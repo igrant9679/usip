@@ -81,9 +81,20 @@ describe("scrubUnresolvedMergeTags — executed", () => {
 describe("the scrub sits at every template egress", () => {
   it("emailDelivery scrubs in all three senders", () => {
     const src = read("server/emailDelivery.ts");
-    expect(src.includes('scrubTemplateOpts(opts, "emailDelivery.pool")'), "pool sender unscrubbed").toBe(true);
-    expect(src.includes('scrubTemplateOpts(opts, "emailDelivery.workspace")'), "workspace sender unscrubbed").toBe(true);
+    // 2026-09-03: the pool and workspace senders fill the SENDER tokens from
+    // the chosen mailbox first, then scrub — the scrub is still the last
+    // thing before the wire, and the fill is what stops "Best," / blank line.
+    expect(src.includes('scrubTemplateOpts(fillSenderTokens(opts, chosen), "emailDelivery.pool")'), "pool sender unscrubbed").toBe(true);
+    expect(src.includes('scrubTemplateOpts(fillSenderTokens(opts, { fromName: cfg.fromName, fromEmail }), "emailDelivery.workspace")'), "workspace sender unscrubbed").toBe(true);
     expect(src.includes('scrubTemplateOpts(opts, "emailDelivery.system")'), "system sender unscrubbed").toBe(true);
+    // The pool scrub must sit AFTER the account is chosen and BEFORE the adapter send.
+    const pool = src.slice(src.indexOf("export async function sendCampaignEmailViaPool"), src.indexOf("export async function sendWorkspaceEmail"));
+    const chosenAt = pool.indexOf("let chosen = eligible[0].a;");
+    const scrubAt = pool.indexOf('scrubTemplateOpts(fillSenderTokens(opts, chosen), "emailDelivery.pool")');
+    const sendAt = pool.indexOf("await adapter.sendEmail({");
+    expect(chosenAt).toBeGreaterThan(-1);
+    expect(scrubAt).toBeGreaterThan(chosenAt);
+    expect(sendAt).toBeGreaterThan(scrubAt);
     // The helper must scrub subject AND html AND text.
     const helper = src.slice(src.indexOf("function scrubTemplateOpts"), src.indexOf("function scrubTemplateOpts") + 700);
     for (const field of ["subject:", "html:", "text:"] as const) {
@@ -109,7 +120,9 @@ describe("the scrub sits at every template egress", () => {
 
   it("the ARE path keeps its own strip policy — belt under the emailDelivery scrub", () => {
     const src = read("server/areEngine.ts");
-    expect(src.includes('return ""; // strip unresolved tags')).toBe(true);
+    // Sender tokens are the one deferred set (filled by emailDelivery once
+    // the mailbox is known); everything else unresolved is still stripped.
+    expect(src.includes('if (hit === undefined) return name && isDeferredSenderToken(name) ? match : "";')).toBe(true);
   });
 
   it("human-composed mail is NOT scrubbed", () => {

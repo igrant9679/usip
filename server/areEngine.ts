@@ -48,6 +48,7 @@ import {
   leads,
   prospectIntelligence,
   prospectQueue,
+  users,
   workspaceSettings,
 } from "../drizzle/schema";
 import { runEnrichAgent, runSequenceAgent } from "./routers/are/prospects";
@@ -62,7 +63,7 @@ import { listUsableAccounts } from "./services/linkedinLookup";
 import { randomUUID } from "node:crypto";
 import { sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
 import { dispatchLinkedInStep, HEALABLE_NO_LINKEDIN } from "./services/are/linkedinStep";
-import { injectTracking } from "./mergeVars";
+import { injectTracking, isDeferredSenderToken, resolveSenderTokens, scrubForSend } from "./mergeVars";
 import { resolveBookingUrl } from "./mergeVars";
 import { ARE_DEFAULT_SOURCES, normalizeSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 // One rule for a step's index + variant key, shared with the A/B metadata
@@ -207,10 +208,15 @@ export function applyMerge(text: string, p: Prospect, bookingUrl = ""): string {
     isEmptyLinkToken(tok, lookup),
   );
 
-  return carried.replace(/\{\{([^}]+)\}\}/g, (_match, inner: string) => {
+  return carried.replace(/\{\{([^}]+)\}\}/g, (match, inner: string) => {
     const { name, fallback } = parseMergeToken(inner);
     const hit = name ? resolveMergeName(lookup, name) : undefined;
-    if (hit === undefined) return ""; // strip unresolved tags
+    // Sender tokens are DEFERRED, not stripped: which mailbox sends is the
+    // pool's decision at send time, and emailDelivery fills them against
+    // the chosen account. Stripping them here is what signed every campaign
+    // email "Best," / blank line / "CommunityForce" (owner report
+    // 2026-09-03). Every other unresolved tag is still stripped.
+    if (hit === undefined) return name && isDeferredSenderToken(name) ? match : "";
     return hit || fallback || hit;
   });
 }
@@ -1219,12 +1225,23 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           }
 
           const lmc = (step.messageContent ?? {}) as { body?: string };
+          // A LinkedIn message has no mailbox behind it, so the sender tokens
+          // applyMerge now defers are filled here from the campaign owner's
+          // name (the LinkedIn seat is theirs), then scrubbed — nothing in
+          // braces may reach a stranger's inbox on either channel.
+          const [linkedinOwner] = campaign.ownerUserId
+            ? await db.select({ name: users.name }).from(users).where(eq(users.id, campaign.ownerUserId)).limit(1)
+            : [];
+          const linkedinBody = scrubForSend(
+            resolveSenderTokens(applyMerge(lmc.body ?? "", lp), { fromName: linkedinOwner?.name ?? null }),
+            "areEngine.linkedin",
+          );
           const outcome = await dispatchLinkedInStep({
             workspaceId: wsId,
             campaignId: campId,
             campaignOwnerUserId: campaign.ownerUserId ?? null,
             prospect: lp,
-            body: applyMerge(lmc.body ?? "", lp),
+            body: linkedinBody,
             stepIndex: step.stepIndex ?? 0,
           });
 

@@ -8,6 +8,7 @@ import nodemailer from "nodemailer";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import type { SendingAccount } from "../drizzle/schema";
+import { senderDisplayName } from "./mergeVars";
 import { applyAccountSendDefaults } from "./services/sending/accountDefaults";
 import type { EmailLogMeta } from "./services/email/logSend";
 import { recordEmailsSent } from "./usageCounters";
@@ -392,7 +393,9 @@ export class SendGridAdapter implements EmailAdapter {
       html: input.bodyHtml,
       text: input.bodyText,
       fromEmail: input.fromEmail || this.account.fromEmail,
-      fromName: input.fromName ?? this.account.fromName,
+      // An address-linked sender has no fromName; fall back to the one rule
+      // the pool and the signature use, so From never shows a bare address.
+      fromName: input.fromName ?? (senderDisplayName(this.account) || null),
       replyTo,
       // List-Unsubscribe / List-Unsubscribe-Post (RFC 8058) travel here.
       headers: input.headers ?? null,
@@ -513,7 +516,7 @@ export function createEmailAdapter(account: SendingAccount): EmailAdapter {
       meta: logMeta,
       sendingAccountId: account.id,
       fromEmail: decorated.fromEmail ?? account.fromEmail,
-      fromName: decorated.fromName ?? account.fromName,
+      fromName: decorated.fromName ?? (senderDisplayName(account) || null),
       to: decorated.to,
       cc: decorated.cc,
       bcc: decorated.bcc,

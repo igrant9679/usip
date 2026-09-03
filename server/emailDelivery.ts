@@ -30,7 +30,7 @@ import { getDb } from "./db";
 import { logEmailSend, type EmailLogMeta, type EmailLogSource } from "./services/email/logSend";
 import { recordEmailsSent } from "./usageCounters";
 import { buildTransporter, decrypt } from "./routers/smtpConfig";
-import { scrubForSend } from "./mergeVars";
+import { resolveSenderTokens, scrubForSend, senderDisplayName } from "./mergeVars";
 
 export interface SendEmailOptions {
   to: string | string[];
@@ -72,6 +72,25 @@ function scrubTemplateOpts<T extends SendEmailOptions>(opts: T, where: string): 
 }
 
 /**
+ * Fill {{senderName}} / {{senderFirstName}} / {{senderLastName}} / {{senderEmail}}
+ * against the mailbox that is about to send. Must run BEFORE the scrub: the
+ * scrub deletes any brace token left on the wire, and until the pool has
+ * chosen an account these four cannot be filled. (Owner report 2026-09-03:
+ * campaign sign-offs went out "Best," / blank line / "CommunityForce".)
+ */
+function fillSenderTokens<T extends SendEmailOptions>(
+  opts: T,
+  sender: { fromName?: string | null; name?: string | null; fromEmail?: string | null },
+): T {
+  return {
+    ...opts,
+    subject: resolveSenderTokens(opts.subject, sender),
+    html: resolveSenderTokens(opts.html, sender),
+    ...(opts.text !== undefined ? { text: resolveSenderTokens(opts.text, sender) } : {}),
+  };
+}
+
+/**
  * Send an OUTBOUND campaign email through the workspace's sender POOL, spreading
  * volume across the connected sending accounts with per-account daily-limit
  * enforcement — the deliverability-correct path for cold outreach (ARE engine).
@@ -93,7 +112,9 @@ export async function sendCampaignEmailViaPool(
   workspaceId: number,
   opts: SendEmailOptions & { fromName?: string; logMeta?: EmailLogMeta },
 ): Promise<SendEmailResult & { accountId?: number; fromEmail?: string }> {
-  opts = scrubTemplateOpts(opts, "emailDelivery.pool");
+  // The scrub runs AFTER the account is chosen (step 3c below) so the sender
+  // tokens can be filled from it first. The no-accounts fallback scrubs
+  // inside sendWorkspaceEmail, after filling them from the SMTP config.
   try {
     const db = await getDb();
     if (!db) return { ok: false, reason: "DB unavailable" };
@@ -189,6 +210,10 @@ export async function sendCampaignEmailViaPool(
       return { ok: false, reason: "Every eligible sending account has hit its hourly limit — it will resume within the hour" };
     }
 
+    // 3c. Now the sender is known: fill the sender tokens, THEN scrub whatever
+    //     is still unresolved so no brace reaches the wire.
+    opts = scrubTemplateOpts(fillSenderTokens(opts, chosen), "emailDelivery.pool");
+
     // 4. Send via the account's adapter (SMTP/IMAP/OAuth).
     const { createEmailAdapter } = await import("./emailAdapter");
     const adapter = createEmailAdapter(chosen as any);
@@ -198,7 +223,10 @@ export async function sendCampaignEmailViaPool(
       bodyHtml: opts.html,
       bodyText: opts.text,
       fromEmail: (chosen as any).fromEmail,
-      fromName: opts.fromName ?? (chosen as any).fromName ?? undefined,
+      // A mailbox linked by address has no fromName; the From header then
+      // showed a bare address. One rule (senderDisplayName) for the header
+      // and the signature, so they cannot disagree.
+      fromName: opts.fromName ?? (senderDisplayName(chosen) || undefined),
       replyTo: opts.replyTo ?? (chosen as any).replyTo ?? undefined,
       // Carried through to the email_log row the adapter writes, so campaign
       // mail lands on the Emails page naming its campaign, step and prospect
@@ -243,7 +271,7 @@ export async function sendWorkspaceEmail(
   workspaceId: number,
   opts: SendEmailOptions,
 ): Promise<SendEmailResult> {
-  opts = scrubTemplateOpts(opts, "emailDelivery.workspace");
+  // Scrubbed below, once the config's sender is known (see fillSenderTokens).
   try {
     const db = await getDb();
     if (!db) return { ok: false, reason: "DB unavailable" };
@@ -274,8 +302,9 @@ export async function sendWorkspaceEmail(
       password,
     });
 
-    const fromName = cfg.fromName ?? cfg.username;
     const fromEmail = cfg.fromEmail ?? cfg.username;
+    const fromName = senderDisplayName({ fromName: cfg.fromName, fromEmail }) || cfg.username;
+    opts = scrubTemplateOpts(fillSenderTokens(opts, { fromName: cfg.fromName, fromEmail }), "emailDelivery.workspace");
 
     await transporter.sendMail({
       from: `"${fromName}" <${fromEmail}>`,

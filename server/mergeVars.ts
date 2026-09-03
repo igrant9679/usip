@@ -25,7 +25,7 @@ import { contacts, accounts, leads, prospects, bookingLinks, users } from "../dr
 import { escapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody } from "@shared/emailBody";
 import { slugify } from "@shared/slugify";
-import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
+import { buildMergeLookup, isEmptyLinkToken, normalizeMergeKey, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
 
 export type MergeContext = {
   contact?: {
@@ -397,6 +397,62 @@ export function personNameFromEmailLocal(email?: string | null): string {
     .filter((w) => w.length > 1);
   if (parts.length === 0) return "";
   return parts.map((w) => w[0]!.toUpperCase() + w.slice(1)).join(" ");
+}
+
+/**
+ * The name a mailbox signs with and shows as. In order: the explicit display
+ * name; the account's own label when it is more than the address; then a name
+ * read off the address itself ("asrar.mehraj@…" → "Asrar Mehraj"). Empty only
+ * for a shared inbox ("info@") with nothing configured.
+ *
+ * Owner report 2026-09-03, two screenshots: the four CommunityForce SendGrid
+ * senders were linked by address (fromName NULL, name = the address), so
+ * every campaign email arrived From a bare address and signed off
+ * "Best," / blank line / "CommunityForce". ONE rule here, used by the From
+ * header AND the {{senderName}} merge, so the two can never disagree.
+ */
+export function senderDisplayName(a: { fromName?: string | null; name?: string | null; fromEmail?: string | null }): string {
+  const explicit = (a.fromName ?? "").trim();
+  if (explicit) return explicit;
+  const email = (a.fromEmail ?? "").trim();
+  const label = (a.name ?? "").trim();
+  if (label && !label.includes("@") && label.toLowerCase() !== email.toLowerCase()) return label;
+  return personNameFromEmailLocal(email);
+}
+
+/** Sender-side tokens: resolvable only once the sending mailbox is known. */
+export const SENDER_TOKENS = ["senderName", "senderFirstName", "senderLastName", "senderEmail"] as const;
+
+export function isDeferredSenderToken(name: string): boolean {
+  const n = normalizeMergeKey(name);
+  return SENDER_TOKENS.some((t) => normalizeMergeKey(t) === n);
+}
+
+/**
+ * Fill the sender tokens against the mailbox that is about to send. Runs at
+ * the send boundary (emailDelivery), AFTER the pool has picked the account:
+ * the ARE engine substitutes prospect fields at dispatch time but cannot know
+ * which mailbox the pool will choose, so it leaves these four verbatim and
+ * this fills them. Every other token is left alone for the scrub to judge.
+ */
+export function resolveSenderTokens(
+  text: string,
+  a: { fromName?: string | null; name?: string | null; fromEmail?: string | null },
+): string {
+  const name = senderDisplayName(a);
+  const parts = name.split(/\s+/).filter(Boolean);
+  const lookup = buildMergeLookup([
+    ["senderName", name],
+    ["senderFirstName", parts[0] ?? ""],
+    ["senderLastName", parts.slice(1).join(" ")],
+    ["senderEmail", (a.fromEmail ?? "").trim()],
+  ]);
+  return String(text ?? "").replace(/\{\{([^}]+)\}\}/g, (match, inner: string) => {
+    const { name: key, fallback } = parseMergeToken(inner);
+    if (!key || !isDeferredSenderToken(key)) return match;
+    const hit = resolveMergeName(lookup, key) ?? "";
+    return hit || fallback || "";
+  });
 }
 
 export function renderSequenceOptOut(
