@@ -58,6 +58,17 @@ describe("the gate is defined once and read the same way twice", () => {
     expect(screen).toContain("`sequenceStatus` = 'pending'");
   });
 
+  it("human intent outranks fit in the queue order: approved, then pushed (score 0), then best score", () => {
+    // 2026-09-04: seven pushed people (score 0) whose first enrichment hit
+    // the AI rate limit sat "pending — will retry on the next pass" for an
+    // hour while plain `score DESC` gave every tick's five slots to scored
+    // discovery rows engine-wide. The promised retry was unreachable.
+    expect(selector).toContain("CASE WHEN ${prospectQueue.sequenceStatus} = 'approved' THEN 2 WHEN ${prospectQueue.icpMatchScore} = 0 THEN 1 ELSE 0 END");
+    expect(selector).not.toContain(".orderBy(desc(prospectQueue.icpMatchScore))");
+    // Still bounded per tick, still serial.
+    expect(selector).toContain(".limit(ENRICH_PER_TICK)");
+  });
+
   it("the screen pass derives its gate from the same constant", () => {
     expect(screen).toContain("campaign.minConfidence ?? ENRICH_MIN_CONFIDENCE_DEFAULT");
     // No second opinion about what the default is.

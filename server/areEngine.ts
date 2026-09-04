@@ -397,7 +397,17 @@ async function enrichPendingGlobally(result: AreEngineResult): Promise<void> {
         sql`(${prospectQueue.icpMatchScore} >= COALESCE(${areCampaigns.minConfidence}, ${ENRICH_MIN_CONFIDENCE_DEFAULT}) OR ${prospectQueue.icpMatchScore} = 0 OR ${prospectQueue.sequenceStatus} = 'approved')`,
       ),
     )
-    .orderBy(desc(prospectQueue.icpMatchScore))
+    // Human intent first, then best fit. A row a person APPROVED or PUSHED
+    // (manual pushes carry score 0) outranks a discovered row's score; plain
+    // `score DESC` starved them: on 2026-09-04 seven pushed people whose
+    // first enrichment hit the AI rate limit sat "pending — will retry on the
+    // next pass" for an hour while every tick's five slots went to scored
+    // discovery rows across the whole engine. The retry the error message
+    // promises has to be reachable.
+    .orderBy(
+      desc(sql`CASE WHEN ${prospectQueue.sequenceStatus} = 'approved' THEN 2 WHEN ${prospectQueue.icpMatchScore} = 0 THEN 1 ELSE 0 END`),
+      desc(prospectQueue.icpMatchScore),
+    )
     .limit(ENRICH_PER_TICK);
 
   if (pending.length === 0) return;
