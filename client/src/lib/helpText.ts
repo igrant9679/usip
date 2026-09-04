@@ -58,7 +58,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/leads": { body: "Inbound people who haven't been qualified yet — from the chat agent, booking pages and forms.", article: "leads-contacts-accounts" },
 
   // ── Engage ──
-  "/v2/sequences": { body: "Multi-step email follow-ups that run on a schedule so you don't have to chase manually.", article: "build-a-sequence" },
+  "/v2/sequences": { body: "Fixed multi-step email follow-ups — the same steps to everyone you enroll. Not the same as a Revenue Engine campaign, which writes per person and can source its own people.", article: "sequences-vs-campaigns" },
   "/campaigns": { body: "Outbound sending campaigns, with their own audience and sending accounts.", article: "are-tuning-campaign" },
   "/segments": { body: "Saved filters over your contacts that stay up to date as data changes." },
   "/sending-accounts": { body: "The mailboxes and services that actually send your email, with per-account daily limits.", article: "email-sending-preferences" },

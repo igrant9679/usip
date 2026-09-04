@@ -449,6 +449,26 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     bodyMarkdown: `**Sequences** (sidebar → Engage) are multi-step cadences. Click **New sequence**, then add steps: email steps (subject + body, with \`{{firstName}}\`, \`{{company}}\`, \`{{senderName}}\` merge fields), **wait** steps (delays), and **task** steps (manual to-dos). Apply an Email Builder template to a step, or write inline. Use the **Canvas** view for a visual builder or the list/Edit view — they stay in sync. Set day caps and auto-stop rules so replies pause the sequence. When ready, **Activate** it, then enroll prospects/contacts/leads (see "Enroll prospects into a sequence"). The engine creates and sends drafts on cadence.`,
   },
   {
+    slug: "sequences-vs-campaigns",
+    categorySlug: "sequences-email",
+    title: "Sequences vs. Campaigns: which is which",
+    summary: "The three things the word \"sequence\" means, and when to use each.",
+    readingTimeMinutes: 3,
+    tags: ["sequences", "campaigns", "revenue-engine", "outreach"],
+    pageKey: "sequences",
+    bodyMarkdown: `The word **sequence** shows up in three places, and they are not the same thing.
+
+**1. Sequences (Engage → Sequences).** A fixed multi-step cadence you write once: the same emails, in the same order, to everyone you enroll. Runs on the original sequence engine — one template per step, merge tags such as \`{{firstName}}\` and \`{{senderName}}\` fill in the details. Use it for steady follow-ups where one message fits everyone. Any sequence has a **Convert to campaign** action that turns it into a fixed-copy campaign on the Revenue Engine.
+
+**2. Campaigns (Revenue Engine).** An autonomous campaign can source people, enrich them, write each email, send on a cadence, and react to replies. Every campaign has a **copy mode**: *per person* (the engine writes a unique email for each prospect) or *fixed* (one template per step, the same to everyone — what a Sequence does, now on the campaign engine's dispatcher, suppression list and approval queue). Campaigns run under Off / Approve / Auto control per campaign and per engine feature.
+
+**3. A campaign's Sequences tab.** Inside one campaign, this tab lists the step-by-step plan generated for *each person*: their own emails on their own timeline. Review or edit what a specific person will receive, approve batches, pause or resume individuals.
+
+**Rule of thumb.** One message for everyone → a Sequence, or a fixed-copy campaign. A different message per person, or anything you want the engine to source and run → a Campaign.
+
+**Where people go.** With **Campaign Routing** on (Autonomy Center), the engine puts people who are in nothing into the campaign that fits them best — suggesting picks in Approve, enrolling them in Auto — and **proposes new campaigns** for the people no active campaign fits, grouped by industry, job family and country. Proposals appear on the Revenue Engine hub; creating one makes the campaign (active, batch approval) and adds those people.`,
+  },
+  {
     slug: "email-builder-templates",
     categorySlug: "sequences-email",
     title: "Email Builder & templates",

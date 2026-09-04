@@ -186,6 +186,10 @@ export function AttentionPanel() {
           <QueueCard icon={<ListChecks className="size-4" />} tint="#14B8A6" title="Chat follow-ups to approve"
             count={s.chatFollowUps.count} cta="Open tasks" href="/v2/tasks" />
         )}
+        {(s.campaignProposals?.count ?? 0) > 0 && (
+          <QueueCard icon={<ListChecks className="size-4" />} tint="#7C3AED" title="New campaigns the engine proposes"
+            count={s.campaignProposals.count} cta="Review proposals" href="/are" />
+        )}
         {(s.routingSuggestions?.count ?? 0) > 0 && (
           <QueueCard icon={<ListChecks className="size-4" />} tint="#7C3AED" title="People the engine wants to put in a campaign"
             count={s.routingSuggestions.count} cta="Review picks" href="/are">

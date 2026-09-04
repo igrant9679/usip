@@ -2,6 +2,7 @@
  * ARE Campaigns — list and create autonomous prospecting campaigns
  */
 import { Shell, PageHeader } from "@/components/usip/Shell";
+import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -347,6 +348,8 @@ export default function ARECampaigns() {
       </PageHeader>
 
       <div className="p-4 md:p-6 space-y-4 max-w-5xl">
+        {/* Which is which: sequences vs campaigns vs a campaign's sequences (owner ask 2026-09-04). */}
+        <OutreachExplainer current="campaigns" />
         {/* Campaign list */}
         {isLoading ? (
           <div className="flex items-center gap-2 text-muted-foreground py-12 justify-center">

@@ -10,6 +10,7 @@
  */
 import { Shell, PageHeader, StatCard, EmptyState, SubNav, useAccentColor } from "@/components/usip/Shell";
 import { RoutingSuggestions } from "@/components/usip/RoutingSuggestions";
+import { CampaignProposals } from "@/components/usip/CampaignProposals";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -624,6 +625,9 @@ export default function AREHub() {
               </div>
             )}
           </section>
+
+          {/* Proposed NEW campaigns (2026-09-04) — audiences nothing targets yet. */}
+          <CampaignProposals />
 
           {/* Best-fit routing suggestions (phase 3) — approval mode's queue. */}
           <RoutingSuggestions />

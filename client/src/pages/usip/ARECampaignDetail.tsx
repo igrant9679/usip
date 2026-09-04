@@ -56,6 +56,7 @@ import { AddExistingProspectsDialog } from "@/components/usip/are/AddExistingPro
 import { ActiveSequenceTimeline } from "@/components/usip/are/ActiveSequenceTimeline";
 import { AreMessageDialog } from "@/components/usip/are/AreMessageDialog";
 import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
+import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
 import {
   DEFAULT_DISPATCH_TABLE_STATE, OUTCOME_LABEL, OUTCOME_ORDER, filterDispatches, groupDispatchesByStep, isFiltered,
   nextSort, outcomeCounts, outcomeOf, sortDispatches, type DispatchSortKey, type DispatchTableState,
@@ -1338,6 +1339,8 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
 
   return (
     <div className="space-y-3">
+      {/* Which is which: this tab vs the Sequences page vs campaigns (owner ask 2026-09-04). */}
+      <OutreachExplainer current="campaign-sequences-tab" />
       {/* Email prompt editor — collapsed by default, saves ~280px of vertical space. */}
       <details className="rounded-lg border bg-card">
         <summary className="cursor-pointer px-3 py-2 text-xs font-medium flex items-center gap-2 hover:bg-muted/40">

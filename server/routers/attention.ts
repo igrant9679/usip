@@ -50,6 +50,8 @@ const EMPTY = {
   chatFollowUps: { count: 0 },
   /** Best-fit campaign suggestions awaiting accept/dismiss (phase 3). */
   routingSuggestions: { count: 0, byCampaign: [] as { campaignId: number; name: string; count: number }[] },
+  /** Proposed NEW campaigns awaiting create/dismiss (2026-09-04). */
+  campaignProposals: { count: 0 },
   digest24h: { emailsSent: 0, prospectsDiscovered: 0, repliesReceived: 0, meetingsBooked: 0 },
 };
 
@@ -192,13 +194,16 @@ export const attentionRouter = router({
       count: routingByCampaign.reduce((s, r) => s + Number(r.n), 0),
       byCampaign: routingByCampaign.map((r) => ({ campaignId: r.campaignId, name: r.name, count: Number(r.n) })),
     };
+    // Proposed NEW campaigns (2026-09-04) — a queue a person has to act on.
+    const { countPendingProposals } = await import("../services/campaignProposals");
+    const campaignProposals = { count: await countPendingProposals(ws) };
 
     return {
       totalNeedingYou:
         aiDrafts.count + proposedMeetings.count + unhandledReplies.count +
         areApprovals.count + draftTasks.count + paused.length +
         sequenceDrafts.count + socialReplies.count + optimizationRecs.count + chatFollowUps.count +
-        routingSuggestions.count,
+        routingSuggestions.count + campaignProposals.count,
       aiDrafts,
       proposedMeetings,
       unhandledReplies,
@@ -210,6 +215,7 @@ export const attentionRouter = router({
       optimizationRecs,
       chatFollowUps,
       routingSuggestions,
+      campaignProposals,
       digest24h: {
         emailsSent: Number(digestSent?.n ?? 0),
         prospectsDiscovered: Number(digestDiscovered?.n ?? 0),

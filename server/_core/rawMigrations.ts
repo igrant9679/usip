@@ -3974,6 +3974,35 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0178: campaign proposals — the engine suggests NEW campaigns for the
+  //    People no active campaign fits (owner ask 2026-09-04). Same dial as
+  //    campaign routing (0176): approval = pending row, auto = created.
+  {
+    name: "0178_campaign_proposals.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `campaign_proposals` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`status` ENUM('pending','accepted','dismissed') NOT NULL DEFAULT 'pending', " +
+        "`source` ENUM('sweep','manual') NOT NULL DEFAULT 'sweep', " +
+        "`name` VARCHAR(200) NOT NULL, " +
+        "`description` TEXT NULL, " +
+        "`valueProposition` TEXT NULL, " +
+        "`targeting` JSON NULL, " +
+        "`copyMode` ENUM('per_person','fixed') NOT NULL DEFAULT 'per_person', " +
+        "`reasoning` TEXT NULL, " +
+        "`clusterKey` VARCHAR(200) NULL, " +
+        "`prospectIds` JSON NULL, " +
+        "`size` INT NOT NULL DEFAULT 0, " +
+        "`createdCampaignId` INT NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "`decidedAt` TIMESTAMP NULL, " +
+        "`decidedBy` INT NULL, " +
+        "INDEX `ix_cp_ws` (`workspaceId`, `status`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

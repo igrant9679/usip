@@ -159,6 +159,13 @@ const SURFACES: Array<{
     gate: /const recipient = await workspaceNotifyUserId\(opts\.workspaceId\);\s*if \(!recipient\) return;/,
   },
   {
+    what: "a campaign the engine proposes is owned by the acceptor or the active workspace owner — never created ownerless",
+    file: "server/services/campaignProposals.ts",
+    start: "export async function acceptProposal(",
+    end: "db.insert(areCampaigns)",
+    gate: /const ownerUserId = actorUserId \?\? \(await workspaceNotifyUserId\(workspaceId\)\);\s*if \(!ownerUserId\) throw new Error\(/,
+  },
+  {
     what: "the proposal-followup cron raises its task on an active member",
     file: "server/emailTracking.ts",
     start: "for (const proposal of staleProposals)",
@@ -258,7 +265,7 @@ describe("every session-less path that names a member gates on active membership
    * pinned rather than bounded so that REMOVING a surface is also a decision.
    */
   it("checks every surface in the table, and the table has not shrunk", () => {
-    expect(SURFACES.length).toBe(21);
+    expect(SURFACES.length).toBe(22);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 

@@ -148,7 +148,7 @@ export default function WorkflowsV2() {
     { key: "optimization", label: "Continuous Optimisation", icon: Zap, blurb: "Measure what works and tune sequences", href: "/are/performance", mode: optAp.data?.mode ?? "off", lastRunAt: (optAp.data as any)?.lastRunAt, set: (m: string) => setOptAp.mutate({ mode: m as any }) },
     // Phase 3: the best-fit campaign router. Approve = suggests picks for
     // review on the Revenue Engine hub; Auto = enrolls them.
-    { key: "routing", label: "Campaign Routing", icon: Bot, blurb: "Put people who are in nothing yet into the campaign that fits them best", href: "/are", mode: routingAp.data?.mode ?? "off", lastRunAt: (routingAp.data as any)?.lastRunAt, set: (m: string) => setRoutingAp.mutate({ mode: m as any }) },
+    { key: "routing", label: "Campaign Routing", icon: Bot, blurb: "Put people who are in nothing yet into the campaign that fits them best, and propose new campaigns for the ones nothing fits", href: "/are", mode: routingAp.data?.mode ?? "off", lastRunAt: (routingAp.data as any)?.lastRunAt, set: (m: string) => setRoutingAp.mutate({ mode: m as any }) },
   ];
   const onCount = autopilots.filter((a) => a.mode !== "off").length;
 

@@ -884,6 +884,41 @@ export const campaignRoutingSuggestions = mysqlTable(
   }),
 );
 
+/**
+ * Proposed NEW campaigns (owner ask 2026-09-04, migration 0178): a cluster of
+ * People that no active campaign fits, with the targeting and copy mode a
+ * campaign for them would carry. Lives under the Campaign Routing dial:
+ * approval = a pending row here for a human, auto = created at once (active,
+ * batch approval, so nothing sends unreviewed). `prospectIds` is the exact
+ * set the proposal would absorb; `createdCampaignId` links an accepted row
+ * to the campaign it became.
+ */
+export const campaignProposals = mysqlTable(
+  "campaign_proposals",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    status: mysqlEnum("status", ["pending", "accepted", "dismissed"]).default("pending").notNull(),
+    source: mysqlEnum("source", ["sweep", "manual"]).default("sweep").notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    description: text("description"),
+    valueProposition: text("valueProposition"),
+    /** IcpOverrides shape: targetTitles, targetIndustries, targetGeographies, keywords. */
+    targeting: json("targeting"),
+    copyMode: mysqlEnum("copyMode", ["per_person", "fixed"]).default("per_person").notNull(),
+    reasoning: text("reasoning"),
+    /** The cluster this came from (industry|title family|country), for de-duplication. */
+    clusterKey: varchar("clusterKey", { length: 200 }),
+    prospectIds: json("prospectIds"),
+    size: int("size").default(0).notNull(),
+    createdCampaignId: int("createdCampaignId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    decidedAt: timestamp("decidedAt"),
+    decidedBy: int("decidedBy"),
+  },
+  (t) => ({ byWs: index("ix_cp_ws").on(t.workspaceId, t.status) }),
+);
+
 export const emailLog = mysqlTable(
   "email_log",
   {

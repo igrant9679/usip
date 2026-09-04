@@ -48,6 +48,7 @@ import { runDailyCheckAllWorkspaces } from "../services/linkedinEnrichment/daily
 import { runAreEngine } from "../areEngine";
 import { runTaskAutopilotAllWorkspaces } from "../services/taskAutopilot";
 import { runCampaignRoutingAllWorkspaces } from "../services/campaignRouter";
+import { runCampaignProposalsAllWorkspaces } from "../services/campaignProposals";
 import { runMeetingAutopilotAllWorkspaces } from "../services/meetingScheduler";
 import { sendDueMeetingReminders } from "../services/meetingReminders";
 import { runConversationAutopilotAllWorkspaces } from "../services/replyClassifier";
@@ -355,6 +356,17 @@ async function startServer() {
   };
   setTimeout(runRouting, 6 * 60 * 1000); // first run 6 minutes after boot
   setInterval(runRouting, 30 * 60 * 1000); // every 30 minutes
+
+  // Campaign proposals (2026-09-04), under the SAME dial: propose NEW
+  // campaigns for the people no active campaign fits — pending in approval,
+  // created (active, batch approval) in auto. Hourly: it reads all of People.
+  const runProposals = guardOverlap("CampaignProposals", () =>
+    runCampaignProposalsAllWorkspaces().catch((e) =>
+      console.error("[CampaignProposals] cron run failed:", e)
+    ),
+  );
+  setTimeout(runProposals, 9 * 60 * 1000); // first run 9 minutes after boot
+  setInterval(runProposals, 60 * 60 * 1000); // every hour
 
   // Chat abandonment follow-up (0137): a visitor who gave an email and left
   // without booking is the most recoverable thing the chat produces. Only acts

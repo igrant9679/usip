@@ -278,6 +278,44 @@ export const campaignsRouter = router({
     }),
 
   /**
+   * Proposed NEW campaigns (owner ask 2026-09-04): the people no active
+   * campaign fits, clustered into audiences, each with the targeting and
+   * copy mode a campaign for them would carry. Same dial as routing. All
+   * logic in services/campaignProposals.ts; these are the seams.
+   */
+  listProposals: workspaceProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(50).default(10) }).optional())
+    .query(async ({ ctx, input }) => {
+      const { listPendingProposals } = await import("../../services/campaignProposals");
+      return listPendingProposals(ctx.workspace.id, input?.limit ?? 10);
+    }),
+
+  decideProposal: workspaceProcedure
+    .input(z.object({ id: z.number().int().positive(), decision: z.enum(["accept", "dismiss"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const { acceptProposal, dismissProposal } = await import("../../services/campaignProposals");
+      let result: { campaignId: number | null; added: number; skipped: number };
+      try {
+        result = input.decision === "accept"
+          ? await acceptProposal(ctx.workspace.id, input.id, ctx.user.id)
+          : await dismissProposal(ctx.workspace.id, input.id, ctx.user.id);
+      } catch (e) {
+        throw new TRPCError({ code: "NOT_FOUND", message: (e as Error).message || "Proposal not found" });
+      }
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "campaign_proposal", entityId: input.id, after: { decision: input.decision, ...result } });
+      return { ok: true as const, ...result };
+    }),
+
+  /** Admin: analyse People now and propose campaigns (records pending rows; never creates). */
+  generateProposals: adminWsProcedure
+    .mutation(async ({ ctx }) => {
+      const { generateProposals } = await import("../../services/campaignProposals");
+      const r = await generateProposals(ctx.workspace.id, { source: "manual" });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "campaign_proposal", entityId: ctx.workspace.id, after: r });
+      return r;
+    }),
+
+  /**
    * A CRM Sequence becomes a fixed-copy campaign in the ONE engine (phase 6).
    * Email steps carry over verbatim (subject, body, merge tags); `days` gaps
    * become cumulative day offsets; task/wait steps only contribute their

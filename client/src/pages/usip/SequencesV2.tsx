@@ -13,6 +13,7 @@ import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
+import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -222,6 +223,9 @@ export default function SequencesV2() {
             ))}
           </div>
         </div>
+
+        {/* Which is which: this page vs Revenue Engine campaigns vs a campaign's sequences (owner ask 2026-09-04). */}
+        <div className="px-4 pt-3"><OutreachExplainer current="sequences" /></div>
 
         {tab === "All Sequences" ? (
           <>
