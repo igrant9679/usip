@@ -1735,8 +1735,17 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
   // ('ai_research', 'events') or null. normalizeSources strips the dead ones;
   // a campaign with nothing left falls back to the full default set rather
   // than the old lone "linkedin" guess.
-  const configured = normalizeSources(campaign.prospectSources);
-  const sources: string[] = configured.length > 0 ? configured : [...ARE_DEFAULT_SOURCES];
+  //
+  // An EXPLICIT empty list is different: it means "no discovery". A campaign
+  // the engine proposed (campaignProposals) exists to absorb the people it
+  // was proposed for and stores [] on purpose; on 2026-09-04 the fallback
+  // below read that as "every source" and pulled 68 strangers into a
+  // 32-person campaign within one tick. Only null / dead-ids-only lists —
+  // the legacy shapes the fallback was written for — still get the defaults.
+  const rawSources = campaign.prospectSources;
+  const explicitlyNone = Array.isArray(rawSources) && rawSources.length === 0;
+  const configured = normalizeSources(rawSources);
+  const sources: string[] = configured.length > 0 ? configured : explicitlyNone ? [] : [...ARE_DEFAULT_SOURCES];
 
   // Seed the dedup index with everything already in the queue for the WHOLE
   // workspace, remembering which campaign owns each identity. Two jobs in
