@@ -86,7 +86,7 @@ describe("the send boundary fills, then scrubs, then names the sender in the Fro
 
   it("the pool fills sender tokens from the CHOSEN account, before the scrub, before the send", () => {
     const pool = delivery.slice(delivery.indexOf("export async function sendCampaignEmailViaPool"), delivery.indexOf("export async function sendWorkspaceEmail"));
-    const chosenAt = pool.indexOf("let chosen = eligible[0].a;");
+    const chosenAt = pool.indexOf("const pick = await choosePoolAccount(workspaceId);");
     const fillAt = pool.indexOf('scrubTemplateOpts(fillSenderTokens(opts, chosen), "emailDelivery.pool")');
     const sendAt = pool.indexOf("await adapter.sendEmail({");
     expect(chosenAt).toBeGreaterThan(-1);
@@ -114,6 +114,31 @@ describe("the send boundary fills, then scrubs, then names the sender in the Fro
     expect(engine).toContain('resolveSenderTokens(applyMerge(lmc.body ?? "", lp), { fromName: linkedinOwner?.name ?? null })');
     expect(engine).toContain('"areEngine.linkedin"');
     expect(engine).toContain("body: linkedinBody,");
+  });
+
+  it("the pool's selection is ONE exported rule, and the send uses it", () => {
+    expect(delivery).toContain("export async function choosePoolAccount(workspaceId: number): Promise<PoolPick>");
+    const helper = delivery.slice(delivery.indexOf("export async function choosePoolAccount"), delivery.indexOf("export async function sendWorkspaceEmail"));
+    for (const s of ["senderPools", "senderPoolMembers", "dailySendLimit ?? 500", "getAccountSentLastHour", 'return { kind: "account", account: chosen };']) expect(helper).toContain(s);
+    // The send itself no longer carries a private copy of the selection.
+    const pool = delivery.slice(delivery.indexOf("export async function sendCampaignEmailViaPool"), delivery.indexOf("export type PoolPick"));
+    expect(pool).toContain("const chosen = pick.account;");
+    expect(pool).not.toContain("eligible[0]");
+  });
+
+  it("the message preview fills the sender the same way — sent mailbox, else the pool's real pick", () => {
+    // Owner ask 2026-09-03: the Variant A preview showed the literal {{senderName}}.
+    const exec = read("routers", "are", "execution.ts");
+    const proc = exec.slice(exec.indexOf("getMessage: workspaceProcedure"), exec.indexOf("findStepMessage: workspaceProcedure"));
+    expect(proc).toContain("senderDisplayName({ fromName: row.accountFromName, name: row.accountName, fromEmail: row.accountEmail })");
+    expect(proc).toContain("const pick = await choosePoolAccount(ctx.workspace.id);");
+    expect(proc).toContain("subject: fill(mc?.subject),");
+    expect(proc).toContain("body: fill(mc?.body),");
+    expect(proc).toContain("resolveSenderTokens(s, senderShape)");
+    // And the dialog says whose name that is for a pending step.
+    const dialog = read("..", "client", "src", "components", "usip", "are", "AreMessageDialog.tsx");
+    expect(dialog).toContain('{m.status === "sent" ? "Sent from" : "Will send from"}');
+    expect(dialog).toContain("(pool’s current pick)");
   });
 
   it("fillSenderTokens covers subject, html and text", () => {

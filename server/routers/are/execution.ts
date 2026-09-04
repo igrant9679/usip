@@ -40,6 +40,8 @@ import {
   sendingAccounts,
 } from "../../../drizzle/schema";
 import { getDb } from "../../db";
+import { resolveSenderTokens, senderDisplayName } from "../../mergeVars";
+import { choosePoolAccount } from "../../emailDelivery";
 import { findOrCreateAccount } from "../../services/crmMatching";
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
@@ -790,6 +792,7 @@ export const executionRouter = router({
           personProspectId: prospectQueue.personProspectId,
           campaignName: areCampaigns.name,
           accountName: sendingAccounts.name,
+          accountFromName: sendingAccounts.fromName,
           accountEmail: sendingAccounts.fromEmail,
         })
         .from(areExecutionQueue)
@@ -822,6 +825,37 @@ export const executionRouter = router({
         .limit(50);
 
       const mc = (row.q.messageContent ?? null) as { subject?: string; body?: string; variantKey?: string } | null;
+
+      /**
+       * The sender, so the preview reads the way the email does (owner ask
+       * 2026-09-03: the Variant A preview showed the literal {{senderName}}).
+       * A SENT row names the mailbox that sent it. A pending row names the
+       * mailbox the pool would pick right now — through choosePoolAccount,
+       * the send's own rule, so this is the real next pick and not a guess;
+       * with no accounts, the Email-Delivery SMTP config the fallback uses.
+       * The tokens are filled here with the same resolveSenderTokens the
+       * send boundary applies, so preview and wire cannot disagree.
+       */
+      let sender: { name: string; email: string | null; source: "sent" | "pool" | "smtp" } | null = null;
+      if (row.q.sendingAccountId && row.accountEmail) {
+        sender = { name: senderDisplayName({ fromName: row.accountFromName, name: row.accountName, fromEmail: row.accountEmail }), email: row.accountEmail, source: "sent" };
+      } else if (row.q.status !== "sent") {
+        const pick = await choosePoolAccount(ctx.workspace.id);
+        if (pick.kind === "account") {
+          sender = { name: senderDisplayName(pick.account), email: pick.account.fromEmail, source: "pool" };
+        } else if (pick.kind === "no_accounts") {
+          const { smtpConfigs } = await import("../../../drizzle/schema");
+          const [cfg] = await db.select({ fromName: smtpConfigs.fromName, fromEmail: smtpConfigs.fromEmail, username: smtpConfigs.username })
+            .from(smtpConfigs).where(eq(smtpConfigs.workspaceId, ctx.workspace.id)).limit(1);
+          if (cfg) {
+            const email = cfg.fromEmail ?? cfg.username ?? null;
+            sender = { name: senderDisplayName({ fromName: cfg.fromName, fromEmail: email }), email, source: "smtp" };
+          }
+        }
+      }
+      const senderShape = sender ? { fromName: sender.name, fromEmail: sender.email } : null;
+      const fill = (s: string | null | undefined) => (s && senderShape ? resolveSenderTokens(s, senderShape) : s ?? null);
+
       return {
         id: row.q.id,
         campaignId: row.q.campaignId,
@@ -835,8 +869,8 @@ export const executionRouter = router({
         failureReason: row.q.status === "sent" ? null : row.q.failureReason,
         scheduledAt: row.q.scheduledAt,
         executedAt: row.q.executedAt,
-        subject: mc?.subject ?? null,
-        body: mc?.body ?? null,
+        subject: fill(mc?.subject),
+        body: fill(mc?.body),
         variantKey: mc?.variantKey ?? "A",
         // Engagement. openCount is HUMAN opens since migration 0165;
         // machineOpenCount is the prefetch traffic, shown separately so the
@@ -857,9 +891,11 @@ export const executionRouter = router({
         },
         sentFrom: {
           accountId: row.q.sendingAccountId ?? null,
-          name: row.accountName ?? null,
+          name: sender?.source === "sent" ? sender.name : row.accountName ?? null,
           email: row.accountEmail ?? row.q.fromEmail ?? null,
         },
+        /** Who signs it — the mailbox that sent, or the pool's current pick for a pending step. */
+        sender,
         signals,
       };
     }),

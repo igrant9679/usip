@@ -117,12 +117,23 @@ export function AreMessageDialog({
                   <span className="break-all">{m.recipient.email ?? "—"}</span>
                 </div>
                 <div className="grid grid-cols-[92px_1fr] gap-2">
-                  <span className="text-muted-foreground">Sent from</span>
+                  <span className="text-muted-foreground">{m.status === "sent" ? "Sent from" : "Will send from"}</span>
                   <span className="break-all">
                     {m.sentFrom.email ? (
                       <>
                         {m.sentFrom.email}
                         {m.sentFrom.name ? <span className="text-muted-foreground"> · {m.sentFrom.name}</span> : null}
+                      </>
+                    ) : m.sender ? (
+                      // Not sent yet: the pool's pick as of now, through the
+                      // send's own selection rule. The signature below is
+                      // filled with this same name.
+                      <>
+                        {m.sender.email ?? "—"}
+                        <span className="text-muted-foreground"> · {m.sender.name || "no display name"}</span>
+                        <span className="text-muted-foreground italic" title="The pool picks the least-used eligible mailbox at send time; this is its pick right now.">
+                          {" "}(pool’s current pick)
+                        </span>
                       </>
                     ) : (
                       // The pool has always chosen an account per send; nothing

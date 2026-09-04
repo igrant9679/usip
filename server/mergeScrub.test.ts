@@ -89,7 +89,7 @@ describe("the scrub sits at every template egress", () => {
     expect(src.includes('scrubTemplateOpts(opts, "emailDelivery.system")'), "system sender unscrubbed").toBe(true);
     // The pool scrub must sit AFTER the account is chosen and BEFORE the adapter send.
     const pool = src.slice(src.indexOf("export async function sendCampaignEmailViaPool"), src.indexOf("export async function sendWorkspaceEmail"));
-    const chosenAt = pool.indexOf("let chosen = eligible[0].a;");
+    const chosenAt = pool.indexOf("const pick = await choosePoolAccount(workspaceId);");
     const scrubAt = pool.indexOf('scrubTemplateOpts(fillSenderTokens(opts, chosen), "emailDelivery.pool")');
     const sendAt = pool.indexOf("await adapter.sendEmail({");
     expect(chosenAt).toBeGreaterThan(-1);

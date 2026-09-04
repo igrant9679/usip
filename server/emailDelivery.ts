@@ -119,42 +119,14 @@ export async function sendCampaignEmailViaPool(
     const db = await getDb();
     if (!db) return { ok: false, reason: "DB unavailable" };
 
-    // 1. Candidate accounts — pool members first, else all enabled accounts.
-    const [pool] = await db
-      .select()
-      .from(senderPools)
-      .where(and(eq(senderPools.workspaceId, workspaceId), eq(senderPools.enabled, true)))
-      .orderBy(senderPools.id)
-      .limit(1);
-
-    let accounts: (typeof sendingAccounts.$inferSelect)[] = [];
-    if (pool) {
-      const members = await db
-        .select({ accountId: senderPoolMembers.accountId })
-        .from(senderPoolMembers)
-        .where(eq(senderPoolMembers.poolId, pool.id));
-      const ids = members.map((m) => m.accountId);
-      if (ids.length > 0) {
-        accounts = await db
-          .select()
-          .from(sendingAccounts)
-          .where(and(
-            eq(sendingAccounts.workspaceId, workspaceId),
-            inArray(sendingAccounts.id, ids),
-            eq(sendingAccounts.enabled, true),
-          ));
-      }
-    }
-    if (accounts.length === 0) {
-      accounts = await db
-        .select()
-        .from(sendingAccounts)
-        .where(and(eq(sendingAccounts.workspaceId, workspaceId), eq(sendingAccounts.enabled, true)));
-    }
+    // 1–3. Which mailbox sends — the ONE selection rule (choosePoolAccount),
+    //      shared with the message preview so "will send from" names the
+    //      pool's real pick rather than a guess.
+    const pick = await choosePoolAccount(workspaceId);
     // No sending accounts at all → fall back to the single Email-Delivery config.
     // The classification travels with it: a campaign email that went out
     // through the fallback is still a campaign email on the Emails page.
-    if (accounts.length === 0) {
+    if (pick.kind === "no_accounts") {
       const r = await sendWorkspaceEmail(workspaceId, {
         ...opts,
         logSource: opts.logMeta?.source ?? opts.logSource ?? "campaign",
@@ -162,53 +134,9 @@ export async function sendCampaignEmailViaPool(
       });
       return r;
     }
-
-    // 2. Today's per-account usage.
+    if (pick.kind === "blocked") return { ok: false, reason: pick.reason };
+    const chosen = pick.account;
     const today = new Date().toISOString().slice(0, 10);
-    const ids = accounts.map((a) => a.id);
-    // SUM, not the first row: there is no unique key on (accountId, date), so
-    // two sends racing on the first send of a day can both insert and leave two
-    // rows. Reading one of them undercounts usage for the rest of that day, and
-    // this number is what enforces the mailbox's daily limit.
-    const stats = await db
-      .select({
-        accountId: sendingAccountDailyStats.accountId,
-        sent: sql<number>`COALESCE(SUM(${sendingAccountDailyStats.sentCount}), 0)`,
-      })
-      .from(sendingAccountDailyStats)
-      .where(and(inArray(sendingAccountDailyStats.accountId, ids), eq(sendingAccountDailyStats.date, today)))
-      .groupBy(sendingAccountDailyStats.accountId);
-    const usedMap = new Map(stats.map((s) => [s.accountId, Number(s.sent) || 0]));
-
-    // 3. Eligible = under daily limit; pick the least-used (balances + rotates).
-    const eligible = accounts
-      .map((a) => ({ a, used: usedMap.get(a.id) ?? 0 }))
-      .filter((x) => x.used < (x.a.dailySendLimit ?? 500))
-      .sort((x, y) => x.used - y.used || x.a.id - y.a.id);
-    if (eligible.length === 0) {
-      return { ok: false, reason: "All sending accounts have hit their daily limit" };
-    }
-
-    // 3b. …and under its HOURLY limit, for accounts whose owner configured one
-    //     (owner ask 2026-08-14: inbox sending limits are global defaults for
-    //     that inbox). Campaign sends pick their account HERE, so a limit
-    //     enforced only in sendLimits.assertSendAllowed never reached them.
-    //     Skipping the account is better than failing the send — that is what
-    //     a pool is for.
-    const { getAccountSentLastHour } = await import("./sendLimits");
-    let chosen = eligible[0].a;
-    let hourlyBlocked = 0;
-    for (const cand of eligible) {
-      const limit = (cand.a as { hourlySendLimit?: number }).hourlySendLimit ?? 0;
-      const configured = (cand.a as { sendingLimitsCompleted?: boolean }).sendingLimitsCompleted === true;
-      if (!configured || limit <= 0) { chosen = cand.a; break; }
-      const lastHour = await getAccountSentLastHour(cand.a.id, workspaceId);
-      if (lastHour < limit) { chosen = cand.a; break; }
-      hourlyBlocked++;
-    }
-    if (hourlyBlocked === eligible.length) {
-      return { ok: false, reason: "Every eligible sending account has hit its hourly limit — it will resume within the hour" };
-    }
 
     // 3c. Now the sender is known: fill the sender tokens, THEN scrub whatever
     //     is still unresolved so no brace reaches the wire.
@@ -258,6 +186,110 @@ export async function sendCampaignEmailViaPool(
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, reason: `Pool send failed: ${msg}` };
   }
+}
+
+export type PoolPick =
+  | { kind: "account"; account: typeof sendingAccounts.$inferSelect }
+  | { kind: "no_accounts" }
+  | { kind: "blocked"; reason: string };
+
+/**
+ * The mailbox the pool sends from RIGHT NOW. Extracted from
+ * sendCampaignEmailViaPool (2026-09-03) so the message preview can name the
+ * sender a not-yet-sent step will go out from — through the same rule, not a
+ * copy of it. Read-only: usage is recorded by the send, not the pick.
+ *
+ * Selection: prefer the workspace's first sender pool's members; if no pool
+ * exists, rotate across ALL enabled sending accounts. Among eligible accounts
+ * (under their dailySendLimit today) it picks the LEAST-used one, which evenly
+ * balances load and naturally round-robins; then skips any whose owner-set
+ * hourly limit is spent.
+ */
+export async function choosePoolAccount(workspaceId: number): Promise<PoolPick> {
+  const db = await getDb();
+  if (!db) return { kind: "blocked", reason: "DB unavailable" };
+
+  // 1. Candidate accounts — pool members first, else all enabled accounts.
+  const [pool] = await db
+    .select()
+    .from(senderPools)
+    .where(and(eq(senderPools.workspaceId, workspaceId), eq(senderPools.enabled, true)))
+    .orderBy(senderPools.id)
+    .limit(1);
+
+  let accounts: (typeof sendingAccounts.$inferSelect)[] = [];
+  if (pool) {
+    const members = await db
+      .select({ accountId: senderPoolMembers.accountId })
+      .from(senderPoolMembers)
+      .where(eq(senderPoolMembers.poolId, pool.id));
+    const ids = members.map((m) => m.accountId);
+    if (ids.length > 0) {
+      accounts = await db
+        .select()
+        .from(sendingAccounts)
+        .where(and(
+          eq(sendingAccounts.workspaceId, workspaceId),
+          inArray(sendingAccounts.id, ids),
+          eq(sendingAccounts.enabled, true),
+        ));
+    }
+  }
+  if (accounts.length === 0) {
+    accounts = await db
+      .select()
+      .from(sendingAccounts)
+      .where(and(eq(sendingAccounts.workspaceId, workspaceId), eq(sendingAccounts.enabled, true)));
+  }
+  if (accounts.length === 0) return { kind: "no_accounts" };
+
+  // 2. Today's per-account usage.
+  const today = new Date().toISOString().slice(0, 10);
+  const ids = accounts.map((a) => a.id);
+  // SUM, not the first row: there is no unique key on (accountId, date), so
+  // two sends racing on the first send of a day can both insert and leave two
+  // rows. Reading one of them undercounts usage for the rest of that day, and
+  // this number is what enforces the mailbox's daily limit.
+  const stats = await db
+    .select({
+      accountId: sendingAccountDailyStats.accountId,
+      sent: sql<number>`COALESCE(SUM(${sendingAccountDailyStats.sentCount}), 0)`,
+    })
+    .from(sendingAccountDailyStats)
+    .where(and(inArray(sendingAccountDailyStats.accountId, ids), eq(sendingAccountDailyStats.date, today)))
+    .groupBy(sendingAccountDailyStats.accountId);
+  const usedMap = new Map(stats.map((s) => [s.accountId, Number(s.sent) || 0]));
+
+  // 3. Eligible = under daily limit; pick the least-used (balances + rotates).
+  const eligible = accounts
+    .map((a) => ({ a, used: usedMap.get(a.id) ?? 0 }))
+    .filter((x) => x.used < (x.a.dailySendLimit ?? 500))
+    .sort((x, y) => x.used - y.used || x.a.id - y.a.id);
+  if (eligible.length === 0) {
+    return { kind: "blocked", reason: "All sending accounts have hit their daily limit" };
+  }
+
+  // 3b. …and under its HOURLY limit, for accounts whose owner configured one
+  //     (owner ask 2026-08-14: inbox sending limits are global defaults for
+  //     that inbox). Campaign sends pick their account HERE, so a limit
+  //     enforced only in sendLimits.assertSendAllowed never reached them.
+  //     Skipping the account is better than failing the send — that is what
+  //     a pool is for.
+  const { getAccountSentLastHour } = await import("./sendLimits");
+  let chosen = eligible[0].a;
+  let hourlyBlocked = 0;
+  for (const cand of eligible) {
+    const limit = (cand.a as { hourlySendLimit?: number }).hourlySendLimit ?? 0;
+    const configured = (cand.a as { sendingLimitsCompleted?: boolean }).sendingLimitsCompleted === true;
+    if (!configured || limit <= 0) { chosen = cand.a; break; }
+    const lastHour = await getAccountSentLastHour(cand.a.id, workspaceId);
+    if (lastHour < limit) { chosen = cand.a; break; }
+    hourlyBlocked++;
+  }
+  if (hourlyBlocked === eligible.length) {
+    return { kind: "blocked", reason: "Every eligible sending account has hit its hourly limit — it will resume within the hour" };
+  }
+  return { kind: "account", account: chosen };
 }
 
 /**
