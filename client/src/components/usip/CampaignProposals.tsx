@@ -50,9 +50,16 @@ export function CampaignProposals() {
     },
     onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can run the analysis" : e.message),
   });
+  const redraft = trpc.are.campaigns.redraftProposal.useMutation({
+    onSuccess: (r) => {
+      toast[r.usedModel ? "success" : "info"](r.usedModel ? `Redrafted: “${r.name}”` : "The model was unavailable — the deterministic draft stands (see the note on the card)");
+      refresh();
+    },
+    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can redraft" : e.message),
+  });
   const rows = (q.data ?? []) as any[];
   const mode = routing.data?.mode ?? "off";
-  const pending = decide.isPending || generate.isPending;
+  const pending = decide.isPending || generate.isPending || redraft.isPending;
 
   return (
     <section className="lg:col-span-5" data-tour-id="are-campaign-proposals">
@@ -112,6 +119,9 @@ export function CampaignProposals() {
                   </Button>
                   <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" disabled={pending} onClick={() => decide.mutate({ id: p.id, decision: "dismiss" })}>
                     <X className="size-3.5" /> Dismiss
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 ml-auto" disabled={pending} title="Same people; the model writes the name, targeting and opening line again" onClick={() => redraft.mutate({ id: p.id })}>
+                    {redraft.isPending && redraft.variables?.id === p.id ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} Redraft with AI
                   </Button>
                 </div>
               </div>

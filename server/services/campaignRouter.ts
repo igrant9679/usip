@@ -107,7 +107,19 @@ async function activeCampaignsWithTargets(workspaceId: number) {
  * Route a set of People. Skips anyone a campaign or sequence already owns.
  * Read-only: returns picks; callers decide whether to suggest or enroll.
  */
-export async function routeProspects(workspaceId: number, prospectIds: number[]): Promise<RoutePick[]> {
+export async function routeProspects(
+  workspaceId: number,
+  prospectIds: number[],
+  /**
+   * `deterministicOnly`: never consult the model — a close call takes its
+   * provisional leader. For callers that only need to know WHETHER a person
+   * is placeable (campaignProposals), not which of two near-equal campaigns
+   * wins: on 2026-09-04 a manual proposals run over 600 CommunityForce
+   * people fired a tiebreak per close call, hit the per-user LLM burst limit
+   * (30/min), and the proposals' own drafts were then refused.
+   */
+  opts: { deterministicOnly?: boolean } = {},
+): Promise<RoutePick[]> {
   const db = await getDb();
   if (!db || prospectIds.length === 0) return [];
   const people = await db.select({
@@ -137,7 +149,7 @@ export async function routeProspects(workspaceId: number, prospectIds: number[])
     const { pick, needsTiebreak, contenders } = choosePick(scores);
     if (!pick) { out.push({ ...base, alternatives: scores, campaignId: null, campaignName: null, fit: 0, reasoning: "", skipReason: `No campaign scores ${MIN_FIT}+ for this person's title, industry, or location` }); continue; }
 
-    if (!needsTiebreak) {
+    if (!needsTiebreak || opts.deterministicOnly) {
       out.push({ ...base, alternatives: scores, campaignId: pick.campaignId, campaignName: pick.campaignName, fit: pick.fit, reasoning: `Best deterministic fit (${pick.fit}/100) on title, industry and location; the next campaign scored ${contenders[1]?.fit ?? "—"}.` });
       continue;
     }

@@ -190,7 +190,10 @@ export async function findUnplacedPeople(workspaceId: number, excludeIds: Set<nu
   // The router's own verdict, so "unplaced" means exactly what the sweep
   // means by it. A person with a pick is the router's business, not ours;
   // one it skips as owned is already somewhere.
-  const picks = await routeProspects(workspaceId, candidates.map((c) => c.id));
+  // deterministicOnly: we only need to know WHETHER someone is placeable, so
+  // no tiebreak model call per close call — those burned the per-user LLM
+  // burst budget before the proposals' own drafts ran (2026-09-04).
+  const picks = await routeProspects(workspaceId, candidates.map((c) => c.id), { deterministicOnly: true });
   const unplaced = new Set(picks.filter((p) => p.campaignId == null && !/^Already in|^In the sequence/.test(p.skipReason ?? "")).map((p) => p.prospectId));
   return candidates.filter((c) => unplaced.has(c.id));
 }
@@ -253,9 +256,41 @@ export async function proposeForCluster(workspaceId: number, cluster: Cluster, e
       usedModel: true,
     };
   } catch (e) {
-    console.error(`[campaignProposals] model draft failed for cluster ${cluster.key}:`, (e as Error)?.message ?? e);
-    return fallback;
+    const msg = String((e as Error)?.message ?? e).slice(0, 200);
+    console.error(`[campaignProposals] model draft failed for cluster ${cluster.key}:`, msg);
+    // Say so ON the proposal. A silent fallback reads as a weak model; the
+    // real cause (a rate limit, a missing key) has to be visible to be fixed.
+    return { ...fallback, reasoning: `${fallback.reasoning} Model draft unavailable: ${msg}` };
   }
+}
+
+/** Rebuild a pending proposal's cluster from its people and draft it again with the model. */
+export async function redraftProposal(workspaceId: number, proposalId: number): Promise<{ ok: boolean; usedModel: boolean; name: string }> {
+  const db = await getDb();
+  if (!db) return { ok: false, usedModel: false, name: "" };
+  const [p] = await db.select().from(campaignProposals)
+    .where(and(eq(campaignProposals.id, proposalId), eq(campaignProposals.workspaceId, workspaceId), eq(campaignProposals.status, "pending"))).limit(1);
+  if (!p) throw new Error("Proposal not found or already decided");
+  const ids = (Array.isArray(p.prospectIds) ? p.prospectIds : []).map(Number).filter((n) => Number.isFinite(n));
+  const people = ids.length
+    ? await db.select({
+        id: prospects.id, title: prospects.title, seniority: prospects.seniority, functionalArea: prospects.functionalArea,
+        industry: prospects.industry, country: prospects.country, company: prospects.company,
+      }).from(prospects).where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.id, ids)))
+    : [];
+  const [industry, family, country] = String(p.clusterKey ?? "-|-|-").split("|");
+  const cluster: Cluster = {
+    key: p.clusterKey ?? "-|-|-",
+    industry: industry === "-" ? null : industry, family: family === "-" ? null : family, country: country === "-" ? null : country,
+    people,
+  };
+  const existing = await db.select({ name: areCampaigns.name }).from(areCampaigns)
+    .where(and(eq(areCampaigns.workspaceId, workspaceId), ne(areCampaigns.status, "archived" as never)));
+  const draft = await proposeForCluster(workspaceId, cluster, existing.map((e) => e.name));
+  await db.update(campaignProposals)
+    .set({ name: draft.name, description: draft.description, valueProposition: draft.valueProposition || null, targeting: draft.targeting, copyMode: draft.copyMode, reasoning: draft.reasoning } as never)
+    .where(and(eq(campaignProposals.id, proposalId), eq(campaignProposals.workspaceId, workspaceId)));
+  return { ok: true, usedModel: draft.usedModel, name: draft.name };
 }
 
 /** Ids covered by a pending proposal, or one dismissed inside the cooldown. */
@@ -437,5 +472,3 @@ export async function runCampaignProposalsAllWorkspaces(): Promise<{ workspaces:
   return out;
 }
 
-// Referenced so the import stays honest until per-person overrides need it.
-void inArray;

@@ -81,9 +81,19 @@ describe("the deterministic draft — what a proposal is when the model is unava
 
 describe("the plumbing", () => {
   const svc = read("services", "campaignProposals.ts");
-  it("unplaced = the ROUTER's own verdict, not a second scorer", () => {
+  it("unplaced = the ROUTER's own verdict, not a second scorer — and never a tiebreak model call", () => {
     expect(svc).toContain('import { routeProspects } from "./campaignRouter"');
-    expect(svc).toContain("const picks = await routeProspects(workspaceId, candidates.map((c) => c.id));");
+    expect(svc).toContain("const picks = await routeProspects(workspaceId, candidates.map((c) => c.id), { deterministicOnly: true });");
+    // The router honours the flag: a close call takes its provisional leader.
+    const router = read("services", "campaignRouter.ts");
+    expect(router).toContain("opts: { deterministicOnly?: boolean } = {},");
+    expect(router).toContain("if (!needsTiebreak || opts.deterministicOnly) {");
+  });
+  it("a failed model draft says so ON the proposal, and a pending one can be redrafted", () => {
+    expect(svc).toContain("Model draft unavailable: ${msg}");
+    expect(svc).toContain("export async function redraftProposal(");
+    expect(read("routers", "are", "campaigns.ts")).toContain("redraftProposal: adminWsProcedure");
+    expect(client("components", "usip", "CampaignProposals.tsx")).toContain("trpc.are.campaigns.redraftProposal.useMutation");
     expect(svc).toContain('p.campaignId == null && !/^Already in|^In the sequence/.test(p.skipReason ?? "")');
   });
   it("accept creates the campaign ACTIVE with batch approval, no discovery, and pushes through the one write path", () => {

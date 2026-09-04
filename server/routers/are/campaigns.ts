@@ -306,6 +306,18 @@ export const campaignsRouter = router({
       return { ok: true as const, ...result };
     }),
 
+  /** Admin: draft a pending proposal again with the model (same people, new name/targeting/copy). */
+  redraftProposal: adminWsProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const { redraftProposal } = await import("../../services/campaignProposals");
+      try {
+        return await redraftProposal(ctx.workspace.id, input.id);
+      } catch (e) {
+        throw new TRPCError({ code: "NOT_FOUND", message: (e as Error).message || "Proposal not found" });
+      }
+    }),
+
   /** Admin: analyse People now and propose campaigns (records pending rows; never creates). */
   generateProposals: adminWsProcedure
     .mutation(async ({ ctx }) => {
