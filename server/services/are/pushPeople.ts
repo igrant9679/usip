@@ -149,17 +149,30 @@ export async function pushPeopleIntoCampaign(
     for (const k of queueIdentityKeys(shape)) if (!index.has(k)) index.set(k, { rowId: row.id, campaignId });
   }
 
-  // Enrich → sequence, in that order, off the request path.
+  // Enrich → sequence, in that order, off the request path — and SERIALLY.
+  // One chain per push, one person at a time. It used to start a task per
+  // person: a 32-person push fired 32 enrichments at once, tripped the
+  // per-user LLM burst limit (30/min), and seven people failed their first
+  // enrichment with "will retry on the next pass" (2026-09-04). Serial is
+  // slower to finish but every person gets through; the engine's own global
+  // pass is serial for the same reason. A failure for one person is logged
+  // and the chain moves on to the next.
   const { runEnrichAgent, runSequenceAgent } = await import("../../routers/are/prospects");
-  for (const a of added) {
+  if (added.length > 0) {
     void (async () => {
-      await runEnrichAgent(a.queueId, workspaceId);
-      if (opts.generateSequence !== false) {
-        // allowWithoutIntel: enrichment may legitimately find nothing for
-        // this person, and a manual push should still produce a sequence.
-        await runSequenceAgent(a.queueId, workspaceId, campaignId, { force: false, allowWithoutIntel: true });
+      for (const a of added) {
+        try {
+          await runEnrichAgent(a.queueId, workspaceId);
+          if (opts.generateSequence !== false) {
+            // allowWithoutIntel: enrichment may legitimately find nothing for
+            // this person, and a manual push should still produce a sequence.
+            await runSequenceAgent(a.queueId, workspaceId, campaignId, { force: false, allowWithoutIntel: true });
+          }
+        } catch (e) {
+          console.error(`[pushPeopleIntoCampaign] queue ${a.queueId}:`, (e as Error)?.message ?? e);
+        }
       }
-    })().catch((e) => console.error(`[pushPeopleIntoCampaign] queue ${a.queueId}:`, (e as Error)?.message ?? e));
+    })().catch((e) => console.error(`[pushPeopleIntoCampaign] chain for campaign ${campaignId}:`, (e as Error)?.message ?? e));
   }
 
   return { added, skipped };

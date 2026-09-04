@@ -103,6 +103,21 @@ describe("the preview rehearses the push with the push's own inputs", () => {
   const preview = read("services", "are", "addExistingPreview.ts");
   const write = read("services", "are", "pushPeople.ts");
 
+  it("the push enriches SERIALLY: one background chain per push, one person at a time", () => {
+    // 2026-09-04: one task per person fired 32 enrichments at once, tripped
+    // the per-user LLM burst limit, and seven people failed their first
+    // enrichment. The chain is still off the request path, still enrich
+    // before sequence, and a failure for one person does not stop the rest.
+    // lastIndexOf: the early no-db return uses the same literal above the chain.
+    const tail = write.slice(write.indexOf("// Enrich → sequence, in that order"), write.lastIndexOf("return { added, skipped };"));
+    expect(tail.length).toBeGreaterThan(200);
+    expect(tail).toContain("if (added.length > 0) {");
+    expect(tail).toContain("void (async () => {\n      for (const a of added) {\n        try {\n          await runEnrichAgent(a.queueId, workspaceId);");
+    expect(tail).toContain("} catch (e) {\n          console.error(`[pushPeopleIntoCampaign] queue ${a.queueId}:`");
+    // No per-person task: exactly ONE `void (async` in the tail.
+    expect(tail.split("void (async").length - 1).toBe(1);
+  });
+
   it("the write path decides through the classifier — not an inline copy of the rules", () => {
     expect(write).toContain("const verdict = classifyPushCandidate(shape, campaignId, index, inSequence.get(p.id));");
     expect(write).toContain('if (verdict.kind !== "ready") {');
