@@ -299,6 +299,8 @@ type NavSection = { label: string; icon: any; items: NavLink[]; color: string; d
 // mailbox, calendar). Uncoloured links inherit their legacy section hue.
 const TOP_LINKS: NavLink[] = [
   { href: "/v2/home", label: "Home", icon: Home, color: "#3B82F6", darkColor: "#93C5FD" },
+  // Back on the rail (owner, 2026-09-04): the pipeline dashboard.
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, color: "#F59E0B", darkColor: "#FBBF24" },
   { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, color: "#9333EA", darkColor: "#D8B4FE" },
   { href: "/inbox", label: "Inbox", icon: Inbox },
   { href: "/mailbox", label: "My Mailbox", icon: MailOpen },
@@ -316,9 +318,11 @@ const TOP_LINKS: NavLink[] = [
 // Rail sections ARE the products (owner, 2026-09-02): Prospecting → CRM →
 // Outreach → Proposals → Dialer → Customer Success reads as the story of the
 // app top to bottom. Marketing has no rail section on purpose — its one
-// product (Campaigns/Broadcasts) does not send yet and comes back to the
-// rail the day it does; Analytics and Configuration are cross-cutting and
-// live in the Library / palette / admin panel.
+// product (Broadcasts) does not send yet and comes back to the rail the day
+// it does. Analytics came BACK as a section (owner, 2026-09-04: "add the
+// Dashboard and the other menus that are relevant and working back") — it
+// sits after the products, as the view across them. Configuration stays
+// cross-cutting: Library / palette / the Admin Settings panel.
 const GROUP_META: { group: ToolGroup; label: string; icon: any; color: string; darkColor: string }[] = [
   { group: "Prospecting", label: "Prospecting", icon: Radar, color: "#EA580C", darkColor: "#FB923C" },
   { group: "CRM", label: "CRM", icon: Database, color: "#0891B2", darkColor: "#22D3EE" },
@@ -326,13 +330,13 @@ const GROUP_META: { group: ToolGroup; label: string; icon: any; color: string; d
   { group: "Proposals", label: "Proposals", icon: DollarSign, color: "#10B981", darkColor: "#34D399" },
   { group: "Dialer", label: "Dialer", icon: Phone, color: "#7C3AED", darkColor: "#A78BFA" },
   { group: "Customer Success", label: "Customer Success", icon: Heart, color: "#DB2777", darkColor: "#F472B6" },
+  { group: "Analytics", label: "Analytics", icon: BarChart3, color: "#F59E0B", darkColor: "#FBBF24" },
 ];
 
 /** Accent hues for tools whose group has no rail section (Library reach). */
 const EXTRA_GROUP_COLORS: Partial<Record<ToolGroup, { c: string; d: string }>> = {
   "Daily": { c: "#3B82F6", d: "#93C5FD" },
   "Marketing": { c: "#B45309", d: "#FCD34D" },
-  "Analytics": { c: "#F59E0B", d: "#FBBF24" },
   "Configuration": { c: "#64748B", d: "#94A3B8" },
 };
 

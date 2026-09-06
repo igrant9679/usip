@@ -89,7 +89,8 @@ const INERT_KEYS = new Set([
   "/v2/pipeline",        // Pipeline has no sidebar link
   "/v2/opportunities",   // reached from the pipeline board
   "/sending-accounts",   // Engage SubNav
-  "/are/performance",    // ARE Hub SubNav
+  // "/are/performance" left this list 2026-09-04: Engine Performance is on
+  // the rail again (the Analytics section came back).
 ]);
 
 describe("nav hover-help coverage", () => {

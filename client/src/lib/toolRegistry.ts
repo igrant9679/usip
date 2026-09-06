@@ -26,7 +26,7 @@ import {
   Activity, AlertTriangle, BarChart3, Bot, Building2, CalendarClock,
   CalendarDays, ClipboardCheck, ClipboardList, Database, DollarSign, FileText,
   Filter, GitFork, Globe, Heart, HelpCircle, Home, Inbox, KanbanSquare,
-  LayoutTemplate, Linkedin, ListChecks, Mail, MailOpen, MailWarning, Megaphone,
+  LayoutDashboard, LayoutTemplate, Linkedin, ListChecks, Mail, MailOpen, MailWarning, Megaphone,
   MessageSquare, Mic2, Network, Package, PenLine, Phone, PieChart, Plug,
   Radar, Search, Send, Settings, Share2, ShieldCheck, Sparkles, Target,
   Upload, Users, Workflow, Wrench,
@@ -75,6 +75,11 @@ export const TOOLS: Tool[] = [
   /* ── Daily — the loop: what needs me, what the machine did, where I act ── */
   { href: "/v2/home", label: "Home", icon: Home, group: "Daily", primary: true,
     description: "What needs you, what the autopilots did, and today's numbers." },
+  // Back on the rail (owner, 2026-09-04): the pipeline dashboard — revenue,
+  // win/loss, stage funnel, top reps — is a different question from Home's
+  // "what needs me", and it was the app's landing page before /v2/home.
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, group: "Daily", primary: true,
+    description: "Pipeline at a glance — revenue, win/loss, stage funnel, top reps, recent deals.", keywords: ["overview", "kpi", "home screen", "revenue"] },
   { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, group: "Daily", primary: true,
     description: "Ask anything about your pipeline in plain language." },
   { href: "/inbox", label: "Inbox", icon: Inbox, group: "Daily", primary: true,
@@ -128,9 +133,12 @@ export const TOOLS: Tool[] = [
     description: "Scored, routable leads awaiting qualification." },
   { href: "/v2/deals", label: "Deals", icon: KanbanSquare, group: "CRM", primary: true,
     description: "Your pipeline board — every open opportunity.", keywords: ["pipeline", "opportunities"] },
-  { href: "/v2/lists", label: "Lists", icon: ListChecks, group: "CRM",
+  // Back on the rail (owner, 2026-09-04): both are daily working surfaces —
+  // Lists feed the Add-existing wizard and targeting, Tasks carry the
+  // Task Autopilot's proposals.
+  { href: "/v2/lists", label: "Lists", icon: ListChecks, group: "CRM", primary: true,
     description: "Named sets of people or companies for targeting." },
-  { href: "/v2/tasks", label: "Tasks", icon: ListChecks, group: "CRM",
+  { href: "/v2/tasks", label: "Tasks", icon: ListChecks, group: "CRM", primary: true,
     description: "Your to-dos, including AI-proposed drafts." },
   // The alerts strip on Deals shows the same rows (phase 4); the route stays
   // for its in-page deal actions.
@@ -140,8 +148,12 @@ export const TOOLS: Tool[] = [
   /* ── Outreach — 1:1, sequenced, per-person copy; replies and meetings ── */
   { href: "/are", label: "Revenue Engine", icon: Bot, group: "Outreach", primary: true,
     description: "The autonomous outbound engine: source → enrich → send → book.", keywords: ["are", "hub", "autonomous"] },
-  { href: "/are/campaigns", label: "ARE Campaigns", icon: Megaphone, group: "Outreach",
-    description: "The engine's campaigns — targeting, copy, funnel." },
+  // Back on the rail (owner, 2026-09-04): the campaign list is where the
+  // owner lives — every campaign's targeting, copy, prospects and funnel.
+  // Labelled "Campaigns" here; the unfinished Marketing product is
+  // "Broadcasts" so the palette never shows two entries with one name.
+  { href: "/are/campaigns", label: "Campaigns", icon: Megaphone, group: "Outreach", primary: true,
+    description: "The engine's campaigns — targeting, copy, prospects, funnel.", keywords: ["are", "revenue engine", "sequences"] },
   { href: "/v2/sequences", label: "Sequences", icon: Activity, group: "Outreach", primary: true,
     description: "Multi-step outreach flows with one fixed message per step." },
   { href: "/v2/emails", label: "Emails", icon: Mail, group: "Outreach", primary: true,
@@ -152,7 +164,7 @@ export const TOOLS: Tool[] = [
     description: "Booked and proposed meetings; approve AI proposals.", keywords: ["demo"] },
   { href: "/unified-inbox", label: "Unified Inbox", icon: MessageSquare, group: "Outreach", primary: true,
     description: "LinkedIn, WhatsApp and social DMs in one place.", keywords: ["multichannel"] },
-  { href: "/social", label: "Social", icon: Share2, group: "Outreach",
+  { href: "/social", label: "Social", icon: Share2, group: "Outreach", primary: true,
     description: "LinkedIn outreach: invites, DMs, and replies.", keywords: ["linkedin", "multichannel"] },
   // Both were views of the same drafts table as Emails (phase 4): they are
   // now saved filters of it. The old routes stay for the per-draft editor
@@ -166,8 +178,8 @@ export const TOOLS: Tool[] = [
   /* ── Marketing — one message to a segment ────────────────────────────── */
   // Not on the rail: the Campaigns product does not send yet (Launch flips a
   // status; nothing dispatches). It comes back to the rail the day it sends.
-  { href: "/campaigns", label: "Campaigns", icon: Megaphone, group: "Marketing",
-    description: "Broadcast one message to a segment. Not yet sending — audiences and copy can be prepared.", keywords: ["broadcast", "bulk", "newsletter"] },
+  { href: "/campaigns", label: "Broadcasts", icon: Megaphone, group: "Marketing",
+    description: "Broadcast one message to a segment. Not yet sending — audiences and copy can be prepared.", keywords: ["broadcast", "bulk", "newsletter", "campaigns"] },
   { href: "/segments", label: "Segments", icon: Filter, group: "Marketing",
     description: "Saved audience filters for broadcasts and auto-enroll rules." },
   // Live but unregistered until phase 4: the rules that auto-enroll matching
@@ -198,18 +210,21 @@ export const TOOLS: Tool[] = [
   { href: "/qbrs", label: "QBRs", icon: ClipboardCheck, group: "Customer Success",
     description: "Quarterly business review prep and history." },
 
-  /* ── Analytics — cross-cutting ───────────────────────────────────────── */
-  { href: "/v2/analytics", label: "Analytics", icon: BarChart3, group: "Analytics",
+  /* ── Analytics — cross-cutting; a rail section again (owner, 2026-09-04) ── */
+  { href: "/v2/analytics", label: "Analytics", icon: BarChart3, group: "Analytics", primary: true,
     description: "Cross-channel outreach and pipeline analytics — the one funnel." },
-  { href: "/reports", label: "Reports", icon: FileText, group: "Analytics",
+  { href: "/reports", label: "Reports", icon: FileText, group: "Analytics", primary: true,
     description: "Row-level reports over any object, exportable." },
-  { href: "/dashboards", label: "Dashboards", icon: PieChart, group: "Analytics",
+  { href: "/dashboards", label: "Dashboards", icon: PieChart, group: "Analytics", primary: true,
     description: "Build your own CRM metric dashboards." },
+  // Deliberately NOT on the rail: it reads email_drafts only, so campaign
+  // sends (the bulk of volume) are invisible to it and its rates understate
+  // reality (audit 2026-09-02). Analytics counts the execution queue.
   { href: "/email-analytics", label: "Email Analytics", icon: Mail, group: "Analytics",
-    description: "Opens, clicks, replies, bounces by send." },
-  { href: "/are/performance", label: "Engine Performance", icon: BarChart3, group: "Analytics",
+    description: "Opens, clicks, replies, bounces by send — drafts only; use Analytics for campaign sends." },
+  { href: "/are/performance", label: "Engine Performance", icon: BarChart3, group: "Analytics", primary: true,
     description: "What the engine sent, booked, and learned." },
-  { href: "/forecast", label: "Forecast", icon: BarChart3, group: "Analytics",
+  { href: "/forecast", label: "Forecast", icon: BarChart3, group: "Analytics", primary: true,
     description: "Projected revenue from the open pipeline." },
   { href: "/mindmaps", label: "Mindmaps", icon: GitFork, group: "Analytics",
     description: "Freeform planning canvases." },

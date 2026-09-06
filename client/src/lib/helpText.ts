@@ -36,6 +36,9 @@ export interface HelpEntry {
 export const NAV_HELP: Record<string, HelpEntry> = {
   // ── Overview ──
   "/v2/home": { body: "Your starting point: what needs attention today, and how the pipeline moved this week.", article: "navigating-the-app" },
+  "/dashboard": { body: "The pipeline at a glance — revenue by period, win/loss, stage funnel, top reps and recent deals.", article: "navigating-the-app" },
+  "/are/campaigns": { body: "Every Revenue Engine campaign: targeting, copy, prospects, and how each step performed.", article: "are-tuning-campaign" },
+  "/forecast": { body: "Projected revenue from the open pipeline, weighted by stage." },
   "/v2/library": { body: "Every tool in the product, grouped and searchable. The sidebar shows only the daily loop — anything you can't find lives here (or press Ctrl+K)." },
   "/v2/ai-assistant": { body: "Ask questions about your own data in plain English — \"which deals slipped this month?\" — and have it propose actions (enroll, tasks, lists, enrich, pause/activate or create a campaign) that run only when you confirm.", article: "ai-assistant" },
   "/inbox": { body: "Notifications from the autonomous engines: what they did, and anything waiting on your approval." },
@@ -59,7 +62,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
 
   // ── Engage ──
   "/v2/sequences": { body: "Fixed multi-step email follow-ups — the same steps to everyone you enroll. Not the same as a Revenue Engine campaign, which writes per person and can source its own people.", article: "sequences-vs-campaigns" },
-  "/campaigns": { body: "Outbound sending campaigns, with their own audience and sending accounts.", article: "are-tuning-campaign" },
+  "/campaigns": { body: "Broadcasts: one message to a segment. Not yet sending — prepare audiences and copy here; live outreach runs as Revenue Engine campaigns.", article: "are-tuning-campaign" },
   "/segments": { body: "Saved filters over your contacts that stay up to date as data changes." },
   "/sending-accounts": { body: "The mailboxes and services that actually send your email, with per-account daily limits.", article: "email-sending-preferences" },
   "/email-builder": { body: "Design reusable email templates and snippets.", article: "email-builder-templates" },
