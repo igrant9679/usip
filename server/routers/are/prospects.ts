@@ -766,14 +766,54 @@ async function personalizeForProspect(
   });
 }
 
-/** Quality flag, not gate. Records a score the UI surfaces as a Review badge. */
-async function evaluateSequenceQuality(steps: unknown[], workspaceId: number): Promise<{ score: number; breakdown: Record<string, number>; feedback: string }> {
+/**
+ * Quality flag, not gate. Records a score the UI surfaces as a Review badge.
+ *
+ * The evaluator is told what it is looking at (2026-09-04). It used to see
+ * the raw steps with `{{firstName}}` / `{{company}}` / `[..]({{bookingLink}})`
+ * still in them and no prospect facts at all — so "specificity: verifiable
+ * prospect facts referenced" could only be guessed, and the booking link
+ * read as a broken CTA. Every sequence on two new campaigns scored 7–8/40
+ * across ALL four dimensions, which is the signature of a rubric that
+ * cannot see its subject, not of uniformly bad copy. It now receives the
+ * dossier the writer had, and the merge/signature mechanics are explained,
+ * so a low score means the writing is weak and a high score means it used
+ * what was known. Still strict on generic phrases.
+ */
+async function evaluateSequenceQuality(
+  steps: unknown[],
+  workspaceId: number,
+  facts?: { prospect: typeof prospectQueue.$inferSelect; intel: typeof prospectIntelligence.$inferSelect },
+): Promise<{ score: number; breakdown: Record<string, number>; feedback: string }> {
   if (!Array.isArray(steps) || steps.length === 0) return { score: 0, breakdown: {}, feedback: "Empty sequence" };
+  const known = facts
+    ? (() => {
+        const p = facts.prospect, i = facts.intel;
+        const pains = intelArray<{ signal?: string; evidence?: string }>(i.painSignals)
+          .filter((x) => x && typeof x === "object" && (x.signal || x.evidence)).slice(0, 3);
+        const { hook } = primaryHookOf(i);
+        return [
+          `- Name: ${p.firstName} ${p.lastName}`,
+          `- Title: ${p.title ?? "unknown"}`,
+          `- Company: ${p.companyName ?? "unknown"}${p.industry ? ` (${p.industry})` : ""}`,
+          i.companyOneLiner ? `- Company one-liner: ${i.companyOneLiner}` : null,
+          i.linkedinSummary ? `- LinkedIn summary: ${String(i.linkedinSummary).slice(0, 400)}` : null,
+          hook ? `- Primary hook: ${hook}` : null,
+          pains.length ? `- Pain signals: ${pains.map((x) => `${x.signal ?? ""}${x.evidence ? ` (${x.evidence})` : ""}`).join("; ")}` : null,
+        ].filter(Boolean).join("\n");
+      })()
+    : "(no dossier supplied — judge specificity only on what the text itself names)";
   const result = await invokeLLM({
     workspaceId,
     messages: [
-      { role: "system", content: `You are a cold email quality evaluator. Score the sequence on 4 dimensions, each 0-10. Be strict — generic phrases, lack of personalisation, or weak CTAs should score low.` },
-      { role: "user", content: `Evaluate:\n\n${JSON.stringify(steps, null, 2)}\n\nScore (0-10 each):\n1. Specificity (verifiable prospect facts referenced)\n2. Clarity (value prop clear)\n3. Brevity (<150 words per email)\n4. CTA (clear, low-friction)` },
+      { role: "system", content:
+        `You are a cold email quality evaluator. Score the sequence on 4 dimensions, each 0-10. Be strict — generic phrases, lack of personalisation, or weak CTAs should score low.\n\n` +
+        `How to read the text:\n` +
+        `- {{firstName}}, {{company}} and similar tags are merge fields filled with the real values at send time; treat them as the correct name/company, not as missing personalisation.\n` +
+        `- A Markdown link whose target is {{bookingLink}} is a working scheduling page; it is a clear, low-friction CTA.\n` +
+        `- A fixed sign-off block at the end of a body is appended by the system; do not score it.\n` +
+        `- Specificity means the copy USES the facts listed under "What the writer knew". If the dossier is thin, score how well the copy uses what exists, and do not penalise it for facts nobody had — but do penalise invented claims about the prospect.` },
+      { role: "user", content: `## What the writer knew about the prospect\n${known}\n\n## Sequence to evaluate\n${JSON.stringify(steps, null, 2)}\n\nScore (0-10 each):\n1. Specificity (uses the known facts; no invented ones)\n2. Clarity (value prop clear)\n3. Brevity (<150 words per email)\n4. CTA (clear, low-friction)` },
     ],
     response_format: {
       type: "json_schema",
@@ -959,8 +999,8 @@ export async function runSequenceAgent(
     await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.personalize",
       `Personalized ${steps.length} steps for ${prospect.firstName} ${prospect.lastName}`, { prospectId, steps: steps.length });
 
-    // (3) Single-pass quality flag.
-    const quality = await evaluateSequenceQuality(steps, workspaceId);
+    // (3) Single-pass quality flag — judged against the dossier the writer had.
+    const quality = await evaluateSequenceQuality(steps, workspaceId, { prospect, intel });
     await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.eval",
       `Quality: ${quality.score}/40`, { prospectId, score: quality.score, breakdown: quality.breakdown });
 
