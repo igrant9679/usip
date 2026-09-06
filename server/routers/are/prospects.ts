@@ -839,11 +839,23 @@ async function evaluateSequenceQuality(
   const content = result.choices[0]?.message?.content;
   if (!content) return { score: 0, breakdown: {}, feedback: "Eval LLM returned no content" };
   const data = parseLlmJson(content, "evaluateSequenceQuality");
+  const breakdown = { specificity: data.specificity, clarity: data.clarity, brevity: data.brevity, cta: data.cta };
   return {
-    score: Math.min(40, Math.max(0, Math.round(data.totalScore))),
-    breakdown: { specificity: data.specificity, clarity: data.clarity, brevity: data.brevity, cta: data.cta },
+    // The TOTAL is arithmetic, so it is done here, not by the model. The
+    // model's own `totalScore` was trusted until 2026-09-06, and it often
+    // returned an average or a single dimension: a sequence whose four
+    // dimensions read 7/8/9/7 came back as "8/40" — the bimodal 7-8 vs 32
+    // split across a whole campaign was this, not two kinds of copy.
+    score: sumQualityBreakdown(breakdown),
+    breakdown,
     feedback: String(data.feedback ?? ""),
   };
+}
+
+/** 0–40 from the four 0–10 dimensions; a missing or non-numeric dimension counts 0. */
+export function sumQualityBreakdown(b: Record<string, unknown> | null | undefined): number {
+  const dim = (k: string) => { const n = Number((b as Record<string, unknown> | null)?.[k]); return Number.isFinite(n) ? Math.min(10, Math.max(0, n)) : 0; };
+  return Math.round(dim("specificity") + dim("clarity") + dim("brevity") + dim("cta"));
 }
 
 /** Result the awaited generateSequence mutation returns so the client

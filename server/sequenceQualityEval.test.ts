@@ -12,8 +12,29 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { sumQualityBreakdown } from "./routers/are/prospects";
 
 const src = readFileSync(join(__dirname, "routers", "are", "prospects.ts"), "utf8");
+
+describe("the total is arithmetic, not the model's word", () => {
+  // 2026-09-06, live: dimensions 7/8/9/7 stored beside a score of 8 — the
+  // model's totalScore was an average. Half a campaign read 7–8/40 while the
+  // other half read 32+, and it was this, not two kinds of copy.
+  it("sums the four dimensions, clamped 0–10 each", () => {
+    expect(sumQualityBreakdown({ specificity: 7, clarity: 8, brevity: 9, cta: 7 })).toBe(31);
+    expect(sumQualityBreakdown({ specificity: 10, clarity: 10, brevity: 10, cta: 10 })).toBe(40);
+    expect(sumQualityBreakdown({ specificity: 12, clarity: -3, brevity: 5, cta: 5 })).toBe(20);
+  });
+  it("a missing or non-numeric dimension counts zero, never NaN", () => {
+    expect(sumQualityBreakdown({ specificity: "7", clarity: null, brevity: undefined, cta: "x" })).toBe(7);
+    expect(sumQualityBreakdown(null)).toBe(0);
+  });
+  it("the evaluator uses it and no longer reads data.totalScore", () => {
+    const fn = src.slice(src.indexOf("async function evaluateSequenceQuality"), src.indexOf("export function sumQualityBreakdown"));
+    expect(fn).toContain("score: sumQualityBreakdown(breakdown),");
+    expect(fn).not.toContain("data.totalScore");
+  });
+});
 const fn = src.slice(src.indexOf("async function evaluateSequenceQuality"), src.indexOf("export interface SequenceAgentResult"));
 
 describe("evaluateSequenceQuality sees its subject", () => {
