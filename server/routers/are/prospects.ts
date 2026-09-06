@@ -51,7 +51,7 @@ import { getDb } from "../../db";
 import { parseLlmJson } from "./llmJson";
 import { invokeLLM, isRetryableLLMError } from "../../_core/llm";
 import { router } from "../../_core/trpc";
-import { isAdminRole, requireMinRole, workspaceProcedure } from "../../_core/workspace";
+import { adminWsProcedure, isAdminRole, requireMinRole, workspaceProcedure } from "../../_core/workspace";
 import { recordAudit } from "../../audit";
 import { BULK_INPUT, runBulkAction } from "./prospectsBulk";
 import { notifyIfEnabled } from "../../services/policyNotify";
@@ -1274,6 +1274,56 @@ export const prospectsRouter = router({
    *  for the LLM pipeline to finish, then returns the concrete result
    *  ({ok, reused, steps, qualityScore, durationMs}) or throws a
    *  TRPCError with the underlying error message. */
+  /**
+   * Repair stored quality TOTALS (owner ask 2026-09-06). Rows scored before
+   * `da3641c` carry the model's own total, which was often an average of the
+   * four 0-10 dimensions (7/8/9/7 stored beside "8/40"). The breakdown was
+   * always right; this re-sums it through the same sumQualityBreakdown the
+   * evaluator now uses. Idempotent: a row whose total already matches is
+   * left alone. Workspace-scoped at the read AND at every write.
+   */
+  repairSequenceQualityTotals: adminWsProcedure
+    .input(z.object({ campaignId: z.number().int().positive().optional() }).optional())
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db
+        .select({
+          id: prospectIntelligence.id,
+          score: prospectIntelligence.sequenceQualityScore,
+          breakdown: prospectIntelligence.sequenceQualityBreakdown,
+          campaignId: prospectQueue.campaignId,
+        })
+        .from(prospectIntelligence)
+        .innerJoin(prospectQueue, eq(prospectQueue.id, prospectIntelligence.prospectQueueId))
+        .where(and(
+          eq(prospectQueue.workspaceId, ctx.workspace.id),
+          input?.campaignId ? eq(prospectQueue.campaignId, input.campaignId) : undefined,
+          isNotNull(prospectIntelligence.sequenceQualityBreakdown),
+        ));
+      let repaired = 0, unchanged = 0;
+      const examples: Array<{ id: number; campaignId: number; from: number | null; to: number }> = [];
+      for (const r of rows) {
+        const b = r.breakdown as Record<string, unknown> | null;
+        // A breakdown with no numeric dimension at all is not a score to repair.
+        if (!b || !["specificity", "clarity", "brevity", "cta"].some((k) => Number.isFinite(Number(b[k])))) { unchanged++; continue; }
+        const sum = sumQualityBreakdown(b);
+        if (sum === (r.score ?? 0)) { unchanged++; continue; }
+        await db
+          .update(prospectIntelligence)
+          .set({ sequenceQualityScore: sum } as never)
+          .where(and(eq(prospectIntelligence.id, r.id), eq(prospectIntelligence.workspaceId, ctx.workspace.id)));
+        repaired++;
+        if (examples.length < 5) examples.push({ id: r.id, campaignId: r.campaignId, from: r.score, to: sum });
+      }
+      await recordAudit({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id,
+        action: "update", entityType: "sequence_quality_repair", entityId: input?.campaignId ?? ctx.workspace.id,
+        after: { scanned: rows.length, repaired, unchanged },
+      });
+      return { scanned: rows.length, repaired, unchanged, examples };
+    }),
+
   generateSequence: workspaceProcedure
     .input(z.object({
       prospectId: z.number(),

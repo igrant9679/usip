@@ -29,6 +29,15 @@ describe("the total is arithmetic, not the model's word", () => {
     expect(sumQualityBreakdown({ specificity: "7", clarity: null, brevity: undefined, cta: "x" })).toBe(7);
     expect(sumQualityBreakdown(null)).toBe(0);
   });
+  it("stored totals can be repaired from the breakdown — same sum, workspace-scoped at read and write, idempotent", () => {
+    const proc = src.slice(src.indexOf("repairSequenceQualityTotals: adminWsProcedure"), src.indexOf("generateSequence: workspaceProcedure"));
+    expect(proc).toContain("const sum = sumQualityBreakdown(b);");
+    expect(proc).toContain("if (sum === (r.score ?? 0)) { unchanged++; continue; }");
+    expect(proc).toContain("eq(prospectQueue.workspaceId, ctx.workspace.id)");
+    expect(proc).toContain("eq(prospectIntelligence.id, r.id), eq(prospectIntelligence.workspaceId, ctx.workspace.id)");
+    expect(proc).toContain('entityType: "sequence_quality_repair"');
+  });
+
   it("the evaluator uses it and no longer reads data.totalScore", () => {
     const fn = src.slice(src.indexOf("async function evaluateSequenceQuality"), src.indexOf("export function sumQualityBreakdown"));
     expect(fn).toContain("score: sumQualityBreakdown(breakdown),");
