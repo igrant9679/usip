@@ -274,6 +274,7 @@ describe("every messageContent writer goes through the shared rule", () => {
     // that finds nothing looks exactly like a repo with no problem.
     expect(writers.map((w) => w.rel).sort()).toEqual([
       "server/areEngine.ts",
+      "server/demoSeedExtras.ts",
       "server/routers/are/prospects.ts",
     ]);
   });

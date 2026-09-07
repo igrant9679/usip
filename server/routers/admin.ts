@@ -2094,6 +2094,23 @@ export const dangerZoneRouter = router({
    * What the sample-data remover WOULD delete — powers the Danger-zone card
    * so the destructive button states its blast radius before it's pressed.
    */
+  /**
+   * Seed the demo EXTRAS (owner ask 2026-09-07): everything the base sample
+   * data and the ARE demo campaign leave empty. Super-admin only, idempotent
+   * (audit-row guard), never sends. Runs the ARE demo seeder first so the
+   * campaign exists for the sent steps to hang off.
+   */
+  seedDemoExtras: adminWsProcedure
+    .input(z.object({ ownerName: z.string().max(120).optional(), ownerEmail: z.string().email().optional() }).optional())
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.member.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can seed demo data" });
+      const { seedAreDemoForAllWorkspaces } = await import("../seedAreDemo");
+      await seedAreDemoForAllWorkspaces();
+      const { seedDemoExtras } = await import("../demoSeedExtras");
+      const r = await seedDemoExtras(ctx.workspace.id, ctx.user.id, { ownerName: input?.ownerName, ownerEmail: input?.ownerEmail });
+      return r;
+    }),
+
   sampleDataStatus: adminWsProcedure.query(async ({ ctx }) => {
     const { sampleDataStatus } = await import("../services/sampleData");
     return sampleDataStatus(ctx.workspace.id);
