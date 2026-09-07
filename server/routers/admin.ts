@@ -2101,13 +2101,22 @@ export const dangerZoneRouter = router({
    * campaign exists for the sent steps to hang off.
    */
   seedDemoExtras: adminWsProcedure
-    .input(z.object({ ownerName: z.string().max(120).optional(), ownerEmail: z.string().email().optional() }).optional())
+    .input(z.object({ ownerName: z.string().max(120).optional(), ownerEmail: z.string().email().optional(), ownerUserId: z.number().int().positive().optional() }).optional())
     .mutation(async ({ ctx, input }) => {
       if (ctx.member.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can seed demo data" });
+      // The demo persona (booking link, inbox, meetings) can be a DIFFERENT
+      // member than the super admin running this — but must be a member here.
+      let ownerUserId = ctx.user.id;
+      if (input?.ownerUserId && input.ownerUserId !== ctx.user.id) {
+        const db = await getDb();
+        const [m] = db ? await db.select({ id: workspaceMembers.id }).from(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.userId, input.ownerUserId))).limit(1) : [];
+        if (!m) throw new TRPCError({ code: "BAD_REQUEST", message: "ownerUserId is not a member of this workspace" });
+        ownerUserId = input.ownerUserId;
+      }
       const { seedAreDemoForAllWorkspaces } = await import("../seedAreDemo");
       await seedAreDemoForAllWorkspaces();
       const { seedDemoExtras } = await import("../demoSeedExtras");
-      const r = await seedDemoExtras(ctx.workspace.id, ctx.user.id, { ownerName: input?.ownerName, ownerEmail: input?.ownerEmail });
+      const r = await seedDemoExtras(ctx.workspace.id, ownerUserId, { ownerName: input?.ownerName, ownerEmail: input?.ownerEmail });
       return r;
     }),
 
