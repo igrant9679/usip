@@ -32,6 +32,7 @@ import {
   workspaces,
 } from "../drizzle/schema";
 import { getDb } from "./db";
+import { OPERATOR_ARTICLES, OPERATOR_CATEGORY } from "./seedHelpOperatorManual";
 
 type AnyDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -42,6 +43,8 @@ type CatSeed = { slug: string; name: string; icon: string; sortOrder: number };
 // NOTE: HelpCenter.tsx renders cat.icon as a literal string (emoji), not a
 // lucide component name — so these are emojis, matching the "📁" fallback.
 export const CATEGORIES: CatSeed[] = [
+  // sortOrder 0: the manual sits first — it is the index to everything below.
+  OPERATOR_CATEGORY,
   { slug: "getting-started", name: "Getting Started", icon: "🚀", sortOrder: 1 },
   { slug: "prospecting", name: "Prospecting", icon: "🔍", sortOrder: 2 },
   { slug: "crm-pipeline", name: "CRM & Pipeline", icon: "📊", sortOrder: 3 },
@@ -869,6 +872,10 @@ If the panel is empty, you are done. That is the system working, not something y
 
 The pattern underneath all three cadences is the same: the machines act, the attention panel confesses, and your job is to read the confession — daily for sends, weekly for trends, monthly for budgets and trust.`,
   },
+  // The Operator's Manual (2026-09-08): every page, the data model, the engine,
+  // the autopilots, and the daily / weekly / monthly routines, in their own
+  // category. Lives in seedHelpOperatorManual.ts so this file stays navigable.
+  ...OPERATOR_ARTICLES,
 ];
 
 /* ─── Tours ──────────────────────────────────────────────────────────────── */

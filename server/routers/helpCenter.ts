@@ -19,6 +19,7 @@ import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
+import { PRODUCT_KNOWLEDGE } from "../productKnowledge";
 
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -308,7 +309,10 @@ export const helpCenterRouter = router({
         .select({ id: helpArticles.id, title: helpArticles.title, summary: helpArticles.summary, bodyMarkdown: helpArticles.bodyMarkdown, tags: helpArticles.tags, pageKey: helpArticles.pageKey })
         .from(helpArticles)
         .where(and(eq(helpArticles.workspaceId, ctx.workspace.id), eq(helpArticles.status, "published")))
-        .limit(80);
+        // 80 was the seeded count's headroom in 0130; the Operator's Manual
+        // (2026-09-08) took the catalogue past 70. A cap below the catalogue
+        // silently drops the newest articles from Ask AI.
+        .limit(200);
 
       const tokens = [...new Set(input.message.toLowerCase().match(/[a-z][a-z0-9-]{2,}/g) ?? [])]
         .filter((t) => !["the", "and", "for", "how", "what", "can", "you", "with", "does", "are", "this", "that"].includes(t));
@@ -352,6 +356,9 @@ How to answer:
 - When you use an article, set its numeric ID in citedArticleIds AND reference it inline as [Article:ID] so the user can open it.
 - Keep it short — a few sentences or a tight numbered list. Set confidence lower when the articles only partially cover the question.
 - Current page context: ${input.pageKey ?? "unknown"} (use it to disambiguate, but answer the question that was actually asked).
+
+Product model (the vocabulary and page map the articles assume — use it to interpret the question and name the right page; still cite articles for steps):
+${PRODUCT_KNOWLEDGE}
 
 Knowledge base articles:
 ${articleContext}`;

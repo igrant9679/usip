@@ -41,6 +41,7 @@ import {
   validateNavigateHref,
 } from "../services/assistantTools";
 import { buildEntityCatalog, runExplorerQuery } from "../services/assistantDataExplorer";
+import { PRODUCT_KNOWLEDGE } from "../productKnowledge";
 
 const MAX_ROUNDS = 5;
 /** A proposal the user has not answered goes stale — the world it described
@@ -241,7 +242,7 @@ async function runReadTool(
         .select({ id: helpArticles.id, slug: helpArticles.slug, title: helpArticles.title, summary: helpArticles.summary, body: helpArticles.bodyMarkdown })
         .from(helpArticles)
         .where(and(eq(helpArticles.workspaceId, ctx.workspace.id), eq(helpArticles.status, "published")))
-        .limit(80);
+        .limit(200); // catalogue passed 70 with the Operator's Manual; a cap below it drops the newest articles
       const tokens = Array.from(new Set(String(args.question).toLowerCase().match(/[a-z][a-z0-9-]{2,}/g) ?? []));
       const scored = articles
         .map((a) => {
@@ -280,7 +281,11 @@ Rules:
 - Use navigate to hand the user a link when the answer is "go to this page".
 - Tool results arrive as [tool_result …] messages. After reading one, either call another tool or give your final answer as plain text.
 - Be concise and concrete. Short sentences, tight lists, real names and numbers from tool results.
-- The user opened the assistant from this page: ${pageKey ?? "unknown"}. Use it to interpret "this page" / "here" and to pick navigate targets.`;
+- The user opened the assistant from this page: ${pageKey ?? "unknown"}. Use it to interpret "this page" / "here" and to pick navigate targets.
+- For "what should I do today / this week / this month" call whats_waiting first, then answer as the routine below applied to those real counts — name the queues that are non-empty and skip the ones that are. For "where is X" / "how do I X" answer from the page map and, when depth is needed, help_lookup (the Help Center's Operator's Manual articles cover every page, routine and process).
+
+OPERATOR'S MANUAL (the product's mental model, vocabulary, page map, dials and routines — trust it, and keep its vocabulary exact):
+${PRODUCT_KNOWLEDGE}`;
 
 export const assistantRouter = router({
   chat: workspaceProcedure
