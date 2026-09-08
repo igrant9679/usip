@@ -14,6 +14,7 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { ConfirmButton } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -220,6 +221,10 @@ export default function WorkflowsV2() {
   const genSuggestions = trpc.workflowsAi.generateSuggestions.useMutation({ onSuccess: () => { utils.workflowsAi.listSuggestions.invalidate(); toast.success("AI generated new workflow ideas"); }, onError: (e) => toast.error(e.message) });
   const applySuggestion = trpc.workflowsAi.applySuggestion.useMutation({ onSuccess: () => { utils.workflowsAi.listSuggestions.invalidate(); utils.workflows.list.invalidate(); toast.success("Workflow created"); }, onError: (e) => toast.error(e.message) });
   const dismissSuggestion = trpc.workflowsAi.dismissSuggestion.useMutation({ onSuccess: () => utils.workflowsAi.listSuggestions.invalidate(), onError: (e) => toast.error(e.message) });
+  const applyAllSuggestions = trpc.workflowsAi.applyAllSuggestions.useMutation({
+    onSuccess: (r) => { utils.workflowsAi.listSuggestions.invalidate(); utils.workflows.list.invalidate(); toast[r.failed.length ? "warning" : "success"](`${r.applied} workflow${r.applied === 1 ? "" : "s"} created${r.failed.length ? `, ${r.failed.length} failed` : ""}`); },
+    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can add workflow rules" : e.message),
+  });
 
   // ── Segment auto-enroll rules ──
   const segRules = trpc.segmentRules.list.useQuery(undefined as any, { retry: false });
@@ -422,7 +427,15 @@ export default function WorkflowsV2() {
 
           {/* AI workflow suggestions */}
           {sugList.length > 0 && (
-            <Section icon={Sparkles} title="AI workflow ideas">
+            <Section icon={Sparkles} title="AI workflow ideas"
+              action={
+                <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={applyAllSuggestions.isPending || applySuggestion.isPending}
+                  title={`Add all ${sugList.length} suggested workflow${sugList.length === 1 ? "" : "s"}?`}
+                  description="Each suggestion becomes an enabled workflow rule. Rules fire on real CRM events from now on; you can disable any of them in the list below."
+                  confirmLabel="Add all" onConfirm={() => applyAllSuggestions.mutate()}>
+                  <Check className="size-3.5" /> Add all ({sugList.length})
+                </ConfirmButton>
+              }>
               <div className="space-y-2">
                 {sugList.map((sug: any) => (
                   <div key={sug.id} className="rounded-xl border bg-card p-3 shadow-sm flex items-start gap-3" style={{ borderColor: "#7c3aed40" }}>

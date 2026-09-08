@@ -31,6 +31,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { ConfirmButton } from "@/components/usip/Common";
 import {
   CalendarClock, CalendarCheck, CalendarX, Sparkles, Bot, Zap, Check, X, Clock, Video, Send,
   MoreHorizontal, Plus, AlertTriangle, Link2, Building2, MailWarning, Copy, ExternalLink,
@@ -132,6 +133,17 @@ export default function MeetingsV2() {
       else if (r.reason === "provider_error") toast.error("The calendar provider rejected the invite — nothing was sent; the proposal was kept.");
       else if (r.reason === "all_times_expired") toast.error("Every proposed time has passed — regenerate the proposal to offer new times.");
       else toast.error(`Invite not sent (${r.reason ?? "unknown"}) — the proposal was kept.`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const approveAllProposed = trpc.meetings.approveAllProposed.useMutation({
+    onSuccess: (r) => {
+      invalidateAll();
+      const skippedTotal = Object.values(r.skipped).reduce((a, b) => a + b, 0);
+      const why = Object.entries(r.skipped).map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`).join(", ");
+      if (r.sent > 0 && skippedTotal === 0) toast.success(`${r.sent} invite${r.sent === 1 ? "" : "s"} sent`);
+      else if (r.sent > 0) toast.warning(`${r.sent} sent, ${skippedTotal} not sent (${why}) — those proposals were kept`);
+      else toast.error(`Nothing sent (${why || "no proposals"}) — the proposals were kept`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -259,7 +271,15 @@ export default function MeetingsV2() {
           {/* AI proposals to review */}
           {proposals.length > 0 && (
             <section>
-              <h2 className="text-sm font-semibold mb-2 flex items-center gap-2"><Sparkles className="size-4" style={{ color: "#7c3aed" }} /> AI meeting proposals ({proposals.length})</h2>
+              <div className="flex items-center justify-between mb-2 gap-2">
+                <h2 className="text-sm font-semibold flex items-center gap-2"><Sparkles className="size-4" style={{ color: "#7c3aed" }} /> AI meeting proposals ({proposals.length})</h2>
+                <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={approveAllProposed.isPending || approveSend.isPending}
+                  title={`Approve and send all ${proposals.length} proposal${proposals.length === 1 ? "" : "s"}?`}
+                  description="Each proposal books its earliest future time and the calendar invite is emailed to the prospect now. Proposals whose times have all passed are skipped and kept for you to regenerate."
+                  confirmLabel="Approve & send all" onConfirm={() => approveAllProposed.mutate()}>
+                  <Send className="size-3.5" /> Approve & send all ({proposals.length})
+                </ConfirmButton>
+              </div>
               <div className="space-y-2">
                 {proposals.map((m) => (
                   <ProposalCard key={m.id} m={m}

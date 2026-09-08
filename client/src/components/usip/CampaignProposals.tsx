@@ -13,6 +13,7 @@
  * analysis on demand and always leaves the result here for a human.
  */
 import { Bot, Check, Loader2, Sparkles, X } from "lucide-react";
+import { ConfirmButton } from "@/components/usip/Common";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
@@ -50,6 +51,13 @@ export function CampaignProposals() {
     },
     onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can run the analysis" : e.message),
   });
+  const acceptAll = trpc.are.campaigns.acceptAllProposals.useMutation({
+    onSuccess: (r) => {
+      toast[r.failed.length ? "warning" : "success"](`${r.created} campaign${r.created === 1 ? "" : "s"} created as drafts — ${r.added} people added${r.skipped ? `, ${r.skipped} skipped` : ""}${r.failed.length ? `, ${r.failed.length} failed` : ""}. Each waits for activation and its first batch approval.`);
+      refresh();
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const redraft = trpc.are.campaigns.redraftProposal.useMutation({
     onSuccess: (r) => {
       toast[r.usedModel ? "success" : "info"](r.usedModel ? `Redrafted: “${r.name}”` : "The model was unavailable — the deterministic draft stands (see the note on the card)");
@@ -59,7 +67,7 @@ export function CampaignProposals() {
   });
   const rows = (q.data ?? []) as any[];
   const mode = routing.data?.mode ?? "off";
-  const pending = decide.isPending || generate.isPending || redraft.isPending;
+  const pending = decide.isPending || generate.isPending || redraft.isPending || acceptAll.isPending;
 
   return (
     <section className="lg:col-span-5" data-tour-id="are-campaign-proposals">
@@ -76,6 +84,14 @@ export function CampaignProposals() {
           <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" disabled={pending} onClick={() => generate.mutate()}>
             {generate.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Bot className="size-3.5" />} Analyse People now
           </Button>
+          {rows.length > 0 && (
+            <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 text-xs gap-1.5" disabled={pending}
+              title={`Create all ${rows.length} proposed campaign${rows.length === 1 ? "" : "s"}?`}
+              description="Each proposal becomes a draft campaign with its people queued. Nothing sends until you activate a campaign and approve its first batch."
+              confirmLabel="Create all" onConfirm={() => acceptAll.mutate()}>
+              {acceptAll.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />} Create all ({rows.length})
+            </ConfirmButton>
+          )}
         </div>
       </div>
 

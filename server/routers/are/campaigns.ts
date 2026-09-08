@@ -278,6 +278,29 @@ export const campaignsRouter = router({
     }),
 
   /**
+   * Accept every pending routing suggestion at once (owner ask 2026-09-08).
+   * Same write path as accepting one — applyPicks already takes an array —
+   * so duplicates and people already in outreach are skipped, not doubled.
+   * Bounded at 200 per call; the button shows the count it will act on.
+   */
+  acceptAllRoutingSuggestions: workspaceProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const rows = await db.select().from(campaignRoutingSuggestions)
+      .where(and(eq(campaignRoutingSuggestions.workspaceId, ctx.workspace.id), eq(campaignRoutingSuggestions.status, "pending")))
+      .orderBy(desc(campaignRoutingSuggestions.fit), desc(campaignRoutingSuggestions.id))
+      .limit(200);
+    if (rows.length === 0) return { ok: true as const, accepted: 0, added: 0, skipped: 0 };
+    const { applyPicks } = await import("../../services/campaignRouter");
+    const result = await applyPicks(ctx.workspace.id, rows.map((s) => ({ prospectId: s.prospectId, campaignId: s.campaignId, campaignName: null, fit: s.fit, reasoning: s.reasoning ?? "", alternatives: [], usedModel: false })));
+    await db.update(campaignRoutingSuggestions)
+      .set({ status: "accepted", decidedAt: new Date(), decidedBy: ctx.user.id } as never)
+      .where(and(eq(campaignRoutingSuggestions.workspaceId, ctx.workspace.id), inArray(campaignRoutingSuggestions.id, rows.map((s) => s.id))));
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "campaign_routing_suggestion", entityId: 0, after: { acceptAll: rows.length, ...result } });
+    return { ok: true as const, accepted: rows.length, ...result };
+  }),
+
+  /**
    * Proposed NEW campaigns (owner ask 2026-09-04): the people no active
    * campaign fits, clustered into audiences, each with the targeting and
    * copy mode a campaign for them would carry. Same dial as routing. All
@@ -305,6 +328,30 @@ export const campaignsRouter = router({
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "campaign_proposal", entityId: input.id, after: { decision: input.decision, ...result } });
       return { ok: true as const, ...result };
     }),
+
+  /**
+   * Accept every pending proposal (owner ask 2026-09-08). Each becomes a
+   * DRAFT campaign with its people queued pending — nothing sends until the
+   * campaign is activated and its first batch approved, which is why a bulk
+   * accept is safe here. One failure never blocks the rest.
+   */
+  acceptAllProposals: workspaceProcedure.mutation(async ({ ctx }) => {
+    const { listPendingProposals, acceptProposal } = await import("../../services/campaignProposals");
+    const pending = await listPendingProposals(ctx.workspace.id, 50);
+    let created = 0, added = 0, skipped = 0;
+    const failed: Array<{ id: number; detail: string }> = [];
+    for (const p of pending) {
+      try {
+        const r = await acceptProposal(ctx.workspace.id, p.id, ctx.user.id);
+        if (r.campaignId) created++;
+        added += r.added; skipped += r.skipped;
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "campaign_proposal", entityId: p.id, after: { decision: "accept", bulk: true, ...r } });
+      } catch (e) {
+        failed.push({ id: p.id, detail: (e as Error).message });
+      }
+    }
+    return { ok: true as const, created, added, skipped, failed };
+  }),
 
   /** Admin: draft a pending proposal again with the model (same people, new name/targeting/copy). */
   redraftProposal: adminWsProcedure
@@ -676,6 +723,58 @@ export const campaignsRouter = router({
         .set({ prospectsApproved: Number(n) })
         .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)));
 
+      return { approved };
+    }),
+
+  /**
+   * How many people an "Approve all" would approve right now: enriched and
+   * still pending. The Prospects tab only loads 100 rows, so the button's
+   * count must come from the server or it lies on any bigger campaign.
+   */
+  pendingApprovalCount: workspaceProcedure
+    .input(z.object({ campaignId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return { count: 0 };
+      const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(prospectQueue)
+        .where(and(
+          eq(prospectQueue.campaignId, input.campaignId),
+          eq(prospectQueue.workspaceId, ctx.workspace.id),
+          eq(prospectQueue.sequenceStatus, "pending"),
+          eq(prospectQueue.enrichmentStatus, "complete"),
+        ));
+      return { count: Number(n) };
+    }),
+
+  /**
+   * Approve EVERY enriched, still-pending person in the campaign (owner ask
+   * 2026-09-08). Server-side on purpose: the bulk procs cap at 200 ids and
+   * the tab loads 100 rows, so a client-driven "all" was never all. The
+   * COALESCE stamps match `are.prospects.approve` — a row that was already
+   * approved keeps its original decision record. Recounts the campaign's
+   * denormalised counter the same way approveBatch does.
+   */
+  approveAllPending: workspaceProcedure
+    .input(z.object({ campaignId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const r = await db.update(prospectQueue).set({
+        sequenceStatus: "approved",
+        approvedAt: sql`COALESCE(${prospectQueue.approvedAt}, NOW())`,
+        approvedByUserId: sql`COALESCE(${prospectQueue.approvedByUserId}, ${ctx.user.id})`,
+      }).where(and(
+        eq(prospectQueue.campaignId, input.campaignId),
+        eq(prospectQueue.workspaceId, ctx.workspace.id),
+        eq(prospectQueue.sequenceStatus, "pending"),
+        eq(prospectQueue.enrichmentStatus, "complete"),
+      ));
+      const approved = Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
+      const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(prospectQueue)
+        .where(and(eq(prospectQueue.campaignId, input.campaignId), eq(prospectQueue.workspaceId, ctx.workspace.id), eq(prospectQueue.sequenceStatus, "approved")));
+      await db.update(areCampaigns).set({ prospectsApproved: Number(n) })
+        .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_campaign", entityId: input.campaignId, after: { approveAllPending: approved } });
       return { approved };
     }),
 

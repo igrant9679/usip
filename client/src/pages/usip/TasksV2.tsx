@@ -362,8 +362,13 @@ export default function TasksV2() {
             <section>
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-sm font-semibold flex items-center gap-2"><Sparkles className="size-4" style={{ color: "#7c3aed" }} /> AI drafts to review ({draftTasks.length})</h2>
-                <Button size="sm" variant="outline" className="h-7 gap-1.5" disabled={approveAll.isPending} onClick={() => approveAll.mutate()}>
-                  <CheckCheck className="size-3.5" /> Approve all
+                <Button size="sm" variant="outline" className="h-7 gap-1.5" disabled={approveAll.isPending}
+                  onClick={() => confirmAction({
+                    title: `Approve all ${draftTasks.length} AI draft task${draftTasks.length === 1 ? "" : "s"}?`,
+                    description: "Every draft becomes an open task in your queue. Nothing is sent to anyone.",
+                    confirmLabel: "Approve all", destructive: false,
+                  }, () => approveAll.mutate())}>
+                  <CheckCheck className="size-3.5" /> Approve all ({draftTasks.length})
                 </Button>
               </div>
               <div className="rounded-xl border bg-card overflow-hidden shadow-sm" style={{ borderColor: "#7c3aed40" }}>

@@ -399,9 +399,12 @@ export default function AIPipelineQueue() {
     },
     onError: (e) => toast.error(e.message),
   });
-  const bulkApprove = trpc.aiPipeline.bulkApproveDrafts.useMutation({
+  // Workspace-wide, not page-wide: the old bulkApproveDrafts({draftIds}) only
+  // saw the 20 drafts on screen, so "Approve All" on a long queue left the
+  // rest waiting.
+  const bulkApprove = trpc.aiPipeline.approveAllPending.useMutation({
     onSuccess: (data) => {
-      toast.success(`${data.count} drafts approved`);
+      toast.success(`${data.approved} draft${data.approved === 1 ? "" : "s"} approved`);
       refetchDrafts();
       refetchStats();
     },
@@ -776,20 +779,26 @@ export default function AIPipelineQueue() {
               </label>
             </div>
             {pendingDraftIds.length > 0 && (
-              <Button
-                data-tour-id="ai-queue-approve-all"
-                size="sm"
-                onClick={() => bulkApprove.mutate({ draftIds: pendingDraftIds })}
-                disabled={bulkApprove.isPending}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white"
-              >
-                {bulkApprove.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin mr-1" />
-                ) : (
-                  <CheckCircle className="h-4 w-4 mr-1" />
-                )}
-                Approve All ({pendingDraftIds.length})
-              </Button>
+              <span data-tour-id="ai-queue-approve-all">
+                <ConfirmButton
+                  size="sm"
+                  variant="default"
+                  destructive={false}
+                  disabled={bulkApprove.isPending}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                  title={`Approve all ${stats?.pending_review ?? pendingDraftIds.length} pending draft${(stats?.pending_review ?? pendingDraftIds.length) === 1 ? "" : "s"}?`}
+                  description="Every AI draft awaiting review in this workspace is marked approved — including the ones not on this page. Approved drafts send through auto-send or Send All Approved; nothing is emailed by this step."
+                  confirmLabel="Approve all"
+                  onConfirm={() => bulkApprove.mutate()}
+                >
+                  {bulkApprove.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                  ) : (
+                    <CheckCircle className="h-4 w-4 mr-1" />
+                  )}
+                  Approve All ({stats?.pending_review ?? pendingDraftIds.length})
+                </ConfirmButton>
+              </span>
             )}
             {(stats?.approved ?? 0) > 0 && (
               <Button

@@ -37,6 +37,7 @@ import {
   ExternalLink, Ban,
 } from "lucide-react";
 import { EMAIL_SOURCES, emailSourceLabel, type EmailFeedRow } from "@shared/emailActivity";
+import { ConfirmButton } from "@/components/usip/Common";
 
 /* ─── vocabulary ───────────────────────────────────────────────────────────── */
 
@@ -277,6 +278,13 @@ export default function EmailsV2() {
   const invalidate = () => { utils.emailActivity.list.invalidate(); utils.emailActivity.stats.invalidate(); };
   const approve = trpc.emailDrafts.approve.useMutation({ onSuccess: invalidate, onError: (e) => toast.error(e.message) });
   const reject = trpc.emailDrafts.reject.useMutation({ onSuccess: invalidate, onError: (e) => toast.error(e.message) });
+  const approveAll = trpc.emailDrafts.approveAll.useMutation({
+    onSuccess: (r) => { invalidate(); toast.success(`${r.approved} draft${r.approved === 1 ? "" : "s"} approved`); },
+    onError: (e) => toast.error(e.message),
+  });
+  // The "Approve all" scope follows the source chip: AI Pipeline drafts,
+  // sequence drafts, or both. Any other chip (crm, inbound…) has no drafts.
+  const approveAllSource = source === "ai_draft" ? "ai_draft" : source === "sequence" ? "sequence" : "all";
   const send = trpc.emailDrafts.send.useMutation({ onSuccess: () => { invalidate(); toast.success("Email sent"); }, onError: (e) => toast.error(e.message) });
   const updateSettings = trpc.emailAutoSend.updateAutoSendSettings.useMutation({
     onSuccess: () => { utils.emailAutoSend.getAutoSendSettings.invalidate(); toast.success("Auto-send updated"); },
@@ -369,6 +377,24 @@ export default function EmailsV2() {
             <StatCard label="Scheduled" value={(st?.scheduled ?? 0).toLocaleString()} onClick={() => setFilter(() => setStatus("scheduled"))} />
             <StatCard label="Failed / bounced" value={(st?.failed ?? 0) + (st?.bounced ?? 0)} tone={(st?.failed ?? 0) + (st?.bounced ?? 0) ? "danger" : undefined} onClick={() => setFilter(() => setStatus("failed"))} />
           </div>
+
+          {/* Approve all — the Emails page is where the rail's AI Pipeline and
+              Email Drafts links land, so the queue-wide approval lives here too.
+              Server-scoped: the feed is paged with no total, so the button
+              cannot honestly count from the rows on screen. */}
+          {status === "awaiting" && (st?.awaiting ?? 0) > 0 && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+              <span className="text-xs text-muted-foreground">
+                {st?.awaiting} email{st?.awaiting === 1 ? "" : "s"} awaiting review{approveAllSource !== "all" ? ` — showing ${approveAllSource === "ai_draft" ? "AI Pipeline" : "sequence"} drafts` : ""}.
+              </span>
+              <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={approveAll.isPending}
+                title={`Approve all ${approveAllSource === "ai_draft" ? "AI Pipeline" : approveAllSource === "sequence" ? "sequence" : "awaiting"} drafts?`}
+                description="Every draft still waiting for review in this workspace is marked approved — not only the rows on this page. Approved drafts are sent by auto-send, the sequence engine, or Send All Approved; this step emails nobody."
+                confirmLabel="Approve all" onConfirm={() => approveAll.mutate({ source: approveAllSource })}>
+                <Check className="size-3.5 text-emerald-500" /> Approve all
+              </ConfirmButton>
+            </div>
+          )}
 
           {/* Source chips + search. Both are server-side query input. */}
           <div className="flex flex-wrap items-center gap-2">

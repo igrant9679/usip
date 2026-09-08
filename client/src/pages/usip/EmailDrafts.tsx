@@ -329,6 +329,10 @@ export default function EmailDrafts() {
     onSuccess: (data) => { utils.emailDrafts.list.invalidate(); toast.success(`Sent ${data.sent} emails, ${data.failed} failed`); },
     onError: (e) => toast.error(e.message),
   });
+  const approveAll = trpc.emailDrafts.approveAll.useMutation({
+    onSuccess: (r) => { utils.emailDrafts.list.invalidate(); toast.success(`${r.approved} draft${r.approved === 1 ? "" : "s"} approved`); },
+    onError: (e) => toast.error("Approve all failed", { description: e.message }),
+  });
 
   // Feature 60: remove from suppression by email
   const removeSuppressionByEmail = trpc.emailSuppressions.removeByEmail.useMutation({
@@ -363,6 +367,14 @@ export default function EmailDrafts() {
             </button>
           ))}
         </div>
+        {filter === "pending_review" && (data ?? []).length > 0 && (
+          <ConfirmButton size="sm" variant="outline" destructive={false} disabled={approveAll.isPending}
+            title={`Approve all ${(data ?? []).length} pending draft${(data ?? []).length === 1 ? "" : "s"}?`}
+            description="Every draft awaiting review is marked approved. Nothing is sent by this step — approved drafts go out through the sequence engine or Send All Approved."
+            confirmLabel="Approve all" onConfirm={() => approveAll.mutate({ source: "sequence" })}>
+            <Check className="size-4" /> Approve All ({(data ?? []).length})
+          </ConfirmButton>
+        )}
         {filter === "approved" && (
           <ConfirmButton size="sm" variant="outline" destructive={false} disabled={sendBulkApproved.isPending}
             title="Send all approved drafts?"

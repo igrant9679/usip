@@ -478,6 +478,10 @@ export default function Proposals() {
     onSuccess: () => { toast.success("Extension approved"); refetch(); refetchPending(); },
     onError: (e) => toast.error(e.message),
   });
+  const approveAllExtMutation = trpc.proposals.approveExtensionsBulk.useMutation({
+    onSuccess: (r) => { toast[r.failed.length ? "warning" : "success"](`${r.approved} extension${r.approved === 1 ? "" : "s"} approved${r.failed.length ? `, ${r.failed.length} failed` : ""}`); refetch(); refetchPending(); },
+    onError: (e) => toast.error(e.message),
+  });
   const denyExtMutation = trpc.proposals.denyExtension.useMutation({
     onSuccess: () => { toast.success("Extension declined"); refetch(); refetchPending(); },
     onError: (e) => toast.error(e.message),
@@ -957,6 +961,15 @@ export default function Proposals() {
             <p className="text-sm text-muted-foreground py-4 text-center">No pending extension requests.</p>
           ) : (
             <div className="space-y-3 py-2">
+              <div className="flex justify-end">
+                <ConfirmButton size="sm" variant="outline" destructive={false} className="gap-1 text-xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10" disabled={approveAllExtMutation.isPending}
+                  title={`Approve all ${extensionPending.length} extension request${extensionPending.length === 1 ? "" : "s"}?`}
+                  description="Each proposal's expiry moves 7 days past its current date and the client is emailed the new date, exactly as a single approval would."
+                  confirmLabel="Approve all"
+                  onConfirm={() => approveAllExtMutation.mutate({ items: extensionPending.map((req) => ({ proposalId: req.id, newExpiresAt: new Date((req.expiresAt ? new Date(req.expiresAt).getTime() : Date.now()) + 7 * 86400000).toISOString().slice(0, 10) })) })}>
+                  <ThumbsUp className="size-3" /> Approve all ({extensionPending.length}, +7 days)
+                </ConfirmButton>
+              </div>
               {extensionPending.map((req) => (
                 <div key={req.id} className="border border-border rounded-lg p-4 space-y-2">
                   <div className="flex items-start justify-between gap-2">

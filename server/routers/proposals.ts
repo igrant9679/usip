@@ -1407,6 +1407,34 @@ ${proposal.shareToken ? `<p><a href="${appUrl(`/p/${proposal.shareToken}`)}">Vie
       }
       return { ok: true };
     }),
+
+  /**
+   * Approve several extension requests at once (owner ask 2026-09-08:
+   * "approve all" on every approvals screen). Each item runs the single
+   * approveExtension above through the app router, so the activity log and
+   * the client email are identical to a one-at-a-time approval. The client
+   * supplies each new expiry (its default is +7 days on the current one).
+   */
+  approveExtensionsBulk: workspaceProcedure
+    .input(z.object({
+      items: z.array(z.object({ proposalId: z.number().int().positive(), newExpiresAt: z.string() })).min(1).max(50),
+      note: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }): Promise<{ approved: number; failed: Array<{ proposalId: number; detail: string }> }> => {
+      const { appRouter } = await import("../routers");
+      const caller = appRouter.createCaller(ctx as never);
+      let approved = 0;
+      const failed: Array<{ proposalId: number; detail: string }> = [];
+      for (const item of input.items) {
+        try {
+          await caller.proposals.approveExtension({ proposalId: item.proposalId, newExpiresAt: item.newExpiresAt, note: input.note });
+          approved++;
+        } catch (e) {
+          failed.push({ proposalId: item.proposalId, detail: (e as Error).message });
+        }
+      }
+      return { approved, failed };
+    }),
   /**
    * Deny a client extension request. Logs an activity and optionally sends
    * a decline email to the client.

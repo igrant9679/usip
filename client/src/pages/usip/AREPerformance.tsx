@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { BarChart3, Check, History, Info, Lightbulb, Loader2, MailOpen, Radar, TrendingUp, Undo2, X } from "lucide-react";
+import { ConfirmButton } from "@/components/usip/Common";
 
 /** Below this many sends a per-row rate is noise; we show the count, not a verdict. */
 const MIN_ROW_SAMPLE = 20;
@@ -102,6 +103,16 @@ export default function AREPerformance() {
       utils.optimization.list.invalidate();
       // Distinguish a real change from a recorded-only decision.
       toast.success(r?.detail ?? (r?.applied ? "Applied" : "Recorded"));
+    },
+    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can act on recommendations" : e.message),
+  });
+  const approveAll = trpc.optimization.approveAll.useMutation({
+    onSuccess: (r: any) => {
+      utils.optimization.list.invalidate();
+      const parts = [`${r.applied} applied`, `${r.recorded} recorded`];
+      if (r.skipped) parts.push(`${r.skipped} skipped`);
+      if (r.failed?.length) parts.push(`${r.failed.length} failed`);
+      toast[r.failed?.length ? "warning" : "success"](parts.join(", "));
     },
     onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can act on recommendations" : e.message),
   });
@@ -219,6 +230,14 @@ export default function AREPerformance() {
                       {analyze.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <TrendingUp className="size-3.5" />}
                       Analyse now
                     </Button>
+                    {recRows.length > 0 && (
+                      <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5 text-xs" disabled={approveAll.isPending || approve.isPending}
+                        title={`Apply all ${recRows.length} recommendation${recRows.length === 1 ? "" : "s"}?`}
+                        description="Applicable changes are made to your live sequences now (each is reversible from History); advisory ones are recorded as accepted. Nothing is sent by this step."
+                        confirmLabel="Apply all" onConfirm={() => approveAll.mutate({ ids: recRows.map((r) => r.id) })}>
+                        <Check className="size-3.5" /> Apply all ({recRows.length})
+                      </ConfirmButton>
+                    )}
                   </div>
                 </CardTitle>
               </CardHeader>

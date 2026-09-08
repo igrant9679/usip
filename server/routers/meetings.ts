@@ -223,6 +223,34 @@ export const meetingsRouter = router({
       return res;
     }),
 
+  /**
+   * Approve & send EVERY pending proposal (owner ask 2026-09-08: "approve
+   * all" on every approvals screen). Each one books its earliest FUTURE
+   * slot — the same default the single approve uses when no time is chosen —
+   * so a proposal whose times have all passed is skipped and reported, not
+   * silently booked in the past. Bounded at 50 per call; each send is
+   * audited exactly like a single approve.
+   */
+  approveAllProposed: repProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const rows = await db.select({ id: meetings.id }).from(meetings)
+      .where(and(eq(meetings.workspaceId, ctx.workspace.id), eq(meetings.status, "proposed")))
+      .orderBy(desc(meetings.createdAt)).limit(50);
+    let sent = 0;
+    const skipped: Record<string, number> = {};
+    for (const m of rows) {
+      try {
+        const res = await sendMeetingInvite(ctx.workspace.id, m.id);
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "meeting", entityId: m.id, after: { ...res, bulk: true, book: true } });
+        if (res.sent) sent++; else { const k = res.reason ?? "unknown"; skipped[k] = (skipped[k] ?? 0) + 1; }
+      } catch (e) {
+        const k = (e as Error).message || "error"; skipped[k] = (skipped[k] ?? 0) + 1;
+      }
+    }
+    return { sent, attempted: rows.length, skipped };
+  }),
+
   reschedule: repProcedure
     .input(z.object({ id: z.number(), scheduledAt: z.string() }))
     .mutation(async ({ ctx, input }) => {

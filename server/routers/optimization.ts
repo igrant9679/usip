@@ -234,4 +234,39 @@ export const optimizationRouter = router({
         ));
       return { ok: true as const, dismissed: input.ids.length };
     }),
+
+  /**
+   * Bulk approve (owner ask 2026-09-08: "approve all" on every approvals
+   * screen). Same split as `approve`: advisory rows are recorded, applicable
+   * ones are applied (each reversible via `revert`). One failure never
+   * blocks the rest — the caller gets the tally and the failures by id.
+   */
+  approveAll: adminWsProcedure
+    .input(z.object({ ids: z.array(z.number().int()).min(1).max(100) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { applyRecommendation, isApplicable } = await import("../services/optimization/apply");
+      let applied = 0, recorded = 0, skipped = 0;
+      const failed: Array<{ id: number; detail: string }> = [];
+      for (const id of input.ids) {
+        try {
+          const row = await loadOwned(db, ctx.workspace.id, id);
+          if (row.status !== "pending" && row.status !== "approved") { skipped++; continue; }
+          if (!isApplicable(row)) {
+            await db
+              .update(optimizationRecommendations)
+              .set({ status: "approved" as never, appliedByUserId: ctx.user.id })
+              .where(and(eq(optimizationRecommendations.id, id), eq(optimizationRecommendations.workspaceId, ctx.workspace.id)));
+            recorded++;
+            continue;
+          }
+          const outcome = await applyRecommendation(ctx.workspace.id, row, ctx.user.id);
+          if (outcome.ok) applied++; else failed.push({ id, detail: outcome.detail });
+        } catch (e) {
+          failed.push({ id, detail: (e as Error).message });
+        }
+      }
+      return { ok: true as const, applied, recorded, skipped, failed };
+    }),
 });

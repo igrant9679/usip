@@ -18,6 +18,7 @@
  *   - Signal feed with sentiment colour coding and action badges
  */
 import { Shell, PageHeader, StatCard, EmptyState } from "@/components/usip/Shell";
+import { ConfirmButton } from "@/components/usip/Common";
 import { ProspectAvatar } from "@/components/usip/ProspectAvatar";
 import { emailStatusBadge, genericInboxBadge } from "@/components/usip/people/peopleShared";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -2088,6 +2089,19 @@ export default function ARECampaignDetail() {
 
   const { data: campaign, isLoading: loadingCampaign } = trpc.are.campaigns.get.useQuery({ id: campaignId });
   const { data: prospects, isLoading: loadingProspects } = trpc.are.prospects.list.useQuery({ campaignId, limit: 100 });
+  // "Approve all" is server-scoped: this tab loads 100 rows and the bulk bar
+  // caps at 200 ids, so neither could honestly say "all" on a big campaign.
+  const approvable = trpc.are.campaigns.pendingApprovalCount.useQuery({ campaignId }, { refetchInterval: 15000 });
+  const approveAllPending = trpc.are.campaigns.approveAllPending.useMutation({
+    onSuccess: (r) => {
+      toast.success(`${r.approved} ${r.approved === 1 ? "person" : "people"} approved — the engine writes their sequences on its next tick`);
+      utils.are.prospects.list.invalidate({ campaignId });
+      utils.are.campaigns.get.invalidate({ id: campaignId });
+      utils.are.campaigns.pendingApprovalCount.invalidate({ campaignId });
+      utils.attention.summary.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
   /**
    * Signal feed. Type + person filters are sent to the SERVER, not applied to
    * the rows already on screen: filtering after a LIMIT shows "the matches that
@@ -2552,6 +2566,17 @@ export default function ARECampaignDetail() {
                   {enrichBatch.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <FlaskConical className="size-3.5" />}
                   Enrich Batch (20)
                 </Button>
+                {(approvable.data?.count ?? 0) > 0 && (
+                  <ConfirmButton size="sm" variant="default" destructive={false} className="gap-1.5 text-xs" disabled={approveAllPending.isPending}
+                    title={`Approve all ${approvable.data?.count} enriched ${approvable.data?.count === 1 ? "person" : "people"} in this campaign?`}
+                    description={campaign?.status === "active"
+                      ? "Every enriched person still pending is approved — including the ones beyond the 100 rows shown. The engine writes their sequences and starts sending on the campaign's cadence within its daily cap."
+                      : "Every enriched person still pending is approved — including the ones beyond the 100 rows shown. Nothing sends while the campaign is not active."}
+                    confirmLabel="Approve all" onConfirm={() => approveAllPending.mutate({ campaignId })}>
+                    {approveAllPending.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                    Approve all ({approvable.data?.count})
+                  </ConfirmButton>
+                )}
               </div>
             </div>
 

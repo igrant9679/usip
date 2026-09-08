@@ -493,6 +493,24 @@ export const aiPipelineRouter = router({
       return { ok: true, count: input.draftIds.length };
     }),
 
+  /**
+   * Approve EVERY draft awaiting review in the workspace (owner ask
+   * 2026-09-08: "approve all" on every approvals screen). The page-scoped
+   * bulkApproveDrafts above only ever saw the 20 drafts on screen, so
+   * "Approve All (20)" on a 200-draft queue left 180 behind. One UPDATE,
+   * workspace-scoped, returns the real count.
+   */
+  approveAllPending: workspaceProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const r = await db
+      .update(emailDrafts)
+      .set({ status: "approved", reviewedByUserId: ctx.user.id })
+      .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status as any, "ai_pending_review")));
+    const approved = Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
+    return { ok: true, approved };
+  }),
+
   /** Regenerate a draft with a revision preset */
   regenerateDraft: workspaceProcedure
     .input(

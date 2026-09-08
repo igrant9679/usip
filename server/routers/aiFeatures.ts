@@ -527,29 +527,67 @@ Make the 3 suggestions distinct from existing rules and target real meeting-book
        * falls back to record_created rather than being stored as a rule that
        * cannot happen.
        */
-      const triggerType = (LIVE_TRIGGER_IDS as readonly string[]).includes(sug.triggerType)
-        ? (sug.triggerType as (typeof LIVE_TRIGGER_IDS)[number])
-        : "record_created";
-
-      const [newRule] = await db.insert(workflowRules).values({
-        workspaceId: ctx.workspace.id,
-        name: sug.title,
-        description: sug.description,
-        triggerType,
-        triggerConfig: sug.triggerConfig as object,
-        conditions: sug.conditions as object,
-        actions: sug.actions as object,
-        enabled: true,
-      }).$returningId();
-
-      await db
-        .update(aiWorkflowSuggestions)
-        .set({ dismissed: true, appliedRuleId: newRule.id })
-        .where(eq(aiWorkflowSuggestions.id, sug.id));
-
-      return { ruleId: newRule.id };
+      const ruleId = await applySuggestionRow(db, ctx.workspace.id, sug);
+      return { ruleId };
     }),
+
+  /**
+   * Apply every open suggestion (owner ask 2026-09-08: "approve all" on
+   * every approvals screen). Same helper as applying one, so the live-trigger
+   * fallback and the applied-rule link are identical; one failure never
+   * blocks the rest.
+   */
+  applyAllSuggestions: adminWsProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const open = await db
+      .select()
+      .from(aiWorkflowSuggestions)
+      .where(and(eq(aiWorkflowSuggestions.workspaceId, ctx.workspace.id), eq(aiWorkflowSuggestions.dismissed, false)))
+      .orderBy(desc(aiWorkflowSuggestions.generatedAt))
+      .limit(50);
+    const ruleIds: number[] = [];
+    const failed: Array<{ id: number; detail: string }> = [];
+    for (const sug of open) {
+      try { ruleIds.push(await applySuggestionRow(db, ctx.workspace.id, sug)); }
+      catch (e) { failed.push({ id: sug.id, detail: (e as Error).message }); }
+    }
+    return { applied: ruleIds.length, ruleIds, failed };
+  }),
 });
+
+/**
+ * One suggestion → one enabled workflow rule, suggestion marked applied.
+ * Shared by applySuggestion and applyAllSuggestions so the two can never
+ * drift (the live-trigger fallback below is the kind of rule that drifts).
+ */
+async function applySuggestionRow(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  sug: typeof aiWorkflowSuggestions.$inferSelect,
+): Promise<number> {
+  const triggerType = (LIVE_TRIGGER_IDS as readonly string[]).includes(sug.triggerType)
+    ? (sug.triggerType as (typeof LIVE_TRIGGER_IDS)[number])
+    : "record_created";
+
+  const [newRule] = await db.insert(workflowRules).values({
+    workspaceId,
+    name: sug.title,
+    description: sug.description,
+    triggerType,
+    triggerConfig: sug.triggerConfig as object,
+    conditions: sug.conditions as object,
+    actions: sug.actions as object,
+    enabled: true,
+  }).$returningId();
+
+  await db
+    .update(aiWorkflowSuggestions)
+    .set({ dismissed: true, appliedRuleId: newRule.id })
+    .where(eq(aiWorkflowSuggestions.id, sug.id));
+
+  return newRule.id;
+}
 
 // ─── Forecast — AI Commentary ─────────────────────────────────────────────────
 
