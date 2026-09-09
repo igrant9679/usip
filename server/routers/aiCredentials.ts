@@ -7,9 +7,10 @@
  *   aiCredentials.test    — issue a tiny "ping" call against a provider (admin only)
  */
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
-import { workspaceSettings } from "../../drizzle/schema";
+import { workspaceMembers, workspaceSettings } from "../../drizzle/schema";
+import { recordAudit } from "../audit";
 import { checkPermission, getDb } from "../db";
 import {
   encryptSecret,
@@ -124,6 +125,52 @@ export const aiCredentialsRouter = router({
       }
 
       return { ok: true };
+    }),
+
+  /**
+   * Copy another workspace's AI credentials into THIS one (owner ask
+   * 2026-09-09: "copy the LSI key to the demo workspace"). The API never
+   * hands a key back in plaintext, so a copy has to happen server-side.
+   * Super admin of BOTH workspaces required; keys are decrypted and
+   * re-encrypted through the same helpers upsert uses; models and the
+   * default provider come along. Audited on the destination.
+   */
+  copyFromWorkspace: adminWsProcedure
+    .input(z.object({ fromWorkspaceId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.member.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "Only super admins can copy credentials" });
+      if (input.fromWorkspaceId === ctx.workspace.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Source and destination are the same workspace" });
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [src] = await db
+        .select({ role: workspaceMembers.role })
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, input.fromWorkspaceId), eq(workspaceMembers.userId, ctx.user.id)))
+        .limit(1);
+      if (!src || src.role !== "super_admin") throw new TRPCError({ code: "FORBIDDEN", message: "You must be a super admin of the source workspace too" });
+      const [from] = await db
+        .select({
+          anthropicApiKeyEnc: workspaceSettings.anthropicApiKeyEnc, anthropicModel: workspaceSettings.anthropicModel,
+          openaiApiKeyEnc: workspaceSettings.openaiApiKeyEnc, openaiModel: workspaceSettings.openaiModel,
+          geminiApiKeyEnc: workspaceSettings.geminiApiKeyEnc, geminiModel: workspaceSettings.geminiModel,
+          aiDefaultProvider: workspaceSettings.aiDefaultProvider,
+        })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, input.fromWorkspaceId))
+        .limit(1);
+      if (!from) throw new TRPCError({ code: "NOT_FOUND", message: "Source workspace has no settings row" });
+      const reenc = (enc: string | null) => { const pt = tryDecryptSecret(enc); return pt ? encryptSecret(pt) : null; };
+      await ensureSettingsRow(ctx.workspace.id);
+      const copied: string[] = [];
+      const updates: Record<string, string | null> = {};
+      const a = reenc(from.anthropicApiKeyEnc); if (a) { updates.anthropicApiKeyEnc = a; updates.anthropicModel = from.anthropicModel ?? null; copied.push("anthropic"); }
+      const o = reenc(from.openaiApiKeyEnc); if (o) { updates.openaiApiKeyEnc = o; updates.openaiModel = from.openaiModel ?? null; copied.push("openai"); }
+      const g = reenc(from.geminiApiKeyEnc); if (g) { updates.geminiApiKeyEnc = g; updates.geminiModel = from.geminiModel ?? null; copied.push("gemini"); }
+      if (from.aiDefaultProvider) updates.aiDefaultProvider = from.aiDefaultProvider;
+      if (copied.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "The source workspace has no AI keys to copy" });
+      await db.update(workspaceSettings).set(updates).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "ai_credentials", entityId: ctx.workspace.id, after: { copiedFromWorkspaceId: input.fromWorkspaceId, providers: copied, defaultProvider: from.aiDefaultProvider ?? null } });
+      return { ok: true as const, providers: copied, defaultProvider: from.aiDefaultProvider ?? null };
     }),
 
   /** Set the workspace's default provider (admins only). */
