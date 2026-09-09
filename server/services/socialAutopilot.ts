@@ -308,7 +308,7 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
 const INVITE_HARD_CAP = 20; // per workspace/day — LinkedIn throttles invites hard
 
 /** Short, personalized connection-request note (<200 chars, LinkedIn's limit). */
-async function generateInviteNote(
+export async function generateInviteNote(
   workspaceId: number,
   who: { name: string; title?: string | null; company?: string | null },
 ): Promise<string> {

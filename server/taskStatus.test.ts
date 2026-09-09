@@ -153,6 +153,8 @@ const OPEN_ONLY_ALLOWED: Record<string, string> = {
     "task_overdue trigger. Whether an in_progress task should fire 'overdue' is a product decision, not drift — see the note in SESSION_STATUS.",
   "server/routers/attention.ts":
     "Chat follow-up review queue (2026-09-02). chatFollowUp inserts its review tasks with status 'open' (not 'draft'), so the 'needs you' count has to read literally-open follow-ups; an in_progress one is being handled and correctly drops out.",
+  "server/services/approvalTasks.ts":
+    "Approve-and-send queues (2026-09-09). The queue lists literally-open review tasks (same predicate as attention.ts), and the send path claims a task with a compare-and-set on status 'open' → 'in_progress' so two approvers cannot send the same email twice. Not a dedupe.",
 };
 
 describe("eq(tasks.status, \"open\") is only used where it is meant", () => {

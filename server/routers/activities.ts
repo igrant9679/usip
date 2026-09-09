@@ -145,6 +145,41 @@ export const tasksRouter = router({
       return { ok: true };
     }),
 
+  /* ── Approval queues that were only ever tasks (2026-09-09) ────────────
+   * Chat follow-ups and Social Autopilot invites in Approve mode park as
+   * open tasks; these turn them into approve-and-send actions through the
+   * same paths Auto mode uses. See services/approvalTasks.ts. */
+  approvalQueue: workspaceProcedure.query(async ({ ctx }) => {
+    const { listApprovalTasks } = await import("../services/approvalTasks");
+    return listApprovalTasks(ctx.workspace.id);
+  }),
+  sendChatFollowUp: repProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    const { sendChatFollowUpTask } = await import("../services/approvalTasks");
+    const r = await sendChatFollowUpTask(ctx.workspace.id, input.id, ctx.user.id);
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "task", entityId: input.id, after: { approveAndSend: "chat_follow_up", ...r } });
+    if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: `Not sent: ${r.reason.replace(/_/g, " ")}` });
+    return r;
+  }),
+  sendAllChatFollowUps: repProcedure.mutation(async ({ ctx }) => {
+    const { sendAllApprovalTasks } = await import("../services/approvalTasks");
+    const r = await sendAllApprovalTasks(ctx.workspace.id, "chat_follow_up", ctx.user.id);
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "task", entityId: 0, after: { approveAndSendAll: "chat_follow_up", ...r } });
+    return r;
+  }),
+  sendSocialInvite: repProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    const { sendSocialInviteTask } = await import("../services/approvalTasks");
+    const r = await sendSocialInviteTask(ctx.workspace.id, input.id, ctx.user.id);
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "task", entityId: input.id, after: { approveAndSend: "social_invite", ...r } });
+    if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: `Not sent: ${r.reason.replace(/_/g, " ")}` });
+    return r;
+  }),
+  sendAllSocialInvites: repProcedure.mutation(async ({ ctx }) => {
+    const { sendAllApprovalTasks } = await import("../services/approvalTasks");
+    const r = await sendAllApprovalTasks(ctx.workspace.id, "social_invite", ctx.user.id);
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "task", entityId: 0, after: { approveAndSendAll: "social_invite", ...r } });
+    return r;
+  }),
+
   /** Snooze a task to a later time (status → snoozed). */
   snooze: repProcedure
     .input(z.object({ id: z.number(), snoozedUntil: z.string() }))

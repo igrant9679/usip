@@ -347,7 +347,10 @@ export async function runChatFollowUps(): Promise<FollowUpRunResult> {
             await db.insert(tasks).values({
               workspaceId: agent.workspaceId,
               title: `Follow up: ${(s as any).visitorName || email} left chat without booking`,
-              description: `Suggested email\n\nSubject: ${draft.subject}\n\n${draft.body}`,
+              // "To:" line (2026-09-09): the approve-and-send action reads the
+              // recipient from the task itself; before, a visitor with a name
+              // left the address only in the chat session.
+              description: `Suggested email\nTo: ${email}\n\nSubject: ${draft.subject}\n\n${draft.body}`,
               type: "follow_up",
               priority: "high",
               status: "open",

@@ -125,6 +125,10 @@ export const SEND_ALLOWLIST: Record<string, string> = {
   "smtpConfig.sendBulkApproved": "SENDS EMAIL NOW: send every approved draft (or the given draftIds, max 200), one per second.",
   "meetings.approveAndSend": "SENDS EMAIL NOW: approve one proposed meeting and email the calendar invite (chosenTime optional — earliest future slot by default).",
   "meetings.approveAllProposed": "SENDS EMAIL NOW: approve and send every pending meeting proposal (expired ones are skipped and reported).",
+  "tasks.sendChatFollowUp": "SENDS EMAIL NOW: approve one chat follow-up task and email the suggested follow-up to the visitor.",
+  "tasks.sendAllChatFollowUps": "SENDS EMAIL NOW: approve and send every pending chat follow-up (max 50).",
+  "tasks.sendSocialInvite": "SENDS A LINKEDIN INVITE NOW: approve one Social Autopilot invite task (within LinkedIn limits).",
+  "tasks.sendAllSocialInvites": "SENDS LINKEDIN INVITES NOW: approve every pending Social Autopilot invite task (stops at the LinkedIn limit).",
 };
 
 /** Humanise "are.prospects.pushExisting" → "Push existing (Revenue Engine › prospects)". */
@@ -286,7 +290,7 @@ export function catalogRowForModel(a: CatalogEntry) {
 export function describeGenericAction(a: CatalogEntry, input: unknown): string {
   const args = JSON.stringify(input ?? {});
   const short = args.length > 300 ? `${args.slice(0, 300)}…` : args;
-  return `${a.sends ? "⚠ Sends email now — " : ""}Run ${a.title}: ${a.description} Input: ${short}`;
+  return `${a.sends ? "⚠ Sends now — " : ""}Run ${a.title}: ${a.description} Input: ${short}`;
 }
 
 /** Walk a dotted path on the tRPC caller and invoke it. */

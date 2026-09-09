@@ -56,8 +56,8 @@ describe("action catalog policy on the real router", () => {
       const a = cat.find((x) => x.path === p);
       expect(a, p).toBeTruthy();
       expect(a!.sends).toBe(true);
-      expect(a!.description).toMatch(/SENDS EMAIL NOW/);
-      expect(describeGenericAction(a!, {})).toMatch(/Sends email now/);
+      expect(a!.description).toMatch(/^SENDS .*NOW/);
+      expect(describeGenericAction(a!, {})).toMatch(/^⚠ Sends now/);
     }
   });
 

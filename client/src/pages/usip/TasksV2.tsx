@@ -36,7 +36,7 @@ import {
   Phone, Mail, CalendarClock, Link2, ListTodo, Repeat, Database, Sparkles, Check, Clock,
   AlertTriangle, Plus, Zap, MoreHorizontal, X, Bot, CheckCheck, Inbox, Trash2,
 } from "lucide-react";
-import { confirmAction } from "@/components/usip/Common";
+import { confirmAction, ConfirmButton } from "@/components/usip/Common";
 
 type Task = {
   id: number;
@@ -167,18 +167,30 @@ export default function TasksV2() {
   const mode = autopilot.data?.mode ?? "off";
   const activeTasks = (active.data ?? []) as Task[];
   const draftTasks = (drafts.data ?? []) as Task[];
+  // Approval queues that used to be plain tasks (2026-09-09): chat follow-ups
+  // and Social Autopilot invites. Each row sends through the autopilot's own
+  // path when approved, so they render as approve-and-send cards, not to-dos.
+  const approvalQ = trpc.tasks.approvalQueue.useQuery(undefined, { refetchInterval: 30000 });
+  const chatFollowUps = approvalQ.data?.chatFollowUps ?? [];
+  const socialInvites = approvalQ.data?.socialInvites ?? [];
+  const approvalIds = useMemo(() => new Set([...chatFollowUps, ...socialInvites].map((r) => r.id)), [chatFollowUps, socialInvites]);
+  const sendFollowUp = trpc.tasks.sendChatFollowUp.useMutation({ onSuccess: (r) => { invalidateAll(); utils.tasks.approvalQueue.invalidate(); toast.success(r.ok ? r.detail : "Sent"); }, onError: (e) => toast.error(e.message) });
+  const sendAllFollowUps = trpc.tasks.sendAllChatFollowUps.useMutation({ onSuccess: (r) => { invalidateAll(); utils.tasks.approvalQueue.invalidate(); toast[r.failed.length ? "warning" : "success"](`${r.sent} sent${r.failed.length ? `, ${r.failed.length} not sent (${r.failed.map((f) => f.reason.replace(/_/g, " ")).join("; ")})` : ""}`); }, onError: (e) => toast.error(e.message) });
+  const sendInvite = trpc.tasks.sendSocialInvite.useMutation({ onSuccess: (r) => { invalidateAll(); utils.tasks.approvalQueue.invalidate(); toast.success(r.ok ? r.detail : "Sent"); }, onError: (e) => toast.error(e.message) });
+  const sendAllInvites = trpc.tasks.sendAllSocialInvites.useMutation({ onSuccess: (r) => { invalidateAll(); utils.tasks.approvalQueue.invalidate(); toast[r.failed.length ? "warning" : "success"](`${r.sent} invite${r.sent === 1 ? "" : "s"} sent${r.failed.length ? `, ${r.failed.length} not sent (${r.failed.map((f) => f.reason.replace(/_/g, " ")).join("; ")})` : ""}`); }, onError: (e) => toast.error(e.message) });
   const s = stats.data ?? { open: 0, dueToday: 0, overdue: 0, completed: 0, draftsPending: 0, snoozed: 0, aiOpen: 0 };
 
   // Queue: open / in_progress / snoozed, sorted by due date (nulls last).
   const queue = useMemo(() => {
     return activeTasks
       .filter((t) => t.status === "open" || t.status === "in_progress" || t.status === "snoozed")
+      .filter((t) => !approvalIds.has(t.id))
       .sort((a, b) => {
         const ta = a.dueAt ? new Date(a.dueAt).getTime() : Infinity;
         const tb = b.dueAt ? new Date(b.dueAt).getTime() : Infinity;
         return ta - tb;
       });
-  }, [activeTasks]);
+  }, [activeTasks, approvalIds]);
   // "Recently closed" deliberately includes CANCELLED, not just done.
   // Dismissing an AI-drafted task sets status="cancelled" (activities.dismissDraft),
   // and this page rendered neither bucket for it — so the task vanished from
@@ -356,6 +368,72 @@ export default function TasksV2() {
             <StatCard label="AI drafts" value={s.draftsPending} tone={s.draftsPending ? "ai" : undefined} />
             <StatCard label="Completed" value={s.completed} />
           </div>
+
+          {/* Waiting for your approval — each card SENDS when approved */}
+          {(chatFollowUps.length > 0 || socialInvites.length > 0) && (
+            <section>
+              <h2 className="text-sm font-semibold mb-2 flex items-center gap-2"><Mail className="size-4" style={{ color: "#d97706" }} /> Waiting for your approval ({chatFollowUps.length + socialInvites.length})</h2>
+              {chatFollowUps.length > 0 && (
+                <div className="rounded-xl border bg-card overflow-hidden shadow-sm mb-3" style={{ borderColor: "#d9770640" }}>
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-border/60 bg-amber-500/5">
+                    <span className="text-[12px] font-medium">Chat follow-up emails ({chatFollowUps.length})</span>
+                    <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5 text-xs" disabled={sendAllFollowUps.isPending}
+                      title={`Send all ${chatFollowUps.length} chat follow-up${chatFollowUps.length === 1 ? "" : "s"}?`}
+                      description="Each suggested email is sent to its visitor now, one per second, and the task closes as sent. Emails with no recipient on file are skipped and reported."
+                      confirmLabel="Approve & send all" onConfirm={() => sendAllFollowUps.mutate()}>
+                      <CheckCheck className="size-3.5" /> Approve & send all
+                    </ConfirmButton>
+                  </div>
+                  {chatFollowUps.map((r) => (
+                    <div key={r.id} className="flex items-start gap-3 px-3 py-2.5 border-b border-border/60 last:border-0">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium truncate">{r.title}</div>
+                        <div className="text-[11px] text-muted-foreground truncate">To {r.to ?? "(no recipient on file)"} · Subject: {r.subject ?? "—"}</div>
+                        {r.body && <p className="text-[12px] text-muted-foreground mt-1 line-clamp-3 whitespace-pre-wrap">{r.body}</p>}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1 text-xs" disabled={sendFollowUp.isPending || !r.to}
+                          title="Send this follow-up now?" description={`Emails "${r.subject ?? ""}" to ${r.to ?? "the visitor"} and closes the task as sent.`}
+                          confirmLabel="Approve & send" onConfirm={() => sendFollowUp.mutate({ id: r.id })}>
+                          <Mail className="size-3.5" /> Approve & send
+                        </ConfirmButton>
+                        <Button size="icon" variant="ghost" className="size-7 text-muted-foreground" title="Dismiss without sending" onClick={() => complete.mutate({ id: r.id, disposition: "not_sent" })}><X className="size-4" /></Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {socialInvites.length > 0 && (
+                <div className="rounded-xl border bg-card overflow-hidden shadow-sm" style={{ borderColor: "#d9770640" }}>
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-border/60 bg-amber-500/5">
+                    <span className="text-[12px] font-medium">LinkedIn invites ({socialInvites.length})</span>
+                    <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5 text-xs" disabled={sendAllInvites.isPending}
+                      title={`Send all ${socialInvites.length} LinkedIn invite${socialInvites.length === 1 ? "" : "s"}?`}
+                      description="Each invite goes out from the owning rep's LinkedIn account with an AI-written note, within the account's daily limits; it stops when a limit is reached. Tasks close as sent."
+                      confirmLabel="Approve & send all" onConfirm={() => sendAllInvites.mutate()}>
+                      <CheckCheck className="size-3.5" /> Approve & send all
+                    </ConfirmButton>
+                  </div>
+                  {socialInvites.map((r) => (
+                    <div key={r.id} className="flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium truncate">{r.title}</div>
+                        <a href={r.linkedinUrl ?? "#"} target="_blank" rel="noreferrer" className="text-[11px] text-muted-foreground truncate hover:underline">{r.linkedinUrl}</a>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1 text-xs" disabled={sendInvite.isPending}
+                          title="Send this LinkedIn invite now?" description="Sends a connection request with an AI-written note from the owning rep's LinkedIn account and closes the task as sent."
+                          confirmLabel="Approve & send" onConfirm={() => sendInvite.mutate({ id: r.id })}>
+                          <Link2 className="size-3.5" /> Approve & send
+                        </ConfirmButton>
+                        <Button size="icon" variant="ghost" className="size-7 text-muted-foreground" title="Dismiss without sending" onClick={() => complete.mutate({ id: r.id, disposition: "not_sent" })}><X className="size-4" /></Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
 
           {/* AI drafts to review */}
           {draftTasks.length > 0 && (
