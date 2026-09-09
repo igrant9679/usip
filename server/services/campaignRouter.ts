@@ -130,9 +130,14 @@ export async function routeProspects(
 
   const campaigns = await activeCampaignsWithTargets(workspaceId);
   const { activeCampaignsForProspects, activeSequencesForProspects } = await import("./crossEngineEnrollment");
-  const [owned, sequenced] = await Promise.all([
+  const [owned, sequenced, everSeen] = await Promise.all([
     activeCampaignsForProspects(workspaceId, people.map((p) => p.id)),
     activeSequencesForProspects(workspaceId, people.map((p) => p.id)),
+    // ANY queue row, any status. A person rejected from a campaign must not be
+    // suggested for that same campaign again: on 2026-09-09 all 43 accepted
+    // suggestions in CommunityForce were skipped as duplicates because the
+    // people already sat in the target campaign as `skipped` rows.
+    activeCampaignsForProspects(workspaceId, people.map((p) => p.id), { statuses: null }),
   ]);
 
   const out: RoutePick[] = [];
@@ -145,7 +150,10 @@ export async function routeProspects(
     if (campaigns.length === 0) { out.push({ ...base, campaignId: null, campaignName: null, fit: 0, reasoning: "", skipReason: "No active campaign has targeting to score against" }); continue; }
 
     const rec = personRecord(p);
-    const scores: CandidateScore[] = campaigns.map((c) => ({ campaignId: c.id, campaignName: c.name, fit: scoreIcpMatch(rec, c.targets) }));
+    const tried = new Set((everSeen.get(p.id) ?? []).map((h) => h.campaignId));
+    const eligible = campaigns.filter((c) => !tried.has(c.id));
+    if (eligible.length === 0) { out.push({ ...base, campaignId: null, campaignName: null, fit: 0, reasoning: "", skipReason: "Already tried in every campaign that fits (rejected or completed there)" }); continue; }
+    const scores: CandidateScore[] = eligible.map((c) => ({ campaignId: c.id, campaignName: c.name, fit: scoreIcpMatch(rec, c.targets) }));
     const { pick, needsTiebreak, contenders } = choosePick(scores);
     if (!pick) { out.push({ ...base, alternatives: scores, campaignId: null, campaignName: null, fit: 0, reasoning: "", skipReason: `No campaign scores ${MIN_FIT}+ for this person's title, industry, or location` }); continue; }
 
