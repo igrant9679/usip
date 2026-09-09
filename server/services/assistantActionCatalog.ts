@@ -39,6 +39,8 @@ export interface CatalogEntry {
   inputSchema: Record<string, unknown>;
   /** The zod gate the confirm path re-validates the stored input with. */
   parse: (input: unknown) => unknown;
+  /** True for the approval-queue sends — the card and the model are told email goes out. */
+  sends: boolean;
 }
 
 /** Router prefix → group label + what it is for (the model reads these). */
@@ -105,6 +107,25 @@ export const ALLOWED_GROUPS: Record<string, { group: string; description: string
 export const DENY_LEAF = /(send|dispatch|message|reply(?!Class)|delete|remove|purge|wipe|destroy|reset|password|invite|apiKey|secret|token|credential|transfer|archiveWorkspace|acceptByToken|submit$|book$|byToken|import)/i;
 /** Whole paths that are read-only public surfaces or otherwise out of scope. */
 export const DENY_PATH = /^(helpCenter\.(upsert|create|update|delete|generate)|chatAgents\.(getPublic|sessionByToken)|landingPages\.(getBySlug)|forms\.getByPublicId|bookingLinks\.getPublic|are\.execution\.(pause|resume))/;
+
+/**
+ * The approval-queue sends (owner decision 2026-09-09: "open the
+ * approval-queue sends to it too"). These are the exact procedures the
+ * Emails / Email Drafts / Meetings pages run when a human presses Send or
+ * Approve & send on something already approved or proposed — they are
+ * exempt from DENY_LEAF and from the router allowlist, flagged `sends`, and
+ * their confirm card says out loud that email goes out now. Composing and
+ * sending arbitrary mail (contacts.sendAdHocEmail, unipile.sendMessage,
+ * proposals.sendToClient) stays excluded: the assistant sends what a queue
+ * already holds, never what it wrote a moment ago.
+ */
+export const SEND_ALLOWLIST: Record<string, string> = {
+  "emailDrafts.send": "SENDS EMAIL NOW: send one approved draft to its recipient.",
+  "smtpConfig.sendDraft": "SENDS EMAIL NOW: send one approved draft through the workspace sender.",
+  "smtpConfig.sendBulkApproved": "SENDS EMAIL NOW: send every approved draft (or the given draftIds, max 200), one per second.",
+  "meetings.approveAndSend": "SENDS EMAIL NOW: approve one proposed meeting and email the calendar invite (chosenTime optional — earliest future slot by default).",
+  "meetings.approveAllProposed": "SENDS EMAIL NOW: approve and send every pending meeting proposal (expired ones are skipped and reported).",
+};
 
 /** Humanise "are.prospects.pushExisting" → "Push existing (Revenue Engine › prospects)". */
 export function titleFor(path: string): string {
@@ -183,10 +204,11 @@ export function buildCatalogFrom(router: RouterLike): CatalogEntry[] {
     const type = proc?._def?.type;
     if (type !== "query" && type !== "mutation") continue;
     const root = path.split(".")[0];
-    const allow = ALLOWED_GROUPS[root];
+    const sends = path in SEND_ALLOWLIST;
+    const allow = ALLOWED_GROUPS[root] ?? (sends ? { group: "Outreach", description: "Approval-queue sends" } : undefined);
     if (!allow) continue;
     const leaf = path.split(".").pop() ?? "";
-    if (DENY_LEAF.test(leaf) || DENY_PATH.test(path)) continue;
+    if (!sends && (DENY_LEAF.test(leaf) || DENY_PATH.test(path))) continue;
     const zodInput = (proc._def?.inputs ?? [])[0] as z.ZodTypeAny | undefined;
     let inputSchema: Record<string, unknown> = { type: "object", additionalProperties: true, description: "Untyped input — pass what the page would" };
     if (zodInput) {
@@ -203,9 +225,10 @@ export function buildCatalogFrom(router: RouterLike): CatalogEntry[] {
       kind: type,
       group: allow.group,
       title: titleFor(path),
-      description: ACTION_DESCRIPTIONS[path] ?? `${allow.description}.`,
+      description: SEND_ALLOWLIST[path] ?? ACTION_DESCRIPTIONS[path] ?? `${allow.description}.`,
       inputSchema,
       parse: (input: unknown) => (zodInput ? zodInput.parse(input ?? {}) : input),
+      sends,
     });
   }
   return out;
@@ -240,7 +263,7 @@ export function searchCatalog(catalog: CatalogEntry[], query: string | undefined
     // their description words carry real signal; a router-group boilerplate
     // description ("Autonomous campaigns: create, update, …") matches every
     // sibling procedure equally and must not outrank them.
-    const described = !!ACTION_DESCRIPTIONS[a.path];
+    const described = !!ACTION_DESCRIPTIONS[a.path] || a.sends;
     let score = 0;
     for (const t of tokens) {
       if (path.includes(t)) score += 4;
@@ -263,7 +286,7 @@ export function catalogRowForModel(a: CatalogEntry) {
 export function describeGenericAction(a: CatalogEntry, input: unknown): string {
   const args = JSON.stringify(input ?? {});
   const short = args.length > 300 ? `${args.slice(0, 300)}…` : args;
-  return `Run ${a.title}: ${a.description} Input: ${short}`;
+  return `${a.sends ? "⚠ Sends email now — " : ""}Run ${a.title}: ${a.description} Input: ${short}`;
 }
 
 /** Walk a dotted path on the tRPC caller and invoke it. */

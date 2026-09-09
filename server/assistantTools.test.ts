@@ -17,6 +17,7 @@ import {
   ASSISTANT_TOOLS,
   MUTATING_TOOLS,
   READ_TOOLS,
+  SEND_TOOLS,
   TOOL_ARGS,
   buildToolDigest,
   describeAction,
@@ -39,10 +40,20 @@ describe("assistant tool registry", () => {
     expect(defined).toEqual(Object.keys(TOOL_ARGS).sort());
   });
 
-  it("the outbound gate is structural — no tool can send anything", () => {
-    // If someone adds a send/reply/message tool, this fails and forces the
-    // conversation about the approval queue it must live behind instead.
+  it("the outbound gate is structural — only the approval-queue send tools can send, and they are confirm-carded", () => {
+    // Owner decision 2026-09-09: the assistant may send what a queue already
+    // holds (approved drafts, proposed meetings) — never mail it composed. Any
+    // other tool whose name mentions sending fails here and forces the
+    // conversation about which queue it must live behind.
+    expect([...SEND_TOOLS].sort()).toEqual(["approve_and_send_meetings", "send_approved_drafts"]);
     for (const name of Object.keys(TOOL_ARGS)) {
+      if (SEND_TOOLS.includes(name)) {
+        expect(isMutatingTool(name)).toBe(true);
+        const def = ASSISTANT_TOOLS.find((t) => t.function.name === name)!;
+        expect(def.function.description).toMatch(/NOW/);
+        expect(describeAction(name as never, name === "send_approved_drafts" ? { draftIds: [1] } : { meetingIds: [1] })).toMatch(/Sends email now/);
+        continue;
+      }
       expect(name).not.toMatch(/send|reply|outreach|dispatch/i);
     }
   });

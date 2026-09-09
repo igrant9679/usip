@@ -257,6 +257,17 @@ export const TOOL_ARGS = {
     priority: z.enum(["low", "normal", "high", "urgent"]).default("normal"),
     dueInDays: z.number().int().min(0).max(60).default(0),
   }),
+  /* ── Approval-queue sends (owner decision 2026-09-09) ─────────────────
+   * The assistant may send what a queue already holds — approved drafts and
+   * proposed meetings — never mail it composed itself. Both are confirm
+   * cards whose text says email goes out now. */
+  send_approved_drafts: z.object({
+    draftIds: z.array(z.number().int().positive()).min(1).max(200).optional(),
+  }),
+  approve_and_send_meetings: z.object({
+    meetingIds: z.array(z.number().int().positive()).min(1).max(10),
+    chosenTime: z.string().max(40).optional(),
+  }),
   save_report: z.object({
     name: z.string().trim().min(1).max(160),
     spec: z.object({
@@ -289,7 +300,14 @@ export const MUTATING_TOOLS: AssistantToolName[] = [
   "set_company_brand", "update_prospect", "archive_prospects",
   "run_action", "add_to_campaign", "add_to_campaign_by_filter", "enroll_by_filter", "add_to_list_by_filter",
   "create_sequence", "log_call", "queue_calls", "save_report",
+  "send_approved_drafts", "approve_and_send_meetings",
 ];
+/**
+ * The tools that put email in flight (owner decision 2026-09-09). Every one
+ * is MUTATING (confirm-carded) and its card says so; assistantTools.test
+ * pins that no other tool name can mention sending.
+ */
+export const SEND_TOOLS: AssistantToolName[] = ["send_approved_drafts", "approve_and_send_meetings"];
 
 export function isMutatingTool(name: string): name is AssistantToolName {
   return (MUTATING_TOOLS as string[]).includes(name);
@@ -403,6 +421,12 @@ export function describeAction(name: AssistantToolName, args: Record<string, unk
       return `Log a call on person #${args.prospectId}: ${String(args.disposition).replace(/_/g, " ")}${args.durationSec ? `, ${args.durationSec}s` : ""}${args.outcome ? ` — ${args.outcome}` : ""}`;
     case "queue_calls":
       return `Create a call task "${args.title ?? "Call"}" (${args.priority ?? "normal"}) for ${n(args.prospectIds)} ${n(args.prospectIds) === 1 ? "person" : "people"}, due in ${args.dueInDays ?? 0} day(s) — tasks only; no call is placed`;
+    case "send_approved_drafts":
+      return Array.isArray(args.draftIds)
+        ? `⚠ Sends email now — send ${n(args.draftIds)} approved draft${n(args.draftIds) === 1 ? "" : "s"} to ${n(args.draftIds) === 1 ? "its recipient" : "their recipients"}`
+        : "⚠ Sends email now — send EVERY approved draft in the workspace to its recipient (max 200, one per second)";
+    case "approve_and_send_meetings":
+      return `⚠ Sends email now — approve ${n(args.meetingIds)} proposed meeting${n(args.meetingIds) === 1 ? "" : "s"} and email the calendar invite${n(args.meetingIds) === 1 ? "" : "s"}${args.chosenTime ? ` for ${args.chosenTime}` : " (earliest future slot each)"}`;
     case "save_report": {
       const spec = (args.spec ?? {}) as { object?: string; columns?: string[]; filters?: unknown[] };
       return `Save report "${args.name}" over ${spec.object} (${(spec.columns ?? []).length} columns, ${(spec.filters ?? []).length} filter${(spec.filters ?? []).length === 1 ? "" : "s"})`;
@@ -720,6 +744,15 @@ export const ASSISTANT_TOOLS: Tool[] = [
       durationSec: { type: "number" }, outcome: { type: "string" }, notes: { type: "string" },
     },
     required: ["prospectId", "disposition"],
+  }),
+  t("send_approved_drafts", "PROPOSE sending approved email drafts NOW — all of them (omit draftIds) or specific ones. This puts email in flight the moment the user confirms; say so plainly. Only drafts already approved are sent; nothing pending review goes out. The user must confirm.", {
+    type: "object",
+    properties: { draftIds: { type: "array", items: { type: "number" }, description: "Specific approved draft ids; omit to send every approved draft (max 200)" } },
+  }),
+  t("approve_and_send_meetings", "PROPOSE approving proposed meetings and EMAILING the calendar invites NOW (earliest future slot each unless chosenTime is given). Look meetings up first (run_read_action meetings.list with status proposed). Expired proposals are skipped and reported. The user must confirm.", {
+    type: "object",
+    properties: { meetingIds: { type: "array", items: { type: "number" } }, chosenTime: { type: "string", description: "ISO time to book, when the user picked one (single meeting)" } },
+    required: ["meetingIds"],
   }),
   t("queue_calls", "PROPOSE creating a call task for each person (their phone shows on the task). Velocity cannot place outbound calls itself — the AI voice agents answer inbound call-backs only — so this queues the calls for a human. The user must confirm.", {
     type: "object",

@@ -224,7 +224,7 @@ Accepting one starts a guided tour: the relevant control is spotlighted, a card 
 
 ## What it will not do
 
-It never sends email or LinkedIn messages, and it cannot place outbound calls (voice agents answer inbound call-backs only; "call these people" becomes call tasks with the numbers). It never deletes records, changes team members, passwords, credentials, billing or workspace settings. Those stay on their pages.
+It sends email only from the approval queues: it can send drafts you have already approved and send the invites for meetings already proposed, and those cards say "Sends email now" before you confirm. It never composes and sends arbitrary email or LinkedIn messages, and it cannot place outbound calls (voice agents answer inbound call-backs only; "call these people" becomes call tasks with the numbers). It never deletes records, changes team members, passwords, credentials, billing or workspace settings. Those stay on their pages.
 
 ## Try it
 

@@ -173,7 +173,7 @@ export function AssistantChat({ pageKey, compact = false }: { pageKey?: string; 
             <Button variant="ghost" size="icon" className="size-9 shrink-0" title="New chat" onClick={() => assistantStore.reset()}><RotateCcw className="size-4" /></Button>
           )}
         </div>
-        <p className={`${compact ? "" : "max-w-2xl mx-auto"} mt-1 text-[11px] text-muted-foreground`}>Actions run only after you confirm, under your own permissions. It never sends outreach on its own.</p>
+        <p className={`${compact ? "" : "max-w-2xl mx-auto"} mt-1 text-[11px] text-muted-foreground`}>Actions run only after you confirm, under your own permissions. Cards that send email say so.</p>
       </div>
     </div>
   );

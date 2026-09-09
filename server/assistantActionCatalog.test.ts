@@ -10,7 +10,7 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { ALLOWED_GROUPS, DENY_LEAF, buildCatalogFrom, searchCatalog, titleFor, type CatalogEntry } from "./services/assistantActionCatalog";
+import { ALLOWED_GROUPS, DENY_LEAF, SEND_ALLOWLIST, buildCatalogFrom, describeGenericAction, searchCatalog, titleFor, type CatalogEntry } from "./services/assistantActionCatalog";
 import { MUTATING_TOOLS, READ_TOOLS, TOOL_ARGS } from "./services/assistantTools";
 
 const read = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
@@ -35,9 +35,10 @@ describe("action catalog policy on the real router", () => {
     expect(cat.filter((a) => a.kind === "mutation").length).toBeGreaterThan(80);
   });
 
-  it("never lists a send, delete, wipe, secret, admin, team, billing or danger-zone procedure", async () => {
+  it("never lists a compose-and-send, delete, wipe, secret, admin, team, billing or danger-zone procedure", async () => {
     const cat = await realCatalog();
     const bad = cat.filter((a) => {
+      if (a.sends) return !(a.path in SEND_ALLOWLIST);
       const root = a.path.split(".")[0];
       const leaf = a.path.split(".").pop() ?? "";
       return DENY_LEAF.test(leaf)
@@ -45,10 +46,18 @@ describe("action catalog policy on the real router", () => {
         || /send|dispatch|delete|remove|purge|password|invite|apiKey|secret|transfer/i.test(leaf);
     });
     expect(bad.map((a) => a.path)).toEqual([]);
-    // Belt and braces: the well-known senders by name.
+    // Belt and braces: composed sends and admin by name stay out …
     const paths = new Set(cat.map((a) => a.path));
-    for (const p of ["emailDrafts.send", "smtpConfig.sendDraft", "smtpConfig.sendBulkApproved", "unipile.sendMessage", "meetings.approveAndSend", "proposals.sendToClient", "contacts.sendAdHocEmail", "dangerZone.transferOwnership", "team.setMemberPassword", "prospects.delete", "sequences.delete"]) {
+    for (const p of ["unipile.sendMessage", "proposals.sendToClient", "contacts.sendAdHocEmail", "dangerZone.transferOwnership", "team.setMemberPassword", "prospects.delete", "sequences.delete"]) {
       expect(paths.has(p), p).toBe(false);
+    }
+    // … and the approval-queue sends (owner decision 2026-09-09) are in, flagged, and say so.
+    for (const p of Object.keys(SEND_ALLOWLIST)) {
+      const a = cat.find((x) => x.path === p);
+      expect(a, p).toBeTruthy();
+      expect(a!.sends).toBe(true);
+      expect(a!.description).toMatch(/SENDS EMAIL NOW/);
+      expect(describeGenericAction(a!, {})).toMatch(/Sends email now/);
     }
   });
 

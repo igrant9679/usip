@@ -9,7 +9,9 @@
  * It looks things up through the app's own procedures, recommends, asks
  * when it needs a decision, hands out in-app links, and PROPOSES actions —
  * every action renders as a confirmation card and runs only when the user
- * presses Confirm (assistant.confirmAction). It never sends outreach.
+ * presses Confirm (assistant.confirmAction). It can send only what the
+ * approval queues already hold (approved drafts, proposed meetings), and
+ * those cards say so.
  */
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { pageKeyForRoute } from "@/components/usip/Elsie";

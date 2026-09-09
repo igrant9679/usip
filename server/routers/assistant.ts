@@ -338,7 +338,7 @@ Rules:
 - Mutating tools (every tool whose description says PROPOSE, plus run_action) only PROPOSE: calling one shows the user a confirmation card. You may propose up to three actions in one turn when they form one plan the user asked for (say what each card does); otherwise one. Only propose what the user asked for, with ids you obtained from lookups this conversation.
 - create_campaign makes a DRAFT only: it never launches. If the user wants it running, that is a second step (set_campaign_status to active) in a later turn, after they have seen the draft. Fill targeting from what the user said; if they gave no name or no targeting, ask rather than invent.
 - For "make a list of everyone who…" requests, call preview_people_filter first and tell the user the real count, then propose create_list_from_filter with the same filter.
-- You cannot send email or LinkedIn messages, and must not promise to. Sends live behind the user's approval queues.
+- Sending: you may put email in flight ONLY from the approval queues — send_approved_drafts (drafts already approved) and approve_and_send_meetings (meetings already proposed), or the catalog actions marked "SENDS EMAIL NOW". Each is a confirm card that says email goes out; never propose one the user did not ask for, and never compose-and-send arbitrary mail or LinkedIn messages (those tools do not exist). Approving a draft (emailDrafts.approve / approveAll) sends nothing by itself.
 - Use navigate to hand the user a link when the answer is "go to this page".
 - ask_user ends your turn and shows the options as buttons; the user's pick arrives as their next message. Use it for decisions, not for small talk.
 - Tool results arrive as [tool_result …] messages. After reading one, either call another tool or give your final answer as plain text.
@@ -763,6 +763,25 @@ export const assistantRouter = router({
         case "queue_calls": {
           const r = (await caller.tasks.bulkCreateForProspects({ prospectIds: args.prospectIds, title: args.title ?? "Call", type: "call", priority: args.priority ?? "normal", dueInDays: args.dueInDays ?? 0 } as never)) as { created?: number };
           summary = `Queued ${r.created ?? (args.prospectIds as number[]).length} call task(s) — they are on the Tasks page with each person's number`;
+          break;
+        }
+        case "send_approved_drafts": {
+          const r = (await caller.smtpConfig.sendBulkApproved({ draftIds: args.draftIds } as never)) as { sent?: number; failed?: number };
+          summary = `Sent ${r.sent ?? 0} email${(r.sent ?? 0) === 1 ? "" : "s"}${r.failed ? `, ${r.failed} failed` : ""}`;
+          break;
+        }
+        case "approve_and_send_meetings": {
+          let sent = 0;
+          const notSent: string[] = [];
+          for (const id of args.meetingIds as number[]) {
+            try {
+              const r = (await caller.meetings.approveAndSend({ id, chosenTime: args.chosenTime } as never)) as { sent?: boolean; reason?: string; scheduledAt?: string | null };
+              if (r.sent) sent++; else notSent.push(`#${id} (${(r.reason ?? "not sent").replace(/_/g, " ")})`);
+            } catch (e) {
+              notSent.push(`#${id} (${(e as Error).message.slice(0, 80)})`);
+            }
+          }
+          summary = `Sent ${sent} meeting invite${sent === 1 ? "" : "s"}${notSent.length ? `; not sent: ${notSent.join(", ")} — those proposals were kept` : ""}`;
           break;
         }
         case "save_report": {
