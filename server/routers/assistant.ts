@@ -41,9 +41,33 @@ import {
   validateNavigateHref,
 } from "../services/assistantTools";
 import { buildEntityCatalog, runExplorerQuery } from "../services/assistantDataExplorer";
+import { catalogRowForModel, describeGenericAction, getAction, getActionCatalog, invokeCallerPath, searchCatalog } from "../services/assistantActionCatalog";
 import { PRODUCT_KNOWLEDGE } from "../productKnowledge";
 
-const MAX_ROUNDS = 5;
+// 8 rounds: a conversational plan (look up → preview → propose) plus the
+// catalog round-trip (list_actions → run_action) fits; 5 cut the second leg.
+const MAX_ROUNDS = 8;
+/** Proposals per turn. A plan like "create the list, add them to the
+ *  campaign, queue the calls" is three cards the user confirms one by one. */
+const MAX_PROPOSALS_PER_TURN = 3;
+
+/** Page through prospects.list with a described filter — the same query
+ *  preview_people_filter ran, capped to what the confirmation card promised. */
+async function collectFilterIds(caller: Awaited<ReturnType<typeof getCaller>>, filter: Record<string, unknown>, limit: number): Promise<number[]> {
+  const ids: number[] = [];
+  for (let page = 1; ids.length < limit && page <= 10; page++) {
+    const res = (await caller.prospects.list({ page, perPage: 200, ...filter } as never)) as { total: number; data: Array<{ id: number }> };
+    ids.push(...res.data.map((p) => p.id));
+    if (page * 200 >= res.total) break;
+  }
+  return ids.slice(0, limit);
+}
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
 /** A proposal the user has not answered goes stale — the world it described
  *  (ids, counts) drifts, and a card left open for a day should not still be
  *  executable. */
@@ -263,22 +287,60 @@ async function runReadTool(
         summary: `Looked up help for "${args.question}"`,
       };
     }
+    case "list_actions": {
+      const catalog = await getActionCatalog();
+      const rows = searchCatalog(catalog, args.query as string | undefined, args.group as string | undefined, 15);
+      return {
+        result: { total: catalog.length, actions: rows.map(catalogRowForModel) },
+        summary: `Searched the action catalog${args.query ? ` for "${args.query}"` : ""} — ${rows.length} of ${catalog.length}`,
+      };
+    }
+    case "run_read_action": {
+      const entry = await getAction(String(args.path));
+      if (!entry) return { result: { error: `Unknown or disallowed action ${args.path} — use list_actions` }, summary: `Unknown action ${args.path}` };
+      if (entry.kind !== "query") return { result: { error: `${entry.path} changes data — propose it with run_action instead` }, summary: `${entry.path} is a mutation` };
+      const input = entry.parse(args.input ?? {});
+      const r = await invokeCallerPath(caller, entry.path, input);
+      return { result: JSON.parse(JSON.stringify(r ?? null).slice(0, 6000)), summary: `Ran ${entry.path}` };
+    }
+    case "list_report_fields": {
+      const s = await caller.reports.schema();
+      return { result: JSON.parse(JSON.stringify(s).slice(0, 6000)), summary: "Listed the report objects and columns" };
+    }
+    case "run_report": {
+      const r = (await caller.reports.run(args as never)) as { rows?: unknown[]; total?: number };
+      const rows = Array.isArray(r?.rows) ? r.rows : (Array.isArray(r) ? (r as unknown[]) : []);
+      return {
+        result: JSON.parse(JSON.stringify({ total: r?.total ?? rows.length, rows: rows.slice(0, 50) }).slice(0, 6000)),
+        summary: `Ran a ${String(args.object)} report — ${rows.length} row(s)`,
+      };
+    }
     default:
       return { result: { error: "unknown tool" }, summary: `Unknown tool ${name}` };
   }
 }
 
-const SYSTEM_PROMPT = (pageKey: string | undefined) => `You are Velocity's in-app assistant. You can look things up, guide the user step-by-step, and PROPOSE actions — the app runs a proposed action only after the user confirms it in the chat.
+const SYSTEM_PROMPT = (pageKey: string | undefined) => `You are Velocity's in-app assistant and operator. You can look anything up, run reports, and do virtually anything the user can do in the app — create and edit campaigns, sequences, lists, deals, leads, tasks, meetings, proposals, quotes, workflows, personas, reports; add batches of people to campaigns, sequences and lists by criteria; log and queue calls — always by PROPOSING the action, which runs only after the user confirms the card in the chat.
+
+How to work with the user:
+- Be consultative. When a request is ambiguous in a way that changes the outcome (which campaign, which criteria, how many, draft or active), ask ONE focused question with ask_user and offer 2–4 concrete options. Do not ask about things you can look up or that have an obvious default.
+- Make recommendations, with the reason and the number behind it. If asked "should I…" or "what should I do", look at the real data first (whats_waiting, query_data, run_report, are.metrics via run_read_action) and give a clear recommendation plus the one alternative worth considering.
+- Walk the user through what you do: before a multi-step plan, state the steps in one line; as you act, say what each tool told you; after a confirmed action, say what happened and what the sensible next step is.
+- For batches by criteria ("add all the CFOs in Texas to the sequence"): preview_people_filter first, tell the user the real count and a few names, then propose the batch tool (add_to_campaign_by_filter, enroll_by_filter, add_to_list_by_filter, create_list_from_filter) with the same filter. If the count looks wrong, refine the filter with the user before proposing.
+- For anything no purpose-built tool covers, call list_actions to find the app action, read its input schema, look up any ids it needs, then run_read_action (queries) or run_action (mutations). Never guess a path or an id.
+- Calls: Velocity does not place outbound calls (voice agents answer inbound call-backs only). "Call these people" means queue_calls (call tasks with the phone number) or log_call for a call that happened.
+- The user should never be lost. End every answer with the sensible next step, or the one question that decides it. When they ask "what should I do next" or "what now", read whats_waiting and the page they are on, then give a short ordered plan and offer to start the first item.
 
 Rules:
 - Use tools for facts. Never invent prospect ids, sequence names, or counts — search first. For "how do I…" questions call help_lookup and answer from what it returns.
 - You can see ALL of the workspace's data: query_data runs read-only filter/group/aggregate queries over every core table (people, companies, campaigns, email log, replies, meetings, tasks, deals, sequences, brand observations, audit log…). Use it for counting, auditing, "which rows…", and any question the purpose-built tools don't cover. Call list_data_entities first when unsure of an entity or column name — never guess one.
 - Numeric ids may ONLY come from tool results — either this turn's, or an [assistant_context …] block at the end of an earlier assistant message (that block holds prior turns' tool results). If no real id is in context, look the person or object up again before proposing an action. The server rejects actions naming ids that don't exist.
-- Mutating tools (enroll_in_sequence, create_tasks, add_to_list, enrich_prospects, set_campaign_status, propose_meetings, create_list_from_filter, create_campaign, set_company_brand, update_prospect, archive_prospects) only PROPOSE: calling one shows the user a confirmation card. Call at most ONE per turn, only when the user asked for that action, and with ids you obtained from lookups this conversation.
+- Mutating tools (every tool whose description says PROPOSE, plus run_action) only PROPOSE: calling one shows the user a confirmation card. You may propose up to three actions in one turn when they form one plan the user asked for (say what each card does); otherwise one. Only propose what the user asked for, with ids you obtained from lookups this conversation.
 - create_campaign makes a DRAFT only: it never launches. If the user wants it running, that is a second step (set_campaign_status to active) in a later turn, after they have seen the draft. Fill targeting from what the user said; if they gave no name or no targeting, ask rather than invent.
 - For "make a list of everyone who…" requests, call preview_people_filter first and tell the user the real count, then propose create_list_from_filter with the same filter.
 - You cannot send email or LinkedIn messages, and must not promise to. Sends live behind the user's approval queues.
 - Use navigate to hand the user a link when the answer is "go to this page".
+- ask_user ends your turn and shows the options as buttons; the user's pick arrives as their next message. Use it for decisions, not for small talk.
 - Tool results arrive as [tool_result …] messages. After reading one, either call another tool or give your final answer as plain text.
 - Be concise and concrete. Short sentences, tight lists, real names and numbers from tool results.
 - The user opened the assistant from this page: ${pageKey ?? "unknown"}. Use it to interpret "this page" / "here" and to pick navigate targets.
@@ -306,7 +368,7 @@ export const assistantRouter = router({
       const prior = await db.select().from(aiHelpMessages)
         .where(eq(aiHelpMessages.conversationId, input.conversationId))
         .orderBy(aiHelpMessages.createdAt)
-        .limit(12);
+        .limit(24);
 
       await db.insert(aiHelpMessages).values({ conversationId: input.conversationId, role: "user", body: input.message });
 
@@ -320,7 +382,9 @@ export const assistantRouter = router({
       const toolEvents: Array<{ tool: string; summary: string }> = [];
       const toolResults: Array<{ tool: string; result: unknown }> = [];
       const navigations: Array<{ href: string; label: string }> = [];
-      let pendingAction: { nonce: string; tool: string; args: Record<string, unknown>; description: string; expiresAt: string } | null = null;
+      type Pending = { nonce: string; tool: string; args: Record<string, unknown>; description: string; expiresAt: string };
+      const pendingActions: Pending[] = [];
+      let question: { text: string; options: string[] } | null = null;
       let answer = "";
 
       for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -328,7 +392,7 @@ export const assistantRouter = router({
           messages,
           tools: ASSISTANT_TOOLS,
           toolChoice: "auto",
-          maxTokens: 900,
+          maxTokens: 1400,
           workspaceId: ctx.workspace.id,
         });
         const msg = res.choices[0]?.message;
@@ -352,20 +416,42 @@ export const assistantRouter = router({
           }
 
           if (isMutatingTool(name)) {
-            // First proposal wins the turn — the user decides from here. The
-            // proposal is a server-held row; the client only gets its nonce,
-            // and confirm/decline consume that row (0168). The args that run
-            // are the ones stored HERE, never the ones a client sends back.
-            const description = describeAction(name, args);
+            // Proposals end the turn — the user decides from here. Each proposal
+            // is a server-held row; the client only gets its nonce, and
+            // confirm/decline consume that row (0168). The args that run are
+            // the ones stored HERE, never the ones a client sends back. Up to
+            // MAX_PROPOSALS_PER_TURN cards may be made in one turn (a plan).
+            if (pendingActions.length >= MAX_PROPOSALS_PER_TURN) {
+              messages.push({ role: "user", content: `[tool_result ${name}]: {"error":"proposal limit for this turn reached — the user will confirm the cards first"}` });
+              continue;
+            }
+            let description = describeAction(name, args);
+            if (name === "run_action") {
+              // Generic gate: the path must be an allowlisted MUTATION and the
+              // input must pass the procedure's own zod schema now, so the card
+              // never promises something the confirm step would reject.
+              const entry = await getAction(String(args.path));
+              if (!entry) { messages.push({ role: "user", content: `[tool_result run_action]: {"error":"unknown or disallowed action — use list_actions"}` }); continue; }
+              if (entry.kind !== "mutation") { messages.push({ role: "user", content: `[tool_result run_action]: {"error":"${entry.path} is a query — use run_read_action"}` }); continue; }
+              try { args = { path: entry.path, input: entry.parse(args.input ?? {}) }; }
+              catch (e) { messages.push({ role: "user", content: `[tool_result run_action]: {"error":${JSON.stringify(`input rejected: ${(e as Error).message.slice(0, 300)}`)}}` }); continue; }
+              description = describeGenericAction(entry, args.input);
+            }
             const nonce = randomBytes(24).toString("base64url");
             const expiresAt = new Date(Date.now() + PROPOSAL_TTL_MS);
             await db.insert(aiAssistantProposals).values({
               workspaceId: ctx.workspace.id, userId: ctx.user.id, conversationId: input.conversationId,
               nonce, tool: name, args, description, expiresAt,
             } as never);
-            pendingAction = { nonce, tool: name, args, description, expiresAt: expiresAt.toISOString() };
-            answer = text || `Ready when you are — confirm below to run it.`;
-            break;
+            pendingActions.push({ nonce, tool: name, args, description, expiresAt: expiresAt.toISOString() });
+            messages.push({ role: "user", content: `[tool_result ${name}]: {"ok":true,"note":"proposed — the user sees a confirmation card"}` });
+            if (text) answer = text;
+            continue;
+          }
+          if (name === "ask_user") {
+            question = { text: String(args.question), options: (args.options as string[]) };
+            if (text) answer = text;
+            continue;
           }
           if (name === "navigate") {
             const href = String(args.href);
@@ -388,16 +474,19 @@ export const assistantRouter = router({
             messages.push({ role: "user", content: `[tool_result ${name}]: {"error":${JSON.stringify(emsg)}}` });
           }
         }
-        if (pendingAction) break;
+        if (pendingActions.length > 0 || question) {
+          if (!answer) answer = question ? question.text : (pendingActions.length === 1 ? "Ready when you are — confirm below to run it." : `${pendingActions.length} actions proposed — confirm each card to run it.`);
+          break;
+        }
       }
 
       // Rounds exhausted mid-tool-use: the model has results it never got to
       // narrate (query_data turns hit this — first live probe ended on "Let me
       // check…" with the number sitting unread in a tool result). One final
       // call WITHOUT tools forces it to answer from what it gathered.
-      if (!answer && !pendingAction) {
+      if (!answer && pendingActions.length === 0 && !question) {
         messages.push({ role: "user", content: "[assistant_note]: Tool budget for this turn is used up. Answer the user's question now from the tool results above; say plainly if something is still missing." });
-        const res = await invokeLLM({ messages, maxTokens: 900, workspaceId: ctx.workspace.id });
+        const res = await invokeLLM({ messages, maxTokens: 1400, workspaceId: ctx.workspace.id });
         const msg = res.choices[0]?.message;
         answer = (typeof msg?.content === "string" ? msg.content : "") || "";
       }
@@ -415,7 +504,7 @@ export const assistantRouter = router({
       await db.update(aiHelpConversations).set({ lastMessageAt: new Date() } as never)
         .where(and(eq(aiHelpConversations.workspaceId, ctx.workspace.id), eq(aiHelpConversations.id, input.conversationId)));
 
-      return { answer, toolEvents, navigations, pendingAction };
+      return { answer, toolEvents, navigations, pendingAction: pendingActions[0] ?? null, pendingActions, question };
     }),
 
   /**
@@ -603,6 +692,82 @@ export const assistantRouter = router({
             archived++;
           }
           summary = `Archived ${archived} ${archived === 1 ? "person" : "people"} (reversible from the People page)`;
+          break;
+        }
+        case "run_action": {
+          const entry = await getAction(String(args.path));
+          if (!entry || entry.kind !== "mutation") throw new TRPCError({ code: "BAD_REQUEST", message: `Action ${args.path} is not allowed` });
+          const parsed = entry.parse(args.input ?? {});
+          const r = await invokeCallerPath(caller, entry.path, parsed);
+          const out = JSON.stringify(r ?? null);
+          summary = `Ran ${entry.path}${out && out !== "null" ? ` → ${out.length > 300 ? out.slice(0, 300) + "…" : out}` : ""}`;
+          break;
+        }
+        case "add_to_campaign": {
+          let added = 0, skipped = 0;
+          for (const ids of chunk(args.prospectIds as number[], 100)) {
+            const r = (await caller.are.prospects.pushExisting({ campaignId: args.campaignId, prospectIds: ids } as never)) as { added: unknown[]; skipped: unknown[] };
+            added += r.added.length; skipped += r.skipped.length;
+          }
+          summary = `Added ${added} to campaign #${args.campaignId}${skipped ? `, ${skipped} skipped (already in the campaign or no identity)` : ""} — the engine enriches and writes to them next; the batch waits for approval`;
+          break;
+        }
+        case "add_to_campaign_by_filter": {
+          const ids = await collectFilterIds(caller, args.filter as Record<string, unknown>, Number(args.limit ?? 200));
+          if (ids.length === 0) { summary = "No one matched the filter — nothing added"; break; }
+          let added = 0, skipped = 0;
+          for (const part of chunk(ids, 100)) {
+            const r = (await caller.are.prospects.pushExisting({ campaignId: args.campaignId, prospectIds: part } as never)) as { added: unknown[]; skipped: unknown[] };
+            added += r.added.length; skipped += r.skipped.length;
+          }
+          summary = `Added ${added} of ${ids.length} matching people to campaign #${args.campaignId}${skipped ? ` (${skipped} skipped — already there)` : ""}; the batch waits for approval before anything sends`;
+          break;
+        }
+        case "enroll_by_filter": {
+          const ids = await collectFilterIds(caller, args.filter as Record<string, unknown>, Number(args.limit ?? 200));
+          if (ids.length === 0) { summary = "No one matched the filter — nobody enrolled"; break; }
+          let enrolled = 0, already = 0, blocked = 0;
+          for (const part of chunk(ids, 100)) {
+            const r = (await caller.sequences.bulkEnroll({ sequenceId: args.sequenceId, prospectIds: part } as never)) as { enrolled?: number; skippedAlreadyEnrolled?: number; blockedInvalidEmail?: number };
+            enrolled += r.enrolled ?? 0; already += r.skippedAlreadyEnrolled ?? 0; blocked += r.blockedInvalidEmail ?? 0;
+          }
+          summary = `Enrolled ${enrolled} of ${ids.length} matching people in sequence #${args.sequenceId}${already ? `, ${already} already enrolled` : ""}${blocked ? `, ${blocked} blocked (invalid email)` : ""}`;
+          break;
+        }
+        case "add_to_list_by_filter": {
+          const ids = await collectFilterIds(caller, args.filter as Record<string, unknown>, Number(args.limit ?? 500));
+          if (ids.length === 0) { summary = "No one matched the filter — nothing added"; break; }
+          const r = (await caller.recordLists.addMembers({ listId: args.listId, recordType: "prospect", recordIds: ids } as never)) as { added?: number };
+          summary = `Added ${r.added ?? ids.length} of ${ids.length} matching people to list #${args.listId}`;
+          break;
+        }
+        case "create_sequence": {
+          const steps = (args.steps as Array<Record<string, unknown>>).map((s) => {
+            switch (s.type) {
+              case "email": return { type: "email", subject: s.subject, body: s.body };
+              case "wait": return { type: "wait", days: s.days };
+              case "task": return { type: "task", body: s.body };
+              case "linkedin_dm": return { type: "linkedin_dm", body: s.body };
+              default: return { type: "linkedin_invite", note: s.note };
+            }
+          });
+          const created = (await caller.sequences.create({ name: args.name, description: args.description, steps } as never)) as { id: number };
+          summary = `Created sequence "${args.name}" (#${created.id}) as a DRAFT with ${steps.length} step(s) — review it at /v2/sequences, activate it, then enroll people`;
+          break;
+        }
+        case "log_call": {
+          await caller.activities.logCall({ relatedType: "prospect", relatedId: args.prospectId, disposition: args.disposition, durationSec: args.durationSec ?? 0, outcome: args.outcome, notes: args.notes } as never);
+          summary = `Logged a ${String(args.disposition).replace(/_/g, " ")} call on person #${args.prospectId}`;
+          break;
+        }
+        case "queue_calls": {
+          const r = (await caller.tasks.bulkCreateForProspects({ prospectIds: args.prospectIds, title: args.title ?? "Call", type: "call", priority: args.priority ?? "normal", dueInDays: args.dueInDays ?? 0 } as never)) as { created?: number };
+          summary = `Queued ${r.created ?? (args.prospectIds as number[]).length} call task(s) — they are on the Tasks page with each person's number`;
+          break;
+        }
+        case "save_report": {
+          const r = (await caller.reports.save({ name: args.name, spec: args.spec } as never)) as { id?: number };
+          summary = `Saved report "${args.name}"${r?.id ? ` (#${r.id})` : ""} — it is on the Reports page and can be scheduled`;
           break;
         }
         default:

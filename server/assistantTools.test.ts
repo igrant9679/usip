@@ -30,7 +30,7 @@ describe("assistant tool registry", () => {
     const read = new Set<string>(READ_TOOLS);
     const mut = new Set<string>(MUTATING_TOOLS);
     for (const t of read) expect(mut.has(t)).toBe(false);
-    const all = new Set([...read, ...mut, "navigate"]);
+    const all = new Set([...read, ...mut, "navigate", "ask_user"]);
     expect([...all].sort()).toEqual(Object.keys(TOOL_ARGS).sort());
   });
 

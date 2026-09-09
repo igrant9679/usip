@@ -83,6 +83,8 @@ import { Link, useLocation } from "wouter";
 import { rememberPage } from "@/lib/lastPage";
 import { PageTransition } from "@/components/PageTransition";
 import { HelpDrawer } from "@/components/usip/HelpDrawer";
+import { AssistantDrawer } from "@/components/usip/AssistantDrawer";
+import { assistantStore } from "@/lib/assistantStore";
 import { useTheme, PALETTES } from "@/contexts/ThemeContext";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Moon, Sun, Pencil, Check as CheckIcon, X as XIcon, Palette } from "lucide-react";
@@ -508,6 +510,18 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const [newWsOpen, setNewWsOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  // AI Assistant from anywhere (owner ask 2026-09-08): Ctrl/Cmd+J toggles the
+  // drawer on every page. Ctrl+K is the Library; J sits next to it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        assistantStore.toggle();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const navRef = useRef<HTMLElement>(null);
   // Collapsible nav groups — persisted to localStorage so the choice survives
   // Shell's per-navigation remount (each page renders its own <Shell>).
@@ -875,6 +889,19 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             </button>
           )}
 
+          {/* AI Assistant — the conversational operator, from any page. Anchored
+              in the topbar (with Ctrl+J), NOT a floating FAB. */}
+          <button
+            type="button"
+            data-tour-id="assistant-button"
+            onClick={() => assistantStore.toggle()}
+            className="p-2 rounded-md hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+            title="AI Assistant (Ctrl+J)"
+            aria-label="Open the AI Assistant"
+          >
+            <Sparkles className="size-4" />
+          </button>
+
           {/* Help Center — opens the contextual drawer (articles for this page,
               Ask AI, guided tours). Anchored in the topbar, NOT a floating FAB. */}
           <button
@@ -897,6 +924,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         </header>
 
         {helpOpen && <HelpDrawer onClose={() => setHelpOpen(false)} />}
+        <AssistantDrawer />
 
         <main className="flex-1 overflow-auto bg-background">
           <PageTransition>{children}</PageTransition>

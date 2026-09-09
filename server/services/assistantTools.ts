@@ -94,6 +94,12 @@ export const TOOL_ARGS = {
   get_company: z.object({ companyId: z.number().int().positive() }),
   // NAVIGATE
   navigate: z.object({ href: z.string().min(1).max(200), label: z.string().min(1).max(80) }),
+  // ASK — client-side like navigate: the question and its options render as
+  // buttons; the user's pick comes back as their next message. Nothing runs.
+  ask_user: z.object({
+    question: z.string().trim().min(3).max(500),
+    options: z.array(z.string().trim().min(1).max(80)).min(2).max(6),
+  }),
   // MUTATING
   enroll_in_sequence: z.object({ sequenceId: z.number().int().positive(), prospectIds: idList }),
   create_tasks: z.object({
@@ -180,6 +186,94 @@ export const TOOL_ARGS = {
     }).refine((f) => Object.values(f).some((v) => v !== undefined), { message: "At least one field is required" }),
   }),
   archive_prospects: z.object({ prospectIds: idList }),
+
+  /* ── Comprehensive actions (owner ask 2026-09-08) ─────────────────────
+   * "Virtually any action I can do in the app": batches of people by
+   * criteria into campaigns/sequences/lists, sequences and reports created
+   * in conversation, calls logged and queued, and a generic gate onto the
+   * allowlisted tRPC catalog (services/assistantActionCatalog.ts). Every
+   * mutation still lands on a confirm card. */
+  // READ
+  list_actions: z.object({
+    query: z.string().trim().max(200).optional(),
+    group: z.string().trim().max(40).optional(),
+  }),
+  run_read_action: z.object({ path: z.string().min(3).max(120), input: z.unknown().optional() }),
+  list_report_fields: z.object({}).optional().or(z.object({}).passthrough()),
+  run_report: z.object({
+    object: z.enum(["deals", "leads", "prospects", "contacts", "activities", "emails"]),
+    columns: z.array(z.string().max(64)).min(1).max(20),
+    filters: z.array(z.object({
+      field: z.string().max(64),
+      op: z.enum(["eq", "neq", "contains", "gt", "gte", "lt", "lte", "is_empty", "not_empty"]),
+      value: z.string().max(500).optional(),
+    })).max(12).default([]),
+    groupBy: z.string().max(64).optional(),
+    aggregate: z.enum(["count", "sum_value", "avg_value"]).optional(),
+    aggregateField: z.string().max(64).optional(),
+    sort: z.object({ field: z.string().max(64), dir: z.enum(["asc", "desc"]) }).optional(),
+    limit: z.number().int().min(1).max(200).default(50),
+  }),
+  // MUTATING
+  run_action: z.object({ path: z.string().min(3).max(120), input: z.unknown().optional() }),
+  add_to_campaign: z.object({ campaignId: z.number().int().positive(), prospectIds: z.array(z.number().int().positive()).min(1).max(100) }),
+  add_to_campaign_by_filter: z.object({
+    campaignId: z.number().int().positive(),
+    filter: PEOPLE_FILTER.refine(filterIsNonEmpty, { message: "At least one filter field is required" }),
+    limit: z.number().int().min(1).max(500).default(200),
+  }),
+  enroll_by_filter: z.object({
+    sequenceId: z.number().int().positive(),
+    filter: PEOPLE_FILTER.refine(filterIsNonEmpty, { message: "At least one filter field is required" }),
+    limit: z.number().int().min(1).max(500).default(200),
+  }),
+  add_to_list_by_filter: z.object({
+    listId: z.number().int().positive(),
+    filter: PEOPLE_FILTER.refine(filterIsNonEmpty, { message: "At least one filter field is required" }),
+    limit: z.number().int().min(1).max(1000).default(500),
+  }),
+  create_sequence: z.object({
+    name: z.string().trim().min(1).max(200),
+    description: z.string().trim().max(1000).optional(),
+    steps: z.array(z.discriminatedUnion("type", [
+      z.object({ type: z.literal("email"), subject: z.string().min(1).max(300), body: z.string().min(1).max(8000) }),
+      z.object({ type: z.literal("wait"), days: z.number().min(0).max(60) }),
+      z.object({ type: z.literal("task"), body: z.string().min(1).max(1000) }),
+      z.object({ type: z.literal("linkedin_dm"), body: z.string().min(1).max(3000) }),
+      z.object({ type: z.literal("linkedin_invite"), note: z.string().max(300).optional() }),
+    ])).min(1).max(20),
+  }),
+  log_call: z.object({
+    prospectId: z.number().int().positive(),
+    disposition: z.enum(["connected", "voicemail", "no_answer", "bad_number", "gatekeeper", "callback_requested", "not_interested"]),
+    durationSec: z.number().int().min(0).max(14400).default(0),
+    outcome: z.string().max(300).optional(),
+    notes: z.string().max(4000).optional(),
+  }),
+  queue_calls: z.object({
+    prospectIds: z.array(z.number().int().positive()).min(1).max(100),
+    title: z.string().trim().min(1).max(200).default("Call"),
+    notes: z.string().max(1000).optional(),
+    priority: z.enum(["low", "normal", "high", "urgent"]).default("normal"),
+    dueInDays: z.number().int().min(0).max(60).default(0),
+  }),
+  save_report: z.object({
+    name: z.string().trim().min(1).max(160),
+    spec: z.object({
+      object: z.enum(["deals", "leads", "prospects", "contacts", "activities", "emails"]),
+      columns: z.array(z.string().max(64)).min(1).max(20),
+      filters: z.array(z.object({
+        field: z.string().max(64),
+        op: z.enum(["eq", "neq", "contains", "gt", "gte", "lt", "lte", "is_empty", "not_empty"]),
+        value: z.string().max(500).optional(),
+      })).max(12).default([]),
+      groupBy: z.string().max(64).optional(),
+      aggregate: z.enum(["count", "sum_value", "avg_value"]).optional(),
+      aggregateField: z.string().max(64).optional(),
+      sort: z.object({ field: z.string().max(64), dir: z.enum(["asc", "desc"]) }).optional(),
+      limit: z.number().int().min(1).max(1000).default(200),
+    }),
+  }),
 } as const;
 
 export type AssistantToolName = keyof typeof TOOL_ARGS;
@@ -187,11 +281,14 @@ export type AssistantToolName = keyof typeof TOOL_ARGS;
 export const READ_TOOLS: AssistantToolName[] = [
   "search_people", "get_person", "list_sequences", "list_lists", "list_campaigns", "whats_waiting", "help_lookup",
   "deals_pipeline", "preview_people_filter", "list_data_entities", "query_data", "search_companies", "get_company",
+  "list_actions", "run_read_action", "list_report_fields", "run_report",
 ];
 export const MUTATING_TOOLS: AssistantToolName[] = [
   "enroll_in_sequence", "create_tasks", "add_to_list", "enrich_prospects", "set_campaign_status",
   "propose_meetings", "create_list_from_filter", "create_campaign",
   "set_company_brand", "update_prospect", "archive_prospects",
+  "run_action", "add_to_campaign", "add_to_campaign_by_filter", "enroll_by_filter", "add_to_list_by_filter",
+  "create_sequence", "log_call", "queue_calls", "save_report",
 ];
 
 export function isMutatingTool(name: string): name is AssistantToolName {
@@ -283,6 +380,33 @@ export function describeAction(name: AssistantToolName, args: Record<string, unk
     }
     case "archive_prospects":
       return `Archive ${n(args.prospectIds)} ${n(args.prospectIds) === 1 ? "person" : "people"} (marked rejected — reversible from the People page)`;
+    case "run_action": {
+      // The catalog entry's own description is attached by the router when it
+      // resolves the path; this is the fallback wording.
+      const raw = JSON.stringify(args.input ?? {});
+      return `Run ${args.path} with ${raw.length > 300 ? raw.slice(0, 300) + "…" : raw}`;
+    }
+    case "add_to_campaign":
+      return `Add ${n(args.prospectIds)} ${n(args.prospectIds) === 1 ? "person" : "people"} to campaign #${args.campaignId} (they are enriched and written to as that campaign's next batch; nothing sends until the batch is approved)`;
+    case "add_to_campaign_by_filter":
+      return `Add everyone ${describePeopleFilter((args.filter ?? {}) as PeopleFilter)} (up to ${args.limit ?? 200} people) to campaign #${args.campaignId} — people already in the campaign are skipped; nothing sends until the batch is approved`;
+    case "enroll_by_filter":
+      return `Enroll everyone ${describePeopleFilter((args.filter ?? {}) as PeopleFilter)} (up to ${args.limit ?? 200} people) in sequence #${args.sequenceId} — the sequence's steps go out on its cadence from your connected sender`;
+    case "add_to_list_by_filter":
+      return `Add everyone ${describePeopleFilter((args.filter ?? {}) as PeopleFilter)} (up to ${args.limit ?? 500} people) to list #${args.listId}`;
+    case "create_sequence": {
+      const steps = (args.steps ?? []) as Array<{ type: string }>;
+      const kinds = steps.map((s) => s.type).join(" → ");
+      return `Create sequence "${args.name}" as a DRAFT with ${steps.length} step${steps.length === 1 ? "" : "s"} (${kinds}). Nothing sends until it is activated and people are enrolled.`;
+    }
+    case "log_call":
+      return `Log a call on person #${args.prospectId}: ${String(args.disposition).replace(/_/g, " ")}${args.durationSec ? `, ${args.durationSec}s` : ""}${args.outcome ? ` — ${args.outcome}` : ""}`;
+    case "queue_calls":
+      return `Create a call task "${args.title ?? "Call"}" (${args.priority ?? "normal"}) for ${n(args.prospectIds)} ${n(args.prospectIds) === 1 ? "person" : "people"}, due in ${args.dueInDays ?? 0} day(s) — tasks only; no call is placed`;
+    case "save_report": {
+      const spec = (args.spec ?? {}) as { object?: string; columns?: string[]; filters?: unknown[] };
+      return `Save report "${args.name}" over ${spec.object} (${(spec.columns ?? []).length} columns, ${(spec.filters ?? []).length} filter${(spec.filters ?? []).length === 1 ? "" : "s"})`;
+    }
     default:
       return `Run ${name}`;
   }
@@ -400,6 +524,11 @@ export const ASSISTANT_TOOLS: Tool[] = [
     properties: { href: { type: "string" }, label: { type: "string" } },
     required: ["href", "label"],
   }),
+  t("ask_user", "Ask the user ONE focused question with 2–6 concrete options shown as buttons (which campaign, which criteria, draft or active, how many…). Ends your turn; their choice arrives as the next message. Use it when the answer changes what you would do — not for things you can look up.", {
+    type: "object",
+    properties: { question: { type: "string" }, options: { type: "array", items: { type: "string" } } },
+    required: ["question", "options"],
+  }),
   t("enroll_in_sequence", "PROPOSE enrolling prospects into a sequence. The user must confirm before anything happens. Look up the sequence id with list_sequences first.", {
     type: "object",
     properties: {
@@ -510,6 +639,96 @@ export const ASSISTANT_TOOLS: Tool[] = [
   t("archive_prospects", "PROPOSE archiving people (marks them rejected and hides them from working views; reversible, never a hard delete). The user must confirm.", {
     type: "object",
     properties: { prospectIds: { type: "array", items: { type: "number" } } },
+    required: ["prospectIds"],
+  }),
+
+  /* ── Comprehensive actions (2026-09-08) ─────────────────────────────── */
+  t("list_actions", "Search the catalog of EVERY app action the assistant may run (create/update/move deals, leads, tasks, meetings, sequences, campaigns, lists, segments, proposals, quotes, workflows, reports, chat agents, forms, landing pages, personas, brand voice, scoring…). Returns matching actions with their input schema. Call this whenever the user asks for something no purpose-built tool covers, then use run_read_action (queries) or run_action (mutations).", {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "What the user wants, e.g. 'move deal to negotiation', 'create persona', 'schedule report'" },
+      group: { type: "string", description: "Optional group filter: People, CRM, Outreach, Marketing, Revenue Engine, Lists, Configuration, Automation, Proposals, Analytics, Inbound, Dialer, Daily" },
+    },
+  }),
+  t("run_read_action", "Execute a READ (query) action from list_actions immediately and return its result. path must be a query path from list_actions; input must match its schema.", {
+    type: "object",
+    properties: { path: { type: "string" }, input: { type: "object", description: "Input matching the action's schema" } },
+    required: ["path"],
+  }),
+  t("run_action", "PROPOSE a mutating action from list_actions (any create/update/approve/move the app offers). The user must confirm the card before it runs. path must be a mutation path from list_actions; input must match its schema — look ids up first, never invent them.", {
+    type: "object",
+    properties: { path: { type: "string" }, input: { type: "object", description: "Input matching the action's schema" } },
+    required: ["path"],
+  }),
+  t("list_report_fields", "The report builder's objects (deals, leads, prospects, contacts, activities, emails) and the columns each one offers. Call before run_report or save_report.", { type: "object", properties: {} }),
+  t("run_report", "Run a row-level report now: object, columns, filters, optional groupBy/aggregate, sort, limit (max 200 rows). Use list_report_fields for valid columns.", {
+    type: "object",
+    properties: {
+      object: { type: "string", enum: ["deals", "leads", "prospects", "contacts", "activities", "emails"] },
+      columns: { type: "array", items: { type: "string" } },
+      filters: { type: "array", items: { type: "object", properties: { field: { type: "string" }, op: { type: "string", enum: ["eq", "neq", "contains", "gt", "gte", "lt", "lte", "is_empty", "not_empty"] }, value: { type: "string" } }, required: ["field", "op"] } },
+      groupBy: { type: "string" },
+      aggregate: { type: "string", enum: ["count", "sum_value", "avg_value"] },
+      aggregateField: { type: "string" },
+      sort: { type: "object", properties: { field: { type: "string" }, dir: { type: "string", enum: ["asc", "desc"] } } },
+      limit: { type: "number" },
+    },
+    required: ["object", "columns"],
+  }),
+  t("save_report", "PROPOSE saving a report spec (same shape as run_report) under a name so it appears on the Reports page and can be scheduled. The user must confirm.", {
+    type: "object",
+    properties: {
+      name: { type: "string" },
+      spec: { type: "object", properties: { object: { type: "string" }, columns: { type: "array", items: { type: "string" } }, filters: { type: "array", items: { type: "object" } }, groupBy: { type: "string" }, aggregate: { type: "string" }, aggregateField: { type: "string" }, sort: { type: "object" }, limit: { type: "number" } }, required: ["object", "columns"] },
+    },
+    required: ["name", "spec"],
+  }),
+  t("add_to_campaign", "PROPOSE adding looked-up people (ids) to a Revenue Engine campaign — the Add existing path: duplicates are skipped, the engine enriches and writes to them as the campaign's next batch, nothing sends until that batch is approved. Up to 100 ids. The user must confirm.", {
+    type: "object",
+    properties: { campaignId: { type: "number" }, prospectIds: { type: "array", items: { type: "number" } } },
+    required: ["campaignId", "prospectIds"],
+  }),
+  t("add_to_campaign_by_filter", "PROPOSE adding EVERYONE matching a described people filter (a batch by criteria, up to a limit) to a Revenue Engine campaign. Preview with preview_people_filter first so the user hears the real count. The user must confirm.", {
+    type: "object",
+    properties: { campaignId: { type: "number" }, filter: FILTER_SCHEMA, limit: { type: "number", description: "Max people (default 200, max 500)" } },
+    required: ["campaignId", "filter"],
+  }),
+  t("enroll_by_filter", "PROPOSE enrolling EVERYONE matching a described people filter (up to a limit) into a sequence. Preview with preview_people_filter first. The user must confirm.", {
+    type: "object",
+    properties: { sequenceId: { type: "number" }, filter: FILTER_SCHEMA, limit: { type: "number", description: "Max people (default 200, max 500)" } },
+    required: ["sequenceId", "filter"],
+  }),
+  t("add_to_list_by_filter", "PROPOSE adding everyone matching a described people filter to an EXISTING list (use create_list_from_filter for a new list). The user must confirm.", {
+    type: "object",
+    properties: { listId: { type: "number" }, filter: FILTER_SCHEMA, limit: { type: "number", description: "Max people (default 500, max 1000)" } },
+    required: ["listId", "filter"],
+  }),
+  t("create_sequence", "PROPOSE creating a sequence as a DRAFT from steps the user described: email {subject, body with merge tags like {{firstName}} {{company}} {{senderName}}}, wait {days}, task {body}, linkedin_dm {body}, linkedin_invite {note}. Write the copy yourself from what the user said; ask if the goal or audience is unclear. The user must confirm.", {
+    type: "object",
+    properties: {
+      name: { type: "string" },
+      description: { type: "string" },
+      steps: { type: "array", items: { type: "object", properties: { type: { type: "string", enum: ["email", "wait", "task", "linkedin_dm", "linkedin_invite"] }, subject: { type: "string" }, body: { type: "string" }, days: { type: "number" }, note: { type: "string" } }, required: ["type"] } },
+    },
+    required: ["name", "steps"],
+  }),
+  t("log_call", "PROPOSE logging a call that already happened on a person's record (disposition, duration, outcome, notes). The user must confirm.", {
+    type: "object",
+    properties: {
+      prospectId: { type: "number" },
+      disposition: { type: "string", enum: ["connected", "voicemail", "no_answer", "bad_number", "gatekeeper", "callback_requested", "not_interested"] },
+      durationSec: { type: "number" }, outcome: { type: "string" }, notes: { type: "string" },
+    },
+    required: ["prospectId", "disposition"],
+  }),
+  t("queue_calls", "PROPOSE creating a call task for each person (their phone shows on the task). Velocity cannot place outbound calls itself — the AI voice agents answer inbound call-backs only — so this queues the calls for a human. The user must confirm.", {
+    type: "object",
+    properties: {
+      prospectIds: { type: "array", items: { type: "number" } },
+      title: { type: "string" }, notes: { type: "string" },
+      priority: { type: "string", enum: ["low", "normal", "high", "urgent"] },
+      dueInDays: { type: "number" },
+    },
     required: ["prospectIds"],
   }),
 ];

@@ -204,7 +204,35 @@ Accepting one starts a guided tour: the relevant control is spotlighted, a card 
     tags: ["ai", "assistant", "actions", "campaigns", "sequences", "lists", "tasks"],
     pageKey: "ai-assistant",
     tourName: "Ask the AI Assistant",
-    bodyMarkdown: `**AI Assistant** sits in the sidebar's quick links. It does three things: it **looks things up** in your own workspace, it **proposes actions** that you confirm in the chat, and it **hands you links** to the right page.\n\n**It reads your data, not general knowledge.** Ask it to find everyone at a company, open a person and see where each fact came from, list your sequences, lists or autonomous campaigns, summarise what is waiting on you, show the deals pipeline by stage, or count who matches a filter ("CFOs in Texas with a valid email") before you act on it. For "how do I…" questions it reads the Help Center and answers from that. It never invents ids or counts — if it has not looked something up, it will look it up first.\n\n**What it can propose.** Each of these shows a **confirmation card** that states exactly what will happen, and nothing runs until you click **Confirm**:\n\n| Ask it to… | What runs on Confirm | Limit |\n|---|---|---|\n| Enroll people in a sequence | the enrolment, through the same rules as the Sequences page | 50 people |\n| Create follow-up tasks | one task per person, with type, priority and due date | 50 |\n| Add people to a list, or build a list from a filter | the list and its members — it previews the real count first | 50 / 1,000 |\n| Enrich people | the full enrichment pass — **this spends verification credits** | 25 |\n| Pause or activate a campaign | the status change on that autonomous campaign | 1 |\n| Draft meeting proposals | drafts into your approval queue; nothing is scheduled or mailed until you approve each one there | 5 |\n| **Create a campaign** | a new autonomous campaign as a **draft** from your description — targeting (titles, industries, geographies, keywords, company size), prospect count, daily cap, channels, goal and tone guidance | 1,000 prospects · 100/day |\n\n**Creating a campaign never launches it.** The draft discovers and sends nothing until you activate it — a separate step (ask the assistant to activate it, or use the campaign page) taken after you have looked at it. The assistant can only create it in **batch approval** (you approve batches) or **review & release** (you release each send); fully unattended mode is something a human sets on the campaign's settings page.\n\n**How the confirm card works.** A proposal is held by the server, not by the page: it can be confirmed **once**, it expires after **30 minutes**, and **Not now** closes it for good — ask again if you change your mind. Everything runs under *your* role and permissions, exactly as if you had done it from the page, and every confirmed action is logged. One proposal per message: it will not chain several writes behind a single click.\n\n**What it will never do**, whatever you type: send an email, LinkedIn message or reply (those stay behind the autopilot dials and your approval queues), fetch new prospects, edit or delete records, change autopilot or workspace settings, or launch a campaign. If you ask for one of these it will tell you where that lives and offer the link.\n\n**Two habits that make it useful.** Be specific — names, companies, numbers — and let it ask: when a request is missing something it needs (a campaign with no name or no targeting, a person it cannot find) it asks rather than guessing. It also knows which page you came from, so "this page" and "here" mean what you expect.`,
+    bodyMarkdown: `The **AI Assistant** is a conversational operator for the whole product. Open it from the sparkles button in the top bar or with **Ctrl+J** on any page, or go to the full page under Daily → AI Assistant. One conversation follows you from page to page.
+
+## What it does
+
+- **Looks things up** in your own workspace: people, companies, sequences, lists, campaigns, the pipeline, what is waiting on you, and read-only queries over every core table.
+- **Runs reports** on the spot (deals, leads, people, contacts, activities, emails) and can save one to the Reports page for scheduling.
+- **Recommends.** Ask "what should I do next", "which campaign should I prioritise", "should I raise the cap" and it reads the real numbers first, then gives a recommendation with the reason and one alternative.
+- **Asks when it needs a decision.** If a request could go two ways (which campaign, which criteria, draft or active, how many), it asks one focused question with buttons; your pick continues the conversation.
+- **Does almost anything you can do in the app**, always as a proposed action you confirm in the chat: create or edit campaigns, sequences, lists, deals, leads, tasks, meetings, proposals, quotes, workflows, personas and reports; add batches of people to campaigns, sequences or lists by criteria ("all the CFOs in Texas with valid emails"); queue or log calls; approve, restore, move, update. It searches a catalog of every allowed app action, reads that action's own input rules, looks up the ids it needs, and proposes it.
+- **Walks you through** what it does: the plan up front, what each lookup told it, what happened after you confirmed, and the sensible next step.
+
+## How an action runs
+
+1. You describe what you want. For batches, it previews the criteria first and tells you the real count and a few names.
+2. It proposes up to three actions as cards.
+3. You press **Confirm** on each card (or **Not now**). Only then does anything run, and it runs under your own permissions, so it can never do more than you could from the page.
+4. It reports what happened and what to do next.
+
+## What it will not do
+
+It never sends email or LinkedIn messages, and it cannot place outbound calls (voice agents answer inbound call-backs only; "call these people" becomes call tasks with the numbers). It never deletes records, changes team members, passwords, credentials, billing or workspace settings. Those stay on their pages.
+
+## Try it
+
+- "What should I do next?"
+- "Add everyone at Acme with a valid email to the Nonprofit campaign."
+- "Create a 5-step sequence for grants directors and enroll the Texas list."
+- "Which deals are stuck, and what would you do about each?"
+- "Run a report of leads created this month by source and save it as weekly."`,
   },
   {
     slug: "multiple-workspaces",

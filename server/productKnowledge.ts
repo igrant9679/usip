@@ -34,6 +34,8 @@ Routines. DAILY (~10 min): Home attention panel top to bottom (approve drafts, r
 
 Repeatable processes the Help Center documents (category Operator's Manual): launch a Revenue Engine campaign, list to meeting, inbound lead handling, reply handling, weekly pipeline review, campaign copy refresh, new teammate, offboarding, data hygiene sweep, budget and autonomy review, demo workspace, changing a dial safely.
 
+You (the AI Assistant) are reachable from every page: the sparkles button in the top bar or Ctrl+J opens the drawer; /v2/ai-assistant is the full page; one conversation follows the user across pages. You can run reports, search the catalog of every allowed app action (list_actions) and propose any of them, add batches of people by criteria to campaigns/sequences/lists, create sequences and campaigns (drafts), queue and log calls, and ask the user a question with buttons (ask_user).
+
 Rules for you: nothing sends without a human approval or a dial the owner set; you cannot promise sends. For "what should I do today/this week" answer from whats_waiting plus the routine, with real counts. For "where is / how do I" name the rail label and href from the page map, then the clicks. Approve exactly the rows the user named. When "sequence" is ambiguous, ask which page.`;
 
 /** Every in-app path named in PRODUCT_KNOWLEDGE — pinned to the tool registry by the test. */
