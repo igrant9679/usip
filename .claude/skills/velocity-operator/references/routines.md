@@ -2,14 +2,14 @@
 
 The pattern under everything: the machines act, the attention panel confesses, a human reads the confession. Daily for sends, weekly for trends, monthly for budgets and trust, quarterly for strategy. Times are for one person running one workspace; scale with team size.
 
-Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable processes (P1–P12) · Definition of done checklists.
+Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable processes (P1–P13) · Definition of done checklists.
 
 ---
 
 ## Daily
 
 ### Everyone — the 10-minute loop (Home first)
-1. **Home → attention panel**, top to bottom. Each row is a queue; empty the queue, not the row.
+1. **Home → attention panel**, top to bottom. Each row is a queue; empty the queue, not the row. Each approvals screen also has a whole-queue button (P13) whose count is the server's, not the page's — sample the queue before using it.
    - AI drafts (Emails → AI Pipeline): approve, edit, discard. Read at least two in full every day; you are training your own trust.
    - Engine approvals (campaign → Prospects): release the batch if the campaign runs batch-approval. Nothing sends until you do.
    - Unhandled replies (Conversations): answer within one business day. A human reply beats any sequence step; handling one stops the sequence for that person.
@@ -163,6 +163,15 @@ As in Monthly items 1 and 5; record the decision in the workspace notes so next 
 1. Read a week of that feature's Approve output first.
 2. Flip one dial; note the date in Inbox/notes.
 3. Watch Home's digest and the feature's page for three days; revert if the quality drops.
+
+### P13 — Clear an approval queue in one action
+Every approvals screen carries a whole-queue button next to the per-row controls: AI Pipeline, Emails (awaiting filter), Email Drafts, Tasks, Meetings ("Approve & send all"), a campaign's Prospects tab, routing suggestions and campaign proposals on the Revenue Engine hub, Engine Performance recommendations, Autonomy Center workflow ideas, and Proposals extension requests.
+1. The count on the button is the SERVER's count for the whole queue, not the rows on screen — a page showing 20 can approve 200. Read it before clicking.
+2. Every one of them confirms first. Read the confirm text; it names what will happen and how many rows.
+3. Scan a sample before bulk-approving. Approving all is a judgement that the queue is uniformly good, and the fastest way to send 200 mediocre emails is to trust a queue you have not sampled.
+4. Meetings' bulk approve books the earliest FUTURE slot and skips anything whose proposed time has passed, telling you how many it skipped. A queue of expired proposals will bulk-approve to zero — that is correct, not a failure.
+5. There is deliberately no bulk action on Conversations (replies) or Needs Review: applying the AI's suggested action to every reply would fire booking links at people en masse, and Needs Review has no approve action at all. Work those two by hand.
+
 
 ---
 
