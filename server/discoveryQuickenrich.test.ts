@@ -104,11 +104,16 @@ describe("QuickEnrich is the PRIMARY source (owner decision 2026-08-24), and the
     expect(resolveSourceOrder(null, null, ["web"])).toEqual(["web"]);
   });
 
-  it("the engine builds its tasks FROM the resolver and walks them in order", () => {
+  it("the engine builds its tasks FROM the resolver and walks them in order — as a WATERFALL that stops at the open-slot count", () => {
     expect(engine).toContain("resolveSourceOrder(wsSourceRow?.order, wsSourceRow?.mask, sources as AreSourceId[])");
-    expect(engine).toContain("runOrder.map((id) => taskFactories[id]())");
-    expect(engine).toContain("const settled = await Promise.allSettled(tasks)");
-    expect(engine).toContain("for (const s of settled)");
+    // Since 2026-09-14 (prospect-source registry): sequential, in order,
+    // and the loop stops once `slots` net-new prospects are queued — a later
+    // source is never called (or paid) for people an earlier one supplied.
+    // The old Promise.allSettled fan-out paid every vendor for the same person.
+    expect(engine).toContain("value = await taskFactories[id](remaining)");
+    expect(engine).toContain("const remaining = slots - totalNew;");
+    expect(engine).toContain('skipped: "target met by earlier sources"');
+    expect(engine).not.toContain("const settled = await Promise.allSettled(tasks)");
   });
 
   it("the Find-prospects fan-out honours the same mask through the same resolver", () => {

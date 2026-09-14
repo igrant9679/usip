@@ -578,11 +578,13 @@ describe("the areSources rule, now enforced: a source exists only if the engine 
     // a vocabulary entry without a factory is ALSO a compile error — this
     // pins the shape so a refactor away from the Record re-opens the check.
     const engine = read("server/areEngine.ts");
-    expect(engine).toContain("const taskFactories: Record<AreSourceId, () => Promise<SourceResult>>");
+    // Since 2026-09-14 every factory receives the open-slot count (the
+    // waterfall sizes billable acquisition to it); the Record type is unchanged.
+    expect(engine).toContain("const taskFactories: Record<AreSourceId, (remaining: number) => Promise<SourceResult>>");
     const block = engine.slice(engine.indexOf("const taskFactories:"), engine.indexOf("const [wsSourceRow]"));
     for (const id of ARE_SOURCE_IDS) {
       expect(
-        block.includes(`${id}: () =>`),
+        block.includes(`${id}: () =>`) || block.includes(`${id}: (remaining) =>`),
         `source "${id}" is offered but the engine has no task factory for it — the silent-checkbox class`,
       ).toBe(true);
     }
@@ -643,7 +645,8 @@ describe("no inert controls, no leaks", () => {
     expect(block).toMatch(/ALTER TABLE `are_scrape_jobs` MODIFY COLUMN `sourceType` enum\('[^)]*'quickenrich'\) NOT NULL/);
     expect(block).toMatch(/ALTER TABLE `prospect_queue` MODIFY COLUMN `sourceType` enum\('[^)]*'quickenrich'\) NOT NULL/);
     // And the schema enums agree with the migration.
-    expect(/quickenrich[\s\S]{0,40}?\]\)\.notNull\(\)/.test(schema), "a schema sourceType enum is missing quickenrich").toBe(true);
+    // Later vendors (warmysender, 0179) sit between quickenrich and the close.
+    expect(/quickenrich[\s\S]{0,160}?\]\)\.notNull\(\)/.test(schema), "a schema sourceType enum is missing quickenrich").toBe(true);
   });
 
   it("discovery ranks has_email rows first, so headroom goes to convertible people", () => {

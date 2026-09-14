@@ -41,6 +41,8 @@ import { VoiceAgentsSection } from "@/components/usip/settings/VoiceAgentsSectio
 import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
 import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
+import { WarmySenderSourceCard } from "@/components/usip/settings/WarmySenderSourceCard";
+import { ProspectSourceRegistryCard } from "@/components/usip/settings/ProspectSourceRegistryCard";
 import { BrandingSection } from "@/components/usip/settings/BrandingSection";
 import { SocialAccountsSection } from "@/components/usip/settings/SocialAccountsSection";
 import {
@@ -225,9 +227,11 @@ export default function SettingsHub() {
         {section === "social-accounts" && <SocialAccountsSection />}
         {section === "data-sources" && (
           <div className="space-y-4" data-tour-id="settings-data-sources">
+            <ProspectSourceRegistryCard />
+            <WarmySenderSourceCard />
+            <QuickEnrichSourceCard />
             <ApolloSourceCard />
             <ReoonVerifierCard />
-            <QuickEnrichSourceCard />
           </div>
         )}
       </main>

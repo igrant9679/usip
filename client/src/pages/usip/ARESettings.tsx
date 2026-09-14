@@ -12,6 +12,7 @@ import { Shell, PageHeader } from "@/components/usip/Shell";
 import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
 import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
+import { WarmySenderSourceCard } from "@/components/usip/settings/WarmySenderSourceCard";
 import { ARE_SOURCES, ARE_SOURCE_IDS, resolveSourceOrder } from "@shared/areSources";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,7 +43,7 @@ import {
   Sliders,
   Sparkles,
   Star,
-  Zap, Settings2, MailCheck, Radar, ChevronUp, ChevronDown
+  Zap, Settings2, MailCheck, Radar, ChevronUp, ChevronDown, Flame
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -543,6 +544,7 @@ export default function ARESettings() {
                 news: { icon: Newspaper, color: "text-amber-500" },
                 apollo: { icon: Database, color: "text-violet-500" },
                 quickenrich: { icon: Radar, color: "text-cyan-600" },
+                warmysender: { icon: Flame, color: "text-orange-500" },
               };
               const { icon: Icon, color } = iconFor[key] ?? { icon: Database, color: "text-slate-500" };
               const active = !!scraperSources[key];
@@ -611,6 +613,15 @@ export default function ARESettings() {
           description="Campaigns discover people from the QuickEnrich database for free; the enrichment sweep then buys their emails one credit per hit, Reoon-verified."
         >
           <QuickEnrichSourceCard variant="bare" />
+        </Section>
+
+        {/* -- 8e. WarmySender connection (feeds the "WarmySender leads" source above) -- */}
+        <Section
+          icon={Flame}
+          title="WarmySender"
+          description="Campaigns preview WarmySender's lead database for free (masked) and spend one lead unit per net-new person acquired, metered by the budget ledger against the plan's daily pace and monthly allowance."
+        >
+          <WarmySenderSourceCard variant="bare" />
         </Section>
 
         {/* -- 9. ICP Regen Schedule -- */}

@@ -919,6 +919,106 @@ export const campaignProposals = mysqlTable(
   (t) => ({ byWs: index("ix_cp_ws").on(t.workspaceId, t.status) }),
 );
 
+/* ──────────────────────────────────────────────────────────────────────────
+   Prospect-source subsystem (migration 0179) — vendor credentials, the
+   per-workspace per-vendor budget ledger, and staged search runs.
+   server/services/prospectSources/* is the only reader/writer.
+   ────────────────────────────────────────────────────────────────────────── */
+export const prospectSourceCredentials = mysqlTable(
+  "prospect_source_credentials",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    /** @shared/prospectSources ProspectSourceSlug — varchar, not enum, so a new vendor needs no DDL. */
+    sourceSlug: varchar("sourceSlug", { length: 40 }).notNull(),
+    /** AES-256-GCM (server/_core/crypto) over a JSON object of secrets. */
+    credentialsEnc: text("credentialsEnc"),
+    /** Non-secret config: billing anniversary, allowances, captured schemas. */
+    config: json("config"),
+    status: mysqlEnum("status", ["unvalidated", "valid", "invalid", "revoked"]).default("unvalidated").notNull(),
+    lastValidatedAt: timestamp("lastValidatedAt"),
+    validationError: text("validationError"),
+    /** Circuit breaker state — persisted so a restart does not forget a vendor is down. */
+    consecutiveFailures: int("consecutiveFailures").default(0).notNull(),
+    circuitOpenUntil: timestamp("circuitOpenUntil"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({ uq: uniqueIndex("uq_psc_ws_source").on(t.workspaceId, t.sourceSlug) }),
+);
+export type ProspectSourceCredential = typeof prospectSourceCredentials.$inferSelect;
+
+export const prospectSourceBudgetLedger = mysqlTable(
+  "prospect_source_budget_ledger",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    sourceSlug: varchar("sourceSlug", { length: 40 }).notNull(),
+    /** leads | verification | lookups */
+    bucket: varchar("bucket", { length: 24 }).notNull(),
+    granularity: mysqlEnum("granularity", ["daily", "monthly", "credits"]).notNull(),
+    /** 2026-09-14 / 2026-09 / all */
+    periodKey: varchar("periodKey", { length: 16 }).notNull(),
+    unitsConsumed: int("unitsConsumed").default(0).notNull(),
+    /** Held by an in-flight run; committed or released when it finishes. */
+    unitsReserved: int("unitsReserved").default(0).notNull(),
+    /** null = uncapped / unknown. */
+    unitsLimit: int("unitsLimit"),
+    resetsAt: timestamp("resetsAt"),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({ uq: uniqueIndex("uq_psbl_period").on(t.workspaceId, t.sourceSlug, t.bucket, t.granularity, t.periodKey) }),
+);
+export type ProspectSourceBudgetRow = typeof prospectSourceBudgetLedger.$inferSelect;
+
+export const prospectSearchRuns = mysqlTable(
+  "prospect_search_runs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId"),
+    /** @shared/prospectSources SearchCriteria */
+    criteria: json("criteria"),
+    batchTarget: int("batchTarget").default(25).notNull(),
+    status: mysqlEnum("status", ["queued", "running", "complete", "failed", "interrupted"]).default("queued").notNull(),
+    startedAt: timestamp("startedAt"),
+    completedAt: timestamp("completedAt"),
+    recordsReturned: int("recordsReturned").default(0).notNull(),
+    recordsNetNew: int("recordsNetNew").default(0).notNull(),
+    /** Per-source breakdown: { [slug]: { verdict, searched, netNew, unitsSpent, skipped?, error? } } */
+    perSource: json("perSource"),
+    error: text("error"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byWs: index("ix_psr_ws").on(t.workspaceId, t.status) }),
+);
+export type ProspectSearchRun = typeof prospectSearchRuns.$inferSelect;
+
+export const prospectSearchResults = mysqlTable(
+  "prospect_search_results",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    runId: int("runId").notNull(),
+    sourceSlug: varchar("sourceSlug", { length: 40 }).notNull(),
+    externalId: varchar("externalId", { length: 191 }).notNull(),
+    /** The vendor's row as returned (PII lives here, never in logs). */
+    rawPayload: json("rawPayload"),
+    /** ProspectRecord */
+    normalized: json("normalized"),
+    /** The identity key that matched, or the key this row claimed. */
+    dedupeKey: varchar("dedupeKey", { length: 400 }),
+    isNetNew: boolean("isNetNew").default(true).notNull(),
+    /** Acquisition happened (units spent) — full details are in `normalized`. */
+    wasCharged: boolean("wasCharged").default(false).notNull(),
+    emailIsMasked: boolean("emailIsMasked").default(false).notNull(),
+    promotedProspectId: int("promotedProspectId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byRun: index("ix_psres_run").on(t.runId, t.isNetNew) }),
+);
+export type ProspectSearchResult = typeof prospectSearchResults.$inferSelect;
+
 export const emailLog = mysqlTable(
   "email_log",
   {
@@ -3750,6 +3850,7 @@ export const prospectQueue = mysqlTable(
       "web_scrape", "news_event", "industry_event",
       "apollo", "zoominfo", "clay", "ai_research",
       "quickenrich", // migration 0148
+      "warmysender", // migration 0179
     ]).notNull(),
     sourceId: varchar("sourceId", { length: 256 }), // external ID from data provider
     sourceUrl: text("sourceUrl"),                    // original URL scraped
@@ -4092,6 +4193,7 @@ export const areScrapeJobs = mysqlTable(
       "web_scrape", "news", "industry_events",
       "apollo", "internal", // migration 0124
       "quickenrich", // migration 0148
+      "warmysender", // migration 0179
     ]).notNull(),
     query: text("query").notNull(),          // search query or URL
     status: mysqlEnum("status", ["pending", "running", "complete", "failed"]).default("pending").notNull(),

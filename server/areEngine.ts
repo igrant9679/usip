@@ -1613,7 +1613,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     // still enriching — that made the engine appear "idle" for hours.
     if (working < campaign.targetProspectCount) {
       // runDiscovery emits its own detailed per-source summary log.
-      result.discovered += await runDiscovery(campaign);
+      result.discovered += await runDiscovery(campaign, campaign.targetProspectCount - working);
     } else {
       await emitLog(wsId, campId, "discovery", "info",
         `Discovery skipped — queue full (${working}/${campaign.targetProspectCount} working` +
@@ -1626,7 +1626,13 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
 }
 
 /* ─── Discovery — scrape one source to top up a drained campaign ────────── */
-async function runDiscovery(campaign: Campaign): Promise<number> {
+/**
+ * @param slots  Open queue slots (target − working). The WATERFALL stops
+ *               once this many net-new prospects have been queued in this
+ *               tick, so a later source is never called — or paid — for
+ *               people an earlier one already supplied.
+ */
+async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_INTEGER): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
 
@@ -1791,7 +1797,8 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     | "web_scrape"
     | "internal"
     | "apollo"
-    | "quickenrich";
+    | "quickenrich"
+    | "warmysender";
   type SourceResult = {
     sourceType: SourceType;
     query: string;
@@ -1809,7 +1816,16 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
   // "every source id has a branch" rule: a vocabulary entry without a
   // factory here no longer compiles.
   let quickenrichNextPage: QuickenrichPageState | null = null;
-  const taskFactories: Record<AreSourceId, () => Promise<SourceResult>> = {
+  // Each factory receives the slots still open when its turn comes — the
+  // registry-backed sources size their (billable) acquisition to it; the
+  // scraper sources ignore it and stay bounded per call as before.
+  const taskFactories: Record<AreSourceId, (remaining: number) => Promise<SourceResult>> = {
+    warmysender: (remaining) =>
+      discoverViaRegistrySource(campaign, "warmysender", { titles, industries, geos, keywords }, remaining).then((raw) => ({
+        sourceType: "warmysender" as const,
+        query,
+        raw,
+      })),
     internal: () =>
       discoverViaInternalCrm(campaign, titles).then((raw) => ({
         sourceType: "internal" as const,
@@ -1861,27 +1877,40 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
     .where(eq(workspaceSettings.workspaceId, campaign.workspaceId))
     .limit(1);
   const runOrder = resolveSourceOrder(wsSourceRow?.order, wsSourceRow?.mask, sources as AreSourceId[]);
-  const tasks: Array<Promise<SourceResult>> = runOrder.map((id) => taskFactories[id]());
 
-  if (tasks.length === 0) {
+  if (runOrder.length === 0) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
       `Discovery skipped — no usable sources (campaign.prospectSources=${JSON.stringify(sources)}; workspace Settings may have disabled the rest).`);
     return 0;
   }
 
-  const settled = await Promise.allSettled(tasks);
+  // WATERFALL, not fan-out (owner ask 2026-09-14). Sources run one at a time
+  // in the workspace's checking order and the loop STOPS once this tick has
+  // queued `slots` net-new prospects — a later source is never called (or
+  // paid) for people an earlier one already found. Order is therefore both
+  // priority and dedup precedence, as before. One source failing degrades
+  // the tick, never fails it.
   let totalNew = 0;
-  const perSource: Record<string, { raw: number; new: number; error?: string }> = {};
-  for (const s of settled) {
-    if (s.status !== "fulfilled") {
-      console.error(`[AreEngine] discovery source failed for campaign ${campaign.id}:`, s.reason);
-      const reason = s.reason instanceof Error ? s.reason.message : String(s.reason);
-      perSource["unknown"] = { raw: 0, new: 0, error: reason };
-      await emitLog(campaign.workspaceId, campaign.id, "discovery", "error",
-        `Discovery source failed: ${reason}`, errorDetails(s.reason));
+  const perSource: Record<string, { raw: number; new: number; error?: string; skipped?: string }> = {};
+  for (let idx = 0; idx < runOrder.length; idx++) {
+    const id = runOrder[idx];
+    const remaining = slots - totalNew;
+    if (remaining <= 0) {
+      perSource[id] = { raw: 0, new: 0, skipped: "target met by earlier sources" };
       continue;
     }
-    const { sourceType, query: q, raw } = s.value;
+    let value: SourceResult;
+    try {
+      value = await taskFactories[id](remaining);
+    } catch (err) {
+      console.error(`[AreEngine] discovery source ${id} failed for campaign ${campaign.id}:`, err);
+      const reason = err instanceof Error ? err.message : String(err);
+      perSource[id] = { raw: 0, new: 0, error: reason };
+      await emitLog(campaign.workspaceId, campaign.id, "discovery", "error",
+        `Discovery source ${id} failed: ${reason}`, errorDetails(err));
+      continue;
+    }
+    const { sourceType, query: q, raw } = value;
     // Within-tick + cross-tick dedup AND cross-campaign exclusivity, one
     // vocabulary (services/are/queueIdentity).
     const unique = raw.filter((p) => {
@@ -1949,8 +1978,8 @@ async function runDiscovery(campaign: Campaign): Promise<number> {
   // which angle of the ICP grid this tick covered.
   const sliceIdx = targetingSlices.findIndex((s) => s.id === slice.id);
   await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
-    `Discovery slice ${sliceIdx + 1}/${targetingSlices.length} "${query}" → ${totalNew} new across ${Object.keys(perSource).length} sources`,
-    { query, sliceId: slice.id, sliceIdx: sliceIdx + 1, sliceCount: targetingSlices.length, perSource });
+    `Discovery slice ${sliceIdx + 1}/${targetingSlices.length} "${query}" → ${totalNew} new across ${Object.keys(perSource).length} sources (waterfall, ${slots === Number.MAX_SAFE_INTEGER ? "uncapped" : `${slots} open slot${slots === 1 ? "" : "s"}`})`,
+    { query, sliceId: slice.id, sliceIdx: sliceIdx + 1, sliceCount: targetingSlices.length, slots: slots === Number.MAX_SAFE_INTEGER ? null : slots, perSource });
   return totalNew;
 }
 
@@ -2071,6 +2100,67 @@ export function scoreIcpMatch(
  * The daily cap is enforced here rather than inside the service so the
  * remaining headroom can shrink the page size instead of dropping the tick.
  */
+/**
+ * Registry-backed discovery — one vendor from the prospect-source registry
+ * (services/prospectSources) run as a single-source waterfall step sized to
+ * the campaign's open slots. WarmySender today; any registry vendor with
+ * on-demand acquisition tomorrow, with no change here.
+ *
+ * Preview is free and masked; acquisition (export_leads, one unit per NEW
+ * person) happens only for net-new records after dedupe against the whole
+ * workspace (People + every campaign queue), and only up to `remaining`.
+ * The unit hold is reserved in the budget ledger before the call and
+ * committed to what the vendor actually charged. A masked preview never
+ * becomes an email: only acquired addresses are written, and they go
+ * through the same Reoon gate as every other address before promotion.
+ */
+async function discoverViaRegistrySource(
+  campaign: Campaign,
+  slug: "warmysender",
+  targeting: { titles: string[]; industries: string[]; geos: string[]; keywords: string[] },
+  remaining: number,
+): Promise<Array<Record<string, unknown>>> {
+  const { eligibleFor } = await import("./services/prospectSources/registry");
+  const { runWaterfall } = await import("./services/prospectSources/executor");
+  const { workspaceDeduper } = await import("./services/prospectSources/dedupe");
+  const { criteriaFromTargeting, recordToQueueRow } = await import("./services/prospectSources/bridge");
+
+  const criteria = criteriaFromTargeting(targeting);
+  const { eligible, skipped } = await eligibleFor(campaign.workspaceId, criteria, { only: [slug] });
+  if (eligible.length === 0) {
+    const why = skipped.find((x) => x.slug === slug);
+    const reason = why?.reason ?? "unavailable";
+    // No key is a configuration CHOICE, not a failure — info, not error.
+    const level = reason === "no_credentials" || reason === "not_selected" || reason === "disabled" ? "info" : "warn";
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", level,
+      `${slug} skipped — ${why?.detail ?? "not eligible"}${reason === "no_credentials" ? " (Settings → Data sources)" : ""}.`);
+    return [];
+  }
+  const target = Math.max(0, Math.min(remaining, 100));
+  if (target === 0) return [];
+  const deduper = await workspaceDeduper(campaign.workspaceId);
+  const result = await runWaterfall({
+    workspaceId: campaign.workspaceId,
+    criteria,
+    target,
+    sources: eligible,
+    deduper,
+    mode: "acquire",
+    ctx: { campaignId: campaign.id },
+    queryLabel: `campaign ${campaign.id}`,
+  });
+  const outcome = result.perSource[0];
+  if (outcome) {
+    const level = outcome.error ? (outcome.errorReason === "budget_exhausted" ? "warn" : "error") : "info";
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", level,
+      outcome.error
+        ? `${slug}: ${outcome.error}`
+        : `${slug} returned ${outcome.searched} masked previews, ${outcome.netNew} net-new after dedupe, acquired ${outcome.acquired} (${outcome.unitsSpent} unit${outcome.unitsSpent === 1 ? "" : "s"}${outcome.fundedBy ? `, ${outcome.fundedBy}` : ""}) toward ${target} open slot${target === 1 ? "" : "s"}.`,
+      { perSource: result.perSource, duplicates: result.duplicates.length });
+  }
+  return result.collected.map((c) => recordToQueueRow(c.record));
+}
+
 async function discoverViaApollo(
   campaign: Campaign,
   targeting: {

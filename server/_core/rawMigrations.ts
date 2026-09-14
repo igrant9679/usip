@@ -4003,6 +4003,80 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0179: prospect-source registry — vendor credentials, the per-workspace
+  //    per-vendor budget ledger, staged search runs, and WarmySender as an
+  //    ARE source (owner ask 2026-09-14: capability-aware waterfall + ledger).
+  //    Both sourceType enums widen — the enum-insert class: an unlisted value
+  //    fails at runtime INSERT, not at compile time.
+  {
+    name: "0179_prospect_source_registry.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `prospect_source_credentials` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`sourceSlug` VARCHAR(40) NOT NULL, " +
+        "`credentialsEnc` TEXT NULL, " +
+        "`config` JSON NULL, " +
+        "`status` ENUM('unvalidated','valid','invalid','revoked') NOT NULL DEFAULT 'unvalidated', " +
+        "`lastValidatedAt` TIMESTAMP NULL, " +
+        "`validationError` TEXT NULL, " +
+        "`consecutiveFailures` INT NOT NULL DEFAULT 0, " +
+        "`circuitOpenUntil` TIMESTAMP NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "`updatedAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
+        "UNIQUE KEY `uq_psc_ws_source` (`workspaceId`, `sourceSlug`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "CREATE TABLE IF NOT EXISTS `prospect_source_budget_ledger` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`sourceSlug` VARCHAR(40) NOT NULL, " +
+        "`bucket` VARCHAR(24) NOT NULL, " +
+        "`granularity` ENUM('daily','monthly','credits') NOT NULL, " +
+        "`periodKey` VARCHAR(16) NOT NULL, " +
+        "`unitsConsumed` INT NOT NULL DEFAULT 0, " +
+        "`unitsReserved` INT NOT NULL DEFAULT 0, " +
+        "`unitsLimit` INT NULL, " +
+        "`resetsAt` TIMESTAMP NULL, " +
+        "`updatedAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
+        "UNIQUE KEY `uq_psbl_period` (`workspaceId`, `sourceSlug`, `bucket`, `granularity`, `periodKey`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "CREATE TABLE IF NOT EXISTS `prospect_search_runs` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`userId` INT NULL, " +
+        "`criteria` JSON NULL, " +
+        "`batchTarget` INT NOT NULL DEFAULT 25, " +
+        "`status` ENUM('queued','running','complete','failed','interrupted') NOT NULL DEFAULT 'queued', " +
+        "`startedAt` TIMESTAMP NULL, " +
+        "`completedAt` TIMESTAMP NULL, " +
+        "`recordsReturned` INT NOT NULL DEFAULT 0, " +
+        "`recordsNetNew` INT NOT NULL DEFAULT 0, " +
+        "`perSource` JSON NULL, " +
+        "`error` TEXT NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "INDEX `ix_psr_ws` (`workspaceId`, `status`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "CREATE TABLE IF NOT EXISTS `prospect_search_results` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`runId` INT NOT NULL, " +
+        "`sourceSlug` VARCHAR(40) NOT NULL, " +
+        "`externalId` VARCHAR(191) NOT NULL, " +
+        "`rawPayload` JSON NULL, " +
+        "`normalized` JSON NULL, " +
+        "`dedupeKey` VARCHAR(400) NULL, " +
+        "`isNetNew` TINYINT(1) NOT NULL DEFAULT 1, " +
+        "`wasCharged` TINYINT(1) NOT NULL DEFAULT 0, " +
+        "`emailIsMasked` TINYINT(1) NOT NULL DEFAULT 0, " +
+        "`promotedProspectId` INT NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "INDEX `ix_psres_run` (`runId`, `isNetNew`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "ALTER TABLE `are_scrape_jobs` MODIFY COLUMN `sourceType` enum('google_business','linkedin_company','linkedin_people','web_scrape','news','industry_events','apollo','internal','quickenrich','warmysender') NOT NULL",
+      "ALTER TABLE `prospect_queue` MODIFY COLUMN `sourceType` enum('internal_contact','internal_lead','google_business','linkedin_company','linkedin_people','web_scrape','news_event','industry_event','apollo','zoominfo','clay','ai_research','quickenrich','warmysender') NOT NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

@@ -68,6 +68,14 @@ const post = async (p, i) => (await (await fetch('/api/trpc/' + p, { method: 'PO
 8. Per-user LLM burst is 30/min: fan-out enrich/generate calls serially or trigger the batch procedures.
 9. Restore ws context (`x-workspace-id`) per call; workspace ids differ per environment (production: 2 = LSI, 4 = CommunityForce, 5 = Queue & Co demo).
 
+## Prospect sources (registry)
+- `prospectSources.describe {criteria?}` — every vendor with manifest, credential status, circuit, budget, and (with criteria) the match verdict; the Source search strip reads this.
+- `prospectSources.saveCredentials {slug, apiKey?, config?}` (admin) / `validate {slug}` / `removeCredentials {slug}` — table-mode vendors only (WarmySender); Apollo/QuickEnrich keep `apollo.*` / `quickenrich.*`. Validate captures scopes, tier and the search tool schema.
+- `prospectSources.ledger {slug}` — current-period ledger rows + the vendor's own report.
+- `prospectSources.startSearch {criteria, batchTarget}` → `{runId}` (background, preview only) · `getRun {runId}` (poll) · `listRuns` · `resultRaw {resultId}`.
+- `prospectSources.estimatePromotion {runId, resultIds}` → units the selection would spend · `promote {runId, resultIds}` — acquires on-demand rows (spends) then promotes into People. Always show the estimate before calling promote.
+- Campaign discovery uses the same registry: tick "WarmySender leads" on a campaign's Sources tab; discovery is a waterfall sized to the open queue slots.
+
 ## Ops
 - Health: `GET /api/health` → `{commit, ...}`; deploys are verified by polling for the expected commit.
 - Boot re-seeds help content, tours and the demo ARE campaign (guarded by name).

@@ -54,6 +54,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   // Re-keyed 2026-08-21: Find Prospects folded into Data Enrichment's tab;
   // navHelpFor matches EXACTLY, so the key must be the registry tool's href.
   "/v2/data-enrichment?tab=find-prospects": { body: "Search for new people who match your ideal customer, and add them to the queue.", article: "find-prospects-discovery" },
+  "/v2/data-enrichment?tab=source-search": { body: "Search your connected data vendors one after another — free previews, and you see what a selection will spend before anyone is acquired.", article: "prospect-source-registry" },
   "/v2/data-enrichment": { body: "Fill in missing details — company, job title, email — on contacts you already have.", article: "how-email-finding-works" },
   "/data-health": { body: "What's missing or wrong across your data, and what that's costing you in reach." },
   // Re-keyed 2026-08-21: Import Contacts folded into Data Enrichment's tab.

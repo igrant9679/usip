@@ -528,6 +528,30 @@ async function startServer() {
   setTimeout(runCompanyBackfill, 18 * 60 * 1000); // stagger: 18 minutes after boot
   setInterval(runCompanyBackfill, 6 * 60 * 60 * 1000); // every 6h; the 20h gap sets the real cadence
 
+  // Prospect-source registry maintenance (migration 0179): re-validate every
+  // vendor credential, refresh the budget ledger's limits from what the vendor
+  // reports, release unit holds leaked by crashed runs, and mark search runs
+  // that were in flight when the process died as interrupted (a deploy kills
+  // fire-and-forget work — nothing will ever finish them). Archived
+  // workspaces are frozen: archivedWs.has() gates every credential.
+  const runProspectSourceMaintenance = () => {
+    Promise.all([
+      import("../services/prospectSources/searchRuns"),
+      import("./workspaceArchive").then((m) => m.archivedWorkspaceIds()),
+    ])
+      .then(([m, archivedWs]) => m.runSourceMaintenance({ skipWorkspace: (ws) => archivedWs.has(ws) }))
+      .then((r) => console.log(`[ProspectSources] maintenance validated=${r.validated} invalid=${r.invalid} releasedHolds=${r.released}`))
+      .catch((e) => console.error("[ProspectSources] maintenance failed:", e));
+  };
+  setTimeout(() => {
+    import("../services/prospectSources/searchRuns")
+      .then((m) => m.markInterruptedRuns())
+      .then((n) => { if (n > 0) console.log(`[ProspectSources] marked ${n} in-flight search run(s) interrupted by restart`); })
+      .catch((e) => console.error("[ProspectSources] boot sweep failed:", e));
+  }, 45_000);
+  setTimeout(runProspectSourceMaintenance, 22 * 60 * 1000); // stagger: 22 minutes after boot
+  setInterval(runProspectSourceMaintenance, 6 * 60 * 60 * 1000); // every 6h
+
   // Profile-photo mirroring. Stored enrichment photos are SIGNED licdn URLs
   // that lapse ~2 weeks after retrieval; this inlines them as data URIs while
   // they still resolve, and marks already-expired ones failed_to_load. Free

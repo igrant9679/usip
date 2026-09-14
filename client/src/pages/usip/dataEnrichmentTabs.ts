@@ -13,6 +13,7 @@
 export const DATA_ENRICHMENT_TABS = [
   "Data health center",
   "Find prospects",
+  "Source search",
   "Import contacts",
   "CRM",
   "Job change alerts",

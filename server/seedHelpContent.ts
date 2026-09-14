@@ -346,6 +346,26 @@ Every engine has the same three-way switch, and they all live on one screen — 
     bodyMarkdown: `**Find Prospects** (sidebar → Prospect and enrich) runs multi-source discovery against your ICP. Pick **Person** or **Account** mode, fill the fields you care about (job title, seniority, industry, location) and add keywords for intent. Click **Run discovery** — results fan out across LinkedIn, web, and news, then get scored and de-duplicated automatically. Anything fully verified lands in **Verified**; partial matches land in **Needs Review** for you to clean up. Click any result row to open the full prospect. Skipped fields are ignored, so start broad and narrow if you get noise.`,
   },
   {
+    slug: "prospect-source-registry",
+    categorySlug: "prospecting",
+    title: "Source search: vendors, the waterfall and the budget ledger",
+    summary: "How Velocity searches your data vendors in order, previews for free, dedupes before spending, and meters every vendor's allowance.",
+    readingTimeMinutes: 5,
+    tags: ["prospecting", "warmysender", "quickenrich", "apollo", "budget", "waterfall"],
+    pageKey: "find-prospects",
+    bodyMarkdown: `Velocity treats every prospect-data vendor as a plugin in one **prospect source registry**. Each source declares what it can actually filter on (its *capability manifest*), whether searching is free, whether previews hide the email, and how its allowance resets. Today's sources: **WarmySender leads** (free masked search; one lead unit per net-new person acquired; US/Canada deepest; business phones only), **QuickEnrich** (free discovery of people with a has-email flag; credits are spent later by the enrichment sweep, verified before anything is written), and **Apollo.io** (search-only, never an email, zero credits). Hunter and Lemlist are registered as "available, not configured".
+
+**Connecting a vendor.** Settings → Data sources → the vendor's card. Paste the key, Save, then **Test connection**. The test records the key's scopes and plan tier and, for WarmySender, captures the search tool's parameter schema — that is how Velocity learns whether the vendor filters on job title natively or only keyword-matches it. For WarmySender also set the **billing anniversary day** (the plan's allowance resets then), and record any **purchased lead credits** (they never expire and skip the daily pace).
+
+**The waterfall.** A search — from a campaign's discovery or from Data Enrichment → **Source search** — runs down your sources in the order set under Revenue Engine → Settings → *Prospect Sources & Checking Order*, and **stops once the batch target is met**. A later source is never called, or paid, for someone an earlier one already found. Sources without a key, without the filters your query needs, over budget, or paused after repeated failures are skipped with the reason shown. Dedupe against People and every campaign queue runs *before* any billable step, using email (never a masked one), LinkedIn URL, and name + company. One vendor failing degrades the run; it never fails it.
+
+**Source search page.** The filter panel is the union of every source's filters; the **source strip** shows, as you type, whether each connected source gives a *full match*, an *approximate match* (a filter it only keyword-matches) or *cannot honour* the query — hover for the reason. Set a batch target beside the combined remaining allowance; **Run search** previews for free (masked emails), results land with a source badge and a net-new flag. Select rows and **Promote**: the confirm dialog says exactly how many units the selection will spend before anything is acquired. Promoted people enter People through the same consolidation Find Prospects uses, with per-field provenance naming the vendor.
+
+**Budget ledger.** Each vendor card shows today's and this billing month's spend against the limit, plus purchased credits. Holds are reserved before a vendor call and committed to what was actually charged, so two concurrent runs cannot both spend the last unit. WarmySender publishes no endpoint for its remaining *lead* allowance, so leads are tracked from what Velocity spends and a vendor refusal closes the day's row; verification allowance comes from their endpoint. QuickEnrich is uncapped by credits; its daily pull cap remains the brake.
+
+**Adding a vendor** (for developers): one adapter file implementing the provider interface plus one line in the registry — see docs/prospect-sources.md. The search page, waterfall and ledger need no change.`,
+  },
+  {
     slug: "needs-review-queue",
     categorySlug: "prospecting",
     title: "The Needs Review queue",

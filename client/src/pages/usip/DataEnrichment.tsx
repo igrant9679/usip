@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { EnrichmentJobDrawer } from "@/components/usip/enrichment/EnrichmentJobDrawer";
 import { FindProspectsPanel } from "@/pages/usip/FindProspects";
+import { SourceSearchPanel } from "@/pages/usip/SourceSearch";
 import { ImportContactsPanel } from "@/pages/usip/ImportContacts";
 import { DATA_ENRICHMENT_TABS, tabFromSlug, tabSlug, type DataEnrichmentTab } from "@/pages/usip/dataEnrichmentTabs";
 import { trpc } from "@/lib/trpc";
@@ -189,6 +190,11 @@ export default function DataEnrichment() {
         <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
           {/* The folded Find Prospects surface — full panel, honoring ?runId=/?q=. */}
           {tab === "Find prospects" && <FindProspectsPanel />}
+
+          {/* Capability-aware vendor search: union of every source's filters,
+              per-source match strip, waterfall preview, spend shown before
+              promotion (prospect-source registry, 2026-09-14). */}
+          {tab === "Source search" && <SourceSearchPanel />}
 
           {tab === "Data health center" && (
             <div className="space-y-5">

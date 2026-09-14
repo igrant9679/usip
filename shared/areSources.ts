@@ -55,6 +55,11 @@ export const ARE_SOURCES = [
     label: "QuickEnrich",
     description: "Discover people matching your titles and industries from the QuickEnrich database. Discovery is free; emails are found during enrichment, one credit per hit.",
   },
+  {
+    id: "warmysender",
+    label: "WarmySender leads",
+    description: "Search WarmySender's B2B lead database (US/Canada deepest). Searching is free and masked; one lead unit is spent per net-new person acquired.",
+  },
 ] as const;
 
 export type AreSourceId = (typeof ARE_SOURCES)[number]["id"];
@@ -93,6 +98,7 @@ export function normalizeSources(raw: unknown): AreSourceId[] {
  */
 export const ARE_DEFAULT_SOURCE_ORDER: AreSourceId[] = [
   "quickenrich",
+  "warmysender",
   "internal",
   "linkedin",
   "apollo",
