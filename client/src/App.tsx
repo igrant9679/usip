@@ -13,7 +13,6 @@ import Dashboard from "@/pages/usip/Dashboard";
 import DashboardHome2 from "@/pages/usip/DashboardHome2";
 import Dashboards from "@/pages/usip/Dashboards";
 import Reports from "@/pages/usip/Reports";
-import EmailDrafts from "@/pages/usip/EmailDrafts";
 import EmailAnalytics from "@/pages/usip/EmailAnalytics";
 import { EmailSuppressions } from "@/pages/usip/EmailSuppressions";
 import SendingAccounts from "@/pages/usip/SendingAccounts";
@@ -90,7 +89,6 @@ import PromptTemplates from "@/pages/usip/PromptTemplates";
 import ImportContacts from "@/pages/usip/ImportContacts";
 import DataHealth from "@/pages/usip/DataHealth";
 import Segments from "@/pages/usip/Segments";
-import AIPipelineQueue from "@/pages/usip/AIPipelineQueue";
 import PipelineAlerts from "@/pages/usip/PipelineAlerts";
 import SegmentRules from "@/pages/usip/SegmentRules";
 import ConnectedAccounts from "@/pages/usip/ConnectedAccounts";
@@ -453,7 +451,6 @@ function Router() {
       <Route path="/forecast"><AuthGate><Forecast /></AuthGate></Route>
       <Route path="/sequences"><AuthGate><Sequences /></AuthGate></Route>
       <Route path="/sequences/:id/canvas"><AuthGate><SequenceCanvas /></AuthGate></Route>
-      <Route path="/email-drafts"><AuthGate><EmailDrafts /></AuthGate></Route>
       <Route path="/email-analytics"><AuthGate><EmailAnalytics /></AuthGate></Route>
       <Route path="/email-suppressions"><AuthGate><EmailSuppressions /></AuthGate></Route>
       <Route path="/sending-accounts"><AuthGate><SendingAccounts /></AuthGate></Route>
@@ -477,7 +474,6 @@ function Router() {
       <Route path="/lead-scoring"><AuthGate><LeadScoring /></AuthGate></Route>
       <Route path="/lead-routing"><AuthGate><LeadRouting /></AuthGate></Route>
       <Route path="/research-pipeline"><AuthGate><ResearchPipeline /></AuthGate></Route>
-      <Route path="/ai-pipeline"><AuthGate><AIPipelineQueue /></AuthGate></Route>
       <Route path="/pipeline-alerts"><AuthGate><PipelineAlerts /></AuthGate></Route>
       <Route path="/quota"><AuthGate><Quota /></AuthGate></Route>
       <Route path="/custom-fields"><AuthGate><CustomFields /></AuthGate></Route>

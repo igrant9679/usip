@@ -27,10 +27,11 @@ type Surface = {
   confirm: "ConfirmButton" | "confirmAction";
 };
 
+// The /ai-pipeline and /email-drafts pages retired 2026-09-15 (phase 4 —
+// their tools live in the Emails drawer); the Emails page's source-scoped
+// Approve all is the ONE surface for both queues now.
 const SURFACES: Surface[] = [
-  { name: "AI Pipeline drafts", client: "../client/src/pages/usip/AIPipelineQueue.tsx", calls: "trpc.aiPipeline.approveAllPending", server: "./routers/aiPipeline.ts", proc: "approveAllPending:", confirm: "ConfirmButton" },
   { name: "Emails page (awaiting)", client: "../client/src/pages/usip/EmailsV2.tsx", calls: "trpc.emailDrafts.approveAll", server: "./routers/sequences.ts", proc: "approveAll: repProcedure", confirm: "ConfirmButton" },
-  { name: "Email Drafts (sequence)", client: "../client/src/pages/usip/EmailDrafts.tsx", calls: "trpc.emailDrafts.approveAll", server: "./routers/sequences.ts", proc: "approveAll: repProcedure", confirm: "ConfirmButton" },
   { name: "Tasks — AI drafts", client: "../client/src/pages/usip/TasksV2.tsx", calls: "trpc.tasks.approveAllDrafts", server: "./routers/activities.ts", proc: "approveAllDrafts:", confirm: "confirmAction" },
   { name: "Meetings — proposals", client: "../client/src/pages/usip/MeetingsV2.tsx", calls: "trpc.meetings.approveAllProposed", server: "./routers/meetings.ts", proc: "approveAllProposed:", confirm: "ConfirmButton" },
   { name: "Campaign — Prospects tab", client: "../client/src/pages/usip/ARECampaignDetail.tsx", calls: "trpc.are.campaigns.approveAllPending", server: "./routers/are/campaigns.ts", proc: "approveAllPending:", confirm: "ConfirmButton" },
@@ -54,9 +55,9 @@ describe("every approvals screen has a wired, confirmed Approve all", () => {
 });
 
 describe("bulk approvals are whole-queue, not page-scoped", () => {
-  it("AI Pipeline no longer approves only the 20 drafts on screen", () => {
-    const client = read("../client/src/pages/usip/AIPipelineQueue.tsx");
-    expect(client).not.toContain("bulkApprove.mutate({ draftIds: pendingDraftIds })");
+  it("AI-draft bulk approval stays workspace-wide on the server", () => {
+    // The page moved into the Emails drawer, but aiPipeline.approveAllPending
+    // remains the API/assistant surface — keep its whole-queue shape pinned.
     const server = read("./routers/aiPipeline.ts");
     const proc = server.slice(server.indexOf("approveAllPending:"), server.indexOf("regenerateDraft:"));
     expect(proc).toContain('eq(emailDrafts.status as any, "ai_pending_review")');

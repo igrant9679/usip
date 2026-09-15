@@ -35,6 +35,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
+  aiPipelineJobs,
   areCampaigns,
   areExecutionQueue,
   emailDrafts,
@@ -590,13 +591,25 @@ export const emailActivityRouter = {
       }
 
       if (input.kind === "draft") {
+        // The Emails drawer hosts the AI draft editor now (phase 4 port), so
+        // a draft read carries its pipeline job's research context along —
+        // the data ResearchAccordion used to get from aiPipeline.getDraftQueue.
         const [row] = await db
-          .select()
+          .select({
+            d: emailDrafts,
+            jobOrgResearch: aiPipelineJobs.orgResearch,
+            jobContactResearch: aiPipelineJobs.contactResearch,
+            jobFitAnalysis: aiPipelineJobs.fitAnalysis,
+          })
           .from(emailDrafts)
+          .leftJoin(aiPipelineJobs, eq(aiPipelineJobs.id, emailDrafts.pipelineJobId))
           .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, wsId)))
           .limit(1);
         if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-        return { ...row, accountName: null, accountEmail: null, userName: null, campaignName: null };
+        const job = row.jobOrgResearch || row.jobContactResearch || row.jobFitAnalysis
+          ? { orgResearch: row.jobOrgResearch, contactResearch: row.jobContactResearch, fitAnalysis: row.jobFitAnalysis }
+          : null;
+        return { ...row.d, job, accountName: null, accountEmail: null, userName: null, campaignName: null };
       }
 
       if (input.kind === "queued") {

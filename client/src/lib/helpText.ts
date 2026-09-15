@@ -105,7 +105,6 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/products": { body: "Your product and pricing catalogue, used when building a quote." },
 
   // ── Automation and analytics ──
-  "/ai-pipeline": { body: "What the AI engines have queued, are working on, and have finished." },
   "/brand-voice": { body: "How the AI should sound when it writes as you. Every AI-written email and chat reply reads from this." },
   "/personas": { body: "The types of buyer you sell to. Used to tailor messaging and to score fit." },
   "/workflows": { body: "If-this-then-that rules over CRM events — e.g. when a prospect changes job, start a sequence.", article: "workflow-rules" },

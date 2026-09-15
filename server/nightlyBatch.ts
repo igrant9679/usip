@@ -178,7 +178,7 @@ export async function runNightlyBatch(): Promise<{
       `• Leads queued for AI research: ${totalTriggered}\n` +
       `• Leads skipped (recent job or over cap): ${totalSkipped}\n` +
       (totalErrors > 0 ? `• Errors encountered: ${totalErrors}\n` : "") +
-      `\nEach queued lead will receive a personalised email draft in the AI Draft Queue (/ai-pipeline) for your review.`;
+      `\nEach queued lead will receive a personalised email draft on the Emails page (/v2/emails?status=awaiting&source=ai_draft) for your review.`;
 
     await notifyOwner({
       title: `Nightly Batch: ${totalTriggered} lead${totalTriggered !== 1 ? "s" : ""} queued`,

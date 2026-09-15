@@ -119,8 +119,6 @@ const ROUTE_PAGE_KEYS: Array<[string, string]> = [
   ["/sequences", "sequences"],
   ["/unified-inbox", "unified-inbox"],
   ["/social", "social"],
-  ["/ai-pipeline", "ai-pipeline"],
-  ["/email-drafts", "email-drafts"],
   ["/connected-accounts", "connected-accounts"],
   ["/v2/ai-assistant", "ai-assistant"],
   ["/inbox", "inbox"],

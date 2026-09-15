@@ -272,7 +272,7 @@ export default function ResearchPipeline() {
                     )}
                     {activePipeline?.emailDraftId && (
                       <div className="pt-2">
-                        <a href="/email-drafts" className="inline-flex items-center gap-1.5 text-sm text-emerald-600 hover:underline">
+                        <a href="/v2/emails?status=awaiting&source=sequence" className="inline-flex items-center gap-1.5 text-sm text-emerald-600 hover:underline">
                           View in Email Drafts queue <ArrowRight className="h-3.5 w-3.5" />
                         </a>
                       </div>

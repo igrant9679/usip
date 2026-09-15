@@ -101,7 +101,7 @@ export function AttentionPanel() {
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
         {s.aiDrafts.count > 0 && (
           <QueueCard icon={<Sparkles className="size-4" />} tint="#9333EA" title="AI drafts to review"
-            count={s.aiDrafts.count} cta="Review queue" href="/ai-pipeline">
+            count={s.aiDrafts.count} cta="Review queue" href="/v2/emails?status=awaiting&source=ai_draft">
             <ul className="space-y-1">
               {s.aiDrafts.items.slice(0, 3).map((d) => (
                 <li key={d.id} className="text-xs text-muted-foreground truncate">
@@ -172,7 +172,7 @@ export function AttentionPanel() {
         {/* The four queues the aggregator used to omit (audit 2026-09-02). */}
         {(s.sequenceDrafts?.count ?? 0) > 0 && (
           <QueueCard icon={<ListChecks className="size-4" />} tint="#0EA5E9" title="Sequence drafts to review"
-            count={s.sequenceDrafts.count} cta="Review drafts" href="/email-drafts" />
+            count={s.sequenceDrafts.count} cta="Review drafts" href="/v2/emails?status=awaiting&source=sequence" />
         )}
         {(s.socialReplies?.count ?? 0) > 0 && (
           <QueueCard icon={<ListChecks className="size-4" />} tint="#0A66C2" title="LinkedIn & social replies"

@@ -818,7 +818,7 @@ export default function Dashboard() {
                   </span>
                 )}
               </div>
-              <Link href="/email-drafts" className="ml-auto text-xs flex items-center gap-1" style={{ color: accent }}>
+              <Link href="/v2/emails?status=awaiting&source=sequence" className="ml-auto text-xs flex items-center gap-1" style={{ color: accent }}>
                 Review queue <ArrowRight className="size-3" />
               </Link>
             </div>

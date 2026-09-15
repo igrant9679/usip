@@ -546,9 +546,8 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Review AI/sequence drafts and send safely.",
     readingTimeMinutes: 3,
     tags: ["email-drafts", "sending", "deliverability"],
-    pageKey: "email-drafts",
-    tourName: "AI Pipeline: Review Drafts",
-    bodyMarkdown: `**Email Drafts** is the review queue for messages sequences and AI created. Each draft can be edited, approved, or rejected. **Send** (single) and **Send All Approved** now require a quick confirm — because sends are real and can't be recalled. Before sending, drafts are checked against the **suppression list** (unsubscribes + verified bounces) and per-account daily caps. Filter by status (pending review / approved / sent / bounced). Bounces here flow back to deliverability data — keep an eye on the bounced tab.`,
+    pageKey: "emails",
+    bodyMarkdown: `Draft review lives on the **Emails page** (/v2/emails) — filter to **Needs review** to see every message sequences and AI created. Click a row to open the drawer: edit, run **Subject A/B + spam analysis**, read the AI's **research context**, **regenerate** with a preset, approve, or reject. **Send** (single) and **Send approved** require a quick confirm — because sends are real and can't be recalled. Before sending, drafts are checked against the **suppression list** (unsubscribes + verified bounces) and per-account daily caps. Bounces flow back to deliverability data — the **Bounced** status filter shows them.`,
   },
   {
     slug: "are-overview",
@@ -579,7 +578,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 4,
     tags: ["playbook", "routine", "sdr"],
     pageKey: "dashboard",
-    bodyMarkdown: `A repeatable morning beats heroics. **1) Home (5 min):** scan your numbers and overdue tasks. **2) Inbox & replies (15 min):** clear **Conversations** and the **Unified Inbox** — every reply gets a response or a logged next step; sequences auto-pause on reply so focus on movers. **3) Needs Review (15 min):** triage the **Find Prospects → Needs Review** queue — fix emails, verify, archive junk (see "The Needs Review queue"). **4) Build list (20 min):** run **Find Prospects** against today's ICP slice; enroll high-Fit + Valid-email prospects into the right sequence. **5) Approve drafts (10 min):** clear **Email Drafts** / **AI Pipeline** so the engine keeps sending. Then spend the rest of the day on live conversations and pipeline.`,
+    bodyMarkdown: `A repeatable morning beats heroics. **1) Home (5 min):** scan your numbers and overdue tasks. **2) Inbox & replies (15 min):** clear **Conversations** and the **Unified Inbox** — every reply gets a response or a logged next step; sequences auto-pause on reply so focus on movers. **3) Needs Review (15 min):** triage the **Find Prospects → Needs Review** queue — fix emails, verify, archive junk (see "The Needs Review queue"). **4) Build list (20 min):** run **Find Prospects** against today's ICP slice; enroll high-Fit + Valid-email prospects into the right sequence. **5) Approve drafts (10 min):** clear the **Emails page's Needs-review queue** so the engine keeps sending. Then spend the rest of the day on live conversations and pipeline.`,
   },
   {
     slug: "crm-hygiene-eod",
@@ -588,7 +587,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "End-of-day CRM hygiene checklist.",
     readingTimeMinutes: 3,
     tags: ["playbook", "crm", "hygiene"],
-    bodyMarkdown: `Five minutes at EOD keeps your pipeline trustworthy. **✓ Log every touch** — calls, meetings, notes on the relevant record (see "Logging activities"). **✓ Update stages** — move any opportunity that progressed; honest stages = honest forecast. **✓ Capture win/loss reasons** on closed deals. **✓ Set next steps** — add a task to every active deal/contact so nothing goes dark (pipeline alerts catch 14-day silence, but don't rely on them). **✓ Clear approvals** — leave the Email Drafts queue empty so overnight sends fire. Consistency here is what separates the top of the leaderboard from the rest.`,
+    bodyMarkdown: `Five minutes at EOD keeps your pipeline trustworthy. **✓ Log every touch** — calls, meetings, notes on the relevant record (see "Logging activities"). **✓ Update stages** — move any opportunity that progressed; honest stages = honest forecast. **✓ Capture win/loss reasons** on closed deals. **✓ Set next steps** — add a task to every active deal/contact so nothing goes dark (pipeline alerts catch 14-day silence, but don't rely on them). **✓ Clear approvals** — leave the Emails Needs-review queue empty so overnight sends fire. Consistency here is what separates the top of the leaderboard from the rest.`,
   },
   {
     slug: "weekly-pipeline-review",
@@ -892,7 +891,7 @@ Press **Ctrl+K** anywhere to jump to any tool. And make *Home* your first stop e
 ## Daily — about ten minutes
 
 1. **Open Home.** The attention panel is the one aggregator of everything waiting on a human. Work it top to bottom:
-   - **AI drafts** — approve, edit, or discard outreach the engines wrote (*Autopilot & AI → AI Pipeline*).
+   - **AI drafts** — approve, edit, or discard outreach the engines wrote (*Emails → Needs review*).
    - **Engine approvals** — release the day's batch if your engine runs in batch-approval mode. This is the gate outbound sends wait behind.
    - **Unhandled replies** — a human answer within a day is worth more than any sequence step. Handling a reply also stops the sequence for that person.
    - **Proposed meetings** — confirm times the Meeting Autopilot suggested.
@@ -1744,29 +1743,19 @@ export const TOURS: TourSeed[] = [
       { title: "Tune it", bodyMarkdown: "Set autonomy mode + the enrichment fit gate in campaign Settings.", routeTo: "/are/campaigns", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
-  {
-    name: "AI Pipeline: Review Drafts",
-    description: "Review, edit, and bulk-approve AI-drafted outreach.",
-    type: "feature",
-    estimatedMinutes: 3,
-    pageKey: "ai-pipeline",
-    route: "/ai-pipeline",
-    roleTags: ["sdr"],
-    steps: [
-      { title: "AI-drafted outreach", bodyMarkdown: "Review what the engine prepared.", targetDataTourId: "ai-queue-stats", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "The draft queue", bodyMarkdown: "Edit, approve, or reject each.", targetDataTourId: "ai-queue-draft-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Approve in bulk", bodyMarkdown: "Clear the queue so sends fire.", targetDataTourId: "ai-queue-approve-all", visualTreatment: "pulse", advanceCondition: "next_button" },
-    ],
-  },
 ];
 
-/** Legacy demo tours (seedTours.ts) that the 10 SDR tours above supersede. */
+/** Legacy demo tours (seedTours.ts) that the 10 SDR tours above supersede.
+ *  "AI Pipeline: Review Drafts" joined the list when /ai-pipeline retired
+ *  (2026-09-15) — its spotlight targets only existed on that page; draft
+ *  review lives in the Emails drawer now. */
 const RETIRED_LEGACY_TOURS = [
   "Welcome to Velocity",
   "Building an Email Sequence",
   "Managing Your Pipeline",
   "Automated Revenue Engine (ARE)",
   "AI Draft Queue & Auto-Send",
+  "AI Pipeline: Review Drafts",
 ];
 
 /* ─── Upsert helpers ─────────────────────────────────────────────────────── */

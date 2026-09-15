@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { EMAIL_SOURCES, emailSourceLabel, type EmailFeedRow } from "@shared/emailActivity";
 import { ConfirmButton } from "@/components/usip/Common";
+import { AiComposeDialog, DraftEditorTools } from "@/components/usip/emails/DraftEditorTools";
 
 /* ─── vocabulary ───────────────────────────────────────────────────────────── */
 
@@ -112,11 +113,17 @@ function statusLabel(row: EmailFeedRow): string {
 /* ─── detail drawer ────────────────────────────────────────────────────────── */
 
 function EmailDetail({ row, onClose }: { row: EmailFeedRow | null; onClose: () => void }) {
+  const utils = trpc.useUtils();
   const detail = trpc.emailActivity.get.useQuery(
     { kind: (row?.kind ?? "log") as "log" | "draft" | "queued" | "inbound", id: row?.id ?? 0 },
     { enabled: !!row, retry: false },
   );
   const d = (detail.data ?? null) as Record<string, any> | null;
+  const onDraftChanged = () => {
+    detail.refetch();
+    utils.emailActivity.list.invalidate();
+    utils.emailActivity.stats.invalidate();
+  };
 
   const Fact = ({ label, children }: { label: string; children: React.ReactNode }) => (
     <div className="grid grid-cols-[110px_1fr] gap-2 text-xs py-1 border-b border-border/40 last:border-0">
@@ -228,6 +235,12 @@ function EmailDetail({ row, onClose }: { row: EmailFeedRow | null; onClose: () =
               </div>
             )}
 
+            {/* Per-draft editor tools — subject A/B, research context,
+                regenerate, edit — live here since the phase-4 port. */}
+            {row.kind === "draft" && row.draftId ? (
+              <DraftEditorTools row={{ draftId: row.draftId, status: row.status, kind: row.kind }} detail={d} onChanged={onDraftChanged} />
+            ) : null}
+
             <div className="rounded-lg border bg-card p-3">
               <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">Message</div>
               {detail.isLoading ? (
@@ -261,6 +274,7 @@ export default function EmailsV2() {
   const [searchDebounced, setSearchDebounced] = useState("");
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<EmailFeedRow | null>(null);
+  const [composeOpen, setComposeOpen] = useState(false);
   const PAGE = 50;
 
   useEffect(() => {
@@ -286,6 +300,11 @@ export default function EmailsV2() {
   // sequence drafts, or both. Any other chip (crm, inbound…) has no drafts.
   const approveAllSource = source === "ai_draft" ? "ai_draft" : source === "sequence" ? "sequence" : "all";
   const send = trpc.emailDrafts.send.useMutation({ onSuccess: () => { invalidate(); toast.success("Email sent"); }, onError: (e) => toast.error(e.message) });
+  // "Send All Approved" from the retired drafts pages — workspace-wide.
+  const sendBulkApproved = trpc.smtpConfig.sendBulkApproved.useMutation({
+    onSuccess: (r) => { invalidate(); toast.success(`Sent ${r.sent} email${r.sent === 1 ? "" : "s"}${r.failed ? `, ${r.failed} failed` : ""}`); },
+    onError: (e) => toast.error(e.message.includes("No active SMTP") ? "SMTP not configured — set up in Settings → Email delivery" : e.message),
+  });
   const updateSettings = trpc.emailAutoSend.updateAutoSendSettings.useMutation({
     onSuccess: () => { utils.emailAutoSend.getAutoSendSettings.invalidate(); toast.success("Auto-send updated"); },
     onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change auto-send" : e.message),
@@ -341,6 +360,17 @@ export default function EmailsV2() {
           <Mail className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Emails</h1>
           <div className="flex-1" />
+          <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={() => setComposeOpen(true)}>
+            <Bot className="size-3.5" /> AI compose
+          </Button>
+          <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5 text-xs"
+            disabled={sendBulkApproved.isPending}
+            title="Send every approved draft now?"
+            description="All approved drafts in this workspace are sent immediately through your configured email delivery — not only the rows on this page."
+            confirmLabel="Send approved"
+            onConfirm={() => sendBulkApproved.mutate({})}>
+            <Send className="size-3.5" /> Send approved
+          </ConfirmButton>
           <Select value={direction} onValueChange={(v) => setFilter(() => setDirection(v))}>
             <SelectTrigger className="h-7 w-[120px] text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>{DIRECTIONS.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
@@ -511,9 +541,8 @@ export default function EmailsV2() {
                         <Button size="sm" variant="outline" className="h-7 gap-1" disabled={send.isPending} onClick={() => send.mutate({ id: row.draftId! })}><Send className="size-3.5" /> Send</Button>
                         <Button size="icon" variant="ghost" className="size-7" title="Approve" onClick={() => approve.mutate({ id: row.draftId! })}><Check className="size-4 text-emerald-500" /></Button>
                         <Button size="icon" variant="ghost" className="size-7" title="Reject" onClick={() => reject.mutate({ id: row.draftId! })}><X className="size-4 text-muted-foreground" /></Button>
-                        {/* Per-draft editor tools (subject A/B, research context, regenerate) still live on the
-                            original pages until they are ported here (phase 4). */}
-                        <Link href={row.status === "ai_pending_review" ? "/ai-pipeline" : "/email-drafts"} title="Open the full editor: subject A/B, research context, regenerate" className="inline-flex items-center justify-center size-7 rounded-md hover:bg-muted text-muted-foreground" onClick={(e) => e.stopPropagation()}><ExternalLink className="size-3.5" /></Link>
+                        {/* The full editor (subject A/B, research context, regenerate)
+                            renders inline in the drawer — click the row to open it. */}
                       </div>
                     )}
                     {row.status === "approved" && row.draftId && (
@@ -542,6 +571,7 @@ export default function EmailsV2() {
       </div>
 
       <EmailDetail row={selected} onClose={() => setSelected(null)} />
+      <AiComposeDialog open={composeOpen} onClose={() => setComposeOpen(false)} />
     </Shell>
   );
 }

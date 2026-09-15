@@ -465,7 +465,7 @@ describe("nightly batch notification content", () => {
       `• Leads queued for AI research: ${totalTriggered}\n` +
       `• Leads skipped (recent job or over cap): ${totalSkipped}\n` +
       (totalErrors > 0 ? `• Errors encountered: ${totalErrors}\n` : "") +
-      `\nEach queued lead will receive a personalised email draft in the AI Draft Queue (/ai-pipeline) for your review.`;
+      `\nEach queued lead will receive a personalised email draft on the Emails page (/v2/emails?status=awaiting&source=ai_draft) for your review.`;
 
     const title = `Nightly Batch: ${totalTriggered} lead${totalTriggered !== 1 ? "s" : ""} queued`;
     return { title, content };
@@ -509,9 +509,9 @@ describe("nightly batch notification content", () => {
     expect(noErrors).not.toContain("Errors encountered");
   });
 
-  it("always includes the AI Draft Queue link", () => {
+  it("always includes the Emails-page review link", () => {
     const { content } = buildNotificationMessage(1, 5, 0, 0);
-    expect(content).toContain("/ai-pipeline");
+    expect(content).toContain("/v2/emails?status=awaiting&source=ai_draft");
   });
 
   it("content mentions the run date", () => {
@@ -541,7 +541,7 @@ describe("notifyOwner call in runNightlyBatch", () => {
       "• Leads queued for AI research: 50\n" +
       "• Leads skipped (recent job or over cap): 100\n" +
       "• Errors encountered: 2\n" +
-      "\nEach queued lead will receive a personalised email draft in the AI Draft Queue (/ai-pipeline) for your review.";
+      "\nEach queued lead will receive a personalised email draft on the Emails page (/v2/emails?status=awaiting&source=ai_draft) for your review.";
     expect(content.length).toBeLessThanOrEqual(20000);
   });
 });

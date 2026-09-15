@@ -292,7 +292,7 @@ export default function UnifiedInbox() {
           </Button>
         </Link>
         <Link
-          href="/email-drafts"
+          href="/v2/emails?status=awaiting&source=sequence"
           className="text-xs text-muted-foreground hover:text-foreground self-center underline-offset-2 hover:underline"
           title="Drafts created by sequences awaiting review"
         >

@@ -1505,7 +1505,7 @@ export default function Sequences() {
         <Button onClick={() => setOpen(true)} data-tour-id="sequences-new-button"><Plus className="size-4" /> New sequence</Button>
       </PageHeader>
       <SubNav items={[
-        { href: "/email-drafts", label: "Email Drafts", title: "Review and edit drafts created by sequence steps" },
+        { href: "/v2/emails?status=awaiting&source=sequence", label: "Email Drafts", title: "Review and edit drafts created by sequence steps" },
         { href: "/email-analytics", label: "Email Analytics", title: "Open / click / reply rates per sequence and per step" },
       ]} />
       <div className="p-4 md:p-5 grid grid-cols-1 lg:grid-cols-3 gap-4">

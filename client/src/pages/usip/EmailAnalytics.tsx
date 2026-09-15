@@ -275,7 +275,7 @@ export default function EmailAnalytics() {
             <div className="mt-3 border-t pt-3 flex flex-wrap items-center justify-between gap-2">
               {bounceStats.totalBounced > 0 && (
                 <button
-                  onClick={() => setLocation("/email-drafts?filter=bounced")}
+                  onClick={() => setLocation("/v2/emails?status=bounced")}
                   className="flex items-center gap-1 text-xs text-primary hover:underline"
                 >
                   <ChevronRight className="size-3" />

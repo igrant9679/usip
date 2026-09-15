@@ -59,10 +59,23 @@ describe("old links survive the move (URL direction)", () => {
     expect(emails).toContain('useState(initial.get("source") || "all")');
     expect(client("pages", "usip", "DealsV2.tsx")).toContain('<div id="alerts"');
   });
-  it("the retained editor pages stay routed and reachable from the Emails drawer", () => {
+  it("the editor pages are retired: their tools render inside the Emails drawer, the routes are gone", () => {
+    // Phase 4's final step (2026-09-15): /email-drafts and /ai-pipeline no
+    // longer exist as pages. Both directions of the fold are pinned — the
+    // drawer actually hosts every editor tool (not just a link), and no
+    // route or page file survives to drift.
     const app = client("App.tsx");
-    for (const r of ['path="/email-drafts"', 'path="/ai-pipeline"', 'path="/data-health"', 'path="/pipeline-alerts"', 'path="/segment-rules"']) expect(app).toContain(r);
-    expect(client("pages", "usip", "EmailsV2.tsx")).toContain('href={row.status === "ai_pending_review" ? "/ai-pipeline" : "/email-drafts"}');
+    for (const r of ['path="/data-health"', 'path="/pipeline-alerts"', 'path="/segment-rules"']) expect(app).toContain(r);
+    for (const r of ['path="/email-drafts"', 'path="/ai-pipeline"']) expect(app).not.toContain(r);
+    expect(existsSync(join(__dirname, "..", "client", "src", "pages", "usip", "EmailDrafts.tsx"))).toBe(false);
+    expect(existsSync(join(__dirname, "..", "client", "src", "pages", "usip", "AIPipelineQueue.tsx"))).toBe(false);
+    expect(client("pages", "usip", "EmailsV2.tsx")).toContain("<DraftEditorTools");
+    const tools = client("components", "usip", "emails", "DraftEditorTools.tsx");
+    for (const s of [
+      "subjectAB.generate", "subjectAB.select", "emailDrafts.update", "smtpConfig.previewResolved",
+      "smtpConfig.getTrackingStats", "aiPipeline.regenerateDraft", "aiPipeline.scoreDraft",
+      "aiPipeline.approveDraft", "aiPipeline.runBulk",
+    ]) expect(tools).toContain(s);
   });
 });
 

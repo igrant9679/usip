@@ -82,7 +82,9 @@ describe("the Autonomy Center's engine dial is real", () => {
   it("no surface promises a confidence floor that nothing enforces", () => {
     expect(page).not.toContain("score &amp; confidence");
     expect(client("pages", "usip", "EmailsV2.tsx")).not.toContain("and confidence ≥");
-    expect(client("pages", "usip", "AIPipelineQueue.tsx")).not.toContain("is not yet enforced");
+    // /ai-pipeline retired 2026-09-15 — its replacement drawer must not
+    // resurrect the unenforced-floor copy either.
+    expect(client("components", "usip", "emails", "DraftEditorTools.tsx")).not.toContain("is not yet enforced");
   });
 
   it("Job Change Autopilot says when it actually runs", () => {
