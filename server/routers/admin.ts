@@ -215,7 +215,7 @@ const ROLE_ENUM = z.enum(["super_admin", "admin", "manager", "rep"]);
  */
 const DEFAULT_NOTIFY_POLICY = defaultNotifyPolicy();
 
-async function getOrSeedSettings(workspaceId: number) {
+export async function getOrSeedSettings(workspaceId: number) {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
   const [row] = await db.select().from(workspaceSettings).where(eq(workspaceSettings.workspaceId, workspaceId));

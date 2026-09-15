@@ -18,9 +18,12 @@
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
+import { workspaceSettings } from "../../drizzle/schema";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
-import { checkPermission } from "../db";
+import { checkPermission, getDb } from "../db";
+import { getOrSeedSettings } from "./admin";
 import { recordAudit } from "../audit";
 import { PROSPECT_SOURCE_SLUGS } from "@shared/prospectSources";
 import { describeSources, getSource } from "../services/prospectSources/registry";
@@ -118,6 +121,31 @@ export const prospectSourcesRouter = router({
       await saveCredentials(ctx.workspace.id, input.slug, { secrets: { apiKey: "" } });
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "prospect_source_credentials", entityId: ctx.workspace.id, after: { slug: input.slug, cleared: true } });
       return { ok: true as const };
+    }),
+
+  /**
+   * Workspace-wide on/off for one source. Writes the SAME areScraperSources
+   * mask ARE Settings edits (one vocabulary, migration 0172); the registry
+   * waterfall and campaign discovery both honour it, so "off" stops searches
+   * and spends while the saved key and ledger history stay put.
+   */
+  setEnabled: adminWsProcedure
+    .input(z.object({ slug: slugSchema, enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await checkPermission(ctx, "manage_api_keys");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const row = await getOrSeedSettings(ctx.workspace.id);
+      const prior = ((row as Record<string, unknown>).areScraperSources ?? {}) as Record<string, boolean>;
+      const mask = { ...(typeof prior === "object" && prior ? prior : {}), [input.slug]: input.enabled };
+      await db.update(workspaceSettings).set({ areScraperSources: mask } as never)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      await recordAudit({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update",
+        entityType: "prospect_source_credentials", entityId: ctx.workspace.id,
+        after: { slug: input.slug, enabled: input.enabled },
+      });
+      return { ok: true as const, enabled: input.enabled };
     }),
 
   /** Budget ledger for one source: current-period rows + the vendor's own report. */

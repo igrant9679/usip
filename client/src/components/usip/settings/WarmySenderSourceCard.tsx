@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Flame, Loader2, ShieldCheck, AlertTriangle } from "lucide-react";
 import { confirmAction } from "@/components/usip/Common";
 
@@ -80,6 +81,15 @@ export function WarmySenderSourceCard({ variant = "standalone" }: { variant?: "s
     onSuccess: () => { invalidate(); toast.success("Key removed"); },
     onError: (e: any) => toast.error(e?.message ?? "Could not remove"),
   });
+  const setEnabled = trpc.prospectSources.setEnabled.useMutation({
+    onSuccess: (r: any) => {
+      invalidate();
+      utils.settings.getAreSettings.invalidate();
+      toast.success(r?.enabled ? "WarmySender enabled" : "WarmySender disabled — searches and campaigns skip it");
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Could not update"),
+  });
+  const enabled = source ? source.enabled !== false : true;
 
   const titleNative = source?.capabilities.supportedFilters.includes("jobTitle");
   const status = cred?.status ?? "unvalidated";
@@ -98,6 +108,21 @@ export function WarmySenderSourceCard({ variant = "standalone" }: { variant?: "s
           <span>Saved, not yet tested <span className="text-muted-foreground">· key {cred?.masked}</span></span>
         )}
       </div>
+
+      {configured && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/40 p-2.5">
+          <div className="text-[12.5px]">
+            <span className="font-medium">{enabled ? "Enabled" : "Disabled"}</span>
+            <span className="text-muted-foreground">
+              {enabled
+                ? " — campaigns and Source search may use this source."
+                : " — campaigns and searches skip this source; the key and ledger history are kept."}
+            </span>
+          </div>
+          <Switch checked={enabled} disabled={!isAdmin || setEnabled.isPending}
+            onCheckedChange={(v) => setEnabled.mutate({ slug: "warmysender", enabled: v })} />
+        </div>
+      )}
 
       {source?.circuit.open && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-2.5 text-[12px] text-amber-800 dark:text-amber-300">

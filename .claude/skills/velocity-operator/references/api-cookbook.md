@@ -71,6 +71,7 @@ const post = async (p, i) => (await (await fetch('/api/trpc/' + p, { method: 'PO
 ## Prospect sources (registry)
 - `prospectSources.describe {criteria?}` — every vendor with manifest, credential status, circuit, budget, and (with criteria) the match verdict; the Source search strip reads this.
 - `prospectSources.saveCredentials {slug, apiKey?, config?}` (admin) / `validate {slug}` / `removeCredentials {slug}` — table-mode vendors only (WarmySender); Apollo/QuickEnrich keep `apollo.*` / `quickenrich.*`. Validate captures scopes, tier and the search tool schema.
+- `prospectSources.setEnabled {slug, enabled}` (admin) — workspace-wide on/off for one source; writes the same `areScraperSources` mask ARE Settings edits, key and ledger kept.
 - `prospectSources.ledger {slug}` — current-period ledger rows + the vendor's own report.
 - `prospectSources.startSearch {criteria, batchTarget}` → `{runId}` (background, preview only) · `getRun {runId}` (poll) · `listRuns` · `resultRaw {resultId}`.
 - `prospectSources.estimatePromotion {runId, resultIds}` → units the selection would spend · `promote {runId, resultIds}` — acquires on-demand rows (spends) then promotes into People. Always show the estimate before calling promote.
