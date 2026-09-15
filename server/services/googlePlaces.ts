@@ -389,7 +389,7 @@ async function emitThresholdEmail(workspaceId: number, state: BudgetState): Prom
     .limit(1);
   const wsName = ws?.name ?? "your workspace";
 
-  const settingsUrl = `${(process.env.MANUS_APP_URL ?? "").replace(/\/+$/, "")}/settings`;
+  const settingsUrl = `${(process.env.MANUS_APP_URL ?? "").replace(/\/+$/, "")}/v2/settings/integrations`;
 
   const html = `
 <div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111827">

@@ -282,8 +282,8 @@ export default function DataEnrichment() {
               <h2 className="text-lg font-semibold">Enrich existing records across your CRM systems</h2>
               <p className="text-sm text-muted-foreground mt-1 max-w-xl mx-auto">Boost your CRM effectiveness with dynamic enrichment, effortlessly updating contact and account details to keep your data consistently synchronized.</p>
               <div className="mt-5 flex items-center justify-center gap-2">
-                <Button className="gap-1.5" style={{ backgroundColor: accent }} onClick={() => setLocation("/settings")}>Connect Salesforce</Button>
-                <Button variant="outline" className="gap-1.5" onClick={() => setLocation("/settings")}>Connect HubSpot</Button>
+                <Button className="gap-1.5" style={{ backgroundColor: accent }} onClick={() => setLocation("/v2/settings/integrations")}>Connect Salesforce</Button>
+                <Button variant="outline" className="gap-1.5" onClick={() => setLocation("/v2/settings/integrations")}>Connect HubSpot</Button>
               </div>
               <div className="mt-10">
                 <div className="text-sm font-semibold mb-4">Key benefits</div>

@@ -377,8 +377,8 @@ const ADMIN_MENU_ITEMS = [
   // Label matches the destination page's title ("Audit log"); it read as a
   // broken link when it was called "System Activity" but opened /audit.
   { label: "Audit Log", icon: Activity, href: "/audit" },
-  { label: "Security", icon: ShieldCheck, href: "/settings?tab=security" },
-  { label: "Integrations", icon: Plug, href: "/settings?tab=integrations" },
+  { label: "Security", icon: ShieldCheck, href: "/v2/settings/security" },
+  { label: "Integrations", icon: Plug, href: "/v2/settings/integrations" },
 ];
 
 function AdminSettingsMenu({ color }: { color: string }) {

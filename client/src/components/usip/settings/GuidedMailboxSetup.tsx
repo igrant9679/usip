@@ -1662,7 +1662,7 @@ function CompleteStep({
     { icon: Network, tint: "text-sky-600", label: "Explore the Deliverability suite", act: () => { onClose(); navigate("/v2/deliverability"); } },
     { icon: Mail, tint: "text-muted-foreground", label: "Link another mailbox", act: onLinkAnother },
     { icon: Send, tint: "text-pink-500", label: "Create sequence", act: () => { onClose(); navigate("/sequences"); } },
-    { icon: Plug, tint: "text-indigo-500", label: "Connect your CRM", act: () => { onClose(); navigate("/settings?tab=integrations"); } },
+    { icon: Plug, tint: "text-indigo-500", label: "Connect your CRM", act: () => { onClose(); navigate("/v2/settings/integrations"); } },
   ];
   const cardCls =
     "flex w-full items-center gap-3 rounded-lg border border-border bg-card px-4 py-4 text-left text-[13.5px] font-semibold transition-colors hover:border-foreground/30";

@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Section, StatusPill, fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell, StatCard, SubNav } from "@/components/usip/Shell";
-import { Link, useSearch } from "wouter";
+import { Link, Redirect, useSearch } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
 import { SWEEP_DAILY_CAP_DEFAULT, SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimits";
@@ -39,26 +39,44 @@ type TabId = (typeof TABS)[number]["id"];
 // to carry its own list plus a blanket `{ inApp: true, email: false }` default,
 // which disagreed with the server's seed on two of the five keys.
 
+/** Legacy tab id → Settings-hub section id (collapse of 2026-09-15). */
+const TAB_TO_SECTION: Record<string, string> = {
+  general: "workspace",
+  "my-profile": "appearance",
+  branding: "email-delivery",
+  security: "security",
+  notifications: "notification-policy",
+  integrations: "integrations",
+  smtp: "email-delivery",
+  proposals: "proposals",
+  enrichment: "enrichment-sweep",
+  billing: "billing",
+  danger: "danger",
+};
+
+/**
+ * The standalone Settings page collapsed into the Settings hub (audit
+ * follow-on, shipped 2026-09-15). The route survives as a deep-link shim so
+ * every old link — ?tab=security from the sidebar panel, digest emails,
+ * bookmarks — lands on the matching hub section instead of a 404.
+ */
 export default function Settings() {
+  const t = new URLSearchParams(window.location.search).get("tab") ?? "general";
+  return <Redirect to={`/v2/settings/${TAB_TO_SECTION[t] ?? "workspace"}`} replace />;
+}
+
+/**
+ * One legacy tab, hosted as a Settings-hub section. Owns the queries and the
+ * shared settings.save mutation the tabs were written against, and renders
+ * with the hub's section chrome (header + grey scroll canvas). The workspace
+ * identity strip only accompanies the Workspace overview ("general") tab.
+ */
+export function LegacySettingsSection({ tab, title }: { tab: TabId; title: string }) {
   const { current } = useWorkspace();
   const isAdmin = current?.role === "admin" || current?.role === "super_admin";
-  // Deep-linkable: /settings?tab=security etc. (used by the sidebar's
-  // Admin Settings panel). Unknown values fall back to "general". The search
-  // subscription keeps this working when the panel is used while ALREADY on
-  // /settings (same route — no remount).
-  const search = useSearch();
-  const [tab, setTab] = useState<TabId>(() => {
-    const t = new URLSearchParams(window.location.search).get("tab");
-    return TABS.some((x) => x.id === t) ? (t as TabId) : "general";
-  });
-  useEffect(() => {
-    const t = new URLSearchParams(search).get("tab");
-    if (t && TABS.some((x) => x.id === t)) setTab(t as TabId);
-  }, [search]);
-
-  const summary = trpc.workspace.summary.useQuery();
+  const summary = trpc.workspace.summary.useQuery(undefined, { enabled: tab === "general" });
   const settings = trpc.settings.get.useQuery();
-  const usage = trpc.usage.currentMonth.useQuery();
+  const usage = trpc.usage.currentMonth.useQuery(undefined, { enabled: tab === "billing" });
   const utils = trpc.useUtils();
   const save = trpc.settings.save.useMutation({
     onSuccess: () => {
@@ -69,85 +87,71 @@ export default function Settings() {
   });
 
   return (
-    <Shell title="Settings">
-      <PageHeader title="Workspace settings" description="Workspace settings covering general configuration, billing, integrations, and notification preferences. Changes here apply to all members unless overridden at the individual user level." pageKey="settings"
-        icon={<SettingsIcon className="size-5" />}
-      />
-      <SubNav items={[
-        { href: "/audit", label: "Audit Log", title: "Workspace-wide audit trail of all admin and data-change actions" },
-        { href: "/tour-builder", label: "Tour Builder", title: "Author guided tours for your workspace (super-admin)" },
-      ]} />
-      <div className="p-4 md:p-5 grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6">
-        {/* Tab nav */}
-        <nav className="space-y-1">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => setTab(id)}
-              className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded-md text-sm transition ${
-                tab === id ? "bg-secondary font-medium" : "hover:bg-secondary/50 text-muted-foreground"
-              }`}
-            >
-              <Icon className="size-4" />
-              {label}
-            </button>
-          ))}
-        </nav>
-
-        {/* Right pane */}
-        <div className="space-y-4 min-w-0">
-          {/* Always-visible identity strip */}
-          <Section title="Workspace">
-            <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm min-w-0">
-              <div className="min-w-0">
-                <div className="text-xs text-muted-foreground">Name</div>
-                <div className="font-medium truncate" title={current?.name ?? "—"}>
-                  {current?.name ?? "—"}
+    <>
+      <div className="shrink-0 px-6 pt-4 flex items-start justify-between gap-3">
+        <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto bg-muted/40 mt-3">
+        <div className="mx-auto w-full max-w-[820px] px-4 sm:px-6 py-6 space-y-4">
+          {tab === "general" && (
+            <Section title="Workspace">
+              <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm min-w-0">
+                <div className="min-w-0">
+                  <div className="text-xs text-muted-foreground">Name</div>
+                  <div className="font-medium truncate" title={current?.name ?? "—"}>
+                    {current?.name ?? "—"}
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <div className="text-xs text-muted-foreground">Slug</div>
+                  <div className="font-mono truncate" title={current?.slug ?? "—"}>
+                    {current?.slug ?? "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Plan</div>
+                  <StatusPill tone="info">{current?.plan ?? "—"}</StatusPill>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Your role</div>
+                  <StatusPill
+                    tone={
+                      current?.role === "super_admin"
+                        ? "danger"
+                        : current?.role === "admin"
+                          ? "warning"
+                          : current?.role === "manager"
+                            ? "info"
+                            : "muted"
+                    }
+                  >
+                    {current?.role ?? "—"}
+                  </StatusPill>
                 </div>
               </div>
-              <div className="min-w-0">
-                <div className="text-xs text-muted-foreground">Slug</div>
-                <div className="font-mono truncate" title={current?.slug ?? "—"}>
-                  {current?.slug ?? "—"}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Plan</div>
-                <StatusPill tone="info">{current?.plan ?? "—"}</StatusPill>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Your role</div>
-                <StatusPill
-                  tone={
-                    current?.role === "super_admin"
-                      ? "danger"
-                      : current?.role === "admin"
-                        ? "warning"
-                        : current?.role === "manager"
-                          ? "info"
-                          : "muted"
-                  }
-                >
-                  {current?.role ?? "—"}
-                </StatusPill>
-              </div>
-            </div>
-          </Section>
+            </Section>
+          )}
 
           {tab === "general" && <GeneralTab settings={settings.data} save={save.mutate} canEdit={isAdmin} summary={summary.data} />}
           {tab === "my-profile" && <MyProfileTab workspaceSignature={settings.data?.emailSignature ?? ""} />}
-          {tab === "branding" && <BrandingTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
           {tab === "security" && <SecurityTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
           {tab === "notifications" && <NotificationsTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
           {tab === "integrations" && <IntegrationsTab />}
-          {tab === "smtp" && <SmtpTab canEdit={isAdmin} />}
+          {/* Email identity (From-name + signature) rides with delivery; the
+              hub's Branding section owns colours/logo/voice. */}
+          {tab === "smtp" && (
+            <>
+              <SmtpTab canEdit={isAdmin} />
+              <BrandingTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />
+            </>
+          )}
           {tab === "proposals" && <ProposalsTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
           {tab === "enrichment" && <EnrichmentTab />}
           {tab === "billing" && <BillingTab usage={usage.data} />}
           {tab === "danger" && <DangerTab canEdit={isAdmin} />}
         </div>
       </div>
-    </Shell>
+    </>
   );
 }
 
@@ -578,10 +582,14 @@ function BrandingTab({ settings, save, canEdit }: { settings: any; save: (v: any
     setSig(settings.emailSignature ?? "");
   }, [settings]);
 
+  // Brand COLOURS moved to the hub's Branding section (BrandingSection.tsx,
+  // the richer editor); this card keeps only the email identity fields the
+  // hub section lacks. The colour state stays so an existing value is passed
+  // through unchanged on save.
   return (
     <Section
-      title="Branding & email defaults"
-      description="Drives color tokens, outbound email From-name, and signature appended to AI-drafted sends."
+      title="Email identity"
+      description="Outbound email From-name and the signature appended to AI-drafted sends. Brand colours live under Branding."
       right={
         canEdit ? (
           <Button
@@ -594,20 +602,6 @@ function BrandingTab({ settings, save, canEdit }: { settings: any; save: (v: any
       }
     >
       <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="space-y-1">
-          <Label>Primary color</Label>
-          <div className="flex items-center gap-2">
-            <Input type="color" value={primary} onChange={(e) => setPrimary(e.target.value)} disabled={!canEdit} className="w-16 p-1" />
-            <Input value={primary} onChange={(e) => setPrimary(e.target.value)} disabled={!canEdit} className="font-mono" />
-          </div>
-        </div>
-        <div className="space-y-1">
-          <Label>Accent color</Label>
-          <div className="flex items-center gap-2">
-            <Input type="color" value={accent} onChange={(e) => setAccent(e.target.value)} disabled={!canEdit} className="w-16 p-1" />
-            <Input value={accent} onChange={(e) => setAccent(e.target.value)} disabled={!canEdit} className="font-mono" />
-          </div>
-        </div>
         <div className="space-y-1 md:col-span-2">
           <Label>Email From-name</Label>
           <Input value={fromName} onChange={(e) => setFromName(e.target.value)} disabled={!canEdit} placeholder="Acme Inc. Sales" />

@@ -45,6 +45,7 @@ import { WarmySenderSourceCard } from "@/components/usip/settings/WarmySenderSou
 import { ProspectSourceRegistryCard } from "@/components/usip/settings/ProspectSourceRegistryCard";
 import { BrandingSection } from "@/components/usip/settings/BrandingSection";
 import { SocialAccountsSection } from "@/components/usip/settings/SocialAccountsSection";
+import { LegacySettingsSection } from "@/pages/usip/Settings";
 import {
   ArrowLeft,
   Search,
@@ -75,6 +76,10 @@ import {
   Phone,
   Copy,
   AudioLines,
+  Monitor,
+  FileText,
+  Zap,
+  AlertTriangle,
 } from "lucide-react";
 
 /* ───────────────────────── section registry ───────────────────────────── */
@@ -90,11 +95,15 @@ type HubItem = {
 };
 type HubGroup = { label: string; items: HubItem[] };
 
+// The legacy /settings page collapsed into this hub 2026-09-15: every row
+// that used to round-trip into it is now an internal section rendering the
+// same tab component via LegacySettingsSection.
 const GROUPS: HubGroup[] = [
   {
     label: "Personal settings",
     items: [
       { id: "profile", label: "Profile", icon: User, internal: true },
+      { id: "appearance", label: "Appearance", icon: Monitor, internal: true },
       { id: "mailboxes", label: "Mailboxes", icon: Mail, internal: true },
       { id: "phone-numbers", label: "Phone numbers", icon: Phone, href: "/v2/calls" },
       { id: "notifications", label: "Notifications", icon: Bell, href: "/notification-prefs" },
@@ -104,16 +113,20 @@ const GROUPS: HubGroup[] = [
   {
     label: "Workspace settings",
     items: [
-      { id: "workspace", label: "Workspace overview", icon: Building2, href: "/settings?tab=general" },
+      { id: "workspace", label: "Workspace overview", icon: Building2, internal: true },
       { id: "users-teams", label: "Users and teams", icon: Users, href: "/team" },
-      { id: "security", label: "Security", icon: ShieldCheck, href: "/settings?tab=security" },
-      { id: "integrations", label: "Integrations", icon: Plug, href: "/settings?tab=integrations" },
+      { id: "security", label: "Security", icon: ShieldCheck, internal: true },
+      { id: "notification-policy", label: "Notification policy", icon: Bell, internal: true },
+      { id: "integrations", label: "Integrations", icon: Plug, internal: true },
       { id: "voice-agents", label: "Voice agents", icon: AudioLines, internal: true },
       { id: "data-sources", label: "Data sources", icon: Database, internal: true },
-      { id: "email-delivery", label: "Email delivery", icon: Send, href: "/settings?tab=smtp" },
+      { id: "email-delivery", label: "Email delivery", icon: Send, internal: true },
       { id: "branding", label: "Branding", icon: Palette, internal: true },
-      { id: "billing", label: "Billing and credits", icon: CreditCard, href: "/settings?tab=billing" },
+      { id: "proposals", label: "Proposals", icon: FileText, internal: true },
+      { id: "billing", label: "Billing and credits", icon: CreditCard, internal: true },
       { id: "system-activity", label: "System activity", icon: Activity, href: "/audit" },
+      { id: "tour-builder", label: "Tour builder", icon: Zap, href: "/tour-builder" },
+      { id: "danger", label: "Danger zone", icon: AlertTriangle, internal: true },
     ],
   },
   {
@@ -122,6 +135,7 @@ const GROUPS: HubGroup[] = [
       { id: "custom-fields", label: "Custom fields", icon: Tag, href: "/custom-fields" },
       { id: "imports", label: "Imports and exports", icon: Upload, href: "/v2/data-enrichment?tab=import-contacts" },
       { id: "enrichment", label: "Data enrichment", icon: Sparkles, href: "/v2/data-enrichment" },
+      { id: "enrichment-sweep", label: "Enrichment sweep", icon: Database, internal: true },
     ],
   },
 ];
@@ -234,6 +248,17 @@ export default function SettingsHub() {
             <ReoonVerifierCard />
           </div>
         )}
+        {/* Legacy /settings tabs, collapsed into the hub 2026-09-15. */}
+        {section === "workspace" && <LegacySettingsSection tab="general" title="Workspace overview" />}
+        {section === "appearance" && <LegacySettingsSection tab="my-profile" title="Appearance" />}
+        {section === "security" && <LegacySettingsSection tab="security" title="Security" />}
+        {section === "notification-policy" && <LegacySettingsSection tab="notifications" title="Notification policy" />}
+        {section === "integrations" && <LegacySettingsSection tab="integrations" title="Integrations" />}
+        {section === "email-delivery" && <LegacySettingsSection tab="smtp" title="Email delivery" />}
+        {section === "proposals" && <LegacySettingsSection tab="proposals" title="Proposals" />}
+        {section === "billing" && <LegacySettingsSection tab="billing" title="Billing and credits" />}
+        {section === "enrichment-sweep" && <LegacySettingsSection tab="enrichment" title="Enrichment sweep" />}
+        {section === "danger" && <LegacySettingsSection tab="danger" title="Danger zone" />}
       </main>
     </div>
   );
@@ -485,7 +510,7 @@ function GeneralTab(props: {
             <button
               type="button"
               title="Browse integrations"
-              onClick={() => navigate("/settings?tab=integrations")}
+              onClick={() => navigate("/v2/settings/integrations")}
               className="flex size-12 items-center justify-center rounded-xl border-2 border-dashed border-amber-400/70 text-amber-500 transition-colors hover:bg-amber-50 dark:hover:bg-amber-950/30"
             >
               <Plus className="size-6" />
@@ -926,7 +951,7 @@ function EmailSettingsTab({
 
         {isAdmin && (
           <div className="pt-1">
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/settings?tab=smtp")}>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => navigate("/v2/settings/email-delivery")}>
               <Send className="size-3.5" /> Workspace email delivery
             </Button>
           </div>

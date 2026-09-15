@@ -178,7 +178,7 @@ Freeform planning canvases and account maps.
 ## Configuration
 
 ### Settings hub — `/v2/settings/profile`
-Personal: Profile, Mailboxes, Phone numbers, Notifications, Social accounts, Multi-factor authentication, Email settings. Workspace: Overview, Users and teams, Security, Integrations, Voice agents, Data sources, Email delivery, Branding, Billing and credits (AI monthly token budget, verification credits), System activity, Data management (Custom fields, Imports and exports, Data enrichment, Danger zone: remove sample data, export, archive, transfer ownership).
+Personal: Profile, Appearance (theme + personal signature), Mailboxes, Phone numbers, Notifications, Social accounts, Multi-factor authentication, Email settings. Workspace: Overview, Users and teams, Security, Notification policy, Integrations (provider grid + AI keys + verification policy + messaging/system sender), Voice agents, Data sources, Email delivery (SMTP + From-name/signature), Branding, Proposals, Billing and credits (AI monthly token budget, verification credits), System activity, Tour builder, Danger zone (remove sample data, export, archive, transfer ownership). Data management: Custom fields, Imports and exports, Data enrichment, Enrichment sweep. The legacy `/settings` page collapsed into the hub 2026-09-15 — the route is a redirect shim (`?tab=X` maps to the matching section), so old deep links keep working.
 
 ### Email Sending cluster
 - **Email Sending / Sending Accounts** — `/sending-accounts`: mailboxes (Gmail/Outlook/SMTP) and SendGrid senders, from name (**set a display name on every sender**, it is the From header and the `{{senderName}}` signature), daily limits, warmup, reply-to, test send.
