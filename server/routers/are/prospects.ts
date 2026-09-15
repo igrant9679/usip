@@ -55,6 +55,7 @@ import { adminWsProcedure, isAdminRole, requireMinRole, workspaceProcedure } fro
 import { recordAudit } from "../../audit";
 import { BULK_INPUT, runBulkAction } from "./prospectsBulk";
 import { notifyIfEnabled } from "../../services/policyNotify";
+import { promoteApprovedProspects } from "../../services/are/approvePromotion";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../../services/humanCopy";
 import { resolveVerifiedEmail } from "../../services/scraper";
 import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "../../services/quickenrich";
@@ -1376,6 +1377,9 @@ export const prospectsRouter = router({
         approvedAt: sql`COALESCE(${prospectQueue.approvedAt}, NOW())`,
         approvedByUserId: sql`COALESCE(${prospectQueue.approvedByUserId}, ${ctx.user.id})`,
       }).where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
+      // Approved people's companies go to the Companies page (2026-09-15).
+      // Fire-and-forget: association is metadata, never blocks the approval.
+      void promoteApprovedProspects(ctx.workspace.id, { queueIds: [input.prospectId] });
       return { success: true };
     }),
 
@@ -2220,6 +2224,8 @@ export const prospectsRouter = router({
         ));
         if ((result[0] as any).affectedRows > 0) approved++;
       }
+      // Companies for the newly-approved people — same hook as approve above.
+      void promoteApprovedProspects(ctx.workspace.id, { queueIds: input.prospectIds });
       return { approved };
     }),
 

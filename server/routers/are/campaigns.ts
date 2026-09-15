@@ -12,6 +12,7 @@ import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
 import { runAreEngine } from "../../areEngine";
+import { promoteApprovedProspects } from "../../services/are/approvePromotion";
 import { recordAudit } from "../../audit";
 import { invokeLLM } from "../../_core/llm";
 import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
@@ -723,6 +724,11 @@ export const campaignsRouter = router({
         .set({ prospectsApproved: Number(n) })
         .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)));
 
+      // Approved people's companies go to the Companies page (2026-09-15).
+      // Fire-and-forget: association is metadata, never blocks the approval;
+      // the engine's per-tick sweep catches anything this misses.
+      void promoteApprovedProspects(ctx.workspace.id, { campaignId: input.campaignId, queueIds: input.prospectIds });
+
       return { approved };
     }),
 
@@ -775,6 +781,8 @@ export const campaignsRouter = router({
       await db.update(areCampaigns).set({ prospectsApproved: Number(n) })
         .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)));
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_campaign", entityId: input.campaignId, after: { approveAllPending: approved } });
+      // Companies for the newly-approved people — see approveBatch above.
+      void promoteApprovedProspects(ctx.workspace.id, { campaignId: input.campaignId, limit: 500 });
       return { approved };
     }),
 

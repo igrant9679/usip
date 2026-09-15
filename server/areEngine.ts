@@ -73,6 +73,7 @@ import { effectiveStepGapDays, dueAtForDay, dayOffsetForPosition, sanitizeDayOff
 import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { queueIdentityKeys } from "./services/are/queueIdentity";
+import { promoteApprovedProspects } from "./services/are/approvePromotion";
 import {
   buildQuickenrichFilters,
   currentQuickenrichPage,
@@ -939,6 +940,16 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     if (enriched.length > 0) {
       await emitLog(wsId, campId, "screen", "info",
         `Screened ${enriched.length} (mode=${mode}, threshold=${threshold})`);
+    }
+    // Approved prospects' companies belong on the Companies page (owner ask
+    // 2026-09-15). Unconditional, bounded catch-up: covers engine approvals
+    // this tick AND any human approval whose fire-and-forget hook a deploy
+    // cut short. Normally returns 0 rows (the predicate stamps every
+    // attempted person, so nothing is re-read).
+    const promo = await promoteApprovedProspects(wsId, { campaignId: campId, limit: 200 });
+    if (promo.createdAccounts + promo.linkedExisting + promo.needsReview > 0) {
+      await emitLog(wsId, campId, "screen", "info",
+        `Companies for approved prospects: ${promo.createdAccounts} created, ${promo.linkedExisting} linked to existing, ${promo.needsReview} held for review`);
     }
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} screen phase failed:`, e);
