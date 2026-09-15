@@ -70,6 +70,10 @@ describe("Apollo is sourcing-only — removed from the prospect waterfall 2026-0
       "server/areEngine.ts",
       "server/routers/apollo.ts",
       "server/services/discovery/index.ts",
+      // Registry credential store (0179): resolves the workspace's Apollo key
+      // through the same getApolloKey seam the settings router uses — key
+      // plumbing for the sourcing adapter, not a waterfall step.
+      "server/services/prospectSources/credentials.ts",
     ]);
   });
 });
