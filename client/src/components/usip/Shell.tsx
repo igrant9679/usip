@@ -1024,7 +1024,7 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ic
       // pageKey it already declares — 69 pages, one definition, and no chance
       // of an anchor drifting away from the page it belongs to.
       data-tour-id={pageKey ? `page-${pageKey}` : undefined}
-      className={`relative shrink-0 px-4 md:px-6 py-5 border-b border-border bg-card/40 flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-3 sm:gap-4${className ? ` ${className}` : ""}`}
+      className={`relative shrink-0 px-4 md:px-6 py-2.5 border-b border-border bg-card/40 flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-2 sm:gap-3${className ? ` ${className}` : ""}`}
       style={{
         // Subtle section-accent wash — colourful wayfinding without shouting.
         backgroundImage: `linear-gradient(105deg, ${accent}14 0%, ${accent}05 38%, transparent 65%)`,
@@ -1037,13 +1037,13 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ic
         <div className="flex items-center gap-3">
           {icon && (
             <span
-              className="shrink-0 size-10 rounded-xl flex items-center justify-center [&_svg]:size-5"
+              className="shrink-0 size-8 rounded-lg flex items-center justify-center [&_svg]:size-4"
               style={{ backgroundColor: `${accent}1f`, color: accent }}
             >
               {icon}
             </span>
           )}
-          <h1 className="text-xl md:text-2xl font-semibold tracking-tight line-clamp-1" title={title}>{title}</h1>
+          <h1 className="text-base md:text-lg font-semibold tracking-tight line-clamp-1" title={title}>{title}</h1>
         </div>
         <div className="flex items-center gap-1.5 mt-0.5 group/desc">
           {editing ? (
@@ -1067,7 +1067,7 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ic
           ) : (
             <>
               {resolvedDescription && (
-                <p className="text-sm text-muted-foreground line-clamp-1" title={resolvedDescription}>{resolvedDescription}</p>
+                <p className="text-[12px] text-muted-foreground line-clamp-1" title={resolvedDescription}>{resolvedDescription}</p>
               )}
               {isAdmin && pageKey && (
                 <button
