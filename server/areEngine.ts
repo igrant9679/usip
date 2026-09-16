@@ -395,6 +395,11 @@ async function enrichPendingGlobally(result: AreEngineResult): Promise<void> {
       and(
         eq(areCampaigns.status, "active"),
         inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
+        // A row a human (or the screen) rejected or canceled is a decision,
+        // not a backlog: enriching it spends LLM + verification credits on
+        // someone who will never be contacted. Found 2026-09-16 — a rejected
+        // score-0 row still matched the score branch below.
+        notInArray(prospectQueue.sequenceStatus, ["skipped", "canceled"]),
         sql`(${prospectQueue.icpMatchScore} >= COALESCE(${areCampaigns.minConfidence}, ${ENRICH_MIN_CONFIDENCE_DEFAULT}) OR ${prospectQueue.icpMatchScore} = 0 OR ${prospectQueue.sequenceStatus} = 'approved')`,
       ),
     )
