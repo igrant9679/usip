@@ -858,7 +858,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             ' — never eligible for enrichment, so never screenable')
       WHERE \`campaignId\` = ${campId}
         AND \`workspaceId\` = ${wsId}
-        AND \`sequenceStatus\` = 'pending'
+        AND \`sequenceStatus\` IN ('pending', 'sourcing')
         AND \`enrichmentStatus\` IN ('pending', 'enriching')
         AND \`icpMatchScore\` > 0
         AND \`icpMatchScore\` < ${gate}`);
@@ -867,6 +867,46 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       result.rejected += gateRejected;
       await emitLog(wsId, campId, "screen", "info",
         `${gateRejected} prospect${gateRejected === 1 ? "" : "s"} rejected — ICP match below the enrichment gate of ${gate}, so they could never be enriched or screened.`);
+    }
+
+    /**
+     * THE NO-EMAIL DOOR — ADMIT + GIVE-UP (owner rule 2026-09-16, migration
+     * 0180). Email-less candidates stage as 'sourcing', outside the queue,
+     * while the enrich phase hunts an address. Promotion happens HERE, in one
+     * place, off the row's own email column — so the enrich agent, the
+     * QuickEnrich sweep and the backlog sweeper only ever have to land the
+     * address, and no writer can forget to admit. The inverse arm rejects the
+     * rows enrichment finished without an address (complete or failed): they
+     * surface in Rejections with the reason, and — since phase 7 counts only
+     * non-'skipped' rows — stop occupying queue headroom.
+     */
+    const [admit] = await db.execute(sql`
+      UPDATE \`prospect_queue\`
+      SET \`sequenceStatus\` = 'pending'
+      WHERE \`campaignId\` = ${campId}
+        AND \`workspaceId\` = ${wsId}
+        AND \`sequenceStatus\` = 'sourcing'
+        AND \`email\` IS NOT NULL AND \`email\` <> ''`);
+    const admitted = (admit as { affectedRows?: number })?.affectedRows ?? 0;
+    if (admitted > 0) {
+      await emitLog(wsId, campId, "screen", "info",
+        `${admitted} prospect${admitted === 1 ? "" : "s"} admitted to the queue — an email address was found.`);
+    }
+    const [giveUp] = await db.execute(sql`
+      UPDATE \`prospect_queue\`
+      SET \`sequenceStatus\` = 'skipped',
+          \`rejectedAt\` = NOW(),
+          \`rejectionReason\` = 'No verifiable email address found — enrichment exhausted every source'
+      WHERE \`campaignId\` = ${campId}
+        AND \`workspaceId\` = ${wsId}
+        AND \`sequenceStatus\` = 'sourcing'
+        AND (\`email\` IS NULL OR \`email\` = '')
+        AND \`enrichmentStatus\` IN ('complete', 'failed')`);
+    const gaveUp = (giveUp as { affectedRows?: number })?.affectedRows ?? 0;
+    if (gaveUp > 0) {
+      result.rejected += gaveUp;
+      await emitLog(wsId, campId, "screen", "info",
+        `${gaveUp} candidate${gaveUp === 1 ? "" : "s"} rejected — no verifiable email address could be found, so they never entered the queue.`);
     }
 
     const enriched = await db

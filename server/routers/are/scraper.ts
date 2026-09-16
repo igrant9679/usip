@@ -428,29 +428,37 @@ export async function saveScrapeJobAndQueue(
       return sourceTypeMap[sourceType] ?? "web_scrape";
     };
 
-    const rows = prospects.map((p) => ({
-      workspaceId,
-      campaignId,
-      sourceType: rowSourceType(p),
-      sourceUrl: String(p.sourceUrl ?? ""), // text column — no clamp needed
-      firstName: cleanName(p.firstName, 80),
-      lastName: cleanName(p.lastName, 80),
+    const rows = prospects.map((p) => {
       // Shape rules, not just token cleaning: an email without an @ or a
       // phone without a digit is scraper garbage whatever it says.
-      email: usableEmailOrNull(p.email) ?? undefined,
-      linkedinUrl: p.linkedinUrl && !isPlaceholderToken(p.linkedinUrl) ? String(p.linkedinUrl) : undefined, // text column
-      phone: usablePhoneOrNull(p.phone) ?? undefined,
-      title: cleanScrapedField(p.title, 120),
-      companyName: cleanScrapedField(p.companyName, 200),
-      companyDomain: usableDomainOrNull(p.companyDomain) ?? undefined,
-      companySize: cleanScrapedField(p.companySize, 40),
-      industry: cleanScrapedField(p.industry, 80),
-      geography: cleanScrapedField(p.geography, 120),
-      // int column 0-100 — round and clamp (scores can arrive as floats)
-      icpMatchScore: Math.max(0, Math.min(100, Math.round(Number((p as any).icpMatchScore ?? 0) || 0))),
-      enrichmentStatus: "pending" as const,
-      sequenceStatus: "pending" as const,
-    }));
+      const email = usableEmailOrNull(p.email) ?? undefined;
+      return {
+        workspaceId,
+        campaignId,
+        sourceType: rowSourceType(p),
+        sourceUrl: String(p.sourceUrl ?? ""), // text column — no clamp needed
+        firstName: cleanName(p.firstName, 80),
+        lastName: cleanName(p.lastName, 80),
+        email,
+        linkedinUrl: p.linkedinUrl && !isPlaceholderToken(p.linkedinUrl) ? String(p.linkedinUrl) : undefined, // text column
+        phone: usablePhoneOrNull(p.phone) ?? undefined,
+        title: cleanScrapedField(p.title, 120),
+        companyName: cleanScrapedField(p.companyName, 200),
+        companyDomain: usableDomainOrNull(p.companyDomain) ?? undefined,
+        companySize: cleanScrapedField(p.companySize, 40),
+        industry: cleanScrapedField(p.industry, 80),
+        geography: cleanScrapedField(p.geography, 120),
+        // int column 0-100 — round and clamp (scores can arrive as floats)
+        icpMatchScore: Math.max(0, Math.min(100, Math.round(Number((p as any).icpMatchScore ?? 0) || 0))),
+        enrichmentStatus: "pending" as const,
+        // THE NO-EMAIL DOOR (owner rule 2026-09-16, migration 0180): a
+        // candidate without a usable address never enters the campaign's
+        // working queue — it stages as 'sourcing' (hidden from the Prospects
+        // tab and every counter) while the enrich phase hunts the email.
+        // The engine's ADMIT step promotes it the moment one lands.
+        sequenceStatus: (email ? "pending" : "sourcing") as "pending" | "sourcing",
+      };
+    });
 
     if (rows.length > 0) {
       try {

@@ -3874,7 +3874,11 @@ export const prospectQueue = mysqlTable(
     enrichmentStatus: mysqlEnum("enrichmentStatus", ["pending", "enriching", "complete", "failed"]).default("pending").notNull(),
     enrichmentError: text("enrichmentError"),
     enrichedAt: timestamp("enrichedAt"),
-    sequenceStatus: mysqlEnum("sequenceStatus", ["pending", "approved", "enrolled", "skipped", "completed", "replied", "paused", "canceled"]).default("pending").notNull(),
+    // 'sourcing' (migration 0180, owner rule 2026-09-16): staged — discovered
+    // without a usable email, invisible to the campaign queue and its counters
+    // while the enrich phase hunts an address. The engine ADMIT step promotes
+    // to 'pending' when one lands and rejects when enrichment exhausts.
+    sequenceStatus: mysqlEnum("sequenceStatus", ["pending", "approved", "enrolled", "skipped", "completed", "replied", "paused", "canceled", "sourcing"]).default("pending").notNull(),
     approvedAt: timestamp("approvedAt"),
     approvedByUserId: int("approvedByUserId"),
     rejectedAt: timestamp("rejectedAt"),

@@ -26,7 +26,7 @@ Owners often say "sequence" meaning a Revenue Engine campaign. Clarify by page.
 ## The engine loop (cron `AreEngine`, every 3 minutes)
 1. **Global enrich pass** — pending people across all active campaigns, strictly serial, best-fit first: approved > pushed (score 0) > by score. Bounded per tick.
 2. Per active campaign, one bounded tick:
-   1. **Screen** — auto-approve / auto-reject per autonomy mode + thresholds; rows below the enrichment gate are skipped with a reason.
+   1. **Screen** — auto-approve / auto-reject per autonomy mode + thresholds; rows below the enrichment gate are skipped with a reason. Includes the **no-email door** (owner rule 2026-09-16): candidates discovered without an email stage as `sourcing` — outside the Prospects tab and every counter, shown only as "N finding email" — while the enrich pass hunts an address; this step admits them to `pending` the moment one lands and rejects the ones enrichment exhausted ("No verifiable email address found"). A prospect without an email is never in the queue.
    2. **Sequence** — the writer produces `generatedSequence` for approved people with none; evaluated by an LLM judge that sees the dossier (`sequenceQualityScore` /40, summed in code from the breakdown).
    3. **Enroll** — steps become `are_execution_queue` rows (one per step, due dates from the cadence); already-sent steps are kept on re-enrol.
    4. **Dispatch** — due email steps send through the pool respecting the daily cap and suppressions; LinkedIn steps via Unipile; sender tokens (`{{senderName}}` etc.) fill at the send boundary from the chosen sender's display name; tracking injected.

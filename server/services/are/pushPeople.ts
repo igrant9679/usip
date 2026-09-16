@@ -140,7 +140,9 @@ export async function pushPeopleIntoCampaign(
       // let it through" escape hatch.
       icpMatchScore: opts.routing?.fit ?? 0,
       enrichmentStatus: "pending",
-      sequenceStatus: "pending",
+      // The no-email door (owner rule 2026-09-16): a person pushed without
+      // an address stages as 'sourcing' until the enrich phase finds one.
+      sequenceStatus: p.email ? "pending" : "sourcing",
     }).$returningId();
 
     added.push({ prospectId: p.id, queueId: row.id });

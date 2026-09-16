@@ -71,7 +71,7 @@ describe("the seams consult the hygiene module", () => {
   it("the scraper ingest maps every prospect field through a cleaner", () => {
     const src = readFileSync("server/routers/are/scraper.ts", "utf8");
     expect(src).toContain('from "@shared/fieldHygiene"');
-    expect(src).toContain("email: usableEmailOrNull(p.email) ?? undefined");
+    expect(src).toContain("const email = usableEmailOrNull(p.email) ?? undefined");
     expect(src).toContain("phone: usablePhoneOrNull(p.phone) ?? undefined");
     expect(src).toContain("companyDomain: usableDomainOrNull(p.companyDomain) ?? undefined");
     for (const f of ["title", "companyName", "companySize", "industry", "geography"]) {

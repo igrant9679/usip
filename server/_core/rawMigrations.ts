@@ -4077,6 +4077,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0180: the no-email door (owner rule 2026-09-16) ─────────────────────
+  // "If a prospect doesn't have an email they should never be added to a
+  // queue of a campaign." New sequenceStatus 'sourcing': every insert path
+  // stages email-less candidates there — invisible to the Prospects tab and
+  // every counter — while the enrich phase hunts the address; the engine's
+  // ADMIT step promotes to 'pending' when an email lands and rejects the
+  // rows enrichment exhausted. Enum-insert class: the code writes the value
+  // this migration adds, so the two must ship together (boot applies
+  // migrations before the first engine tick).
+  {
+    name: "0180_prospect_queue_sourcing_status.sql",
+    statements: [
+      "ALTER TABLE `prospect_queue` MODIFY COLUMN `sequenceStatus` enum('pending','approved','enrolled','skipped','completed','replied','paused','canceled','sourcing') NOT NULL DEFAULT 'pending'",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

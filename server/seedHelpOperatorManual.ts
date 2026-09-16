@@ -220,7 +220,7 @@ One human can be in several campaigns; each membership is its own row pointing b
 
 **Campaign**: draft → active → paused or completed. Only active campaigns run; pausing also stops enrichment spend. Autonomy: full, batch approval (default), review and release.
 
-**Campaign prospect**: enrichment pending → enriching → complete or failed; sequence pending → approved → enrolled → completed, replied, paused, canceled, or skipped (rejected; restorable from the Rejections tab). Each has a dossier, an ICP score and, once written, a sequence with a quality score out of 40. Each step becomes a scheduled row that turns into sent (with opens) or skipped.
+**Campaign prospect**: enrichment pending → enriching → complete or failed; sequence sourcing (discovered without an email — staged outside the queue, shown only as "finding email", admitted to pending when the AI lands an address, rejected if it can't) → pending → approved → enrolled → completed, replied, paused, canceled, or skipped (rejected; restorable from the Rejections tab). A prospect without an email is never in a campaign's queue. Each has a dossier, an ICP score and, once written, a sequence with a quality score out of 40. Each step becomes a scheduled row that turns into sent (with opens) or skipped.
 
 **Person quality**: email status valid / accept-all / unverified / invalid; confidence tier high / medium / low; verification verified / needs review / rejected.
 

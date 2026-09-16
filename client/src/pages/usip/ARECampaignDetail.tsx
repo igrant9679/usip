@@ -224,6 +224,8 @@ const SEQ_COLOR: Record<string, string> = {
   skipped: "#F87171",
   completed: "#A78BFA",
   replied: "#FB923C",
+  // Staged outside the queue while the email-finder works (no-email door).
+  sourcing: "#38BDF8",
 };
 
 const SIGNAL_COLORS: Record<string, string> = {
@@ -2089,6 +2091,10 @@ export default function ARECampaignDetail() {
 
   const { data: campaign, isLoading: loadingCampaign } = trpc.are.campaigns.get.useQuery({ id: campaignId });
   const { data: prospects, isLoading: loadingProspects } = trpc.are.prospects.list.useQuery({ campaignId, limit: 100 });
+  // The no-email door (2026-09-16): staged candidates the email-finder is
+  // still working. Hidden from the list above by the server; surfaced only
+  // as a count so the funnel stays legible.
+  const { data: sourcingRows } = trpc.are.prospects.list.useQuery({ campaignId, sequenceStatus: "sourcing", limit: 100 });
   // "Approve all" is server-scoped: this tab loads 100 rows and the bulk bar
   // caps at 200 ids, so neither could honestly say "all" on a big campaign.
   const approvable = trpc.are.campaigns.pendingApprovalCount.useQuery({ campaignId }, { refetchInterval: 15000 });
@@ -2540,6 +2546,15 @@ export default function ARECampaignDetail() {
                   <span className="flex items-center gap-1">
                     <div className="size-1.5 rounded-full bg-emerald-400" />
                     {awaitingApproval} awaiting approval
+                  </span>
+                )}
+                {(sourcingRows?.length ?? 0) > 0 && (
+                  <span
+                    className="flex items-center gap-1"
+                    title="Discovered without an email address. They stay out of the queue while the AI hunts one — admitted the moment an address is found, rejected if every source is exhausted."
+                  >
+                    <div className="size-1.5 rounded-full bg-sky-400" />
+                    {sourcingRows!.length} finding email
                   </span>
                 )}
               </div>

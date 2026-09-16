@@ -84,16 +84,24 @@ describe("the gate is defined once and read the same way twice", () => {
     expect(screen).not.toMatch(/`icpMatchScore` <= \$\{gate\}/);
   });
 
-  it("only touches rows enrichment has not finished with", () => {
+  it("the gate-reject only touches rows enrichment has not finished with", () => {
     expect(screen).toContain("`enrichmentStatus` IN ('pending', 'enriching')");
     // 'complete' rows below the gate already have a path: AUTO_REJECT_FLOOR.
     // 'failed' rows are a SEPARATE population (36 on prod) and a separate
-    // decision — deliberately out of scope here.
-    expect(screen).not.toMatch(/enrichmentStatus` IN \([^)]*'failed'/);
+    // decision — deliberately out of scope here. Since 2026-09-16 ONE other
+    // statement in this phase acts on finished rows: the no-email door's
+    // GIVE-UP, and only for staged ('sourcing') candidates — pin that it
+    // stays the single exception and stays sourcing-scoped.
+    const finishedArms = screen.match(/enrichmentStatus` IN \([^)]*'(?:complete|failed)'[^)]*\)/g) ?? [];
+    expect(finishedArms).toEqual(["enrichmentStatus` IN ('complete', 'failed')"]);
+    const giveUpAt = screen.indexOf("`enrichmentStatus` IN ('complete', 'failed')");
+    expect(screen.slice(Math.max(0, giveUpAt - 400), giveUpAt)).toContain("`sequenceStatus` = 'sourcing'");
   });
 
   it("only touches rows nobody has dispositioned", () => {
-    expect(screen).toContain("`sequenceStatus` = 'pending'");
+    // pending + the no-email door's staged rows; never approved/enrolled —
+    // a human decision outranks the budget gate (see the selector test).
+    expect(screen).toContain("`sequenceStatus` IN ('pending', 'sourcing')");
   });
 
   it("the UPDATE carries its tenant scope at the statement", () => {

@@ -1099,7 +1099,7 @@ export const prospectsRouter = router({
         conditions.push(eq(prospectQueue.enrichmentStatus, input.enrichmentStatus as "pending" | "enriching" | "complete" | "failed"));
       }
       if (input.sequenceStatus) {
-        conditions.push(eq(prospectQueue.sequenceStatus, input.sequenceStatus as "pending" | "approved" | "enrolled" | "skipped" | "completed" | "replied" | "paused" | "canceled"));
+        conditions.push(eq(prospectQueue.sequenceStatus, input.sequenceStatus as "pending" | "approved" | "enrolled" | "skipped" | "completed" | "replied" | "paused" | "canceled" | "sourcing"));
       } else {
         // Rejected prospects (reject/bulkReject set sequenceStatus="skipped")
         // belong in the Rejections tab only — getRejectionStats selects exactly
@@ -1107,6 +1107,10 @@ export const prospectsRouter = router({
         // complementary (a prospect is in Prospects XOR Rejections). Callers
         // that explicitly ask for sequenceStatus="skipped" still get them.
         conditions.push(ne(prospectQueue.sequenceStatus, "skipped"));
+        // The no-email door (owner rule 2026-09-16): staged candidates the
+        // enrich phase is still finding addresses for are NOT in the queue —
+        // the Prospects tab shows them only via the explicit filter.
+        conditions.push(ne(prospectQueue.sequenceStatus, "sourcing"));
       }
       /**
        * How many verified intent signals the enrichment pass found.
@@ -1977,7 +1981,9 @@ export const prospectsRouter = router({
         ...rest,
         icpMatchScore: 0,
         enrichmentStatus: "pending",
-        sequenceStatus: "pending",
+        // The no-email door (owner rule 2026-09-16): stage until an address
+        // is found; the engine ADMIT step promotes to 'pending'.
+        sequenceStatus: rest.email && String(rest.email).trim() ? "pending" : "sourcing",
       }).$returningId();
       return { id: row.id };
     }),
@@ -2065,7 +2071,10 @@ export const prospectsRouter = router({
           geography: clamp(r.geography, 120),
           icpMatchScore: 0,
           enrichmentStatus: "pending",
-          sequenceStatus: "pending",
+          // The no-email door (owner rule 2026-09-16): imported rows without
+          // an address stage as 'sourcing' — the enrichment finder works
+          // them, and the engine admits them when an email lands.
+          sequenceStatus: email ? "pending" : "sourcing",
         });
       }
 
