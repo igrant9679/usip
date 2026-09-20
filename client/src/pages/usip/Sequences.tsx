@@ -492,6 +492,14 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
                       · Next: {new Date(e.nextActionAt).toLocaleDateString()}
                     </span>
                   )}
+                  {/* A paused row with a resumeAt is an out-of-office snooze,
+                      not a dead end — say so, or the rep resumes it by hand
+                      on top of the sweep. */}
+                  {e.status === "paused" && e.resumeAt && (
+                    <span className="text-xs text-muted-foreground ml-2">
+                      · Resumes {new Date(e.resumeAt).toLocaleDateString()}
+                    </span>
+                  )}
                 </div>
                 <StatusPill tone={e.status === "active" ? "success" : e.status === "paused" ? "warning" : e.status === "finished" ? "info" : "muted"}>{e.status}</StatusPill>
                 <div className="flex gap-1 shrink-0">

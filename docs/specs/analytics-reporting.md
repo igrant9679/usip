@@ -41,7 +41,7 @@
 | Category | Primary fact source | Velocity source |
 |---|---|---|
 | **Sequence analytics** | sequence/step events | `campaignStepStats` (L810), `enrollments` |
-| **Email analytics** | email send/delivery | `sendingAccountDailyStats` (L2202), `emailDrafts`, `emailTrackingEvents` |
+| **Email analytics** | email send/delivery | `emailLog` (every send, L1028), `sendingAccountDailyStats` (L2202 — per-account/day bounce + spam), `emailDrafts`, `emailTrackingEvents` |
 | **Reply analytics** | inbound replies + class | `emailReplies`, `mailboxAiTriage` → ⏳ `reply_classifications` (Email spec) |
 | **Call analytics** | call records | ⏳ `calls` (Tasks/Calls/Deals spec) — today only `tasks type='call'` |
 | **Task analytics** | task lifecycle | `tasks` (L377) |
@@ -63,7 +63,7 @@ Each metric = an aggregate expression over a fact source (registry entry: `{key,
 
 | Metric | Definition | Source (interim) |
 |---|---|---|
-| `emails_sent` | count sent | `sendingAccountDailyStats.sentCount` / `emailDrafts` sent |
+| `emails_sent` | count sent | `emailLog` status='sent' (the one row per transmission); `sendingAccountDailyStats.sentCount` counts campaign-pool sends only |
 | `emails_delivered` | count delivered | provider events / `campaignStepStats.delivered` |
 | `open_rate` | opened / delivered | `emailTrackingEvents(open)` / delivered |
 | `click_rate` | clicked / delivered | `emailTrackingEvents(click)` / delivered |
@@ -132,7 +132,7 @@ Each dimension = a group-by column + a `dim_*` join (registry: `{key, column, di
 Each fact carries FKs to the relevant dims + `workspace_id` + `event_date` for partition/range.
 
 **Interim (no warehouse):** the query engine reads **OLTP + existing rollups** —
-- email/sequence ← `campaignStepStats`, `sendingAccountDailyStats`, `emailDrafts`, `emailTrackingEvents`, `emailReplies`
+- email/sequence ← `campaignStepStats`, `emailLog`, `sendingAccountDailyStats`, `emailDrafts`, `emailTrackingEvents`, `emailReplies`
 - tasks ← `tasks`; deals ← `opportunities` + `opportunityStageHistory`; enrichment ← `clodura_enrichment_jobs`; usage ← `usageCounters`
 - nightly **materialized rollups** for hot metrics (a `mv_*` table per category) refreshed by an aggregation job; `freshness` = last refresh.
 

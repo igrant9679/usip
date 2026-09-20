@@ -83,7 +83,7 @@ Run in `previewEnrollment` (and re-checked at enroll time — TOCTOU). Each prod
 | Mailbox connected | block (whole job) | `sendingAccounts` |
 | User has send permission | block | RBAC |
 | User has sequence-enrollment permission | block | RBAC |
-| Sending limits available | warn/block | `sendingAccountDailyStats` + `dailyCap` |
+| Sending limits available | warn/block | `sendLimits.accountsSentToday` (counts `emailLog` + `sendingAccounts.warmupSentToday`) vs `dailySendLimit` |
 
 ### 🔧 Velocity mapping & delta
 - Suppression, sequence status, mailbox, daily caps all exist as data. **Delta:** the unified validation pass producing typed block/warn per contact, `template_variable_resolution_logs`, and conflict/same-account rules. Email-valid check ties to the Enrichment + Email-Verification subsystems.
@@ -192,7 +192,7 @@ All actions: permission-checked, audited (`audit_log`), and bulk-capable (`membe
 | `sequence_membership_steps` | **new** (today only `current_step int`) |
 | `sequence_enrollment_jobs` / `_validation_results` | **new** (the preview/enroll job + results) |
 | `sequence_mailboxes` | rotation via `senderPools`/`senderPoolMembers` (L2225/2248) — bind pool↔sequence or add table |
-| `email_accounts` | `sendingAccounts` (L2134) + `sendingAccountDailyStats` (L2202) |
+| `email_accounts` | `sendingAccounts` (L2134); usage from `sendLimits.accountsSentToday`, with `sendingAccountDailyStats` (L2202) kept as the reporting/bounce series |
 | `labels` | **new** (CRM-spec delta); lists via `record_lists` |
 | `template_variable_resolution_logs` | **new** |
 
@@ -244,7 +244,7 @@ Each single-membership action: validate transition, apply, audit, emit activity,
 | **Unsubscribe handling job** | link click / webhook | → `unsubscribed` + suppression. |
 | **Status transition job** | scheduled sweep | apply due transitions (finish at last step, blocked on new suppression, etc.). |
 
-Rotation: step-execution picks the next mailbox from `sequence_mailboxes`/pool by weight + remaining daily cap (`sendingAccountDailyStats`), skipping disconnected/exhausted mailboxes.
+Rotation: step-execution picks the next mailbox from `sequence_mailboxes`/pool by weight + remaining daily cap (`sendLimits.accountsSentToday` — one count per mailbox over `emailLog`, shared by the campaign pool, the sequence picker and warmup since 2026-09-20), skipping disconnected/exhausted mailboxes.
 
 ### 🔧 Velocity mapping & delta
 - A send engine + `email_drafts` + daily stats exist. **Delta:** the explicit job set with per-membership-step tracking, variable-resolution logging, and the rotation picker reading `senderPoolMembers` + daily caps.
@@ -344,7 +344,7 @@ State: wizard calls `previewEnrollment` on open + on source/sequence/mailbox cha
 
 **Workers**
 - [ ] Enrollment-validation, membership-creation, first-step-scheduling, step-execution (variable resolution + rotation picker), reply-detection, bounce-handling, unsubscribe-handling, status-transition sweep.
-- [ ] Rotation picker reads pool weights + `sendingAccountDailyStats`; skips disconnected/exhausted.
+- [ ] Rotation picker reads pool weights + `sendLimits.accountsSentToday`; skips disconnected/exhausted.
 
 **Validation**
 - [ ] §3 checks as composable validators producing typed block/warn; reused by preview + enroll (TOCTOU).

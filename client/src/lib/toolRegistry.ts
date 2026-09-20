@@ -29,7 +29,7 @@ import {
   LayoutDashboard, LayoutTemplate, Linkedin, ListChecks, Mail, MailOpen, MailWarning, Megaphone,
   MessageSquare, Mic2, Network, Package, PenLine, Phone, PieChart, Plug,
   Radar, Search, Send, Settings, Share2, ShieldCheck, Sparkles, Target,
-  Upload, Users, Workflow, Wrench,
+  TrendingUp, Upload, Users, Workflow, Wrench,
 } from "lucide-react";
 
 export type ToolGroup =
@@ -137,7 +137,17 @@ export const TOOLS: Tool[] = [
   { href: "/leads", label: "Leads", icon: Target, group: "CRM", primary: true,
     description: "Scored, routable leads awaiting qualification." },
   { href: "/v2/deals", label: "Deals", icon: KanbanSquare, group: "CRM", primary: true,
-    description: "Your pipeline board — every open opportunity.", keywords: ["pipeline", "opportunities"] },
+    description: "Deal autopilot, at-risk alerts and the working board.", keywords: ["pipeline", "opportunities"] },
+  // Back on the rail (owner, 2026-09-20: "bring back the traditional Sales
+  // Pipeline page"). It was never deleted — it simply had no entry here, and
+  // the rail, Library and palette all render ONLY from this file, so it went
+  // invisible the moment /v2/deals took the CRM slot. Kept as its own tool
+  // rather than folded into Deals because it is the only place you can create
+  // an opportunity, run the weighted forecast, export the board, or switch
+  // between configured pipelines.
+  { href: "/pipeline", label: "Sales Pipeline", icon: TrendingUp, group: "CRM", primary: true,
+    description: "The classic stage board — with the weighted forecast, CSV export, and where you add an opportunity.",
+    keywords: ["forecast", "opportunities", "stages", "pipeline", "weighted", "export"] },
   // Back on the rail (owner, 2026-09-04): both are daily working surfaces —
   // Lists feed the Add-existing wizard and targeting, Tasks carry the
   // Task Autopilot's proposals.

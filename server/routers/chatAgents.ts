@@ -746,6 +746,19 @@ async function createLeadForSession(
     return null;
   }
 
+  // One lead per chat session. Placed below the insert so the
+  // departedOwnerCascade source window on `db.insert(leads)` is untouched.
+  if (leadId) {
+    const createdLeadId = leadId;
+    const routedOwnerUserId = ownerUserId;
+    void import("../services/workflowEngine")
+      .then((m) => m.fireRecordCreated(agent.workspaceId, "lead", createdLeadId, {
+        company: visitor.company, email: visitor.email,
+        source: `chat:${agent.slug}`, status: "new",
+      }, routedOwnerUserId))
+      .catch(() => { /* workflow firing is best-effort */ });
+  }
+
   if (leadId && intent) {
     try {
       await db.insert(activities).values({

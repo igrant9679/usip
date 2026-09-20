@@ -40,6 +40,7 @@ import {
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { stripNameCredentials } from "../services/enrichment/personName";
+import { genuineSocialReplyScope } from "../services/replyScope";
 
 // ─── Provider metadata ────────────────────────────────────────────────────────
 
@@ -330,15 +331,19 @@ export const unipileRouter = router({
         linkedinInmail: input.linkedinInmail,
       });
 
-      // Store message record
+      // Store message record. recipientProviderId is not decoration: it is one
+      // of the three facts genuineSocialReplyScope() asks about, so a rep's
+      // hand-sent opener that omits it makes the eventual reply unmatchable
+      // and the reply then reads as a stranger's DM (2026-09-20).
       await db.insert(unipileMessages).values({
         workspaceId: ctx.workspace.id,
         unipileAccountId: input.unipileAccountId,
         provider: account.provider,
-        chatId: input.chatId ?? result.id,
+        chatId: input.chatId ?? result.chatId ?? result.id,
         messageId: result.id,
         direction: "outbound",
         senderName: ctx.user.name ?? undefined,
+        recipientProviderId: input.attendeesIds?.[0] ?? null,
         text: input.text,
         linkedContactId: input.linkedContactId,
         linkedLeadId: input.linkedLeadId,
@@ -906,6 +911,10 @@ export const unipileRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       let created = 0;
       let skipped = 0;
+      // NO record_created fire in this loop, deliberately: it is a bulk path
+      // (up to 25 LinkedIn hits per call, saved in one gesture), and a rule
+      // with a webhook action would POST once per hit. See the do-not-fire
+      // list in services/workflowEngine.ts.
       for (const h of input.hits) {
         // Credentials come off BEFORE the space split — "Jane Doe, MBA" must
         // not land as lastName "Doe, MBA" (owner rule: no LinkedIn suffixes).
@@ -1002,9 +1011,15 @@ export const unipileRouter = router({
     const [msg] = await db
       .select({
         openers: sql<number>`sum(case when \`direction\` = 'outbound' then 1 else 0 end)`,
-        inbound: sql<number>`sum(case when \`direction\` = 'inbound' then 1 else 0 end)`,
-        willing: sql<number>`sum(case when \`direction\` = 'inbound' and \`replyClass\` = 'willing_to_meet' then 1 else 0 end)`,
-        meetings: sql<number>`sum(case when \`autoActionTaken\` = 'meeting_proposed' then 1 else 0 end)`,
+        // The two inbound legs carry the shared social scope (replyScope.ts):
+        // a funnel whose "replies" step counts strangers' DMs reports a
+        // reply rate the outreach never earned (2026-09-20).
+        inbound: sql<number>`sum(case when \`direction\` = 'inbound' and ${genuineSocialReplyScope()} then 1 else 0 end)`,
+        willing: sql<number>`sum(case when \`direction\` = 'inbound' and \`replyClass\` = 'willing_to_meet' and ${genuineSocialReplyScope()} then 1 else 0 end)`,
+        // Counted by the meeting itself, not by the action string: a row whose
+        // action became 'booking_link_sent' (replyClassifier) DID create a
+        // proposal, and testing the string dropped every one of them.
+        meetings: sql<number>`sum(case when \`meetingId\` is not null then 1 else 0 end)`,
       })
       .from(unipileMessages)
       .where(eq(unipileMessages.workspaceId, ws));

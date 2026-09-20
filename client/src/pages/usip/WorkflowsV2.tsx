@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { ConfirmButton } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
+import { isDeadTrigger } from "@shared/workflowTriggers";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -477,7 +478,10 @@ export default function WorkflowsV2() {
               ) : ruleList.length === 0 ? (
                 <div className="text-center py-8 px-4">
                   <div className="text-sm font-medium">No workflow rules</div>
-                  <p className="text-xs text-muted-foreground mt-1">Rules fire on triggers (stage change, deal stuck, reply…) and run actions automatically. Ask AI for ideas, or build one in the editor.</p>
+                  {/* "reply" was never a trigger — see @shared/workflowTriggers
+                      for the six that exist. Naming one that does not is how a
+                      user ends up looking for a rule they cannot build. */}
+                  <p className="text-xs text-muted-foreground mt-1">Rules fire on triggers (record created, record updated, stage change, task overdue, buying signal, deal stuck) and run actions automatically. Ask AI for ideas, or build one in the editor.</p>
                 </div>
               ) : (
                 ruleList.map((r: any) => (
@@ -485,7 +489,9 @@ export default function WorkflowsV2() {
                     <Switch checked={!!r.enabled} onCheckedChange={(v) => toggleRule.mutate({ id: r.id, enabled: v })} />
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium truncate">{r.name}</div>
-                      <div className="text-[11px] text-muted-foreground">Trigger: {String(r.triggerType ?? "").replace(/_/g, " ")} · fired {r.fireCount ?? 0}× · last {fmtWhen(r.lastFiredAt)}</div>
+                      {/* Same "never fires" flag the editor shows: this surface
+                          listed a retired trigger as if it were healthy. */}
+                      <div className="text-[11px] text-muted-foreground">Trigger: {String(r.triggerType ?? "").replace(/_/g, " ")}{isDeadTrigger(String(r.triggerType ?? "")) ? " (never fires)" : ""} · fired {r.fireCount ?? 0}× · last {fmtWhen(r.lastFiredAt)}</div>
                     </div>
                   </div>
                 ))

@@ -579,6 +579,17 @@ export const pipelineAlertsRouter = router({
             console.warn("[pipelineAlerts.moveDealStage] closed-lost win-back task failed:", e);
           }
         }
+        // The Alerts page's move control is the SECOND of five doors that write
+        // opportunities.stage, and until 2026-09-20 only crm.setStage announced
+        // it — so a "when a deal is won" rule simply did not fire when the deal
+        // was moved from here. Best-effort, never blocks the move.
+        void import("../services/workflowEngine")
+          .then((m) => m.fireStageChanged(
+            ctx.workspace.id, input.opportunityId, opp.stage ?? null, input.newStage,
+            { value: Number(opp.value ?? 0), isWon: meta.isWon, isLost: meta.isLost, name: opp.name ?? null },
+            opp.ownerUserId ?? null,
+          ))
+          .catch(() => { /* workflow firing is best-effort */ });
       }
       return { ok: true, customerCreated };
     }),

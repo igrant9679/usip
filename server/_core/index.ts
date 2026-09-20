@@ -41,7 +41,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { runDailyVerificationMaintenance, advanceRunningVerificationJobs } from "../routers/emailVerification";
-import { processEnrollments } from "../sequenceEngine";
+import { processEnrollments, resumeDueEnrollments } from "../sequenceEngine";
 import { autoSendForAllWorkspaces } from "../routers/sequences";
 import { runNightlyBatch } from "../nightlyBatch";
 import { runDailyCheckAllWorkspaces } from "../services/linkedinEnrichment/dailyCheck";
@@ -226,7 +226,13 @@ async function startServer() {
   // Guarded like ARE: this tick sends, and an overrun would let two passes
   // dispatch the same drafts and spend the same per-mailbox daily allowance.
   const runSequenceEngine = guardOverlap("SequenceEngine", () =>
-    processEnrollments()
+    // OOO snooze sweep first (migration 0181), inside this same guard rather
+    // than on a timer of its own: a second setInterval on `enrollments` is a
+    // second overlap surface, and running it here means a row that just woke
+    // gets its next step on this tick instead of five minutes later.
+    resumeDueEnrollments()
+      .catch((e) => console.error("[SequenceEngine] OOO resume sweep failed:", e))
+      .then(() => processEnrollments())
       .catch((e) => console.error("[SequenceEngine] cron run failed:", e))
       .then(() =>
         // Right after each enrollment tick, fire the auto-send pass so any

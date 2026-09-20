@@ -98,7 +98,11 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/renewals": { body: "Contracts coming up for renewal, bucketed by how far off the contract end date is. Past due means the date has gone by with no outcome recorded; renewed and churned come from a contract amendment." },
   "/qbrs": { body: "Quarterly business reviews: the AI drafts the prep, you run the meeting." },
 
-  "/v2/deals": { body: "Open deals and what stage each is at.", article: "managing-pipeline" },
+  "/v2/deals": { body: "Open deals and what stage each is at, with the deal autopilot and the at-risk strip.", article: "managing-pipeline" },
+  // Restored to the rail 2026-09-20 (owner: "bring back the traditional Sales
+  // Pipeline page"). Distinct from Deals — say so here, because the two sit
+  // side by side under CRM and the label alone will not explain the pair.
+  "/pipeline": { body: "The classic stage board plus the weighted forecast — the only place you can create an opportunity, export the board to CSV or switch between configured pipelines. Deals shows the same opportunities with the autopilot and the at-risk alerts instead.", article: "managing-pipeline" },
   "/v2/conversations": { body: "Ongoing back-and-forth with prospects, and the AI's suggested replies.", article: "conversations-autopilot" },
   "/pipeline-alerts": { body: "Warnings about deals going quiet or slipping their close date." },
   "/proposals": { body: "Quotes and proposals you've sent, and whether they've been opened." },
@@ -107,7 +111,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   // ── Automation and analytics ──
   "/brand-voice": { body: "How the AI should sound when it writes as you. Every AI-written email and chat reply reads from this." },
   "/personas": { body: "The types of buyer you sell to. Used to tailor messaging and to score fit." },
-  "/workflows": { body: "If-this-then-that rules over CRM events — e.g. when a prospect changes job, start a sequence.", article: "workflow-rules" },
+  "/workflows": { body: "If-this-then-that rules over CRM events — e.g. when a lead comes in from the web form, assign it. Record rules are scoped to leads, contacts or opportunities, and the conditions offered are the fields that event carries.", article: "workflow-rules" },
   "/lead-scoring": { body: "The rules that decide a lead's 0-100 score, so the best ones surface first.", article: "understanding-scores-badges" },
   "/lead-routing": { body: "Who a new lead gets assigned to, and on what basis." },
   "/v2/analytics": { body: "Trends over time — sending volume, reply rates, pipeline created." },

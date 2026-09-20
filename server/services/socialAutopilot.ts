@@ -266,7 +266,9 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
       workspaceId,
       unipileAccountId: accountId,
       provider: "linkedin",
-      chatId: sent.id || providerId,
+      // sendMessage now hands back Unipile's chat_id; the provider-id fallback
+      // is a last resort only, because it is a key no inbound webhook repeats.
+      chatId: sent.chatId || sent.id || providerId,
       messageId: sent.id || `opener-${providerId}`,
       direction: "outbound",
       recipientName: name,

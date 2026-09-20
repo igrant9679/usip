@@ -409,7 +409,7 @@ Existing workflow rules: ${existingRules.map((r) => `"${r.name}" (trigger: ${r.t
 Pipeline stage counts: ${oppCounts.map((o) => `${o.stage}: ${o.count}`).join(", ")}
 
 Rules are trigger → conditions → actions. Only use these VALID values (anything else is ignored by the engine):
-- triggerType: "record_created" (a new lead — payload has entity:"lead" + lead fields like company/title/source), "record_updated" (a record changed), "stage_changed" (an opportunity moved — payload has stage/fromStage/value/isWon/isLost), "task_overdue" (a task passed its due date), "signal_received" (an intent signal — for a job change set triggerConfig.signal:"job_change"; payload has name/oldCompany/newCompany), "deal_stuck" (a deal sat too long in one stage).
+- triggerType: "record_created" (a lead, contact or opportunity was created — ALWAYS set triggerConfig.entity to one of "lead"/"contact"/"opportunity"/"any"; payload has entity/id/ownerUserId plus EXACTLY these keys — company/title/source/status/email for a lead, title/email/accountId/source for a contact, name/stage/value/winProb/accountId for an opportunity — so a condition on anything else can never match; note a lead's score is written after creation, so never condition on it here), "record_updated" (same entities and the same triggerConfig.entity requirement; payload is the record after the change — score and grade included — plus changed:[field names]), "stage_changed" (an opportunity moved — payload has stage/fromStage/value/winProb/isWon/isLost), "task_overdue" (a task passed its due date — payload has title/type/priority/dueAt), "signal_received" (an intent signal — for a job change set triggerConfig.signal:"job_change"; payload has name/oldCompany/newCompany), "deal_stuck" (a deal sat too long in one stage — set triggerConfig.days and optionally triggerConfig.stage; payload has stage/daysInStage/value/winProb).
 - conditions: array of { "field": <a payload field>, "op": "eq|neq|gt|gte|lt|lte|contains|in", "value": <value> }. Empty array = always. For "in", pass an array of values.
 - actions[].type: "create_task" (params: title, priority:"low|normal|high|urgent", dueInDays, type:"follow_up|call|manual_email"), "notify" (params: title, message), "post_slack" (params: message), "notify_teams" (params: message), "webhook" (params: url).
 
@@ -573,12 +573,24 @@ async function applySuggestionRow(
     ? (sug.triggerType as (typeof LIVE_TRIGGER_IDS)[number])
     : "record_created";
 
+  /**
+   * Stamp the entity the model left out. record_created / record_updated now
+   * cover leads, contacts and opportunities, and the generator frequently omits
+   * `entity` — an unscoped rule would fire on all three. "lead" matches the
+   * engine's own read-time default, so an AI rule behaves exactly like the
+   * hand-built one it is imitating (2026-09-20).
+   */
+  const triggerConfig = (sug.triggerConfig ?? {}) as Record<string, unknown>;
+  if ((triggerType === "record_created" || triggerType === "record_updated") && !triggerConfig.entity) {
+    triggerConfig.entity = "lead";
+  }
+
   const [newRule] = await db.insert(workflowRules).values({
     workspaceId,
     name: sug.title,
     description: sug.description,
     triggerType,
-    triggerConfig: sug.triggerConfig as object,
+    triggerConfig: triggerConfig as object,
     conditions: sug.conditions as object,
     actions: sug.actions as object,
     enabled: true,

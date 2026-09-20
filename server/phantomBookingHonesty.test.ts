@@ -36,7 +36,13 @@ describe("sendMeetingInvite cannot fabricate a booking", () => {
 
 describe("migration 0175 removes the phantoms and only the phantoms", () => {
   const start = migrations.indexOf("0175_delete_phantom_meetings");
-  const block = migrations.slice(start, migrations.indexOf("];", start));
+  // 2026-09-20: bounded at the NEXT migration entry, not at `];`. Statement
+  // arrays close with `],` so the old bound was the end of the whole
+  // MIGRATIONS array — every migration after 0175 was being read as part of
+  // it, and 0181 (which adds columns to email_replies) failed the
+  // "touches no scheduled-email data" pin for a table 0175 never names.
+  const nextEntry = migrations.indexOf('name: "0176', start);
+  const block = migrations.slice(start, nextEntry === -1 ? migrations.indexOf("];", start) : nextEntry);
 
   it("exists and targets exactly the phantom predicate", () => {
     expect(start).toBeGreaterThan(-1);

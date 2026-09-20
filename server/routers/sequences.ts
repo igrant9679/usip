@@ -31,7 +31,6 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, managerProcedure, repProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
-import { utcDayStart } from "@shared/timeWindows";
 import { getSequenceAbVariantStats } from "../services/performanceMetrics";
 import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
@@ -85,8 +84,9 @@ function escapeHtmlWithLinks(s: string): string {
  *
  * Per-account dailySendLimit IS enforced — accounts at or above their
  * limit are skipped. The "lowest count" round-robin reads sentToday
- * via a one-shot count query against email_drafts so we don't need a
- * separate counter table.
+ * from sendLimits.accountsSentToday, the one per-account counter every
+ * sender shares; it used to count email_drafts, which campaign mail
+ * never writes, so a mailbox's campaign volume did not exist here.
  */
 async function pickAccountForSequenceDraft(
   db: Awaited<ReturnType<typeof getDb>>,
@@ -159,27 +159,12 @@ async function pickAccountForSequenceDraft(
       );
     if (accountRows.length === 0) return null;
 
-    // Today's send count per account (drafts sent today with that account).
-    // UTC, matching emailDelivery/sendingAccounts. These two paths measure the
-    // SAME per-account daily limit, and a local-midnight window here made them
-    // disagree about which sends counted on any non-UTC host.
-    const todayStart = utcDayStart();
-    const sentTodayRows = await db
-      .select({
-        accountId: emailDrafts.sendingAccountId,
-        cnt: sql<number>`COUNT(*)`,
-      })
-      .from(emailDrafts)
-      .where(
-        and(
-          eq(emailDrafts.workspaceId, workspaceId),
-          eq(emailDrafts.status, "sent"),
-          inArray(emailDrafts.sendingAccountId, accountIds),
-          sql`${emailDrafts.sentAt} >= ${todayStart}`,
-        ),
-      )
-      .groupBy(emailDrafts.sendingAccountId);
-    const sentToday = new Map(sentTodayRows.map((r) => [r.accountId, Number(r.cnt) || 0]));
+    // ONE counter, shared with the campaign pool (sendLimits.accountsSentToday).
+    // This used to count email_drafts, which campaign sends never write — so
+    // this picker and emailDelivery's pool each believed they had the mailbox's
+    // whole dailySendLimit to spend (audit 2026-09-20).
+    const { accountsSentToday } = await import("../sendLimits");
+    const sentToday = await accountsSentToday(workspaceId, accountIds);
 
     // Filter out accounts at/over their dailySendLimit.
     const eligible = accountRows.filter((a) => {
@@ -1172,21 +1157,24 @@ export const sequencesRouter = router({
   pauseEnrollment: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(enrollments).set({ status: "paused" }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
+    // resumeAt: null on all three manual transitions — a rep acting on a row
+    // that an OOO snooze had already stamped must not inherit its pending
+    // wake-up (0181). Their decision is the later one.
+    await db.update(enrollments).set({ status: "paused", resumeAt: null }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 
   resumeEnrollment: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(enrollments).set({ status: "active", nextActionAt: new Date() }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
+    await db.update(enrollments).set({ status: "active", nextActionAt: new Date(), resumeAt: null }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 
   exitEnrollment: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(enrollments).set({ status: "exited" }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
+    await db.update(enrollments).set({ status: "exited", resumeAt: null }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 

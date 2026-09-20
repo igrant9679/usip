@@ -198,6 +198,17 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
     } catch (e) {
       console.error("[bookingLinks] lead insert failed:", (e as Error).message);
     }
+    // Only inside the `!leadId` branch: a booker the caller already has a lead
+    // for is not a new record, and firing on every booking would announce the
+    // same person repeatedly. One lead per booking otherwise.
+    if (leadId) {
+      const createdLeadId = leadId;
+      void import("../services/workflowEngine")
+        .then((m) => m.fireRecordCreated(link.workspaceId, "lead", createdLeadId, {
+          email: opts.email, source: opts.leadSource ?? "booking_link", status: "new",
+        }, link.userId ?? null))
+        .catch(() => { /* workflow firing is best-effort */ });
+    }
   }
 
   // Proposed meeting at the chosen time, then book it for real.

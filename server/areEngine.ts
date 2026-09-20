@@ -1110,6 +1110,15 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       );
     const remaining = Math.max(0, campaign.dailySendCap - Number(sentToday?.n ?? 0));
 
+    /**
+     * The OTHER capacity ceiling: the mailboxes themselves. Set once the sender
+     * pool reports every one of them spent for the day or the hour, because
+     * every remaining email step this tick would get the identical answer.
+     * Declared out here so the dispatch log below can say why a tick that had
+     * `remaining` to spend sent nothing.
+     */
+    let poolHeld: string | null = null;
+
     if (remaining > 0) {
       // Self-heal: a step that failed ONLY because the prospect had no email
       // yet becomes schedulable again once enrichment resolves an address —
@@ -1365,6 +1374,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             .where(eq(areExecutionQueue.id, step.id));
           continue;
         }
+        if (poolHeld) continue; // no capacity left this tick — already established
 
         const [p] = await db
           .select()
@@ -1569,6 +1579,24 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             })
             .where(eq(areExecutionQueue.id, step.id));
           result.sent++;
+        } else if (sendRes.blocked) {
+          /**
+           * A CAP IS NOT A FAILURE. Nothing was transmitted: the pool refuses
+           * before adapter.sendEmail, so putting the row back is not a risk of
+           * resending cold mail — it is the only way the step survives.
+           *
+           * Marking it `failed` here was a silent loss (audit 2026-09-20):
+           * neither cap message matches HEALABLE_NO_EMAIL or
+           * `${HEALABLE_POOL_PREFIX}%`, so the heal never revived it and the
+           * prospect's cadence simply stopped the first day the mailboxes ran
+           * out. Capacity comes back tomorrow, or within the hour.
+           */
+          await db
+            .update(areExecutionQueue)
+            .set({ status: "scheduled", failureReason: null, executedAt: null })
+            .where(eq(areExecutionQueue.id, step.id));
+          poolHeld = sendRes.reason ?? "sending capacity exhausted";
+          continue;
         } else {
           await db
             .update(areExecutionQueue)
@@ -1582,7 +1610,8 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       }
     }
     await emitLog(wsId, campId, "dispatch", "info",
-      `Dispatched (sent so far this tick: ${result.sent}, daily remaining cap: ${remaining})`);
+      `Dispatched (sent so far this tick: ${result.sent}, daily remaining cap: ${remaining})`
+      + (poolHeld ? ` — email steps held and re-scheduled: ${poolHeld}` : ""));
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} dispatch phase failed:`, e);
     await emitLog(wsId, campId, "dispatch", "error", String((e as Error)?.message ?? e));

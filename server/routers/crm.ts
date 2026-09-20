@@ -60,6 +60,7 @@ import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { renderMergeFields, resolveBookingUrl, scrubForSend } from "../mergeVars";
 import { normalizedAccountFields } from "../services/company/normalize";
+import { ACTIVE_ENROLLMENT_STATUSES } from "../services/crossEngineEnrollment";
 
 /** The ONE public origin — see server/appUrl.ts. */
 const getAppBaseUrl = publicAppOrigin;
@@ -254,6 +255,15 @@ export const accountsRouter = router({
     return { roots };
   }),
 
+  /**
+   * NO record_created / record_updated fire on accounts, deliberately (v1,
+   * 2026-09-20). runAction's update_field allowlist has no `account` entry and
+   * enroll_sequence / send_email_draft both reject anything that is not a
+   * person — so an account-triggered rule would fail on three of the eight
+   * actions the builder offers, which is worse than not offering the entity.
+   * Widening those maps is its own item; until then the entity selector offers
+   * lead / contact / opportunity / any.
+   */
   create: repProcedure
     .input(
       z.object({
@@ -403,6 +413,15 @@ export const contactsRouter = router({
           linkedinUrl: null, companyName: null, companyDomain: null,
         }))
         .catch((e) => console.error("[personLink] contact create link failed:", (e as Error).message));
+      // record_created was lead-only until 2026-09-20 — the builder offered
+      // "when a record is created" and a contact could never trigger it. Placed
+      // after the personLink block so the departedOwnerCascade /
+      // contactPersonLink source windows stay as they were.
+      void import("../services/workflowEngine")
+        .then((m) => m.fireRecordCreated(ctx.workspace.id, "contact", id, {
+          title: input.title, email: input.email, accountId: input.accountId,
+        }, ctx.user.id))
+        .catch(() => { /* workflow firing is best-effort */ });
       return { id };
     }),
 
@@ -413,6 +432,9 @@ export const contactsRouter = router({
     if (!before) throw new TRPCError({ code: "NOT_FOUND" });
     await db.update(contacts).set(input.patch).where(and(eq(contacts.id, input.id), eq(contacts.workspaceId, ctx.workspace.id)));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "contact", entityId: input.id, before, after: input.patch });
+    void import("../services/workflowEngine")
+      .then((m) => m.fireRecordUpdated(ctx.workspace.id, "contact", input.id, before, input.patch, before.ownerUserId ?? null))
+      .catch(() => { /* workflow firing is best-effort */ });
     return { ok: true };
   }),
 
@@ -509,15 +531,21 @@ export const contactsRouter = router({
           results.push({ contactId: contact.id, status: "skipped", reason: "Invalid email address" });
           continue;
         }
-        // Check if already enrolled
+        // Check if already enrolled. 'paused' counts as enrolled, and the
+        // workspaceId term is not decoration: since migration 0181 a paused
+        // row can carry a resumeAt, so an active-only gate let an OOO-snoozed
+        // person be bulk-enrolled into the SAME sequence and the resume sweep
+        // then made both rows live — two sends to one human from one sequence,
+        // created automatically.
         const [existing] = await db
           .select({ id: enrollments.id })
           .from(enrollments)
           .where(
             and(
+              eq(enrollments.workspaceId, ctx.workspace.id),
               eq(enrollments.sequenceId, input.sequenceId),
               eq(enrollments.contactId, contact.id),
-              eq(enrollments.status, "active"),
+              inArray(enrollments.status, [...ACTIVE_ENROLLMENT_STATUSES]),
             ),
           )
           .limit(1);
@@ -1049,12 +1077,19 @@ export const leadsRouter = router({
       const id = Number((r as any)[0]?.insertId ?? 0);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "lead", entityId: id, after: { ...input, ownerUserId, routed: routedOwner != null } });
       // Fire user-defined `record_created` workflow rules (best-effort, non-blocking).
+      // Only the keys RECORD_FIELDS declares for a lead are passed: the helper
+      // fills any it is not given with null and drops anything else, so the
+      // builder's condition list and this payload cannot drift apart, and a
+      // webhook action does not POST the person's phone number to a
+      // customer-configured URL. `score`/`grade` are deliberately absent —
+      // leadScoring writes them after the insert, so at this moment they are
+      // only ever the column default (2026-09-20).
       if (id) {
         void import("../services/workflowEngine")
-          .then((m) => m.fireWorkflowRules(ctx.workspace.id, "record_created", {
-            payload: { ...input, entity: "lead", status: "new" },
-            relatedType: "lead", relatedId: id, ownerUserId,
-          }))
+          .then((m) => m.fireRecordCreated(ctx.workspace.id, "lead", id, {
+            company: input.company, title: input.title, source: input.source,
+            email: input.email, status: "new",
+          }, ownerUserId))
           .catch(() => { /* workflow firing is best-effort */ });
       }
       return { id, ownerUserId, routed: routedOwner != null };
@@ -1069,14 +1104,11 @@ export const leadsRouter = router({
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "lead", entityId: input.id, before, after: input.patch });
 
     // record_updated was offered in the rule builder but had no dispatch site
-    // anywhere, so rules using it sat at fireCount 0 forever. Payload carries
-    // the merged post-update row plus `changed` (the patched field names) so a
-    // rule can condition on what actually moved, not just the new value.
+    // anywhere, so rules using it sat at fireCount 0 forever. The shared helper
+    // builds the merged post-update row plus `changed` (the patched field
+    // names), so all three entities report the same shape.
     void import("../services/workflowEngine")
-      .then((m) => m.fireWorkflowRules(ctx.workspace.id, "record_updated", {
-        payload: { ...before, ...input.patch, entity: "lead", changed: Object.keys(input.patch) },
-        relatedType: "lead", relatedId: input.id, ownerUserId: before.ownerUserId ?? null,
-      }))
+      .then((m) => m.fireRecordUpdated(ctx.workspace.id, "lead", input.id, before, input.patch, before.ownerUserId ?? null))
       .catch(() => { /* workflow firing is best-effort */ });
 
     // Sequences can be configured to auto-enrol on a status change. That
@@ -1192,6 +1224,38 @@ export const leadsRouter = router({
       }
 
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "lead", entityId: lead.id, after: { converted: true, accountId, contactId, opportunityId } });
+      /**
+       * Conversion is three record events at once and announced none of them.
+       * Fired here, after the audit, rather than inline between the inserts:
+       * departedOwnerCascade.test.ts windows on the
+       * `applyTerritoryRules( → db.insert(accounts)` span above and nothing
+       * may land inside it.
+       *
+       * No record_created for the ACCOUNT — accounts are out of scope for v1
+       * (runAction's update_field/enroll_sequence/send_email_draft all reject
+       * an account, so such a rule would fail on three of the eight actions).
+       */
+      void import("../services/workflowEngine")
+        .then(async (m) => {
+          // `source: "lead_convert"` is the key a rule uses to EXCLUDE the
+          // three events one conversion click emits — it is in the contact and
+          // lead field vocabularies for that reason.
+          await m.fireRecordCreated(ctx.workspace.id, "contact", contactId, {
+            email: lead.email, title: lead.title, accountId, source: "lead_convert",
+          }, ctx.user.id);
+          if (opportunityId) {
+            await m.fireRecordCreated(ctx.workspace.id, "opportunity", opportunityId, {
+              name: `${lead.company ?? lead.lastName} – New opportunity`,
+              stage: "discovery", value: Number(input.opportunityValue ?? 25000), winProb: 25, accountId,
+            }, ctx.user.id);
+          }
+          // The "when a lead converts" rule people actually want.
+          await m.fireRecordUpdated(ctx.workspace.id, "lead", lead.id, lead, {
+            status: "converted", convertedAccountId: accountId,
+            convertedContactId: contactId, convertedOpportunityId: opportunityId,
+          }, lead.ownerUserId ?? null);
+        })
+        .catch(() => { /* workflow firing is best-effort */ });
       return { accountId, contactId, opportunityId };
     }),
 
@@ -1574,6 +1638,11 @@ export const opportunitiesRouter = router({
       });
       const id = Number((r as any)[0]?.insertId ?? 0);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "opportunity", entityId: id, after: input });
+      void import("../services/workflowEngine")
+        .then((m) => m.fireRecordCreated(ctx.workspace.id, "opportunity", id, {
+          name: input.name, stage: input.stage, value: input.value, winProb: input.winProb, accountId: input.accountId,
+        }, ctx.user.id))
+        .catch(() => { /* workflow firing is best-effort */ });
       return { id };
     }),
 
@@ -1725,6 +1794,10 @@ export const opportunitiesRouter = router({
     if (patch.closeDate && typeof patch.closeDate === "string") patch.closeDate = new Date(patch.closeDate);
     await db.update(opportunities).set(patch).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id, before, after: input.patch });
+    // Stage is refused above, so this can never double with stage_changed.
+    void import("../services/workflowEngine")
+      .then((m) => m.fireRecordUpdated(ctx.workspace.id, "opportunity", input.id, before, patch, before.ownerUserId ?? null))
+      .catch(() => { /* workflow firing is best-effort */ });
     return { ok: true };
   }),
 

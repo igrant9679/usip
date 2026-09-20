@@ -195,7 +195,9 @@ describe("emailsSent", () => {
     "server/services/warmupEngine.ts":
       "Warmup traffic: the workspace mailing its OWN mailboxes to build sender reputation. " +
       "Counting it would make the Billing tile mostly self-sends and tell the owner nothing " +
-      "about customer volume. sendingAccountDailyStats already tracks it per account.",
+      "about customer volume. Its volume is counted against the mailbox's daily cap via " +
+      "sendingAccounts.warmupSentToday (see sendLimits.accountsSentToday), not via a log row — " +
+      "self-sends must not enter the sitewide Emails feed either.",
   };
 
   it("every raw send is either counted or excluded ON PURPOSE", () => {

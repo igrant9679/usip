@@ -104,9 +104,11 @@ function fillSenderTokens<T extends SendEmailOptions>(
  * Selection: prefer the workspace's first sender pool's members; if no pool
  * exists, rotate across ALL enabled sending accounts. Among eligible accounts
  * (under their dailySendLimit today) it picks the LEAST-used one, which evenly
- * balances load and naturally round-robins. Records the send in
- * sending_account_daily_stats so the next pick — and the Mailboxes UI usage
- * readout — stay accurate.
+ * balances load and naturally round-robins. "Used today" is
+ * sendLimits.accountsSentToday — the same number the sequence, CRM, Inbox and
+ * warmup paths spend, so the mailbox has ONE budget rather than one per engine.
+ * The send is also recorded in sending_account_daily_stats, which is now a
+ * reporting series (and the home of bounceCount), not the gate.
  *
  * `fromName` overrides the display name (e.g. "Jane Doe | Acme Inc.") while
  * the From address rotates with the account.
@@ -117,7 +119,7 @@ function fillSenderTokens<T extends SendEmailOptions>(
 export async function sendCampaignEmailViaPool(
   workspaceId: number,
   opts: SendEmailOptions & { fromName?: string; logMeta?: EmailLogMeta },
-): Promise<SendEmailResult & { accountId?: number; fromEmail?: string }> {
+): Promise<SendEmailResult & { accountId?: number; fromEmail?: string; blocked?: "daily" | "hourly" }> {
   // The scrub runs AFTER the account is chosen (step 3c below) so the sender
   // tokens can be filled from it first. The no-accounts fallback scrubs
   // inside sendWorkspaceEmail, after filling them from the SMTP config.
@@ -140,7 +142,7 @@ export async function sendCampaignEmailViaPool(
       });
       return r;
     }
-    if (pick.kind === "blocked") return { ok: false, reason: pick.reason };
+    if (pick.kind === "blocked") return { ok: false, reason: pick.reason, blocked: pick.blocked };
     const chosen = pick.account;
     const today = new Date().toISOString().slice(0, 10);
 
@@ -169,7 +171,11 @@ export async function sendCampaignEmailViaPool(
       logMeta: opts.logMeta ?? { source: opts.logSource ?? "campaign", sourceLabel: opts.logLabel ?? null },
     } as any);
 
-    // 5. Record usage (no unique key on the table → read-then-write).
+    // 5. Record usage for REPORTING (no unique key on the table → read-then-write).
+    //    This is no longer the gate — sendLimits.accountsSentToday over
+    //    email_log is (audit 2026-09-20). The row survives because it is the
+    //    only per-day home for bounceCount/spamCount and the only multi-day
+    //    series behind sendingAccounts.getDailyStats.
     const [existing] = await db
       .select({ id: sendingAccountDailyStats.id, sentCount: sendingAccountDailyStats.sentCount })
       .from(sendingAccountDailyStats)
@@ -178,8 +184,8 @@ export async function sendCampaignEmailViaPool(
     if (existing) {
       // Atomic in SQL. `existing.sentCount + 1` computed in JS is a lost-update
       // race: two concurrent sends both read 5 and both write 6, so two sends
-      // are recorded as one and the account quietly runs past its daily limit —
-      // which is the one thing this counter exists to prevent.
+      // are recorded as one — which, for the deliverability number the
+      // Mailboxes and Deliverability pages plot, is a silently wrong history.
       await db.update(sendingAccountDailyStats)
         .set({ sentCount: sql`${sendingAccountDailyStats.sentCount} + 1` } as never)
         .where(eq(sendingAccountDailyStats.id, existing.id));
@@ -198,7 +204,13 @@ export async function sendCampaignEmailViaPool(
 export type PoolPick =
   | { kind: "account"; account: typeof sendingAccounts.$inferSelect }
   | { kind: "no_accounts" }
-  | { kind: "blocked"; reason: string };
+  /**
+   * `blocked` means NOTHING was transmitted and the capacity comes back — by
+   * tomorrow for `daily`, within the hour for `hourly`. Callers that own a
+   * queue must defer rather than fail, so the discriminant is typed rather
+   * than recovered by matching the prose in `reason`.
+   */
+  | { kind: "blocked"; blocked: "daily" | "hourly"; reason: string };
 
 /**
  * The mailbox the pool sends from RIGHT NOW. Extracted from
@@ -208,13 +220,16 @@ export type PoolPick =
  *
  * Selection: prefer the workspace's first sender pool's members; if no pool
  * exists, rotate across ALL enabled sending accounts. Among eligible accounts
- * (under their dailySendLimit today) it picks the LEAST-used one, which evenly
- * balances load and naturally round-robins; then skips any whose owner-set
- * hourly limit is spent.
+ * (under their dailySendLimit today, counted by sendLimits.accountsSentToday
+ * across EVERY sender this mailbox serves) it picks the LEAST-used one, which
+ * evenly balances load and naturally round-robins; then skips any whose
+ * owner-set hourly limit is spent.
  */
 export async function choosePoolAccount(workspaceId: number): Promise<PoolPick> {
   const db = await getDb();
-  if (!db) return { kind: "blocked", reason: "DB unavailable" };
+  // `daily`, not a bare failure: a database blip is a reason to hold the step
+  // and try again next tick, never to mark cold outreach permanently failed.
+  if (!db) return { kind: "blocked", blocked: "daily", reason: "DB unavailable" };
 
   // 1. Candidate accounts — pool members first, else all enabled accounts.
   const [pool] = await db
@@ -250,22 +265,15 @@ export async function choosePoolAccount(workspaceId: number): Promise<PoolPick> 
   }
   if (accounts.length === 0) return { kind: "no_accounts" };
 
-  // 2. Today's per-account usage.
-  const today = new Date().toISOString().slice(0, 10);
+  // 2. Today's per-account usage — ONE counter, shared with every other
+  //    sender (sendLimits.accountsSentToday). This used to read
+  //    sending_account_daily_stats, which only this function writes, so the
+  //    sequence/CRM path's volume through the same mailbox was invisible here
+  //    and this function's volume was invisible there: each could spend the
+  //    mailbox's whole daily limit (audit 2026-09-20).
   const ids = accounts.map((a) => a.id);
-  // SUM, not the first row: there is no unique key on (accountId, date), so
-  // two sends racing on the first send of a day can both insert and leave two
-  // rows. Reading one of them undercounts usage for the rest of that day, and
-  // this number is what enforces the mailbox's daily limit.
-  const stats = await db
-    .select({
-      accountId: sendingAccountDailyStats.accountId,
-      sent: sql<number>`COALESCE(SUM(${sendingAccountDailyStats.sentCount}), 0)`,
-    })
-    .from(sendingAccountDailyStats)
-    .where(and(inArray(sendingAccountDailyStats.accountId, ids), eq(sendingAccountDailyStats.date, today)))
-    .groupBy(sendingAccountDailyStats.accountId);
-  const usedMap = new Map(stats.map((s) => [s.accountId, Number(s.sent) || 0]));
+  const { accountsSentToday, getAccountSentLastHour } = await import("./sendLimits");
+  const usedMap = await accountsSentToday(workspaceId, ids);
 
   // 3. Eligible = under daily limit; pick the least-used (balances + rotates).
   const eligible = accounts
@@ -273,7 +281,7 @@ export async function choosePoolAccount(workspaceId: number): Promise<PoolPick> 
     .filter((x) => x.used < (x.a.dailySendLimit ?? 500))
     .sort((x, y) => x.used - y.used || x.a.id - y.a.id);
   if (eligible.length === 0) {
-    return { kind: "blocked", reason: "All sending accounts have hit their daily limit" };
+    return { kind: "blocked", blocked: "daily", reason: "All sending accounts have hit their daily limit" };
   }
 
   // 3b. …and under its HOURLY limit, for accounts whose owner configured one
@@ -282,7 +290,6 @@ export async function choosePoolAccount(workspaceId: number): Promise<PoolPick> 
   //     enforced only in sendLimits.assertSendAllowed never reached them.
   //     Skipping the account is better than failing the send — that is what
   //     a pool is for.
-  const { getAccountSentLastHour } = await import("./sendLimits");
   let chosen = eligible[0].a;
   let hourlyBlocked = 0;
   for (const cand of eligible) {
@@ -294,7 +301,7 @@ export async function choosePoolAccount(workspaceId: number): Promise<PoolPick> 
     hourlyBlocked++;
   }
   if (hourlyBlocked === eligible.length) {
-    return { kind: "blocked", reason: "Every eligible sending account has hit its hourly limit — it will resume within the hour" };
+    return { kind: "blocked", blocked: "hourly", reason: "Every eligible sending account has hit its hourly limit — it will resume within the hour" };
   }
   return { kind: "account", account: chosen };
 }

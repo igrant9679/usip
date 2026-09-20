@@ -205,21 +205,34 @@ export async function getChatMessages(
   );
 }
 
+/**
+ * Send a DM, returning the ids the caller must STORE.
+ *
+ * Unipile does not answer either endpoint with a bare `{id}`: POST
+ * /chats/{id}/messages returns a MessageSent envelope (`message_id`) and POST
+ * /chats a ChatStarted one (`chat_id` + `message_id`). Reading only `.id` left
+ * every outbound row we write keyed on `undefined` — which is why each call
+ * site carries an `|| identifier` fallback, and why the chatId we stored was a
+ * LinkedIn slug that no inbound webhook ever repeats. That broken join is what
+ * made a genuine campaign reply look like a stranger's cold DM (2026-09-20);
+ * the scope in services/replyScope.ts is only as good as this key.
+ */
 export async function sendMessage(params: {
   chatId?: string; // existing chat
   accountId?: string; // required when chatId not provided
   attendeesIds?: string[]; // required when chatId not provided
   text: string;
   linkedinInmail?: boolean;
-}): Promise<{ id: string }> {
+}): Promise<{ id: string; chatId?: string }> {
   const form = new FormData();
   form.append("text", params.text);
 
   if (params.chatId) {
-    return unipileFetch<{ id: string }>(
+    const res = await unipileFetch<any>(
       `/chats/${encodeURIComponent(params.chatId)}/messages`,
       { method: "POST", body: form },
     );
+    return { id: String(res?.id ?? res?.message_id ?? ""), chatId: params.chatId };
   }
 
   // New chat
@@ -232,7 +245,13 @@ export async function sendMessage(params: {
     form.append("linkedin[api]", "classic");
     form.append("linkedin[inmail]", "true");
   }
-  return unipileFetch<{ id: string }>("/chats", { method: "POST", body: form });
+  const res = await unipileFetch<any>("/chats", { method: "POST", body: form });
+  // `chat_id` is the only id the inbound messaging webhook ever echoes back,
+  // so it is the join key a reply can be matched on — never the attendee slug.
+  return {
+    id: String(res?.id ?? res?.message_id ?? res?.chat_id ?? ""),
+    chatId: res?.chat_id ?? res?.id ?? undefined,
+  };
 }
 
 // ─── LinkedIn Invitations ─────────────────────────────────────────────────────

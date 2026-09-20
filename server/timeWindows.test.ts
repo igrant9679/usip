@@ -12,6 +12,11 @@
  * routers/sequences.ts. Same cap, two boundaries — on any non-UTC host the two
  * disagreed about which sends counted, and exceeding a per-mailbox daily limit
  * is how a sending domain gets flagged.
+ *
+ * The boundaries agreeing was only half of it: the two sides were also counting
+ * DIFFERENT TABLES, so they disagreed on a UTC host too. That half is fixed and
+ * pinned separately (sendBudgetUnification.test.ts) — this file still owns the
+ * boundary.
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
@@ -117,14 +122,29 @@ describe("no budget window uses local midnight", () => {
     ).toEqual([]);
   });
 
-  it("the five fixed budget sites import the shared helper", () => {
+  it("the remaining fixed budget sites import the shared helper", () => {
+    // 2026-09-20: routers/sequences.ts left this list. Its only utcDayStart()
+    // use was the per-account "sent today" count, which moved WHOLE into
+    // sendLimits.accountsSentToday when the three per-account counters were
+    // unified onto email_log — so the boundary is still the shared one, it is
+    // just owned by sendLimits now. The import went with it rather than being
+    // left behind dead.
     for (const rel of [
-      "server/routers/sequences.ts",
       "server/sendLimits.ts",
       "server/services/apollo.ts",
       "server/services/socialAutopilot.ts",
     ]) {
       expect(readFileSync(join(ROOT, rel), "utf8"), rel).toContain("@shared/timeWindows");
     }
+  });
+
+  it("the sequence picker now borrows the boundary instead of keeping one", () => {
+    // The trap this replaces: deleting the count but keeping the import (dead
+    // code that keeps the old assertion green), or keeping a second day
+    // boundary here for the same cap — the exact disagreement this file's
+    // header describes.
+    const src = readFileSync(join(ROOT, "server/routers/sequences.ts"), "utf8");
+    expect(src).toContain("accountsSentToday(");
+    expect(src).not.toMatch(/utcDayStart\(/);
   });
 });

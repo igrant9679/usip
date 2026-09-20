@@ -25,6 +25,11 @@ export interface AccountIdentity {
  * are usually different companies, one domain is one company — and the free
  * Apollo organization search supplies a domain for most rows, which is why
  * matching on it is worth doing before falling back to a name comparison.
+ *
+ * NO record_created fire here. This is the shared account funnel — ARE
+ * promotion and the prospect-promotion sweeper both come through it in loops —
+ * and accounts are out of scope for the record_* triggers anyway (see the
+ * do-not-fire list in services/workflowEngine.ts).
  */
 export async function findOrCreateAccount(
   db: NonNullable<Awaited<ReturnType<typeof import("../db").getDb>>>,

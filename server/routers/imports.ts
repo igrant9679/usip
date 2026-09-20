@@ -871,6 +871,10 @@ export const importsRouter = router({
         companyDomain: normDomain(p.mapped.website)?.slice(0, 200) ?? null,
       });
 
+      // NO record_created fire anywhere in this importer, deliberately: a
+      // 5,000-row CSV must not fire 5,000 rules and POST 5,000 webhooks. The
+      // account chunk insert above is out for the same reason. See the
+      // do-not-fire list in services/workflowEngine.ts.
       for (let i = 0; i < toInsert.length; i += CHUNK) {
         const chunk = toInsert.slice(i, i + CHUNK);
         try {

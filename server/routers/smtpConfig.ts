@@ -26,6 +26,7 @@ import {
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { recordEmailsSent } from "../usageCounters";
+import { logEmailSend } from "../services/email/logSend";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { buildMergeContextFromDb, resolveMergeVars, bodyToHtmlDocument, injectTracking, resolveBookingUrl, renderSequenceOptOut } from "../mergeVars";
@@ -279,6 +280,31 @@ export const smtpConfigRouter = router({
       // means nothing was delivered.
       await recordEmailsSent(ctx.workspace.id, 1);
 
+      // …and for the same reason, its email_log row. These drafts carry the
+      // sending account the sequence picker chose, so a send that never
+      // reached the log was a send no per-mailbox cap could see — this path
+      // and the campaign pool could each spend the same mailbox's full daily
+      // limit (audit 2026-09-20). It also puts these messages on the Emails
+      // page, where they appeared nowhere before.
+      await logEmailSend({
+        workspaceId: ctx.workspace.id,
+        meta: {
+          source: draft.sequenceId ? "sequence" : draft.aiGenerated ? "ai_draft" : "crm",
+          draftId: draft.id,
+          sequenceId: draft.sequenceId ?? null,
+          contactId: draft.toContactId ?? null,
+          leadId: draft.toLeadId ?? null,
+          userId: ctx.user.id,
+        },
+        sendingAccountId: draft.sendingAccountId ?? null,
+        fromEmail: cfg.fromEmail,
+        fromName: cfg.fromName,
+        to: toEmail,
+        subject: resolvedSubject,
+        bodyText: resolvedBody,
+        status: "sent",
+      });
+
       // Mark as sent
       await db.update(emailDrafts).set({ status: "sent", sentAt: new Date() }).where(eq(emailDrafts.id, draft.id));
 
@@ -466,6 +492,27 @@ export const smtpConfigRouter = router({
           });
           // Per message, not per batch: this loop sends one email per draft.
           await recordEmailsSent(ctx.workspace.id, 1);
+          // Per message for the same reason. Without this row the bulk blast —
+          // the primary outbound sales path — was invisible to the per-mailbox
+          // daily cap, which now counts email_log (sendLimits.accountsSentToday).
+          await logEmailSend({
+            workspaceId: ctx.workspace.id,
+            meta: {
+              source: draft.sequenceId ? "sequence" : draft.aiGenerated ? "ai_draft" : "crm",
+              draftId: draft.id,
+              sequenceId: draft.sequenceId ?? null,
+              contactId: draft.toContactId ?? null,
+              leadId: draft.toLeadId ?? null,
+              userId: ctx.user.id,
+            },
+            sendingAccountId: draft.sendingAccountId ?? null,
+            fromEmail: cfg.fromEmail,
+            fromName: cfg.fromName,
+            to: toEmail,
+            subject: resolvedSubject,
+            bodyText: textBody,
+            status: "sent",
+          });
           await db.update(emailDrafts).set({ status: "sent", sentAt: new Date() }).where(eq(emailDrafts.id, draft.id));
           if (draft.toContactId || draft.toLeadId) {
             await db.insert(activities).values({

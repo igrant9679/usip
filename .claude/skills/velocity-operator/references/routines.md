@@ -39,7 +39,7 @@ Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable proces
 
 ### Admin — 5 min
 1. Deliverability: bounce and spam rates, warmup progress, any sender in `error`.
-2. Sending Accounts: daily limits not saturated by one campaign; sender display names set.
+2. Sending Accounts: daily limits not saturated by one campaign — "sent today" is every source through that mailbox, not just campaigns; sender display names set.
 3. Audit Log: skim for surprises (deletes, role changes, dial flips).
 
 ### End of day — 5 min (everyone)
@@ -118,7 +118,7 @@ Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable proces
 
 ### P4 — Reply handling
 1. Conversations, newest first; read classification and suggested reply.
-2. Willing to meet → propose times / booking link (Meeting Autopilot can do it); question → answer in your voice, log; referral → create the referred person (People) and a task; OOO → snooze; left company → job-change flow, mark contact departed; not interested → mark, respect it; unsubscribe → suppression (automatic in Auto).
+2. Willing to meet → propose times / booking link (Meeting Autopilot can do it); question → answer in your voice, log; referral → create the referred person (People) and a task; OOO → automatic snooze (the enrollment gets a `resumeAt` — stated return date, else +7d, capped at +90d — and the 5-minute sequence tick flips it back to active from the next unsent step; a genuine reply clears the stamp, and three consecutive out-of-offices ends the probing. Only in Approve/Auto: an Off workspace never classifies, so its OOOs stay paused until you resume them); left company → job-change flow, mark contact departed; not interested → mark, respect it; unsubscribe → suppression (automatic in Auto).
 3. Handling marks the reply handled and stops the sequence for that person.
 
 ### P5 — Weekly pipeline and forecast review

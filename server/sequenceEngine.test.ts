@@ -57,6 +57,11 @@ vi.mock("drizzle-orm", () => ({
   and: (...args: any[]) => ({ type: "and", args }),
   eq: (col: any, val: any) => ({ type: "eq", col, val }),
   isNull: (col: any) => ({ type: "isNull", col }),
+  // 2026-09-20: resumeDueEnrollments (the OOO snooze sweep) calls isNotNull.
+  // vitest's mock proxy throws "No 'isNotNull' export is defined on the mock"
+  // at the call site if it is absent, so it is listed whether or not a test in
+  // this file exercises that function.
+  isNotNull: (col: any) => ({ type: "isNotNull", col }),
   lte: (col: any, val: any) => ({ type: "lte", col, val }),
   or: (...args: any[]) => ({ type: "or", args }),
 }));
@@ -433,7 +438,10 @@ describe("Sequence Execution Engine", () => {
       const { pauseOnReply } = await import("./sequenceEngine");
       await pauseOnReply(20, 1);
 
-      expect(updateSet).toHaveBeenCalledWith({ status: "paused" });
+      // 2026-09-20: pauseOnReply now also clears resumeAt, because a human
+      // pausing on a live conversation must override an OOO snooze already
+      // stamped on the row rather than queue behind it (migration 0181).
+      expect(updateSet).toHaveBeenCalledWith({ status: "paused", resumeAt: null });
       expect(insertValues).toHaveBeenCalledWith(
         expect.objectContaining({
           title: "Reply detected — review sequence enrollment",

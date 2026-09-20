@@ -293,6 +293,19 @@ export const landingPagesRouter = router({
           source: `landing:${page.slug}`,
         });
 
+        // One lead per submit — see forms.submit. Public endpoint, so the
+        // engine's burst cap is what stands between a spam run and a flood of
+        // outbound webhooks.
+        if (leadId) {
+          const createdLeadId = leadId;
+          const routedOwnerUserId = ownerUserId;
+          void import("../services/workflowEngine")
+            .then((m) => m.fireRecordCreated(page.workspaceId, "lead", createdLeadId, {
+              company, email, source: `landing:${page.slug}`, status: "new",
+            }, routedOwnerUserId))
+            .catch(() => { /* workflow firing is best-effort */ });
+        }
+
         if (leadId && page.autoEnrollSequenceId) {
           try {
             // New lead per submit (above), so dedupe on email — a repeat

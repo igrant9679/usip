@@ -18,6 +18,13 @@
  * Cron: runs ~every 30 min from _core/index.ts (overlap-guarded). Each tick
  * sends at most a small slice of the day's target per account, only during
  * 07:00–19:00 IN THE WORKSPACE'S OWN TIMEZONE.
+ *
+ * The ramp is a ceiling, not an entitlement: the batch is also clamped to what
+ * is left of the mailbox's own dailySendLimit after every other sender has
+ * spent from it (sendLimits.accountsSentToday). Warmup mail is not logged to
+ * email_log — it is the workspace mailing itself, and it must not appear on
+ * the Emails page or in the Home "emails sent" tile — so its volume reaches
+ * that counter through `warmupSentToday` instead.
  */
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { sendingAccounts } from "../../drizzle/schema";
@@ -148,7 +155,17 @@ export async function runWarmupEngine(): Promise<void> {
       if (sentToday >= target) continue;
 
       const peers = pools.filter((p) => p.workspaceId === acct.workspaceId && p.id !== acct.id);
-      const batch = Math.min(MAX_PER_TICK, target - sentToday);
+      // The mailbox's OWN daily ceiling, counted the way every other sender
+      // counts it (sendLimits.accountsSentToday, which already folds in this
+      // account's warmupSentToday). Warmup used to sit entirely outside the
+      // cap, so a mailbox saturated by campaign and sequence mail could still
+      // add up to RAMP_CAP on top of it — the provider counts warmup too
+      // (audit 2026-09-20).
+      const { accountsSentToday } = await import("../sendLimits");
+      const usedToday = (await accountsSentToday(acct.workspaceId, [acct.id])).get(acct.id) ?? 0;
+      const remainingDaily = Math.max(0, (acct.dailySendLimit ?? 500) - usedToday);
+      const batch = Math.min(MAX_PER_TICK, target - sentToday, remainingDaily);
+      if (batch <= 0) continue;
       const transporter = buildTransporter({
         host: acct.smtpHost,
         port: acct.smtpPort ?? 587,

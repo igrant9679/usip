@@ -193,6 +193,19 @@ export const formsRouter = router({
           source: "webform",
         });
 
+        // One lead per submit, so this is a single-record dispatch site. The
+        // engine's burst cap covers the rest: this endpoint is PUBLIC and has
+        // no rate limiting, and a spam run must not become a webhook flood.
+        if (leadId) {
+          const createdLeadId = leadId;
+          const routedOwnerUserId = ownerUserId;
+          void import("../services/workflowEngine")
+            .then((m) => m.fireRecordCreated(form.workspaceId, "lead", createdLeadId, {
+              company, title, email, source: "webform", status: "new",
+            }, routedOwnerUserId))
+            .catch(() => { /* workflow firing is best-effort */ });
+        }
+
         // Form-enrichment bridge: link the lead to an account + prospect so
         // enrichment/scoring can run on it. Best-effort, never blocks submit.
         if (leadId) {

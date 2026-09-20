@@ -401,14 +401,33 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
     });
   }
 
-  // Workflow rules (3)
+  /**
+   * Workflow rules (3). Rule 1 was dead twice over: it shipped the operator
+   * `">="`, which is not in CONDITION_OPS, so evalConditions hit
+   * `default: return false`; and it conditioned on `score`, which leadScoring
+   * writes asynchronously AFTER the insert, so at record_created time it is
+   * always the column default and `score >= 60` could never be true however
+   * the operator was spelled. It now conditions on `source`, a key
+   * RECORD_FIELDS declares and every lead-creating seam supplies — "auto-assign
+   * the leads that came in through the web form" is a rule a demo workspace
+   * can actually watch fire (2026-09-20).
+   *
+   * Rules 2 and 3 ship DISABLED because their triggers are retired
+   * (@shared/workflowTriggers DEAD_TRIGGERS) — the page already flags them
+   * "never fires", and disabled is the honest state for a rule that cannot run.
+   * They are deliberately NOT repointed at deal_stuck: pipelineAlerts derives
+   * every workspace's stuck-day threshold from its ENABLED deal_stuck rules,
+   * and checkDealAging would then create a task plus a notification per stuck
+   * deal, nightly, in every demo workspace. All three names must stay — the
+   * sample-data remover identifies seeded rules by name (2026-09-20).
+   */
   for (const wf of [
-    { name: SEED_WORKFLOW_NAMES[0], triggerType: "record_created" as const, triggerConfig: { entity: "lead" }, conditions: [{ field: "score", op: ">=", value: 60 }], actions: [{ type: "update_field", params: { field: "ownerUserId", value: ownerUserId } }] },
-    { name: SEED_WORKFLOW_NAMES[1], triggerType: "schedule" as const, triggerConfig: { cron: "0 9 * * *" }, conditions: [{ field: "daysInStage", op: ">=", value: 14 }, { field: "stage", op: "in", value: ["proposal", "negotiation"] }], actions: [{ type: "create_task", params: { title: "Re-engage stalled deal", priority: "high" } }, { type: "notify", params: { kind: "system" } }] },
-    { name: SEED_WORKFLOW_NAMES[2], triggerType: "field_equals" as const, triggerConfig: { entity: "customer", field: "healthTier", value: "critical" }, conditions: [], actions: [{ type: "create_task", params: { title: "Churn intervention", priority: "urgent" } }] },
+    { name: SEED_WORKFLOW_NAMES[0], triggerType: "record_created" as const, triggerConfig: { entity: "lead" }, conditions: [{ field: "source", op: "eq", value: "webform" }], actions: [{ type: "update_field", params: { field: "ownerUserId", value: ownerUserId } }], enabled: true },
+    { name: SEED_WORKFLOW_NAMES[1], triggerType: "schedule" as const, triggerConfig: { cron: "0 9 * * *" }, conditions: [{ field: "daysInStage", op: "gte", value: 14 }, { field: "stage", op: "in", value: ["proposal", "negotiation"] }], actions: [{ type: "create_task", params: { title: "Re-engage stalled deal", priority: "high" } }, { type: "notify", params: { kind: "system" } }], enabled: false },
+    { name: SEED_WORKFLOW_NAMES[2], triggerType: "field_equals" as const, triggerConfig: { entity: "customer", field: "healthTier", value: "critical" }, conditions: [], actions: [{ type: "create_task", params: { title: "Churn intervention", priority: "urgent" } }], enabled: false },
   ]) {
     await db.insert(workflowRules).values({
-      workspaceId, ...wf, enabled: true, fireCount: randInt(3, 25), lastFiredAt: daysFromNow(-randInt(0, 5)),
+      workspaceId, ...wf, fireCount: randInt(3, 25), lastFiredAt: daysFromNow(-randInt(0, 5)),
     });
   }
 

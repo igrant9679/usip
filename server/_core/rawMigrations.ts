@@ -4093,6 +4093,59 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0181: OOO snooze — a bounded pause instead of a permanent one ────────
+  // The inbound poller pauses every active enrollment for a person the moment
+  // any reply lands, and processEnrollments only ever selects status='active'.
+  // An out-of-office auto-responder therefore ended the outreach forever.
+  // `enrollments.resumeAt` is when the sweep may flip a row back; the two
+  // email_replies columns are the evidence the classifier acts on — which
+  // enrollments THIS reply paused, and the return date it stated.
+  // NO BACKFILL, deliberately: resumeAt starts NULL on every existing paused
+  // row, so the first deploy resumes nothing historic. Backfilling would wake
+  // months-dead enrollments in a single tick.
+  {
+    name: "0181_enrollment_ooo_resume.sql",
+    statements: [
+      "ALTER TABLE `enrollments` ADD COLUMN `resumeAt` timestamp NULL",
+      "CREATE INDEX `ix_enr_resume` ON `enrollments` (`status`, `resumeAt`)",
+      "ALTER TABLE `email_replies` ADD COLUMN `pausedEnrollmentIds` json NULL",
+      "ALTER TABLE `email_replies` ADD COLUMN `oooReturnsAt` timestamp NULL",
+    ],
+  },
+
+  // ── 0182: index the per-account daily send budget ────────────────────────
+  // sendLimits.accountsSentToday and getAccountSentLastHour now run once per
+  // send (emailDelivery.choosePoolAccount picks a mailbox on every campaign
+  // step). Their predicate is sendingAccountId = ? AND sentAt >= ?, so the
+  // leading equality plus the range is a pure index range scan; status and
+  // workspaceId ride along so the COUNT(*) never fetches the row.
+  // ix_elog_ws_sent (workspaceId, sentAt) is wrong for this — it scans the
+  // workspace's whole day and filters by account in the server.
+  {
+    name: "0182_email_log_account_budget_index.sql",
+    statements: [
+      "ALTER TABLE `email_log` ADD INDEX `ix_elog_acct_sent` (`sendingAccountId`, `sentAt`, `status`, `workspaceId`)",
+    ],
+  },
+
+  // ── 0183: indexes for the derived social reply scope ─────────────────────
+  // genuineSocialReplyScope() (services/replyScope.ts) asks three questions of
+  // every inbound row: did we send in this chat, did we DM this provider id,
+  // did we invite it. Only the first had an index, and it was chatId alone —
+  // unscoped by workspace or direction. The live opener dedupe at
+  // socialAutopilot.ts was scanning for the same reason. Prefix lengths keep
+  // these inside InnoDB's 3072-byte key limit for varchar(500) utf8mb4.
+  // Indexes only: the scope is DERIVED, so there is nothing to backfill and
+  // no full-table UPDATE to eat the whole run's 180s budget.
+  {
+    name: "0183_unipile_social_scope_indexes.sql",
+    statements: [
+      "ALTER TABLE `unipile_messages` ADD INDEX `ix_um_ws_chat` (`workspaceId`,`chatId`(191),`direction`)",
+      "ALTER TABLE `unipile_messages` ADD INDEX `ix_um_ws_recipient` (`workspaceId`,`recipientProviderId`(191),`direction`)",
+      "ALTER TABLE `unipile_invites` ADD INDEX `ix_ui_ws_recipient` (`workspaceId`,`recipientProviderId`(191))",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

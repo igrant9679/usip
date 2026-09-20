@@ -15,9 +15,9 @@
  */
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { activeOwnerOrNull } from "../_core/activeMembers";
-import { and, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { genuineReplyScope } from "./replyScope";
-import { emailReplies, emailSuppressions, tasks, unipileMessages, workspaceSettings } from "../../drizzle/schema";
+import { emailReplies, emailSuppressions, enrollments, tasks, unipileMessages, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { humanizeAiCopy } from "./humanCopy";
@@ -46,6 +46,8 @@ export interface ReplyClassification {
   confidence: number;
   reasoning: string;
   suggestedReply: string;
+  /** YYYY-MM-DD the sender said they are back, or "" — out_of_office only. */
+  returnsAt: string;
 }
 
 function truncate(s: string | null | undefined, n: number): string {
@@ -65,6 +67,7 @@ export async function classifyReply(workspaceId: number, reply: any): Promise<Re
 
 From: ${reply.fromName ?? ""} <${reply.fromEmail}>
 Subject: ${reply.subject ?? "(none)"}
+Received: ${(() => { const d = new Date(reply.receivedAt); return isNaN(d.getTime()) ? "(unknown)" : d.toISOString().slice(0, 10); })()}
 Body: ${body || "(empty)"}
 
 Classes (pick exactly one):
@@ -82,10 +85,11 @@ Return: {
   "sentiment": "positive|neutral|negative|objection",
   "confidence": <integer 0-100>,
   "reasoning": "<one sentence>",
-  "suggestedReply": "<a short, professional reply the rep could send>"
+  "suggestedReply": "<a short, professional reply the rep could send>",
+  "returnsAt": "<YYYY-MM-DD if and only if this is an out-of-office auto-reply stating a return date, resolved against Received above; otherwise an empty string>"
 }`;
 
-  let cls: ReplyClassification = { replyClass: "none_of_the_above", sentiment: "neutral", confidence: 50, reasoning: "", suggestedReply: "" };
+  let cls: ReplyClassification = { replyClass: "none_of_the_above", sentiment: "neutral", confidence: 50, reasoning: "", suggestedReply: "", returnsAt: "" };
   try {
     const res = await invokeLLM({
       messages: [{ role: "user", content: prompt }],
@@ -100,8 +104,9 @@ Return: {
             confidence: { type: "integer" },
             reasoning: { type: "string" },
             suggestedReply: { type: "string" },
+            returnsAt: { type: "string" },
           },
-          required: ["replyClass", "sentiment", "confidence", "reasoning", "suggestedReply"],
+          required: ["replyClass", "sentiment", "confidence", "reasoning", "suggestedReply", "returnsAt"],
         },
       },
       max_tokens: 500,
@@ -114,6 +119,10 @@ Return: {
       confidence: Math.max(0, Math.min(100, Math.round(Number(parsed.confidence ?? 50)) || 50)),
       reasoning: String(parsed.reasoning ?? "").slice(0, 500),
       suggestedReply: humanizeAiCopy(String(parsed.suggestedReply ?? "").slice(0, 2000)),
+      // Grounded extraction: the exact shape or nothing. Date.parse over free
+      // text ("back next Monday") invents a date, and this one decides when we
+      // start mailing a person again — a wrong one is a send at a wrong time.
+      returnsAt: /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.returnsAt ?? "")) ? String(parsed.returnsAt) : "",
     };
   } catch (e) {
     console.error(`[ReplyClassifier] LLM classify failed for reply ${reply.id}:`, e);
@@ -125,6 +134,7 @@ Return: {
     classConfidence: cls.confidence,
     classReasoning: cls.reasoning || null,
     suggestedReply: cls.suggestedReply || null,
+    oooReturnsAt: cls.returnsAt ? new Date(cls.returnsAt + "T09:00:00Z") : null,
     classifiedAt: new Date(),
   } as never).where(eq(emailReplies.id, reply.id));
 
@@ -162,6 +172,55 @@ async function createReplyTask(db: any, workspaceId: number, reply: any, title: 
   } as never);
 }
 
+export const OOO_DEFAULT_DAYS = 7;
+export const OOO_MAX_DAYS = 90;
+/** Max consecutive OOO snoozes for one sender before we stop probing them. */
+export const OOO_MAX_SNOOZES = 3;
+
+/**
+ * When a snoozed enrollment may resume. Absent/invalid/past date → receivedAt
+ * + 7d; hard cap +90d; never sooner than now + 12h.
+ *
+ * The floor is the part that matters: a return date already past (a backlog
+ * classified two weeks late, or a robot that quotes yesterday) would resume
+ * straight back into the same auto-responder. Hour-of-day is irrelevant — the
+ * engine's send window + weekend gate decide the actual moment.
+ */
+export function oooResumeAt(returnsAt: string | Date | null | undefined, receivedAt: Date, now: Date = new Date()): Date {
+  const base = receivedAt instanceof Date && !isNaN(receivedAt.getTime()) ? receivedAt : now;
+  const fallback = new Date(base.getTime() + OOO_DEFAULT_DAYS * 86400000);
+  const cap = new Date(base.getTime() + OOO_MAX_DAYS * 86400000);
+  const floor = new Date(now.getTime() + 12 * 3600000);
+  let at = fallback;
+  // Date as well as string: on the approval path the row is re-read from
+  // mysql, so email_replies.oooReturnsAt arrives as a Date. A string-only
+  // check silently threw that away and every approved OOO took the fallback.
+  let parsed: Date | null = null;
+  if (returnsAt instanceof Date) parsed = returnsAt;
+  else if (typeof returnsAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(returnsAt)) parsed = new Date(returnsAt + "T09:00:00Z");
+  if (parsed && !isNaN(parsed.getTime()) && parsed.getTime() > base.getTime()) at = parsed;
+  if (at.getTime() > cap.getTime()) at = cap;
+  if (at.getTime() < floor.getTime()) at = floor;
+  return at;
+}
+
+/**
+ * The enrollment ids inboundReplyPoller paused for THIS reply (migration 0181).
+ * The string branch is not defensive padding: some mysql2 configurations hand
+ * a json column back as text.
+ */
+export function pausedIdsOf(reply: any): number[] {
+  const raw = reply?.pausedEnrollmentIds;
+  const arr = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? (() => { try { return JSON.parse(raw); } catch { return []; } })()
+      : [];
+  return (Array.isArray(arr) ? arr : [])
+    .map((n: any) => Number(n))
+    .filter((n: number) => Number.isFinite(n) && n > 0);
+}
+
 /**
  * Execute the per-class action for a classified reply. Returns the action name.
  * `byUser` distinguishes an autopilot run from a rep clicking "Apply".
@@ -174,6 +233,21 @@ export async function applyReplyAction(workspaceId: number, reply: any, byUser: 
   const rel = replyRelated(reply);
   let action = "none";
   let meetingId: number | null = null;
+
+  // A real reply while someone is OOO-snoozed must cancel the pending resume.
+  // The poller's re-pause matches status='active' only, so it is a no-op on an
+  // already-paused row and cannot clear this. Without it the sweep would
+  // restart outreach into a live conversation — the worst outcome of 0181.
+  if (cls !== "out_of_office") {
+    const stale = pausedIdsOf(reply);
+    if (stale.length > 0) {
+      await db.update(enrollments).set({ resumeAt: null } as never).where(and(
+        eq(enrollments.workspaceId, workspaceId),
+        eq(enrollments.status, "paused"),
+        inArray(enrollments.id, stale),
+      ));
+    }
+  }
 
   switch (cls) {
     case "willing_to_meet": {
@@ -301,9 +375,46 @@ export async function applyReplyAction(workspaceId: number, reply: any, byUser: 
       } catch (e) { console.error(`[ReplyClassifier] suppression insert failed:`, e); }
       action = "suppressed";
       break;
-    case "out_of_office":
-      action = "ooo_noted";
+    case "out_of_office": {
+      // The inbound poller pauses EVERY active enrollment for this person the
+      // moment any reply lands — before anything knows it was a robot. Until
+      // 0181 those people never came back: processEnrollments only ever
+      // selects status='active', so an away-message ended the outreach
+      // permanently. Schedule exactly the rows THIS reply paused; a rep's own
+      // pause, and one an older genuine reply stopped, are not ours to undo.
+      const ids = pausedIdsOf(reply);
+      // Bound the loop: resume → next step drafts → auto-send dispatches →
+      // the robot replies again → paused → snoozed again, and every cycle also
+      // bumps campaigns.totalReplied in the poller. Four polite probes is
+      // persistence; an unbounded loop is a machine talking to a machine.
+      let snoozesSoFar = 0;
+      if (ids.length > 0) {
+        const [prior] = await db.select({ n: sql<number>`count(*)` }).from(emailReplies).where(and(
+          eq(emailReplies.workspaceId, workspaceId),
+          eq(emailReplies.fromEmail, reply.fromEmail),
+          eq(emailReplies.replyClass, "out_of_office"),
+          eq(emailReplies.autoActionTaken, "ooo_snoozed"),
+          genuineReplyScope(),
+        ));
+        snoozesSoFar = Number(prior?.n ?? 0);
+      }
+      if (ids.length > 0 && snoozesSoFar < OOO_MAX_SNOOZES) {
+        const at = oooResumeAt(reply.oooReturnsAt, new Date(reply.receivedAt));
+        // status='paused' is load-bearing: in approval mode a rep may click
+        // Apply days later, having already resumed or exited the row by hand.
+        await db.update(enrollments).set({ resumeAt: at } as never).where(and(
+          eq(enrollments.workspaceId, workspaceId),
+          eq(enrollments.status, "paused"),
+          inArray(enrollments.id, ids),
+        ));
+        action = "ooo_snoozed";
+      } else {
+        // Nothing this reply paused (legacy row, replyDetection off, no
+        // enrollment), or the probe budget is spent — leave it paused.
+        action = "ooo_noted";
+      }
       break;
+    }
     default:
       action = "none";
   }
@@ -334,15 +445,34 @@ async function socialTask(db: any, workspaceId: number, msg: any, ownerUserId: n
  * "willing_to_meet" message spawns a meeting proposal, owned by the rep whose
  * OWN connected account received it (ownerUserId). Called from the messaging
  * webhook only when the workspace's conversationAutopilotMode != 'off'.
+ *
+ * `outreachTier` is the webhook's already-resolved answer to "did we start
+ * this conversation?" — passed in so the three lookups run once per message,
+ * re-derived here when a caller omits it.
  */
 export async function classifyAndHandleSocialMessage(
   workspaceId: number,
   msg: any,
   ownerUserId: number | null,
   mode: "approval" | "auto" = "auto",
+  outreachTier: string | null = null,
 ): Promise<string> {
   const db = await getDb();
   if (!db) return "none";
+  const { resolveSocialOutreachScope, socialAutopilotMaySend } = await import("./replyScope");
+  const tier = outreachTier ?? (await resolveSocialOutreachScope(db, {
+    workspaceId, chatId: msg.chatId, senderProviderId: msg.senderProviderId,
+  })).tier;
+  // Not our conversation: stored and readable, but the model never sees it and
+  // nothing is ever sent on its behalf. Re-checked here rather than trusted
+  // from the caller, because the harm this prevents — a recruiter's cold DM
+  // earning them the rep's booking link — is one forgetful caller away
+  // (2026-09-20, the social twin of the email scope above).
+  if (!tier) return "out_of_scope";
+  // The rep whose account received it may have left since: this path names
+  // unipile_accounts.userId with no request context behind it, exactly what
+  // createReplyTask guards. Unowned beats mis-owned (_core/activeMembers).
+  const owner = await activeOwnerOrNull(workspaceId, ownerUserId);
   const name = msg.senderName || "the sender";
   const chan = msg.provider || "social";
   const body = truncate(msg.text, 2000);
@@ -362,7 +492,7 @@ Classes (pick exactly one):
 - unsubscribe: opt-out request
 - none_of_the_above: unclear`;
 
-  let cls: ReplyClassification = { replyClass: "none_of_the_above", sentiment: "neutral", confidence: 50, reasoning: "", suggestedReply: "" };
+  let cls: ReplyClassification = { replyClass: "none_of_the_above", sentiment: "neutral", confidence: 50, reasoning: "", suggestedReply: "", returnsAt: "" };
   try {
     const res = await invokeLLM({
       messages: [{ role: "user", content: prompt }],
@@ -390,6 +520,9 @@ Classes (pick exactly one):
       confidence: Math.max(0, Math.min(100, Math.round(Number(parsed.confidence ?? 50)) || 50)),
       reasoning: String(parsed.reasoning ?? "").slice(0, 500),
       suggestedReply: humanizeAiCopy(String(parsed.suggestedReply ?? "").slice(0, 2000)),
+      // The social prompt does not ask for a return date: nothing on the
+      // Unipile path pauses an enrollment, so there is nothing to schedule.
+      returnsAt: "",
     };
   } catch (e) {
     console.error(`[SocialClassifier] LLM classify failed for message ${msg.id}:`, e);
@@ -407,16 +540,19 @@ Classes (pick exactly one):
   switch (cls.replyClass) {
     case "willing_to_meet": {
       meetingId = await createMeetingProposal(workspaceId, {
-        ownerUserId, relatedType, relatedId, name,
+        ownerUserId: owner, relatedType, relatedId, name,
         descriptor: `replied on ${chan} with interest: "${truncate(msg.text, 160)}"`, source: "inbound",
       });
       action = "meeting_proposed";
       // AUTO mode: reply IN-THREAD with the rep's booking link so the prospect
       // self-books from the same DM — mirrors the email path. Best-effort.
+      // Only where we MESSAGED first: an accepted invite alone is not consent
+      // to receive our calendar link, so that tier gets the proposal and the
+      // task and no outbound DM.
       let bookingLinkSent = false;
-      if (mode === "auto" && msg.chatId) {
+      if (mode === "auto" && msg.chatId && socialAutopilotMaySend(tier)) {
         try {
-          const bookingUrl = await resolveBookingUrl(workspaceId, ownerUserId ?? null);
+          const bookingUrl = await resolveBookingUrl(workspaceId, owner);
           if (bookingUrl) {
             const first = String(name).trim().split(/\s+/)[0] || "there";
             await sendMessage({ chatId: msg.chatId, text: `Great to hear, ${first}! Grab whatever time works best for you here and it'll go straight on my calendar: ${bookingUrl}` });
@@ -427,18 +563,24 @@ Classes (pick exactly one):
         }
       }
       if (bookingLinkSent) action = "booking_link_sent";
-      await socialTask(db, workspaceId, msg, ownerUserId, bookingLinkSent ? `Booking link sent (${chan}) — ${name}` : `Meeting requested (${chan}) — ${name}`, "high", "meeting_prep");
+      await socialTask(db, workspaceId, msg, owner, bookingLinkSent ? `Booking link sent (${chan}) — ${name}` : `Meeting requested (${chan}) — ${name}`, "high", "meeting_prep");
       break;
     }
     case "follow_up_question":
-      await socialTask(db, workspaceId, msg, ownerUserId, `Answer ${name}'s ${chan} question`, "high", "manual_email"); action = "task_created"; break;
+      await socialTask(db, workspaceId, msg, owner, `Answer ${name}'s ${chan} question`, "high", "manual_email"); action = "task_created"; break;
     case "person_referral":
-      await socialTask(db, workspaceId, msg, ownerUserId, `Save referral from ${name} (${chan})`, "normal", "crm_update"); action = "task_created"; break;
+      await socialTask(db, workspaceId, msg, owner, `Save referral from ${name} (${chan})`, "normal", "crm_update"); action = "task_created"; break;
     case "already_left_company_or_not_right_person":
-      await socialTask(db, workspaceId, msg, ownerUserId, `Re-verify contact — ${name} may have left`, "normal", "crm_update"); action = "task_created"; break;
+      await socialTask(db, workspaceId, msg, owner, `Re-verify contact — ${name} may have left`, "normal", "crm_update"); action = "task_created"; break;
     case "not_interested":
-      await socialTask(db, workspaceId, msg, ownerUserId, `${name} not interested (${chan}) — review`, "low", "follow_up"); action = "marked"; break;
+      await socialTask(db, workspaceId, msg, owner, `${name} not interested (${chan}) — review`, "low", "follow_up"); action = "marked"; break;
     case "out_of_office":
+      // Noted, not snoozed, and that is correct rather than unfinished: no
+      // code path on the Unipile side ever pauses an enrollment (the only
+      // update(enrollments) call sites are inboundReplyPoller, routers/
+      // sequences, routers/dataHealth and sequenceEngine), so there is
+      // nothing here to schedule a resume for. Mirroring the email branch
+      // would stamp a resumeAt with no pausedEnrollmentIds behind it.
       action = "ooo_noted"; break;
     default:
       action = "none";
@@ -497,7 +639,11 @@ export async function runConversationAutopilotForWorkspace(
     if (!cls) continue;
     classified++;
     if (mode === "auto") {
-      const a = await applyReplyAction(workspaceId, { ...reply, replyClass: cls.replyClass }, false);
+      // `reply` is the row read BEFORE classification, so its oooReturnsAt is
+      // whatever it was then — null on a first pass. Carrying cls.returnsAt
+      // forward is what keeps the extracted return date reachable here;
+      // without it every auto-mode OOO silently took the 7-day fallback.
+      const a = await applyReplyAction(workspaceId, { ...reply, replyClass: cls.replyClass, oooReturnsAt: cls.returnsAt || reply.oooReturnsAt }, false);
       if (a !== "none") actioned++;
     }
   }

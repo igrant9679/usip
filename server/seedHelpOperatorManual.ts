@@ -129,6 +129,8 @@ When someone says "add them to the sequence", ask which page they mean.
 
 **Deals** (/v2/deals) — the kanban of open opportunities by stage with value, win probability, days in stage and next step; list and forecast views; the **Pipeline Alerts** strip for stale, low-probability, no-champion and slipped deals.
 
+**Sales Pipeline** (/pipeline) — the same opportunities on the classic stage board, and the one page that adds a weighted forecast with AI commentary, **New opportunity**, **Export CSV** and a switcher between your configured pipelines.
+
 **Lists** (/v2/lists) — named static sets of people or companies for targeting and bulk actions. **Tasks** (/v2/tasks) — your queue, including AI-proposed draft tasks awaiting approval.
 
 ## Outreach
@@ -141,7 +143,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 **Emails** (/v2/emails) — every email in and out, sitewide. **AI Pipeline** and **Email Drafts** are saved filters of this page where you approve, edit or discard.
 
-**Conversations** (/v2/conversations) — inbound replies that need a human, classified with sentiment and a suggested reply. Handling one stops the sequence for that person.
+**Conversations** (/v2/conversations) — inbound replies that need a human, classified with sentiment and a suggested reply. Handling one stops the sequence for that person. The Social counters count replies to OUR outreach only (a DM from someone we messaged or invited first), so they will not match a raw DM count; strangers sit under the **Not our outreach** filter, unclassified and never auto-answered.
 
 **Meetings** (/v2/meetings) — proposed, invited, scheduled, completed, no-show. Confirm AI proposals here; a proposal whose offered times have all passed shows a **Regenerate** button (fresh future times, fresh invite — also swept automatically each autopilot tick, and "Regenerate expired" does the whole backlog). Your **booking link** lives here: set its timezone (it defaults to UTC).
 
@@ -262,7 +264,7 @@ Lists are hand-picked and static. Segments are rule-based and stay current. Pers
 2. **Screen** — approve or reject per the autonomy mode and thresholds.
 3. **Write** — a sequence for each approved person; a judge that can see the dossier scores it out of 40.
 4. **Enroll** — steps become scheduled sends on the cadence. Steps already sent are kept on re-enrol.
-5. **Dispatch** — due steps send through the pool within the daily cap and outside BOTH suppression lists (the campaign's own and the workspace's site-wide one); every campaign email carries one-click unsubscribe headers, plus your opt-out footer when that setting is on; the sender's display name becomes the From header and the signature; tracking is injected.
+5. **Dispatch** — due steps send through the pool within the campaign's daily cap AND each mailbox's own daily and hourly caps (one allowance per mailbox, shared with sequence, CRM, Inbox and warmup sends), and outside BOTH suppression lists (the campaign's own and the workspace's site-wide one); every campaign email carries one-click unsubscribe headers, plus your opt-out footer when that setting is on; the sender's display name becomes the From header and the signature; tracking is injected.
 6. **Complete** and recount the funnel.
 7. **Discover** — if the queue is drained and below target, pull from one source.
 
@@ -357,7 +359,7 @@ Archived workspaces are excluded from every job.
 
 ## Workflow rules
 
-**Configuration → Workflow Rules** are deterministic if-this-then-that automations, separate from the AI dials. Triggers: record created, stage changed, signal received (job change), deal stuck, task overdue, field equals, schedule. Actions: webhook, Slack, Teams, create task, notify, update field. **Test fire** runs the real path. The Autonomy Center also suggests rules from what it observes; adopt the ones that describe something you actually do.
+**Configuration → Workflow Rules** are deterministic if-this-then-that automations, separate from the AI dials. Triggers (six, and only six — *field equals* and *schedule* were retired; a saved rule on either is flagged "never fires"): record created and record updated, each scoped on the rule to leads, contacts, opportunities or any; stage changed (all five stage-writing paths, including an accepted proposal); task overdue; signal received (job change); deal stuck (nightly, and its conditions apply). Accounts are not a scope yet. The conditions a record rule offers are the fields that event carries and nothing else, so "why did my rule never fire?" is usually a condition on a field the payload does not have — a lead has no score yet when it is created (scoring runs afterwards), and a contact has no stage. Actions: webhook, Slack, Teams, create task, notify, update field, enroll in sequence, AI email draft. Bulk paths — imports, prospect imports, ARE bulk approval — never fire rules, and a burst of public form submissions is capped per minute. **Test fire** runs the real path. The Autonomy Center also suggests rules from what it observes; adopt the ones that describe something you actually do.
 
 ## Budgets and caps
 
@@ -415,7 +417,7 @@ If the panel is empty, you are done with this block.
 ## Admin (about 5 minutes)
 
 1. Deliverability: bounce and spam rates, warmup progress, any sender in error.
-2. Sending accounts: no single campaign saturating a daily limit; display names set on every sender.
+2. Sending accounts: no single campaign saturating a daily limit — "sent today" on Mailboxes is everything that mailbox sent, campaign, sequence, CRM, Inbox and warmup together; display names set on every sender.
 3. Audit Log: skim for surprises — deletions, role changes, dial flips.
 
 ## End of day (5 minutes, everyone)
@@ -542,7 +544,7 @@ Newest first. Read the class, the sentiment and the suggested reply, then act:
 | Willing to meet | propose times or send the booking link (the Meeting Autopilot does this in Auto) |
 | Follow-up question | answer in your voice, log it |
 | Referral | automatic: the referred person is created in People, an intro email is drafted for your review (when the reply carried their address — otherwise enrichment hunts one first), and the task quotes their exact words |
-| Out of office | snooze until the return date |
+| Out of office | automatic (Approve or Auto only — Off never classifies, so those pause until you resume them by hand): the enrollment is scheduled to restart on the stated return date, 7 days as the fallback, 90 days as the cap; a real reply cancels it, and we stop after three consecutive out-of-offices |
 | Left company or wrong person | automatic: the contact is flagged departed (filterable, never deleted); the daily LinkedIn check surfaces their new role and feeds Job Change re-engagement |
 | Not interested | mark it, respect it |
 | Unsubscribe | goes on suppression (automatic in Auto) |
@@ -621,7 +623,7 @@ Managers: compare forecast to actuals at quarter end and adjust stage probabilit
 - **Chat agent** — the website widget that qualifies visitors and can book meetings without sending.
 - **Confidence tier** — how sure the identity of a person is, from the provenance ledger.
 - **Conversion** — turning a lead into an account, contact and opportunity in one step.
-- **Daily cap** — the maximum sends per day for a campaign or sender.
+- **Daily cap** — two different ceilings with the same name. A *campaign's* daily cap is how many steps that campaign may dispatch per day. A *mailbox's* daily cap is how much mail that inbox may send per day from every source combined — campaign, sequence, CRM, Inbox compose and warmup — and it has an hourly sibling. A campaign step blocked by a mailbox cap is re-scheduled, not failed.
 - **Dial** — the Off / Approve / Auto switch on a feature.
 - **Discovery** — a campaign sourcing new people while its working count is below target.
 - **Dossier** — the enriched profile the writer reads before writing to a person.
@@ -665,7 +667,7 @@ Managers: compare forecast to actuals at quarter end and adjust stage probabilit
     tags: ["operator-manual", "troubleshooting", "support"],
     bodyMarkdown: `| Symptom | Likely cause | Fix |
 |---|---|---|
-| Nothing sends | no enabled sender, campaign paused or draft, daily cap hit, batch not approved, drafts not approved | Email Sending; campaign status; approve the batch; empty AI Pipeline and Email Drafts; read the Logs tab |
+| Nothing sends | no enabled sender, campaign paused or draft, daily cap hit, batch not approved, drafts not approved | Email Sending; campaign status; approve the batch; empty AI Pipeline and Email Drafts; read the Logs tab. If it is a MAILBOX cap, the Logs say "email steps held and re-scheduled" — nothing is lost, the steps go out as capacity returns; raise the mailbox's limit or add a sender to the pool if you want them sooner |
 | Blank signature or no sender name | the sender has no display name | Email Sending → set a display name on every sender |
 | Replies not in Velocity | SendGrid has no inbox; Reply-To mailbox not connected; poller mailbox disconnected | Settings → Mailboxes: connect the Reply-To mailbox; Connected Accounts |
 | Booking link offers night-time slots | timezone defaults to UTC | Meetings → booking link → timezone |

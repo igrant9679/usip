@@ -752,10 +752,16 @@ export const enrollments = mysqlTable(
     currentStep: int("currentStep").default(0).notNull(),
     startedAt: timestamp("startedAt").defaultNow().notNull(),
     nextActionAt: timestamp("nextActionAt"),
+    // Migration 0181: out-of-office snooze. An auto-responder pauses the
+    // enrollment like any other reply, and processEnrollments only ever
+    // selects status='active' — so before this, an away-message ended the
+    // outreach permanently. NULL = no auto-resume (a rep's own pause).
+    resumeAt: timestamp("resumeAt"),
   },
   (t) => ({
     bySeq: index("ix_enr_seq").on(t.sequenceId),
     byProspect: index("ix_enr_prospect").on(t.prospectId),
+    byResume: index("ix_enr_resume").on(t.status, t.resumeAt),
   }),
 );
 
@@ -825,6 +831,14 @@ export const emailDrafts = mysqlTable(
   (t) => ({
     byWs: index("ix_ed_ws").on(t.workspaceId, t.status),
     byToken: index("ix_ed_token").on(t.trackingToken),
+    /**
+     * Declaration only — migration 0061 has created this in the real database
+     * since long before this line existed. Recorded here so the drift stops
+     * being invisible: reading schema.ts alone said the per-account draft
+     * counters were unindexed, which is how a "this makes the hot path
+     * cheaper" claim got written about a query that was already indexed.
+     */
+    byAcct: index("ix_ed_sending_account").on(t.sendingAccountId),
   }),
 );
 
@@ -1067,6 +1081,13 @@ export const emailLog = mysqlTable(
     byDraft: index("ix_elog_draft").on(t.draftId),
     byExec: index("ix_elog_exec").on(t.executionQueueId),
     byTo: index("ix_elog_to").on(t.toEmail),
+    /**
+     * The per-account daily/hourly send budget (migration 0182). Every
+     * campaign send asks this table how much of a mailbox's day is left, so
+     * the predicate (sendingAccountId, sentAt) must be a range scan; status
+     * and workspaceId ride along to keep the COUNT(*) covering.
+     */
+    byAcctSent: index("ix_elog_acct_sent").on(t.sendingAccountId, t.sentAt, t.status, t.workspaceId),
   }),
 );
 export type EmailLog = typeof emailLog.$inferSelect;
@@ -3297,7 +3318,14 @@ export const emailReplies = mysqlTable(
     classReasoning: text("classReasoning"),
     suggestedReply: text("suggestedReply"),            // AI-drafted reply body (approval mode)
     classifiedAt: timestamp("classifiedAt"),
-    autoActionTaken: varchar("autoActionTaken", { length: 48 }), // meeting_proposed|task_created|suppressed|ooo_noted|marked|none
+    /* OOO snooze linkage (migration 0181). The poller pauses enrollments the
+       moment ANY reply lands, long before anything knows it was a robot, so
+       the classifier needs an exact, id-based record of what THIS reply
+       stopped — re-deriving the person later would also catch a rep's own
+       pause and a contact-merge rewrite (routers/dataHealth.ts). */
+    pausedEnrollmentIds: json("pausedEnrollmentIds"), // enrollment ids THIS reply paused (written by inboundReplyPoller step 5)
+    oooReturnsAt: timestamp("oooReturnsAt"),          // return date the auto-reply stated, when it stated one
+    autoActionTaken: varchar("autoActionTaken", { length: 48 }), // meeting_proposed|task_created|suppressed|ooo_noted|ooo_snoozed|marked|none
     meetingId: int("meetingId"),                       // link to the meetings row a positive reply created
     handledAt: timestamp("handledAt"),
     handledBy: varchar("handledBy", { length: 16 }),   // ai|user

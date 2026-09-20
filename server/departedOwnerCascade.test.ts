@@ -285,6 +285,13 @@ const SURFACES: Array<{
     gate: /const ownerUserId = await activeOwnerOrNull\(workspaceId, reply\.userId\);/,
   },
   {
+    what: "a social reply's proposal and task are not owned by a departed rep",
+    file: "server/services/replyClassifier.ts",
+    start: "export async function classifyAndHandleSocialMessage(",
+    end: "const relatedType = msg.linkedContactId",
+    gate: /const owner = await activeOwnerOrNull\(workspaceId, ownerUserId\);/,
+  },
+  {
     what: "a high-intent visit task is not filed under a departed record owner",
     file: "server/websiteTracking.ts",
     start: "await db.insert(tasks).values({",
@@ -335,9 +342,10 @@ describe("every session-less path that names a member gates on active membership
    * pinned rather than bounded so that REMOVING a surface is also a decision.
    */
   it("checks every surface in the table, and the table has not shrunk", () => {
-    // 2026-09-20: 30, with customers.cmUserId — the Closed Won → Customer step
-    // wrote the deal's stored owner straight through.
-    expect(SURFACES.length).toBe(30);
+    // 2026-09-20: 31, with classifyAndHandleSocialMessage — the social half of
+    // the reply classifier filed its meeting proposal and its task under
+    // unipile_accounts.userId, a rep who may have left since.
+    expect(SURFACES.length).toBe(31);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 

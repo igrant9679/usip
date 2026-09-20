@@ -10,9 +10,14 @@
  * (audit 2026-09-02) and would understate every campaign; Broadcasts does
  * not send. The rail still renders ONLY from the registry, and the Daily
  * row from TOP_LINKS — both are pinned so the two cannot drift.
+ *
+ * Owner again (2026-09-20): "also bring back the traditional Sales Pipeline
+ * page". Same failure, narrower: /pipeline was never deleted or broken — it
+ * had simply lost its registry entry, so the rail, the Library and Ctrl+K
+ * could not see it and only a typed URL reached it.
  */
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PRIMARY_TOOLS, TOOLS } from "../client/src/lib/toolRegistry";
 import { NAV_HELP } from "../client/src/lib/helpText";
@@ -57,6 +62,32 @@ describe("what came back to the rail", () => {
       expect(primaryHrefs.has(href), href).toBe(true);
       expect(NAV_HELP[href]?.body, href).toBeTruthy();
     }
+  });
+
+  it("Sales Pipeline: registered primary in CRM with help copy, route and page intact", () => {
+    // 2026-09-20: the restore was a registry entry, nothing else. Pinning the
+    // route and the page file too, because the diagnosis that made this a
+    // one-line fix ("the page still works, it is only invisible") is exactly
+    // the thing a later deletion would silently invalidate.
+    expect(tool("/pipeline")).toBeTruthy();
+    expect(tool("/pipeline").group).toBe("CRM");
+    expect(tool("/pipeline").label).toBe("Sales Pipeline");
+    expect(primaryHrefs.has("/pipeline")).toBe(true);
+    expect(NAV_HELP["/pipeline"]?.body).toBeTruthy();
+    expect(client("App.tsx")).toContain('path="/pipeline"');
+    expect(existsSync(join(__dirname, "..", "client", "src", "pages", "usip", "Pipeline.tsx"))).toBe(true);
+  });
+
+  it("Sales Pipeline ADDED a surface — Deals kept its own, and the pair says which is which", () => {
+    // The restore's one real risk was editing next to /v2/deals and dropping
+    // it. Two adjacent CRM rail rows over the same opportunities also need
+    // descriptions that name what each has: Deals the autopilot and the
+    // at-risk strip, Sales Pipeline the forecast, create and export.
+    expect(tool("/v2/deals").group).toBe("CRM");
+    expect(primaryHrefs.has("/v2/deals")).toBe(true);
+    expect(tool("/v2/deals").description).toMatch(/autopilot/i);
+    expect(tool("/pipeline").description).toMatch(/forecast/i);
+    expect(tool("/pipeline").description).not.toBe(tool("/v2/deals").description);
   });
 });
 

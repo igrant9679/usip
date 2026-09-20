@@ -58,6 +58,11 @@ export type PromotionOutcome =
  * contact and creates nothing — the sweeper may reach the same row again on a
  * later pass, and a promotion that ran twice would put the same person in the
  * CRM twice and then into a campaign twice.
+ *
+ * NO record_created fire in here, deliberately: enrichmentSweeper drives this
+ * on a cron over every unpromoted prospect in the workspace, so a fire at this
+ * level is a bulk fan-out. The HUMAN door — prospects.promoteToContact —
+ * announces the contact itself, once, on the gesture that caused it.
  */
 export async function promoteProspectRow(
   workspaceId: number,

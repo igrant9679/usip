@@ -20,27 +20,58 @@
  * while doing nothing, which is how four of the eight builder actions stayed
  * dead without anyone noticing.
  *
- * Trigger dispatch sites (a trigger with no site here can never fire):
- *   record_created  → routers/crm.ts (lead create)
- *   record_updated  → routers/crm.ts (lead update)
- *   stage_changed   → routers/crm.ts (opportunity setStage)
- *   signal_received → services/linkedinEnrichment/jobChangeReengagement.ts
+ * Trigger dispatch sites (a trigger with no site here can never fire).
+ * 2026-09-20 trigger inventory — each row was verified against the code, and
+ * the gaps it found are now closed:
+ *   record_created  → routers/crm.ts (leads.create, contacts.create,
+ *                     opportunities.create, leads.convert ×2) via
+ *                     fireRecordCreated; plus the single-record capture paths
+ *                     routers/forms.ts, landingPages.ts, bookingLinks.ts,
+ *                     chatAgents.ts and prospects.ts (promoteToLead /
+ *                     promoteToContact, only when they really insert)
+ *   record_updated  → routers/crm.ts (leads.update, contacts.update,
+ *                     opportunities.update, leads.convert) via fireRecordUpdated
+ *   stage_changed   → FIVE doors write opportunities.stage, and until now only
+ *                     the first fired: routers/crm.ts setStage,
+ *                     routers/pipelineAlerts.ts moveDealStage,
+ *                     routers/opportunityIntelligence.ts reviewStageChange, and
+ *                     both proposal-accept paths in routers/proposals.ts
+ *   signal_received → services/linkedinEnrichment/jobChangeReengagement.ts,
+ *                     services/company/brandReconciler.ts, routers/are/execution.ts
  *   task_overdue    → runTaskOverdueCron below, registered in _core/index.ts
  *   deal_stuck      → routers/operations.ts checkDealAging (separate path)
  * If you add a trigger to the builder, add its dispatch site in the same
  * commit — otherwise it saves, shows active, and sits at fireCount 0 forever.
+ *
+ * A dispatch site is not enough on its own: the record_* payloads are built by
+ * buildRecordPayload from RECORD_FIELDS in @shared/workflowTriggers, which is
+ * also what the rule builder offers as condition fields. They were two
+ * separate hand-written lists with NO keys in common, so a record_created rule
+ * with any condition on it evaluated against `undefined` and never matched —
+ * a fired trigger and a dead rule look identical from the UI (2026-09-20).
+ *
+ * What must NEVER dispatch: bulk and engine paths. A 5,000-row CSV import that
+ * fired 5,000 rules would POST 5,000 webhooks; the imports, prospect-import,
+ * LinkedIn/Places/scraper finders, discovery consolidation, leadBridge,
+ * personLink, crmMatching.findOrCreateAccount, prospectPromotion (shared with
+ * the enrichment cron) and ARE promotion paths therefore carry no fire. Note
+ * that "one tRPC mutation = one record" is NOT a structural guarantee here:
+ * routers/are/prospectsBulk.ts builds an appRouter.createCaller and loops it
+ * over a whole campaign, so anything reachable from such a loop counts as bulk.
  *
  * Best-effort throughout: a single action or rule failing never throws into
  * the caller's event path.
  */
 import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { getDb } from "../db";
+import { archivedWorkspaceIds, isWorkspaceArchived } from "../_core/workspaceArchive";
 import { notifyIfEnabled } from "./policyNotify";
 import {
   contacts, emailDrafts, enrollments, leads, notifications, opportunities,
   sequences, tasks, workflowRules, workflowRuns, workspaceSettings,
 } from "../../drizzle/schema";
 import { invokeLLM } from "../_core/llm";
+import { RECORD_FIELDS } from "@shared/workflowTriggers";
 
 /**
  * Evaluate a rule's condition spec against a flat payload. Supports `{all:[…]}`
@@ -109,8 +140,13 @@ export interface FireContext {
 const TASK_TYPES = ["call", "manual_email", "social_touch", "follow_up", "meeting_prep", "crm_update", "generic_action", "todo"];
 const TASK_PRIORITIES = ["low", "normal", "high", "urgent"];
 
-/** Bare-array conditions (`[{field,op,value}]`) → `{all:[…]}` so evalConditions applies them. */
-function normalizeConditions(raw: unknown): { all?: any[]; any?: any[] } {
+/**
+ * Bare-array conditions (`[{field,op,value}]`) → `{all:[…]}` so evalConditions
+ * applies them. Exported because the deal_stuck loops in routers/operations.ts
+ * read `rule.conditions` straight off the row too, and a rule saved by the
+ * builder (a bare array) would otherwise evaluate as an empty spec there.
+ */
+export function normalizeConditions(raw: unknown): { all?: any[]; any?: any[] } {
   if (Array.isArray(raw)) return { all: raw as any[] };
   if (raw && typeof raw === "object") return raw as { all?: any[]; any?: any[] };
   return {};
@@ -357,6 +393,79 @@ export async function executeRuleActions(
 }
 
 /**
+ * Burst cap. forms.submit, landingPages.submit, chatAgents and bookingLinks are
+ * PUBLIC endpoints with no rate limiting of any kind, and every one of them now
+ * creates a lead that dispatches record_created. Without a valve, a form-spam
+ * run turns straight into an outbound webhook flood against a customer's
+ * endpoint — the app attacking someone on the spammer's behalf.
+ *
+ * Per-PROCESS, deliberately: Railway may run more than one instance, so this is
+ * a safety valve, not a quota. A plain object rather than a Map because the
+ * ES5 target refuses for-of/spread over a Map (TS2802).
+ */
+const BURST_MAX = 50;              // events per workspace+trigger per window
+const BURST_WINDOW_MS = 60_000;
+const burst: Record<string, { windowStart: number; count: number; logged: boolean }> = {};
+
+/**
+ * Count this event; `capped` once the window is over its cap, `firstOverflow`
+ * only on the transition INTO the capped state. Exported so the suite can
+ * exercise the window arithmetic directly — the dispatcher it guards needs a
+ * database and therefore cannot be driven from a unit test.
+ */
+export function burstExceeded(workspaceId: number, triggerType: string): { capped: boolean; firstOverflow: boolean } {
+  const key = `${workspaceId}:${triggerType}`;
+  const now = Date.now();
+  let w = burst[key];
+  if (!w || now - w.windowStart >= BURST_WINDOW_MS) {
+    w = { windowStart: now, count: 0, logged: false };
+    burst[key] = w;
+  }
+  w.count++;
+  if (w.count <= BURST_MAX) return { capped: false, firstOverflow: false };
+  // Log the suppression ONCE per window. Logging per rule per event would make
+  // the valve cost more DB writes than the webhooks it is preventing.
+  const firstOverflow = !w.logged;
+  w.logged = true;
+  return { capped: true, firstOverflow };
+}
+
+/** Test seam: the cap is process-global state, so a suite must be able to clear it. */
+export function __resetBurstWindows(): void {
+  const keys = Object.keys(burst);
+  for (let i = 0; i < keys.length; i++) delete burst[keys[i]!];
+}
+
+/**
+ * The entity gate. For the record_* triggers an ABSENT entity means "lead"
+ * (2026-09-20): leads.create/update was their only dispatch site until the
+ * inventory above widened it, so every rule saved before that was authored
+ * against leads and nothing ever set `entity`. Treating absent as "any" would
+ * have made a "task a rep on a new inbound lead" rule start tasking someone on
+ * every opportunity too.
+ *
+ * Defaulted at READ time rather than backfilled into a column: a backfill only
+ * covers the rows that exist the day it runs, and three writers keep creating
+ * entity-less rules afterwards — the builder, workflows.create in
+ * routers/operations.ts, and the AI generator's apply path.
+ *
+ * Exported as a pure predicate because the dispatcher it guards needs a
+ * database, so this is the only place the semantics can actually be tested.
+ */
+export function entityGateAllows(triggerType: string, cfgEntity: unknown, payloadEntity: unknown): boolean {
+  const cfg = typeof cfgEntity === "string" && cfgEntity ? cfgEntity : null;
+  if (triggerType === "record_created" || triggerType === "record_updated") {
+    const want = cfg ?? "lead";
+    return want === "any" || want === payloadEntity;
+  }
+  // Every other trigger keeps the legacy shape: an entity is an optional
+  // filter, never a default — a legacy AI-authored signal_received rule may
+  // carry a stray `entity` that must not turn into a hard filter.
+  if (!cfg || typeof payloadEntity !== "string" || !payloadEntity) return true;
+  return cfg === payloadEntity;
+}
+
+/**
  * Evaluate + fire all enabled rules for `triggerType` against `ctx`. Returns how
  * many rules matched their conditions and how many were fired (executed). Never
  * throws — safe to call fire-and-forget from any event site.
@@ -370,6 +479,12 @@ export async function fireWorkflowRules(
     const db = await getDb();
     if (!db) return { matched: 0, fired: 0 };
 
+    // An archived workspace must stop sending, spending and creating records.
+    // This is one of the three paths that could previously POST to a customer's
+    // webhook from a frozen workspace (the others: runTaskOverdueCron and
+    // operations.checkDealAging, both guarded in the same commit).
+    if (await isWorkspaceArchived(workspaceId)) return { matched: 0, fired: 0 };
+
     const rules = await db
       .select()
       .from(workflowRules)
@@ -380,6 +495,29 @@ export async function fireWorkflowRules(
       ));
     if (rules.length === 0) return { matched: 0, fired: 0 };
 
+    // Counted only once a workspace actually HAS rules for this trigger, so the
+    // common no-rules case costs nothing and cannot poison a later window.
+    const cap = burstExceeded(workspaceId, triggerType);
+    if (cap.capped) {
+      if (cap.firstOverflow) {
+        console.warn(`[WorkflowEngine] ws ${workspaceId} ${triggerType}: >${BURST_MAX} events in 60s — suppressing for the rest of the window`);
+        try {
+          await db.insert(workflowRuns).values({
+            workspaceId, ruleId: rules[0]!.id,
+            triggeredBy: "burst_cap",
+            status: "skipped",
+            actionsRun: null,
+            errorMessage: `burst cap: >${BURST_MAX} ${triggerType} events in 60s — suppressed`,
+            relatedType: ctx.relatedType ?? null,
+            relatedId: ctx.relatedId ?? null,
+          } as never);
+        } catch (e) {
+          console.error(`[WorkflowEngine] ws ${workspaceId} burst-cap log failed:`, (e as Error).message);
+        }
+      }
+      return { matched: 0, fired: 0 };
+    }
+
     const [wsSettings] = await db
       .select({ slackWebhookUrl: workspaceSettings.slackWebhookUrl, teamsWebhookUrl: workspaceSettings.teamsWebhookUrl })
       .from(workspaceSettings)
@@ -389,10 +527,11 @@ export async function fireWorkflowRules(
     let fired = 0;
     for (const rule of rules) {
       const cfg = (rule.triggerConfig ?? {}) as Record<string, any>;
+      if (!entityGateAllows(triggerType, cfg.entity, ctx.payload.entity)) continue;
       // signal_received: optional signal-name gate (e.g. only "job_change").
+      // Kept permissive — a legacy AI-authored signal rule may carry a stray
+      // `entity` that the branch above must not turn into a hard filter.
       if (triggerType === "signal_received" && cfg.signal && cfg.signal !== ctx.payload.signal) continue;
-      // Optional entity gate shared by record_* / field_equals rules.
-      if (cfg.entity && ctx.payload.entity && cfg.entity !== ctx.payload.entity) continue;
       if (!evalConditions(normalizeConditions(rule.conditions), ctx.payload)) continue;
       matched++;
 
@@ -410,6 +549,11 @@ export async function fireWorkflowRules(
           status: errors.length === 0 ? "success" : "failed",
           actionsRun: rule.actions,
           errorMessage: errors.length ? errors.join("; ").slice(0, 1000) : null,
+          // Which record set it off. The columns have existed since the table
+          // was added and every writer left them null, so the run history read
+          // "success via signal:record_created" with no way to tell WHICH lead.
+          relatedType: ctx.relatedType ?? null,
+          relatedId: ctx.relatedId ?? null,
         } as never);
         await db
           .update(workflowRules)
@@ -428,6 +572,120 @@ export async function fireWorkflowRules(
   } catch (e) {
     console.error(`[WorkflowEngine] ws ${workspaceId} ${triggerType} failed:`, (e as Error).message);
     return { matched: 0, fired: 0 };
+  }
+}
+
+/**
+ * The three record-event helpers below exist so every dispatch site builds the
+ * SAME payload shape. Before them, leads.create and leads.update each hand-rolled
+ * an object literal and no other site had one at all — which is how the builder
+ * came to offer "when a record is created" while only a lead could ever trigger
+ * it. Fire-and-forget and never throwing: a workflow rule must not be able to
+ * fail a user's save.
+ *
+ * Every caller is a SINGLE-record, human-originated path. Do not call these from
+ * an array insert or from anything a per-row createCaller loop can reach — see
+ * the do-not-fire list in this file's header.
+ */
+
+/**
+ * The flat payload for a created record: every key @shared/workflowTriggers
+ * declares for that entity, null where the seam does not know one, and NOTHING
+ * else.
+ *
+ * One builder rather than a literal per site, for two reasons. The rule
+ * builder generates its condition list from the same declaration, so the two
+ * can never drift into the empty intersection that made every conditioned
+ * record_created rule dead (2026-09-20). And the payload goes verbatim into a
+ * webhook action's POST body (runAction above), so no site can spread a whole
+ * tRPC input — names, phone numbers — at a customer-configured URL.
+ */
+export function buildRecordPayload(entity: string, recordId: number, fields: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = { entity, id: recordId };
+  const keys = RECORD_FIELDS[entity] ?? [];
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i]!;
+    out[k] = fields[k] === undefined ? null : fields[k];
+  }
+  return out;
+}
+
+export async function fireRecordCreated(
+  workspaceId: number,
+  entity: "lead" | "contact" | "opportunity",
+  recordId: number,
+  fields: Record<string, any>,
+  ownerUserId: number | null,
+): Promise<void> {
+  if (!recordId) return;
+  try {
+    const payload = buildRecordPayload(entity, recordId, fields);
+    payload.ownerUserId = ownerUserId;
+    await fireWorkflowRules(workspaceId, "record_created", {
+      payload, relatedType: entity, relatedId: recordId, ownerUserId,
+    });
+  } catch (e) {
+    console.error(`[WorkflowEngine] record_created fire failed for ${entity} ${recordId}:`, (e as Error).message);
+  }
+}
+
+export async function fireRecordUpdated(
+  workspaceId: number,
+  entity: "lead" | "contact" | "opportunity",
+  recordId: number,
+  before: Record<string, any>,
+  patch: Record<string, any>,
+  ownerUserId: number | null,
+): Promise<void> {
+  if (!recordId) return;
+  try {
+    // Merged post-update row plus `changed` (the patched field names), so a rule
+    // can condition on what actually MOVED and not merely on the new value.
+    const payload: Record<string, any> = {};
+    const beforeKeys = Object.keys(before ?? {});
+    for (let i = 0; i < beforeKeys.length; i++) payload[beforeKeys[i]!] = before[beforeKeys[i]!];
+    const patchKeys = Object.keys(patch ?? {});
+    for (let i = 0; i < patchKeys.length; i++) payload[patchKeys[i]!] = patch[patchKeys[i]!];
+    payload.entity = entity;
+    payload.id = recordId;
+    payload.ownerUserId = ownerUserId;
+    payload.changed = patchKeys;
+    await fireWorkflowRules(workspaceId, "record_updated", {
+      payload, relatedType: entity, relatedId: recordId, ownerUserId,
+    });
+  } catch (e) {
+    console.error(`[WorkflowEngine] record_updated fire failed for ${entity} ${recordId}:`, (e as Error).message);
+  }
+}
+
+/**
+ * stage_changed. FIVE endpoints write opportunities.stage and until 2026-09-20
+ * only crm.setStage announced it — so "when a deal is WON", the single most
+ * valuable rule anyone builds, was silently dead on both proposal-accept paths,
+ * on the Alerts page's move control and on the manager approval queue.
+ */
+export async function fireStageChanged(
+  workspaceId: number,
+  opportunityId: number,
+  fromStage: string | null,
+  toStage: string,
+  extra: { value?: number; winProb?: number; isWon?: boolean; isLost?: boolean; name?: string | null },
+  ownerUserId: number | null,
+): Promise<void> {
+  if (!opportunityId) return;
+  try {
+    const payload: Record<string, any> = {};
+    const keys = Object.keys(extra ?? {});
+    for (let i = 0; i < keys.length; i++) payload[keys[i]!] = (extra as Record<string, any>)[keys[i]!];
+    payload.entity = "opportunity";
+    payload.id = opportunityId;
+    payload.stage = toStage;
+    payload.fromStage = fromStage;
+    await fireWorkflowRules(workspaceId, "stage_changed", {
+      payload, relatedType: "opportunity", relatedId: opportunityId, ownerUserId,
+    });
+  } catch (e) {
+    console.error(`[WorkflowEngine] stage_changed fire failed for opportunity ${opportunityId}:`, (e as Error).message);
   }
 }
 
@@ -472,7 +730,13 @@ export async function runTaskOverdueCron(intervalMs: number): Promise<void> {
   if (due.length === 0) return;
   console.log(`[WorkflowEngine] task_overdue: ${due.length} task(s) crossed their due date`);
 
+  // Cross-workspace scan, so the archive gate is this cron's own responsibility
+  // — workspaceProcedure never sees it. An archived workspace must not notify
+  // anyone or POST to a webhook (2026-09-20).
+  const archivedWs = await archivedWorkspaceIds();
+
   for (const t of due) {
+    if (archivedWs.has(t.workspaceId)) continue;
     /**
      * Tell the task's OWNER, which is separate from firing workflow rules and
      * had no implementation at all — "One of my tasks is overdue" was a switch

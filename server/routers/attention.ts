@@ -31,7 +31,7 @@ import {
 import { workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { remindableMeetingStatuses } from "@shared/meetingStatus";
-import { genuineReplyScope } from "../services/replyScope";
+import { genuineReplyScope, genuineSocialReplyScope } from "../services/replyScope";
 
 const EMPTY = {
   totalNeedingYou: 0,
@@ -161,9 +161,12 @@ export const attentionRouter = router({
           inArray(emailDrafts.status, ["pending_review", "ai_pending_review"]),
           isNotNull(emailDrafts.sequenceId),
         )),
-      // Unhandled LinkedIn / WhatsApp replies (the Unified Inbox's queue).
+      // Unhandled LinkedIn / WhatsApp replies TO OUR OUTREACH (Conversations →
+      // Social). The scope is the point: unscoped, every stranger's cold DM
+      // landed on Home as something needing the rep, and totalNeedingYou grew
+      // with the spam (2026-09-20, services/replyScope.ts).
       db.select({ n: sql<number>`count(*)` }).from(unipileMessages)
-        .where(and(eq(unipileMessages.workspaceId, ws), eq(unipileMessages.direction, "inbound"), isNull(unipileMessages.handledAt))),
+        .where(and(eq(unipileMessages.workspaceId, ws), eq(unipileMessages.direction, "inbound"), genuineSocialReplyScope(), isNull(unipileMessages.handledAt))),
       // Continuous-optimisation recommendations waiting for accept/dismiss.
       db.select({ n: sql<number>`count(*)` }).from(optimizationRecommendations)
         .where(and(eq(optimizationRecommendations.workspaceId, ws), eq(optimizationRecommendations.status, "pending" as never))),

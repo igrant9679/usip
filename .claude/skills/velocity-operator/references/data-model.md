@@ -92,6 +92,8 @@ Whatever key the deal's pipeline defines. The SEEDED DEFAULT pipeline uses `disc
 
 **Scope trap:** `email_replies` holds *all* synced inbound mail, not only replies to outreach. Every "reply" count in the product is scoped by `genuineReplyScope()`; a query without it counts the whole inbox.
 
+**Out-of-office snooze (migration 0181).** The inbound poller pauses every active enrollment for a person the instant *any* reply lands, and the send engine only ever picks up `status='active'` — so before 0181 an auto-responder ended the outreach permanently. Three columns close it: `email_replies.pausedEnrollmentIds` (json — exactly which enrollment ids *that* reply paused), `email_replies.oooReturnsAt` (the return date the auto-reply stated, when it stated one), and `enrollments.resumeAt` (when the sweep may flip the row back; `NULL` = no auto-resume). Handling an out-of-office in Conversations stamps `resumeAt` on those ids only — never a row a rep paused by hand — and `resumeDueEnrollments()` on the 5-minute sequence tick sets them back to `active` from the next unsent step. Any other class of reply, and every manual pause/resume/exit, clears the stamp.
+
 ### Notification `kind` (Inbox `/inbox`)
 `mention`, `task_assigned`, `task_due`, `deal_won`, `deal_lost`, `renewal_due`, `churn_risk`, `approval_request`, `workflow_fired`, `system`, `email_reply`, `are_event`.
 

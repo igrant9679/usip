@@ -227,7 +227,12 @@ export async function dispatchLinkedInStep(input: {
       workspaceId: input.workspaceId,
       unipileAccountId: account.unipileAccountId,
       provider: "linkedin",
-      chatId: sent.id || identifier,
+      // `identifier` is a PUBLIC SLUG (extractLinkedInIdentifier), while the
+      // inbound webhook stores a LinkedIn URN as senderProviderId — the two
+      // namespaces never meet, so the recipientProviderId tier below cannot
+      // match an ARE reply. Unipile's chat_id is the key that can, which is
+      // why it is preferred here and the slug is only the fallback.
+      chatId: sent.chatId || sent.id || identifier,
       messageId: sent.id || `are-${input.campaignId}-${input.stepIndex}-${identifier}`,
       direction: "outbound",
       recipientName: name,

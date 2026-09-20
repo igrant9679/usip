@@ -174,6 +174,14 @@ export async function promoteProspectToCrm(
     ownerUserId: owner,
   });
 
+  /**
+   * NO record_created fire for the contact or the opportunity this function
+   * creates. "One tRPC mutation = one record" is not a structural guarantee
+   * here: are/prospectsBulk.ts builds an appRouter.createCaller and loops the
+   * approve procedure over an entire campaign, so a fire in this function fans
+   * out across every prospect in it. The moment is already announced once, as
+   * signal_received, further down this file.
+   */
   // ── Contact: reuse the previously linked row, else match on email, else
   // create. The old inline code inserted unconditionally, so a prospect who
   // triggered two positive signals became two contacts.

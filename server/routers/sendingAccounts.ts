@@ -419,6 +419,13 @@ export const sendingAccountsRouter = router({
         : [];
 
     const statsMap = new Map(stats.map((s) => [s.accountId, s]));
+    // "Sent today" must be the number that actually GATES a send, not the
+    // pool's private tally: sending_account_daily_stats counts only campaign
+    // sends, so a mailbox the sequence engine had already spent showed 0 used
+    // and its full limit remaining (audit 2026-09-20). bouncedToday still
+    // comes from the stats row — email_log has no bounce column.
+    const { accountsSentToday } = await import("../sendLimits");
+    const used = await accountsSentToday(wsId, accountIds);
     // A mailbox linked through the sender picker carries NO copy of the key —
     // the workspace one owns it — so reporting only its own column told the UI
     // "no key" about mailboxes that send perfectly well.
@@ -430,9 +437,9 @@ export const sendingAccountsRouter = router({
       // needs to know whether one is USABLE, so it can say "leave blank to keep
       // the current key" instead of implying the field is empty.
       hasSendgridKey: !!sendgridApiKeyEnc || workspaceHasKey,
-      sentToday: statsMap.get(a.id)?.sentCount ?? 0,
+      sentToday: used.get(a.id) ?? 0,
       bouncedToday: statsMap.get(a.id)?.bounceCount ?? 0,
-      remainingToday: a.dailySendLimit - (statsMap.get(a.id)?.sentCount ?? 0),
+      remainingToday: a.dailySendLimit - (used.get(a.id) ?? 0),
     }));
   }),
 
@@ -464,13 +471,17 @@ export const sendingAccountsRouter = router({
         );
       const { sendgridApiKeyEnc, ...safe } = account;
       const { getWorkspaceSendgridKey } = await import("../services/sendgridKey");
+      // Same split as `list`: the gating number from the shared counter, the
+      // bounce number from the stats row that is its only home.
+      const { accountsSentToday } = await import("../sendLimits");
+      const usedToday = (await accountsSentToday(ctx.workspace.id, [input.id])).get(input.id) ?? 0;
       return {
         ...safe,
         // Own copy OR the workspace key — the same thing a send resolves.
         hasSendgridKey: !!sendgridApiKeyEnc || !!(await getWorkspaceSendgridKey(ctx.workspace.id)),
-        sentToday: stat?.sentCount ?? 0,
+        sentToday: usedToday,
         bouncedToday: stat?.bounceCount ?? 0,
-        remainingToday: account.dailySendLimit - (stat?.sentCount ?? 0),
+        remainingToday: account.dailySendLimit - usedToday,
       };
     }),
 
@@ -1277,6 +1288,9 @@ export const senderPoolsRouter = router({
       return { ok: true };
     }),
 
+  // NO CALLER anywhere in server/ or client/src (checked 2026-09-20). Left on
+  // sending_account_daily_stats deliberately: re-pointing dead code at the
+  // shared counter would only make it look maintained.
   pickAccount: workspaceProcedure
     .input(z.object({ poolId: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
@@ -1377,23 +1391,16 @@ export const senderPoolsRouter = router({
         .innerJoin(sendingAccounts, eq(senderPoolMembers.accountId, sendingAccounts.id))
         .where(eq(senderPoolMembers.poolId, input.id))
         .orderBy(senderPoolMembers.position);
-      // Attach sentToday from daily stats
-      const todayStr = new Date().toISOString().slice(0, 10);
-      const stats = members.length > 0 ? await db
-        .select({ accountId: sendingAccountDailyStats.accountId, sent: sendingAccountDailyStats.sentCount })
-        .from(sendingAccountDailyStats)
-        .where(
-          and(
-            inArray(sendingAccountDailyStats.accountId, members.map((m) => m.accountId)),
-            eq(sendingAccountDailyStats.date, todayStr),
-          )
-        ) : [];
-      const statsMap = new Map(stats.map((s) => [s.accountId, s.sent]));
+      // sentToday from the shared counter — the pool screen's "12 / 200" is a
+      // claim about how much of the mailbox's day is left, so it has to be the
+      // number the pool itself gates on, not campaign volume alone.
+      const { accountsSentToday } = await import("../sendLimits");
+      const used = await accountsSentToday(ctx.workspace.id, members.map((m) => m.accountId));
       return {
         ...pool[0],
         members: members.map((m) => ({
           ...m,
-          account: { ...m.account, sentToday: statsMap.get(m.accountId) ?? 0 },
+          account: { ...m.account, sentToday: used.get(m.accountId) ?? 0 },
         })),
       };
     }),

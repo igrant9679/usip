@@ -525,27 +525,54 @@ export function registerUnipileWebhookRoutes(app: Express) {
           .limit(1);
         if (!acct) { console.warn(`[UnipileMsgWebhook] no local account for ${accountId}`); return; }
 
-        // Dedupe on messageId.
-        const [dup] = await db.select({ id: unipileMessages.id }).from(unipileMessages).where(eq(unipileMessages.messageId, messageId)).limit(1);
+        // Dedupe on messageId, WITHIN the tenant: messageId is a provider
+        // string, not ours, so an unscoped lookup let one workspace's message
+        // suppress another's (2026-09-20).
+        const [dup] = await db.select({ id: unipileMessages.id }).from(unipileMessages)
+          .where(and(eq(unipileMessages.workspaceId, acct.workspaceId), eq(unipileMessages.messageId, messageId))).limit(1);
         if (dup) return;
 
+        // Did WE open this conversation? Decided once, here, because it gates
+        // everything below: an autopilot acting on a stranger's DM sent the
+        // rep's booking link to someone we never contacted. It also recovers
+        // the CRM linkage from the outbound row that proves it — the inbound
+        // row has never carried one, so social meeting proposals were filed
+        // against nothing (2026-09-20, services/replyScope.ts).
+        const { resolveSocialOutreachScope } = await import("./services/replyScope");
+        const sc = await resolveSocialOutreachScope(db, {
+          workspaceId: acct.workspaceId,
+          chatId: chatId || messageId,
+          senderProviderId,
+        });
+
+        // Stored either way. Out of scope means "never acted on", never
+        // "never recorded" — the rep still sees it under Not our outreach.
         const ins = await db.insert(unipileMessages).values({
           workspaceId: acct.workspaceId, unipileAccountId: accountId, provider,
           chatId: chatId || messageId, messageId, direction: "inbound",
           senderName: senderName ?? null, senderProviderId: senderProviderId ?? null,
+          linkedContactId: sc.linkedContactId, linkedLeadId: sc.linkedLeadId,
           text: text || subject || null,
         } as never);
         const rowId = Number((ins as any)[0]?.insertId ?? 0) || null;
-        console.log(`[UnipileMsgWebhook] inbound ${provider} msg stored (account ${accountId}, msg ${messageId})`);
+        console.log(`[UnipileMsgWebhook] inbound ${provider} msg stored (account ${accountId}, msg ${messageId}, outreach ${sc.tier ?? "none"})`);
+
+        // An archived workspace stops ACTING, not recording. The gate sits
+        // after the insert for that reason, and it was missing entirely here:
+        // only the autopilot CRON consulted the freeze, so a webhook could
+        // still classify and DM out of a frozen tenant (2026-09-20).
+        const { archivedWorkspaceIds } = await import("./_core/workspaceArchive");
+        const archivedWs = await archivedWorkspaceIds();
+        if (archivedWs.has(acct.workspaceId)) return;
 
         if (rowId) {
           const [ws] = await db.select({ mode: workspaceSettings.conversationAutopilotMode })
             .from(workspaceSettings).where(eq(workspaceSettings.workspaceId, acct.workspaceId)).limit(1);
-          if (ws?.mode && ws.mode !== "off") {
+          if (sc.tier && ws?.mode && ws.mode !== "off") {
             const [row] = await db.select().from(unipileMessages).where(eq(unipileMessages.id, rowId)).limit(1);
             if (row) {
               const { classifyAndHandleSocialMessage } = await import("./services/replyClassifier");
-              await classifyAndHandleSocialMessage(acct.workspaceId, row, acct.userId ?? null, ws.mode as "approval" | "auto");
+              await classifyAndHandleSocialMessage(acct.workspaceId, row, acct.userId ?? null, ws.mode as "approval" | "auto", sc.tier);
             }
           }
         }

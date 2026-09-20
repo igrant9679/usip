@@ -14,18 +14,31 @@
  *     it, so a "warmed" SMTP account could be blasted past its safe
  *     daily ceiling.
  *
- * Both gaps closed here by counting from `email_drafts` rows where
- * `status = "sent"` AND `sentAt >= today`. The count is persistent
- * across restarts (it reads the DB, not RAM), and every send path
- * calls `assertSendAllowed` before invoking the adapter.
+ * Both gaps closed here by counting sent rows from the DB rather than
+ * RAM, so the count survives a restart, and every send path calls
+ * `assertSendAllowed` before invoking the adapter.
+ *
+ * ── WHICH TABLE COUNTS WHAT (audit 2026-09-20) ──────────────────────
+ * Three counters existed and each read a table only one engine wrote,
+ * so a mailbox could spend its whole daily limit TWICE in a day:
+ * `email_drafts` (sequences/CRM — campaign mail writes none),
+ * `sending_account_daily_stats` (written only by emailDelivery's pool)
+ * and warmup's own column. The PER-ACCOUNT number is now one function,
+ * `accountsSentToday`, over `email_log` — the only table every
+ * account-attributed transmission writes — plus the account's warmup
+ * column, which stays out of the log on purpose (see below).
+ *
+ * The WORKSPACE-wide count deliberately still reads `email_drafts`; it
+ * feeds a different, much smaller cap and moving it would break far
+ * more than it fixed. See getWorkspaceSentToday.
  *
  * `assertSendAllowed` throws TRPCError instead of returning a flag so
  * callers don't have to remember to check. Failures surface as
  * actionable error messages.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { emailDrafts, sendingAccounts, workspaceSettings } from "../drizzle/schema";
+import { emailDrafts, emailLog, sendingAccounts, workspaceSettings } from "../drizzle/schema";
 import { getDb } from "./db";
 import { utcDayStart } from "@shared/timeWindows";
 
@@ -38,33 +51,124 @@ function todayStart(): Date {
   return utcDayStart();
 }
 
-/** Count drafts dispatched today by a single sending account. */
+/** The same YYYY-MM-DD stamp warmupEngine writes into `warmupTodayDate`. */
+function utcDateStr(now = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
+/** One account's warmup counter, as `accountsSentToday` reads it. */
+export interface WarmupUsageRow {
+  id: number;
+  warmupSentToday: number | null;
+  warmupTodayDate: string | null;
+}
+
+/**
+ * Fold warmup volume into the per-account log counts.
+ *
+ * Pure, because the two ways this silently mis-measures are worth testing
+ * without a database:
+ *   - an account with no rows must come back as 0, not absent. Every caller
+ *     compares `used < dailySendLimit`, and `undefined < 500` is false — an
+ *     unseen mailbox would be skipped as if it were exhausted.
+ *   - `warmupTodayDate` is overwritten on the next send, never reset at
+ *     midnight, so a stale date means the stored count belongs to yesterday
+ *     and must contribute nothing (same trap as warmupEngine.ts:144-146).
+ */
+export function mergeWarmupUsage(
+  accountIds: number[],
+  logCounts: Array<{ accountId: number | null; cnt: number | string | null }>,
+  warmupRows: WarmupUsageRow[],
+  todayStr: string,
+): Map<number, number> {
+  const out = new Map<number, number>();
+  accountIds.forEach((id) => out.set(id, 0));
+  logCounts.forEach((r) => {
+    if (r.accountId == null) return;
+    out.set(r.accountId, (out.get(r.accountId) ?? 0) + (Number(r.cnt) || 0));
+  });
+  warmupRows.forEach((w) => {
+    if (w.warmupTodayDate !== todayStr) return;
+    out.set(w.id, (out.get(w.id) ?? 0) + (Number(w.warmupSentToday) || 0));
+  });
+  return out;
+}
+
+/**
+ * Today's send count per account — the ONE number every sender gates on.
+ *
+ * Counts `email_log` rows (migration 0163): the only table every
+ * account-attributed transmission writes. Deliberately NOT
+ * `sending_account_daily_stats`, which only emailDelivery's pool writes, and
+ * NOT `email_drafts`, which campaign mail never writes — counting either meant
+ * one engine could not see the other's volume, which is what let a mailbox do
+ * its full dailySendLimit twice in a day.
+ *
+ * Warmup is ADDED from the account's own counter rather than logged: warmup
+ * mail leaves the same mailbox and receiving providers count it, but it is the
+ * workspace mailing itself, so it must not enter the sitewide Emails feed, the
+ * Home "emails sent" tile or the email_log report source.
+ */
+export async function accountsSentToday(
+  workspaceId: number,
+  accountIds: number[],
+): Promise<Map<number, number>> {
+  if (accountIds.length === 0) return new Map<number, number>();
+  const db = await getDb();
+  if (!db) return new Map<number, number>();
+  const rows = await db
+    .select({ accountId: emailLog.sendingAccountId, cnt: sql<number>`COUNT(*)` })
+    .from(emailLog)
+    .where(
+      and(
+        // Mandatory even though the account ids already imply the workspace:
+        // it is the house rule, and it makes a stray cross-workspace id count
+        // as nothing rather than as somebody else's volume.
+        eq(emailLog.workspaceId, workspaceId),
+        inArray(emailLog.sendingAccountId, accountIds),
+        eq(emailLog.status, "sent"),
+        sql`${emailLog.sentAt} >= ${todayStart()}`,
+      ),
+    )
+    .groupBy(emailLog.sendingAccountId);
+  const warm = await db
+    .select({
+      id: sendingAccounts.id,
+      warmupSentToday: sendingAccounts.warmupSentToday,
+      warmupTodayDate: sendingAccounts.warmupTodayDate,
+    })
+    .from(sendingAccounts)
+    .where(
+      and(
+        eq(sendingAccounts.workspaceId, workspaceId),
+        inArray(sendingAccounts.id, accountIds),
+      ),
+    );
+  return mergeWarmupUsage(accountIds, rows, warm, utcDateStr());
+}
+
+/** Count everything this sending account dispatched today. */
 export async function getAccountSentToday(
   accountId: number,
   workspaceId: number,
 ): Promise<number> {
-  const db = await getDb();
-  if (!db) return 0;
-  const [row] = await db
-    .select({ cnt: sql<number>`COUNT(*)` })
-    .from(emailDrafts)
-    .where(
-      and(
-        eq(emailDrafts.workspaceId, workspaceId),
-        eq(emailDrafts.sendingAccountId, accountId),
-        eq(emailDrafts.status, "sent"),
-        sql`${emailDrafts.sentAt} >= ${todayStart()}`,
-      ),
-    );
-  return Number(row?.cnt ?? 0);
+  return (await accountsSentToday(workspaceId, [accountId])).get(accountId) ?? 0;
 }
 
 /**
- * Count drafts this account dispatched in the last rolling hour.
+ * Count what this account dispatched in the last rolling hour.
  *
  * A rolling window, not a clock hour: an account capped at 6/hour should not
  * be able to send 6 at 10:59 and 6 more at 11:01, which is a 12-in-two-minutes
  * burst — exactly the pattern the limit exists to prevent.
+ *
+ * Reads `email_log` for the same reason the daily count does, and this is the
+ * first time the hourly limit can see campaign mail at all — campaign sends
+ * write no email_drafts row, so the pool's own volume was invisible here.
+ *
+ * Warmup is NOT added: its counter is per UTC DAY with no hourly stamp, so
+ * there is no honest way to attribute it to the last sixty minutes. The daily
+ * ceiling is where warmup volume binds.
  */
 export async function getAccountSentLastHour(
   accountId: number,
@@ -75,19 +179,29 @@ export async function getAccountSentLastHour(
   const since = new Date(Date.now() - 60 * 60 * 1000);
   const [row] = await db
     .select({ cnt: sql<number>`COUNT(*)` })
-    .from(emailDrafts)
+    .from(emailLog)
     .where(
       and(
-        eq(emailDrafts.workspaceId, workspaceId),
-        eq(emailDrafts.sendingAccountId, accountId),
-        eq(emailDrafts.status, "sent"),
-        sql`${emailDrafts.sentAt} >= ${since}`,
+        eq(emailLog.workspaceId, workspaceId),
+        eq(emailLog.sendingAccountId, accountId),
+        eq(emailLog.status, "sent"),
+        sql`${emailLog.sentAt} >= ${since}`,
       ),
     );
   return Number(row?.cnt ?? 0);
 }
 
-/** Count drafts dispatched today across the entire workspace. */
+/**
+ * Count drafts dispatched today across the entire workspace.
+ *
+ * DELIBERATELY still email_drafts. This feeds workspaceSettings
+ * .areDefaultDailySendCap (default 50) and a breach THROWS. email_log also
+ * carries ARE campaign mail and transactional mail, so counting it here would
+ * let one live campaign exhaust the workspace budget before mid-morning and
+ * make every rep's Inbox compose throw TOO_MANY_REQUESTS. Widening or
+ * re-pointing this cap is a separate decision, not a side effect of unifying
+ * the per-ACCOUNT number.
+ */
 export async function getWorkspaceSentToday(workspaceId: number): Promise<number> {
   const db = await getDb();
   if (!db) return 0;

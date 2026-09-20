@@ -440,9 +440,22 @@ export async function processInboundReply(data: InboundReplyData) {
       const pauseBySeq = new Map(
         seqRows.map((s) => [s.id, (s.settings as { replyDetection?: boolean } | null)?.replyDetection !== false]),
       );
+      const pausedIds: number[] = [];
       for (const enrollment of activeEnrollments) {
         if (pauseBySeq.get(enrollment.sequenceId) === false) continue;
         await db.update(enrollments).set({ status: "paused" }).where(eq(enrollments.id, enrollment.id));
+        pausedIds.push(enrollment.id);
+      }
+      // Durable link from THIS reply to the enrollments it stopped (0181).
+      // When the classifier later decides the reply was an auto-responder it
+      // schedules exactly these rows to resume — never a row a rep paused by
+      // hand, and never one an older, genuine reply stopped. An id list also
+      // survives a contact merge (routers/dataHealth.ts rewrites contactId),
+      // which re-deriving the person from the reply would not.
+      if (pausedIds.length > 0 && emailReplyId) {
+        await db.update(emailReplies)
+          .set({ pausedEnrollmentIds: pausedIds } as never)
+          .where(eq(emailReplies.id, emailReplyId));
       }
     }
   }

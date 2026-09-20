@@ -1062,6 +1062,26 @@ export const prospectsRouter = router({
               : "This prospect has no company, so there is nothing to file the contact under.",
         });
       }
+      /**
+       * Fired from the ROUTER, never from services/prospectPromotion — that
+       * helper is shared with services/enrichmentSweeper, which drives it on a
+       * cron over every unpromoted prospect in the workspace. A fire inside the
+       * helper would turn one nightly sweep into a bulk fan-out.
+       *
+       * `alreadyLinked` is the closest honest signal available: it is false
+       * when this prospect had no contact of its own, which still includes the
+       * case where the helper matched an existing contact by email. Narrower
+       * than the old "fire on every click", and it errs toward the human
+       * gesture that just happened.
+       */
+      if (!outcome.alreadyLinked) {
+        const newContactId = outcome.contactId;
+        void import("../services/workflowEngine")
+          .then((m) => m.fireRecordCreated(ctx.workspace.id, "contact", newContactId, {
+            accountId: outcome.accountId, source: "prospect_promotion",
+          }, ctx.user.id))
+          .catch(() => { /* workflow firing is best-effort */ });
+      }
       // Response shape preserved for the People page: it reads `created`.
       return { contactId: outcome.contactId, created: !outcome.alreadyLinked };
     }),
@@ -1104,7 +1124,9 @@ export const prospectsRouter = router({
         if (existing) leadId = existing.id;
       }
 
+      let createdLead = false;
       if (!leadId) {
+        createdLead = true;
         const [inserted] = await db.insert(leads).values({
           workspaceId: ctx.workspace.id,
           firstName: prospect.firstName,
@@ -1133,6 +1155,23 @@ export const prospectsRouter = router({
         entityId: leadId!,
         after: { prospectId: input.prospectId },
       });
+
+      /**
+       * Gated on an actual INSERT, not on the optimistic flag this returns.
+       * promoteToLead is idempotent three ways — an existing link, an
+       * existing lead matched by email, and only then an insert — so firing
+       * unconditionally would announce a new lead every time a user re-clicks
+       * Save on a person who has been in the CRM for months.
+       */
+      if (createdLead) {
+        const newLeadId = leadId!;
+        void import("../services/workflowEngine")
+          .then((m) => m.fireRecordCreated(ctx.workspace.id, "lead", newLeadId, {
+            email: prospect.email ?? null, company: prospect.company ?? null,
+            title: prospect.title ?? null, source: "Prospecting", status: "new",
+          }, ctx.user.id))
+          .catch(() => { /* workflow firing is best-effort */ });
+      }
 
       return { leadId: leadId!, created: true };
     }),

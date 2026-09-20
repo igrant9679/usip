@@ -775,7 +775,10 @@ export const proposalsRouter = router({
         const oppValue = proposal.budget ? String(proposal.budget) : "0";
         if (opportunityId) {
           const [existingOpp] = await db
-            .select({ accountId: opportunities.accountId, ownerUserId: opportunities.ownerUserId, pipelineId: opportunities.pipelineId })
+            // `stage` is read so the stage_changed fire below can report a real
+            // fromStage — accepting a proposal is door four of the five that
+            // write opportunities.stage.
+            .select({ accountId: opportunities.accountId, ownerUserId: opportunities.ownerUserId, pipelineId: opportunities.pipelineId, stage: opportunities.stage })
             .from(opportunities)
             .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
           // Update existing opportunity to the workspace's OWN won stage. The
@@ -797,7 +800,21 @@ export const proposalsRouter = router({
               console.warn("[proposals.acceptProposal] closed-won customer creation failed:", e);
             }
           }
+          // "When a deal is WON" is the rule people build first, and accepting
+          // a proposal — the most natural way a deal is won — fired nothing
+          // until 2026-09-20.
+          const wonOppId = opportunityId;
+          void import("../services/workflowEngine")
+            .then((m) => m.fireStageChanged(
+              ctx.workspace.id, wonOppId, existingOpp?.stage ?? null, wonStage,
+              { value: Number(oppValue), winProb: 100, isWon: true, name: proposal.title },
+              existingOpp?.ownerUserId ?? null,
+            ))
+            .catch(() => { /* workflow firing is best-effort */ });
         } else {
+          // No fire on this branch: it CREATES a won opportunity as a side
+          // effect of accepting. record_created there would double with the
+          // accept notification, and there is no stage transition to report.
           // Create a new opportunity already in the won stage
           const wonStage = await canonicalWonStageKey(db, ctx.workspace.id, null);
           const oppResult = await db.insert(opportunities).values({
@@ -1012,7 +1029,8 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         const oppValue = proposal.budget ? String(proposal.budget) : "0";
         if (opportunityId) {
           const [existingOpp] = await db
-            .select({ accountId: opportunities.accountId, ownerUserId: opportunities.ownerUserId, pipelineId: opportunities.pipelineId })
+            // `stage` for the stage_changed fire below — door five of five.
+            .select({ accountId: opportunities.accountId, ownerUserId: opportunities.ownerUserId, pipelineId: opportunities.pipelineId, stage: opportunities.stage })
             .from(opportunities)
             .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, proposal.workspaceId)));
           const wonStage = await canonicalWonStageKey(db, proposal.workspaceId, existingOpp?.pipelineId ?? null);
@@ -1027,7 +1045,19 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
               console.warn("[proposals.acceptByToken] closed-won customer creation failed:", e);
             }
           }
+          // Same omission as the internal accept path above: the client portal
+          // won the deal and no stage_changed rule heard about it.
+          const wonOppId = opportunityId;
+          void import("../services/workflowEngine")
+            .then((m) => m.fireStageChanged(
+              proposal.workspaceId, wonOppId, existingOpp?.stage ?? null, wonStage,
+              { value: Number(oppValue), winProb: 100, isWon: true, name: proposal.title },
+              existingOpp?.ownerUserId ?? null,
+            ))
+            .catch(() => { /* workflow firing is best-effort */ });
         } else {
+          // No fire: this branch CREATES a won opportunity rather than moving
+          // one — see the internal accept path above for why.
           const wonStage = await canonicalWonStageKey(db, proposal.workspaceId, null);
           const oppResult = await db.insert(opportunities).values({
             workspaceId: proposal.workspaceId,

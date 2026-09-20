@@ -20,6 +20,12 @@
  * sending domain gets flagged, so "it depends on TZ" is not an acceptable
  * property here.
  *
+ * That unified the two BOUNDARIES. The two TABLES were unified on 2026-09-20:
+ * the per-account "sent today" count is now one function, sendLimits
+ * .accountsSentToday over `email_log`, rather than one count per engine over
+ * whichever table that engine happened to write. Agreeing on midnight is not
+ * enough when the two sides are counting different mail.
+ *
  * Pure and dependency-free so it can be unit-tested and imported from either
  * side. Note `todayUtc()` in routers/sendingAccounts.ts is the sibling for the
  * same concept as a `YYYY-MM-DD` string, used where a DATE column is compared;

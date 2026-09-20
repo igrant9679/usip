@@ -3,7 +3,7 @@ import { Switch } from "@/components/ui/switch";
 import { ConfirmButton, Field, fmtDate, FormDialog, Section, SelectField, StatusPill } from "@/components/usip/Common";
 import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { CONDITION_OPS, isDeadTrigger, LIVE_TRIGGERS } from "@shared/workflowTriggers";
+import { actionSupportsEntity, CONDITION_OPS, isDeadTrigger, LIVE_TRIGGERS, RECORD_ENTITIES, recordFieldsFor } from "@shared/workflowTriggers";
 import { Play, Plus, Save, Trash2, Workflow, GitBranch, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -28,8 +28,29 @@ const TRIGGERS = LIVE_TRIGGERS.map((t) => [t.id, t.label] as const);
 /** Comparators the engine's evalConditions actually implements. */
 const OPS = CONDITION_OPS.map((o) => [o.id, o.label] as const);
 
+/**
+ * Condition fields. `ownerId` and `leadGrade` were offered here and are not
+ * columns on anything — the schema spells them `ownerUserId` and `grade` — so a
+ * rule conditioned on either compared against `undefined` and evaluated false
+ * forever, the same silent shape as the `in` operator bug above. Replaced with
+ * their real names, plus the keys the dispatch payloads actually carry
+ * (2026-09-20).
+ *
+ * Which of these are populated depends on the trigger: stage_changed carries
+ * stage/fromStage/value/winProb; deal_stuck adds daysInStage; signal_received
+ * carries `signal`; task_overdue carries priority/type.
+ *
+ * record_created / record_updated no longer use this list at all — they take
+ * their fields from recordFieldsFor(), which is the SAME declaration the
+ * dispatch payload is built from (@shared/workflowTriggers). The two used to
+ * be independent hand-written lists with nothing in common, so every
+ * conditioned record rule compared against `undefined` and never matched
+ * (2026-09-20). A per-trigger map for the remaining four is its own item.
+ */
 const FIELDS = [
-  "stage", "value", "winProb", "ownerId", "industry", "region", "leadGrade", "healthScore", "renewalDate", "npsScore",
+  "stage", "value", "winProb", "ownerUserId", "status", "score", "grade", "source",
+  "company", "title", "industry", "region", "daysInStage", "changed", "signal",
+  "priority", "healthScore", "renewalDate", "npsScore",
 ];
 
 const ACTION_TYPES = [
@@ -176,11 +197,14 @@ export default function Workflows() {
 
       <FormDialog open={openNew} onOpenChange={setOpenNew} title="New workflow rule" isPending={create.isPending}
         onSubmit={(f) => {
+          const t = String(f.get("triggerType"));
           create.mutate({
             name: String(f.get("name")),
             description: String(f.get("description") ?? "") || undefined,
-            triggerType: f.get("triggerType") as any,
-            triggerConfig: {},
+            triggerType: t as any,
+            // Explicit rather than relying on the engine's "absent means lead"
+            // default, so the editor shows the same scope the rule will use.
+            triggerConfig: t === "record_created" || t === "record_updated" ? { entity: "lead" } : {},
             conditions: [],
             actions: [{ type: "create_task", params: { title: "Follow up" } }],
             enabled: true,
@@ -208,6 +232,16 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
     setTriggerConfig((rule.triggerConfig as Record<string, string>) ?? {});
   }, [rule.id]);
 
+  /**
+   * The record triggers are scoped to one entity, and the condition fields
+   * follow that scope: a contact payload has no `stage`, so offering one is
+   * the dead wiring this page keeps being fixed for. Absent entity reads as
+   * "lead", exactly as the engine's entityGateAllows() does.
+   */
+  const isRecordTrigger = trigger === "record_created" || trigger === "record_updated";
+  const entity = isRecordTrigger ? (triggerConfig.entity ?? "lead") : null;
+  const fieldOptions = isRecordTrigger ? recordFieldsFor(trigger, entity) : FIELDS;
+
   const dirty =
     trigger !== rule.triggerType ||
     JSON.stringify(conds) !== JSON.stringify(rule.conditions ?? []) ||
@@ -230,7 +264,20 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
       <div className="p-4 space-y-5 text-sm">
         <div>
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5">When</div>
-          <select value={trigger} onChange={(e) => { setTrigger(e.target.value); setTriggerConfig({}); }} className="w-full border rounded-md px-3 py-2 h-10 text-sm bg-card">
+          {/* Conditions are cleared with the trigger: a field vocabulary from
+              another trigger is meaningless here, and a leftover `daysInStage`
+              on a record rule is a condition that can never match. The entity
+              is seeded so the editor shows the scope the engine will use. */}
+          <select
+            value={trigger}
+            onChange={(e) => {
+              const t = e.target.value;
+              setTrigger(t);
+              setTriggerConfig(t === "record_created" || t === "record_updated" ? { entity: "lead" } : {});
+              setConds([]);
+            }}
+            className="w-full border rounded-md px-3 py-2 h-10 text-sm bg-card"
+          >
             {TRIGGERS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
           {trigger === "deal_stuck" && (
@@ -256,19 +303,41 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
               </div>
             </div>
           )}
+          {isRecordTrigger && (
+            <div className="mt-2 space-y-1">
+              <label className="text-xs text-muted-foreground">Which records</label>
+              <select
+                value={entity ?? "lead"}
+                onChange={(e) => { setTriggerConfig({ ...triggerConfig, entity: e.target.value }); setConds([]); }}
+                className="w-full border rounded px-2 py-1.5 text-xs bg-card"
+              >
+                {RECORD_ENTITIES.map((en) => <option key={en.id} value={en.id}>{en.label}</option>)}
+              </select>
+              {/* A rule saved before these triggers covered anything but leads
+                  carries no entity at all; the engine reads that as "lead", so
+                  the default shown here matches what it will actually do. */}
+              <div className="text-[11px] text-muted-foreground">
+                Conditions below follow this choice — they are the fields the event actually carries. Accounts are not covered yet: update field, enroll and email draft have no account handler.
+              </div>
+            </div>
+          )}
         </div>
 
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Conditions (all must match)</div>
-            <Button size="sm" variant="ghost" onClick={() => setConds([...conds, { field: FIELDS[0]!, op: "eq", value: "" }])}>+ Condition</Button>
+            <Button size="sm" variant="ghost" onClick={() => setConds([...conds, { field: fieldOptions[0]!, op: "eq", value: "" }])}>+ Condition</Button>
           </div>
           {conds.length === 0 ? <div className="text-xs text-muted-foreground italic py-2">No conditions — fires on every trigger.</div> : (
             <div className="space-y-2">
               {conds.map((c, i) => (
                 <div key={i} className="grid grid-cols-12 gap-2">
                   <select value={c.field} onChange={(e) => setConds(conds.map((x, j) => j === i ? { ...x, field: e.target.value } : x))} className="col-span-4 border rounded px-2 py-1.5 text-xs bg-card">
-                    {FIELDS.map((f) => <option key={f} value={f}>{f}</option>)}
+                    {/* A field saved before this vocabulary narrowed is kept as
+                        its own option — dropping it would render the select
+                        blank and silently rewrite the rule on the next save. */}
+                    {fieldOptions.indexOf(c.field) < 0 && c.field ? <option value={c.field}>{c.field} (not carried by this event)</option> : null}
+                    {fieldOptions.map((f) => <option key={f} value={f}>{f}</option>)}
                   </select>
                   <select value={c.op} onChange={(e) => setConds(conds.map((x, j) => j === i ? { ...x, op: e.target.value } : x))} className="col-span-3 border rounded px-2 py-1.5 text-xs bg-card">
                     {OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -290,8 +359,16 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
             {acts.map((a, i) => (
               <div key={i} className="border rounded-md p-2 bg-secondary/20 space-y-2">
                 <div className="flex items-center gap-2">
+                  {/* An action the scoped entity cannot run is labelled, not
+                      hidden: the engine returns "cannot enroll a opportunity"
+                      on every fire and logs the run as failed, which is a rule
+                      that looks built and never works. Saved rules keep their
+                      action so the label explains the failures they already
+                      have (2026-09-20). */}
                   <select value={a.type} onChange={(e) => setActs(acts.map((x, j) => j === i ? { ...x, type: e.target.value, params: defaultParams(e.target.value) } : x))} className="flex-1 border rounded px-2 py-1.5 text-xs bg-card">
-                    {ACTION_TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    {ACTION_TYPES.map(([v, l]) => (
+                      <option key={v} value={v}>{actionSupportsEntity(v, entity) ? l : `${l} — not supported on a ${entity}`}</option>
+                    ))}
                   </select>
                   <button onClick={() => setActs(acts.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-rose-600"><Trash2 className="size-3.5" /></button>
                 </div>

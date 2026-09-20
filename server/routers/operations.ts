@@ -42,7 +42,8 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { storagePut } from "../storage";
 import { buildTransporter, decrypt } from "./smtpConfig";
-import { evalConditions, executeRuleActions } from "../services/workflowEngine";
+import { evalConditions, executeRuleActions, normalizeConditions } from "../services/workflowEngine";
+import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 // One arithmetic rule for quote money, shared with the client's preview so the
 // number the user approves is the number stored. See shared/quoteTotals.ts.
 import { centsToDecimal, computeQuoteTotals, formatMoney } from "@shared/quoteTotals";
@@ -86,10 +87,17 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
 
   if (rules.length === 0) return { rulesChecked: 0, dealsMatched: 0, actionsTriggered: 0 };
 
+  // Cross-workspace: the rules SELECT above has no workspace predicate, so the
+  // archive gate is this cron's own job (the tRPC twin below is a
+  // workspaceProcedure and the middleware already refuses archived ones). An
+  // archived workspace must not create tasks or POST to a webhook overnight.
+  const archivedWs = await archivedWorkspaceIds();
+
   let dealsMatched = 0;
   let actionsTriggered = 0;
 
   for (const rule of rules) {
+    if (archivedWs.has(rule.workspaceId)) continue;
     const cfg = (rule.triggerConfig ?? {}) as { stage?: string; days?: number };
     const minDays = cfg.days ?? 7;
     const targetStage = cfg.stage ?? null;
@@ -103,6 +111,12 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
       stage: opportunities.stage,
       daysInStage: opportunities.daysInStage,
       ownerId: opportunities.ownerUserId,
+      // value/winProb are selected only so the payload can carry them — the
+      // condition editor offers both and "stuck deals over $50k" is the most
+      // common deal_stuck rule there is. Without them in the payload, wiring
+      // evalConditions in below would evaluate every such rule FALSE forever.
+      value: opportunities.value,
+      winProb: opportunities.winProb,
     }).from(opportunities)
       .where(and(
         eq(opportunities.workspaceId, rule.workspaceId),
@@ -111,6 +125,7 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
         ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
       ));
 
+    let firedForRule = 0;
     for (const deal of stuckDeals) {
       /**
        * Runs through the SHARED dispatcher rather than a local copy. The local
@@ -136,15 +151,24 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
        * out-of-enum value in strict mode. The shared handler uses
        * "workflow_fired", which is in it.
        */
+      const payload = {
+        entity: "opportunity",
+        id: deal.id,
+        name: deal.name,
+        stage: deal.stage,
+        daysInStage: deal.daysInStage,
+        value: Number(deal.value ?? 0),
+        winProb: deal.winProb,
+        ownerUserId: deal.ownerId ?? null,
+        ruleName: rule.name,
+      };
+      // deal_stuck was the one trigger that IGNORED its own conditions: both
+      // loops ran the actions on every stuck deal, so a rule scoped to
+      // "negotiation only, over $50k" alerted on every stalled deal in the
+      // workspace and the scoping the user wrote did nothing (2026-09-20).
+      if (!evalConditions(normalizeConditions(rule.conditions), payload)) continue;
       const errors = await executeRuleActions(rule.workspaceId, rule, {
-        payload: {
-          entity: "opportunity",
-          id: deal.id,
-          name: deal.name,
-          stage: deal.stage,
-          daysInStage: deal.daysInStage,
-          ruleName: rule.name,
-        },
+        payload,
         relatedType: "opportunity",
         relatedId: deal.id,
         ownerUserId: deal.ownerId ?? null,
@@ -158,12 +182,19 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
         status: errors.length === 0 ? "success" : "failed",
         actionsRun: rule.actions,
         errorMessage: errors.length > 0 ? errors.join("; ") : null,
+        relatedType: "opportunity",
+        relatedId: deal.id,
       });
       dealsMatched++;
+      firedForRule++;
     }
 
-    if (stuckDeals.length > 0) {
-      await db.update(workflowRules).set({ fireCount: rule.fireCount + stuckDeals.length, lastFiredAt: new Date() }).where(eq(workflowRules.id, rule.id));
+    if (firedForRule > 0) {
+      // Atomic, like the engine's own bump: this cron and the tRPC twin can
+      // overlap with a live event dispatch, and a read-modify-write loses the
+      // other's increment. Counts deals that actually FIRED, not every deal the
+      // stuck query returned — the conditions gate above rejects some.
+      await db.update(workflowRules).set({ fireCount: sql`${workflowRules.fireCount} + ${firedForRule}`, lastFiredAt: new Date() }).where(eq(workflowRules.id, rule.id));
     }
   }
 
@@ -224,7 +255,26 @@ export const workflowsRouter = router({
       return { id: Number((r as any)[0]?.insertId ?? 0) };
     }),
 
-  update: managerProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+  /**
+   * The patch used to be `z.record(z.string(), z.any())`, which meant every
+   * gate `create` enforces could be walked around by editing the rule
+   * afterwards: a dead triggerType the UI refuses to offer, someone else's
+   * `workspaceId`, a hand-set `fireCount`. Explicit optional fields instead —
+   * the shape RuleEditor actually sends (triggerType/triggerConfig/conditions/
+   * actions) plus name, description and enabled (2026-09-20).
+   */
+  update: managerProcedure.input(z.object({
+    id: z.number(),
+    patch: z.object({
+      name: z.string().min(1).optional(),
+      description: z.string().nullable().optional(),
+      enabled: z.boolean().optional(),
+      triggerType: z.enum(LIVE_TRIGGER_IDS as unknown as [LiveTrigger, ...LiveTrigger[]]).optional(),
+      triggerConfig: z.record(z.string(), z.any()).optional(),
+      conditions: z.array(z.object({ field: z.string(), op: z.string(), value: z.any() })).optional(),
+      actions: z.array(z.object({ type: z.string(), params: z.record(z.string(), z.any()) })).optional(),
+    }),
+  })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.update(workflowRules).set(input.patch).where(and(eq(workflowRules.id, input.id), eq(workflowRules.workspaceId, ctx.workspace.id)));
@@ -272,6 +322,10 @@ export const workflowsRouter = router({
       status: errors.length === 0 ? "success" : "failed",
       actionsRun: rule.actions,
       errorMessage: errors.length > 0 ? errors.join("; ") : null,
+      // Explicitly null: a manual test links to no CRM record, and every other
+      // run-history writer names the record that set it off.
+      relatedType: null,
+      relatedId: null,
     });
     await db.update(workflowRules).set({ fireCount: rule.fireCount + 1, lastFiredAt: new Date() }).where(eq(workflowRules.id, rule.id));
     await db.insert(notifications).values({
@@ -317,6 +371,9 @@ export const workflowsRouter = router({
           stage: opportunities.stage,
           daysInStage: opportunities.daysInStage,
           ownerId: opportunities.ownerUserId,
+          // Same reason as the cron twin above: the conditions gate needs them.
+          value: opportunities.value,
+          winProb: opportunities.winProb,
         }).from(opportunities)
           .where(and(
             eq(opportunities.workspaceId, ctx.workspace.id),
@@ -325,19 +382,27 @@ export const workflowsRouter = router({
             ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
           ));
 
+        let firedForRule = 0;
         for (const deal of stuckDeals) {
           // Shared dispatcher — see checkDealAging above for why the local copy
           // that used to live here was wrong (six of the eight builder actions
           // did nothing, and the run was still logged "success").
+          const payload = {
+            entity: "opportunity",
+            id: deal.id,
+            name: deal.name,
+            stage: deal.stage,
+            daysInStage: deal.daysInStage,
+            value: Number(deal.value ?? 0),
+            winProb: deal.winProb,
+            ownerUserId: deal.ownerId ?? null,
+            ruleName: rule.name,
+          };
+          // Conditions honoured here too — the manual check and the nightly
+          // cron must agree about which deals a rule covers.
+          if (!evalConditions(normalizeConditions(rule.conditions), payload)) continue;
           const errors = await executeRuleActions(ctx.workspace.id, rule, {
-            payload: {
-              entity: "opportunity",
-              id: deal.id,
-              name: deal.name,
-              stage: deal.stage,
-              daysInStage: deal.daysInStage,
-              ruleName: rule.name,
-            },
+            payload,
             relatedType: "opportunity",
             relatedId: deal.id,
             ownerUserId: deal.ownerId ?? ctx.user.id,
@@ -350,15 +415,18 @@ export const workflowsRouter = router({
             status: errors.length === 0 ? "success" : "failed",
             actionsRun: rule.actions,
             errorMessage: errors.length > 0 ? errors.join("; ") : null,
+            relatedType: "opportunity",
+            relatedId: deal.id,
           });
 
           details.push({ ruleId: rule.id, ruleName: rule.name, dealId: deal.id, dealName: deal.name, daysInStage: deal.daysInStage ?? 0 });
           totalFired++;
+          firedForRule++;
         }
 
-        // Update fireCount for the rule
-        if (stuckDeals.length > 0) {
-          await db.update(workflowRules).set({ fireCount: rule.fireCount + stuckDeals.length, lastFiredAt: new Date() }).where(eq(workflowRules.id, rule.id));
+        // Update fireCount for the rule — atomic, see the cron twin above.
+        if (firedForRule > 0) {
+          await db.update(workflowRules).set({ fireCount: sql`${workflowRules.fireCount} + ${firedForRule}`, lastFiredAt: new Date() }).where(eq(workflowRules.id, rule.id));
         }
       }
 

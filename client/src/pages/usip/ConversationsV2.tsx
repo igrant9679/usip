@@ -78,6 +78,11 @@ const FILTERS = [
   { value: "out_of_office", label: "Out of office" },
 ];
 
+// Social only. `conversations.list`'s enum has no "not_our_outreach", so
+// offering it on the Email tab would send an input tRPC rejects and the email
+// list would error out instead of filtering (2026-09-20).
+const SOCIAL_FILTERS = FILTERS.concat([{ value: "not_our_outreach", label: "Not our outreach" }]);
+
 const MODE_META: Record<string, { label: string; blurb: string }> = {
   off: { label: "Autopilot off", blurb: "Replies aren't classified automatically." },
   approval: { label: "Autopilot: Approve", blurb: "AI classifies each reply and suggests an action for you to apply." },
@@ -132,7 +137,13 @@ function normSocial(m: any): Reply {
 export default function ConversationsV2() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
-  const [channel, setChannel] = useState<"email" | "social" | "calls">("email");
+  // ?channel=social so Home's "LinkedIn & social replies" card lands on the
+  // list that can actually mark them handled — the old CTA pointed at Unified
+  // Inbox, which reads live Unipile and has no handledAt (2026-09-20).
+  const [channel, setChannel] = useState<"email" | "social" | "calls">(() => {
+    const c = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "").get("channel");
+    return c === "social" || c === "calls" ? c : "email";
+  });
   const [filter, setFilter] = useState("all");
   const [selected, setSelected] = useState<Reply | null>(null);
   const isEmail = channel === "email";
@@ -244,7 +255,7 @@ export default function ConversationsV2() {
               <h2 className="text-sm font-semibold flex items-center gap-2"><Inbox className="size-4" style={{ color: accent }} /> Inbox</h2>
               <Select value={filter} onValueChange={setFilter}>
                 <SelectTrigger className="h-7 w-[168px] text-xs"><SelectValue /></SelectTrigger>
-                <SelectContent>{FILTERS.map((f) => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}</SelectContent>
+                <SelectContent>{(isEmail || isCalls ? FILTERS : SOCIAL_FILTERS).map((f) => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="rounded-xl border bg-card overflow-hidden shadow-sm">
@@ -470,9 +481,16 @@ function ReplyDialog({ reply, onClose, onChanged }: { reply: Reply | null; onClo
       onChanged();
       const msg: Record<string, string> = {
         meeting_proposed: "Meeting proposed — see the Meetings tab",
+        booking_link_sent: "Booking link sent — see the Meetings tab",
+        referral_drafted: "Referred person created — intro draft is in the review queue",
+        referral_person_created: "Referred person created in People",
+        contact_flagged_departed: "Contact flagged as departed",
         task_created: "Task created",
         suppressed: "Contact suppressed",
         marked: "Marked",
+        // Static, not interpolated: applyAction returns { action } only. The
+        // actual date lives on the enrollment row in Sequences.
+        ooo_snoozed: "Out of office — the sequence will resume automatically",
         ooo_noted: "Noted as out-of-office",
         none: "No action for this reply",
       };

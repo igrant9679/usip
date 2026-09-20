@@ -14,7 +14,7 @@ import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { applyReplyAction, classifyReply, runConversationAutopilotForWorkspace, REPLY_CLASSES } from "../services/replyClassifier";
-import { genuineReplyScope } from "../services/replyScope";
+import { genuineReplyScope, genuineSocialReplyScope, notOurOutreachScope } from "../services/replyScope";
 
 export const conversationsRouter = router({
   list: workspaceProcedure
@@ -115,7 +115,13 @@ export const conversationsRouter = router({
     if (!reply) throw new TRPCError({ code: "NOT_FOUND" });
     if (!reply.classifiedAt) {
       const cls = await classifyReply(ctx.workspace.id, reply);
-      if (cls) reply.replyClass = cls.replyClass as any;
+      if (cls) {
+        reply.replyClass = cls.replyClass as any;
+        // `reply` was read BEFORE classifyReply wrote oooReturnsAt, so the
+        // stale row would send every first-classify OOO to the 7-day fallback.
+        // On the second visit the re-read above already carries it.
+        (reply as any).oooReturnsAt = cls.returnsAt || reply.oooReturnsAt;
+      }
     }
     const action = await applyReplyAction(ctx.workspace.id, reply, true);
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "apply_reply_action", entityType: "email_reply", entityId: input.id, after: { action } });
@@ -156,7 +162,7 @@ export const conversationsRouter = router({
   // Email and Social, and approval-mode social actions stay visible.
   socialList: workspaceProcedure
     .input(z.object({
-      filter: z.enum(["all", "unhandled", ...REPLY_CLASSES]).optional(),
+      filter: z.enum(["all", "unhandled", "not_our_outreach", ...REPLY_CLASSES]).optional(),
       unreadOnly: z.boolean().optional(),
     }).optional())
     .query(async ({ ctx, input }) => {
@@ -167,8 +173,16 @@ export const conversationsRouter = router({
         eq(unipileMessages.direction, "inbound"),
       ];
       const f = input?.filter;
+      // Default to outreach we started (replyScope.ts), with the complement
+      // reachable rather than hidden: a stranger's DM is still a message the
+      // rep may want, it is just not a reply and is never counted as one.
+      if (f === "not_our_outreach") conds.push(notOurOutreachScope());
+      else conds.push(genuineSocialReplyScope());
       if (f === "unhandled") conds.push(isNull(unipileMessages.handledAt));
-      else if (f && f !== "all") conds.push(eq(unipileMessages.replyClass, f));
+      // "not_our_outreach" is a SCOPE, not a class — falling through to the
+      // replyClass branch would compare it against a column it never appears in
+      // and the tab would show nothing.
+      else if (f && f !== "all" && f !== "not_our_outreach") conds.push(eq(unipileMessages.replyClass, f));
       if (input?.unreadOnly) conds.push(isNull(unipileMessages.readAt));
       return db.select().from(unipileMessages)
         .where(and(...conds))
@@ -185,8 +199,15 @@ export const conversationsRouter = router({
       needsClassify: sql<number>`sum(case when \`classifiedAt\` is null then 1 else 0 end)`,
       willingToMeet: sql<number>`sum(case when \`replyClass\` = 'willing_to_meet' then 1 else 0 end)`,
       meetingsProposed: sql<number>`sum(case when \`autoActionTaken\` = 'meeting_proposed' then 1 else 0 end)`,
+    // Scoped exactly as socialList is, or the header counts one population and
+    // the rows show another — the same trap `stats` above fell into. Unscoped,
+    // every cold DM and recruiter pitch read as a reply to our outreach.
     }).from(unipileMessages)
-      .where(and(eq(unipileMessages.workspaceId, ctx.workspace.id), eq(unipileMessages.direction, "inbound")));
+      .where(and(
+        eq(unipileMessages.workspaceId, ctx.workspace.id),
+        eq(unipileMessages.direction, "inbound"),
+        genuineSocialReplyScope(),
+      ));
     return {
       total: Number(row?.total ?? 0),
       unhandled: Number(row?.unhandled ?? 0),

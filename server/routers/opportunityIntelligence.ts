@@ -375,6 +375,17 @@ export const opportunityIntelligenceRouter = router({
             console.warn("[opportunityIntelligence.reviewStageChange] closed-lost win-back task failed:", e);
           }
         }
+        // Door three of five for opportunities.stage. The approval queue wrote
+        // the stage and its own history row but announced nothing to the rule
+        // engine, so a manager approving a move to Won fired no rule at all
+        // (2026-09-20).
+        void import("../services/workflowEngine")
+          .then((m) => m.fireStageChanged(
+            ctx.workspace.id, approval.opportunityId, approval.fromStage, approval.toStage,
+            { value: Number(opp?.value ?? 0), isWon: meta.isWon, isLost: meta.isLost, name: opp?.name ?? null },
+            opp?.ownerUserId ?? null,
+          ))
+          .catch(() => { /* workflow firing is best-effort */ });
       }
 
       return { ok: true };

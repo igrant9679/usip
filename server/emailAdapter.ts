@@ -474,8 +474,12 @@ function buildEmailAdapter(account: SendingAccount): EmailAdapter {
  * the increment is reached, because nothing was delivered.
  *
  * `sendingAccountDailyStats.sentCount` is a DIFFERENT counter — per account,
- * per day, enforcing `dailySendLimit`. Both are correct and neither replaces
- * the other.
+ * per day, written only by the campaign pool. It no longer enforces anything
+ * (audit 2026-09-20): `dailySendLimit` is now gated by
+ * sendLimits.accountsSentToday, which counts the `email_log` rows THIS wrapper
+ * writes, so the cap finally sees sequence, CRM, Inbox, proposal and
+ * system-sender volume through the same mailbox. The stats row survives as the
+ * multi-day reporting series and the home of bounceCount/spamCount.
  */
 export function createEmailAdapter(account: SendingAccount): EmailAdapter {
   const adapter = buildEmailAdapter(account);

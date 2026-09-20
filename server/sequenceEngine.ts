@@ -14,7 +14,7 @@
  */
 
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
-import { and, eq, isNull, lte, or, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import {
   activities,
   contacts,
@@ -685,14 +685,18 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
                 attendeesIds: [profileSlug],
                 text: step.body ?? "",
               });
-              // Log to unipile_messages
+              // Log to unipile_messages. The recipient's provider id is the
+              // fact genuineSocialReplyScope() matches an inbound DM against —
+              // without it a reply to this step reads as a stranger's message
+              // and is never classified or counted (2026-09-20).
               await db.insert(unipileMessages).values({
                 workspaceId: enrollment.workspaceId,
                 unipileAccountId: unipileAcct.unipileAccountId,
                 provider: "LINKEDIN",
-                chatId: result.id,
+                chatId: result.chatId || result.id,
                 messageId: result.id,
                 direction: "outbound",
+                recipientProviderId: profileSlug,
                 text: step.body ?? "",
                 linkedContactId: enrollment.contactId ?? null,
                 linkedLeadId: enrollment.leadId ?? null,
@@ -900,10 +904,12 @@ export async function pauseOnReply(
 
   if (!enrollment || enrollment.status !== "active") return;
 
-  // Pause enrollment
+  // Pause enrollment. resumeAt: null because this pause is a human saying the
+  // conversation is live — it must override any OOO snooze already stamped on
+  // the row, not queue behind it (0181).
   await db
     .update(enrollments)
-    .set({ status: "paused" })
+    .set({ status: "paused", resumeAt: null })
     .where(eq(enrollments.id, enrollmentId));
 
   // Create review task
@@ -918,6 +924,61 @@ export async function pauseOnReply(
   });
 
   console.log(`[SequenceEngine] Paused enrollment ${enrollmentId} due to reply`);
+}
+
+/**
+ * Resume enrollments whose out-of-office snooze has expired (migration 0181;
+ * the stamp is written by services/replyClassifier's out_of_office branch).
+ *
+ * Runs before processEnrollments on the same 5-minute tick so a resumed row
+ * gets its next step immediately. Never writes currentStep: the paused row
+ * already points at the next UNSENT step, so resuming is continuation, not a
+ * resend — and it files no task and bumps no counter, because none of this is
+ * a reply event. Deliberately a separate function rather than a read at the
+ * top of processEnrollments: that function's tests consume a queued select
+ * chain in strict order.
+ */
+export async function resumeDueEnrollments(): Promise<{ resumed: number }> {
+  const db = await getDb();
+  if (!db) return { resumed: 0 };
+  const now = new Date();
+
+  const due = await db
+    .select()
+    .from(enrollments)
+    .where(
+      and(
+        eq(enrollments.status, "paused"),
+        isNotNull(enrollments.resumeAt),
+        lte(enrollments.resumeAt, now)
+      )
+    )
+    .orderBy(enrollments.resumeAt)
+    .limit(200);
+
+  const archivedWs = await archivedWorkspaceIds();
+  let resumed = 0;
+  for (const e of due) {
+    // An archived workspace's rows keep their resumeAt and wake on un-archive;
+    // archiving that keeps mailing people is not archiving (2026-08-12).
+    if (archivedWs.has(e.workspaceId)) continue;
+    // Claim-before-act: repeating status + isNotNull in the UPDATE makes an
+    // overlapping tick idempotent (the shape inboundReplyPoller uses to claim
+    // a draft's first reply).
+    await db
+      .update(enrollments)
+      .set({ status: "active", resumeAt: null, nextActionAt: now } as never)
+      .where(
+        and(
+          eq(enrollments.id, e.id),
+          eq(enrollments.status, "paused"),
+          isNotNull(enrollments.resumeAt)
+        )
+      );
+    resumed++;
+  }
+  if (resumed > 0) console.log(`[SequenceEngine] resumed ${resumed} out-of-office enrollment(s)`);
+  return { resumed };
 }
 
 // ─── Enrollment stats ─────────────────────────────────────────────────────────

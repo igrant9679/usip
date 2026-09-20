@@ -76,3 +76,112 @@ export const CONDITION_OPS = [
 ] as const;
 
 export const CONDITION_OP_IDS = CONDITION_OPS.map((o) => o.id);
+
+/**
+ * Which records the record_created / record_updated triggers cover.
+ *
+ * Same rule as LIVE_TRIGGERS: an entity belongs here only once a dispatch site
+ * exists for it. Accounts are deliberately absent — crm.ts creates them and
+ * stays silent, because update_field, enroll_sequence and send_email_draft all
+ * reject an account, so three of the builder's eight actions would fail on
+ * every fire of an account-scoped rule.
+ */
+export const RECORD_ENTITIES = [
+  { id: "lead", label: "Leads" },
+  { id: "contact", label: "Contacts" },
+  { id: "opportunity", label: "Opportunities" },
+  { id: "any", label: "Any of them" },
+] as const;
+
+export const RECORD_ENTITY_IDS = RECORD_ENTITIES.map((e) => e.id);
+
+/** The entities a payload can report. `any` is a rule SCOPE, never a record. */
+export const RECORD_PAYLOAD_ENTITIES = ["lead", "contact", "opportunity"] as const;
+
+/**
+ * The keys a record_created payload carries, per entity — ALWAYS present, null
+ * where the creating seam does not know one (buildRecordPayload fills them in).
+ *
+ * Declared once because the builder's condition list and the dispatch payload
+ * had an EMPTY INTERSECTION: the editor offered industry / region /
+ * healthScore / npsScore while the dispatch sent company / title / source, so
+ * every conditioned record_created rule compared against `undefined` and could
+ * never match. The trigger fired, the rule looked healthy, and nothing
+ * happened — the same silent shape as a dead trigger (2026-09-20).
+ *
+ * A key may appear here only if buildRecordPayload declares it, and only if it
+ * is known at INSERT time: see RECORD_UPDATE_ONLY_FIELDS for the columns
+ * another engine fills in afterwards.
+ */
+export const RECORD_FIELDS: Record<string, readonly string[]> = {
+  lead: ["company", "title", "source", "status", "email"],
+  contact: ["title", "email", "accountId", "source"],
+  opportunity: ["name", "stage", "value", "winProb", "accountId"],
+};
+
+/** On every record payload, whatever the entity. */
+export const RECORD_COMMON_FIELDS = ["entity", "id", "ownerUserId"] as const;
+
+/**
+ * Columns written AFTER the insert by another engine — leadScoring writes
+ * score and grade asynchronously — so a record_created payload can only ever
+ * report the column default. "score >= 60 on a new lead" is a rule that can
+ * never match, and it shipped as the seeded sample rule for exactly that
+ * reason. Offered on record_updated, whose payload is the whole post-update row.
+ */
+export const RECORD_UPDATE_ONLY_FIELDS: Record<string, readonly string[]> = {
+  lead: ["score", "grade"],
+  contact: [],
+  opportunity: [],
+};
+
+/**
+ * The condition fields to offer for a record trigger. Scope "any" gets the
+ * union: a key the fired entity does not carry is simply absent from its
+ * payload, so the condition does not match that entity — which is what
+ * scoping to "any" and then conditioning on `stage` is asking for.
+ */
+export function recordFieldsFor(triggerType: string, entity: string | null | undefined): string[] {
+  const scoped = entity && entity !== "any" && RECORD_FIELDS[entity]
+    ? [entity]
+    : (RECORD_PAYLOAD_ENTITIES as readonly string[]).slice();
+  const out: string[] = [];
+  const add = (k: string) => { if (out.indexOf(k) < 0) out.push(k); };
+  for (let i = 0; i < RECORD_COMMON_FIELDS.length; i++) add(RECORD_COMMON_FIELDS[i]!);
+  for (let i = 0; i < scoped.length; i++) {
+    const e = scoped[i]!;
+    const base = RECORD_FIELDS[e] ?? [];
+    for (let j = 0; j < base.length; j++) add(base[j]!);
+    if (triggerType === "record_updated") {
+      const later = RECORD_UPDATE_ONLY_FIELDS[e] ?? [];
+      for (let j = 0; j < later.length; j++) add(later[j]!);
+    }
+  }
+  if (triggerType === "record_updated") add("changed");
+  return out;
+}
+
+/**
+ * Which records each action can act on, mirroring the engine's own allowlists
+ * (workflowEngine.runAction: update_field's ALLOWED map, enroll_sequence's
+ * person check, send_email_draft's contact-or-lead check). `enroll_sequence`
+ * also accepts a prospect, which is not a record_* entity and so is not listed.
+ *
+ * An action a scoped rule cannot run is the same dead wiring as a trigger
+ * nothing dispatches: the rule saves, fires, and logs "cannot enroll a
+ * opportunity" on every run while looking perfectly healthy. Any action absent
+ * from this map works on every entity.
+ */
+export const ACTION_ENTITY_SUPPORT: Record<string, readonly string[]> = {
+  update_field: ["lead", "contact", "opportunity"],
+  enroll_sequence: ["lead", "contact"],
+  send_email_draft: ["lead", "contact"],
+};
+
+export function actionSupportsEntity(actionType: string, entity: string | null | undefined): boolean {
+  // "any" and the non-record triggers cover at least one entity the action
+  // handles, so the builder must not grey it out there.
+  if (!entity || entity === "any") return true;
+  const list = ACTION_ENTITY_SUPPORT[actionType];
+  return !list || list.indexOf(entity) >= 0;
+}

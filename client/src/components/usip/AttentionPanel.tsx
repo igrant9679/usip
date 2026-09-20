@@ -180,7 +180,7 @@ export function AttentionPanel() {
         )}
         {(s.socialReplies?.count ?? 0) > 0 && (
           <QueueCard icon={<ListChecks className="size-4" />} tint="#0A66C2" title="LinkedIn & social replies"
-            count={s.socialReplies.count} cta="Open Unified Inbox" href="/unified-inbox" />
+            count={s.socialReplies.count} cta="Open Conversations" href="/v2/conversations?channel=social" />
         )}
         {(s.optimizationRecs?.count ?? 0) > 0 && (
           <QueueCard icon={<ListChecks className="size-4" />} tint="#10B981" title="Optimisation recommendations"
