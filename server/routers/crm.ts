@@ -38,6 +38,7 @@ import {
   opportunityIntelligence,
   stageApprovals,
   pipelineAlerts,
+  contactAccountLinks,
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
@@ -1163,6 +1164,32 @@ export const leadsRouter = router({
         convertedOpportunityId: opportunityId,
       }).where(eq(leads.id, lead.id));
 
+      // Follow the conversion through to People (audit 2026-09-20): prospect
+      // rows that pointed at this LEAD keep working after it converts — the
+      // meeting autopilot's owner lookup, the company profile and enrichment
+      // all prefer linkedContactId, and without this writeback they saw a
+      // converted lead as still lead-only. Best-effort, never blocks convert.
+      try {
+        await db.update(prospects)
+          .set({ linkedContactId: contactId, accountId } as never)
+          .where(and(
+            eq(prospects.workspaceId, ctx.workspace.id),
+            eq(prospects.linkedLeadId, lead.id),
+            isNull(prospects.linkedContactId),
+          ));
+        await db.insert(contactAccountLinks).values({
+          workspaceId: ctx.workspace.id,
+          personType: "contact",
+          personId: contactId,
+          accountId,
+          relationshipType: "current_employer",
+          titleAtCompany: lead.title ?? null,
+          sourceType: "lead_convert",
+        } as never);
+      } catch (e) {
+        console.error("[crm.convert] prospect/account-link writeback failed:", (e as Error).message);
+      }
+
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "lead", entityId: lead.id, after: { converted: true, accountId, contactId, opportunityId } });
       return { accountId, contactId, opportunityId };
     }),
@@ -1692,6 +1719,15 @@ export const opportunitiesRouter = router({
     const [before] = await db.select().from(opportunities).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
     if (!before) throw new TRPCError({ code: "NOT_FOUND" });
     const patch: any = { ...input.patch };
+    // A stage written through this generic patch bypasses everything a stage
+    // change means here: stage history, daysInStage, the closed-won customer
+    // record, the closed-lost win-back task, ARE attribution (all in
+    // setStage). No UI sends it this way; refuse loudly rather than let an
+    // API caller silently skip the pipeline machinery (audit 2026-09-20).
+    if (patch.stage !== undefined && patch.stage !== before.stage) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Use opportunities.setStage to change stage — the generic update would skip stage history and closed-won/lost handling." });
+    }
+    delete patch.stage;
     if (patch.value !== undefined) patch.value = String(patch.value);
     if (patch.closeDate && typeof patch.closeDate === "string") patch.closeDate = new Date(patch.closeDate);
     await db.update(opportunities).set(patch).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));

@@ -19,6 +19,7 @@
  * page is what emptied the ARE Active tab.
  */
 import { useEffect, useMemo, useState } from "react";
+import { forbiddenMessage } from "@/lib/forbidden";
 import { toast } from "sonner";
 import { Link, useSearch } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
@@ -309,7 +310,7 @@ export default function EmailsV2() {
   });
   const updateSettings = trpc.emailAutoSend.updateAutoSendSettings.useMutation({
     onSuccess: () => { utils.emailAutoSend.getAutoSendSettings.invalidate(); toast.success("Auto-send updated"); },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change auto-send" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change auto-send")),
   });
 
   const s = settings.data as any;

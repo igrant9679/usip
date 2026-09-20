@@ -16,6 +16,7 @@
  *      no tracking pixel, so opens are reported as unavailable, never as 0.
  */
 import { Link } from "wouter";
+import { forbiddenMessage } from "@/lib/forbidden";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Shell, PageHeader, SubNav, StatCard, EmptyState, useAccentColor } from "@/components/usip/Shell";
@@ -89,7 +90,7 @@ export default function AREPerformance() {
   const optSettings = trpc.optimization.getSettings.useQuery(undefined as any, { retry: false });
   const setOptSettings = trpc.optimization.setSettings.useMutation({
     onSuccess: () => { utils.optimization.getSettings.invalidate(); toast.success("Autonomy updated"); },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change autonomy" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change autonomy")),
   });
   const revert = trpc.optimization.revert.useMutation({
     onSuccess: (r: any) => {
@@ -104,7 +105,7 @@ export default function AREPerformance() {
       // Distinguish a real change from a recorded-only decision.
       toast.success(r?.detail ?? (r?.applied ? "Applied" : "Recorded"));
     },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can act on recommendations" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can act on recommendations")),
   });
   const approveAll = trpc.optimization.approveAll.useMutation({
     onSuccess: (r: any) => {
@@ -114,11 +115,11 @@ export default function AREPerformance() {
       if (r.failed?.length) parts.push(`${r.failed.length} failed`);
       toast[r.failed?.length ? "warning" : "success"](parts.join(", "));
     },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can act on recommendations" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can act on recommendations")),
   });
   const dismiss = trpc.optimization.dismiss.useMutation({
     onSuccess: () => { utils.optimization.list.invalidate(); toast.success("Dismissed — it won't be suggested again"); },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can act on recommendations" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can act on recommendations")),
   });
   const analyze = trpc.optimization.analyzeNow.useMutation({
     onSuccess: (r: any) => {
@@ -129,7 +130,7 @@ export default function AREPerformance() {
           : "No new recommendations — not enough measured data yet to say anything useful",
       );
     },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can run the analyzers" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can run the analyzers")),
   });
   const recRows = (recs.data as any[]) ?? [];
   const appliedRows = (history.data as any[]) ?? [];

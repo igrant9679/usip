@@ -75,7 +75,7 @@ Every company with its people, enrichment (industry, size, revenue, HQ, tech), b
 Inbound and engaged people awaiting qualification. Score 0–100 (Lead Scoring), owner (Lead Routing), status new → working → qualified/unqualified → converted. **Convert** creates Account + Contact + Opportunity in one step. AI Pipeline nightly batch drafts outreach for leads above the score threshold.
 
 ### ★ Deals — `/v2/deals`
-Kanban board of open opportunities by stage; list and forecast views. Drag between stages; each card shows value, win probability, days in stage, next step, owner. **Pipeline Alerts** strip (`#alerts`): stale (no touch 14 days), low probability, no champion, slipped close date. Deal Autopilot writes next-step notes and win-prob; in Auto it creates follow-up tasks.
+Kanban board of open opportunities by stage; list and forecast views. Drag between stages; each card shows value, win probability, days in stage, next step, owner. **Pipeline Alerts** strip (`#alerts`): stale (no touch 14 days), low probability, no champion, slipped close date. Deal Autopilot in Approve proposes next steps as draft tasks (with suggested win-prob in the description); in Auto it writes next step + win-prob onto the deal and opens follow-up tasks (2026-09-20).
 
 ### ★ Lists — `/v2/lists`
 Named static sets of people or companies. Create from a filter (AI Assistant or People bulk action), add/remove members, use as the source in the Add existing wizard, bulk enroll, export.

@@ -160,7 +160,10 @@ describe("emailsSent", () => {
   it("the two raw-transporter paths record their own", () => {
     // Neither goes through createEmailAdapter, so the factory cannot see them.
     expect(strip(read("server/emailDelivery.ts"))).toMatch(/await recordEmailsSent\(workspaceId, 1\)/);
-    expect(strip(read("server/routers/operations.ts"))).toMatch(/await recordEmailsSent\(ctx\.workspace\.id, 1\)/);
+    // sendScheduleNow's body became the shared sendDashboardScheduleEmail
+    // helper (2026-09-20 — the cron and the button use ONE implementation),
+    // so the meter call now takes the helper's workspaceId parameter.
+    expect(strip(read("server/routers/operations.ts"))).toMatch(/await recordEmailsSent\(workspaceId, 1\)/);
   });
 
   /**

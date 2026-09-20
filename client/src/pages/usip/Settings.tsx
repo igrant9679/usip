@@ -146,9 +146,9 @@ export function LegacySettingsSection({ tab, title }: { tab: TabId; title: strin
             </>
           )}
           {tab === "proposals" && <ProposalsTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
-          {tab === "enrichment" && <EnrichmentTab />}
-          {tab === "billing" && <BillingTab usage={usage.data} />}
-          {tab === "danger" && <DangerTab canEdit={isAdmin} />}
+          {tab === "enrichment" && <EnrichmentTab canEdit={isAdmin} />}
+          {tab === "billing" && <BillingTab usage={usage.data} canEdit={isAdmin} />}
+          {tab === "danger" && <DangerTab canEdit={isAdmin} isSuperAdmin={current?.role === "super_admin"} />}
         </div>
       </div>
     </>
@@ -658,31 +658,32 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
       }
     >
       <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="space-y-1">
+        {/* These three record a policy that NOTHING enforces: no auth or
+            session code path reads sessionTimeoutMin, enforce2fa or
+            ipAllowlist. Previously the timeout rendered as an ordinary live
+            control ("Users re-authenticate after this interval") ABOVE the
+            banner, so an admin could set 15 minutes and reasonably believe
+            sessions expired (audit 2026-09-20). Marked plainly until the
+            auth path actually honours them — a security control that lies
+            is worse than one that's absent. */}
+        <div className="space-y-1 md:col-span-2">
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            <span className="font-semibold">Not enforced yet.</span> The settings below are
+            stored but no sign-in check reads them, so changing them does not currently affect
+            access. They are shown disabled rather than implying protection that isn't there.
+          </div>
+        </div>
+        <div className="space-y-1 opacity-60">
           <Label>Session timeout (minutes)</Label>
           <Input
             type="number"
             value={timeout_}
             onChange={(e) => setTimeout_(Number(e.target.value))}
-            disabled={!canEdit}
+            disabled
             min={15}
             max={60 * 24 * 7}
           />
-          <div className="text-xs text-muted-foreground">Users re-authenticate after this interval (15 min – 7 days).</div>
-        </div>
-        {/* These two record a policy that NOTHING enforces: no auth or session
-            code path reads enforce2fa or ipAllowlist. Previously they rendered
-            as ordinary enabled controls whose helper text implied enforcement
-            ("Enforced on next login after save"), so an admin could switch on
-            "Require 2FA" and reasonably believe the workspace was protected.
-            Marked plainly until the auth path actually honours them — a
-            security control that lies is worse than one that's absent. */}
-        <div className="space-y-1 md:col-span-2">
-          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-            <span className="font-semibold">Not enforced yet.</span> The two settings below are
-            stored but no sign-in check reads them, so changing them does not currently affect
-            access. They are shown disabled rather than implying protection that isn't there.
-          </div>
+          <div className="text-xs text-muted-foreground">No session check reads this interval yet.</div>
         </div>
         <div className="space-y-1 opacity-60">
           <Label>Enforce 2FA</Label>
@@ -902,9 +903,12 @@ function IntegrationsTab() {
                         <a href={meta.docsUrl} target="_blank" rel="noreferrer"><ExternalLink className="size-3.5" /></a>
                       </Button>
                     )}
+                    {/* integrations.test is admin-gated on the server — the
+                        Configure/Remove buttons already hide for reps, but
+                        Test stayed clickable and failed after the click. */}
                     <Button
                       size="sm" variant="ghost"
-                      disabled={testMut.isPending}
+                      disabled={testMut.isPending || !isAdmin}
                       onClick={() => testMut.mutate({ provider })}
                     >
                       {testMut.isPending && testMut.variables?.provider === provider
@@ -1604,7 +1608,7 @@ function EmailVerificationSettingsSection({ isAdmin }: { isAdmin: boolean }) {
  * ceiling is imported rather than retyped — three copies of `500` is what let
  * the old bound drift from the engine's clamp.
  */
-function EnrichmentTab() {
+function EnrichmentTab({ canEdit }: { canEdit: boolean }) {
   const utils = trpc.useUtils();
   const statusQ = trpc.prospects.sweepStatus.useQuery();
   const saveMut = trpc.prospects.setSweepSettings.useMutation({
@@ -1631,7 +1635,9 @@ function EnrichmentTab() {
       <div className="p-4 space-y-4">
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground">Mode</label>
-          <Select value={mode} onValueChange={setMode}>
+          {/* setSweepSettings is admin-gated on the server; disabled controls
+              beat a Save that fails after the fact (audit 2026-09-20). */}
+          <Select value={mode} onValueChange={setMode} disabled={!canEdit}>
             <SelectTrigger className="w-full sm:w-80"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="off">Off — never sweeps</SelectItem>
@@ -1672,9 +1678,10 @@ function EnrichmentTab() {
           LinkedIn account's lookup allowance rather than credits you can top up.
         </p>
 
+        {!canEdit && <p className="text-xs text-muted-foreground">Only admins can change enrichment settings.</p>}
         <Button
           size="sm"
-          disabled={saveMut.isPending || !capValid}
+          disabled={!canEdit || saveMut.isPending || !capValid}
           onClick={() => saveMut.mutate({ mode: mode as any, dailyCap: Math.floor(capNum) })}
         >
           Save
@@ -1684,7 +1691,7 @@ function EnrichmentTab() {
   );
 }
 
-function BillingTab({ usage }: { usage: any }) {
+function BillingTab({ usage, canEdit }: { usage: any; canEdit: boolean }) {
   const utils = trpc.useUtils();
   const settingsQ = trpc.settings.get.useQuery();
   const saveMut = trpc.settings.save.useMutation({
@@ -1729,14 +1736,17 @@ function BillingTab({ usage }: { usage: any }) {
                 onChange={(e) => setCap(e.target.value)}
               />
             </div>
+            {/* settings.save is admin-gated on the server — the budget field
+                invited every rep to a Save that could only fail. */}
             <Button
               size="sm"
-              disabled={saveMut.isPending}
+              disabled={!canEdit || saveMut.isPending}
               onClick={() => saveMut.mutate({ llmMonthlyTokenCap: cap.trim() === "" ? null : Math.max(0, Math.floor(Number(cap) || 0)) })}
             >
               Save
             </Button>
           </div>
+          {!canEdit && <p className="text-xs text-muted-foreground">Only admins can change the AI budget.</p>}
           <p className="text-xs text-muted-foreground">
             {capNum === null || capNum <= 0
               ? "No limit set — AI features are never refused for budget reasons."
@@ -1760,7 +1770,7 @@ function BillingTab({ usage }: { usage: any }) {
   );
 }
 
-function DangerTab({ canEdit }: { canEdit: boolean }) {
+function DangerTab({ canEdit, isSuperAdmin }: { canEdit: boolean; isSuperAdmin: boolean }) {
   const [exportResult, setExportResult] = useState<Record<string, number> | null>(null);
   const [transferUserId, setTransferUserId] = useState("");
   const [archiveConfirm, setArchiveConfirm] = useState("");
@@ -1821,7 +1831,7 @@ function DangerTab({ canEdit }: { canEdit: boolean }) {
   });
 
   return (
-    <Section title="Danger zone" description="Destructive actions. Super admin role required.">
+    <Section title="Danger zone" description="Destructive actions. Admin role required — ownership transfer needs the super admin.">
       <div className="p-4 space-y-4">
         {/* Export */}
         <div className="flex items-start gap-3">
@@ -1890,9 +1900,15 @@ function DangerTab({ canEdit }: { canEdit: boolean }) {
           <div className="flex items-start gap-3">
             <div className="flex-1">
               <div className="text-sm font-medium">Transfer ownership</div>
-              <div className="text-xs text-muted-foreground">Move super_admin to another active workspace member.</div>
+              <div className="text-xs text-muted-foreground">
+                Move super_admin to another active workspace member.
+                {!isSuperAdmin && " Only the current super admin can do this."}
+              </div>
             </div>
-            <Button variant="outline" size="sm" disabled={!canEdit} onClick={() => setShowTransfer((v) => !v)}>
+            {/* The server refuses this for plain admins (FORBIDDEN) — the
+                button used to invite the click and fail after (audit
+                2026-09-20). */}
+            <Button variant="outline" size="sm" disabled={!canEdit || !isSuperAdmin} onClick={() => setShowTransfer((v) => !v)}>
               Transfer
             </Button>
           </div>

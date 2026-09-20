@@ -31,6 +31,7 @@ import { eq, and, or, desc, inArray, isNull, sql } from "drizzle-orm";
 import { decryptField } from "./emailAdapter";
 import { bumpCampaignCounter } from "./campaignCounters";
 import { processSignal } from "./routers/are/execution";
+import { activeOwnerOrNull, workspaceNotifyUserId } from "./_core/activeMembers";
 
 let pollerInterval: ReturnType<typeof setInterval> | null = null;
 let isPolling = false;
@@ -369,11 +370,17 @@ export async function processInboundReply(data: InboundReplyData) {
     (insertedReply as unknown as { insertId?: number })?.insertId ?? 0,
   );
 
-  // 4. Create notification for the account owner
-  if (data.userId) {
+  // 4. Create notification for the account owner. The mailbox row's userId
+  //    can name someone who left — then the workspace's standing recipient
+  //    gets it, because a reply nobody is told about is an unhandled reply
+  //    (audit 2026-09-20; same rule as _core/activeMembers everywhere else).
+  const notifyUserId =
+    (await activeOwnerOrNull(data.workspaceId, data.userId)) ??
+    (await workspaceNotifyUserId(data.workspaceId));
+  if (notifyUserId) {
     await db.insert(notifications).values({
       workspaceId: data.workspaceId,
-      userId: data.userId,
+      userId: notifyUserId,
       kind: "email_reply",
       title: `Reply from ${data.fromName || data.fromEmail}`,
       body: data.subject ? `Re: ${data.subject}` : data.bodyText?.slice(0, 200),

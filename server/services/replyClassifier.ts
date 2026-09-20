@@ -14,6 +14,7 @@
  *   auto     — AI classifies AND executes the per-class action automatically.
  */
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
+import { activeOwnerOrNull } from "../_core/activeMembers";
 import { and, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
 import { genuineReplyScope } from "./replyScope";
 import { emailReplies, emailSuppressions, tasks, unipileMessages, workspaceSettings } from "../../drizzle/schema";
@@ -139,6 +140,10 @@ function replyRelated(reply: any): { relatedType: string | null; relatedId: numb
 
 async function createReplyTask(db: any, workspaceId: number, reply: any, title: string, priority: string, type = "follow_up", description?: string) {
   const rel = replyRelated(reply);
+  // reply.userId is whoever's mailbox received it, read from a row that may
+  // predate their offboarding — a task owned by a leaver looks handled and
+  // never is. Unowned beats mis-owned (see _core/activeMembers).
+  const ownerUserId = await activeOwnerOrNull(workspaceId, reply.userId);
   await db.insert(tasks).values({
     workspaceId,
     title,
@@ -150,7 +155,7 @@ async function createReplyTask(db: any, workspaceId: number, reply: any, title: 
     priority,
     status: "open",
     dueAt: new Date(Date.now() + 86400000),
-    ownerUserId: reply.userId ?? null,
+    ownerUserId,
     relatedType: rel.relatedType,
     relatedId: rel.relatedId,
     source: "ai",
@@ -173,7 +178,9 @@ export async function applyReplyAction(workspaceId: number, reply: any, byUser: 
   switch (cls) {
     case "willing_to_meet": {
       meetingId = await createMeetingProposal(workspaceId, {
-        ownerUserId: reply.userId ?? null,
+        // Same active-membership rule as createReplyTask: never propose a
+        // meeting owned by someone who left the workspace.
+        ownerUserId: await activeOwnerOrNull(workspaceId, reply.userId),
         relatedType: rel.relatedType,
         relatedId: rel.relatedId,
         name,

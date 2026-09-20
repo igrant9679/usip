@@ -220,7 +220,16 @@ export async function runTaskAutopilotAllWorkspaces(): Promise<{ workspaces: num
         ));
       const createdToday = Number(row?.n ?? 0);
       const remaining = cap - createdToday;
-      if (remaining <= 0) continue;
+      if (remaining <= 0) {
+        // Stamp BEFORE the cap-skip: hitting the daily cap is a run that
+        // decided, not a run that failed — leaving lastRunAt stale made the
+        // Autonomy Center read as "broken" every capped day (audit 2026-09-20).
+        await db
+          .update(workspaceSettings)
+          .set({ taskAutopilotLastRunAt: new Date() })
+          .where(eq(workspaceSettings.workspaceId, ws.workspaceId));
+        continue;
+      }
 
       const r = await generateTasksForWorkspace(ws.workspaceId, {
         mode,

@@ -262,7 +262,7 @@ Lists are hand-picked and static. Segments are rule-based and stay current. Pers
 2. **Screen** — approve or reject per the autonomy mode and thresholds.
 3. **Write** — a sequence for each approved person; a judge that can see the dossier scores it out of 40.
 4. **Enroll** — steps become scheduled sends on the cadence. Steps already sent are kept on re-enrol.
-5. **Dispatch** — due steps send through the pool within the daily cap and outside the suppression list; the sender's display name becomes the From header and the signature; tracking is injected.
+5. **Dispatch** — due steps send through the pool within the daily cap and outside BOTH suppression lists (the campaign's own and the workspace's site-wide one); every campaign email carries one-click unsubscribe headers, plus your opt-out footer when that setting is on; the sender's display name becomes the From header and the signature; tracking is injected.
 6. **Complete** and recount the funnel.
 7. **Discover** — if the queue is drained and below target, pull from one source.
 
@@ -323,7 +323,7 @@ All on **Daily → Autonomy Center**; admin-only. Everything defaults to Off exc
 | Task Autopilot | draft next-best-action tasks | open tasks |
 | Meeting Autopilot | proposed meetings with candidate times | sends the invite |
 | Conversation Autopilot | classifies every reply with a suggested answer | acts per class: willing-to-meet gets your booking link, unsubscribe goes on suppression, referral becomes a task |
-| Deal Autopilot | next-step notes and win probability | also creates follow-up tasks |
+| Deal Autopilot | draft next-step tasks carrying a suggested win probability | writes next step + win probability onto the deal and opens follow-up tasks |
 | Social Autopilot | draft invite tasks | sends LinkedIn invites within caps, opener on accept |
 | Job-change Autopilot | re-engagement tasks when a move is detected | starts the re-engage sequence |
 | Chat agent | chats, captures the lead, qualified visitor becomes a task | books the meeting itself |

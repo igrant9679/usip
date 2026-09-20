@@ -58,6 +58,7 @@ import { runPipelineAlertsCron } from "../routers/pipelineAlerts";
 import { runSegmentEnrollmentForAllWorkspaces } from "../routers/segmentRules"; // eslint-disable-line
 import { runWarmupEngine } from "../services/warmupEngine";
 import { runReportScheduler } from "../services/reportScheduler";
+import { runDashboardReportSchedules } from "../services/dashboardReportScheduler";
 import { registerEmailTrackingRoutes } from "../emailTracking";
 import { startInboundReplyPoller } from "../inboundReplyPoller";
 import { expireInvitations, sendExpiryWarningEmails } from "../inviteExpiry";
@@ -295,6 +296,44 @@ async function startServer() {
   };
   setTimeout(runReports, 150_000);
   setInterval(runReports, 60 * 60 * 1000); // hourly
+
+  // Dashboard report schedules (report_schedules) — same hourly clock. The
+  // table promised daily/weekly/monthly and had no cron at all; "Send now"
+  // was the only sender (audit 2026-09-20).
+  const runDashReports = guardOverlap("DashboardReports", () => runDashboardReportSchedules());
+  setTimeout(runDashReports, 200_000);
+  setInterval(runDashReports, 60 * 60 * 1000); // hourly
+
+  /**
+   * The two ex-Manus scheduled jobs. They were built as secret-gated HTTP
+   * endpoints for an external scheduler that no longer calls them, so the
+   * proposal follow-up sweep and the weekly rejection digest simply never
+   * ran (audit 2026-09-20). Invoked through our OWN endpoint so the secret
+   * gate and rate limiting stay the single entry point, and an external
+   * scheduler can still take over by POSTing the same routes.
+   */
+  const callScheduledRoute = async (route: string) => {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (process.env.SCHEDULED_TASK_SECRET) headers["x-scheduled-secret"] = process.env.SCHEDULED_TASK_SECRET;
+    const res = await fetch(`http://127.0.0.1:${port}/api/scheduled/${route}`, { method: "POST", headers, body: "{}" });
+    if (!res.ok) console.error(`[Scheduled:${route}] HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  };
+  // Proposal follow-up sweep is self-deduping (it checks for a live task per
+  // proposal), so a restart re-running it early is harmless.
+  const runProposalFollowup = guardOverlap("ProposalFollowup", () => callScheduledRoute("proposal-followup"));
+  setTimeout(runProposalFollowup, 10 * 60 * 1000); // 10 min after boot
+  setInterval(runProposalFollowup, 24 * 60 * 60 * 1000); // daily
+  // The digest endpoint has NO dedupe of its own — repeat calls repeat the
+  // whole digest — and this app redeploys often. So: hourly tick, act only
+  // inside one UTC hour on Mondays, which caps a restart-duplicate at the
+  // rare deploy landing inside that same hour.
+  const runRejectionDigest = guardOverlap("RejectionDigest", async () => {
+    const now = new Date();
+    if (now.getUTCDay() !== 1 || now.getUTCHours() !== 9) return;
+    await callScheduledRoute("rejection-digest");
+  });
+  setTimeout(runRejectionDigest, 12 * 60 * 1000);
+  setInterval(runRejectionDigest, 60 * 60 * 1000); // hourly tick, Monday 09 UTC act
 
 
   // ARE engine: drive every active Autonomous Revenue Engine campaign through

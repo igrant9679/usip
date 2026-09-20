@@ -52,9 +52,10 @@ export async function runDealAutopilotForWorkspace(
     .limit(limit);
   if (!opps.length) return { analyzed: 0, tasksCreated: 0 };
 
-  // In auto mode, skip deals that already have an open AI-sourced task.
+  // Skip deals that already have a live AI-sourced task — both modes create
+  // tasks now (draft in approval, open in auto), so both need the dedupe.
   let busy = new Set<number>();
-  if (mode === "auto") {
+  {
     const ids = opps.map((o: any) => o.id);
     const existing = await db.select({ relatedId: tasks.relatedId }).from(tasks)
       .where(and(
@@ -69,6 +70,11 @@ export async function runDealAutopilotForWorkspace(
 
   let analyzed = 0, tasksCreated = 0;
   for (const o of opps) {
+    // A live AI task means the last recommendation is still waiting — don't
+    // spend an LLM call re-deriving it. Matters most in approval mode, where
+    // analysis no longer writes the deal row, so the cron's updatedAt filter
+    // alone would re-pick the same deals every tick.
+    if (busy.has(o.id)) continue;
     const prompt = `You are an autonomous B2B sales pipeline manager. Recommend the single best next step to advance this deal toward close. Return JSON only.
 
 Deal: ${o.name}
@@ -114,24 +120,42 @@ Return: {
       const winProb = Math.max(0, Math.min(100, Math.round(Number(parsed.winProb)) ));
       const priority = ["low", "normal", "high", "urgent"].includes(parsed.priority) ? parsed.priority : "normal";
       const risk = String(parsed.risk ?? "").slice(0, 120);
+      const reasoning = String(parsed.reasoning ?? "").slice(0, 300);
 
-      const patch: any = {};
-      if (nextStep) patch.nextStep = nextStep;
-      if (Number.isFinite(winProb)) patch.winProb = winProb;
-      if (Object.keys(patch).length) {
-        await db.update(opportunities).set(patch as never)
-          .where(and(eq(opportunities.id, o.id), eq(opportunities.workspaceId, workspaceId)));
+      // Writing the deal record is an ACT, so it belongs to auto mode only.
+      // Approve is documented product-wide as "the AI does the work and
+      // stops" — yet this patch ran in both modes, silently overwriting the
+      // rep's own next step and win probability while nothing arrived for
+      // review (audit 2026-09-20).
+      if (mode === "auto") {
+        const patch: any = {};
+        if (nextStep) patch.nextStep = nextStep;
+        if (Number.isFinite(winProb)) patch.winProb = winProb;
+        if (Object.keys(patch).length) {
+          await db.update(opportunities).set(patch as never)
+            .where(and(eq(opportunities.id, o.id), eq(opportunities.workspaceId, workspaceId)));
+        }
       }
       analyzed++;
 
-      if (mode === "auto" && nextStep && !busy.has(o.id)) {
+      // Auto: an open task. Approval: the same recommendation as a DRAFT task
+      // (the review queue), carrying the numbers the deal record no longer
+      // gets — approving it is what makes the suggestion actionable.
+      if (nextStep && !busy.has(o.id)) {
+        const suggestion = mode === "auto"
+          ? (risk ? `Deal at risk: ${risk}` : `Advance deal: ${o.name}`)
+          : [
+              `Advance deal: ${o.name}. Suggested win probability ${Number.isFinite(winProb) ? `${winProb}%` : "unchanged"}.`,
+              risk ? `At risk: ${risk}.` : "",
+              reasoning,
+            ].filter(Boolean).join(" ");
         await db.insert(tasks).values({
           workspaceId,
           title: nextStep,
-          description: risk ? `Deal at risk: ${risk}` : `Advance deal: ${o.name}`,
+          description: suggestion,
           type: "follow_up",
           priority,
-          status: "open",
+          status: mode === "auto" ? "open" : "draft",
           dueAt: new Date(Date.now() + 2 * 86400000),
           ownerUserId: o.ownerUserId ?? null,
           relatedType: "opportunity",

@@ -10,6 +10,7 @@
  * / Autonomous (AI classifies AND applies the action). Backed by conversations.*.
  */
 import { useMemo, useState } from "react";
+import { forbiddenMessage } from "@/lib/forbidden";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
@@ -154,7 +155,7 @@ export default function ConversationsV2() {
 
   const setMode = trpc.conversations.setAutopilotSettings.useMutation({
     onSuccess: () => { utils.conversations.getAutopilotSettings.invalidate(); toast.success("Autopilot updated"); },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Autopilot" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Autopilot")),
   });
   const classifyRecent = trpc.conversations.classifyRecent.useMutation({
     onSuccess: (r) => { invalidateAll(); toast.success(r.classified === 0 ? "Nothing new to classify" : `Classified ${r.classified} repl${r.classified === 1 ? "y" : "ies"}`); },

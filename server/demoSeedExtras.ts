@@ -406,10 +406,14 @@ export async function seedDemoExtras(workspaceId: number, ownerUserId: number, o
   counts.proposals = dealOpps.length; counts.quotes = dealOpps.length;
 
   // ── Saved reports ──────────────────────────────────────────────────────
+  // Specs must satisfy reports.run's schema exactly (object enum uses
+  // "deals", ops are eq/neq/contains/…): the originals used "opportunities"
+  // and invented ops (not_in / this_month / in / last_days), so every seeded
+  // report errored the moment a demo viewer opened it (audit 2026-09-20).
   for (const r of [
-    { name: "Open pipeline by stage", object: "opportunities", config: { columns: ["name", "stage", "value", "closeDate", "owner"], filters: [{ field: "stage", op: "not_in", value: ["won", "lost"] }], groupBy: "stage", sort: { field: "value", dir: "desc" } }, scheduleFreq: "weekly" },
-    { name: "Leads created this month", object: "leads", config: { columns: ["firstName", "lastName", "company", "source", "score", "status"], filters: [{ field: "createdAt", op: "this_month" }], sort: { field: "score", dir: "desc" } }, scheduleFreq: "none" },
-    { name: "Calls and meetings last 30 days", object: "activities", config: { columns: ["type", "subject", "relatedType", "occurredAt", "actor"], filters: [{ field: "type", op: "in", value: ["call", "meeting"] }, { field: "occurredAt", op: "last_days", value: 30 }] }, scheduleFreq: "monthly" },
+    { name: "Open pipeline by stage", object: "deals", config: { columns: ["name", "stage", "value", "closeDate", "owner"], filters: [{ field: "stage", op: "neq", value: "won" }, { field: "stage", op: "neq", value: "lost" }], groupBy: "stage", aggregate: "sum_value", aggregateField: "value", limit: 200 }, scheduleFreq: "weekly" },
+    { name: "Open leads by score", object: "leads", config: { columns: ["firstName", "lastName", "company", "source", "score", "status"], filters: [{ field: "status", op: "neq", value: "converted" }], sort: { field: "score", dir: "desc" }, limit: 200 }, scheduleFreq: "none" },
+    { name: "Recent activity log", object: "activities", config: { columns: ["type", "subject", "relatedType", "occurredAt", "actor"], filters: [], sort: { field: "occurredAt", dir: "desc" }, limit: 200 }, scheduleFreq: "monthly" },
   ]) {
     await db.insert(savedReports).values({ workspaceId, ownerUserId, name: r.name, object: r.object, config: r.config, scheduleFreq: r.scheduleFreq, scheduleRecipients: r.scheduleFreq === "none" ? null : ownerEmail } as never);
   }

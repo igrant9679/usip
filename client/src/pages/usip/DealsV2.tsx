@@ -8,6 +8,7 @@
  * autonomy layer (deals.* ) on top. The classic editor stays at /pipeline.
  */
 import { useMemo, useState } from "react";
+import { forbiddenMessage } from "@/lib/forbidden";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
@@ -107,7 +108,7 @@ export default function DealsV2() {
 
   const setMode = trpc.deals.setAutopilotSettings.useMutation({
     onSuccess: () => { utils.deals.getAutopilotSettings.invalidate(); toast.success("Autopilot updated"); },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Autopilot" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Autopilot")),
   });
   const analyze = trpc.deals.analyzeAll.useMutation({
     onSuccess: (r) => { utils.opportunities.board.invalidate(); toast.success(r.analyzed === 0 ? "No open deals to analyze" : `AI analyzed ${r.analyzed} deal${r.analyzed === 1 ? "" : "s"}`); },

@@ -208,12 +208,15 @@ describe("both public capture paths announce the lead", () => {
   const forms = strip(read("server/routers/forms.ts"));
   const landing = strip(read("server/routers/landingPages.ts"));
 
-  it("forms.submit notifies, with the owner it just resolved", () => {
-    expect(forms).toMatch(/await notifyLeadRouted\(\{[\s\S]{0,200}?ownerUserId,[\s\S]{0,200}?source: "webform"/);
+  // Both paths now fall back to workspaceNotifyUserId when the resolved owner
+  // is null (author left, routing found nobody) — a captured-but-unannounced
+  // lead was the very bug this file pins (audit 2026-09-20).
+  it("forms.submit notifies, with the owner it just resolved (or the standing recipient)", () => {
+    expect(forms).toMatch(/await notifyLeadRouted\(\{[\s\S]{0,200}?ownerUserId: ownerUserId \?\? \(await workspaceNotifyUserId\(form\.workspaceId\)\),[\s\S]{0,200}?source: "webform"/);
   });
 
   it("landingPages.submit notifies, tagged with the page slug", () => {
-    expect(landing).toMatch(/await notifyLeadRouted\(\{[\s\S]{0,300}?ownerUserId,[\s\S]{0,300}?source: `landing:\$\{page\.slug\}`/);
+    expect(landing).toMatch(/await notifyLeadRouted\(\{[\s\S]{0,300}?ownerUserId: ownerUserId \?\? \(await workspaceNotifyUserId\(page\.workspaceId\)\),[\s\S]{0,300}?source: `landing:\$\{page\.slug\}`/);
   });
 
   it("both notify AFTER the lead exists, so the deep link resolves", () => {

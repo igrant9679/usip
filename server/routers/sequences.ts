@@ -2104,7 +2104,15 @@ export const emailDraftsRouter = router({
     const db = await getDb();
     if (!db) return [];
     let rows = await db.select().from(emailDrafts).where(eq(emailDrafts.workspaceId, ctx.workspace.id)).orderBy(desc(emailDrafts.createdAt));
-    if (input?.status) rows = rows.filter((r) => r.status === input.status);
+    // "pending_review" means AWAITING REVIEW — the status PAIR the one draft
+    // vocabulary uses everywhere else (attention panel, Emails page). The
+    // dashboards' draft cards under-counted by exactly the ai_pending_review
+    // rows until this matched (audit 2026-09-20).
+    if (input?.status === "pending_review") {
+      rows = rows.filter((r) => r.status === "pending_review" || r.status === "ai_pending_review");
+    } else if (input?.status) {
+      rows = rows.filter((r) => r.status === input.status);
+    }
     return rows;
   }),
 

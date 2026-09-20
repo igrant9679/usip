@@ -14,6 +14,7 @@
  * which also exports RelatedTasks) is left untouched.
  */
 import { useMemo, useState } from "react";
+import { forbiddenMessage } from "@/lib/forbidden";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
@@ -135,7 +136,7 @@ export default function TasksV2() {
 
   const setMode = trpc.tasks.setAutopilotSettings.useMutation({
     onSuccess: () => { utils.tasks.getAutopilotSettings.invalidate(); toast.success("Autopilot updated"); },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Autopilot" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Autopilot")),
   });
   const generate = trpc.tasks.generateDrafts.useMutation({
     onSuccess: (r) => {

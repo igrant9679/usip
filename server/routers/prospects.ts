@@ -644,8 +644,11 @@ export const prospectsRouter = router({
 
       const conditions = [eq(prospects.workspaceId, ctx.workspace.id)];
       if (input.emailStatus) conditions.push(eq(prospects.emailStatus, input.emailStatus));
-      if (input.hasEmail === true) conditions.push(sql`${prospects.email} IS NOT NULL`);
-      if (input.hasEmail === false) conditions.push(isNull(prospects.email));
+      // '' counts as missing on BOTH sides: imports write empty strings, and
+      // a "has email" filter that returns unmailable rows (or a "missing
+      // email" view that hides them) sends the user chasing ghosts.
+      if (input.hasEmail === true) conditions.push(sql`${prospects.email} IS NOT NULL AND ${prospects.email} != ''`);
+      if (input.hasEmail === false) conditions.push(sql`(${prospects.email} IS NULL OR ${prospects.email} = '')`);
       if (input.hasPhone) conditions.push(sql`${prospects.phone} IS NOT NULL AND ${prospects.phone} <> ''`);
       if (input.hasLinkedin) conditions.push(sql`${prospects.linkedinUrl} IS NOT NULL AND ${prospects.linkedinUrl} <> ''`);
       // "Saved" means promoted to a lead OR a contact — the People page has

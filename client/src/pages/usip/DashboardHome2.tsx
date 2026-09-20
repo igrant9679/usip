@@ -65,7 +65,7 @@ export default function DashboardHome2() {
             </div>
           </Card>
 
-          <Card title="AI drafts awaiting review" right={<Link href="/v2/emails?status=awaiting&source=ai_draft" className="text-xs text-primary">Review queue →</Link>}>
+          <Card title="Drafts awaiting review" right={<Link href="/v2/emails?status=awaiting" className="text-xs text-primary">Review queue →</Link>}>
             {(drafts ?? []).length === 0 ? (
               <div className="text-sm text-muted-foreground p-2">No drafts in the queue.</div>
             ) : (

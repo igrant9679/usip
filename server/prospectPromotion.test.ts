@@ -444,7 +444,9 @@ describe("the sweep daily cap", () => {
      * with this setting for months.
      */
     expect(settingsUi).toMatch(/id: "enrichment", label: "Data enrichment"/);
-    expect(settingsUi).toMatch(/tab === "enrichment" && <EnrichmentTab \/>/);
+    // canEdit came with the 2026-09-20 admin-gating pass: the server's
+    // setSweepSettings is adminWsProcedure, so the controls disable for reps.
+    expect(settingsUi).toMatch(/tab === "enrichment" && <EnrichmentTab canEdit=\{isAdmin\} \/>/);
     expect(settingsUi).toMatch(/setSweepSettings\.useMutation/);
     expect(settingsUi).toMatch(/saveMut\.mutate\(\{ mode: mode as any, dailyCap: Math\.floor\(capNum\) \}\)/);
   });

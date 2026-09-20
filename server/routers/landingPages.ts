@@ -282,10 +282,11 @@ export const landingPagesRouter = router({
           leadId = Number((r as any)[0]?.insertId ?? 0) || null;
         } catch (e) { console.error("[landingPages.submit] lead insert failed:", e); }
 
-        // Same as forms.submit — a lead captured but unannounced is the bug.
+        // Same as forms.submit — a lead captured but unannounced is the bug,
+        // so an unowned one falls back to the workspace's standing recipient.
         await notifyLeadRouted({
           workspaceId: page.workspaceId,
-          ownerUserId,
+          ownerUserId: ownerUserId ?? (await workspaceNotifyUserId(page.workspaceId)),
           leadId,
           name: [firstName, lastName].filter(Boolean).join(" ") || email || "Unknown",
           company,

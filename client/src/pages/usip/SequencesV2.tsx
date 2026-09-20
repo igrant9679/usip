@@ -8,6 +8,7 @@
  * create-sequence builder is a follow-up; "Create sequence" makes a draft here.
  */
 import { useMemo, useState } from "react";
+import { forbiddenMessage } from "@/lib/forbidden";
 import { useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -145,7 +146,7 @@ export default function SequencesV2() {
   });
   const publishMut = trpc.sequences.publishAsTemplate.useMutation({
     onSuccess: () => { utils.sequences.list.invalidate(); utils.sequences.listTemplates.invalidate(); toast.success("Published to the team template library"); },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can publish templates" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can publish templates")),
   });
   const unpublishMut = trpc.sequences.unpublishTemplate.useMutation({
     onSuccess: () => { utils.sequences.list.invalidate(); utils.sequences.listTemplates.invalidate(); toast.success("Removed from templates"); },
@@ -158,7 +159,7 @@ export default function SequencesV2() {
   const memberName = (uid?: number | null) => (uid ? members.find((m) => m.userId === uid)?.name ?? `User ${uid}` : null);
   const assignMut = trpc.sequences.assign.useMutation({
     onSuccess: () => { utils.sequences.list.invalidate(); toast.success("Assignment updated"); },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only managers can assign" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only managers can assign")),
   });
 
   const [tab, setTab] = useState<Tab>("All Sequences");

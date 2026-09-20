@@ -348,7 +348,10 @@ export default function Companies() {
           {!hideFilters && (
             <aside className="w-72 shrink-0 border-r border-border flex flex-col min-h-0 bg-card/30">
               <div className="grid grid-cols-2 gap-px bg-border/60 shrink-0">
-                {[{ l: "Total", v: fmtNum(total) }, { l: "With contacts", v: fmtNum(rows.filter((r) => r.contactCount > 0).length) }].map((s) => (
+                {/* `rows` is the CURRENT PAGE — next to a workspace-wide
+                    Total, an unqualified "With contacts" read as workspace-
+                    wide too and the pair quietly disagreed (audit 2026-09-20). */}
+                {[{ l: "Total", v: fmtNum(total) }, { l: "With contacts (page)", v: fmtNum(rows.filter((r) => r.contactCount > 0).length) }].map((s) => (
                   <div key={s.l} className="bg-card px-2 py-1.5 text-center" style={{ backgroundImage: `linear-gradient(180deg, ${accent}1f, transparent)` }}>
                     <div className="text-[13px] font-bold tabular-nums" style={{ color: accent }}>{s.v}</div>
                     <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{s.l}</div>

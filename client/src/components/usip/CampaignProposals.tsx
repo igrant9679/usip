@@ -13,6 +13,7 @@
  * analysis on demand and always leaves the result here for a human.
  */
 import { Bot, Check, Loader2, Sparkles, X } from "lucide-react";
+import { forbiddenMessage } from "@/lib/forbidden";
 import { ConfirmButton } from "@/components/usip/Common";
 import { Link } from "wouter";
 import { toast } from "sonner";
@@ -49,7 +50,7 @@ export function CampaignProposals() {
       else toast.info(r.unplaced === 0 ? "Everyone with an email already fits a campaign or is in one" : `${r.unplaced} people fit no campaign, but no group is big enough (8+) to be one yet`);
       refresh();
     },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can run the analysis" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can run the analysis")),
   });
   const acceptAll = trpc.are.campaigns.acceptAllProposals.useMutation({
     onSuccess: (r) => {
@@ -63,7 +64,7 @@ export function CampaignProposals() {
       toast[r.usedModel ? "success" : "info"](r.usedModel ? `Redrafted: “${r.name}”` : "The model was unavailable — the deterministic draft stands (see the note on the card)");
       refresh();
     },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can redraft" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can redraft")),
   });
   const rows = (q.data ?? []) as any[];
   const mode = routing.data?.mode ?? "off";

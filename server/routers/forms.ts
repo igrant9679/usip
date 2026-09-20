@@ -16,7 +16,7 @@ import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
 import { publicProcedure } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
-import { activeOwnerOrNull } from "../_core/activeMembers";
+import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { notifyLeadRouted } from "../services/policyNotify";
 
 const FIELD = z.object({ key: z.string(), label: z.string(), required: z.boolean().optional() });
@@ -180,10 +180,13 @@ export const formsRouter = router({
         } catch (e) { console.error("[FormSubmit] lead insert failed:", e); }
 
         // Tell whoever it landed on. Awaited rather than fire-and-forget: it is
-        // one insert, and a lead captured but unannounced is the whole bug.
+        // one insert, and a lead captured but unannounced is the whole bug —
+        // which is also why an UNOWNED lead (author left, routing found
+        // nobody) falls back to the workspace's standing recipient instead of
+        // notifying no one (audit 2026-09-20).
         await notifyLeadRouted({
           workspaceId: form.workspaceId,
-          ownerUserId,
+          ownerUserId: ownerUserId ?? (await workspaceNotifyUserId(form.workspaceId)),
           leadId,
           name,
           company,

@@ -1506,15 +1506,19 @@ export const TOURS: TourSeed[] = [
   },
   {
     name: "Who Is On Your Site",
-    description: "Turn anonymous traffic into named accounts.",
+    description: "See when people you already know come back to read you.",
     type: "feature",
     estimatedMinutes: 2,
     pageKey: "website-visitors",
     route: "/v2/website-visitors",
     roleTags: ["sdr", "admin"],
     steps: [
-      { title: "Companies, not just hits", bodyMarkdown: "Visitors are resolved to companies where possible, so you see which accounts are reading you rather than a list of IP addresses.", routeTo: "/v2/website-visitors", targetDataTourId: "visitors-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Use it as a signal", bodyMarkdown: "A known account browsing your pricing is a reason to reach out today. Pair it with the chat agent so they can book a call while they are still on the page.", visualTreatment: "coach", advanceCondition: "next_button" },
+      // Honest scope: identification works for KNOWN people (a contact or
+      // lead who arrived through a tracked link). Anonymous visitor→company
+      // resolution needs a paid data provider Velocity doesn't ship with —
+      // the automation article says so, and this tour must not promise more.
+      { title: "Known people, recognised", bodyMarkdown: "When a contact or lead you already have visits through a tracked link, their visit is tied to their record — so you see *who* came back and what they read. Fully anonymous traffic stays anonymous.", routeTo: "/v2/website-visitors", targetDataTourId: "visitors-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Use it as a signal", bodyMarkdown: "A known prospect on your pricing page spawns a high-priority task for their owner automatically — reach out while intent is hot. Pair it with the chat agent so they can book a call while they are still on the page.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
   {

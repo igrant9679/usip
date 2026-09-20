@@ -33,6 +33,7 @@ import { attributeMeetingBookingToAre } from "../routers/are/execution";
 import { formatInZone, generateSlots, safeTimezone } from "@shared/availability";
 import { getWorkspaceTimezone } from "./workspaceTimezone";
 import { rankOf } from "../_core/workspace";
+import { activeMemberIds } from "../_core/activeMembers";
 import { liveMeetingStatuses } from "@shared/meetingStatus";
 
 // Every offerable time derives from the workspace's configured zone rather than
@@ -547,8 +548,16 @@ export async function runMeetingAutopilotForWorkspace(
   const leadIds = [...new Set(candidates.map((p: any) => p.linkedLeadId).filter(Boolean))];
   const cOwners = contactIds.length ? await db.select({ id: contacts.id, owner: contacts.ownerUserId }).from(contacts).where(and(eq(contacts.workspaceId, workspaceId), inArray(contacts.id, contactIds))) : [];
   const lOwners = leadIds.length ? await db.select({ id: leads.id, owner: leads.ownerUserId }).from(leads).where(and(eq(leads.workspaceId, workspaceId), inArray(leads.id, leadIds))) : [];
-  const cMap = new Map(cOwners.map((r: any) => [r.id, r.owner]));
-  const lMap = new Map(lOwners.map((r: any) => [r.id, r.owner]));
+  // Only owners who still WORK here: contact/lead rows keep their ownerUserId
+  // after offboarding, and an invite that books onto a leaver's calendar is
+  // the exact gap _core/activeMembers closes. Departed owners fall through to
+  // the fallback (already active-filtered by pickWorkspaceOwner).
+  const stillHere = await activeMemberIds(
+    workspaceId,
+    cOwners.map((r: any) => r.owner).concat(lOwners.map((r: any) => r.owner)),
+  );
+  const cMap = new Map(cOwners.filter((r: any) => stillHere.has(r.owner)).map((r: any) => [r.id, r.owner]));
+  const lMap = new Map(lOwners.filter((r: any) => stillHere.has(r.owner)).map((r: any) => [r.id, r.owner]));
   const ownerFor = (p: any): number | null =>
     (p.linkedContactId && cMap.get(p.linkedContactId)) || (p.linkedLeadId && lMap.get(p.linkedLeadId)) || fallbackOwner;
 
@@ -563,6 +572,9 @@ export async function runMeetingAutopilotForWorkspace(
     if (mode === "auto") {
       const r = await sendMeetingInvite(workspaceId, id);
       if (r.sent) sent++;
+      // The reason used to be dropped on the floor, so "auto mode proposes
+      // but nothing sends" was undiagnosable from the logs (audit 2026-09-20).
+      else console.log(`[MeetingAutopilot] ws ${workspaceId}: proposal ${id} not sent (${r.reason ?? "unknown"})`);
     }
   }
   return { proposed, sent, skipped };

@@ -74,7 +74,10 @@ export default function Renewals() {
                           {c.healthScore}
                         </StatusPill>
                       </div>
-                      <div className="text-[11px] text-muted-foreground mt-1">Renewal {fmtDate(c.renewalDate)}</div>
+                      {/* The column is contractEnd — customers has no
+                          renewalDate field, so this line rendered "—" on
+                          every card (audit 2026-09-20). */}
+                      <div className="text-[11px] text-muted-foreground mt-1">Renewal {fmtDate(c.contractEnd)}</div>
 
                       {/* AI churn-risk score */}
                       {(c as any).churnRiskScore != null ? (

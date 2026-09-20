@@ -13,6 +13,7 @@ import { aiPipelineJobs, leads, workspaceSettings } from "../drizzle/schema";
 import { getDb } from "./db";
 import { runPipelineForContact } from "./routers/aiPipeline";
 import { notifyOwner } from "./_core/notification";
+import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { checkDealAging } from "./routers/operations";
 import { checkAndPromoteAbVariants } from "./routers/sequences";
 
@@ -45,7 +46,12 @@ export async function runNightlyBatch(): Promise<{
   let totalErrors = 0;
   const sevenDaysAgo = new Date(Date.now() - SEVEN_DAYS_MS);
 
+  // Archived workspaces are frozen everywhere (2026-08-12); this batch was
+  // the last cron still drafting mail in them (audit 2026-09-20).
+  const archived = await archivedWorkspaceIds();
+
   for (const setting of enabledSettings) {
+    if (archived.has(setting.workspaceId)) continue;
     const workspaceId = setting.workspaceId;
     const scoreThreshold = setting.nightlyScoreThreshold ?? 60;
 

@@ -256,6 +256,41 @@ const SURFACES: Array<{
     // with the workspace term dropped, would rank members of every workspace.
     gate: /and\(eq\(workspaceMembers\.workspaceId, workspaceId\), isNull\(workspaceMembers\.deactivatedAt\)\)/,
   },
+  {
+    what: "the autopilot's per-prospect owner (the linked contact/lead's rep) still works here",
+    file: "server/services/meetingScheduler.ts",
+    start: "const stillHere = await activeMemberIds(",
+    end: "const ownerFor = (p: any)",
+    gate: /cOwners\.filter\(\(r: any\) => stillHere\.has\(r\.owner\)\)/,
+  },
+  {
+    what: "an inbound reply's notification reaches someone who still works here (or the standing recipient)",
+    file: "server/inboundReplyPoller.ts",
+    start: "const notifyUserId =",
+    end: 'kind: "email_reply"',
+    gate: /\(await activeOwnerOrNull\(data\.workspaceId, data\.userId\)\) \?\?\s*\(await workspaceNotifyUserId\(data\.workspaceId\)\)/,
+  },
+  {
+    what: "a chat follow-up review task is not owned by a departed rep",
+    file: "server/services/chatFollowUp.ts",
+    start: "const ownerId =",
+    end: "await db.insert(tasks).values({",
+    gate: /\(await activeOwnerOrNull\(agent\.workspaceId, agent\.bookingUserId\)\) \?\?\s*\(await activeOwnerOrNull\(agent\.workspaceId, agent\.createdByUserId\)\)/,
+  },
+  {
+    what: "a classified reply's task is not owned by a departed rep",
+    file: "server/services/replyClassifier.ts",
+    start: "async function createReplyTask(",
+    end: "relatedType: rel.relatedType",
+    gate: /const ownerUserId = await activeOwnerOrNull\(workspaceId, reply\.userId\);/,
+  },
+  {
+    what: "a high-intent visit task is not filed under a departed record owner",
+    file: "server/websiteTracking.ts",
+    start: "await db.insert(tasks).values({",
+    end: 'relatedType: contactId ? "contact" : "lead"',
+    gate: /ownerUserId: await activeOwnerOrNull\(ws\.id, ownerUserId\)/,
+  },
 ];
 
 describe("every session-less path that names a member gates on active membership", () => {
@@ -265,7 +300,7 @@ describe("every session-less path that names a member gates on active membership
    * pinned rather than bounded so that REMOVING a surface is also a decision.
    */
   it("checks every surface in the table, and the table has not shrunk", () => {
-    expect(SURFACES.length).toBe(22);
+    expect(SURFACES.length).toBe(27);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 
@@ -563,11 +598,10 @@ describe("the surface table stays in step with the code", () => {
   const importsHelper = (file: string) =>
     /^import \{[^}]*\} from "[^"]*_core\/activeMembers";$/m.test(read(file));
 
-  const tableFiles = Array.from(new Set(SURFACES.map((s) => s.file)))
-    // meetingScheduler gates inline on the column rather than through the
-    // helper — it is already inside a workspace-scoped query and has the
-    // members table in hand, so a second round trip would buy nothing.
-    .filter((f) => f !== "server/services/meetingScheduler.ts");
+  // meetingScheduler used to gate only inline on the column and was filtered
+  // out here; since 2026-09-20 it imports activeMemberIds for the
+  // per-prospect owner map, so it is a full table citizen again.
+  const tableFiles = Array.from(new Set(SURFACES.map((s) => s.file)));
 
   it("every table file really imports the gate", () => {
     expect(tableFiles.length).toBeGreaterThanOrEqual(11);

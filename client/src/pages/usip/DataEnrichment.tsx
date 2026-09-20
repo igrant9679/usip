@@ -7,8 +7,9 @@
  * `dataHealth.getMetrics` query (contact email/phone completeness + freshness);
  * the other tabs are connect/upsell landings (no backend yet).
  */
-import { useState } from "react";
-import { useLocation } from "wouter";
+import { useEffect, useState } from "react";
+import { forbiddenMessage } from "@/lib/forbidden";
+import { useLocation, useSearch } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { EnrichmentJobDrawer } from "@/components/usip/enrichment/EnrichmentJobDrawer";
@@ -97,6 +98,17 @@ export default function DataEnrichment() {
     sp.set("tab", tabSlug(t));
     window.history.replaceState(null, "", `${window.location.pathname}?${sp.toString()}`);
   };
+  // Re-sync when a ROUTER navigation changes ?tab= while this page is already
+  // mounted (Companies' "Import" button, help links). The state initializer
+  // above runs once, so those clicks changed the URL and nothing else
+  // (audit 2026-09-20). replaceState in setTab doesn't fire this hook, so the
+  // effect only ever follows real navigations.
+  const searchStr = useSearch();
+  useEffect(() => {
+    const slug = new URLSearchParams(searchStr).get("tab");
+    if (slug) setTabState(tabFromSlug(slug));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchStr]);
   const [jobDrawerOpen, setJobDrawerOpen] = useState(false);
 
   const { data: m, isLoading, error: metricsError, refetch: refetchMetrics } = trpc.dataHealth.getMetrics.useQuery();
@@ -117,7 +129,7 @@ export default function DataEnrichment() {
   );
   const setJc = trpc.linkedinEnrichment.setJobChangeSettings.useMutation({
     onSuccess: () => { utils.linkedinEnrichment.getJobChangeSettings.invalidate(); toast.success("Job change autopilot updated"); },
-    onError: (e: any) => toast.error(String(e?.message ?? "").includes("FORBIDDEN") ? "Only admins can change this" : e?.message ?? "Failed"),
+    onError: (e: any) => toast.error(forbiddenMessage(e, "Only admins can change this")),
   });
   const reengage = trpc.linkedinEnrichment.reengage.useMutation({
     onSuccess: () => { utils.linkedinEnrichment.jobChanges.invalidate(); toast.success("Re-engagement task created"); },

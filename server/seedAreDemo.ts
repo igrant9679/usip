@@ -134,13 +134,20 @@ export async function seedAreDemoForAllWorkspaces(): Promise<void> {
           name: DEMO_NAME,
           description:
             "Seeded demo: discovers SaaS RevOps VPs, enriches with trigger/pain signals, runs a 7-step A/B sequence, and books meetings autonomously.",
-          status: "active",
+          // Paused, with EXPLICITLY no sources ([] = "no discovery" — see the
+          // engine's fallback note). Seeded as "active" this demo ran real
+          // discovery/enrichment in every workspace on the install, burning
+          // Apollo/Reoon credits on fictional targeting (audit 2026-09-20).
+          // Activating it is a deliberate owner act, and even then it
+          // discovers nothing until sources are chosen.
+          status: "paused",
           autonomyMode: "batch_approval",
           goalType: "meeting_booked",
           targetProspectCount: 100,
           dailySendCap: 50,
           autoApproveThreshold: 85,
           signalToOpportunityEnabled: true,
+          prospectSources: [],
           prospectsDiscovered: 48,
           prospectsEnriched: 36,
           prospectsApproved: 22,

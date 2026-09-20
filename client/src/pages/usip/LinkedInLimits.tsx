@@ -11,6 +11,7 @@
  * that matters is the trailing week and nobody can hold that in their head.
  */
 import { useEffect, useMemo, useState } from "react";
+import { forbiddenMessage } from "@/lib/forbidden";
 import { toast } from "sonner";
 import { Shell, useAccentColor, EmptyState } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
@@ -300,7 +301,7 @@ export default function LinkedInLimits() {
 
   const save = trpc.linkedinLimits.setPolicy.useMutation({
     onSuccess: () => { utils.linkedinLimits.overview.invalidate(); toast.success("Limits saved"); },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change LinkedIn limits" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change LinkedIn limits")),
   });
   const clear = trpc.linkedinLimits.clearAccountPolicy.useMutation({
     onSuccess: () => { utils.linkedinLimits.overview.invalidate(); toast.success("Account now follows the workspace default"); },

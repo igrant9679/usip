@@ -752,8 +752,12 @@ function ArticleForm({ editArticle, isNew, categories, onCancel, onSaved }: Arti
 
 export default function HelpCenterPage() {
   const [activeTab, setActiveTab] = useState<Tab>("browse");
-  const { data: me } = trpc.auth.me.useQuery();
-  const isAdmin = (me as any)?.role === "admin" || (me as any)?.role === "owner";
+  // WORKSPACE role, not the global auth.me role — auth.me's `role` is the
+  // platform-level field ("user"/"admin"), so a workspace admin whose global
+  // role is "user" lost the Admin tab, and "owner" is not a role value at
+  // all (audit 2026-09-20).
+  const { data: me } = trpc.profile.getMe.useQuery();
+  const isAdmin = (me as any)?.role === "admin" || (me as any)?.role === "super_admin";
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
     { id: "browse", label: "Browse Articles", icon: <BookOpen className="h-4 w-4" /> },

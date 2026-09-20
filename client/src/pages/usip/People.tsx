@@ -391,9 +391,13 @@ export default function People() {
   );
 
   // active filter count for "Clear all" / "Hide filters" / Search settings
+  // missingEmail is a server filter like hasEmail — leaving it out of the
+  // count/pills/clearAll made "Clear all" claim zero filters while the list
+  // stayed filtered to email-less people (audit 2026-09-20).
   const activeCount =
     (emailStatus ? 1 : 0) +
     (hasEmail ? 1 : 0) +
+    (missingEmail ? 1 : 0) +
     (verification ? 1 : 0) +
     (promoted !== "all" ? 1 : 0) +
     (search ? 1 : 0) +
@@ -414,6 +418,7 @@ export default function People() {
     const f: AppliedFilter[] = [];
     if (emailStatus) f.push({ id: "emailStatus", group: "Email Status", label: cap(emailStatus) });
     if (hasEmail) f.push({ id: "hasEmail", group: "Email Status", label: "Has email" });
+    if (missingEmail) f.push({ id: "missingEmail", group: "Email Status", label: "Missing email" });
     if (verification) f.push({ id: "verification", group: "Stage", label: cap(verification) });
     if (promoted !== "all") f.push({ id: "promoted", group: "Saved status", label: promoted === "promoted" ? "Saved" : "Net new" });
     if (enrolled !== "all") f.push({ id: "enrolled", group: "Sequence", label: enrolled === "yes" ? "In a sequence" : "Not in a sequence" });
@@ -429,7 +434,7 @@ export default function People() {
     tiers.forEach((t) => f.push({ id: `tier:${t}`, group: "ICP fit", label: cap(t) }));
     seniorities.forEach((s) => f.push({ id: `sen:${s}`, group: "Management level", label: cap(s) }));
     return f;
-  }, [emailStatus, hasEmail, verification, promoted, enrolled, qText, hasPhone, hasLinkedin, tiers, seniorities]);
+  }, [emailStatus, hasEmail, missingEmail, verification, promoted, enrolled, qText, hasPhone, hasLinkedin, tiers, seniorities]);
 
   const removeFilter = (id: string) => {
     if (id.startsWith("tier:")) { const v = id.slice(5); setTiers((p) => { const n = new Set(p); n.delete(v); return n; }); return; }
@@ -437,6 +442,7 @@ export default function People() {
     switch (id) {
       case "emailStatus": setEmailStatus(""); resetPage(); break;
       case "hasEmail": setHasEmail(false); resetPage(); break;
+      case "missingEmail": setMissingEmail(false); resetPage(); break;
       case "verification": setVerification(""); resetPage(); break;
       case "promoted": setPromoted("all"); resetPage(); break;
       case "enrolled": setEnrolled("all"); resetPage(); break;
@@ -453,7 +459,7 @@ export default function People() {
   };
 
   const clearAll = () => {
-    setEmailStatus(""); setHasEmail(false); setVerification(""); setPromoted("all");
+    setEmailStatus(""); setHasEmail(false); setMissingEmail(false); setVerification(""); setPromoted("all");
     setSearch(""); setTitleQ(""); setCompanyQ(""); setLocationQ(""); setIndustryQ(""); setEducationQ("");
     setLinkedinQ(""); setEnrolled("all");
     setHasPhone(false); setHasLinkedin(false); setTiers(new Set()); setSeniorities(new Set());

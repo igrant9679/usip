@@ -17,6 +17,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { activities, contacts, leads, tasks, websiteVisits, workspaces } from "../drizzle/schema";
 import { pageIntent } from "@shared/pageIntent";
+import { activeOwnerOrNull } from "./_core/activeMembers";
 
 const TRACKER_JS = `(function(){try{
 var s=document.currentScript||(function(){var e=document.getElementsByTagName('script');return e[e.length-1];})();
@@ -169,7 +170,10 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
             priority: "high",
             status: "open",
             dueAt: new Date(Date.now() + 3600000),
-            ownerUserId,
+            // The record's stored owner may have left the workspace; a
+            // time-sensitive task filed under a leaver dies unseen. Unowned
+            // is claimable (see _core/activeMembers).
+            ownerUserId: await activeOwnerOrNull(ws.id, ownerUserId),
             relatedType: contactId ? "contact" : "lead",
             relatedId: contactId ?? leadId,
             source: "ai",

@@ -20,7 +20,8 @@
  * (the one that received the acceptance), never a shared/system identity.
  */
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
-import { and, desc, eq, gte, like, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, like, ne, sql } from "drizzle-orm";
+import { activeTaskStatuses } from "@shared/taskStatus";
 import {
   activities,
   contacts,
@@ -404,6 +405,25 @@ export async function runSocialAutopilotInvitesForWorkspace(
     .orderBy(desc(leads.createdAt))
     .limit(budget * 4);
 
+  // A draft/open invite TASK is not an invite, so the unipileInvites dedupe
+  // below cannot see it — in approval mode every hourly tick re-tasked the
+  // same leads until someone approved one (audit 2026-09-20).
+  const pendingTasked = new Set<number>();
+  if (candidates.length) {
+    const open = await db
+      .select({ relatedId: tasks.relatedId })
+      .from(tasks)
+      .where(and(
+        eq(tasks.workspaceId, workspaceId),
+        eq(tasks.relatedType, "lead"),
+        inArray(tasks.relatedId, candidates.map((l: any) => l.id)),
+        eq(tasks.type, "social_touch"),
+        eq(tasks.source, "ai"),
+        inArray(tasks.status, activeTaskStatuses()),
+      ));
+    for (const t of open) if (t.relatedId != null) pendingTasked.add(t.relatedId);
+  }
+
   for (const lead of candidates) {
     if (budget <= 0) break;
     const url = (lead.customFields as any)?.linkedinUrl as string | undefined;
@@ -422,6 +442,7 @@ export async function runSocialAutopilotInvitesForWorkspace(
     const ownerUserId = (lead.ownerUserId != null && acctByUser.has(lead.ownerUserId)) ? lead.ownerUserId : fallback.userId;
 
     if (mode === "approval") {
+      if (pendingTasked.has(lead.id)) { out.skipped++; continue; }
       await db.insert(tasks).values({
         workspaceId, title: `Send LinkedIn invite to ${name}`, description: url,
         type: "social_touch", priority: "normal", status: "open",

@@ -745,12 +745,20 @@ export const smtpConfigRouter = router({
       .groupBy(emailSuppressions.reason);
     const suppressedEmails = suppressionRows.reduce((s, r) => s + r.cnt, 0);
 
-    // Total sent for bounce rate
+    // Total sent for bounce rate — drafts AND campaign mail. ARE sends write
+    // no draft row, so on a campaign-heavy workspace the denominator was a
+    // fraction of real volume and the bounce rate read several times too high
+    // (audit 2026-09-20). The numerator's bounce webhooks resolve campaign
+    // bounces into email_suppressions/drafts either way.
     const [sentRow] = await db
       .select({ cnt: count(emailDrafts.id) })
       .from(emailDrafts)
       .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "sent")));
-    const totalSent = sentRow?.cnt ?? 0;
+    const [areSentRow] = await db
+      .select({ cnt: count(areExecutionQueue.id) })
+      .from(areExecutionQueue)
+      .where(and(eq(areExecutionQueue.workspaceId, ctx.workspace.id), eq(areExecutionQueue.status, "sent")));
+    const totalSent = (sentRow?.cnt ?? 0) + (areSentRow?.cnt ?? 0);
     const bounceRate = totalSent > 0 ? Math.round((totalBounced / totalSent) * 1000) / 10 : 0;
 
     return { hardBounces, softBounces, spamComplaints, totalBounced, totalSent, bounceRate, suppressedEmails };

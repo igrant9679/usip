@@ -13,6 +13,7 @@
  * recorded locally and flagged "not sent" (never a false "booked").
  */
 import { useMemo, useState, type ReactNode } from "react";
+import { forbiddenMessage } from "@/lib/forbidden";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
@@ -108,7 +109,7 @@ export default function MeetingsV2() {
 
   const setMode = trpc.meetings.setAutopilotSettings.useMutation({
     onSuccess: () => { utils.meetings.getAutopilotSettings.invalidate(); toast.success("Autopilot updated"); },
-    onError: (e) => toast.error(e.message.includes("FORBIDDEN") ? "Only admins can change Autopilot" : e.message),
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Autopilot")),
   });
   const generate = trpc.meetings.generateProposals.useMutation({
     onSuccess: (r) => {

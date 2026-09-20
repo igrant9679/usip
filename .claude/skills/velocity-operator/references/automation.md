@@ -12,7 +12,7 @@ Every autonomous feature has the same three-way dial (`workspace_settings.*Mode`
 | Task Autopilot | `taskAutopilotMode` | off | `draft` tasks (next-best action per prospect, every 30 min) | open tasks |
 | Meeting Autopilot | `meetingAutopilotMode` | off | `proposed` meetings with candidate times (every 45 min) | sends the invite |
 | Conversation Autopilot | `conversationAutopilotMode` | off | classifies every reply + suggested reply (every 5 min) | acts per class: willing-to-meet gets your booking link; unsubscribe → suppression; referral → the referred person is created in People + an intro draft lands in review (2026-09-20); wrong-person → contact flagged departed |
-| Deal Autopilot | `dealAutopilotMode` | off | next-step notes + win-prob on open deals (hourly) | also creates follow-up tasks |
+| Deal Autopilot | `dealAutopilotMode` | off | DRAFT next-step tasks carrying suggested win-prob (hourly, 2026-09-20 — Approve no longer rewrites the deal record) | writes next step + win-prob onto the deal and opens follow-up tasks |
 | Social Autopilot | `socialAutopilotMode` | off | draft invite tasks (hourly) | sends LinkedIn invites within caps, opener DM on accept |
 | Job-change Autopilot | `jobChangeAutopilotMode` | off | re-engagement tasks when enrichment detects a move (daily) | starts the re-engage sequence |
 | Chat agent | per agent `mode` | off | chats, captures lead, qualified visitor → high-priority task | books the meeting itself |
@@ -43,7 +43,10 @@ Revenue Engine campaigns use their own vocabulary: `full` | `batch_approval` | `
 | NameVerification | 30 min | rewrite slug-derived company names with the domain's official name |
 | Meeting autopilot | 45 min | propose meetings for ready prospects |
 | Segment enrollment | 1 h | segment → sequence rules |
-| Scheduled reports | 1 h | daily/weekly/monthly report emails |
+| Scheduled reports | 1 h | daily/weekly/monthly saved-report emails |
+| Dashboard report schedules | 1 h | report_schedules (dashboard digests) — cron added 2026-09-20; before that only "Send now" sent them |
+| Proposal follow-up sweep | 24 h | unopened sent proposals → follow-up task + expiry handling (in-process since 2026-09-20; was an orphan HTTP endpoint) |
+| Rejection digest | Mon 09:00 UTC | per-campaign CSV digest of last week's rejected prospects |
 | CampaignProposals | 1 h | propose new campaigns for unmatched people |
 | Meeting reminders | 1 h | one reminder per booked meeting 1–24h out |
 | Deal autopilot | 1 h | next step + win-prob |

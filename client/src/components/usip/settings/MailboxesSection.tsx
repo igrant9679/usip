@@ -10,6 +10,7 @@
  * unlink). All data comes from the real sending-accounts backend.
  */
 import { useMemo, useState } from "react";
+import { forbiddenMessage } from "@/lib/forbidden";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -252,7 +253,7 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
       toast.success(`${a.fromEmail} is now the default sender`);
     },
     // adminWsProcedure — reps get FORBIDDEN; surface it plainly.
-    onError: (e: any) => toast.error(e?.message?.includes("FORBIDDEN") ? "Only admins can change the default mailbox" : e?.message ?? "Could not set default"),
+    onError: (e: any) => toast.error(forbiddenMessage(e, "Only admins can change the default mailbox")),
   });
 
   const deliverability =

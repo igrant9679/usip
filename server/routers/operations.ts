@@ -810,16 +810,47 @@ export const dashboardsRouter = router({
   // Sending a scheduled report blasts email to its distribution list.
   // Rep-gated to keep viewers from triggering bulk sends.
   sendScheduleNow: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    const r = await sendDashboardScheduleEmail(ctx.workspace.id, input.id, ctx.user.id);
+    if (!r.ok) {
+      if (r.reason === "db_unavailable" || r.reason === "decrypt_failed") throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: r.message });
+      if (r.reason === "no_recipients") throw new TRPCError({ code: "BAD_REQUEST", message: r.message });
+      throw new TRPCError({ code: "NOT_FOUND", message: r.message });
+    }
+    return { ok: true, sentAt: r.sentAt };
+  }),
+
+  deleteSchedule: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const [sched] = await db.select().from(reportSchedules).where(and(eq(reportSchedules.id, input.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));
-    if (!sched) throw new TRPCError({ code: "NOT_FOUND" });
+    await db.delete(reportSchedules).where(and(eq(reportSchedules.id, input.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));
+    return { ok: true };
+  }),
+});
+
+/**
+ * The one implementation of "render this dashboard schedule and mail it".
+ * Two callers: the rep's "Send now" button above, and the hourly cron
+ * (services/dashboardReportScheduler) — which did not exist until the
+ * 2026-09-20 audit found that report_schedules rows promised daily/weekly/
+ * monthly delivery and NOTHING ever read them on a clock. "Send now" was the
+ * only sender, so every schedule was a decoration.
+ */
+export async function sendDashboardScheduleEmail(
+  workspaceId: number,
+  scheduleId: number,
+  actorUserId: number | null,
+): Promise<{ ok: boolean; reason?: string; message?: string; sentAt?: Date }> {
+  {
+    const db = await getDb();
+    if (!db) return { ok: false, reason: "db_unavailable", message: "Database unavailable" };
+    const [sched] = await db.select().from(reportSchedules).where(and(eq(reportSchedules.id, scheduleId), eq(reportSchedules.workspaceId, workspaceId)));
+    if (!sched) return { ok: false, reason: "not_found", message: "Schedule not found." };
     const recipients: string[] = Array.isArray(sched.recipients) ? (sched.recipients as string[]) : [];
-    if (recipients.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "No recipients configured for this schedule. Edit the schedule to add recipients." });
-    const [dash] = await db.select().from(dashboards).where(and(eq(dashboards.id, sched.dashboardId), eq(dashboards.workspaceId, ctx.workspace.id)));
-    if (!dash) throw new TRPCError({ code: "NOT_FOUND", message: "Dashboard not found." });
+    if (recipients.length === 0) return { ok: false, reason: "no_recipients", message: "No recipients configured for this schedule. Edit the schedule to add recipients." };
+    const [dash] = await db.select().from(dashboards).where(and(eq(dashboards.id, sched.dashboardId), eq(dashboards.workspaceId, workspaceId)));
+    if (!dash) return { ok: false, reason: "not_found", message: "Dashboard not found." };
     const widgets = await db.select().from(dashboardWidgets).where(eq(dashboardWidgets.dashboardId, sched.dashboardId));
-    const resolved = await Promise.all(widgets.map((w) => resolveWidgetData(ctx.workspace.id, w, {})));
+    const resolved = await Promise.all(widgets.map((w) => resolveWidgetData(workspaceId, w, {})));
     const sentAt = new Date();
     const widgetHtml = resolved.map((r: any) => {
       const val = r?.value;
@@ -832,11 +863,11 @@ export const dashboardsRouter = router({
       return `<tr><td style="padding:8px 12px;border-bottom:1px solid #eee;font-size:14px;color:#555">${r?.title ?? "Widget"}</td><td style="padding:8px 12px;border-bottom:1px solid #eee;font-size:14px;font-weight:600;text-align:right">${valStr}</td></tr>`;
     }).join("");
     const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;background:#f9f9f9;padding:24px"><div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)"><div style="background:#14B89A;padding:20px 24px"><h2 style="margin:0;color:#fff;font-size:18px">${dash.name} \u2014 Dashboard Report</h2><p style="margin:4px 0 0;color:rgba(255,255,255,.8);font-size:13px">${sentAt.toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</p></div><table style="width:100%;border-collapse:collapse">${widgetHtml}</table><p style="padding:16px 24px;font-size:12px;color:#aaa;margin:0">Sent by USIP Sales Intelligence Platform</p></div></body></html>`;
-    const [cfg] = await db.select().from(smtpConfigs).where(and(eq(smtpConfigs.workspaceId, ctx.workspace.id), eq(smtpConfigs.enabled, true)));
-    if (!cfg) throw new TRPCError({ code: "NOT_FOUND", message: "No active SMTP config. Configure SMTP in Settings \u2192 Email Delivery." });
+    const [cfg] = await db.select().from(smtpConfigs).where(and(eq(smtpConfigs.workspaceId, workspaceId), eq(smtpConfigs.enabled, true)));
+    if (!cfg) return { ok: false, reason: "not_found", message: "No active SMTP config. Configure SMTP in Settings \u2192 Email Delivery." };
     let password: string;
     try { password = decrypt(cfg.encryptedPassword); }
-    catch { throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to decrypt SMTP password" }); }
+    catch { return { ok: false, reason: "decrypt_failed", message: "Failed to decrypt SMTP password" }; }
     const transporter = buildTransporter({ host: cfg.host, port: cfg.port, secure: cfg.secure, username: cfg.username, password });
     await transporter.sendMail({
       from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
@@ -855,10 +886,10 @@ export const dashboardsRouter = router({
      * same reason: scheduled reports left the building with no record on the
      * Emails page.
      */
-    await recordEmailsSent(ctx.workspace.id, 1);
+    await recordEmailsSent(workspaceId, 1);
     await logEmailSend({
-      workspaceId: ctx.workspace.id,
-      meta: { source: "transactional", sourceLabel: `${dash.name} — Dashboard Report`, userId: ctx.user.id },
+      workspaceId,
+      meta: { source: "transactional", sourceLabel: `${dash.name} — Dashboard Report`, userId: actorUserId ?? undefined },
       fromEmail: cfg.fromEmail,
       fromName: cfg.fromName,
       to: recipients,
@@ -870,15 +901,8 @@ export const dashboardsRouter = router({
     });
     await db.update(reportSchedules).set({ lastSentAt: sentAt }).where(eq(reportSchedules.id, sched.id));
     return { ok: true, sentAt };
-  }),
-
-  deleteSchedule: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.delete(reportSchedules).where(and(eq(reportSchedules.id, input.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));
-    return { ok: true };
-  }),
-});
+  }
+}
 
 type WidgetFilters = {
   dateFrom?: string;

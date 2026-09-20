@@ -811,14 +811,17 @@ export default function Dashboard() {
             <div className="px-5 py-3.5 border-b flex items-center">
               <div className="flex items-center gap-2">
                 <Zap className="size-3.5 text-violet-500" />
-                <div className="text-sm font-semibold">AI Drafts Awaiting Review</div>
+                <div className="text-sm font-semibold">Drafts Awaiting Review</div>
                 {(drafts ?? []).length > 0 && (
                   <span className="ml-1 rounded-full bg-violet-500/20 text-violet-600 text-xs font-bold px-2 py-0.5">
                     {(drafts ?? []).length}
                   </span>
                 )}
               </div>
-              <Link href="/v2/emails?status=awaiting&source=sequence" className="ml-auto text-xs flex items-center gap-1" style={{ color: accent }}>
+              {/* No source filter: this card counts EVERY awaiting draft in
+                  email_drafts (CRM, AI and sequence alike), so the link must
+                  land on the same set or the numbers disagree on arrival. */}
+              <Link href="/v2/emails?status=awaiting" className="ml-auto text-xs flex items-center gap-1" style={{ color: accent }}>
                 Review queue <ArrowRight className="size-3" />
               </Link>
             </div>

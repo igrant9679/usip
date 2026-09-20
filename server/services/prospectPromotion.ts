@@ -182,5 +182,33 @@ export async function promoteProspectRow(
     .where(and(eq(contacts.id, contactId), eq(contacts.workspaceId, workspaceId)))
     .catch((e: unknown) => console.error(`[promotion] person link for contact ${contactId} failed:`, (e as Error).message));
 
+  // The employment edge (contact_account_links) — CompanyProfile's people
+  // list reads these rows, and promotion created the contact+account pair
+  // without one, so promoted people were missing from their own company page
+  // (audit 2026-09-20). Best-effort, same rule as the person link above.
+  try {
+    const { contactAccountLinks } = await import("../../drizzle/schema");
+    const [dup] = await db.select({ id: contactAccountLinks.id }).from(contactAccountLinks)
+      .where(and(
+        eq(contactAccountLinks.workspaceId, workspaceId),
+        eq(contactAccountLinks.personType, "contact"),
+        eq(contactAccountLinks.personId, contactId),
+        eq(contactAccountLinks.accountId, accountId),
+      )).limit(1);
+    if (!dup) {
+      await db.insert(contactAccountLinks).values({
+        workspaceId,
+        personType: "contact",
+        personId: contactId,
+        accountId,
+        relationshipType: "current_employer",
+        titleAtCompany: p.title ?? null,
+        sourceType: "prospect_promotion",
+      } as never);
+    }
+  } catch (e) {
+    console.error(`[promotion] account link for contact ${contactId} failed:`, (e as Error).message);
+  }
+
   return { promoted: true, contactId, accountId, alreadyLinked: false };
 }

@@ -32,6 +32,8 @@ import { scrubUnsupportedClaims, transcriptText, type ChatMessage } from "./chat
 import { isEmailSuppressed } from "../routers/emailSuppressions";
 import { sendWorkspaceEmail } from "../emailDelivery";
 import { resolveBookingUrl, textToHtml } from "../mergeVars";
+import { archivedWorkspaceIds } from "../_core/workspaceArchive";
+import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 
 /** Conversations older than this are never followed up — see MAX_AGE_DAYS note. */
 export const MAX_AGE_DAYS = 7;
@@ -224,7 +226,13 @@ export async function runChatFollowUps(): Promise<FollowUpRunResult> {
     out.notes.push(`could not load agents: ${(e as Error).message}`);
     return out;
   }
-  const active = agents.filter((a) => a.followUpMode === "approval" || a.followUpMode === "auto");
+  // Archived workspaces are excluded from every job (the standing rule) —
+  // this cron selected agents by status alone and kept EMAILING VISITORS of
+  // workspaces the owner had archived (audit 2026-09-20).
+  const archived = await archivedWorkspaceIds();
+  const active = agents.filter(
+    (a) => (a.followUpMode === "approval" || a.followUpMode === "auto") && !archived.has(a.workspaceId),
+  );
   out.agentsConsidered = active.length;
   if (!active.length) { out.notes.push("no agent has follow-up enabled"); return out; }
 
@@ -335,7 +343,13 @@ export async function runChatFollowUps(): Promise<FollowUpRunResult> {
             out.sent += 1;
           } else {
             // approval — a human reviews the draft before anything is sent.
-            const ownerId = agent.bookingUserId ?? agent.createdByUserId ?? null;
+            // The agent's stored user ids can name someone who left the
+            // workspace; a task owned by a leaver looks handled and never is
+            // (see _core/activeMembers). Unowned beats mis-owned, and the
+            // notification falls back to whoever actually reads them.
+            const ownerId =
+              (await activeOwnerOrNull(agent.workspaceId, agent.bookingUserId)) ??
+              (await activeOwnerOrNull(agent.workspaceId, agent.createdByUserId));
             const leadId = (s as any).leadId ?? null;
             // Claim before creating the task, for the same reason as the auto
             // branch above: a marker written afterwards can fail and leave the
@@ -357,10 +371,11 @@ export async function runChatFollowUps(): Promise<FollowUpRunResult> {
               ownerUserId: ownerId,
               ...(leadId ? { relatedType: "lead", relatedId: leadId } : {}),
             } as never);
-            if (ownerId) {
+            const notifyId = ownerId ?? (await workspaceNotifyUserId(agent.workspaceId));
+            if (notifyId) {
               await db.insert(notifications).values({
                 workspaceId: agent.workspaceId,
-                userId: ownerId,
+                userId: notifyId,
                 kind: "approval_request",
                 title: "Chat follow-up ready to review",
                 body: `${(s as any).visitorName || email} left without booking. A draft is waiting.`,

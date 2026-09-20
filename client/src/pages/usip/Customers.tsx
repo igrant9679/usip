@@ -101,7 +101,9 @@ export default function Customers() {
                         <td className="px-3 py-2 text-right font-mono tabular-nums">{c.healthScore}</td>
                         <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap">{fmt$(Number(c.arr ?? 0))}</td>
                         <td className="px-3 py-2 text-right font-mono tabular-nums">{c.npsScore}</td>
-                        <td className="px-3 py-2 text-right text-xs text-muted-foreground">{fmtDate(c.renewalDate)}</td>
+                        {/* contractEnd, not renewalDate — the latter is not a
+                            column, so this cell was always empty. */}
+                        <td className="px-3 py-2 text-right text-xs text-muted-foreground">{fmtDate(c.contractEnd)}</td>
                         <td className="px-1 py-2 text-right" onClick={(e) => e.stopPropagation()}>
                           <ConfirmButton
                             className="text-muted-foreground hover:text-destructive p-1 h-auto rounded"
