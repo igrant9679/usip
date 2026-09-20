@@ -191,16 +191,42 @@ describe("buildStageIndex — precedence: a configured row beats the name defaul
  * 2026-09-20; the last two are the heuristics that matched neither "won" nor
  * "lost" and so reported every closed deal as open.
  */
+/**
+ * 2026-09-20: every key-matching shape now carries the LEGACY CLOSED FAMILY
+ * (`closed_won` / `closed_lost` / `closed`) and the leading `[Ss]`, and the
+ * array shape no longer demands exactly two elements. The first cut of this
+ * table matched none of the following, all of which are the same bug:
+ *
+ *   const FINISHED = ["won", "lost", "closed_won", "closed_lost", "closed"];
+ *   if (o.stage === "closed_won") return true;
+ *   inArray(opportunities.stage, ["won", "lost", "closed"])
+ *   .where(ne(opportunities.stage, "won"))
+ *   suggestedStage !== "won"            ← capital S
+ *
+ * so dealAutopilot's five-element list could come back anywhere under any other
+ * name and the sweep stayed green. DEFAULT_WON_KEYS lists `closed_won` as a
+ * live stage key, so these are spellings the product actually stores.
+ *
+ * The literals are deliberately NOT matched bare: `"closed_won"` is also a
+ * WIDGET METRIC id in operations.ts / Dashboards.tsx / seed.ts, and
+ * allowlisting those three files wholesale would blind the sweep to a real
+ * stage comparison living next door.
+ */
 const LITERAL_SHAPES: Array<{ name: string; re: RegExp }> = [
-  { name: `raw SQL NOT IN ('won'…)`, re: /NOT IN \('(won|lost)/ },
-  { name: `raw SQL IN ('won'…)`, re: /[^T] IN \('(won|lost)/ },
-  { name: `eq(opportunities.stage, "won"|"lost")`, re: /eq\(\s*opportunities\.stage\s*,\s*"(won|lost)"\s*\)/ },
+  { name: `raw SQL NOT IN ('won'…)`, re: /NOT IN \('(won|lost|closed)/ },
+  { name: `raw SQL IN ('won'…)`, re: /[^T] IN \('(won|lost|closed)/ },
+  { name: `eq(opportunities.stage, "won"|…)`, re: /eq\(\s*opportunities\.stage\s*,\s*"(won|lost|closed_won|closed_lost|closed)"\s*\)/ },
+  // ne() and a literal inArray() list are the same decision written as SQL —
+  // `.where(ne(opportunities.stage, "won"))` matched nothing before.
+  { name: `ne(opportunities.stage, …)`, re: /ne\(\s*opportunities\.stage\s*,/ },
+  { name: `inArray(opportunities.stage, [literal])`, re: /inArray\(\s*opportunities\.stage\s*,\s*\[/ },
   // `stage)? ===` rather than `.stage ===`, so the String(o.stage) === "won"
-  // spelling is caught too — that is how demoSeedExtras writes it.
-  { name: `stage === "won"|"lost"`, re: /stage\)? === "(won|lost)"/ },
-  { name: `stage !== "won"|"lost"`, re: /stage\)? !== "(won|lost)"/ },
-  { name: `["won", "lost"] array literal`, re: /\[\s*"won",\s*"lost"\s*\]/ },
-  { name: `stage: "won"|"lost" write`, re: /stage: "(won|lost)"/ },
+  // spelling is caught too — that is how demoSeedExtras writes it. `[Ss]tage`
+  // because Pipeline.tsx's was `suggestedStage !== "won"`.
+  { name: `stage === "won"|…`, re: /[Ss]tage\)? === "(won|lost|closed_won|closed_lost|closed)"/ },
+  { name: `stage !== "won"|…`, re: /[Ss]tage\)? !== "(won|lost|closed_won|closed_lost|closed)"/ },
+  { name: `["won", …] array literal`, re: /\[\s*"(won|lost|closed_won|closed_lost)"\s*,[^\]]*\]/ },
+  { name: `stage: "won"|… write`, re: /stage: "(won|lost|closed_won|closed_lost|closed)"/ },
   { name: `/closed/i on a stage`, re: /\/closed\/i/ },
   { name: `startsWith("closed") on a stage`, re: /startsWith\("closed"\)/ },
 ];
@@ -218,21 +244,35 @@ function literalHits(files: string[]): Array<{ file: string; shape: string }> {
 
 const SERVER_FILES = sourceFiles(join(ROOT, "server"), /\.ts$/);
 
+/**
+ * shared/ is walked too (2026-09-20). It was the one directory neither sweep
+ * touched — SERVER_FILES is server/**, CLIENT_FILES is client/src/** — so a
+ * helper there deciding won/lost by name would have been invisible to both
+ * halves while being imported by both.
+ */
+const SHARED_FILES = sourceFiles(join(ROOT, "shared"), /\.tsx?$/);
+const BACKEND_FILES = SERVER_FILES.concat(SHARED_FILES);
+
 /** Every surviving name-match on the server, and why it is allowed to survive. */
 const SERVER_ALLOWED: Record<string, string> = {
   "server/seed.ts":
     "Demo/bootstrap data. It seeds the DEFAULT pipeline by definition, so the default keys are the right literals — they are what it is creating.",
   "server/demoSeedExtras.ts":
     "Same: demo saved reports, notifications and deals for the seeded default pipeline. The saved report it plants uses neq won / neq lost, which still runs — the literal ops were kept precisely so old saved specs keep working.",
+  "shared/stageSemantics.ts":
+    "The defaults themselves. DEFAULT_WON_KEYS / DEFAULT_LOST_KEYS are where the legacy names are ALLOWED to live — every other file is supposed to ask this module instead of re-spelling them.",
 };
 
-describe("no server file decides won/lost from the stage NAME", () => {
+describe("no server or shared file decides won/lost from the stage NAME", () => {
   it("walks real source (guards the walker itself)", () => {
     expect(SERVER_FILES.length).toBeGreaterThan(150);
+    // Its own floor: concat()ing an empty shared walk onto 300 server files
+    // would look like a clean sweep of shared/ forever.
+    expect(SHARED_FILES.length).toBeGreaterThan(20);
   });
 
   it("every surviving literal is allowlisted with a reason", () => {
-    const offenders = literalHits(SERVER_FILES).filter((h) => !(h.file in SERVER_ALLOWED));
+    const offenders = literalHits(BACKEND_FILES).filter((h) => !(h.file in SERVER_ALLOWED));
     expect(
       offenders,
       offenders.length
@@ -248,7 +288,7 @@ describe("no server file decides won/lost from the stage NAME", () => {
   });
 
   it("the allowlist has no stale entries", () => {
-    const hit = new Set(literalHits(SERVER_FILES).map((h) => h.file));
+    const hit = new Set(literalHits(BACKEND_FILES).map((h) => h.file));
     const stale = Object.keys(SERVER_ALLOWED).filter((f) => !hit.has(f));
     expect(
       stale,
@@ -339,9 +379,25 @@ describe("every path that moves a deal into a closing stage consults the flags",
   it("opportunityIntelligence.reviewStageChange scopes its UPDATE and runs the close handling", () => {
     const src = read("server/routers/opportunityIntelligence.ts");
     const w = windowBetween(src, "if (input.approved) {", "insert(opportunityStageHistory)");
-    // The UPDATE's WHERE was keyed only on the approval row's opportunityId.
-    expect(w).toContain("opportunities.workspaceId");
     expect(w).toContain("resolvedStageFor(");
+    /**
+     * 2026-09-20: the tenant scope is pinned on the UPDATE STATEMENT, not on
+     * the branch. The same change added a SELECT two statements above the
+     * UPDATE, and that SELECT carries its own eq(opportunities.workspaceId,
+     * ctx.workspace.id) — so a branch-wide `toContain("opportunities.
+     * workspaceId")` stayed green with the UPDATE's WHERE reverted to
+     * `eq(opportunities.id, approval.opportunityId)` alone, which is the
+     * cross-tenant write this test is named after. The slice starts inside the
+     * approved branch so the unrelated `.update(opportunities)` earlier in the
+     * file cannot anchor it.
+     */
+    const upd = windowBetween(
+      src.slice(src.indexOf("if (input.approved) {")),
+      ".update(opportunities)",
+      "db.insert(opportunityStageHistory)",
+    );
+    expect(upd).toContain("eq(opportunities.workspaceId, ctx.workspace.id)");
+    expect(upd).not.toMatch(/where\(eq\(opportunities\.id, approval\.opportunityId\)\)/);
     // Approving a move to Won used to leave the account un-converted.
     const after = windowBetween(src, "insert(opportunityStageHistory)", "listPendingApprovals");
     expect(after).toContain("ensureCustomerForWonOpp(");
@@ -356,6 +412,74 @@ describe("every path that moves a deal into a closing stage consults the flags",
     // Both accept paths — authenticated and the public share-link one.
     expect(src.match(/canonicalWonStageKey\(/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
     expect(src.match(/ensureCustomerForWonOpp\(/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
+  });
+
+  /**
+   * 2026-09-20. The two READ surfaces the literal sweep cannot see, because
+   * what they used to hold matches no shape in LITERAL_SHAPES: operations.ts
+   * had `const stages = ["discovery", "qualified", "proposal", "negotiation",
+   * "won"]` (five elements, not the two-element array shape) and Pipeline.tsx
+   * had `.id !== "lost"` (not `stage !==`). Both could be reverted wholesale
+   * without turning anything red, and the symptom is silent: a workspace with
+   * custom stages gets a funnel of empty columns and a kanban whose closing
+   * column is never recognised.
+   */
+  it("the operations widgets order columns from the workspace's own stages", () => {
+    const src = read("server/routers/operations.ts");
+    const funnel = windowBetween(
+      src,
+      `if (w.type === "funnel" || w.type === "pipeline_stage") {`,
+      `if (["bar", "line", "area", "stacked_bar"]`,
+    );
+    expect(funnel).toContain("orderedStageKeys(");
+    // "excluded from the funnel" means FLAGGED lost, not named "lost".
+    expect(funnel).toContain("stages.isLost(k)");
+    expect(funnel).not.toMatch(/"negotiation", "won"/);
+
+    const pie = windowBetween(src, `if (cfg.metric === "stage_distribution") {`, `if (w.type === "scatter")`);
+    expect(pie).toContain("orderedStageKeys(");
+    expect(pie).toContain("stages.isWon(o.stage)");
+    expect(pie).toContain("stages.isLost(o.stage)");
+    expect(pie).not.toMatch(/"negotiation", "won"/);
+
+    // The seed order is a DISPLAY fallback for an unseeded pipeline only; the
+    // helper must still read the table first.
+    const helper = windowBetween(src, "async function orderedStageKeys(", "function dateRange(");
+    expect(helper).toContain("from(crmPipelineStages)");
+    expect(helper).toContain("defs.length > 0 ? defs.map((d) => d.key) : DEFAULT_STAGE_ORDER");
+  });
+
+  it("the classic pipeline board carries the flags down to the cards", () => {
+    const src = read("client/src/pages/usip/Pipeline.tsx");
+    const hook = windowBetween(src, "function useStagesFor(", "function WinProbBadge(");
+    expect(hook).toContain("isWon: !!s.isWon");
+    expect(hook).toContain("isLost: !!s.isLost");
+    // The AI stage suggestion must not be offered for a closing stage. This was
+    // `suggestedStage !== "won" && suggestedStage !== "lost"`.
+    const card = windowBetween(src, "const suggestedStage: string | null =", "const stageLabel = (id: string)");
+    expect(card).toContain("suggestedMeta.isWon");
+    expect(card).toContain("suggestedMeta.isLost");
+    // The "move to next stage" column list hid Lost by key (`.id !== "lost"`).
+    expect(src).toContain("STAGES.filter((s) => !s.isLost)");
+  });
+
+  it("the Deals board resolves through the shared index, not a bare row lookup", () => {
+    /**
+     * A `stageRows.find((s) => s.key === key)` returns UNDEFINED for a key no
+     * configured row covers, and `!undefined?.isWon` reads as "not won" — so
+     * this page dropped the name-default layer that shared/stageSemantics.ts
+     * applies and that the server has always had. Rename the stage keyed `won`
+     * to `signed` and the 40 deals still holding `won` counted as open pipeline
+     * here while crm.forecast counted them as closed-won. stageHue keeps its
+     * `st.key === "won"` fallback on purpose: that picks a COLOUR.
+     */
+    const src = read("client/src/pages/usip/DealsV2.tsx");
+    expect(src).toContain(`from "@shared/stageSemantics"`);
+    expect(src).toContain("buildStageIndex(");
+    expect(src).toContain("stageIdx.isOpen(o.stage)");
+    expect(src).toContain("stageIdx.isWon(o.stage)");
+    expect(src).toContain("stageIdx.isWon(vars.stage)");
+    expect(src).not.toMatch(/stageRows\.find\(/);
   });
 
   it("dealAutopilot asks the workspace instead of carrying its own five literals", () => {
@@ -386,18 +510,64 @@ describe("every mutation that changes the answer drops the memo", () => {
 
   const src = read("server/routers/crm.ts");
 
+  /**
+   * Every procedure key of crmPipelinesRouter that follows `get`, in source
+   * order — `renamePipeline` included even though it invalidates nothing,
+   * because it is what ENDS createPipeline's window.
+   *
+   * 2026-09-20: these windows used to be a flat 2500 characters from the
+   * mutation's key, which overran into the next two or three procedures. Six of
+   * the seven pins were satisfied by a NEIGHBOUR's invalidateStageIndex and
+   * could not fail for the mutation they name: deleting the call from
+   * createPipeline, setDefault, deletePipeline, createStage, updateStage or
+   * deleteStage left all seven green. Only reorderStages, the last entry in the
+   * file, was honest. The concrete loss: an admin UNTICKS Won at
+   * /settings/pipelines and every widget keeps counting those deals as
+   * closed-won revenue for up to 60s, with a clean sweep reported.
+   */
+  const ROUTER_KEYS = [
+    "createPipeline",
+    "renamePipeline",
+    "setDefault",
+    "deletePipeline",
+    "createStage",
+    "updateStage",
+    "deleteStage",
+    "reorderStages",
+  ];
+
+  /** The named procedure's OWN body: from its key to whichever key comes next. */
+  function bodyOf(m: string): string {
+    const at = src.indexOf(`${m}:`);
+    expect(at, `${m} not found in crm.ts`).toBeGreaterThan(-1);
+    // forEach, not Math.min(...ends): the build targets es5 and spreading is
+    // how this repo keeps tripping TS2802.
+    let end = src.length;
+    ROUTER_KEYS.forEach((o) => {
+      if (o === m) return;
+      const i = src.indexOf(`${o}:`, at + m.length);
+      if (i > at && i < end) end = i;
+    });
+    const w = src.slice(at, end);
+    expect(w.length, `${m}'s body is too small to be the real procedure`).toBeGreaterThan(120);
+    return w;
+  }
+
   it("stageIndexFor is memoized at all (otherwise this suite guards nothing)", () => {
     expect(read("server/_core/stageSemantics.ts")).toContain("TTL_MS");
   });
 
+  it("the windows are one procedure wide — renamePipeline borrows nobody's call", () => {
+    // The control for every pin below. renamePipeline changes no stage answer
+    // and calls nothing; if its window picks an invalidateStageIndex up off a
+    // neighbour, then so do the others and none of them mean anything.
+    expect(bodyOf("renamePipeline")).not.toContain("invalidateStageIndex(");
+  });
+
   for (const m of MUTATIONS) {
     it(`${m} invalidates the stage index`, () => {
-      const at = src.indexOf(`${m}:`);
-      expect(at, `${m} not found in crm.ts`).toBeGreaterThan(-1);
-      const w = src.slice(at, at + 2500);
-      expect(w, `${m} changes the stage answer but never calls invalidateStageIndex`).toContain(
-        "invalidateStageIndex(",
-      );
+      const calls = bodyOf(m).match(/invalidateStageIndex\(/g)?.length ?? 0;
+      expect(calls, `${m} changes the stage answer but never calls invalidateStageIndex`).toBe(1);
     });
   }
 });

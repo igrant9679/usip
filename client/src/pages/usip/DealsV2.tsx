@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { ColorAvatar } from "@/components/usip/ColorAvatar";
 import { trpc } from "@/lib/trpc";
+import { buildStageIndex } from "@shared/stageSemantics";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -115,7 +116,17 @@ export default function DealsV2() {
     const list: Stage[] = raw?.stages ?? raw?.pipeline?.stages ?? [];
     return Array.isArray(list) && list.length > 0 ? list : LEGACY_STAGES;
   }, [pipe.data]);
-  const stageMeta = (key: string | null | undefined): Stage | undefined => stageRows.find((s) => s.key === key);
+  // Resolved through the SHARED resolver, not a bare .find on the rows, because
+  // precedence has a second layer: a key with no configured row falls back to
+  // the name defaults. A bare `stageRows.find(...)` returns undefined for it,
+  // and `!undefined?.isWon` reads as "not won" — so a workspace that renames
+  // the stage keyed `won` to `signed` left its 40 historical `won` deals in
+  // Open pipeline value with a Won count of 0, while the server (buildStageIndex
+  // via stageIndexFor) still counted them as closed-won. Same call Home.tsx makes.
+  const stageIdx = useMemo(
+    () => buildStageIndex(stageRows.map((s) => ({ key: s.key, isWon: s.isWon ?? null, isLost: s.isLost ?? null }))),
+    [stageRows],
+  );
 
   const setMode = trpc.deals.setAutopilotSettings.useMutation({
     onSuccess: () => { utils.deals.getAutopilotSettings.invalidate(); toast.success("Autopilot updated"); },
@@ -129,7 +140,7 @@ export default function DealsV2() {
   const setStage = trpc.opportunities.setStage.useMutation({
     onSuccess: (_d, vars) => {
       utils.opportunities.board.invalidate();
-      if (stageMeta(vars.stage)?.isWon) {
+      if (stageIdx.isWon(vars.stage)) {
         setCelebrate(Date.now());
         toast.success("Deal won! 🎉");
         setTimeout(() => setCelebrate(0), 1800);
@@ -158,10 +169,10 @@ export default function DealsV2() {
     return m;
   }, [opps]);
 
-  const openOpps = opps.filter((o) => { const m = stageMeta(o.stage); return !m?.isWon && !m?.isLost; });
+  const openOpps = opps.filter((o) => stageIdx.isOpen(o.stage));
   const totalValue = openOpps.reduce((s, o) => s + Number(o.value ?? 0), 0);
   const weighted = openOpps.reduce((s, o) => s + Number(o.value ?? 0) * (Number(o.winProb ?? 0) / 100), 0);
-  const wonCount = opps.filter((o) => stageMeta(o.stage)?.isWon).length;
+  const wonCount = opps.filter((o) => stageIdx.isWon(o.stage)).length;
   const activeAlerts = (alerts.data as any[])?.filter?.((a) => !a.dismissedAt) ?? (alerts.data as any[]) ?? [];
 
   const StatCard = ({ label, value, tone }: { label: string; value: string | number; tone?: "good" | "warn" }) => {

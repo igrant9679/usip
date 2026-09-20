@@ -141,11 +141,12 @@ export default function Team() {
   const [localPerms, setLocalPerms] = useState<Record<string, boolean>>({});
   const [permsDirty, setPermsDirty] = useState(false);
   /**
-   * Which keys the admin actually touched in this dialog. The switches are now
-   * seeded from the EFFECTIVE map (rows layered over role defaults), so saving
-   * `localPerms` wholesale would write six explicit override rows every time
-   * somebody flipped one — freezing the member against any future change to
-   * the role defaults. Only touched keys are sent.
+   * Which keys the admin actually touched in this dialog. `localPerms` holds
+   * ONLY those keys — every other switch reads through to the EFFECTIVE map
+   * (rows layered over role defaults) in getPermValue — because saving the map
+   * wholesale would write six explicit override rows every time somebody
+   * flipped one, freezing the member against any future change to the role
+   * defaults. Only touched keys are sent.
    */
   const [permsTouched, setPermsTouched] = useState<Record<string, boolean>>({});
 
@@ -303,6 +304,12 @@ export default function Team() {
   const setPermissions = trpc.team.setPermissions.useMutation({
     onSuccess: () => {
       utils.team.getPermissions.invalidate({ memberId: editTarget?.memberId });
+      // usePermissions caches myPermissions for five minutes and does not
+      // refetch on focus, so an admin who edits their OWN row keeps a stale
+      // answer and the app keeps rendering controls it will now refuse — the
+      // mystery-FORBIDDEN toast that hook exists to prevent. A no-op when the
+      // edited member is somebody else.
+      utils.team.myPermissions.invalidate();
       setPermsDirty(false);
       setPermsTouched({});
       toast.success("Permissions saved");
@@ -312,12 +319,7 @@ export default function Team() {
 
   const { data: memberPerms, isLoading: permsLoading } = trpc.team.getPermissions.useQuery(
     { memberId: editTarget?.memberId ?? 0 },
-    {
-      enabled: !!editTarget && editDialogTab === "permissions",
-      onSuccess: (d: { rows: Record<string, boolean>; effective: Record<string, boolean> }) => {
-        if (!permsDirty) setLocalPerms(d.effective);
-      },
-    } as any,
+    { enabled: !!editTarget && editDialogTab === "permissions" },
   );
 
   const { data: memberActivityLog, isLoading: activityLoading } = trpc.team.getMemberActivityLog.useQuery(
@@ -364,11 +366,20 @@ export default function Team() {
   }
 
   function getPermValue(key: string): boolean {
-    // Use local state if dirty, otherwise the server's EFFECTIVE answer —
-    // rows layered over the role defaults. Reading the raw rows here rendered
-    // every unset key as off, so a new rep appeared fully restricted while the
-    // server granted them three of the six.
-    if (permsDirty) return localPerms[key] ?? false;
+    // Every key falls through to the server's EFFECTIVE answer — rows layered
+    // over the role defaults. Reading the raw rows here rendered every unset
+    // key as off, so a new rep appeared fully restricted while the server
+    // granted them three of the six.
+    //
+    // The fall-through in the DIRTY branch is the fix for the sibling bug
+    // (2026-09-20): `localPerms` only ever holds the keys this dialog has
+    // touched, so `localPerms[key] ?? false` made the other five switches snap
+    // visibly to OFF the moment an admin flipped one, then snap back after the
+    // save — a page contradicting itself across one click. It used to be seeded
+    // from `effective` by an `onSuccess` on useQuery, which react-query v5
+    // removed from useQuery (it survives only on useMutation), so that callback
+    // never ran and the cast hiding it made the dead option look alive.
+    if (permsDirty) return localPerms[key] ?? memberPerms?.effective?.[key] ?? false;
     return (memberPerms?.effective ?? localPerms)[key] ?? false;
   }
 

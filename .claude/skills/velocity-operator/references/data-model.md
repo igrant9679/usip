@@ -51,6 +51,7 @@ Whatever key the deal's pipeline defines. The SEEDED DEFAULT pipeline uses `disc
 ### Customer
 - `tier`: `enterprise` | `midmarket` | `smb`
 - `healthTier`: `healthy` | `watch` | `at_risk` | `critical`
+- `cmUserId`: the CSM. Set once by the Closed Won → Customer step (`services/wonToCustomer.ts`) from the opportunity's owner, but only if that owner is still an active member — otherwise the acting user, or the workspace's notify recipient on the session-less share-link accept. The account's health checks, renewal stage and QBR/renewal tasks are all keyed off it, so a departed owner's id here reads as handled while nobody is watching.
 - `renewalStage`: `early` → `ninety` → `sixty` → `thirty` → `at_risk` | `renewed` | `churned`. DERIVED from `contractEnd` (`@shared/renewalStage`), not set by hand: `d > 90` early, `60 < d <= 90` ninety, `30 < d <= 60` sixty, `0 < d <= 30` thirty, `d <= 0` at_risk. `at_risk` here means PAST DUE — the contract end date has gone by with no outcome recorded — and is unrelated to `healthTier`, which has its own `at_risk` value. `renewed` and `churned` are human outcomes written only by `cs.addAmendment` (type `renewal` rolls the dates forward by the customer's existing term; type `termination` churns them); nothing derived ever overwrites those two. Every `cs.*` read applies the derivation, and `services/renewalStageEngine.ts` sweeps the stored column into line every 6h.
 
 ### Task
@@ -109,9 +110,9 @@ One row per `(workspaceId, userId, feature)` with a `granted` boolean; set on th
 
 | Key | Default for manager/rep | Enforced at |
 |---|---|---|
-| `export_data` | denied | `dangerZone.exportData`, `reports.exportCsv` |
+| `export_data` | denied | `dangerZone.exportData`; `reports.exportCsv`, `reports.sendNow`, `reports.setSchedule` when freq is not `none`; `are.prospects.exportRejections` |
 | `manage_api_keys` | denied | aiCredentials, apollo, prospectSources, quickenrich, reoon |
-| `manage_sequences` | granted | sequences create/update/delete/fork/updateMeta/updateSteps/saveCanvas, and setStatus for every transition except `paused` |
+| `manage_sequences` | granted | sequences create/update/delete/fork/updateMeta/updateSteps/saveCanvas/setVisibility/assign, setStatus for every transition except `paused`, and every `sequenceAb` mutation (that router edits the subject and body a step sends) |
 | `manage_integrations` | granted | integrations save/disconnect/test |
 | `access_billing` | granted | `usage.currentMonth` (Settings → Billing and credits) |
 | `view_all_leads` | granted | **nothing** — lead scoping is separate, unshipped work |

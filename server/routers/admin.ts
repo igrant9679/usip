@@ -389,10 +389,15 @@ export const settingsRouter = router({
 export const usageRouter = router({
   currentMonth: workspaceProcedure.query(async ({ ctx }) => {
     // 2026-09-20: the only enforcement point for access_billing, and the only
-    // reader is the Settings → Billing and credits panel. Safe to gate ONLY
-    // because the key stopped being restricted-by-default in the same change
+    // reader is the Settings → Billing and credits panel. Gateable ONLY because
+    // the key stopped being restricted-by-default in the same change
     // (shared/permissions.ts) — enforcing it under the old default would have
     // removed that page from every manager and rep in every workspace.
+    //
+    // The blast radius is not zero: a member carrying a deny ROW written by the
+    // old Team.tsx "Mgr"/"Rep" presets loses this panel here. Production had no
+    // such rows when this shipped (checked, all workspaces), so no backfill was
+    // written — see shared/permissions.ts for the cleanup if that changes.
     await checkPermission(ctx, "access_billing");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });

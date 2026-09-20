@@ -47,7 +47,7 @@ import {
   users,
   workspaceMembers,
 } from "../../../drizzle/schema";
-import { getDb } from "../../db";
+import { checkPermission, getDb } from "../../db";
 import { parseLlmJson } from "./llmJson";
 import { invokeLLM, isRetryableLLMError } from "../../_core/llm";
 import { router } from "../../_core/trpc";
@@ -2447,6 +2447,17 @@ export const prospectsRouter = router({
   exportRejections: workspaceProcedure
     .input(z.object({ campaignId: z.number() }))
     .query(async ({ ctx, input }) => {
+      /**
+       * 2026-09-20: gated, because this CSV is built HERE and not in the
+       * browser. The first pass at export_data hid the button
+       * (ARECampaignDetail.tsx) and left the query open, which is a UX change
+       * and not a boundary: a denied rep who called the procedure directly got
+       * every skipped prospect's name, title, company, email and LinkedIn URL
+       * for any campaign in the workspace. The client-built exports (Leads,
+       * Contacts, Pipeline, Audit) genuinely cannot be refused server-side
+       * because the rows are already in the browser — this one always could.
+       */
+      await checkPermission(ctx, "export_data");
       const db = await getDb();
       if (!db) return { csv: "" };
       const rejected = await db.select({

@@ -312,6 +312,20 @@ const SURFACES: Array<{
     end: "aiConfidence: 70",
     gate: /ownerUserId: await activeOwnerOrNull\(ctx\.workspace\.id, opp\.ownerUserId\)/,
   },
+  {
+    /**
+     * 2026-09-20. `cmUserId: opp.ownerUserId ?? fallbackUserId` fell back only
+     * on a NULL owner, and a departed rep's id is not null — so the account's
+     * whole post-sale life was keyed to someone who cannot sign in. The BINDING
+     * is pinned, not the call: `activeOwnerOrNull(...)` computed and discarded
+     * beside the old `??` chain would satisfy a bare call regex.
+     */
+    what: "a Closed Won account's CSM is somebody who still works here",
+    file: "server/services/wonToCustomer.ts",
+    start: "export async function ensureCustomerForWonOpp(",
+    end: `renewalStage: "early"`,
+    gate: /const cmUserId = \(await activeOwnerOrNull\(workspaceId, opp\.ownerUserId\)\) \?\? fallbackUserId;/,
+  },
 ];
 
 describe("every session-less path that names a member gates on active membership", () => {
@@ -321,7 +335,9 @@ describe("every session-less path that names a member gates on active membership
    * pinned rather than bounded so that REMOVING a surface is also a decision.
    */
   it("checks every surface in the table, and the table has not shrunk", () => {
-    expect(SURFACES.length).toBe(29);
+    // 2026-09-20: 30, with customers.cmUserId — the Closed Won → Customer step
+    // wrote the deal's stored owner straight through.
+    expect(SURFACES.length).toBe(30);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 

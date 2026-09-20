@@ -3,9 +3,14 @@
  * something (2026-09-20).
  *
  * WHAT WAS ACTUALLY WRONG. `checkPermission` had been fully written for months
- * and was called for three of the six keys. `view_all_leads` and
+ * and was called for four of the six keys. `view_all_leads` and
  * `access_billing` were read by nothing at all: an admin turned them off, got a
  * success toast, and the member kept every power the switch claimed to remove.
+ * (Four, not three: export_data, manage_api_keys, manage_integrations and
+ * manage_sequences all had call sites. The miscount had already propagated once
+ * — a comment in integrations.ts claimed export_data was the only gated key in
+ * the whole server — and it is how a reader re-derives the wrong before/after
+ * when deciding what this deploy takes away.)
  * On top of that the Team page rendered the RAW override rows, so any key with
  * no row showed as OFF — including the three the server grants by default — and
  * its "Rep" preset button wrote `manage_sequences:false` while presenting
@@ -170,11 +175,27 @@ describe("access_billing", () => {
 });
 
 describe("manage_sequences", () => {
+  /**
+   * The sequenceAb rows and setVisibility joined this table on 2026-09-20,
+   * after the first pass gated updateSteps/saveCanvas/updateMeta and left the
+   * SIBLINGS that do the same job open: `sequenceAb` is the second editor for
+   * the subject and body a step actually sends (sequenceEngine.ts reads
+   * sequence_ab_variants at send time), and `setVisibility` publishes a private
+   * sequence to the whole team. The file-level sweep below could never have
+   * caught either — its needle is per-FILE and sequences.ts already contained
+   * gated procs — so these have to be pinned behaviourally.
+   */
   const authoring: Array<[string, (c: any) => Promise<unknown>]> = [
     ["fork", (c) => c.sequences.fork({ templateId: 7 })],
     ["updateMeta", (c) => c.sequences.updateMeta({ id: 7, name: "x" })],
     ["updateSteps", (c) => c.sequences.updateSteps({ id: 7, steps: [] })],
     ["saveCanvas", (c) => c.sequences.saveCanvas({ id: 7, nodes: [], edges: [] })],
+    ["setVisibility", (c) => c.sequences.setVisibility({ id: 7, visibility: "team" })],
+    ["sequenceAb.create", (c) => c.sequenceAb.create({ sequenceId: 7, stepIndex: 0, variantLabel: "B", subject: "s", body: "b" })],
+    ["sequenceAb.update", (c) => c.sequenceAb.update({ id: 3, subject: "s", body: "b" })],
+    ["sequenceAb.delete", (c) => c.sequenceAb.delete({ id: 3 })],
+    ["sequenceAb.promoteWinner", (c) => c.sequenceAb.promoteWinner({ sequenceId: 7, stepIndex: 0, winnerId: 3 })],
+    ["sequenceAb.setMinSends", (c) => c.sequenceAb.setMinSends({ id: 3, minSendsForPromotion: 50 })],
   ];
 
   it("every authoring mutation refuses a member with the key denied", async () => {
@@ -189,6 +210,15 @@ describe("manage_sequences", () => {
       const msg = await refusal(() => call(caller("rep", [])));
       expect(msg, `${name} refuses a rep who has no override row at all`).toBeNull();
     }
+  });
+
+  it("assign is gated too — handing a sequence to another rep is authoring", async () => {
+    // Not in the table above because `assign` is a managerProcedure: a rep is
+    // refused by RANK before the permission check, which would make the denial
+    // assertion pass for the wrong reason.
+    const msg = await refusal(() =>
+      caller("manager", deny("manage_sequences")).sequences.assign({ id: 7, userId: 2 }));
+    expect(msg).toBe("You do not have permission to use: manage_sequences");
   });
 
   it("PAUSING a running sequence stays available with the key denied", async () => {
@@ -223,19 +253,71 @@ describe("export_data", () => {
     expect(msg).toBeNull();
   });
 
-  it("reports.run is NOT gated — only the file is, not reading the numbers", async () => {
+  it("reports.run is NOT gated — reading the numbers on screen is not the export", async () => {
+    // 2026-09-20: the carve-out is UX-level and now says so at the call site.
+    // `run` shares specSchema with exportCsv, so a denied member can fetch the
+    // same 1000 rows and join them in the browser; capping it would put wrong
+    // numbers on screen, which is the worse failure. Pinned so nobody "fixes"
+    // the asymmetry by silently truncating a member's own report.
     const msg = await refusal(() => caller("rep", []).reports.run(spec as never));
     expect(msg).toBeNull();
   });
 
-  it("structurally too: reports.ts gates the export and nothing else", () => {
+  it("reports.sendNow refuses a rep — mailing the rows out IS the export", async () => {
+    // Added 2026-09-20. exportCsv was gated and its siblings were not, so the
+    // denied member's route to the same file was Save → Send now, delivered by
+    // the workspace system sender to any address at all.
+    const msg = await refusal(() => caller("rep", []).reports.sendNow({ id: 1 }));
+    expect(msg).toBe("Your role (rep) does not have permission to use: export_data");
+  });
+
+  it("reports.setSchedule refuses when it turns delivery ON", async () => {
+    const msg = await refusal(() =>
+      caller("rep", []).reports.setSchedule({ id: 1, freq: "daily", recipients: "a@b.com" }));
+    expect(msg).toBe("Your role (rep) does not have permission to use: export_data");
+  });
+
+  it("but setSchedule to \"none\" stays open — stopping a delivery is not exporting", async () => {
+    const msg = await refusal(() =>
+      caller("rep", []).reports.setSchedule({ id: 1, freq: "none", recipients: "" }));
+    expect(msg).toBeNull();
+  });
+
+  it("are.prospects.exportRejections refuses a rep — that CSV is rendered server-side", async () => {
+    // The sibling the first pass missed while reports.ts asserted it was one of
+    // the browser-built exports "with no server call to refuse". It builds the
+    // file here, out of prospect PII (email, LinkedIn URL), and the client only
+    // hid the button.
+    const msg = await refusal(() => caller("rep", []).are.prospects.exportRejections({ campaignId: 1 }));
+    expect(msg).toBe("Your role (rep) does not have permission to use: export_data");
+  });
+
+  it("structurally: every SERVER-rendered export path off this key carries the gate", () => {
+    // This used to read "reports.ts gates the export and nothing else", which
+    // was true and was the problem — the siblings were the hole.
     const src = readFileSync(join(ROOT, "server/routers/reports.ts"), "utf8");
     const at = src.indexOf('checkPermission(ctx, "export_data")');
     expect(at, "reports.exportCsv has lost its export_data gate").toBeGreaterThan(-1);
-    // The gate must sit inside exportCsv, after `run` and before the saved-
-    // report CRUD below it.
+    // The first gate must sit inside exportCsv, after `run` and before the
+    // saved-report CRUD below it.
     expect(at).toBeGreaterThan(src.indexOf("exportCsv: workspaceProcedure"));
     expect(at).toBeLessThan(src.indexOf("/* saved reports */"));
+    // …and the two delivery paths below it keep theirs.
+    const gateIn = (anchor: string, len = 1400) => {
+      const from = src.indexOf(anchor);
+      expect(from, `${anchor} has moved — re-anchor this scan`).toBeGreaterThan(-1);
+      return src.slice(from, from + len);
+    };
+    expect(gateIn("sendNow: workspaceProcedure")).toMatch(/checkPermission\(ctx, "export_data"\)/);
+    expect(gateIn("setSchedule: workspaceProcedure")).toMatch(/freq !== "none"\) await checkPermission\(ctx, "export_data"\)/);
+    const rejections = readFileSync(join(ROOT, "server/routers/are/prospects.ts"), "utf8");
+    const rAt = rejections.indexOf("exportRejections: workspaceProcedure");
+    expect(rAt).toBeGreaterThan(-1);
+    expect(rejections.slice(rAt, rAt + 1400)).toMatch(/checkPermission\(ctx, "export_data"\)/);
+    // The rationale comment must not resurrect the claim that the
+    // campaign-rejection CSV is built in the browser: it is not, and saying so
+    // is what let the one-line gate be skipped in the first place.
+    expect(src.slice(0, src.indexOf("/* saved reports */"))).not.toMatch(/campaign-rejection[\s\S]{0,200}BROWSER/);
   });
 });
 
@@ -264,11 +346,17 @@ describe("the resolver", () => {
       .rejects.toThrow("Your role (rep) does not have permission to use: export_data");
   });
 
-  it("FAILS OPEN with no database, in both the throwing and the asking form", async () => {
+  it("the GATES fail open with no database; the client map falls back to role defaults", async () => {
     // Deliberate (server/db.ts). A non-DB env must not have every gated
     // feature refuse; pinned so a later "tighten this" does not fail closed.
     // A fresh module with DATABASE_URL unset is the only way to reach the
     // branch — db.ts caches its handle after the first successful connect.
+    //
+    // resolvePermissionMap is the ODD ONE OUT and the title used to hide that
+    // by claiming all three behave alike. It returns the role defaults, so a
+    // rep resolves export_data:false while checkPermission lets the same call
+    // through — only ever STRICTER than the boundary, which is the right
+    // direction for a map that decides what the client renders.
     const prev = process.env.DATABASE_URL;
     delete process.env.DATABASE_URL;
     vi.resetModules();
@@ -356,7 +444,7 @@ function serverSources(): { rel: string; src: string }[] {
  * somebody wrote down rather than something nobody noticed.
  */
 const ENFORCEMENT: Record<string, { enforced: boolean; files?: string[]; reason?: string }> = {
-  export_data: { enforced: true, files: ["server/routers/admin.ts", "server/routers/reports.ts"] },
+  export_data: { enforced: true, files: ["server/routers/admin.ts", "server/routers/are/prospects.ts", "server/routers/reports.ts"] },
   manage_sequences: { enforced: true, files: ["server/routers/sequences.ts"] },
   manage_integrations: { enforced: true, files: ["server/routers/integrations.ts"] },
   manage_api_keys: { enforced: true, files: ["server/routers/aiCredentials.ts", "server/routers/apollo.ts", "server/routers/prospectSources.ts", "server/routers/quickenrich.ts", "server/routers/reoon.ts"] },
@@ -392,8 +480,23 @@ describe("no toggle ships dead", () => {
     for (const key of PERMISSION_KEYS) {
       const entry = ENFORCEMENT[key];
       expect(entry, `${key} is in PERMISSION_KEYS but not in this file's ENFORCEMENT map`).toBeDefined();
-      const needle = new RegExp(`(checkPermission|hasPermission)\\(ctx, "${key}"\\)`);
-      const hits = files.filter((f) => needle.test(f.src)).map((f) => f.rel).sort();
+      /**
+       * The needle is deliberately loose about the context argument's NAME and
+       * the quote style: the original `\(ctx, "key"\)` matched one spelling,
+       * and a gate written as `checkPermission(permCtx, 'key')` would have read
+       * as an unenforced key.
+       *
+       * `resolvePermissionMap` counts as a call site too (second needle). It is
+       * the third exported resolver, and it is the shape the deferred
+       * view_all_leads scoping will use — `perms.view_all_leads ? rows :
+       * rows.filter(own)` — because scoping BRANCHES rather than throws. Under
+       * the old needle that work would have landed with the key still marked
+       * unenforced here and still labelled "Not yet enforced" on the Team page,
+       * and the `enforced: false` bookkeeping guard could never have fired.
+       */
+      const needle = new RegExp(`(checkPermission|hasPermission)\\(\\s*\\w+\\s*,\\s*["']${key}["']`);
+      const viaMap = (src: string) => /\bresolvePermissionMap\s*\(/.test(src) && new RegExp(`\\.${key}\\b`).test(src);
+      const hits = files.filter((f) => needle.test(f.src) || viaMap(f.src)).map((f) => f.rel).sort();
       if (!entry.enforced) {
         expect(entry.reason, `${key} is exempt but carries no reason`).toBeTruthy();
         expect(hits, `${key} is marked unenforced but IS called — flip enforced to true`).toEqual([]);
@@ -433,7 +536,15 @@ describe("no toggle ships dead", () => {
     expect(cleanupAt, "team.delete no longer clears member_permissions").toBeGreaterThan(deleteAt);
     // Scoped, or tenantScope.test.ts would flag it — and rightly.
     expect(admin.slice(cleanupAt, cleanupAt + 260)).toMatch(/eq\(memberPermissions\.workspaceId, ctx\.workspace\.id\)/);
+    // 2026-09-20: the order and the substance are asserted before the negative
+    // half slices between them. Reorder admin.ts so `delete` came first and
+    // `slice(deactivateAt, deleteAt)` returns "", which matches nothing — the
+    // pin would then report that deactivate preserves overrides while it was in
+    // fact deleting them, and a reactivated member would silently come back
+    // with every override wiped.
+    expect(deactivateAt, "team.delete now precedes team.deactivate — this slice is empty").toBeLessThan(deleteAt);
     const deactivateBody = admin.slice(deactivateAt, deleteAt);
+    expect(deactivateBody.length).toBeGreaterThan(200);
     expect(deactivateBody).not.toMatch(/db\.delete\(memberPermissions\)/);
   });
 });

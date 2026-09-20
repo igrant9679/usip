@@ -197,9 +197,14 @@ export type PermissionCtx = { workspace: { id: number }; user: { id: number }; m
  *        2026-09-20 when the key was first enforced; see shared/permissions.ts)
  *
  * WHERE THE SIX KEYS ARE ENFORCED, so the next person does not have to grep:
- *   export_data         admin.ts dangerZone.exportData, reports.ts exportCsv
+ *   export_data         admin.ts dangerZone.exportData; reports.ts exportCsv,
+ *                       sendNow, setSchedule(freq !== "none"); are/prospects.ts
+ *                       exportRejections
  *   manage_sequences    sequences.ts create/update/delete/fork/updateMeta/
- *                       updateSteps/saveCanvas/setStatus(non-pause)
+ *                       updateSteps/saveCanvas/setStatus(non-pause)/
+ *                       setVisibility/assign, and every sequenceAb mutation
+ *                       (create/update/delete/promoteWinner/setMinSends —
+ *                       that router edits the subject and body a step SENDS)
  *   manage_integrations integrations.ts save/disconnect/test
  *   manage_api_keys     aiCredentials, apollo, prospectSources, quickenrich, reoon
  *   access_billing      admin.ts usage.currentMonth
@@ -282,7 +287,14 @@ export async function resolvePermissionMap(ctx: PermissionCtx): Promise<Record<s
   for (const k of PERMISSION_KEYS) out[k] = defaultGranted(k, isElevated);
 
   const db = await getDb();
-  if (!db) return out; // fail-open, matching resolvePermission
+  // NOT the same fail-open as resolvePermission, which grants everything with
+  // no database — the comment here used to claim it was. This returns the ROLE
+  // DEFAULTS, so with no DB a rep resolves export_data:false while
+  // checkPermission would have let the same call through. The disagreement is
+  // only ever in the STRICTER direction, which is the harmless one: this map
+  // decides what the client renders and the gates are the boundary, and a
+  // non-DB env has no rows to export anyway.
+  if (!db) return out;
 
   const { memberPermissions } = await import("../drizzle/schema");
   const rows = await db

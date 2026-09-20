@@ -288,11 +288,19 @@ describe("role permission templates", () => {
   // The Team page's preset buttons are now DERIVED from the same defaults the
   // server resolves against, rather than a second table that disagreed with it
   // on four of the six keys.
+  //
+  // 2026-09-20: each template is built from its ROLE STRING through the same
+  // elevation predicate the page applies (Team.tsx applyRoleTemplate, mirroring
+  // server/db.ts), not from a hand-passed boolean. Passing the boolean made the
+  // manager/rep pin below compare `roleTemplate(false)` with `roleTemplate(false)`
+  // — two calls to one pure function with one argument — so it could not fail
+  // for any implementation, including the exact change it claims to guard.
+  const elevated = (role: string) => role === "admin" || role === "super_admin";
   const TEMPLATES: Record<string, Record<string, boolean>> = {
-    super_admin: roleTemplate(true),
-    admin: roleTemplate(true),
-    manager: roleTemplate(false),
-    rep: roleTemplate(false),
+    super_admin: roleTemplate(elevated("super_admin")),
+    admin: roleTemplate(elevated("admin")),
+    manager: roleTemplate(elevated("manager")),
+    rep: roleTemplate(elevated("rep")),
   };
 
   it("all templates cover exactly 6 features", () => {
@@ -315,7 +323,20 @@ describe("role permission templates", () => {
   });
 
   it("manager and rep resolve identically — neither role is elevated", () => {
-    expect(TEMPLATES.manager).toEqual(TEMPLATES.rep);
+    // Asserted against a LITERAL as well as against each other: give manager
+    // its own rank in the elevation predicate and both halves of an
+    // equality-with-itself assertion move together, so the one property this
+    // test names would break while the test stayed green.
+    const unelevated = {
+      export_data: false,
+      manage_sequences: true,
+      view_all_leads: true,
+      manage_integrations: true,
+      access_billing: true,
+      manage_api_keys: false,
+    };
+    expect(TEMPLATES.manager).toEqual(unelevated);
+    expect(TEMPLATES.rep).toEqual(unelevated);
   });
 });
 

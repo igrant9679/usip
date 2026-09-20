@@ -38,8 +38,20 @@ export type PermissionKey = typeof PERMISSION_KEYS[number];
  * role today (only the Save button is admin-only). Enforcing the key while it
  * still defaulted to denied would have taken that page away from every manager
  * and rep in every workspace on deploy, including the ones that never opened
- * the Permissions tab. Granted by default, only an explicit deny row refuses —
- * which is the state an admin actually asked for.
+ * the Permissions tab.
+ *
+ * ⚠️ IT IS NOT "TAKES NOTHING AWAY", and the first draft of this comment said
+ * so. A member with an explicit deny ROW is refused, and the OLD Team.tsx
+ * preset buttons wrote one: their hand-written manager/rep templates set
+ * `access_billing: false` (and `manage_sequences: false`) across all six keys,
+ * and nothing has ever deleted those rows. Anyone the "Mgr"/"Rep" preset was
+ * applied to therefore loses the Billing panel — and sequence authoring — the
+ * day these keys are first enforced. Production was checked before deploy:
+ * zero `member_permissions` rows exist in any live workspace, so no backfill
+ * migration was written for rows that do not exist. If that ever stops being
+ * true, the honest cleanup is `DELETE FROM member_permissions WHERE granted = 0`
+ * for the preset-written keys, because those denies are a side effect of a
+ * button that described itself as "the role defaults".
  */
 export const RESTRICTED_BY_DEFAULT: string[] = ["export_data", "manage_api_keys"];
 

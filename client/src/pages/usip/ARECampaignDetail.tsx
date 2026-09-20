@@ -2037,8 +2037,10 @@ export default function ARECampaignDetail() {
       toast.error(e.message);
     },
   });
-  // UX, not a boundary — the rejection CSV is rendered server-side but handed
-  // back through an ungated query. See the comment on reports.exportCsv.
+  // Hiding the button is UX; the boundary is the gate on the query itself.
+  // This CSV is rendered SERVER-side (are.prospects.exportRejections), so
+  // unlike the Leads/Contacts/Pipeline exports it can be — and since
+  // 2026-09-20 is — refused rather than merely hidden.
   const { can: canPerm } = usePermissions();
   const handleExportCsv = async () => {
     const result = await fetchCsv();

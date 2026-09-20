@@ -579,6 +579,7 @@ export const sequencesRouter = router({
 
   /** Manager/admin assigns a sequence or template to a specific rep. */
   assign: managerProcedure.input(z.object({ id: z.number(), userId: z.number().nullable() })).mutation(async ({ ctx, input }) => {
+    await checkPermission(ctx, "manage_sequences");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.update(sequences).set({ assignedToUserId: input.userId } as never)
@@ -589,6 +590,11 @@ export const sequencesRouter = router({
 
   /** Owner (or manager+) sets a sequence's visibility (private vs team-shared). */
   setVisibility: repProcedure.input(z.object({ id: z.number(), visibility: z.enum(["private", "team"]) })).mutation(async ({ ctx, input }) => {
+    // Publishing your private sequence to the whole team is authoring, not
+    // reading: the rank check below passes for the owner, so without this a
+    // member with manage_sequences denied could not edit their sequence but
+    // could still hand it to everyone. Added 2026-09-20 with `assign` above.
+    await checkPermission(ctx, "manage_sequences");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [seq] = await db.select({ ownerUserId: sequences.ownerUserId }).from(sequences)
@@ -2322,6 +2328,22 @@ ${HUMAN_COPY_RULES}${brandBlock ? `\n\n${brandBlock}` : ""}`,
    Sequence A/B Variants Router
    ───────────────────────────────────────────────────────────────────────── */
 
+/**
+ * ⚠️ THIS IS THE SECOND EDITOR for the copy a sequence actually sends —
+ * sequenceEngine.ts reads sequence_ab_variants to pick a step's subject and
+ * body. Every MUTATION here is therefore gated on `manage_sequences`, the same
+ * key updateSteps / saveCanvas / updateMeta carry. They were missed when that
+ * gate landed on 2026-09-20, which left a complete sibling bypass: a member
+ * with the switch denied could not touch the steps editor but could rewrite the
+ * outbound subject and body on the A/B tab, and `promoteWinner` — which has no
+ * active/archived lock either — could change which variant every subsequent
+ * send used while the sequence was running.
+ *
+ * The file-level sweep in permissionEnforcement.test.ts cannot catch this:
+ * its needle is per-FILE, and sequences.ts already contained gated procs, so
+ * the key reported as enforced. The behavioural table in that file is what
+ * holds these.
+ */
 export const sequenceAbRouter = router({
   /** List all variants for a sequence (optionally filtered by stepIndex) */
   list: workspaceProcedure
@@ -2375,6 +2397,7 @@ export const sequenceAbRouter = router({
       splitPct: z.number().int().min(1).max(99).default(50),
     }))
     .mutation(async ({ ctx, input }) => {
+      await checkPermission(ctx, "manage_sequences");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       // Verify sequence belongs to workspace AND is editable. The canvas
@@ -2413,6 +2436,7 @@ export const sequenceAbRouter = router({
       variantLabel: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      await checkPermission(ctx, "manage_sequences");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       // Same live-sequence lock as create — block edits while the
@@ -2448,6 +2472,7 @@ export const sequenceAbRouter = router({
   delete: repProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
+      await checkPermission(ctx, "manage_sequences");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [v] = await db
@@ -2506,6 +2531,11 @@ export const sequenceAbRouter = router({
   promoteWinner: repProcedure
     .input(z.object({ sequenceId: z.number(), stepIndex: z.number().int().min(0), winnerId: z.number() }))
     .mutation(async ({ ctx, input }) => {
+      // Unlike create/update/delete this proc has no active/archived lock, so
+      // it lands on a RUNNING sequence and changes which variant every
+      // subsequent send uses. Whether that lock belongs here is a separate
+      // question; the permission check does not wait on it.
+      await checkPermission(ctx, "manage_sequences");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       // Clear existing winner flags for this step
@@ -2530,6 +2560,7 @@ export const sequenceAbRouter = router({
   setMinSends: repProcedure
     .input(z.object({ id: z.number(), minSendsForPromotion: z.number().int().min(1).max(10000) }))
     .mutation(async ({ ctx, input }) => {
+      await checkPermission(ctx, "manage_sequences");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       await db.update(sequenceAbVariants)

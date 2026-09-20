@@ -349,14 +349,27 @@ export const reportsRouter = router({
      * /reports CSV button in every workspace — deliberate, and announced.
      *
      * ⚠️ THIS IS NOT A COMPLETE BOUNDARY, and saying otherwise would be the
-     * half-fix that reads as complete. The Leads, Contacts, Pipeline, Audit,
-     * campaign-rejection and people-selection exports build the CSV IN THE
-     * BROWSER out of rows the list query already returned (see
-     * client/src/pages/usip/Leads.tsx — `new Blob([...], { type: "text/csv" })`),
-     * so there is no server call to refuse. Those buttons are HIDDEN on
-     * `export_data === false`, which is UX, not enforcement: the user already
-     * holds the rows. `run` below is left open on purpose — the builder is how
-     * a member reads their own numbers on screen; only the file is gated.
+     * half-fix that reads as complete. The Leads, Contacts, Pipeline, Audit and
+     * people-selection exports build the CSV IN THE BROWSER out of rows the
+     * list query already returned (see client/src/pages/usip/Leads.tsx —
+     * `new Blob([...], { type: "text/csv" })`), so there is no server call to
+     * refuse. Those buttons are HIDDEN on `export_data === false`, which is UX,
+     * not enforcement: the user already holds the rows.
+     *
+     * The campaign-rejection export used to be listed above as browser-built.
+     * It is not: are.prospects.exportRejections renders that CSV server-side,
+     * and on 2026-09-20 it gained this same gate (a wrong comment is how the
+     * next reader inherits a hole). Every SERVER-rendered path off this key is
+     * now gated — exportCsv, exportRejections, sendNow, and setSchedule when it
+     * turns delivery on.
+     *
+     * `run` below is left open, but NOT because "only the file is gated": it
+     * shares `specSchema` with exportCsv, accepts the same limit: 1000, and
+     * scopes on workspaceId only — so a denied member can fetch the identical
+     * rows and `join(",")` them in the browser. The gate on this surface is
+     * therefore UX-level in exactly the way the client-built exports are.
+     * Capping `run` was considered and rejected: a silently truncated report is
+     * wrong numbers on screen, which is worse than a CSV somebody re-types.
      */
     await checkPermission(ctx, "export_data");
     const result = await runSpec(ctx.workspace.id, { ...input, limit: 1000 });
@@ -409,6 +422,12 @@ export const reportsRouter = router({
       recipients: z.string().max(2000),
     }))
     .mutation(async ({ ctx, input }) => {
+      // Turning delivery ON is an export: the scheduler renders every row of
+      // the spec and mails it, on a recurrence that outlives the member who
+      // set it (activeRecipients only strips revoked MEMBERS, so an arbitrary
+      // external address passes through). Turning it OFF stays open — a member
+      // who may not start a delivery must still be able to stop one.
+      if (input.freq !== "none") await checkPermission(ctx, "export_data");
       const db = await getDb();
       const [r] = await db.select({ id: savedReports.id }).from(savedReports)
         .where(and(eq(savedReports.id, input.id), eq(savedReports.workspaceId, ctx.workspace.id))).limit(1);
@@ -423,6 +442,12 @@ export const reportsRouter = router({
   sendNow: workspaceProcedure
     .input(z.object({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
+      // Same operation exportCsv refuses — this report's rows, out of the app —
+      // only rendered as HTML and handed to addresses that need no workspace
+      // access at all. It was left open when exportCsv was gated, which made
+      // the CSV button the long way round to a file anyone could still mail
+      // themselves.
+      await checkPermission(ctx, "export_data");
       const { emailSavedReport } = await import("../services/reportScheduler");
       const res = await emailSavedReport(input.id, ctx.workspace.id);
       if (!res.ok) throw new TRPCError({ code: "BAD_REQUEST", message: res.reason ?? "Send failed" });
