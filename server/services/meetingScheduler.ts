@@ -135,11 +135,45 @@ export interface MeetingTarget {
 export async function createMeetingProposal(workspaceId: number, target: MeetingTarget): Promise<number | null> {
   const db = await getDb();
   if (!db) return null;
+  const draft = await draftProposalContent(workspaceId, target);
+  try {
+    const ins = await db.insert(meetings).values({
+      workspaceId,
+      ownerUserId: target.ownerUserId ?? null,
+      relatedType: target.relatedType ?? null,
+      relatedId: target.relatedId ?? null,
+      contactName: target.name || "there",
+      contactEmail: target.email ?? null,
+      company: target.company ?? null,
+      title: draft.title,
+      status: "proposed",
+      proposedTimes: draft.slots,
+      durationMin: draft.durationMin,
+      inviteMessage: draft.inviteMessage,
+      source: target.source ?? "ai",
+      aiReasoning: draft.reasoning || null,
+      aiConfidence: draft.confidence,
+    } as never);
+    return Number((ins as any)[0]?.insertId ?? 0) || null;
+  } catch (e) {
+    console.error(`[MeetingScheduler] insert failed:`, e);
+    return null;
+  }
+}
+
+/**
+ * The drafting core createMeetingProposal and regenerateMeetingProposal
+ * share: fresh FUTURE slots from the owner's current calendar, and an LLM
+ * title + invite in the workspace's own voice. Extracted 2026-09-20 so
+ * regeneration can never drift from first-time proposal quality.
+ */
+async function draftProposalContent(workspaceId: number, target: MeetingTarget) {
+  const db = await getDb();
 
   const durationMin = 30;
   const ownerUserId = target.ownerUserId ?? null;
   let busy: { startAt: Date | string | null; endAt: Date | string | null }[] = [];
-  if (ownerUserId) {
+  if (db && ownerUserId) {
     const from = new Date();
     const to = new Date(Date.now() + 14 * 86400000);
     busy = await db
@@ -166,8 +200,8 @@ export async function createMeetingProposal(workspaceId: number, target: Meeting
   // proposals marketed the PLATFORM instead of the workspace's own brand
   // (owner report 2026-08-26). The brand block is the ONE workspace voice
   // (buildBrandContext), same as every other generation surface.
-  const [wsRow] = await db.select({ name: workspaces.name }).from(workspaces)
-    .where(eq(workspaces.id, workspaceId)).limit(1);
+  const wsRow = db ? (await db.select({ name: workspaces.name }).from(workspaces)
+    .where(eq(workspaces.id, workspaceId)).limit(1))[0] : undefined;
   const senderCompany = wsRow?.name?.trim() || "our team";
   const brandBlock = await buildBrandContext(workspaceId);
 
@@ -219,29 +253,80 @@ ${HUMAN_COPY_RULES}`;
     console.error(`[MeetingScheduler] LLM draft failed for ${target.relatedType ?? "target"} ${target.relatedId ?? "?"}:`, e);
   }
 
-  try {
-    const ins = await db.insert(meetings).values({
-      workspaceId,
-      ownerUserId,
-      relatedType: target.relatedType ?? null,
-      relatedId: target.relatedId ?? null,
-      contactName: name,
-      contactEmail: target.email ?? null,
-      company: target.company ?? null,
-      title,
-      status: "proposed",
-      proposedTimes: slots,
-      durationMin,
-      inviteMessage,
-      source: target.source ?? "ai",
-      aiReasoning: reasoning || null,
-      aiConfidence: confidence,
-    } as never);
-    return Number((ins as any)[0]?.insertId ?? 0) || null;
-  } catch (e) {
-    console.error(`[MeetingScheduler] insert failed:`, e);
-    return null;
+  return { slots, durationMin, title, inviteMessage, reasoning, confidence };
+}
+
+/**
+ * Regenerate a stale proposal IN PLACE (owner ask 2026-09-20): fresh future
+ * slots and a fresh invite on the SAME row, so links and the autopilot's
+ * has-a-live-meeting dedupe stay stable. Four surfaces had promised a
+ * "regenerate" while nothing implemented it.
+ */
+export async function regenerateMeetingProposal(workspaceId: number, meetingId: number): Promise<{ ok: boolean; reason?: string }> {
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "db_unavailable" };
+  const [m] = await db.select().from(meetings)
+    .where(and(eq(meetings.workspaceId, workspaceId), eq(meetings.id, meetingId))).limit(1);
+  if (!m) return { ok: false, reason: "not_found" };
+  if (m.status !== "proposed") return { ok: false, reason: "not_a_proposal" };
+  // The target rebuilds from the row's own denormalized columns; only the
+  // descriptor (title/industry colour for the LLM) needs a lookup, and only
+  // for prospect-linked rows.
+  let descriptor: string | undefined;
+  if (m.relatedType === "prospect" && m.relatedId) {
+    const [p] = await db.select({ title: prospects.title, industry: prospects.industry }).from(prospects)
+      .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.id, m.relatedId))).limit(1);
+    if (p) descriptor = `${p.title ?? "unknown title"}${p.industry ? `, industry ${p.industry}` : ""}`;
   }
+  const draft = await draftProposalContent(workspaceId, {
+    ownerUserId: m.ownerUserId ?? null,
+    relatedType: m.relatedType,
+    relatedId: m.relatedId,
+    name: m.contactName ?? "there",
+    firstName: (m.contactName ?? "").split(" ")[0] || undefined,
+    email: m.contactEmail,
+    company: m.company,
+    descriptor,
+    source: (m.source as MeetingTarget["source"]) ?? "ai",
+  });
+  await db.update(meetings).set({
+    title: draft.title,
+    proposedTimes: draft.slots,
+    inviteMessage: draft.inviteMessage,
+    aiReasoning: draft.reasoning || null,
+    aiConfidence: draft.confidence,
+  } as never).where(and(eq(meetings.workspaceId, workspaceId), eq(meetings.id, meetingId)));
+  return { ok: true };
+}
+
+/**
+ * Freshen every all-times-past proposal, bounded. Runs from the autopilot
+ * tick (so the backlog can never accumulate again) and from the
+ * "Regenerate all expired" button. Rows with NO offered times are left
+ * alone — that is a creation failure, not staleness.
+ */
+export async function regenerateStaleProposals(workspaceId: number, limit: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db.select({ id: meetings.id, proposedTimes: meetings.proposedTimes }).from(meetings)
+    .where(and(eq(meetings.workspaceId, workspaceId), eq(meetings.status, "proposed")))
+    .orderBy(meetings.id);
+  const nowMs = Date.now();
+  let done = 0;
+  for (const r of rows) {
+    if (done >= limit) break;
+    const times = Array.isArray(r.proposedTimes) ? (r.proposedTimes as string[]) : [];
+    if (times.length === 0) continue;
+    let anyFuture = false;
+    for (const t of times) {
+      const ms = new Date(t).getTime();
+      if (Number.isFinite(ms) && ms > nowMs) { anyFuture = true; break; }
+    }
+    if (anyFuture) continue;
+    const res = await regenerateMeetingProposal(workspaceId, r.id);
+    if (res.ok) done++;
+  }
+  return done;
 }
 
 /** Draft + persist a proposed meeting for one prospect. Returns the new meeting id (or null). */
@@ -491,6 +576,13 @@ export async function runMeetingAutopilotAllWorkspaces(): Promise<{ workspaces: 
         .where(and(eq(meetings.workspaceId, ws.workspaceId), eq(meetings.source, "ai"), gte(meetings.createdAt, dayStart)));
       const remaining = cap - Number(row?.n ?? 0);
       if (remaining <= 0) continue;
+
+      // Regenerate stale proposals FIRST (owner ask 2026-09-20): a proposal
+      // whose every offered time has passed can neither send nor be
+      // re-proposed (it holds the dedupe slot), so the backlog only ever
+      // grew — 99 rows on LSI by the time this shipped. Bounded per tick.
+      const swept = await regenerateStaleProposals(ws.workspaceId, 10);
+      if (swept > 0) console.log(`[MeetingAutopilot] ws ${ws.workspaceId}: regenerated ${swept} stale proposal(s)`);
 
       const r = await runMeetingAutopilotForWorkspace(ws.workspaceId, mode, Math.min(remaining, 10));
       proposed += r.proposed;

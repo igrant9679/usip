@@ -148,6 +148,14 @@ export default function MeetingsV2() {
     onError: (e) => toast.error(e.message),
   });
   const dismiss = trpc.meetings.dismissProposal.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
+  const regenerate = trpc.meetings.regenerateProposal.useMutation({
+    onSuccess: () => { invalidateAll(); toast.success("Proposal regenerated — fresh times offered"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const regenerateAllExpired = trpc.meetings.regenerateAllExpired.useMutation({
+    onSuccess: (r) => { invalidateAll(); toast.success(`${r.regenerated} proposal${r.regenerated === 1 ? "" : "s"} regenerated with fresh times`); },
+    onError: (e) => toast.error(e.message),
+  });
   const complete = trpc.meetings.complete.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
   const cancel = trpc.meetings.cancel.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
   const create = trpc.meetings.create.useMutation({
@@ -279,13 +287,20 @@ export default function MeetingsV2() {
                   confirmLabel="Approve & send all" onConfirm={() => approveAllProposed.mutate()}>
                   <Send className="size-3.5" /> Approve & send all ({proposals.length})
                 </ConfirmButton>
+                <Button size="sm" variant="outline" className="h-7 gap-1.5"
+                  disabled={regenerateAllExpired.isPending}
+                  title="Fresh future times and a fresh invite for every proposal whose offered times have all passed"
+                  onClick={() => regenerateAllExpired.mutate()}>
+                  <Sparkles className="size-3.5" /> Regenerate expired
+                </Button>
               </div>
               <div className="space-y-2">
                 {proposals.map((m) => (
                   <ProposalCard key={m.id} m={m}
                     onApprove={(chosenTime) => approveSend.mutate({ id: m.id, chosenTime })}
                     onDismiss={() => dismiss.mutate({ id: m.id })}
-                    pending={approveSend.isPending}
+                    onRegenerate={() => regenerate.mutate({ id: m.id })}
+                    pending={approveSend.isPending || regenerate.isPending}
                     ContactLine={<ContactLine m={m} />}
                   />
                 ))}
@@ -368,11 +383,12 @@ export default function MeetingsV2() {
 }
 
 function ProposalCard({
-  m, onApprove, onDismiss, pending, ContactLine,
+  m, onApprove, onDismiss, onRegenerate, pending, ContactLine,
 }: {
   m: Meeting;
   onApprove: (chosenTime?: string) => void;
   onDismiss: () => void;
+  onRegenerate: () => void;
   pending: boolean;
   ContactLine: ReactNode;
 }) {
@@ -426,6 +442,11 @@ function ProposalCard({
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {expired && (
+            <Button size="sm" variant="outline" className="h-7 gap-1" disabled={pending}
+              title="Fresh future times and a fresh invite for this proposal"
+              onClick={onRegenerate}><Sparkles className="size-3.5" /> Regenerate</Button>
+          )}
           <Button size="sm" className="h-7 gap-1" disabled={pending || expired || !chosen}
             title={expired ? "Every proposed time has passed — regenerate this proposal" : undefined}
             onClick={() => onApprove(chosen)}><Send className="size-3.5" /> Approve &amp; send</Button>

@@ -17,7 +17,7 @@ import { getDb } from "../db";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
-import { proposeMeetingForProspect, runMeetingAutopilotForWorkspace, sendMeetingInvite } from "../services/meetingScheduler";
+import { proposeMeetingForProspect, regenerateMeetingProposal, regenerateStaleProposals, runMeetingAutopilotForWorkspace, sendMeetingInvite } from "../services/meetingScheduler";
 import { MEETING_STATUSES } from "@shared/meetingStatus";
 
 // Was a fourth hand-written copy of the enum, for this router's z.enum(). The
@@ -249,6 +249,32 @@ export const meetingsRouter = router({
       }
     }
     return { sent, attempted: rows.length, skipped };
+  }),
+
+  /**
+   * Fresh times + fresh invite for one stale proposal, in place (owner ask
+   * 2026-09-20 — four surfaces promised this button before it existed). The
+   * autopilot also regenerates stale proposals unattended each tick.
+   */
+  regenerateProposal: repProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const res = await regenerateMeetingProposal(ctx.workspace.id, input.id);
+      if (!res.ok) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: res.reason === "not_a_proposal" ? "Only proposals can be regenerated." : "Proposal not found.",
+        });
+      }
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "meeting", entityId: input.id, after: { regenerated: true } });
+      return { ok: true };
+    }),
+
+  /** Every all-times-past proposal, freshened in one click (bounded at 15). */
+  regenerateAllExpired: repProcedure.mutation(async ({ ctx }) => {
+    const regenerated = await regenerateStaleProposals(ctx.workspace.id, 15);
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "meeting", entityId: 0, after: { regenerateAllExpired: regenerated } });
+    return { regenerated };
   }),
 
   reschedule: repProcedure
