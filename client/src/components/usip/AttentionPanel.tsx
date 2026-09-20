@@ -174,6 +174,10 @@ export function AttentionPanel() {
           <QueueCard icon={<ListChecks className="size-4" />} tint="#0EA5E9" title="Sequence drafts to review"
             count={s.sequenceDrafts.count} cta="Review drafts" href="/v2/emails?status=awaiting&source=sequence" />
         )}
+        {((s as any).crmDrafts?.count ?? 0) > 0 && (
+          <QueueCard icon={<ListChecks className="size-4" />} tint="#6366F1" title="CRM drafts to review"
+            count={(s as any).crmDrafts.count} cta="Review drafts" href="/v2/emails?status=awaiting&source=crm" />
+        )}
         {(s.socialReplies?.count ?? 0) > 0 && (
           <QueueCard icon={<ListChecks className="size-4" />} tint="#0A66C2" title="LinkedIn & social replies"
             count={s.socialReplies.count} cta="Open Unified Inbox" href="/unified-inbox" />

@@ -45,6 +45,7 @@ const EMPTY = {
   // (audit: it covered five of nine human queues). Each is a real place a
   // person has to act; a "what needs me" number that omits them is wrong.
   sequenceDrafts: { count: 0 },
+  crmDrafts: { count: 0 },
   socialReplies: { count: 0 },
   optimizationRecs: { count: 0 },
   chatFollowUps: { count: 0 },
@@ -82,11 +83,26 @@ export const attentionRouter = router({
       [chatFollowAgg],
       routingByCampaign,
     ] = await Promise.all([
+      // AI drafts, in the FEED's vocabulary (aiGenerated, not sequence-bound)
+      // — the card used to count by status alone while its link filtered by
+      // flag, so 15 pending_review AI drafts read "sequence drafts" on Home
+      // and the link landed on an empty screen (owner report 2026-09-20).
+      // One classification everywhere: sequence > ai_draft > crm.
       db.select({ n: sql<number>`count(*)` }).from(emailDrafts)
-        .where(and(eq(emailDrafts.workspaceId, ws), eq(emailDrafts.status, "ai_pending_review"))),
+        .where(and(
+          eq(emailDrafts.workspaceId, ws),
+          inArray(emailDrafts.status, ["pending_review", "ai_pending_review"]),
+          eq(emailDrafts.aiGenerated, true),
+          isNull(emailDrafts.sequenceId),
+        )),
       db.select({ id: emailDrafts.id, subject: emailDrafts.subject, toEmail: emailDrafts.toEmail })
         .from(emailDrafts)
-        .where(and(eq(emailDrafts.workspaceId, ws), eq(emailDrafts.status, "ai_pending_review")))
+        .where(and(
+          eq(emailDrafts.workspaceId, ws),
+          inArray(emailDrafts.status, ["pending_review", "ai_pending_review"]),
+          eq(emailDrafts.aiGenerated, true),
+          isNull(emailDrafts.sequenceId),
+        ))
         .orderBy(desc(emailDrafts.id)).limit(5),
       db.select({ n: sql<number>`count(*)` }).from(meetings)
         .where(and(eq(meetings.workspaceId, ws), eq(meetings.status, "proposed"))),
@@ -136,10 +152,15 @@ export const attentionRouter = router({
           inArray(meetings.status, remindableMeetingStatuses()),
           gte(meetings.createdAt, since),
         )),
-      // Sequence-engine drafts awaiting a human (the /email-drafts queue) —
-      // a different status value from the AI-pipeline drafts counted above.
+      // Sequence drafts awaiting a human — feed vocabulary: a draft is a
+      // "sequence draft" iff it belongs to a sequence, whatever its status
+      // string says (the status-based split mislabelled AI drafts).
       db.select({ n: sql<number>`count(*)` }).from(emailDrafts)
-        .where(and(eq(emailDrafts.workspaceId, ws), eq(emailDrafts.status, "pending_review"))),
+        .where(and(
+          eq(emailDrafts.workspaceId, ws),
+          inArray(emailDrafts.status, ["pending_review", "ai_pending_review"]),
+          isNotNull(emailDrafts.sequenceId),
+        )),
       // Unhandled LinkedIn / WhatsApp replies (the Unified Inbox's queue).
       db.select({ n: sql<number>`count(*)` }).from(unipileMessages)
         .where(and(eq(unipileMessages.workspaceId, ws), eq(unipileMessages.direction, "inbound"), isNull(unipileMessages.handledAt))),
@@ -174,6 +195,18 @@ export const attentionRouter = router({
       : [];
     const nameOf = new Map(names.map((c) => [c.id, c.name]));
 
+    // Manual CRM drafts awaiting review — the third feed source. Without its
+    // own card these rows were invisible on Home while still counted in the
+    // Emails page's "Needs review" total.
+    const [crmDraftAgg] = await db.select({ n: sql<number>`count(*)` }).from(emailDrafts)
+      .where(and(
+        eq(emailDrafts.workspaceId, ws),
+        inArray(emailDrafts.status, ["pending_review", "ai_pending_review"]),
+        eq(emailDrafts.aiGenerated, false),
+        isNull(emailDrafts.sequenceId),
+      ));
+    const crmDrafts = { count: Number(crmDraftAgg?.n ?? 0) };
+
     const aiDrafts = { count: Number(draftAgg?.n ?? 0), items: draftItems };
     const proposedMeetings = { count: Number(meetAgg?.n ?? 0), items: meetItems };
     const unhandledReplies = { count: Number(replyAgg?.n ?? 0), items: replyItems };
@@ -202,7 +235,7 @@ export const attentionRouter = router({
       totalNeedingYou:
         aiDrafts.count + proposedMeetings.count + unhandledReplies.count +
         areApprovals.count + draftTasks.count + paused.length +
-        sequenceDrafts.count + socialReplies.count + optimizationRecs.count + chatFollowUps.count +
+        crmDrafts.count + sequenceDrafts.count + socialReplies.count + optimizationRecs.count + chatFollowUps.count +
         routingSuggestions.count + campaignProposals.count,
       aiDrafts,
       proposedMeetings,
@@ -211,6 +244,7 @@ export const attentionRouter = router({
       draftTasks,
       pausedCampaigns: paused,
       sequenceDrafts,
+      crmDrafts,
       socialReplies,
       optimizationRecs,
       chatFollowUps,

@@ -114,7 +114,9 @@ describe("numbers that used to omit the engine", () => {
     for (const k of ["sequenceDrafts", "socialReplies", "optimizationRecs", "chatFollowUps"]) {
       expect(att).toContain(`${k}.count`);
     }
-    expect(att).toContain('eq(emailDrafts.status, "pending_review")');
+    // Since 2026-09-20 the draft cards use the FEED's vocabulary (flags,
+    // not status strings) — see draftVocabulary.test.ts for the full pin.
+    expect(att).toContain('inArray(emailDrafts.status, ["pending_review", "ai_pending_review"])');
     expect(att).toContain("isNull(unipileMessages.handledAt)");
     expect(att).toContain("optimizationRecommendations.status");
     expect(att).toContain('like(tasks.title, "Follow up:%")');

@@ -7,7 +7,7 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { TRPCError } from "@trpc/server";
-import { eq, and, inArray, desc, isNull } from "drizzle-orm";
+import { eq, and, inArray, desc, isNull, isNotNull, ne } from "drizzle-orm";
 import {
   aiPipelineJobs,
   emailDrafts,
@@ -84,6 +84,16 @@ export async function runPipelineForContact(
         email = l.email ?? "";
         companyName = l.company ?? "";
       }
+    }
+
+    // The no-email door's belt: one chokepoint that covers the single run,
+    // the bulk run AND the nightly batch — no address, no draft, and the job
+    // says why instead of producing a ghost "no recipient" review row.
+    if (!email.trim()) {
+      await db.update(aiPipelineJobs)
+        .set({ status: "failed", errorMessage: "No email address on the contact/lead — enrich first, then draft." })
+        .where(eq(aiPipelineJobs.id, jobId));
+      return;
     }
 
     const fullName = `${firstName} ${lastName}`.trim();
@@ -301,6 +311,17 @@ export const aiPipelineRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // The no-email door, CRM side (2026-09-20): a draft for someone we
+      // cannot mail is a ghost row — April's "no recipient" review queue.
+      if (input.contactId) {
+        const [c] = await db.select({ email: contacts.email }).from(contacts)
+          .where(and(eq(contacts.id, input.contactId), eq(contacts.workspaceId, ctx.workspace.id)));
+        if (!c?.email?.trim()) throw new TRPCError({ code: "BAD_REQUEST", message: "This contact has no email address — find one first (enrichment), then draft." });
+      } else if (input.leadId) {
+        const [l] = await db.select({ email: leads.email }).from(leads)
+          .where(and(eq(leads.id, input.leadId), eq(leads.workspaceId, ctx.workspace.id)));
+        if (!l?.email?.trim()) throw new TRPCError({ code: "BAD_REQUEST", message: "This lead has no email address — find one first (enrichment), then draft." });
+      }
       const [job] = await db
         .insert(aiPipelineJobs)
         .values({
@@ -331,8 +352,23 @@ export const aiPipelineRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // The no-email door: only mailable contacts get drafts; the rest are
+      // reported back as skipped instead of becoming ghost queue rows.
+      const withEmail = input.contactIds.length === 0 ? [] : await db
+        .select({ id: contacts.id })
+        .from(contacts)
+        .where(and(
+          eq(contacts.workspaceId, ctx.workspace.id),
+          inArray(contacts.id, input.contactIds),
+          isNotNull(contacts.email),
+          ne(contacts.email, ""),
+        ));
+      const mailable: Record<number, true> = {};
+      for (const r of withEmail) mailable[r.id] = true;
+      const skippedNoEmail = input.contactIds.filter((id) => !mailable[id]).length;
       const jobIds: number[] = [];
       for (const contactId of input.contactIds) {
+        if (!mailable[contactId]) continue;
         const [job] = await db
           .insert(aiPipelineJobs)
           .values({
@@ -348,7 +384,7 @@ export const aiPipelineRouter = router({
           runPipelineForContact(ctx.workspace.id, jobId, contactId, null, ctx.user.id)
         );
       }
-      return { jobIds, count: jobIds.length };
+      return { jobIds, count: jobIds.length, skippedNoEmail };
     }),
 
   /** Get recent pipeline jobs for this workspace */

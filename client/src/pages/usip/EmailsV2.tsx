@@ -286,7 +286,9 @@ export default function EmailsV2() {
     { direction: direction as "all" | "outbound" | "inbound", source, status, search: searchDebounced, limit: PAGE, offset: page * PAGE },
     { retry: false },
   );
-  const stats = trpc.emailActivity.stats.useQuery({}, { retry: false });
+  // Status-aware: the chips must count what the ACTIVE filter would show,
+  // not all-time transmitted totals (owner report 2026-09-20).
+  const stats = trpc.emailActivity.stats.useQuery({ status }, { retry: false });
   const settings = trpc.emailAutoSend.getAutoSendSettings.useQuery(undefined as any, { retry: false });
 
   const invalidate = () => { utils.emailActivity.list.invalidate(); utils.emailActivity.stats.invalidate(); };
@@ -315,10 +317,15 @@ export default function EmailsV2() {
   const st = stats.data;
   const sourceCounts = useMemo(() => {
     const m = new Map<string, number>();
+    // The server's bySource is already status-scoped and already includes
+    // drafts, queued campaign steps and inbound — no client-side additions.
     for (const b of st?.bySource ?? []) m.set(b.source, b.count);
-    if (st?.inbound) m.set("inbound", st.inbound);
     return m;
   }, [st]);
+  // The banner count follows the active source chip; under Needs review the
+  // per-source counts are exact, so a chip can never show an empty list
+  // under a banner still claiming the workspace-wide number.
+  const awaitingScoped = source === "all" ? (st?.awaiting ?? 0) : (sourceCounts.get(source) ?? 0);
 
   const setFilter = (fn: () => void) => { fn(); setPage(0); };
 
@@ -412,10 +419,10 @@ export default function EmailsV2() {
               Email Drafts links land, so the queue-wide approval lives here too.
               Server-scoped: the feed is paged with no total, so the button
               cannot honestly count from the rows on screen. */}
-          {status === "awaiting" && (st?.awaiting ?? 0) > 0 && (
+          {status === "awaiting" && awaitingScoped > 0 && (
             <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
               <span className="text-xs text-muted-foreground">
-                {st?.awaiting} email{st?.awaiting === 1 ? "" : "s"} awaiting review{approveAllSource !== "all" ? ` — showing ${approveAllSource === "ai_draft" ? "AI Pipeline" : "sequence"} drafts` : ""}.
+                {awaitingScoped} email{awaitingScoped === 1 ? "" : "s"} awaiting review{approveAllSource !== "all" ? ` — showing ${approveAllSource === "ai_draft" ? "AI Pipeline" : "sequence"} drafts` : ""}.
               </span>
               <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={approveAll.isPending}
                 title={`Approve all ${approveAllSource === "ai_draft" ? "AI Pipeline" : approveAllSource === "sequence" ? "sequence" : "awaiting"} drafts?`}

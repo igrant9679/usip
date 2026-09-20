@@ -128,7 +128,9 @@ describe("the feed filters in SQL, before the limit", () => {
     // A draft or execution row that has a log row is the log row's story —
     // the log carries the delivery outcome and the failure reason.
     const notExists = router.match(/NOT EXISTS \(SELECT 1 FROM \\`email_log\\`/g) ?? [];
-    expect(notExists.length).toBe(2);
+    // Three: the list's draft section, the status-aware chip counts for
+    // "all" (2026-09-20), and the drafts headline — every one the same rule.
+    expect(notExists.length).toBe(3);
   });
 
   it("counts the chips across the workspace, not across the page", () => {

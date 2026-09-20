@@ -212,7 +212,12 @@ export const emailActivityRouter = {
       ];
       if (input.contactId) conds.push(eq(emailDrafts.toContactId, input.contactId));
       if (input.source === "sequence") conds.push(sql`${emailDrafts.sequenceId} IS NOT NULL`);
-      if (input.source === "ai_draft") conds.push(eq(emailDrafts.aiGenerated, true));
+      // Exact inverse of the row classification below (sequence wins over
+      // ai_draft): the filter used to admit AI-written sequence drafts the
+      // classifier then labelled "sequence" — a filter↔label mismatch.
+      if (input.source === "ai_draft") {
+        conds.push(sql`(${emailDrafts.aiGenerated} = true AND ${emailDrafts.sequenceId} IS NULL)`);
+      }
       if (input.source === "crm") {
         conds.push(sql`(${emailDrafts.sequenceId} IS NULL AND ${emailDrafts.aiGenerated} = false)`);
       }
@@ -450,7 +455,7 @@ export const emailActivityRouter = {
    * tells.
    */
   stats: workspaceProcedure
-    .input(z.object({ campaignId: z.number().optional() }))
+    .input(z.object({ campaignId: z.number().optional(), status: z.string().default("all") }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -520,6 +525,73 @@ export const emailActivityRouter = {
         ]),
       ]);
 
+      /**
+       * Status-aware chip counts (owner report 2026-09-20). The chips used to
+       * show all-time transmitted-mail totals whatever status filter was
+       * active — "ARE campaign 1,014" over an empty Needs-review list — and
+       * the draft sources (the only kind that CAN be awaiting) never earned a
+       * chip at all, because the old bySource read email_log alone. Each
+       * status now counts with the same predicate the list applies, and
+       * drafts are classified exactly as the feed classifies rows
+       * (sequence > ai_draft > crm).
+       */
+      const draftSrcExpr = sql<string>`case when ${emailDrafts.sequenceId} is not null then 'sequence' when ${emailDrafts.aiGenerated} = true then 'ai_draft' else 'crm' end`;
+      const stFilter = input.status;
+      let chips: { source: string; count: number }[];
+      if (stFilter === "received") {
+        chips = [{ source: "inbound", count: num(inbound[0]?.count) }];
+      } else if (stFilter === "scheduled") {
+        chips = [{ source: "campaign", count: num(queued[0]?.count) }];
+      } else if (stFilter === "awaiting") {
+        const rows = await db
+          .select({ source: draftSrcExpr, count: sql<number>`count(*)` })
+          .from(emailDrafts)
+          .where(and(
+            eq(emailDrafts.workspaceId, wsId),
+            inArray(emailDrafts.status, ["pending_review", "ai_pending_review", "approved"]),
+          ))
+          .groupBy(draftSrcExpr);
+        chips = rows.map((r) => ({ source: String(r.source), count: num(r.count) }));
+      } else if (stFilter === "sent" || stFilter === "failed" || stFilter === "engaged" || stFilter === "bounced") {
+        const conds = [eq(emailLog.workspaceId, wsId), campaignScope];
+        if (stFilter === "sent") conds.push(eq(emailLog.status, "sent"));
+        if (stFilter === "failed") conds.push(eq(emailLog.status, "failed"));
+        if (stFilter === "engaged") {
+          conds.push(sql`(COALESCE(${emailDrafts.openCount}, 0) > 0
+            OR COALESCE(${emailDrafts.clickCount}, 0) > 0
+            OR ${areExecutionQueue.openedAt} IS NOT NULL)`);
+        }
+        if (stFilter === "bounced") conds.push(sql`${emailDrafts.bouncedAt} IS NOT NULL`);
+        const rows = await db
+          .select({ source: emailLog.source, count: sql<number>`count(*)` })
+          .from(emailLog)
+          .leftJoin(emailDrafts, eq(emailDrafts.id, emailLog.draftId))
+          .leftJoin(areExecutionQueue, eq(areExecutionQueue.id, emailLog.executionQueueId))
+          .where(and(...conds))
+          .groupBy(emailLog.source);
+        chips = rows.map((r) => ({ source: r.source, count: num(r.count) }));
+      } else {
+        // "all": transmitted mail per source, plus the rows the log never
+        // holds — unsent drafts (3-way), queued campaign steps, inbound.
+        const draftRows = await db
+          .select({ source: draftSrcExpr, count: sql<number>`count(*)` })
+          .from(emailDrafts)
+          .where(and(
+            eq(emailDrafts.workspaceId, wsId),
+            ne(emailDrafts.status, "sent"),
+            sql`NOT EXISTS (SELECT 1 FROM \`email_log\` l WHERE l.\`draftId\` = ${emailDrafts.id})`,
+          ))
+          .groupBy(draftSrcExpr);
+        const m = new Map<string, number>();
+        for (const r of bySource) m.set(r.source, num(r.count));
+        for (const r of draftRows) m.set(String(r.source), (m.get(String(r.source)) ?? 0) + num(r.count));
+        m.set("campaign", (m.get("campaign") ?? 0) + num(queued[0]?.count));
+        m.set("inbound", (m.get("inbound") ?? 0) + num(inbound[0]?.count));
+        const merged: { source: string; count: number }[] = [];
+        m.forEach((count, source) => { merged.push({ source, count }); });
+        chips = merged;
+      }
+
       const [draftEng, execEng] = engagement;
       const sentTotal = num(draftEng[0]?.sent) + num(execEng[0]?.sent);
       const openedTotal = num(draftEng[0]?.opened) + num(execEng[0]?.opened);
@@ -534,7 +606,7 @@ export const emailActivityRouter = {
         bounced: num(draftEng[0]?.bounced),
         openRate: sentTotal ? Math.round((openedTotal / sentTotal) * 100) : 0,
         clickRate: sentTotal ? Math.round((clickedTotal / sentTotal) * 100) : 0,
-        bySource: bySource.map((r) => ({ source: r.source, count: num(r.count) })),
+        bySource: chips,
       };
     }),
 
