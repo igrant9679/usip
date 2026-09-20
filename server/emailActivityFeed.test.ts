@@ -165,9 +165,11 @@ describe("every transmission point writes the log", () => {
   it("carries the campaign, step and prospect onto ARE campaign sends", () => {
     const engine = readFileSync("server/areEngine.ts", "utf8");
     const call = engine.slice(engine.indexOf("sendCampaignEmailViaPool(wsId"));
-    expect(call.slice(0, 900)).toContain('source: "campaign"');
-    expect(call.slice(0, 900)).toContain("executionQueueId: step.id");
-    expect(call.slice(0, 900)).toContain("prospectQueueId: p.id");
+    // 1400, not 900: the call now carries the List-Unsubscribe headers block
+    // (compliance audit 2026-09-20) ahead of the logMeta keys.
+    expect(call.slice(0, 1400)).toContain('source: "campaign"');
+    expect(call.slice(0, 1400)).toContain("executionQueueId: step.id");
+    expect(call.slice(0, 1400)).toContain("prospectQueueId: p.id");
   });
 
   it("tags the paths that previously recorded nothing at all", () => {

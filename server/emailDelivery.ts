@@ -46,6 +46,12 @@ export interface SendEmailOptions {
   logSource?: EmailLogSource | string;
   /** Human label for the source — "Weekly pipeline report", a campaign name. */
   logLabel?: string | null;
+  /**
+   * Extra RFC 5322 headers, carried to the adapter (pool path) or nodemailer
+   * (SMTP path) verbatim. Campaign mail uses this for the RFC 8058
+   * List-Unsubscribe pair; senders that never set it are unchanged.
+   */
+  headers?: Record<string, string>;
 }
 
 export interface SendEmailResult {
@@ -156,6 +162,7 @@ export async function sendCampaignEmailViaPool(
       // and the signature, so they cannot disagree.
       fromName: opts.fromName ?? (senderDisplayName(chosen) || undefined),
       replyTo: opts.replyTo ?? (chosen as any).replyTo ?? undefined,
+      headers: opts.headers,
       // Carried through to the email_log row the adapter writes, so campaign
       // mail lands on the Emails page naming its campaign, step and prospect
       // rather than as an anonymous "other".
@@ -345,6 +352,7 @@ export async function sendWorkspaceEmail(
       html: opts.html,
       text: opts.text,
       replyTo: opts.replyTo ?? cfg.replyTo ?? undefined,
+      headers: opts.headers,
     });
 
     /**

@@ -269,6 +269,10 @@ export async function regenerateMeetingProposal(workspaceId: number, meetingId: 
     .where(and(eq(meetings.workspaceId, workspaceId), eq(meetings.id, meetingId))).limit(1);
   if (!m) return { ok: false, reason: "not_found" };
   if (m.status !== "proposed") return { ok: false, reason: "not_a_proposal" };
+  // A row with a scheduledAt is an AGREED time (booking links set it at
+  // insert) — regenerating would overwrite a real commitment with invented
+  // slots. Refuse, whatever the status says (audit 2026-09-20).
+  if (m.scheduledAt) return { ok: false, reason: "already_scheduled" };
   // The target rebuilds from the row's own denormalized columns; only the
   // descriptor (title/industry colour for the LLM) needs a lookup, and only
   // for prospect-linked rows.
@@ -309,7 +313,14 @@ export async function regenerateStaleProposals(workspaceId: number, limit: numbe
   const db = await getDb();
   if (!db) return 0;
   const rows = await db.select({ id: meetings.id, proposedTimes: meetings.proposedTimes }).from(meetings)
-    .where(and(eq(meetings.workspaceId, workspaceId), eq(meetings.status, "proposed")))
+    .where(and(
+      eq(meetings.workspaceId, workspaceId),
+      eq(meetings.status, "proposed"),
+      // Only the autopilot's own proposals: never a booking-link row (an
+      // agreed time carries scheduledAt) and never an inbound/manual one.
+      eq(meetings.source, "ai"),
+      isNull(meetings.scheduledAt),
+    ))
     .orderBy(meetings.id);
   const nowMs = Date.now();
   let done = 0;

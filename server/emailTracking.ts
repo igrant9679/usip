@@ -1356,7 +1356,22 @@ export async function processBounceEvent(
     .orderBy(desc(draftsTable.sentAt))
     .limit(1);
 
-  const workspaceId = event.workspaceId ?? draft?.workspaceId ?? 0;
+  // ARE campaign sends write email_log rows, not drafts — without this
+  // fallback a provider bounce webhook for campaign mail resolved workspace 0,
+  // step 3 below was skipped, and the dead address kept being mailed (audit
+  // 2026-09-20). Same most-recent-send heuristic as the draft lookup above.
+  let logWorkspaceId: number | undefined;
+  if (!draft && !event.workspaceId) {
+    const { emailLog } = await import("../drizzle/schema");
+    const [logRow] = await db
+      .select({ workspaceId: emailLog.workspaceId })
+      .from(emailLog)
+      .where(eq(emailLog.toEmail, event.email))
+      .orderBy(desc(emailLog.sentAt))
+      .limit(1);
+    logWorkspaceId = logRow?.workspaceId;
+  }
+  const workspaceId = event.workspaceId ?? draft?.workspaceId ?? logWorkspaceId ?? 0;
 
   // 2. Update the draft's bounce fields
   if (draft) {

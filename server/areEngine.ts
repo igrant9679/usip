@@ -63,7 +63,7 @@ import { listUsableAccounts } from "./services/linkedinLookup";
 import { randomUUID } from "node:crypto";
 import { sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
 import { dispatchLinkedInStep, HEALABLE_NO_LINKEDIN } from "./services/are/linkedinStep";
-import { injectTracking, isDeferredSenderToken, resolveSenderTokens, scrubForSend } from "./mergeVars";
+import { injectTracking, isDeferredSenderToken, renderSequenceOptOut, resolveSenderTokens, scrubForSend } from "./mergeVars";
 import { resolveBookingUrl } from "./mergeVars";
 import { ARE_DEFAULT_SOURCES, normalizeSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 // One rule for a step's index + variant key, shared with the A/B metadata
@@ -92,6 +92,7 @@ import {
   sequenceCompletionVerdict,
 } from "./services/sequenceCompletion";
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
+import { isSuppressed as isSuppressedSitewide, makeUnsubscribeUrl, unsubscribeHeaders } from "./unsubscribe";
 import { escapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { cleanScrapedField } from "@shared/fieldHygiene";
@@ -1233,6 +1234,11 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       // unchecking "open tracking" did not stop the engine that sends most of
       // the mail (audit 2026-09-02). Resolved once per campaign run.
       let openTrackingPref: boolean | undefined;
+      // The workspace's sequence opt-out footer (Settings → Email delivery),
+      // resolved by the same lazy read below. Cold campaign mail shipped with
+      // no unsubscribe path at all until the 2026-09-20 audit; the RFC 8058
+      // headers now go on every send, the visible footer when enabled.
+      let optOutMessage: string | null | undefined;
       /**
        * Set once a LinkedIn step is refused for a reason every other LinkedIn
        * step this tick would share — throttled by the activity gate, or no
@@ -1408,6 +1414,17 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             .where(eq(areExecutionQueue.id, step.id));
           continue;
         }
+        // The SITE-WIDE list too (audit 2026-09-20). Unsubscribes, bounces and
+        // spam complaints from every other send path land in email_suppressions,
+        // and this dispatcher read only its own ARE list — so an address that
+        // opted out of sequence mail kept receiving campaign mail.
+        if (await isSuppressedSitewide(wsId, p.email)) {
+          await db
+            .update(areExecutionQueue)
+            .set({ status: "skipped", failureReason: "On suppression list (workspace)", executedAt: new Date() })
+            .where(eq(areExecutionQueue.id, step.id));
+          continue;
+        }
 
         const mc = (step.messageContent ?? {}) as { subject?: string; body?: string };
         // The owner's booking link, so a {{bookingLink}} CTA lets the prospect
@@ -1436,13 +1453,18 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         const bodyIsHtml = isHtmlBody(body);
         if (openTrackingPref === undefined) {
           const [prefs] = await db
-            .select({ open: workspaceSettings.emailOpenTracking })
+            .select({
+              open: workspaceSettings.emailOpenTracking,
+              optOutEnabled: workspaceSettings.emailSequenceOptOutEnabled,
+              optOutText: workspaceSettings.emailSequenceOptOutMessage,
+            })
             .from(workspaceSettings)
             .where(eq(workspaceSettings.workspaceId, wsId))
             .limit(1);
           openTrackingPref = prefs?.open ?? true;
+          optOutMessage = prefs?.optOutEnabled ? (prefs.optOutText ?? null) : null;
         }
-        const html = injectTracking(
+        let html = injectTracking(
           bodyIsHtml ? `<!DOCTYPE html><html><body>${body}</body></html>` : textToHtml(body),
           trackingToken,
           appBaseUrl,
@@ -1455,6 +1477,24 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             click: false,
           },
         );
+        // Compliance wrap (audit 2026-09-20): campaign mail previously carried
+        // no unsubscribe route at all. The signed per-recipient URL stands on
+        // its own (workspaceId+email HMAC — server/unsubscribe.ts), so the
+        // RFC 8058 headers go on EVERY campaign send; the visible footer is
+        // appended when the workspace enabled its opt-out message.
+        const unsubHeaders = unsubscribeHeaders(appBaseUrl, wsId, p.email);
+        let textOut = bodyIsHtml ? htmlBodyToText(body) : body;
+        if (optOutMessage) {
+          const optOut = renderSequenceOptOut(optOutMessage, {
+            unsubscribeUrl: makeUnsubscribeUrl(appBaseUrl, wsId, p.email),
+          });
+          if (optOut) {
+            html = html.includes("</body>")
+              ? html.replace("</body>", `${optOut.html}</body>`)
+              : `${html}\n${optOut.html}`;
+            textOut = `${textOut}\n\n${optOut.text}`;
+          }
+        }
 
         /**
          * CLAIM THE ROW BEFORE SENDING — this is cold outbound, so a duplicate
@@ -1487,7 +1527,11 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           to: p.email,
           subject,
           html,
-          text: bodyIsHtml ? htmlBodyToText(body) : body,
+          text: textOut,
+          // RFC 8058 List-Unsubscribe / List-Unsubscribe-Post — Gmail and
+          // Yahoo require these of bulk senders; without them the recipient's
+          // cheap option is "report spam".
+          headers: unsubHeaders,
           // What puts this send on the Emails page as campaign mail, named,
           // and linked back to its campaign, step and prospect (migration
           // 0163). Campaign mail used to be recorded ONLY on the execution

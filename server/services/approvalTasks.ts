@@ -111,6 +111,13 @@ export async function sendChatFollowUpTask(workspaceId: number, taskId: number, 
   if (!p.subject || !p.body) return { ok: false, reason: "not_a_suggested_email" };
   const to = await resolveRecipient(workspaceId, t, p.to);
   if (!to) return { ok: false, reason: "no_recipient" };
+  // The SAME suppression gate the Auto branch applies — an approved click
+  // must not out-rank an unsubscribe (audit 2026-09-20).
+  const { isEmailSuppressed } = await import("../routers/emailSuppressions");
+  if (await isEmailSuppressed(workspaceId, to)) {
+    await closeTask(workspaceId, taskId, "suppressed");
+    return { ok: false, reason: "recipient is on the suppression list" };
+  }
   // Claim before sending (at-most-once, same rule as the Auto branch).
   const claimed = await db.update(tasks).set({ status: "in_progress" } as never)
     .where(and(eq(tasks.id, taskId), eq(tasks.workspaceId, workspaceId), eq(tasks.status, "open")));

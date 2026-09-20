@@ -253,7 +253,10 @@ export const pipelineAlertsRouter = router({
 
   /** List active (undismissed) alerts for the workspace */
   list: workspaceProcedure
-    .input(z.object({ limit: z.number().default(50) }))
+    // .optional(): DealsV2 calls this with NO input, and a required object
+    // made the whole Deals batch return 207 — the alerts strip 400'd on
+    // every page load (found live, 2026-09-20).
+    .input(z.object({ limit: z.number().default(50) }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -268,7 +271,7 @@ export const pipelineAlertsRouter = router({
           )
         )
         .orderBy(desc(pipelineAlerts.createdAt))
-        .limit(input.limit);
+        .limit(input?.limit ?? 50);
 
       // Attach opportunity names
       const oppIds = Array.from(new Set(alerts.map((a) => a.opportunityId)));

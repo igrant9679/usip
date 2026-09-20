@@ -61,8 +61,15 @@ export async function sendDueMeetingReminders(): Promise<{ sent: number; conside
     ))
     .limit(300);
 
+  // Archived workspaces are frozen (2026-08-12) — this was the ONE cron in
+  // the meetings area still mailing external prospects from archived
+  // workspaces (audit 2026-09-20).
+  const { archivedWorkspaceIds } = await import("../_core/workspaceArchive");
+  const archivedWs = await archivedWorkspaceIds();
+  const live = due.filter((m) => !archivedWs.has(m.workspaceId));
+
   let sent = 0;
-  for (const m of due) {
+  for (const m of live) {
     if (!m.contactEmail || !m.scheduledAt) continue;
     const when = fmtWhen(m.scheduledAt as Date);
     const name = m.contactName?.trim() || "there";

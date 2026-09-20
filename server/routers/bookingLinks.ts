@@ -226,6 +226,17 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
   } catch (e) {
     console.error("[bookingLinks] sendMeetingInvite failed:", (e as Error).message);
   }
+  // A self-booked meeting is SCHEDULED whatever the calendar situation — the
+  // prospect chose this time. sendMeetingInvite flips the status when a
+  // provider invite goes out; without a connected calendar (or on a provider
+  // error) the row used to stay "proposed": no reminders (proposed is not
+  // remindable), miscounted as an AI proposal, dismissible from the approval
+  // queue, and eligible for the stale-proposal regenerator to overwrite a
+  // real customer's agreed time (audit 2026-09-20).
+  if (!result.sent) {
+    await db.update(meetings).set({ status: "scheduled" } as never)
+      .where(and(eq(meetings.workspaceId, link.workspaceId), eq(meetings.id, meetingId), eq(meetings.status, "proposed")));
+  }
 
   // Atomic in SQL. `link.bookingCount + 1` computed in JS is a lost update: the
   // count comes from a row read before the booking, and two prospects booking
