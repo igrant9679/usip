@@ -710,11 +710,24 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
               }
             } else {
               // linkedin_invite
+              // Behind the SAME activity gate as every other automated
+              // sender (2026-09-20) — this path predated the gate and sent
+              // ungoverned, contradicting the precondition the ARE LinkedIn
+              // step documents for having two automated senders at all.
+              const { checkLinkedInAction, recordLinkedInAction } = await import("./services/linkedin/activityGate");
+              const inviteGate = await checkLinkedInAction({ workspaceId: enrollment.workspaceId, unipileAccountId: unipileAcct.unipileAccountId, kind: "invite" });
+              if (!inviteGate.allowed) {
+                // Held: log and let the step advance (the engine's existing
+                // contract — it never blocks a sequence on channel failures).
+                console.log(`[SequenceEngine] invite held by LinkedIn limits for enrollment ${enrollment.id}: ${inviteGate.reason ?? "cap"}`);
+                throw new Error(`held by LinkedIn limits: ${inviteGate.reason ?? "cap"}`);
+              }
               await sendLinkedInInvitation({
                 accountId: unipileAcct.unipileAccountId,
                 providerId: profileSlug,
                 message: step.note ?? "",
               });
+              await recordLinkedInAction({ workspaceId: enrollment.workspaceId, unipileAccountId: unipileAcct.unipileAccountId, kind: "invite" });
               // Log to unipile_invites
               await db.insert(unipileInvites).values({
                 workspaceId: enrollment.workspaceId,

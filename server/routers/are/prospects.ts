@@ -1530,6 +1530,9 @@ export const prospectsRouter = router({
       const rows = await db
         .select({
           prospectId: prospectQueue.id,
+          // The person-record link (owner ask 2026-09-20): the drawer's
+          // header links to /prospects/:id, and this is the id it needs.
+          personProspectId: prospectQueue.personProspectId,
           firstName: prospectQueue.firstName,
           lastName: prospectQueue.lastName,
           email: prospectQueue.email,

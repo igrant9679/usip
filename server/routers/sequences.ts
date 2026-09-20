@@ -879,7 +879,39 @@ export const sequencesRouter = router({
     const db = await getDb();
     if (!db) return [];
     const rows = await db.select().from(enrollments).where(eq(enrollments.workspaceId, ctx.workspace.id));
-    return input?.sequenceId ? rows.filter((r) => r.sequenceId === input.sequenceId) : rows;
+    const scoped = input?.sequenceId ? rows.filter((r) => r.sequenceId === input.sequenceId) : rows;
+    // Resolve WHO each enrollment is (owner ask 2026-09-20): the panel used
+    // to render "Enrollment #372" — an id with no name and no way to open
+    // the person. One batched lookup per referenced table; personId is the
+    // /prospects/:id link (contacts resolve through their person link).
+    const contactIds: number[] = [];
+    const leadIds: number[] = [];
+    const prospectIds: number[] = [];
+    for (const r of scoped) {
+      if (r.contactId) contactIds.push(r.contactId);
+      else if (r.leadId) leadIds.push(r.leadId);
+      else if (r.prospectId) prospectIds.push(r.prospectId);
+    }
+    const [cRows, lRows, pRows] = await Promise.all([
+      contactIds.length ? db.select({ id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName, personProspectId: contacts.personProspectId }).from(contacts).where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, contactIds))) : Promise.resolve([]),
+      leadIds.length ? db.select({ id: leads.id, firstName: leads.firstName, lastName: leads.lastName }).from(leads).where(and(eq(leads.workspaceId, ctx.workspace.id), inArray(leads.id, leadIds))) : Promise.resolve([]),
+      prospectIds.length ? db.select({ id: prospects.id, firstName: prospects.firstName, lastName: prospects.lastName }).from(prospects).where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, prospectIds))) : Promise.resolve([]),
+    ]);
+    const cMap: Record<number, { name: string; personId: number | null }> = {};
+    for (const c of cRows as any[]) cMap[c.id] = { name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim(), personId: c.personProspectId ?? null };
+    const lMap: Record<number, string> = {};
+    for (const l of lRows as any[]) lMap[l.id] = `${l.firstName ?? ""} ${l.lastName ?? ""}`.trim();
+    const pMap: Record<number, string> = {};
+    for (const p of pRows as any[]) pMap[p.id] = `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim();
+    return scoped.map((r) => ({
+      ...r,
+      personName: r.contactId ? (cMap[r.contactId]?.name ?? null)
+        : r.leadId ? (lMap[r.leadId] ?? null)
+        : r.prospectId ? (pMap[r.prospectId] ?? null)
+        : null,
+      personId: r.prospectId ?? (r.contactId ? cMap[r.contactId]?.personId ?? null : null),
+      leadHref: r.leadId ? `/leads/${r.leadId}` : null,
+    }));
   }),
 
   enroll: repProcedure.input(z.object({ sequenceId: z.number(), contactId: z.number().optional(), leadId: z.number().optional() })).mutation(async ({ ctx, input }) => {
@@ -2102,6 +2134,13 @@ export const emailDraftsRouter = router({
           contextLine = `Recipient: ${l.firstName} ${l.lastName}, ${l.title ?? "?"} at ${l.company ?? "?"}`;
           toEmail = l.email ?? null;
         }
+      }
+
+      // The no-email door, compose side (2026-09-20): refuse to draft for a
+      // person with no address — the draft could never send and would sit in
+      // the review queue as a ghost "no recipient" row.
+      if ((input.toContactId || input.toLeadId) && !toEmail) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This person has no email address — find one first (enrichment), then compose." });
       }
 
       // Seller's own company + brand voice (migration 0125); "" when unset.

@@ -20,7 +20,7 @@
  * not carry the connection's provider id, and guessing it is how a message
  * goes to the wrong person.
  */
-import { and, desc, eq, inArray, isNotNull, like, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, like, sql } from "drizzle-orm";
 import { activities, chatSessions, leads, tasks, unipileAccounts, unipileInvites } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { sendWorkspaceEmail } from "../emailDelivery";
@@ -142,6 +142,12 @@ export async function sendSocialInviteTask(workspaceId: number, taskId: number, 
   if (accts.length === 0) return { ok: false, reason: "no_linkedin_account" };
   const owned = accts.find((a) => a.userId != null && a.userId === (t.ownerUserId ?? actorUserId));
   const account = owned ?? accts[0];
+  if (!owned) {
+    // The fallback is deliberate (an invite beats a dead task) but it must
+    // never be silent — the approver was told "from the owning rep's
+    // account" (2026-09-20).
+    console.warn(`[approvalTasks] task ${t.id}: owner has no connected LinkedIn account — sending from workspace account ${account.id}`);
+  }
   const [dup] = await db.select({ id: unipileInvites.id }).from(unipileInvites)
     .where(and(eq(unipileInvites.workspaceId, workspaceId), eq(unipileInvites.recipientProviderId, slug))).limit(1);
   if (dup) { await closeTask(workspaceId, taskId, "already_invited"); return { ok: false, reason: "already_invited" }; }
@@ -181,7 +187,23 @@ export async function sendSocialInviteTask(workspaceId: number, taskId: number, 
 
 export async function sendAllApprovalTasks(workspaceId: number, kind: ApprovalTaskKind, actorUserId: number | null, limit = 50): Promise<{ sent: number; failed: Array<{ id: number; reason: string }> }> {
   const q = await listApprovalTasks(workspaceId);
-  const rows = (kind === "chat_follow_up" ? q.chatFollowUps : q.socialInvites).slice(0, limit);
+  let rows = (kind === "chat_follow_up" ? q.chatFollowUps : q.socialInvites).slice(0, limit);
+  if (kind === "social_invite") {
+    // The SAME per-workspace/day invite budget Auto mode enforces
+    // (socialAutopilot INVITE_HARD_CAP) — approving in bulk must not push
+    // past the ceiling the unattended path respects (2026-09-20). The
+    // per-account activity gate still applies inside each send.
+    const db = await getDb();
+    if (db) {
+      const since = new Date(); since.setUTCHours(0, 0, 0, 0);
+      const [{ n: sentToday }] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(unipileInvites)
+        .where(and(eq(unipileInvites.workspaceId, workspaceId), gte(unipileInvites.sentAt, since)));
+      const budget = Math.max(0, 20 - Number(sentToday ?? 0));
+      rows = rows.slice(0, budget);
+    }
+  }
   let sent = 0;
   const failed: Array<{ id: number; reason: string }> = [];
   for (const r of rows) {

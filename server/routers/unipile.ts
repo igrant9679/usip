@@ -379,7 +379,9 @@ export const unipileRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
-      // Verify account ownership
+      // Verify account ownership — scoped to the CURRENT workspace
+      // (2026-09-20): this proc could previously send from an account the
+      // same user connected in a DIFFERENT workspace.
       const [account] = await db
         .select()
         .from(unipileAccounts)
@@ -387,16 +389,27 @@ export const unipileRouter = router({
           and(
             eq(unipileAccounts.unipileAccountId, input.unipileAccountId),
             eq(unipileAccounts.userId, ctx.user.id),
+            eq(unipileAccounts.workspaceId, ctx.workspace.id),
           ),
         )
         .limit(1);
       if (!account) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // The same safety gate every automated invite path obeys (daily and
+      // weekly caps, spacing, warmup). A manual click is still LinkedIn
+      // activity on the account the gate is protecting.
+      const { checkLinkedInAction, recordLinkedInAction } = await import("../services/linkedin/activityGate");
+      const inviteGate = await checkLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: input.unipileAccountId, kind: "invite" });
+      if (!inviteGate.allowed) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Held by LinkedIn limits: ${inviteGate.reason ?? "cap reached"}` });
+      }
 
       await sendLinkedInInvitation({
         accountId: input.unipileAccountId,
         providerId: input.recipientProviderId,
         message: input.message,
       });
+      await recordLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: input.unipileAccountId, kind: "invite" });
 
       // Store invite record
       await db.insert(unipileInvites).values({

@@ -312,7 +312,11 @@ export default function TasksV2() {
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => approveDraft.mutate({ id: t.id })}><Check className="size-3.5" /> Approve</Button>
+          <Button size="sm" variant="outline" className="h-7 gap-1"
+            title={/linkedin|connection request|connect with/i.test(t.title ?? "")
+              ? "Approves the task only — it does NOT send a LinkedIn request. Real invites send from the LinkedIn invites queue above or the person's record."
+              : undefined}
+            onClick={() => approveDraft.mutate({ id: t.id })}><Check className="size-3.5" /> Approve</Button>
           <Button size="icon" variant="ghost" className="size-7 text-muted-foreground" title="Dismiss" onClick={() => dismissDraft.mutate({ id: t.id })}><X className="size-4" /></Button>
         </div>
       </div>
@@ -409,7 +413,7 @@ export default function TasksV2() {
                     <span className="text-[12px] font-medium">LinkedIn invites ({socialInvites.length})</span>
                     <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5 text-xs" disabled={sendAllInvites.isPending}
                       title={`Send all ${socialInvites.length} LinkedIn invite${socialInvites.length === 1 ? "" : "s"}?`}
-                      description="Each invite goes out from the owning rep's LinkedIn account with an AI-written note, within the account's daily limits; it stops when a limit is reached. Tasks close as sent."
+                      description="Each invite goes out from the owning rep's connected LinkedIn account (or the workspace's account when that rep has none connected), with an AI-written note, within the account's daily limits; it stops when a limit is reached. Tasks close as sent."
                       confirmLabel="Approve & send all" onConfirm={() => sendAllInvites.mutate()}>
                       <CheckCheck className="size-3.5" /> Approve & send all
                     </ConfirmButton>
@@ -422,7 +426,7 @@ export default function TasksV2() {
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1 text-xs" disabled={sendInvite.isPending}
-                          title="Send this LinkedIn invite now?" description="Sends a connection request with an AI-written note from the owning rep's LinkedIn account and closes the task as sent."
+                          title="Send this LinkedIn invite now?" description="Sends a connection request with an AI-written note from the owning rep's connected LinkedIn account (or the workspace's account when that rep has none connected) and closes the task as sent."
                           confirmLabel="Approve & send" onConfirm={() => sendInvite.mutate({ id: r.id })}>
                           <Link2 className="size-3.5" /> Approve & send
                         </ConfirmButton>

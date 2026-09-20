@@ -472,7 +472,19 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
             {enrollmentList.map((e: any) => (
               <li key={e.id} className="p-3 flex items-center gap-2 text-sm">
                 <div className="flex-1 min-w-0">
-                  <span className="font-medium">Enrollment #{e.id}</span>
+                  {/* WHO, not a row id — with a link to the person record
+                      (owner ask 2026-09-20). */}
+                  {e.personId ? (
+                    <Link href={`/prospects/${e.personId}`} className="font-medium hover:underline">
+                      {e.personName || `Enrollment #${e.id}`}
+                    </Link>
+                  ) : e.leadHref ? (
+                    <Link href={e.leadHref} className="font-medium hover:underline">
+                      {e.personName || `Enrollment #${e.id}`}
+                    </Link>
+                  ) : (
+                    <span className="font-medium">{e.personName || `Enrollment #${e.id}`}</span>
+                  )}
                   <span className="text-muted-foreground ml-2">· Step {e.currentStep + 1}</span>
                   {e.nextActionAt && (
                     <span className="text-xs text-muted-foreground ml-2">

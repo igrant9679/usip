@@ -93,11 +93,15 @@ export const prospectsRouter = router({
         activeCampaignsForProspects(ctx.workspace.id, input.ids),
         activeSequencesForProspects(ctx.workspace.id, input.ids),
       ]);
-      const out: Record<number, { campaigns: Array<{ campaignId: number; campaignName: string; sequenceStatus: string }>; sequences: Array<{ sequenceId: number; sequenceName: string; status: string; currentStep: number }> }> = {};
+      // queueId is the prospect_queue row id — the key the campaign
+      // intelligence dossier is stored under (are.prospects.getIntelligence).
+      // It was computed here and then dropped, which is why the person
+      // record could never show the dossier (owner ask 2026-09-20).
+      const out: Record<number, { campaigns: Array<{ campaignId: number; campaignName: string; sequenceStatus: string; queueId: number }>; sequences: Array<{ sequenceId: number; sequenceName: string; status: string; currentStep: number }> }> = {};
       for (const id of input.ids) {
         const c = campaigns.get(id) ?? [];
         const s = seqs.get(id) ?? [];
-        if (c.length || s.length) out[id] = { campaigns: c.map(({ campaignId, campaignName, sequenceStatus }) => ({ campaignId, campaignName, sequenceStatus })), sequences: s };
+        if (c.length || s.length) out[id] = { campaigns: c.map(({ campaignId, campaignName, sequenceStatus, queueId }) => ({ campaignId, campaignName, sequenceStatus, queueId })), sequences: s };
       }
       return out;
     }),

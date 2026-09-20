@@ -21,6 +21,7 @@ import { AddToMenu } from "@/components/usip/AddToMenu";
 import { ProfileImageUploader, ProfileImageSourceBadge } from "@/components/usip/ProspectAvatar";
 import { LinkedInEnrichmentFullPanel } from "@/components/usip/people/LinkedInEnrichment";
 import { ProspectScoringPanel } from "@/components/usip/scoring/ProspectScoringPanel";
+import { IntelligenceDossier } from "@/components/usip/are/IntelligenceDossier";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -77,6 +78,12 @@ export default function ProspectDetail() {
   const utils = trpc.useUtils();
 
   const { data: p, isLoading } = trpc.prospects.get.useQuery({ id }, { enabled: !Number.isNaN(id) });
+  // Campaign membership + the queueId key each membership's dossier lives
+  // under — same proc the People list rows use (owner ask 2026-09-20).
+  const { data: enrollments } = trpc.prospects.enrollmentsFor.useQuery(
+    { ids: [id] },
+    { enabled: !Number.isNaN(id) && id > 0 },
+  );
   const update = trpc.prospects.update.useMutation({
     onSuccess: () => { toast.success("Saved"); utils.prospects.get.invalidate({ id }); setEditing(null); },
     onError: (e) => toast.error(e.message),
@@ -204,6 +211,24 @@ export default function ProspectDetail() {
         <DetailSection title="Velocity priority score">
           <ProspectScoringPanel objectType="person" objectId={id} />
         </DetailSection>
+
+        {/* Campaign intelligence — the enrichment dossier(s) this person's
+            campaign membership produced (owner ask 2026-09-20). The dossier
+            is keyed per campaign queue row (a person can be in one campaign
+            at a time, but history can leave several), so one section renders
+            per enrolled campaign. */}
+        {(enrollments?.[id]?.campaigns ?? []).map((c: any) => (
+          <DetailSection key={c.queueId} title={`Campaign intelligence — ${c.campaignName}`}
+            tag="the AI's enrichment dossier for this person in this campaign: hooks, trigger events, pain signals and the written sequence">
+            <div className="flex items-center justify-between mb-2">
+              <Badge variant="outline" className="text-[10px] capitalize">{String(c.sequenceStatus ?? "").replace(/_/g, " ")}</Badge>
+              <Link href={`/are/campaigns/${c.campaignId}`} className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1">
+                Open campaign <ExternalLink className="size-3" />
+              </Link>
+            </div>
+            <IntelligenceDossier prospect={{ id: c.queueId }} />
+          </DetailSection>
+        ))}
 
         {/* Evidence panel */}
         <DetailSection title="Evidence — every source URL" tag="the public pages the discovery pipeline pulled this person's data from; open any to verify the claim">
