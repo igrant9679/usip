@@ -362,7 +362,9 @@ export default function Dashboards() {
     onError: (e) => toast.error(e.message),
   });
   const sendNow = trpc.dashboards.sendScheduleNow.useMutation({
-    onSuccess: () => { utils.dashboards.listSchedules.invalidate(); toast.success("Sent (stub)"); },
+    // Not a stub and hasn't been for a while — this really mails the
+    // distribution list through the workspace SMTP config.
+    onSuccess: () => { utils.dashboards.listSchedules.invalidate(); toast.success("Report emailed to the schedule's recipients"); },
     onError: (e) => toast.error(e.message),
   });
   const delSched = trpc.dashboards.deleteSchedule.useMutation({
