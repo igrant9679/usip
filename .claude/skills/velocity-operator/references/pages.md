@@ -103,7 +103,7 @@ Every email sitewide: campaign and sequence steps, CRM sends, inbox mail, propos
 Inbound replies that need a human: classified (willing to meet, question, referral, OOO, left company, not interested, unsubscribe, other) with sentiment, confidence and a suggested reply. Handle = reply, book, task, or dismiss; handling stops the sequence for that person. Social replies have their own list. Stats: total, unhandled, willing-to-meet, needs-classify.
 
 ### ★ Meetings — `/v2/meetings`
-Proposed (AI candidate times to confirm), invited, scheduled, completed, no-show, cancelled. Confirm AI proposals here; reminders send 1–24h before; a no-show creates a re-book task. Your booking link (`/b/your-slug`) is managed here: title, duration, window, **timezone (defaults to UTC — set it)**.
+Proposed (AI candidate times to confirm), invited, scheduled, completed, no-show, cancelled. Confirm AI proposals here; a proposal whose offered times all passed shows **Regenerate** (fresh future times + fresh invite, same row), "Regenerate expired" does the backlog in one click, and the autopilot sweeps stale proposals automatically each tick (all 2026-09-20). Reminders send 1–24h before; a no-show creates a re-book task. Your booking link (`/b/your-slug`) is managed here: title, duration, window, **timezone (defaults to UTC — set it)**.
 
 ### ★ Unified Inbox — `/unified-inbox`
 LinkedIn, WhatsApp and social DMs in one thread list, via the Unipile connection.

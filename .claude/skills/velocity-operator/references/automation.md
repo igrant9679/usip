@@ -11,7 +11,7 @@ Every autonomous feature has the same three-way dial (`workspace_settings.*Mode`
 |---|---|---|---|---|
 | Task Autopilot | `taskAutopilotMode` | off | `draft` tasks (next-best action per prospect, every 30 min) | open tasks |
 | Meeting Autopilot | `meetingAutopilotMode` | off | `proposed` meetings with candidate times (every 45 min) | sends the invite |
-| Conversation Autopilot | `conversationAutopilotMode` | off | classifies every reply + suggested reply (every 5 min) | acts per class: willing-to-meet gets your booking link; unsubscribe → suppression; referral → task |
+| Conversation Autopilot | `conversationAutopilotMode` | off | classifies every reply + suggested reply (every 5 min) | acts per class: willing-to-meet gets your booking link; unsubscribe → suppression; referral → the referred person is created in People + an intro draft lands in review (2026-09-20); wrong-person → contact flagged departed |
 | Deal Autopilot | `dealAutopilotMode` | off | next-step notes + win-prob on open deals (hourly) | also creates follow-up tasks |
 | Social Autopilot | `socialAutopilotMode` | off | draft invite tasks (hourly) | sends LinkedIn invites within caps, opener DM on accept |
 | Job-change Autopilot | `jobChangeAutopilotMode` | off | re-engagement tasks when enrichment detects a move (daily) | starts the re-engage sequence |
@@ -65,7 +65,7 @@ The Autonomy Center also lists **AI-suggested rules** derived from what it sees;
 
 ## The attention panel (`attention.summary`)
 The one "what needs me" aggregator; Home renders it and the AI Assistant's `whats_waiting` reads it. Fields:
-`totalNeedingYou`, `aiDrafts{count,items}`, `proposedMeetings{count,items}`, `unhandledReplies{count,items}`, `areApprovals{count,byCampaign}`, `draftTasks{count}`, `pausedCampaigns[]`, `sequenceDrafts{count}`, `socialReplies{count}`, `optimizationRecs{count}`, `chatFollowUps{count}`, `routingSuggestions{count,byCampaign}`, `campaignProposals{count}`, `digest24h{emailsSent,prospectsDiscovered,repliesReceived,meetingsBooked}`.
+`totalNeedingYou`, `aiDrafts{count,items}`, `proposedMeetings{count,items}`, `unhandledReplies{count,items}`, `areApprovals{count,byCampaign}`, `draftTasks{count}`, `pausedCampaigns[]`, `sequenceDrafts{count}`, `crmDrafts{count}` (2026-09-20 — manual CRM drafts awaiting review), `socialReplies{count}`, `optimizationRecs{count}`, `chatFollowUps{count}`, `routingSuggestions{count,byCampaign}`, `campaignProposals{count}`, `digest24h{emailsSent,prospectsDiscovered,repliesReceived,meetingsBooked}`. Draft cards use the Emails feed's classification (sequence > ai_draft > crm — by flags, not status strings), so every card's link lands on rows.
 Any new human queue in the product must join this aggregator or it will be missed.
 
 ## Budgets and caps

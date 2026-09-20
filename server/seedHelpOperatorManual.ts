@@ -143,7 +143,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 **Conversations** (/v2/conversations) — inbound replies that need a human, classified with sentiment and a suggested reply. Handling one stops the sequence for that person.
 
-**Meetings** (/v2/meetings) — proposed, invited, scheduled, completed, no-show. Confirm AI proposals here. Your **booking link** lives here: set its timezone (it defaults to UTC).
+**Meetings** (/v2/meetings) — proposed, invited, scheduled, completed, no-show. Confirm AI proposals here; a proposal whose offered times have all passed shows a **Regenerate** button (fresh future times, fresh invite — also swept automatically each autopilot tick, and "Regenerate expired" does the whole backlog). Your **booking link** lives here: set its timezone (it defaults to UTC).
 
 **Unified Inbox** (/unified-inbox) — LinkedIn, WhatsApp and social DMs. **Social** (/social) — LinkedIn invites, DMs and replies under the Social Autopilot and LinkedIn Limits.
 
@@ -541,9 +541,9 @@ Newest first. Read the class, the sentiment and the suggested reply, then act:
 |---|---|
 | Willing to meet | propose times or send the booking link (the Meeting Autopilot does this in Auto) |
 | Follow-up question | answer in your voice, log it |
-| Referral | create the referred person in People and a task to reach them |
+| Referral | automatic: the referred person is created in People, an intro email is drafted for your review (when the reply carried their address — otherwise enrichment hunts one first), and the task quotes their exact words |
 | Out of office | snooze until the return date |
-| Left company or wrong person | mark the contact departed; the job-change flow finds the new role |
+| Left company or wrong person | automatic: the contact is flagged departed (filterable, never deleted); the daily LinkedIn check surfaces their new role and feeds Job Change re-engagement |
 | Not interested | mark it, respect it |
 | Unsubscribe | goes on suppression (automatic in Auto) |
 

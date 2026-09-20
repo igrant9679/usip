@@ -137,12 +137,15 @@ function replyRelated(reply: any): { relatedType: string | null; relatedId: numb
   return { relatedType: null, relatedId: null };
 }
 
-async function createReplyTask(db: any, workspaceId: number, reply: any, title: string, priority: string, type = "follow_up") {
+async function createReplyTask(db: any, workspaceId: number, reply: any, title: string, priority: string, type = "follow_up", description?: string) {
   const rel = replyRelated(reply);
   await db.insert(tasks).values({
     workspaceId,
     title,
-    description: reply.subject ? `Re: ${reply.subject}` : null,
+    // The reply's OWN words when the caller passes them — a referral task
+    // whose description was just "Re: <subject>" forced the rep back into
+    // Conversations to find who was actually named (2026-09-20).
+    description: description ?? (reply.subject ? `Re: ${reply.subject}` : null),
     type,
     priority,
     status: "open",
@@ -214,14 +217,52 @@ export async function applyReplyAction(workspaceId: number, reply: any, byUser: 
       await createReplyTask(db, workspaceId, reply, `Answer ${name}'s question`, "high", "manual_email");
       action = "task_created";
       break;
-    case "person_referral":
-      await createReplyTask(db, workspaceId, reply, `Save referral from ${name}`, "normal", "crm_update");
-      action = "task_created";
+    case "person_referral": {
+      // Follow through (2026-09-20): create the referred person in People
+      // and draft the intro for review — what the Help Center always said
+      // happens. Best-effort: any failure degrades to the task alone.
+      let outcome = "";
+      try {
+        const { handleReferralReply } = await import("./referralHandler");
+        const r = await handleReferralReply(workspaceId, reply);
+        outcome = r.detail;
+        action = r.handled ? (r.draftId ? "referral_drafted" : "referral_person_created") : "task_created";
+      } catch (e) {
+        console.error(`[ReplyClassifier] referral handling failed for reply ${reply.id}:`, e);
+        action = "task_created";
+      }
+      const refSnippet = truncate(reply.bodyText || reply.bodyHtml, 240);
+      await createReplyTask(
+        db, workspaceId, reply,
+        action === "referral_drafted" ? `Referral from ${name} — review the intro draft` : `Referral from ${name}`,
+        "normal", "crm_update",
+        `${outcome ? `${outcome}.\n` : ""}They wrote: "${refSnippet}"`,
+      );
       break;
-    case "already_left_company_or_not_right_person":
-      await createReplyTask(db, workspaceId, reply, `Re-verify contact — ${name} may have left`, "normal", "crm_update");
-      action = "task_created";
+    }
+    case "already_left_company_or_not_right_person": {
+      // Flag departed (never delete) so views can filter; the linked
+      // person's LinkedIn daily check surfaces the new role, which feeds
+      // Job Change re-engagement (2026-09-20).
+      let wpOutcome = "";
+      try {
+        const { handleWrongPersonReply } = await import("./referralHandler");
+        const w = await handleWrongPersonReply(workspaceId, reply);
+        wpOutcome = w.detail;
+        if (w.handled) action = "contact_flagged_departed";
+      } catch (e) {
+        console.error(`[ReplyClassifier] wrong-person handling failed for reply ${reply.id}:`, e);
+      }
+      if (action !== "contact_flagged_departed") action = "task_created";
+      const wpSnippet = truncate(reply.bodyText || reply.bodyHtml, 240);
+      await createReplyTask(
+        db, workspaceId, reply,
+        `Re-verify contact — ${name} may have left`,
+        "normal", "crm_update",
+        `${wpOutcome ? `${wpOutcome}.\n` : ""}They wrote: "${wpSnippet}"`,
+      );
       break;
+    }
     case "not_interested":
       await createReplyTask(db, workspaceId, reply, `${name} not interested — review`, "low", "follow_up");
       action = "marked";

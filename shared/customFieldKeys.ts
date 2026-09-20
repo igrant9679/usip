@@ -30,6 +30,11 @@ export const RESERVED_CUSTOM_FIELD_KEYS: Record<string, string> = {
   location: "LinkedIn import",
   // routers/opportunityIntelligence.ts — a list of workspace user ids.
   coOwners: "Opportunity co-owners",
+  // services/referralHandler.ts — a wrong-person reply flags the contact
+  // departed (never deletes); views filter on it (2026-09-20).
+  departed: "Wrong-person reply handling (departed flag)",
+  departedNotedAt: "Wrong-person reply handling (departed flag)",
+  departedSource: "Wrong-person reply handling (departed flag)",
   // routers/imports.ts — CSV import provenance.
   importTag: "CSV import provenance",
   importSource: "CSV import provenance",
