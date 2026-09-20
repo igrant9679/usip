@@ -146,7 +146,7 @@ Call queue and log with outcomes and durations; AI voice agents (inbound call-ba
 Won accounts: tier, health tier (healthy / watch / at risk / critical), ARR, notes, expansion. Churn-risk notifications come from here.
 
 ### Renewals — `/renewals` · QBRs — `/qbrs`
-Renewal stages (early → 90 → 60 → 30 → at risk → renewed/churned) with contract end dates; QBR prep drafted by AI, history per customer.
+Renewal stages (early → 90 → 60 → 30 → past due → renewed/churned) derived from each customer's contract end date; "past due" is the enum's `at_risk` and means the date has passed with no outcome recorded, not that the customer looks unhealthy. Only a contract amendment records renewed or churned. QBR prep drafted by AI, history per customer.
 
 ---
 
@@ -178,7 +178,7 @@ Freeform planning canvases and account maps.
 ## Configuration
 
 ### Settings hub — `/v2/settings/profile`
-Personal: Profile, Appearance (theme + personal signature), Mailboxes, Phone numbers, Notifications, Social accounts, Multi-factor authentication, Email settings. Workspace: Overview, Users and teams, Security, Notification policy, Integrations (provider grid + AI keys + verification policy + messaging/system sender), Voice agents, Data sources, Email delivery (SMTP + From-name/signature), Branding, Proposals, Billing and credits (AI monthly token budget, verification credits), System activity, Tour builder, Danger zone (remove sample data, export, archive, transfer ownership). Data management: Custom fields, Imports and exports, Data enrichment, Enrichment sweep. The legacy `/settings` page collapsed into the hub 2026-09-15 — the route is a redirect shim (`?tab=X` maps to the matching section), so old deep links keep working.
+Personal: Profile, Appearance (theme + personal signature), Mailboxes, Phone numbers, Notifications, Social accounts, Multi-factor authentication, Email settings. Workspace: Overview, Users and teams, Security, Notification policy, Integrations (provider grid + AI keys + verification policy + messaging/system sender), Voice agents, Data sources, Email delivery (SMTP + From-name/signature), Branding, Proposals, Billing and credits (AI monthly token budget, verification credits — permission-sensitive: hidden from a member whose `access_billing` override is off), System activity, Tour builder, Danger zone (remove sample data, export, archive, transfer ownership). Data management: Custom fields, Imports and exports, Data enrichment, Enrichment sweep. The legacy `/settings` page collapsed into the hub 2026-09-15 — the route is a redirect shim (`?tab=X` maps to the matching section), so old deep links keep working.
 
 ### Email Sending cluster
 - **Email Sending / Sending Accounts** — `/sending-accounts`: mailboxes (Gmail/Outlook/SMTP) and SendGrid senders, from name (**set a display name on every sender**, it is the From header and the `{{senderName}}` signature), daily limits, warmup, reply-to, test send.
@@ -191,6 +191,9 @@ OAuth links: mailboxes, Microsoft 365 (calendar, OneDrive, OneNote), LinkedIn vi
 
 ### LinkedIn Limits — `/settings/linkedin-limits`
 Per-account invite/message caps, pacing, working hours.
+
+### Pipelines — `/settings/pipelines`
+Multiple named pipelines per workspace, each with its own stages (key, label, order, default win probability) and one marked default. Every stage carries a **Won** and a **Lost** tickbox, and those flags — not the stage key — are what the whole product reads: closed-won revenue, win rate, the open forecast, the Closed Won → Customer step, the closed-lost win-back task, the `is_won`/`is_lost`/`is_open` report filters. Renaming `won` to `signed` is safe as long as the tickbox travels with it. Deleting a stage leaves its opportunities holding the old key, and an unrecognised key counts as OPEN. New pipelines can clone an existing one's stages.
 
 ### Lead Scoring — `/lead-scoring` · Lead Routing — `/lead-routing`
 Fit and engagement models with grade thresholds (install defaults, set primary, **Recalculate** after enrichment waves); assignment rules for new leads (round-robin, territory, owner rules).

@@ -729,6 +729,22 @@ async function startServer() {
   };
   scheduleLinkedInDailyCheck();
 
+  // Renewal stages: the stored customers.renewalStage never moved — a contract
+  // ending in nine days stayed in the column wonToCustomer stamped on the day
+  // the deal was won. Every READER now derives the stage from contractEnd, so
+  // this sweep only makes the persisted column agree with what the UI already
+  // shows (exports, direct queries, future reports). Outcomes a human recorded
+  // — renewed, churned — are never touched.
+  const runRenewalStages = guardOverlap("RenewalStages", () =>
+    import("../services/renewalStageEngine")
+      .then((m) => m.runRenewalStageSweepAllWorkspaces())
+      .then((r) => {
+        if (r.moved > 0) console.log(`[RenewalStages] scanned=${r.scanned} moved=${r.moved}`);
+      }),
+  );
+  setTimeout(runRenewalStages, 27 * 60 * 1000); // stagger: 27 minutes after boot
+  setInterval(runRenewalStages, 6 * 60 * 60 * 1000); // every 6h; bounded per run
+
   // Inbound reply poller: check IMAP/Gmail inboxes every 60s for new replies
   startInboundReplyPoller();
 }

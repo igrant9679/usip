@@ -106,6 +106,17 @@ export default function DealsV2() {
   const alerts = trpc.pipelineAlerts.list.useQuery(undefined as any, { retry: false });
   const commentary = trpc.forecastAi.getCommentary.useQuery(undefined as any, { retry: false });
 
+  // The workspace's configured stage rows, FLAGS INCLUDED, with the legacy six
+  // as the loading fallback. Every "did this deal close?" question on this page
+  // reads these rather than the key: a pipeline whose closing stage is keyed
+  // `signed` got no confetti, and its won deals counted as open pipeline.
+  const stageRows: Stage[] = useMemo(() => {
+    const raw: any = pipe.data;
+    const list: Stage[] = raw?.stages ?? raw?.pipeline?.stages ?? [];
+    return Array.isArray(list) && list.length > 0 ? list : LEGACY_STAGES;
+  }, [pipe.data]);
+  const stageMeta = (key: string | null | undefined): Stage | undefined => stageRows.find((s) => s.key === key);
+
   const setMode = trpc.deals.setAutopilotSettings.useMutation({
     onSuccess: () => { utils.deals.getAutopilotSettings.invalidate(); toast.success("Autopilot updated"); },
     onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Autopilot")),
@@ -118,7 +129,7 @@ export default function DealsV2() {
   const setStage = trpc.opportunities.setStage.useMutation({
     onSuccess: (_d, vars) => {
       utils.opportunities.board.invalidate();
-      if (vars.stage === "won") {
+      if (stageMeta(vars.stage)?.isWon) {
         setCelebrate(Date.now());
         toast.success("Deal won! 🎉");
         setTimeout(() => setCelebrate(0), 1800);
@@ -133,16 +144,13 @@ export default function DealsV2() {
   // Stage columns: prefer the workspace pipeline's stages; fall back to legacy;
   // then append any stage present in the data that isn't already a column.
   const stages: Stage[] = useMemo(() => {
-    const raw: any = pipe.data;
-    let list: Stage[] = raw?.stages ?? raw?.pipeline?.stages ?? [];
-    if (!Array.isArray(list) || list.length === 0) list = LEGACY_STAGES;
-    list = [...list].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    const list: Stage[] = [...stageRows].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
     const known = new Set(list.map((s) => s.key));
     for (const o of opps) {
       if (o.stage && !known.has(o.stage)) { list.push({ key: o.stage, label: o.stage }); known.add(o.stage); }
     }
     return list;
-  }, [pipe.data, opps]);
+  }, [stageRows, opps]);
 
   const byStage = useMemo(() => {
     const m: Record<string, Opp[]> = {};
@@ -150,10 +158,10 @@ export default function DealsV2() {
     return m;
   }, [opps]);
 
-  const openOpps = opps.filter((o) => o.stage !== "won" && o.stage !== "lost");
+  const openOpps = opps.filter((o) => { const m = stageMeta(o.stage); return !m?.isWon && !m?.isLost; });
   const totalValue = openOpps.reduce((s, o) => s + Number(o.value ?? 0), 0);
   const weighted = openOpps.reduce((s, o) => s + Number(o.value ?? 0) * (Number(o.winProb ?? 0) / 100), 0);
-  const wonCount = opps.filter((o) => o.stage === "won").length;
+  const wonCount = opps.filter((o) => stageMeta(o.stage)?.isWon).length;
   const activeAlerts = (alerts.data as any[])?.filter?.((a) => !a.dismissedAt) ?? (alerts.data as any[]) ?? [];
 
   const StatCard = ({ label, value, tone }: { label: string; value: string | number; tone?: "good" | "warn" }) => {

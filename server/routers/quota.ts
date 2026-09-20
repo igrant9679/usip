@@ -3,10 +3,11 @@
  * Procedures: get, set, progress (actual vs target for a period)
  */
 import { TRPCError } from "@trpc/server";
-import { and, eq, gte, lte, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { activities, opportunities, quotaTargets, workspaceMembers } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { wonStageKeys } from "../_core/stageSemantics";
 import { router } from "../_core/trpc";
 import { managerProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
 
@@ -154,7 +155,7 @@ export const quotaRouter = router({
           and(
             eq(opportunities.workspaceId, ctx.workspace.id),
             eq(opportunities.ownerUserId, targetUserId),
-            eq(opportunities.stage, "won"),
+            inArray(opportunities.stage, await wonStageKeys(db, ctx.workspace.id)),
             gte(opportunities.updatedAt, startDate),
             lte(opportunities.updatedAt, endDate),
           ),

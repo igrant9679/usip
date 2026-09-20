@@ -34,7 +34,7 @@ Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable proces
 
 ### Customer success — 15 min
 1. Customers: anyone `at_risk` or `critical` gets a touch today.
-2. Renewals: anything at `thirty` or `at_risk` has an owner and a dated plan.
+2. Renewals: anything at `thirty` or `at_risk` (past due) has an owner and a dated plan. Those columns fill themselves off `contractEnd`, so a card in the wrong one means the date is wrong — fix the date or record an amendment.
 3. QBRs due this month: review the AI prep draft, schedule the meeting.
 
 ### Admin — 5 min
@@ -76,7 +76,7 @@ Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable proces
 6. **Deliverability month-end**: domain health, warmup graduations, suppression list growth, unsubscribes by campaign; retire any sender with rising bounces.
 7. **Brand voice and personas**: re-read; update avoid-words from what replies complained about; add personas for new segments that converted.
 8. **Prompt templates and campaign prompts**: fold the month's learnings (do-not lines) into the prompts; regenerate unsent steps if the change is material.
-9. **Customer success**: health tiers reviewed; renewals 90 days out have plans; QBRs scheduled for next month.
+9. **Customer success**: health tiers reviewed; every card in the `ninety` column or nearer has a plan; anything `at_risk` (past due) either renews or gets recorded as churned via an amendment; QBRs scheduled for next month.
 10. **Data hygiene**: duplicates in Data Health; company brand pins/merges; departed contacts (job-change signals) re-routed.
 11. **Team and access**: roles right-sized; departed members deactivated and reassigned (Offboarding); MFA on for admins.
 12. **Backup/export** (Danger zone → Export) if compliance wants an offline copy; audit-log skim for the month.

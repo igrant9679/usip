@@ -26,6 +26,8 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { inArray } from "drizzle-orm";
 import { getDb } from "../db";
+import { stageIndexFor } from "../_core/stageSemantics";
+import { buildStageIndex } from "@shared/stageSemantics";
 import { aiAssistantProposals, aiHelpConversations, aiHelpMessages, helpArticles, prospects } from "../../drizzle/schema";
 import { invokeLLM, type Message } from "../_core/llm";
 import { recordAudit } from "../audit";
@@ -175,7 +177,12 @@ async function runReadTool(
     }
     case "deals_pipeline": {
       const board = (await caller.opportunities.board()) as Array<Record<string, unknown>>;
-      const open = board.filter((o) => !/closed/i.test(String(o.stage ?? "")));
+      // 2026-09-20: this filtered on /closed/i, which matches NEITHER "won" nor
+      // "lost" — so every won and lost deal was reported to the model as OPEN,
+      // in openDeals, openValue, topOpen and the sentence the assistant speaks.
+      const db = await getDb();
+      const stages = db ? await stageIndexFor(db, ctx.workspace.id) : buildStageIndex([]);
+      const open = board.filter((o) => stages.isOpen(String(o.stage ?? "")));
       const byStage = new Map<string, { count: number; value: number }>();
       for (const o of board) {
         const s = String(o.stage ?? "unknown");

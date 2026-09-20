@@ -17,8 +17,9 @@ Find Prospects / Import / Campaign discovery      ← names enter here
    ACCOUNT + CONTACT + OPPORTUNITY                ← durable company + person + the deal
           |  pipeline stages
           v
-   CLOSED WON  → account becomes a CUSTOMER (health, renewals, QBRs)
-   CLOSED LOST → account + contact kept; a later deal is a NEW opportunity
+   A STAGE FLAGGED WON  → account becomes a CUSTOMER (health, renewals, QBRs)
+   A STAGE FLAGGED LOST → account + contact kept, win-back task in 90 days;
+                          a later deal is a NEW opportunity
 ```
 
 The idea that makes the CRM click: **separate the who from the deal.** Accounts and Contacts persist across many deals. The Opportunity is the only thing that travels the pipeline and closes.
@@ -39,13 +40,18 @@ Companies mirror this: `accounts` (CRM company; page Companies) hold `contacts`;
 ### Lead `status`
 `new` → `working` → `qualified` | `unqualified` → `converted` (conversion creates Account + Contact + Opportunity in one step and marks the lead converted).
 
-### Opportunity `stage` (free text, seeded values)
-`discovery` → `qualified` → `proposal` → `negotiation` → `won` | `lost`. Won turns the account into a Customer. Each opportunity carries `value`, `winProb`, `closeDate`, `daysInStage`, an AI next-step note, and a stage history table.
+### Pipelines and stages (`crm_pipelines`, `crm_pipeline_stages`)
+A workspace has one or more named pipelines, exactly one flagged `isDefault`. Each pipeline owns an ordered list of stages: `key` (what `opportunities.stage` stores), `label`, `sortOrder`, `defaultWinProb`, and two booleans — **`isWon`** and **`isLost`**. Editable at any time at `/settings/pipelines`; a new pipeline can clone another's stages.
+
+🔴 `isWon` / `isLost` — NOT the key — decide the revenue math. Closed-won totals, win rate, the open forecast, the Closed Won → Customer step, the closed-lost win-back task and the `is_won`/`is_lost`/`is_open` report filters all read the flags. A workspace can rename `won` to `signed` and everything keeps working. A key nothing configures falls back to name defaults (`won`/`closed_won` = won, `lost`/`closed_lost` = lost, `closed` = closed but neither), and an unrecognised key counts as OPEN — which is what a deleted stage leaves behind.
+
+### Opportunity `stage` (free text)
+Whatever key the deal's pipeline defines. The SEEDED DEFAULT pipeline uses `discovery` → `qualified` → `proposal` → `negotiation` → `won` | `lost`; those six values are a default, not the vocabulary. `opportunities.pipelineId` is nullable and nothing backfills it, so a deal with no pipeline resolves its stage flags against the workspace's default pipeline. Each opportunity carries `value`, `winProb`, `closeDate`, `daysInStage`, an AI next-step note, and a stage history table.
 
 ### Customer
 - `tier`: `enterprise` | `midmarket` | `smb`
 - `healthTier`: `healthy` | `watch` | `at_risk` | `critical`
-- `renewalStage`: `early` → `ninety` → `sixty` → `thirty` → `at_risk` | `renewed` | `churned`
+- `renewalStage`: `early` → `ninety` → `sixty` → `thirty` → `at_risk` | `renewed` | `churned`. DERIVED from `contractEnd` (`@shared/renewalStage`), not set by hand: `d > 90` early, `60 < d <= 90` ninety, `30 < d <= 60` sixty, `0 < d <= 30` thirty, `d <= 0` at_risk. `at_risk` here means PAST DUE — the contract end date has gone by with no outcome recorded — and is unrelated to `healthTier`, which has its own `at_risk` value. `renewed` and `churned` are human outcomes written only by `cs.addAmendment` (type `renewal` rolls the dates forward by the customer's existing term; type `termination` churns them); nothing derived ever overwrites those two. Every `cs.*` read applies the derivation, and `services/renewalStageEngine.ts` sweeps the stored column into line every 6h.
 
 ### Task
 - `type`: `call`, `email`, `meeting`, `linkedin`, `todo`, `follow_up`, `social_touch`, `manual_email`, `meeting_prep`, `crm_update`, `generic_action`
@@ -98,6 +104,20 @@ Companies mirror this: `accounts` (CRM company; page Companies) hold `contacts`;
 ### Roles (`workspace_members.role`)
 `super_admin` (everything, including workspace create/transfer/archive and demo seeding) > `admin` (settings, autonomy dials, team, sending) > `manager` (team views, approvals) > `rep` (own records and queues). Autonomy setters are admin-only; reps see the dial but cannot move it.
 
+### Per-member permissions (`member_permissions`)
+One row per `(workspaceId, userId, feature)` with a `granted` boolean; set on the Team page's Permissions tab, resolved by `checkPermission` / `hasPermission` / `resolvePermissionMap` in `server/db.ts`. A row wins over the role default **in both directions** — it can refuse an admin. The six keys live in `shared/permissions.ts`:
+
+| Key | Default for manager/rep | Enforced at |
+|---|---|---|
+| `export_data` | denied | `dangerZone.exportData`, `reports.exportCsv` |
+| `manage_api_keys` | denied | aiCredentials, apollo, prospectSources, quickenrich, reoon |
+| `manage_sequences` | granted | sequences create/update/delete/fork/updateMeta/updateSteps/saveCanvas, and setStatus for every transition except `paused` |
+| `manage_integrations` | granted | integrations save/disconnect/test |
+| `access_billing` | granted | `usage.currentMonth` (Settings → Billing and credits) |
+| `view_all_leads` | granted | **nothing** — lead scoping is separate, unshipped work |
+
+Admins and super admins are granted everything by default. `team.delete` clears a departed member's rows; `team.deactivate` deliberately keeps them.
+
 ## Workspaces
 Everything is scoped by `workspaceId`. A user can belong to several workspaces; the workspace switcher is in the top bar. `workspace_settings` holds the autonomy dials, caps, budgets, routing mode and campaign-copy defaults. Archived workspaces are excluded from every cron.
 
@@ -105,7 +125,7 @@ Everything is scoped by `workspaceId`. A user can belong to several workspaces; 
 - **Lists** (`record_lists` + members): hand-picked named sets of people or companies. Static. Used for targeting, the Add existing wizard's "From a list" step, and bulk actions.
 - **Segments** (`audience_segments`): saved rule-based filters that stay current; feed Broadcasts and Segment Rules (auto-enroll into a sequence).
 - **Personas**: buyer archetypes (titles, industries, sizes, keywords) grouped in categories; the writer and fit scoring read them.
-- **ICP profile** (`icp_profiles`, versioned): the living ideal-customer profile; regenerated daily by the ICP cron from won deals and engagement; drives discovery targeting and the campaign screen floor.
+- **ICP profile** (`icp_profiles`, versioned): the living ideal-customer profile; regenerated daily by the ICP cron from deals in stages flagged Won (and, for the negative signal, stages flagged Lost) plus engagement; drives discovery targeting and the campaign screen floor.
 - **Brand voice** (one row per workspace): tone, vocabulary, avoid-words, from-name; every AI-written email and chat reply reads it.
 - **Score models** (`score_models` + `score_results`): fit scoring for people and companies; one primary per object type; ratings `excellent` | `good` | `fair` | `not_a_fit`.
 

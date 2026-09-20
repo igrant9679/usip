@@ -1,13 +1,14 @@
 import { fmt$, fmtDate, StatusPill } from "@/components/usip/Common";
 import { PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { RENEWAL_STAGES, RENEWAL_STAGE_LABELS, type RenewalStage } from "@shared/renewalStage";
 import { RefreshCw, Sparkles, AlertTriangle } from "lucide-react";
 import { useMemo } from "react";
 import { toast } from "sonner";
 
 /**
- * Column ids MUST match the customers.renewalStage enum in drizzle/schema.ts:
- *   early | ninety | sixty | thirty | at_risk | renewed | churned
+ * Column ids and their ORDER come from the customers.renewalStage enum, via
+ * @shared/renewalStage — schema order IS the ladder.
  *
  * The first column used to be `"secure"`, which is not a value the enum can
  * ever hold. The real first value, `"early"`, is the column DEFAULT and is set
@@ -15,16 +16,26 @@ import { toast } from "sonner";
  * undefined and `?.push()` silently dropped every new customer — they appeared
  * in no column at all, while "Secure" sat permanently empty. Reps were
  * systematically undercounting their book.
+ *
+ * 2026-09-20: the hand-written list that replaced it then rendered early / 30 /
+ * 60 / 90, so a card advancing through its contract travelled right, then left,
+ * then left again. Reading RENEWAL_STAGES makes that reorder impossible to
+ * re-introduce. cs.renewalsBoard now DERIVES the stage from contractEnd, so
+ * "Past due" (the enum's `at_risk`) means the end date has passed with no
+ * outcome recorded — not that the customer looks unhealthy, which is the
+ * separate health pill on every card.
  */
-const STAGES = [
-  { id: "early", label: "Early", tone: "success" as const },
-  { id: "thirty", label: "30 days", tone: "info" as const },
-  { id: "sixty", label: "60 days", tone: "info" as const },
-  { id: "ninety", label: "90 days", tone: "warning" as const },
-  { id: "at_risk", label: "At risk", tone: "danger" as const },
-  { id: "renewed", label: "Renewed", tone: "muted" as const },
-  { id: "churned", label: "Churned", tone: "muted" as const },
-];
+const TONE: Record<RenewalStage, "success" | "info" | "warning" | "danger" | "muted"> = {
+  early: "success",
+  ninety: "warning",
+  sixty: "info",
+  thirty: "info",
+  at_risk: "danger",
+  renewed: "muted",
+  churned: "muted",
+};
+
+const STAGES = RENEWAL_STAGES.map((id) => ({ id, label: RENEWAL_STAGE_LABELS[id], tone: TONE[id] }));
 
 export default function Renewals() {
   const utils = trpc.useUtils();

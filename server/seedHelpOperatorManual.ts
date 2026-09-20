@@ -208,9 +208,9 @@ One human can be in several campaigns; each membership is its own row pointing b
 
 **Lead**: new → working → qualified or unqualified → converted.
 
-**Opportunity stage**: discovery → qualified → proposal → negotiation → won or lost. Each deal has value, win probability, close date, days in stage and an AI next step.
+**Opportunity stage**: free text, defined per pipeline under Settings → Pipelines. The seeded default pipeline uses discovery → qualified → proposal → negotiation → won → lost, but any stage can be renamed or replaced. What decides revenue, losses and open forecast is the **Won** / **Lost** tickbox on the stage, not its name. Each deal has value, win probability, close date, days in stage and an AI next step.
 
-**Customer**: tier enterprise / midmarket / smb; health healthy / watch / at risk / critical; renewal stage early → 90 days → 60 → 30 → at risk → renewed or churned.
+**Customer**: tier enterprise / midmarket / smb; health healthy / watch / at risk / critical; renewal stage early → 90 days → 60 → 30 → past due → renewed or churned. The stage is **derived from the contract end date**, not set by hand: more than 90 days out is Early, then the 90 / 60 / 30 day buckets, and **past due** (stored as at_risk) means the end date has passed with no outcome recorded — it is a statement about the DATE, not about the health score beside it. **Renewed** and **churned** are outcomes, and the only thing that records one is a contract amendment (Customers → a customer → Add amendment, type renewal or termination); nothing derived ever overwrites them.
 
 **Task**: open, in progress, snoozed, done, cancelled, and **draft** (AI-proposed, awaiting approval). Types include call, email, meeting, LinkedIn, follow-up, meeting prep, CRM update.
 
@@ -409,7 +409,7 @@ If the panel is empty, you are done with this block.
 ## Customer success (about 15 minutes)
 
 1. Customers at risk or critical get a touch today.
-2. Renewals at 30 days or at risk have an owner and a dated plan.
+2. Renewals in the 30 days or past due columns have an owner and a dated plan. Those columns fill themselves off the contract end date, so a card sitting in the wrong one means the date is wrong — fix the date or record an amendment.
 3. QBRs due this month: review the AI prep draft and schedule the meeting.
 
 ## Admin (about 5 minutes)
@@ -467,7 +467,7 @@ Close the week when: performance read, losers retired, pipeline honest, leads ro
 6. **Deliverability month-end**: domain health, warmup graduations, suppression growth, unsubscribes by campaign; retire any sender with rising bounces.
 7. **Brand voice and personas**: update avoid-words from what replies complained about; add personas for segments that converted.
 8. **Prompts**: fold the month's lessons into the campaign sequence prompts as do-not lines; regenerate unsent steps if the change is material.
-9. **Customer success**: health tiers reviewed; renewals 90 days out have plans; next month's QBRs scheduled.
+9. **Customer success**: health tiers reviewed; every card in the 90 days column or nearer has a plan; anything in past due either renews or is recorded as churned; next month's QBRs scheduled.
 10. **Data hygiene**: duplicates in Data Health; company brand pins and merges; departed contacts re-routed.
 11. **Team and access**: roles right-sized; departed members deactivated and reassigned; MFA on for admins.
 12. **Backup**: Danger zone → Export if compliance wants an offline copy; skim the month's Audit Log.

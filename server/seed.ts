@@ -277,7 +277,18 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
     const score = computeHealth({ productUsage: usage, engagement: eng, supportHealth: supp, npsScore: nps });
     const tier = score >= 75 ? "healthy" : score >= 55 ? "watch" : score >= 35 ? "at_risk" : "critical";
     const daysToRenewal = Math.round((end.getTime() - Date.now()) / 86400000);
-    const renewalStage = daysToRenewal < 0 ? "renewed" : daysToRenewal <= 30 ? "thirty" : daysToRenewal <= 60 ? "sixty" : daysToRenewal <= 90 ? "ninety" : "early";
+    // The four time buckets agree with @shared/renewalStage at every boundary,
+    // so seeded rows do not jump when the derivation runs over them.
+    //
+    // The past-due branch deliberately does NOT: contract dates here run from
+    // -235d to +305d, so ~43% of seeded customers are already past their end
+    // date, and mapping all of them to "renewed" left the Churned column
+    // permanently empty in every demo tenant (2026-09-20). Both are terminal —
+    // renewalStageFor never moves them — so this is the only place demo data
+    // can populate an outcome, and it has to populate both.
+    const renewalStage = daysToRenewal < 0
+      ? (Math.random() < 0.75 ? "renewed" : "churned")
+      : daysToRenewal <= 30 ? "thirty" : daysToRenewal <= 60 ? "sixty" : daysToRenewal <= 90 ? "ninety" : "early";
 
     const r = await db.insert(customers).values({
       workspaceId,

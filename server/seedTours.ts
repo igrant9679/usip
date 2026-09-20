@@ -99,7 +99,7 @@ const DEMO_TOURS: TourSeed[] = [
     steps: [
       {
         title: "The Renewals Board",
-        bodyMarkdown: "The **Renewals** board shows all customers with upcoming contract renewals, organised by renewal stage. Each card shows ARR, health score, and days until renewal.",
+        bodyMarkdown: "The **Renewals** board shows all customers with upcoming contract renewals, organised by renewal stage. The stage comes from the contract end date — Early, then 90 / 60 / 30 days, then **Past due** once the date has passed with no outcome recorded. Each card shows ARR, health score, and the renewal date.",
         targetDataTourId: "renewals-board",
         routeTo: "/renewals",
         visualTreatment: "coach",

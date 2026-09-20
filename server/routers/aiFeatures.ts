@@ -20,6 +20,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { z } from "zod";
+import { daysUntilContractEnd, renewalStageFor } from "@shared/renewalStage";
 import { LIVE_TRIGGER_IDS } from "@shared/workflowTriggers";
 import {
   accounts,
@@ -39,6 +40,7 @@ import {
   aiPipelineJobs,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { wonStageKeys } from "../_core/stageSemantics";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
@@ -77,10 +79,12 @@ export const csAiRouter = router({
 
       const [acct] = await db.select().from(accounts).where(eq(accounts.id, cust.accountId));
 
-      // Build renewal context
-      const daysToRenewal = cust.contractEnd
-        ? Math.round((cust.contractEnd.getTime() - Date.now()) / 86400000)
-        : null;
+      // Build renewal context. The day count and the stage come from the SAME
+      // helper (2026-09-20) — the stored renewalStage column never moved, so
+      // this prompt used to read "Renewal stage: early / Days to renewal: 10"
+      // and the model had to pick which half to believe.
+      const daysToRenewal = daysUntilContractEnd(cust.contractEnd);
+      const renewalStage = renewalStageFor({ current: cust.renewalStage, contractEnd: cust.contractEnd });
 
       const prompt = `You are a customer success AI. Assess churn risk for this customer and return JSON only.
 
@@ -91,7 +95,7 @@ Usage score: ${cust.usageScore}/100
 Engagement score: ${cust.engagementScore}/100
 Support score: ${cust.supportScore}/100
 NPS score: ${cust.npsScore} (-100 to +100)
-Renewal stage: ${cust.renewalStage}
+Renewal stage: ${renewalStage}
 Days to renewal: ${daysToRenewal !== null ? daysToRenewal : "unknown"}
 Tier: ${cust.tier}
 
@@ -145,11 +149,10 @@ churnRiskScore: 0=no risk, 100=certain churn. Be calibrated — a healthy custom
     for (const cust of toScore) {
       try {
         const [acct] = await db.select().from(accounts).where(eq(accounts.id, cust.accountId));
-        const daysToRenewal = cust.contractEnd
-          ? Math.round((cust.contractEnd.getTime() - Date.now()) / 86400000)
-          : null;
+        const daysToRenewal = daysUntilContractEnd(cust.contractEnd);
+        const renewalStage = renewalStageFor({ current: cust.renewalStage, contractEnd: cust.contractEnd });
         const prompt = `Customer success AI. Churn risk JSON only.
-Customer: ${acct?.name ?? "Unknown"}, ARR $${Number(cust.arr ?? 0).toLocaleString()}, health ${cust.healthScore}/100 (${cust.healthTier}), NPS ${cust.npsScore}, renewal stage ${cust.renewalStage}, days to renewal ${daysToRenewal ?? "unknown"}.
+Customer: ${acct?.name ?? "Unknown"}, ARR $${Number(cust.arr ?? 0).toLocaleString()}, health ${cust.healthScore}/100 (${cust.healthTier}), NPS ${cust.npsScore}, renewal stage ${renewalStage}, days to renewal ${daysToRenewal ?? "unknown"}.
 Return: { "churnRiskScore": <0-100>, "rationale": "<one sentence>" }`;
         const res = await invokeLLM({ messages: [{ role: "user", content: prompt }], response_format: { type: "json_object" }, max_tokens: 100 });
         const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
@@ -327,7 +330,7 @@ export const quotesAiRouter = router({
       const wonDeals = await db
         .select({ value: opportunities.value, winProb: opportunities.winProb })
         .from(opportunities)
-        .where(and(eq(opportunities.workspaceId, ctx.workspace.id), eq(opportunities.stage, "won")))
+        .where(and(eq(opportunities.workspaceId, ctx.workspace.id), inArray(opportunities.stage, await wonStageKeys(db, ctx.workspace.id))))
         .orderBy(desc(opportunities.updatedAt))
         .limit(20);
 

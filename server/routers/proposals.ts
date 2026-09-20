@@ -29,6 +29,8 @@ import { getDb } from "../db";
 import { appUrl } from "../appUrl";
 import { invokeLLM } from "../_core/llm";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
+import { canonicalWonStageKey } from "../_core/stageSemantics";
+import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
 import { publicProcedure, router } from "../_core/trpc";
 import {
   managerProcedure,
@@ -772,18 +774,37 @@ export const proposalsRouter = router({
       if (proposal.accountId) {
         const oppValue = proposal.budget ? String(proposal.budget) : "0";
         if (opportunityId) {
-          // Update existing opportunity to "won" stage
+          const [existingOpp] = await db
+            .select({ accountId: opportunities.accountId, ownerUserId: opportunities.ownerUserId, pipelineId: opportunities.pipelineId })
+            .from(opportunities)
+            .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+          // Update existing opportunity to the workspace's OWN won stage. The
+          // literal "won" parked the deal in a key a custom pipeline has no
+          // column for, so an accepted proposal fell off its own kanban.
+          const wonStage = await canonicalWonStageKey(db, ctx.workspace.id, existingOpp?.pipelineId ?? null);
           await db
             .update(opportunities)
-            .set({ stage: "won", winProb: 100, value: oppValue, updatedAt: new Date() })
-            .where(eq(opportunities.id, opportunityId));
+            .set({ stage: wonStage, winProb: 100, value: oppValue, updatedAt: new Date() })
+            .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+          // Closed Won → Customer, the same downstream step every other won
+          // path runs. Neither accept path called it until 2026-09-20, so a
+          // proposal-accepted deal was Closed Won with no customer record and
+          // no renewal ever scheduled. Idempotent, and non-fatal.
+          if (existingOpp) {
+            try {
+              await ensureCustomerForWonOpp(db, ctx.workspace.id, { accountId: existingOpp.accountId, value: oppValue, ownerUserId: existingOpp.ownerUserId }, ctx.user.id);
+            } catch (e) {
+              console.warn("[proposals.acceptProposal] closed-won customer creation failed:", e);
+            }
+          }
         } else {
-          // Create a new opportunity in "won" stage
+          // Create a new opportunity already in the won stage
+          const wonStage = await canonicalWonStageKey(db, ctx.workspace.id, null);
           const oppResult = await db.insert(opportunities).values({
             workspaceId: ctx.workspace.id,
             accountId: proposal.accountId,
             name: proposal.title,
-            stage: "won",
+            stage: wonStage,
             value: oppValue,
             winProb: 100,
             ownerUserId: ctx.user.id,
@@ -797,6 +818,11 @@ export const proposalsRouter = router({
               .update(proposals)
               .set({ linkedOpportunityId: opportunityId })
               .where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
+          }
+          try {
+            await ensureCustomerForWonOpp(db, ctx.workspace.id, { accountId: proposal.accountId, value: oppValue, ownerUserId: ctx.user.id }, ctx.user.id);
+          } catch (e) {
+            console.warn("[proposals.acceptProposal] closed-won customer creation failed:", e);
           }
         }
       }
@@ -985,16 +1011,29 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       if (proposal.accountId) {
         const oppValue = proposal.budget ? String(proposal.budget) : "0";
         if (opportunityId) {
+          const [existingOpp] = await db
+            .select({ accountId: opportunities.accountId, ownerUserId: opportunities.ownerUserId, pipelineId: opportunities.pipelineId })
+            .from(opportunities)
+            .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, proposal.workspaceId)));
+          const wonStage = await canonicalWonStageKey(db, proposal.workspaceId, existingOpp?.pipelineId ?? null);
           await db
             .update(opportunities)
-            .set({ stage: "won", winProb: 100, value: oppValue, updatedAt: new Date() })
-            .where(eq(opportunities.id, opportunityId));
+            .set({ stage: wonStage, winProb: 100, value: oppValue, updatedAt: new Date() })
+            .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, proposal.workspaceId)));
+          if (existingOpp && ownerUserId) {
+            try {
+              await ensureCustomerForWonOpp(db, proposal.workspaceId, { accountId: existingOpp.accountId, value: oppValue, ownerUserId: existingOpp.ownerUserId }, ownerUserId);
+            } catch (e) {
+              console.warn("[proposals.acceptByToken] closed-won customer creation failed:", e);
+            }
+          }
         } else {
+          const wonStage = await canonicalWonStageKey(db, proposal.workspaceId, null);
           const oppResult = await db.insert(opportunities).values({
             workspaceId: proposal.workspaceId,
             accountId: proposal.accountId,
             name: proposal.title,
-            stage: "won",
+            stage: wonStage,
             value: oppValue,
             winProb: 100,
             ownerUserId: ownerUserId ?? undefined,
@@ -1007,6 +1046,16 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
               .update(proposals)
               .set({ linkedOpportunityId: opportunityId })
               .where(eq(proposals.id, proposal.id));
+          }
+          // cmUserId falls back to the caller, and this path has no session —
+          // so the customer is only created when the workspace still has an
+          // active member to own it.
+          if (ownerUserId) {
+            try {
+              await ensureCustomerForWonOpp(db, proposal.workspaceId, { accountId: proposal.accountId, value: oppValue, ownerUserId }, ownerUserId);
+            } catch (e) {
+              console.warn("[proposals.acceptByToken] closed-won customer creation failed:", e);
+            }
           }
         }
       }

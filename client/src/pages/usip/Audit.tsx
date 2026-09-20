@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Section, StatusPill, fmtDate } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermissions";
 import { Activity, ClipboardList, Download, User } from "lucide-react";
 import { useState } from "react";
 
@@ -20,6 +21,9 @@ function downloadCsv(rows: any[], filename: string) {
 }
 
 export default function Audit() {
+  // UX, not a boundary — downloadCsv above builds the file from rows audit.list
+  // already returned. See the comment on reports.exportCsv.
+  const { can } = usePermissions();
   const [entityType, setEntityType] = useState<string>("");
   const [actorUserId, setActorUserId] = useState<number | undefined>(undefined);
 
@@ -94,6 +98,7 @@ export default function Audit() {
             </Button>
           )}
 
+          {can("export_data") && (
           <Button
             size="sm"
             variant="outline"
@@ -103,6 +108,7 @@ export default function Audit() {
           >
             <Download className="size-4 mr-1" /> Export CSV
           </Button>
+          )}
         </div>
 
         <Section

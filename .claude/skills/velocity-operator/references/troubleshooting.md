@@ -23,6 +23,9 @@
 | LinkedIn actions fail | Unipile disconnected or caps reached | Connected Accounts; LinkedIn Limits |
 | AI features fail mid-day | Monthly AI budget exhausted or provider key missing | Billing and credits; Settings → Integrations → AI credentials |
 | "FORBIDDEN" from the API | Role too low or wrong workspace header | `x-workspace-id`; role |
+| A rep gets FORBIDDEN editing or creating a sequence | `manage_sequences` override is off for them (the old "Rep" template button used to write it) | Team page → member → Permissions. Note pausing a sequence is never gated |
+| A manager cannot open Settings → Billing and credits | `access_billing` override is off (granted by default, so somebody set it) | Same place |
+| Export CSV missing on /reports | `export_data` — denied by default for manager and rep | Same place. The per-page Export buttons are hidden by the same flag, but that is UX only: those files are built in the browser |
 | `No procedure found on path admin.*` | Router mounted as `team` / `dangerZone` / `settings` / `usage` | Use the right mount |
 | Demo workspace sent an email | Should be impossible: demo mailbox disabled, campaign paused | Verify both; never enable the demo mailbox |
 | Campaign "active" that should be paused | Someone resumed it; carried-state assumption | Re-query `are.campaigns.get`; pause; check Audit Log |

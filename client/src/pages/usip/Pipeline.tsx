@@ -7,20 +7,22 @@ import { Field, fmt$, FormDialog, SelectField } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermissions";
 import { ArrowRight, Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare, Sparkles, ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link, useLocation } from "wouter";
 
-type StageItem = { id: string; label: string };
+type StageItem = { id: string; label: string; isWon: boolean; isLost: boolean };
 
+/** Loading fallback only — the real flags come from crmPipelines.get. */
 const LEGACY_STAGES: StageItem[] = [
-  { id: "discovery", label: "Discovery" },
-  { id: "qualified", label: "Qualified" },
-  { id: "proposal", label: "Proposal" },
-  { id: "negotiation", label: "Negotiation" },
-  { id: "won", label: "Won" },
-  { id: "lost", label: "Lost" },
+  { id: "discovery", label: "Discovery", isWon: false, isLost: false },
+  { id: "qualified", label: "Qualified", isWon: false, isLost: false },
+  { id: "proposal", label: "Proposal", isWon: false, isLost: false },
+  { id: "negotiation", label: "Negotiation", isWon: false, isLost: false },
+  { id: "won", label: "Won", isWon: true, isLost: false },
+  { id: "lost", label: "Lost", isWon: false, isLost: true },
 ];
 
 const STAGE_COLORS: Record<string, string> = {
@@ -43,7 +45,10 @@ function useStagesFor(pipelineId?: number): StageItem[] {
     { staleTime: 60_000 },
   );
   if (!data) return LEGACY_STAGES;
-  return data.stages.map((s) => ({ id: s.key, label: s.label }));
+  // The flags travel with the list: every "is this the closing column?"
+  // question on this page used to be `id === "won"`, which is false for every
+  // workspace that renamed its closing stage.
+  return data.stages.map((s) => ({ id: s.key, label: s.label, isWon: !!s.isWon, isLost: !!s.isLost }));
 }
 
 function WinProbBadge({ prob, aiGenerated }: { prob: number; aiGenerated?: boolean }) {
@@ -80,11 +85,13 @@ function DealCard({
   const topNba = nba[0] ?? null;
   // Only show suggestion if it's a different stage from current and not won/lost
   const suggestedStage: string | null = intel?.suggestedStage ?? null;
+  const suggestedMeta = suggestedStage ? STAGES.find((s) => s.id === suggestedStage) : null;
   const showStageSuggestion =
-    suggestedStage &&
+    !!suggestedStage &&
     suggestedStage !== opp.stage &&
-    suggestedStage !== "won" &&
-    suggestedStage !== "lost";
+    !!suggestedMeta &&
+    !suggestedMeta.isWon &&
+    !suggestedMeta.isLost;
   const stageLabel = (id: string) => STAGES.find((s) => s.id === id)?.label ?? id;
 
   return (
@@ -328,7 +335,7 @@ function ForecastView() {
       <div>
         <h3 className="text-sm font-semibold text-muted-foreground mb-3">Stage Funnel</h3>
         <div className="space-y-2">
-          {STAGES.filter((s) => s.id !== "lost").map((s) => {
+          {STAGES.filter((s) => !s.isLost).map((s) => {
             const st = stages.find((x) => x.stage === s.id);
             if (!st) return null;
             const pct = grandTotal > 0 ? Math.round((st.total / grandTotal) * 100) : 0;
@@ -408,6 +415,9 @@ function ForecastView() {
 
 /* ─── Main Page ─────────────────────────────────────────────────────────── */
 export default function Pipeline() {
+  // UX, not a boundary — the CSV below is assembled from rows already in the
+  // browser. See the comment on reports.exportCsv.
+  const { can } = usePermissions();
   const utils = trpc.useUtils();
   const [location, navigate] = useLocation();
   // Parse optional ?owner=<userId> from the URL for rep drill-down from Dashboard
@@ -576,6 +586,7 @@ export default function Pipeline() {
             </button>
           ))}
         </div>
+        {can("export_data") && (
         <Button variant="outline" onClick={() => {
           const rows = data ?? [];
           if (!rows.length) return;
@@ -586,6 +597,7 @@ export default function Pipeline() {
         }} disabled={!data?.length}>
           <Download className="size-4" /> Export CSV
         </Button>
+        )}
         <Button onClick={() => setAddOpen(true)} data-tour-id="pipeline-new-button"><Plus className="size-4" /> New opportunity</Button>
       </PageHeader>
 

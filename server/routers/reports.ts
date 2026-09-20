@@ -11,11 +11,13 @@
  * Owner/actor user-id columns are resolved to names post-query.
  */
 import { TRPCError } from "@trpc/server";
-import { and, asc, avg, count, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, or, sum, type SQL } from "drizzle-orm";
+import { and, asc, avg, count, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notInArray, or, sum, type SQL } from "drizzle-orm";
 import type { MySqlColumn } from "drizzle-orm/mysql-core";
 import { z } from "zod";
 import { activities, contacts, emailLog, leads, opportunities, prospects, savedReports, users } from "../../drizzle/schema";
-import { getDb } from "../db";
+import { checkPermission, getDb } from "../db";
+import { stageIndexFor } from "../_core/stageSemantics";
+import type { StageIndex } from "@shared/stageSemantics";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 
@@ -151,7 +153,14 @@ const OBJECTS: Record<string, ObjectDef> = {
 
 const filterSchema = z.object({
   field: z.string().max(64),
-  op: z.enum(["eq", "neq", "contains", "gt", "gte", "lt", "lte", "is_empty", "not_empty"]),
+  /**
+   * `is_won` / `is_lost` / `is_open` are SEMANTIC stage ops: they resolve
+   * against the workspace's `crm_pipeline_stages` flags rather than a literal
+   * key, so a saved report survives a workspace renaming its closing stage.
+   * The literal `eq`/`neq` ops stay, so every report saved before 2026-09-20
+   * (and the demo-seeded one) keeps running unchanged.
+   */
+  op: z.enum(["eq", "neq", "contains", "gt", "gte", "lt", "lte", "is_empty", "not_empty", "is_won", "is_lost", "is_open"]),
   value: z.string().max(500).optional(),
 });
 
@@ -177,7 +186,7 @@ function colOrThrow(def: ObjectDef, field: string): ColDef {
   return c;
 }
 
-function filterToSql(def: ObjectDef, f: z.infer<typeof filterSchema>): SQL {
+function filterToSql(def: ObjectDef, f: z.infer<typeof filterSchema>, idx: StageIndex | null = null): SQL {
   const { col, kind } = colOrThrow(def, f.field);
   const v = f.value ?? "";
   const typed = (): string | number | Date => {
@@ -203,6 +212,16 @@ function filterToSql(def: ObjectDef, f: z.infer<typeof filterSchema>): SQL {
     case "lte": return lte(col, typed());
     case "is_empty": return or(isNull(col), eq(col, "" as never))!;
     case "not_empty": return and(isNotNull(col), ne(col, "" as never))!;
+    case "is_won":
+    case "is_lost":
+    case "is_open": {
+      if (col !== opportunities.stage || !idx) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `"${f.op}" only applies to the deal stage field` });
+      }
+      if (f.op === "is_won") return inArray(col, idx.wonKeys());
+      if (f.op === "is_lost") return inArray(col, idx.lostKeys());
+      return notInArray(col, idx.closedKeys());
+    }
   }
 }
 
@@ -211,7 +230,11 @@ export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ 
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
   const def = OBJECTS[spec.object];
 
-  const where = and(eq(def.wsCol, workspaceId), ...spec.filters.map((f) => filterToSql(def, f)));
+  // Only pay for the stage-flag read when a filter actually asks a semantic
+  // question — most specs never touch the deal stage.
+  const wantsStageFlags = spec.filters.some((f) => f.op === "is_won" || f.op === "is_lost" || f.op === "is_open");
+  const idx = spec.object === "deals" && wantsStageFlags ? await stageIndexFor(db, workspaceId) : null;
+  const where = and(eq(def.wsCol, workspaceId), ...spec.filters.map((f) => filterToSql(def, f, idx)));
 
   /* grouped mode: one row per group value + aggregate */
   if (spec.groupBy) {
@@ -287,9 +310,9 @@ function toCsv(columns: { key: string; label: string }[], rows: Record<string, u
 export const PRESET_REPORTS: Array<{ key: string; name: string; description: string; spec: ReportSpec }> = [
   { key: "pipeline-by-stage", name: "Pipeline by stage", description: "Deal value and count per stage.", spec: { object: "deals", columns: ["stage", "value"], filters: [], groupBy: "stage", aggregate: "sum_value", aggregateField: "value", limit: 200 } },
   { key: "deals-by-owner", name: "Deal value by owner", description: "Who owns the pipeline.", spec: { object: "deals", columns: ["owner", "value"], filters: [], groupBy: "owner", aggregate: "sum_value", aggregateField: "value", limit: 200 } },
-  { key: "upcoming-closes", name: "Upcoming close dates", description: "Open deals ordered by close date.", spec: { object: "deals", columns: ["name", "stage", "value", "winProb", "closeDate", "owner"], filters: [{ field: "closeDate", op: "not_empty" }, { field: "stage", op: "neq", value: "won" }, { field: "stage", op: "neq", value: "lost" }], sort: { field: "closeDate", dir: "asc" }, limit: 200 } },
-  { key: "won-deals", name: "Won deals", description: "Closed-won, biggest first.", spec: { object: "deals", columns: ["name", "value", "winReason", "owner", "closeDate"], filters: [{ field: "stage", op: "eq", value: "won" }], sort: { field: "value", dir: "desc" }, limit: 200 } },
-  { key: "lost-deals", name: "Lost deals & reasons", description: "What we lost and why.", spec: { object: "deals", columns: ["name", "value", "lostReason", "owner", "closeDate"], filters: [{ field: "stage", op: "eq", value: "lost" }], sort: { field: "value", dir: "desc" }, limit: 200 } },
+  { key: "upcoming-closes", name: "Upcoming close dates", description: "Open deals ordered by close date.", spec: { object: "deals", columns: ["name", "stage", "value", "winProb", "closeDate", "owner"], filters: [{ field: "closeDate", op: "not_empty" }, { field: "stage", op: "is_open" }], sort: { field: "closeDate", dir: "asc" }, limit: 200 } },
+  { key: "won-deals", name: "Won deals", description: "Closed-won, biggest first.", spec: { object: "deals", columns: ["name", "value", "winReason", "owner", "closeDate"], filters: [{ field: "stage", op: "is_won" }], sort: { field: "value", dir: "desc" }, limit: 200 } },
+  { key: "lost-deals", name: "Lost deals & reasons", description: "What we lost and why.", spec: { object: "deals", columns: ["name", "value", "lostReason", "owner", "closeDate"], filters: [{ field: "stage", op: "is_lost" }], sort: { field: "value", dir: "desc" }, limit: 200 } },
   { key: "leads-by-status", name: "Lead funnel by status", description: "Lead counts per status.", spec: { object: "leads", columns: ["status"], filters: [], groupBy: "status", aggregate: "count", limit: 200 } },
   { key: "lead-quality-by-source", name: "Lead quality by source", description: "Average lead score per source.", spec: { object: "leads", columns: ["source", "score"], filters: [], groupBy: "source", aggregate: "avg_value", aggregateField: "score", limit: 200 } },
   { key: "prospects-by-email-status", name: "Prospects by email status", description: "Deliverability shape of your list.", spec: { object: "prospects", columns: ["emailStatus"], filters: [], groupBy: "emailStatus", aggregate: "count", limit: 200 } },
@@ -320,6 +343,22 @@ export const reportsRouter = router({
   }),
 
   exportCsv: workspaceProcedure.input(specSchema).mutation(async ({ ctx, input }) => {
+    /**
+     * 2026-09-20: export_data now bites here, not only on the danger-zone dump.
+     * It is restricted-by-default, so on deploy every manager and rep loses the
+     * /reports CSV button in every workspace — deliberate, and announced.
+     *
+     * ⚠️ THIS IS NOT A COMPLETE BOUNDARY, and saying otherwise would be the
+     * half-fix that reads as complete. The Leads, Contacts, Pipeline, Audit,
+     * campaign-rejection and people-selection exports build the CSV IN THE
+     * BROWSER out of rows the list query already returned (see
+     * client/src/pages/usip/Leads.tsx — `new Blob([...], { type: "text/csv" })`),
+     * so there is no server call to refuse. Those buttons are HIDDEN on
+     * `export_data === false`, which is UX, not enforcement: the user already
+     * holds the rows. `run` below is left open on purpose — the builder is how
+     * a member reads their own numbers on screen; only the file is gated.
+     */
+    await checkPermission(ctx, "export_data");
     const result = await runSpec(ctx.workspace.id, { ...input, limit: 1000 });
     return { csv: toCsv(result.columns, result.rows), rows: result.rows.length };
   }),

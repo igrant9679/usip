@@ -547,6 +547,7 @@ export const sequencesRouter = router({
 
   /** A rep forks a template into their OWN editable, private sequence. */
   fork: repProcedure.input(z.object({ templateId: z.number(), name: z.string().optional() })).mutation(async ({ ctx, input }) => {
+    await checkPermission(ctx, "manage_sequences");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [tpl] = await db.select().from(sequences).where(and(eq(sequences.id, input.templateId), eq(sequences.workspaceId, ctx.workspace.id)));
@@ -638,6 +639,7 @@ export const sequencesRouter = router({
       replyDetection: z.boolean().optional(),
     }).optional(),
   })).mutation(async ({ ctx, input }) => {
+    await checkPermission(ctx, "manage_sequences");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await assertTemplateEditable(db, ctx, input.id);
@@ -649,6 +651,7 @@ export const sequencesRouter = router({
     id: z.number(),
     steps: z.array(stepSchema),
   })).mutation(async ({ ctx, input }) => {
+    await checkPermission(ctx, "manage_sequences");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [seq] = await db.select().from(sequences).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
@@ -757,6 +760,16 @@ export const sequencesRouter = router({
   }),
 
   setStatus: repProcedure.input(z.object({ id: z.number(), status: z.enum(["draft", "active", "paused", "archived"]) })).mutation(async ({ ctx, input }) => {
+    /**
+     * PAUSING IS THE SAFETY LEVER, NOT AN EDIT — and it is deliberately left
+     * open to a member whose manage_sequences is denied. `updateSteps` above
+     * literally tells the user "Pause it first", so a rep who can see a
+     * sequence sending the wrong thing but cannot stop it is a worse outcome
+     * than a rep who can stop one they may not edit. Every other transition
+     * (starting it, archiving it, putting it back to draft) is managing the
+     * sequence and is gated. Do not "tidy" this into a single call.
+     */
+    if (input.status !== "paused") await checkPermission(ctx, "manage_sequences");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await assertTemplateEditable(db, ctx, input.id);
@@ -822,6 +835,7 @@ export const sequencesRouter = router({
       })),
     }))
     .mutation(async ({ ctx, input }) => {
+      await checkPermission(ctx, "manage_sequences");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       // Verify sequence belongs to workspace

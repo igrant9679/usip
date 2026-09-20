@@ -11,6 +11,7 @@ import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { EmailClientPreview } from "@/components/usip/EmailClientPreview";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermissions";
 import {
   Activity, GitBranch, Pause, Play, Plus, Power, CheckCircle2, XCircle,
   BarChart3, RefreshCw, Pencil, Trash2, ArrowUp, ArrowDown, Mail, Clock, ClipboardList, TrendingUp,
@@ -1476,6 +1477,9 @@ function SequenceStepBreakdown({ sequenceId }: { sequenceId: number }) {
 }
 
 export default function Sequences() {
+  // sequences.create refuses a member whose manage_sequences is denied; hiding
+  // the button is what keeps that from arriving as an unexplained toast.
+  const { can } = usePermissions();
   const [open, setOpen] = useState(false);
   const [editSeq, setEditSeq] = useState<any | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -1514,7 +1518,7 @@ export default function Sequences() {
       <PageHeader title="Sequences" description="Build multi-step email and task cadences to engage prospects at scale with personalised touchpoints. Set delays, branching conditions, and auto-stop rules to keep every sequence relevant." pageKey="sequences"
         icon={<ListOrdered className="size-5" />}
       >
-        <Button onClick={() => setOpen(true)} data-tour-id="sequences-new-button"><Plus className="size-4" /> New sequence</Button>
+        {can("manage_sequences") && <Button onClick={() => setOpen(true)} data-tour-id="sequences-new-button"><Plus className="size-4" /> New sequence</Button>}
       </PageHeader>
       <SubNav items={[
         { href: "/v2/emails?status=awaiting&source=sequence", label: "Email Drafts", title: "Review and edit drafts created by sequence steps" },

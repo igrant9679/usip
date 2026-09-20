@@ -61,15 +61,17 @@ export default function OpportunityDetail() {
   useEffect(() => {
     const op = data?.opportunity;
     if (!op) return;
-    setReason((op.stage === "won" ? op.winReason : op.stage === "lost" ? op.lostReason : "") ?? "");
+    const meta = data?.stageMeta;
+    setReason((meta?.isWon ? op.winReason : meta?.isLost ? op.lostReason : "") ?? "");
   }, [data]);
 
   if (isLoading) return <Shell title="Opportunity"><div className="p-4 md:p-5 text-sm text-muted-foreground">Loading…</div></Shell>;
   if (!data) return <Shell title="Opportunity"><EmptyState title="Opportunity not found" /></Shell>;
 
   const { opportunity: o, account, contactRoles } = data;
-  const isClosedWon = o.stage === "won";
-  const isClosedLost = o.stage === "lost";
+  // Flags, not the key — see crm.getWithRelated.
+  const isClosedWon = !!data.stageMeta?.isWon;
+  const isClosedLost = !!data.stageMeta?.isLost;
   const reasonValue = isClosedWon ? o.winReason : isClosedLost ? o.lostReason : null;
 
   const overview = (

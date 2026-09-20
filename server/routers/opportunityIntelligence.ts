@@ -12,8 +12,9 @@
  *   - removeCoOwner(opportunityId, userId)  — remove co-owner
  */
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, like } from "drizzle-orm";
 import { z } from "zod";
+import { activeTaskStatuses } from "@shared/taskStatus";
 import {
   accounts,
   activities,
@@ -23,9 +24,13 @@ import {
   opportunityIntelligence,
   opportunityStageHistory,
   stageApprovals,
+  tasks,
   workspaceMembers,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { activeOwnerOrNull } from "../_core/activeMembers";
+import { resolvedStageFor } from "../_core/stageSemantics";
+import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
@@ -294,11 +299,28 @@ export const opportunityIntelligenceRouter = router({
         .where(and(eq(stageApprovals.id, input.approvalId), eq(stageApprovals.workspaceId, ctx.workspace.id)));
 
       if (input.approved) {
-        // Apply stage change
+        const [opp] = await db
+          .select({
+            accountId: opportunities.accountId,
+            value: opportunities.value,
+            ownerUserId: opportunities.ownerUserId,
+            pipelineId: opportunities.pipelineId,
+            name: opportunities.name,
+            stage: opportunities.stage,
+          })
+          .from(opportunities)
+          .where(and(eq(opportunities.id, approval.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+        const meta = await resolvedStageFor(db, ctx.workspace.id, opp?.pipelineId ?? null, approval.toStage);
+
+        // Apply stage change. workspaceId on the UPDATE (2026-09-20): the WHERE
+        // was keyed only on the opportunity id carried by the approval row, so
+        // a concurrent or crafted call could mutate another workspace's
+        // opportunity. tenantScope's UPDATE scan walked past it because the
+        // WHERE contains no `input.` token.
         await db
           .update(opportunities)
           .set({ stage: approval.toStage as any, daysInStage: 0 })
-          .where(eq(opportunities.id, approval.opportunityId));
+          .where(and(eq(opportunities.id, approval.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
 
         // Write stage history
         await db.insert(opportunityStageHistory).values({
@@ -309,6 +331,50 @@ export const opportunityIntelligenceRouter = router({
           changedByUserId: ctx.user.id,
           note: `Approved by manager. ${input.reviewNote ?? ""}`.trim(),
         });
+
+        // The approval queue is a THIRD way a deal reaches a closing stage, and
+        // until 2026-09-20 it was the only one that did nothing about it:
+        // approving a move to Won left the account un-converted and approving a
+        // move to Lost left the deal abandoned. Both non-fatal — the stage move
+        // is what the manager asked for and it has already landed.
+        if (opp && meta.isWon) {
+          try {
+            await ensureCustomerForWonOpp(db, ctx.workspace.id, opp, ctx.user.id);
+          } catch (e) {
+            console.warn("[opportunityIntelligence.reviewStageChange] customer creation failed:", e);
+          }
+        }
+        if (opp && meta.isLost) {
+          try {
+            const dealName = opp.name ?? "the deal";
+            const existing = await db.select({ id: tasks.id }).from(tasks).where(and(
+              eq(tasks.workspaceId, ctx.workspace.id),
+              eq(tasks.relatedType, "opportunity"),
+              eq(tasks.relatedId, approval.opportunityId),
+              like(tasks.title, "Win-back:%"),
+              inArray(tasks.status, activeTaskStatuses()),
+            )).limit(1);
+            if (existing.length === 0) {
+              await db.insert(tasks).values({
+                workspaceId: ctx.workspace.id,
+                title: `Win-back: ${dealName}`.slice(0, 240),
+                description: `"${dealName}" closed lost from stage "${approval.fromStage}". Check back in — circumstances (budget, priorities, the champion's role) often change within a quarter.`,
+                type: "follow_up",
+                priority: "normal",
+                status: "open",
+                dueAt: new Date(Date.now() + 90 * 86400000),
+                ownerUserId: await activeOwnerOrNull(ctx.workspace.id, opp.ownerUserId),
+                relatedType: "opportunity",
+                relatedId: approval.opportunityId,
+                source: "ai",
+                aiReasoning: "Auto-created on closed-lost so the deal re-enters nurture instead of being abandoned.",
+                aiConfidence: 70,
+              } as never);
+            }
+          } catch (e) {
+            console.warn("[opportunityIntelligence.reviewStageChange] closed-lost win-back task failed:", e);
+          }
+        }
       }
 
       return { ok: true };

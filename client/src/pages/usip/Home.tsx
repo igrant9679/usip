@@ -17,6 +17,7 @@ import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { AttentionPanel } from "@/components/usip/AttentionPanel";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
+import { buildStageIndex, type StageFlagRow } from "@shared/stageSemantics";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,6 +42,7 @@ type Ctx = {
   calls: any[];
   convStats: any;
   attention: any;
+  dealStages: StageFlagRow[];
 };
 
 type WidgetDef = {
@@ -153,13 +155,18 @@ const WIDGETS: Record<string, WidgetDef> = {
   "pending-deals": {
     title: "Pending deals", category: "Recommended", icon: DollarSign,
     render: (c) => {
-      const open = (c.deals ?? []).filter((d: any) => !String(d.stage ?? "").startsWith("closed"));
+      // 2026-09-20: this was startsWith("closed"), which matches neither "won"
+      // nor "lost" — so every won and lost deal showed up as "pending".
+      // buildStageIndex falls back to the name defaults while the pipeline
+      // query is still in flight.
+      const stageIdx = buildStageIndex(c.dealStages);
+      const open = (c.deals ?? []).filter((d: any) => stageIdx.isOpen(String(d.stage ?? "")));
       return open.length === 0
         ? <div className="flex items-center justify-between"><EmptyHint text="No open deals right now." /><Button variant="outline" size="sm" className="h-7" onClick={() => c.nav("/v2/deals")}>View pipeline</Button></div>
         : (
           <div>{open.slice(0, 5).map((d: any) => (
             <MiniRow key={d.id} primary={d.name}
-              secondary={[d.stage?.replace(/_/g, " "), d.amount ? `$${Number(d.amount).toLocaleString()}` : null].filter(Boolean).join(" · ")}
+              secondary={[d.stage?.replace(/_/g, " "), d.value ? `$${Number(d.value).toLocaleString()}` : null].filter(Boolean).join(" · ")}
               right={<Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => c.nav("/v2/deals")}>Open <ArrowRight className="size-3" /></Button>} />
           ))}</div>
         );
@@ -231,9 +238,10 @@ export default function Home() {
   // Feed the four widgets that used to render hardcoded emptiness/zeros.
   const replies = (trpc.conversations.list.useQuery({ filter: "unhandled" }).data ?? []) as any[];
   const deals = (trpc.opportunities.list.useQuery({}).data ?? []) as any[];
+  const dealStages = (((trpc.crmPipelines.get.useQuery({} as any, { staleTime: 60_000 }).data as any)?.stages ?? []) as StageFlagRow[]);
   const calls = ((trpc.voiceAgents.listCalls.useQuery({ limit: 50 }).data ?? []) as any[]);
   const attention = trpc.attention.summary.useQuery().data as any;
-  const ctx: Ctx = { accent, nav: setLocation, people, companies, tasks, sequences, metrics, replies, deals, calls, convStats, attention };
+  const ctx: Ctx = { accent, nav: setLocation, people, companies, tasks, sequences, metrics, replies, deals, calls, convStats, attention, dealStages };
 
   const current = editing ? draft : layout;
 

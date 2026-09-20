@@ -12,6 +12,7 @@ import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { isEmptyEmailBody } from "@shared/emailBody";
 import { EmailVerificationBadge } from "@/components/usip/EmailVerificationBadge";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermissions";
 import {
   Plus,
   Users,
@@ -581,6 +582,9 @@ export default function Contacts() {
   const [editContact, setEditContact] = useState<any | null>(null);
   const [verifFilter, setVerifFilter] = useState<VerifFilter>("all");
 
+  // UX, not a boundary — the CSV below is assembled from rows already in the
+  // browser. See the comment on reports.exportCsv.
+  const { can } = usePermissions();
   const utils = trpc.useUtils();
   const { data: rawContacts, isLoading: contactsLoading, error: contactsError, refetch: contactsRefetch } = trpc.contacts.list.useQuery({ search });
   // Apply verification status filter client-side
@@ -750,6 +754,7 @@ export default function Contacts() {
             </Button>
           </>
         )}
+        {can("export_data") && (
         <Button variant="outline" onClick={() => {
           const rows = data ?? [];
           if (!rows.length) return;
@@ -760,6 +765,7 @@ export default function Contacts() {
         }} disabled={!data?.length}>
           <Download className="size-4" /> Export CSV
         </Button>
+        )}
         <Button onClick={() => setOpen(true)} data-tour-id="contacts-new-button">
           <Plus className="size-4" /> New contact
         </Button>

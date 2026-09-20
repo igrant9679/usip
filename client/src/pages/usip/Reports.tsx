@@ -9,6 +9,7 @@
 import { useMemo, useState } from "react";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -62,6 +63,12 @@ const OPS: Array<{ value: string; label: string; needsValue: boolean }> = [
   { value: "lte", label: "≤", needsValue: true },
   { value: "is_empty", label: "is empty", needsValue: false },
   { value: "not_empty", label: "is not empty", needsValue: false },
+  // Semantic stage ops — they resolve against the workspace's pipeline flags,
+  // so they keep meaning the right thing after a stage is renamed. Server side:
+  // server/routers/reports.ts filterSchema.
+  { value: "is_won", label: "is won", needsValue: false },
+  { value: "is_lost", label: "is lost", needsValue: false },
+  { value: "is_open", label: "is open", needsValue: false },
 ];
 
 function fmtCell(v: unknown, kind: string): string {
@@ -81,6 +88,9 @@ const selectCls = "h-8 rounded-md border border-border bg-background px-2 text-[
 
 export default function Reports() {
   const accent = useAccentColor();
+  // The one export the SERVER can refuse (reports.exportCsv gates export_data).
+  // Hiding the button keeps that refusal from arriving as a mystery toast.
+  const { can } = usePermissions();
   const schema = trpc.reports.schema.useQuery();
   const saved = trpc.reports.list.useQuery();
   const presets = trpc.reports.presets.useQuery();
@@ -155,9 +165,11 @@ export default function Reports() {
           <h1 className="text-[15px] font-semibold tracking-tight">Reports</h1>
           {loadedName && <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">{loadedName}</span>}
           <div className="flex-1" />
-          <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={!armed || exportCsv.isPending} onClick={() => exportCsv.mutate(runnableSpec as never)}>
-            {exportCsv.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />} Export CSV
-          </Button>
+          {can("export_data") && (
+            <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={!armed || exportCsv.isPending} onClick={() => exportCsv.mutate(runnableSpec as never)}>
+              {exportCsv.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />} Export CSV
+            </Button>
+          )}
           <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setSaveOpen(true)} disabled={effectiveColumns.length === 0}>
             <Save className="size-3.5" /> Save
           </Button>

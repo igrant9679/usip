@@ -34,9 +34,10 @@
  *     the denominator would understate the rate forever. `opensTracked` is
  *     false for those cells, so the UI can say "not tracked" rather than "0%".
  */
-import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { genuineReplyScope } from "./replyScope";
 import { getDb } from "../db";
+import { stageIndexFor } from "../_core/stageSemantics";
 import {
   areAbVariants,
   areExecutionQueue,
@@ -517,21 +518,31 @@ export async function getWinLossStats(workspaceId: number): Promise<WinLossStats
     .groupBy(opportunities.stage);
   if (byStage.length === 0) return empty;
 
-  let won = 0, lost = 0, open = 0, avgWonValue = 0;
+  const stages = await stageIndexFor(db, workspaceId);
+  let won = 0, lost = 0, open = 0;
+  // Count-weighted across EVERY won group. 2026-09-20: avgWonValue was a plain
+  // assignment off the single `won` group row, so a workspace with two stages
+  // flagged Won reported whichever one the GROUP BY happened to return last.
+  let wonValueSum = 0;
   const openByStage: Array<{ stage: string; count: number }> = [];
   for (const row of byStage) {
     const stage = String(row.stage);
     const n = Number(row.n ?? 0);
-    if (stage === "won") { won = n; avgWonValue = Math.round(Number(row.avgValue ?? 0)); }
-    else if (stage === "lost") lost = n;
-    else { open += n; openByStage.push({ stage, count: n }); }
+    if (stages.isWon(stage)) { won += n; wonValueSum += n * Number(row.avgValue ?? 0); continue; }
+    if (stages.isLost(stage)) { lost += n; continue; }
+    // Closed but flagged neither (the legacy `closed` key) is finished work —
+    // counting it as open pipeline overstated the funnel.
+    if (stages.isClosed(stage)) continue;
+    open += n;
+    openByStage.push({ stage, count: n });
   }
+  const avgWonValue = won === 0 ? 0 : Math.round(wonValueSum / won);
   openByStage.sort((a, b) => b.count - a.count);
 
   const reasonRows = await db
     .select({ reason: opportunities.lostReason, n: sql<number>`count(*)` })
     .from(opportunities)
-    .where(and(eq(opportunities.workspaceId, workspaceId), eq(opportunities.stage, "lost")))
+    .where(and(eq(opportunities.workspaceId, workspaceId), inArray(opportunities.stage, stages.lostKeys())))
     .groupBy(opportunities.lostReason);
   const reasonTotal = reasonRows.reduce((n, r) => n + Number(r.n ?? 0), 0);
   const lostReasons = reasonRows

@@ -13,11 +13,12 @@
  *   bulkDelete        — remove many prospects at once
  */
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, like, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, notInArray, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, requireMinRole, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
+import { closedStageKeys } from "../_core/stageSemantics";
 import { contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings, prospectLinkedinEnrichments, prospectFieldHistory } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { runComprehensiveEnrichment } from "../services/enrichment/comprehensivePass";
@@ -66,7 +67,7 @@ export async function deriveLifecycle(
   }
   if (row.accountId) {
     const [open] = await db.select({ id: opportunities.id }).from(opportunities)
-      .where(and(eq(opportunities.workspaceId, workspaceId), eq(opportunities.accountId, row.accountId), sql`${opportunities.stage} NOT IN ('won','lost')`))
+      .where(and(eq(opportunities.workspaceId, workspaceId), eq(opportunities.accountId, row.accountId), notInArray(opportunities.stage, await closedStageKeys(db, workspaceId))))
       .orderBy(descBy(opportunities.id)).limit(1);
     if (open) return { ...out, stage: "opportunity", opportunityId: open.id };
   }

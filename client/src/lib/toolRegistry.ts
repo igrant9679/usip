@@ -211,7 +211,7 @@ export const TOOLS: Tool[] = [
   { href: "/customers", label: "Customers", icon: Heart, group: "Customer Success", primary: true,
     description: "Won accounts — health, notes, and expansion.", keywords: ["customer success", "accounts"] },
   { href: "/renewals", label: "Renewals", icon: CalendarClock, group: "Customer Success",
-    description: "Contract end dates and renewal risk." },
+    description: "Renewal board — columns derived from the contract end date." },
   { href: "/qbrs", label: "QBRs", icon: ClipboardCheck, group: "Customer Success",
     description: "Quarterly business review prep and history." },
 

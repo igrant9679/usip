@@ -64,11 +64,10 @@ export const integrationsRouter = router({
   }),
 
   // manage_integrations is one of the six per-member permission toggles in
-  // Team settings. checkPermission had exactly ONE call site in the whole
-  // server (export_data), so five of those six switches wrote a DB row that
-  // nothing read — revoking them changed nothing about what a member could
-  // actually do. Note the gate is in ADDITION to adminWsProcedure: an
-  // explicit granted:false row blocks even an admin, which is the point.
+  // Team settings; the inventory of which key is enforced where now lives on
+  // the doc comment above checkPermission in server/db.ts. Note the gate is in
+  // ADDITION to adminWsProcedure: an explicit granted:false row blocks even an
+  // admin, which is the point.
   save: adminWsProcedure
     .input(
       z.object({

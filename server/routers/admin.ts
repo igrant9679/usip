@@ -33,7 +33,7 @@ import {
   workspaces,
   workspaceSettings,
 } from "../../drizzle/schema";
-import { checkPermission, getDb } from "../db";
+import { checkPermission, getDb, resolvePermissionMap } from "../db";
 import { adminWsProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
 import { publicProcedure, protectedProcedure, router } from "../_core/trpc";
 import { recordAudit } from "../audit";
@@ -48,6 +48,7 @@ import {
   type OwnableScope,
   type OwnedWork,
 } from "@shared/ownedWork";
+import { isPermissionKey } from "@shared/permissions";
 import { liveMeetingStatuses } from "@shared/meetingStatus";
 import { defaultMemberNotifyPrefs, defaultNotifyPolicy, memberWantsEmail, memberWantsInApp, pickKnownNotifyPrefs } from "@shared/notifyPolicy";
 import { invalidateArchivedWorkspaceCache } from "../_core/workspaceArchive";
@@ -387,6 +388,12 @@ export const settingsRouter = router({
 
 export const usageRouter = router({
   currentMonth: workspaceProcedure.query(async ({ ctx }) => {
+    // 2026-09-20: the only enforcement point for access_billing, and the only
+    // reader is the Settings → Billing and credits panel. Safe to gate ONLY
+    // because the key stopped being restricted-by-default in the same change
+    // (shared/permissions.ts) — enforcing it under the old default would have
+    // removed that page from every manager and rep in every workspace.
+    await checkPermission(ctx, "access_billing");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const month = new Date().toISOString().slice(0, 7); // YYYY-MM
@@ -914,6 +921,25 @@ export const teamRouter = router({
       } catch (e) {
         console.error("[team.delete] booking link deactivate failed:", (e as Error).message);
       }
+
+      /**
+       * Drop their permission overrides.
+       *
+       * Nothing in the repo has ever deleted a `member_permissions` row — the
+       * only writes are `setPermissions`, the only reads are `getPermissions`
+       * and the resolver in db.ts. So deleting a member and re-inviting the
+       * same person silently resurrected every deny an admin had set on them
+       * months earlier, on an account the UI presents as brand new. Same
+       * reasoning as the saved-report strip above: hard delete must not leave
+       * state keyed to a person the workspace can no longer name.
+       *
+       * Deliberately NOT done on `deactivate` — that is reversible, and a
+       * reactivated member should come back with their overrides intact.
+       */
+      await db.delete(memberPermissions).where(and(
+        eq(memberPermissions.workspaceId, ctx.workspace.id),
+        eq(memberPermissions.userId, target.userId),
+      ));
 
       // Remove the membership row.
       await db.delete(workspaceMembers).where(eq(workspaceMembers.id, target.id));
@@ -1858,7 +1884,25 @@ export const teamRouter = router({
       return { ok: true };
     }),
 
-  /** Return all permission overrides for a member in this workspace */
+  /**
+   * What the CALLER may do, resolved — rows layered over the role defaults.
+   *
+   * The client needs this to decide what to render: without it the permission
+   * work lands as unexplained FORBIDDEN toasts on buttons that look enabled.
+   */
+  myPermissions: workspaceProcedure.query(async ({ ctx }) => resolvePermissionMap(ctx)),
+
+  /**
+   * A member's permission overrides AND their effective state.
+   *
+   * `rows` is what has been explicitly set; `effective` is what the server
+   * would actually answer, resolved against THAT MEMBER's role rather than the
+   * admin's. Before 2026-09-20 this returned the raw rows only and Team.tsx
+   * rendered a missing key as off — so a brand-new rep, whom the server grants
+   * manage_sequences / view_all_leads / manage_integrations, was displayed with
+   * all six switches off. An admin reading that page believed a restriction
+   * that did not exist, which is the worse half of a permissions bug.
+   */
   getPermissions: adminWsProcedure
     .input(z.object({ memberId: z.number().int() }))
     .query(async ({ ctx, input }) => {
@@ -1866,7 +1910,7 @@ export const teamRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
       const [member] = await db
-        .select({ userId: workspaceMembers.userId })
+        .select({ userId: workspaceMembers.userId, role: workspaceMembers.role })
         .from(workspaceMembers)
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
@@ -1879,7 +1923,13 @@ export const teamRouter = router({
       // Return as a map: { feature: granted }
       const perms: Record<string, boolean> = {};
       for (const row of rows) perms[row.feature] = row.granted;
-      return perms;
+
+      const effective = await resolvePermissionMap({
+        workspace: { id: ctx.workspace.id },
+        user: { id: member.userId },
+        member: { role: member.role as string },
+      });
+      return { rows: perms, effective };
     }),
 
   /** Upsert permission overrides for a member */
@@ -1897,6 +1947,20 @@ export const teamRouter = router({
         .from(workspaceMembers)
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+
+      /**
+       * Reject unknown keys rather than storing them. The schema accepted any
+       * string ≤80 chars, so a typo was written to member_permissions, read by
+       * nothing, and reported to the admin as saved — the toast said the
+       * restriction was applied and it never was.
+       */
+      const unknown = Object.keys(input.permissions).filter((k) => !isPermissionKey(k));
+      if (unknown.length > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Unknown permission key(s): ${unknown.join(", ")}`,
+        });
+      }
 
       const entries = Object.entries(input.permissions);
       if (entries.length === 0) return { ok: true };

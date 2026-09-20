@@ -53,6 +53,7 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermissions";
 import { AddExistingProspectsDialog } from "@/components/usip/are/AddExistingProspectsDialog";
 import { ActiveSequenceTimeline } from "@/components/usip/are/ActiveSequenceTimeline";
 import { AreMessageDialog } from "@/components/usip/are/AreMessageDialog";
@@ -2036,6 +2037,9 @@ export default function ARECampaignDetail() {
       toast.error(e.message);
     },
   });
+  // UX, not a boundary — the rejection CSV is rendered server-side but handed
+  // back through an ungated query. See the comment on reports.exportCsv.
+  const { can: canPerm } = usePermissions();
   const handleExportCsv = async () => {
     const result = await fetchCsv();
     if (!result.data?.csv) { toast.error("No data to export"); return; }
@@ -3406,6 +3410,7 @@ export default function ARECampaignDetail() {
                       )}
                       Re-evaluate All
                     </Button>
+                    {canPerm("export_data") && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -3415,6 +3420,7 @@ export default function ARECampaignDetail() {
                       <Download className="size-3" />
                       Export CSV
                     </Button>
+                    )}
                   </div>
                 </div>
                 {/* ── ICP suggestion banner after zero-requalified run ── */}

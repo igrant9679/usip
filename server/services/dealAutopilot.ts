@@ -19,9 +19,8 @@ import { and, asc, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { activeTaskStatuses } from "@shared/taskStatus";
 import { opportunities, tasks, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { closedStageKeys } from "../_core/stageSemantics";
 import { invokeLLM } from "../_core/llm";
-
-const CLOSED_STAGES = ["won", "lost", "closed_won", "closed_lost", "closed"];
 
 function daysSince(d: Date | string | null | undefined): number | null {
   if (!d) return null;
@@ -45,7 +44,7 @@ export async function runDealAutopilotForWorkspace(
   const opps = await db.select().from(opportunities)
     .where(and(
       eq(opportunities.workspaceId, workspaceId),
-      notInArray(opportunities.stage, CLOSED_STAGES),
+      notInArray(opportunities.stage, await closedStageKeys(db, workspaceId)),
       staleBefore ? lt(opportunities.updatedAt, staleBefore) : undefined,
     ))
     .orderBy(asc(opportunities.lastActivityAt))

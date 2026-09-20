@@ -291,6 +291,27 @@ const SURFACES: Array<{
     end: 'relatedType: contactId ? "contact" : "lead"',
     gate: /ownerUserId: await activeOwnerOrNull\(ws\.id, ownerUserId\)/,
   },
+  /**
+   * 2026-09-20, both added with the won/lost stage-flag work. Moving a deal
+   * into a stage FLAGGED Lost now raises the same ~90-day win-back task the
+   * kanban has always raised — from two more endpoints: the alert panel's quick
+   * move and the manager approval queue. Neither has a session belonging to the
+   * deal's owner, so both resolve it through the gate.
+   */
+  {
+    what: "the alert-panel stage move's win-back task is not owned by a departed rep",
+    file: "server/routers/pipelineAlerts.ts",
+    start: "if (meta.isLost) {",
+    end: "aiConfidence: 70",
+    gate: /ownerUserId: await activeOwnerOrNull\(ctx\.workspace\.id, opp\.ownerUserId\)/,
+  },
+  {
+    what: "an approved closed-lost stage change raises a win-back task somebody owns",
+    file: "server/routers/opportunityIntelligence.ts",
+    start: "if (opp && meta.isLost) {",
+    end: "aiConfidence: 70",
+    gate: /ownerUserId: await activeOwnerOrNull\(ctx\.workspace\.id, opp\.ownerUserId\)/,
+  },
 ];
 
 describe("every session-less path that names a member gates on active membership", () => {
@@ -300,7 +321,7 @@ describe("every session-less path that names a member gates on active membership
    * pinned rather than bounded so that REMOVING a surface is also a decision.
    */
   it("checks every surface in the table, and the table has not shrunk", () => {
-    expect(SURFACES.length).toBe(27);
+    expect(SURFACES.length).toBe(29);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 

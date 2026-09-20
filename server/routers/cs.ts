@@ -7,12 +7,29 @@ import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
+import { renewalStageFor, type RenewalStage } from "@shared/renewalStage";
 
 function calcHealth(c: { usageScore: number; engagementScore: number; supportScore: number; npsScore: number }) {
   const npsNorm = (c.npsScore + 100) / 2; // 0..100
   const score = Math.round(c.usageScore * 0.35 + c.engagementScore * 0.25 + c.supportScore * 0.2 + npsNorm * 0.2);
   const tier: "healthy" | "watch" | "at_risk" | "critical" = score >= 75 ? "healthy" : score >= 55 ? "watch" : score >= 35 ? "at_risk" : "critical";
   return { score, tier };
+}
+
+/**
+ * 2026-09-20: renewalStage is DERIVED from contractEnd on the way out, because
+ * nothing ever moved the stored column — wonToCustomer stamped "early" on every
+ * new customer and that is where it stayed, so a renewal nine days out rendered
+ * in the "Early" column and renewing90 was structurally 0.
+ *
+ * Applied at every read in this router, not just the board: `cs` is in
+ * ALLOWED_GROUPS (services/assistantActionCatalog.ts), so cs.list, cs.get,
+ * cs.kpis and cs.renewalsBoard all run as AI-Assistant read actions. A stage
+ * the board fixes but the assistant does not is a worse bug than one that is
+ * wrong everywhere.
+ */
+function withStage<T extends { renewalStage: string; contractEnd: Date | null }>(c: T) {
+  return { ...c, renewalStage: renewalStageFor({ current: c.renewalStage, contractEnd: c.contractEnd }) };
 }
 
 export const csRouter = router({
@@ -22,7 +39,7 @@ export const csRouter = router({
     const cs = await db.select().from(customers).where(eq(customers.workspaceId, ctx.workspace.id)).orderBy(customers.healthScore);
     const accs = await db.select().from(accounts).where(eq(accounts.workspaceId, ctx.workspace.id));
     const accMap = new Map(accs.map((a) => [a.id, a]));
-    return cs.map((c) => ({ ...c, account: accMap.get(c.accountId) ?? null }));
+    return cs.map((c) => ({ ...withStage(c), account: accMap.get(c.accountId) ?? null }));
   }),
 
   get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
@@ -31,7 +48,7 @@ export const csRouter = router({
     const [c] = await db.select().from(customers).where(and(eq(customers.id, input.id), eq(customers.workspaceId, ctx.workspace.id)));
     if (!c) return null;
     const [a] = await db.select().from(accounts).where(eq(accounts.id, c.accountId));
-    return { ...c, account: a ?? null };
+    return { ...withStage(c), account: a ?? null };
   }),
 
   /** Aggregate KPIs: ARR, GRR, NRR (simplified), expansion potential, churn risk count. */
@@ -42,7 +59,9 @@ export const csRouter = router({
     const arr = cs.reduce((s, c) => s + Number(c.arr ?? 0), 0);
     const expansion = cs.reduce((s, c) => s + Number(c.expansionPotential ?? 0), 0);
     const atRisk = cs.filter((c) => c.healthTier === "at_risk" || c.healthTier === "critical").length;
-    const renewing90 = cs.filter((c) => ["thirty", "sixty", "ninety", "at_risk"].includes(c.renewalStage)).length;
+    // Counted off the DERIVED stage — the stored column never moved, so this
+    // read 0 in every real workspace while contracts expired (2026-09-20).
+    const renewing90 = cs.filter((c) => ["thirty", "sixty", "ninety", "at_risk"].includes(withStage(c).renewalStage)).length;
     const avgNps = cs.length === 0 ? 0 : Math.round(cs.reduce((s, c) => s + c.npsScore, 0) / cs.length);
     const promoters = cs.filter((c) => c.npsScore >= 50).length;
     const detractors = cs.filter((c) => c.npsScore <= 0).length;
@@ -57,7 +76,7 @@ export const csRouter = router({
     const cs = await db.select().from(customers).where(eq(customers.workspaceId, ctx.workspace.id));
     const accs = await db.select().from(accounts).where(eq(accounts.workspaceId, ctx.workspace.id));
     const accMap = new Map(accs.map((a) => [a.id, a]));
-    return cs.map((c) => ({ ...c, account: accMap.get(c.accountId) ?? null }));
+    return cs.map((c) => ({ ...withStage(c), account: accMap.get(c.accountId) ?? null }));
   }),
 
   updateHealthComponents: repProcedure
@@ -116,8 +135,46 @@ export const csRouter = router({
     });
     // Apply ARR delta to customer (workspace-scoped)
     const newArr = Math.max(0, Number(c.arr) + input.arrDelta);
-    await db.update(customers).set({ arr: String(newArr) }).where(and(eq(customers.id, c.id), eq(customers.workspaceId, ctx.workspace.id)));
-    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "contract_amendment", after: input });
+    /**
+     * 2026-09-20: an amendment now moves the CONTRACT DATES too, which is the
+     * only way `renewed` and `churned` are ever reached — every other stage is
+     * derived from contractEnd, and nothing else in the product records an
+     * outcome. Before this, a renewal amendment adjusted ARR and left the
+     * contract ending on the same day it always had.
+     *
+     * The new term is the customer's OWN term (contractEnd − contractStart),
+     * not a hardcoded 365 days: contract_amendments has no term field, but the
+     * two date columns already encode it, and rolling a two-year customer
+     * forward by a year would silently convert them to annual.
+     *
+     * The stage is DERIVED from the new end date rather than set to "early":
+     * input.effectiveAt is caller-supplied and routinely back-dated (seed.ts
+     * writes amendments 30-200 days in the past), so the rolled contractEnd can
+     * legitimately land inside 90 days or still in the past.
+     */
+    const eff = new Date(input.effectiveAt);
+    const termMs = c.contractStart && c.contractEnd ? c.contractEnd.getTime() - c.contractStart.getTime() : 365 * 86400000;
+    const patch: { arr: string; contractStart?: Date; contractEnd?: Date; renewalStage?: RenewalStage } = { arr: String(newArr) };
+    if (input.type === "renewal") {
+      const newStart = c.contractEnd ?? eff;
+      const newEnd = new Date(newStart.getTime() + termMs);
+      patch.contractStart = newStart;
+      patch.contractEnd = newEnd;
+      patch.renewalStage = renewalStageFor({ current: "early", contractEnd: newEnd });
+    } else if (input.type === "termination") {
+      patch.contractEnd = eff;
+      patch.renewalStage = "churned";
+    }
+    await db.update(customers).set(patch).where(and(eq(customers.id, c.id), eq(customers.workspaceId, ctx.workspace.id)));
+    await recordAudit({
+      workspaceId: ctx.workspace.id,
+      actorUserId: ctx.user.id,
+      action: "create",
+      entityType: "contract_amendment",
+      entityId: c.id,
+      before: { arr: c.arr, contractStart: c.contractStart, contractEnd: c.contractEnd, renewalStage: c.renewalStage },
+      after: { ...input, arr: patch.arr, contractStart: patch.contractStart, contractEnd: patch.contractEnd, renewalStage: patch.renewalStage },
+    });
     return { ok: true };
   }),
 

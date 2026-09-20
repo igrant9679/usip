@@ -14,6 +14,7 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { getDb } from "./db";
+import { stageIndexFor } from "./_core/stageSemantics";
 import {
   sendingAccounts,
   emailReplies,
@@ -519,8 +520,9 @@ export async function processInboundReply(data: InboundReplyData) {
             eq(opportunities.workspaceId, data.workspaceId),
             inArray(opportunities.id, oppIds),
           ));
+        const stages = await stageIndexFor(db, data.workspaceId);
         for (const o of openOpps) {
-          if (o.stage === "won" || o.stage === "lost") continue;
+          if (stages.isClosed(o.stage)) continue;
           await db.insert(activities).values({ ...activityRow, relatedType: "opportunity", relatedId: o.id });
           await db.update(opportunities).set({ lastActivityAt: data.receivedAt })
             .where(eq(opportunities.id, o.id));

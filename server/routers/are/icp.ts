@@ -25,6 +25,7 @@ import {
   opportunityContactRoles,
 } from "../../../drizzle/schema";
 import { getDb } from "../../db";
+import { closedStageKeys, lostStageKeys, wonStageKeys } from "../../_core/stageSemantics";
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
@@ -51,7 +52,7 @@ export async function runIcpInference(workspaceId: number): Promise<void> {
     })
     .from(opportunities)
     .leftJoin(accounts, eq(opportunities.accountId, accounts.id))
-    .where(and(eq(opportunities.workspaceId, workspaceId), eq(opportunities.stage, "won")))
+    .where(and(eq(opportunities.workspaceId, workspaceId), inArray(opportunities.stage, await wonStageKeys(db, workspaceId))))
     .limit(200);
 
   // 2. Gather lost deals
@@ -66,7 +67,7 @@ export async function runIcpInference(workspaceId: number): Promise<void> {
     })
     .from(opportunities)
     .leftJoin(accounts, eq(opportunities.accountId, accounts.id))
-    .where(and(eq(opportunities.workspaceId, workspaceId), eq(opportunities.stage, "lost")))
+    .where(and(eq(opportunities.workspaceId, workspaceId), inArray(opportunities.stage, await lostStageKeys(db, workspaceId))))
     .limit(100);
 
   // 3. Gather contact roles on won deals (champion titles)
@@ -388,7 +389,7 @@ export async function runIcpInferenceAllWorkspaces(): Promise<{ regenerated: num
         .from(opportunities)
         .where(and(
           eq(opportunities.workspaceId, ws.id),
-          inArray(opportunities.stage, ["won", "lost"]),
+          inArray(opportunities.stage, await closedStageKeys(db, ws.id)),
         ));
       const closedCount = Number(closed?.n ?? 0);
 

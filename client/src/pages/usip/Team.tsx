@@ -8,6 +8,7 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { ownedWorkNounPhrase, summariseReassigned, totalOwnedWork } from "@shared/ownedWork";
+import { PERMISSION_KEYS, roleTemplate } from "@shared/permissions";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -139,6 +140,14 @@ export default function Team() {
   // Local permissions state (feature -> granted)
   const [localPerms, setLocalPerms] = useState<Record<string, boolean>>({});
   const [permsDirty, setPermsDirty] = useState(false);
+  /**
+   * Which keys the admin actually touched in this dialog. The switches are now
+   * seeded from the EFFECTIVE map (rows layered over role defaults), so saving
+   * `localPerms` wholesale would write six explicit override rows every time
+   * somebody flipped one — freezing the member against any future change to
+   * the role defaults. Only touched keys are sent.
+   */
+  const [permsTouched, setPermsTouched] = useState<Record<string, boolean>>({});
 
   // Set Password dialog
   const [pwTarget, setPwTarget] = useState<any | null>(null);
@@ -295,6 +304,7 @@ export default function Team() {
     onSuccess: () => {
       utils.team.getPermissions.invalidate({ memberId: editTarget?.memberId });
       setPermsDirty(false);
+      setPermsTouched({});
       toast.success("Permissions saved");
     },
     onError: (e) => toast.error(e.message),
@@ -304,8 +314,8 @@ export default function Team() {
     { memberId: editTarget?.memberId ?? 0 },
     {
       enabled: !!editTarget && editDialogTab === "permissions",
-      onSuccess: (d: Record<string, boolean>) => {
-        if (!permsDirty) setLocalPerms(d);
+      onSuccess: (d: { rows: Record<string, boolean>; effective: Record<string, boolean> }) => {
+        if (!permsDirty) setLocalPerms(d.effective);
       },
     } as any,
   );
@@ -315,70 +325,56 @@ export default function Team() {
     { enabled: !!editTarget && editDialogTab === "activity" },
   );
 
-  const PERMISSION_FEATURES: { key: string; label: string; description: string }[] = [
-    { key: "export_data", label: "Export data", description: "Can export leads, contacts, and reports to CSV/Excel" },
-    { key: "manage_sequences", label: "Manage sequences", description: "Can create, edit, and delete email sequences" },
-    { key: "view_all_leads", label: "View all leads", description: "Can view leads owned by other team members" },
-    { key: "manage_integrations", label: "Manage integrations", description: "Can connect and disconnect external integrations" },
-    { key: "access_billing", label: "Access billing", description: "Can view and manage workspace billing and subscription" },
-    { key: "manage_api_keys", label: "Manage API keys", description: "Can create and revoke API keys for the workspace" },
-  ];
+  /**
+   * The keys come from @shared/permissions — the same list server/db.ts
+   * resolves against. They used to be declared here and again on the server,
+   * with nothing tying the two together; the descriptions are the only part
+   * that is UI-only.
+   *
+   * "View all leads" says what it does TODAY, which is nothing: the key is
+   * stored and read by no server code. Data scoping is a separate, approved
+   * piece of work. Labelling it honestly beats a switch that implies a
+   * restriction the server does not apply.
+   */
+  const PERMISSION_DESCRIPTIONS: Record<string, { label: string; description: string }> = {
+    export_data: { label: "Export data", description: "Can download report CSVs and the workspace data export" },
+    manage_sequences: { label: "Manage sequences", description: "Can create, edit, fork, and delete email sequences (pausing a running sequence stays available to everyone)" },
+    view_all_leads: { label: "View all leads", description: "Not yet enforced — lead visibility is not restricted by this switch today" },
+    manage_integrations: { label: "Manage integrations", description: "Can connect and disconnect external integrations" },
+    access_billing: { label: "Access billing", description: "Can open Settings → Billing and credits" },
+    manage_api_keys: { label: "Manage API keys", description: "Can create and revoke API keys for the workspace" },
+  };
+  const PERMISSION_FEATURES: { key: string; label: string; description: string }[] =
+    PERMISSION_KEYS.map((key) => ({ key, ...PERMISSION_DESCRIPTIONS[key] }));
 
   /**
-   * Role-based permission presets.
-   * Keys match PERMISSION_FEATURES; values are the defaults for that role.
-   * super_admin and admin get everything; manager gets most; rep gets minimal.
+   * "Apply template" = reset this member to what their ROLE already resolves
+   * to on the server. Derived from the shared defaults rather than written out
+   * here: the hand-written table disagreed with the server on four of the six
+   * keys, so clicking "Rep" silently revoked manage_sequences, view_all_leads
+   * and manage_integrations while presenting itself as the rep default.
    */
-  const ROLE_PERMISSION_TEMPLATES: Record<string, Record<string, boolean>> = {
-    super_admin: {
-      export_data: true,
-      manage_sequences: true,
-      view_all_leads: true,
-      manage_integrations: true,
-      access_billing: true,
-      manage_api_keys: true,
-    },
-    admin: {
-      export_data: true,
-      manage_sequences: true,
-      view_all_leads: true,
-      manage_integrations: true,
-      access_billing: true,
-      manage_api_keys: false,
-    },
-    manager: {
-      export_data: true,
-      manage_sequences: true,
-      view_all_leads: true,
-      manage_integrations: false,
-      access_billing: false,
-      manage_api_keys: false,
-    },
-    rep: {
-      export_data: false,
-      manage_sequences: false,
-      view_all_leads: false,
-      manage_integrations: false,
-      access_billing: false,
-      manage_api_keys: false,
-    },
-  };
-
   function applyRoleTemplate(role: string) {
-    const template = ROLE_PERMISSION_TEMPLATES[role];
-    if (!template) return;
-    setLocalPerms(template);
+    const tpl = roleTemplate(role === "admin" || role === "super_admin");
+    setLocalPerms(tpl);
+    const touched: Record<string, boolean> = {};
+    for (const k of PERMISSION_KEYS) touched[k] = true;
+    setPermsTouched(touched);
     setPermsDirty(true);
   }
 
   function getPermValue(key: string): boolean {
-    // Use local state if dirty, otherwise fall back to server data
+    // Use local state if dirty, otherwise the server's EFFECTIVE answer —
+    // rows layered over the role defaults. Reading the raw rows here rendered
+    // every unset key as off, so a new rep appeared fully restricted while the
+    // server granted them three of the six.
     if (permsDirty) return localPerms[key] ?? false;
-    return (memberPerms ?? localPerms)[key] ?? false;
+    return (memberPerms?.effective ?? localPerms)[key] ?? false;
   }
 
   function togglePerm(key: string, value: boolean) {
     setLocalPerms((prev) => ({ ...prev, [key]: value }));
+    setPermsTouched((prev) => ({ ...prev, [key]: true }));
     setPermsDirty(true);
   }
 
@@ -1077,7 +1073,7 @@ export default function Team() {
       )}
 
       {/* Edit Member dialog — 3-tab layout */}
-      <Dialog open={!!editTarget} onOpenChange={(v) => { if (!v) { setEditTarget(null); setEditDialogTab("profile"); setPermsDirty(false); } }}>
+      <Dialog open={!!editTarget} onOpenChange={(v) => { if (!v) { setEditTarget(null); setEditDialogTab("profile"); setPermsDirty(false); setPermsTouched({}); } }}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Edit member — {editTarget?.name ?? editTarget?.email}</DialogTitle>
@@ -1145,7 +1141,7 @@ export default function Team() {
                   <div className="space-y-1">
                     <div className="flex items-center justify-between mb-3">
                       <p className="text-xs text-muted-foreground">
-                        Feature-level overrides for this member. Toggles here take precedence over workspace-wide defaults.
+                        Feature-level overrides for this member. Each switch shows the EFFECTIVE answer — what the server would say today — and an override you set here wins over the role default in both directions.
                       </p>
                       <div className="flex items-center gap-1.5 ml-3 shrink-0">
                         <span className="text-xs text-muted-foreground">Apply template:</span>
@@ -1246,7 +1242,7 @@ export default function Team() {
               </Button>
             )}
             <div className="flex items-center gap-2">
-              <Button variant="ghost" onClick={() => { setEditTarget(null); setEditDialogTab("profile"); setPermsDirty(false); }}>Cancel</Button>
+              <Button variant="ghost" onClick={() => { setEditTarget(null); setEditDialogTab("profile"); setPermsDirty(false); setPermsTouched({}); }}>Cancel</Button>
               {editDialogTab === "profile" && (
                 <Button
                   disabled={updateMember.isPending}
@@ -1272,7 +1268,11 @@ export default function Team() {
                   disabled={!permsDirty || setPermissions.isPending}
                   onClick={() => {
                     if (!editTarget) return;
-                    setPermissions.mutate({ memberId: editTarget.memberId, permissions: localPerms });
+                    const changed: Record<string, boolean> = {};
+                    for (const k of PERMISSION_KEYS) {
+                      if (permsTouched[k]) changed[k] = localPerms[k] ?? false;
+                    }
+                    setPermissions.mutate({ memberId: editTarget.memberId, permissions: changed });
                   }}
                 >
                   {setPermissions.isPending ? "Saving…" : "Save permissions"}

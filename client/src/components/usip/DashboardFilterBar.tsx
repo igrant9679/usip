@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select";
 import { Calendar, ChevronDown, Filter, X } from "lucide-react";
 import { useState } from "react";
+import { trpc } from "@/lib/trpc";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 export interface DashboardFilters {
@@ -52,7 +53,8 @@ const PRESETS: Array<{ label: string; value: string }> = [
   { label: "Custom range", value: "custom" },
 ];
 
-const STAGES = [
+/** Loading fallback for the stage dropdown; the live list comes from crmPipelines.get. */
+const LEGACY_STAGES = [
   { label: "Discovery", value: "discovery" },
   { label: "Qualified", value: "qualified" },
   { label: "Proposal", value: "proposal" },
@@ -117,6 +119,11 @@ function activeCount(f: DashboardFilters): number {
 export function DashboardFilterBar({ filters, onChange, members = [] }: DashboardFilterBarProps) {
   const [open, setOpen] = useState(false);
   const count = activeCount(filters);
+  // The six hardcoded options were the DEFAULT pipeline's keys, so a workspace
+  // with custom stages could only filter by stages it does not have.
+  const pipe = trpc.crmPipelines.get.useQuery({} as any, { staleTime: 60_000 });
+  const rows = ((pipe.data as any)?.stages ?? []) as Array<{ key: string; label: string }>;
+  const stageOptions = rows.length > 0 ? rows.map((s) => ({ label: s.label, value: s.key })) : LEGACY_STAGES;
 
   const update = (patch: Partial<DashboardFilters>) => {
     const next = { ...filters, ...patch };
@@ -215,7 +222,7 @@ export function DashboardFilterBar({ filters, onChange, members = [] }: Dashboar
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">All stages</SelectItem>
-          {STAGES.map((s) => (
+          {stageOptions.map((s) => (
             <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
           ))}
         </SelectContent>

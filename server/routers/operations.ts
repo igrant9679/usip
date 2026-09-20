@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
+import { DEFAULT_STAGE_ORDER } from "@shared/stageSemantics";
 import {
   accounts,
   activities,
@@ -10,6 +11,7 @@ import {
   campaignStepStats,
   campaigns,
   contacts,
+  crmPipelineStages,
   emailDrafts,
   sendingAccounts,
   senderPools,
@@ -34,6 +36,7 @@ import { recordAudit } from "../audit";
 import { recordEmailsSent } from "../usageCounters";
 import { logEmailSend } from "../services/email/logSend";
 import { getDb } from "../db";
+import { closedStageKeys, stageIndexFor } from "../_core/stageSemantics";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
@@ -103,7 +106,7 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
     }).from(opportunities)
       .where(and(
         eq(opportunities.workspaceId, rule.workspaceId),
-        sql`${opportunities.stage} NOT IN ('won', 'lost')`,
+        notInArray(opportunities.stage, await closedStageKeys(db, rule.workspaceId)),
         sql`${opportunities.daysInStage} >= ${minDays}`,
         ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
       ));
@@ -317,7 +320,7 @@ export const workflowsRouter = router({
         }).from(opportunities)
           .where(and(
             eq(opportunities.workspaceId, ctx.workspace.id),
-            sql`${opportunities.stage} NOT IN ('won', 'lost')`,
+            notInArray(opportunities.stage, await closedStageKeys(db, ctx.workspace.id)),
             sql`${opportunities.daysInStage} >= ${minDays}`,
             ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
           ));
@@ -399,10 +402,11 @@ export const campaignsRouter = router({
     const db = await getDb();
     if (!db) return null;
     const opps = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), eq(opportunities.campaignId, input.id)));
+    const stages = await stageIndexFor(db, ctx.workspace.id);
     return {
       pipelineCount: opps.length,
       pipelineValue: opps.reduce((s, o) => s + Number(o.value), 0),
-      wonValue: opps.filter((o) => o.stage === "won").reduce((s, o) => s + Number(o.value), 0),
+      wonValue: opps.filter((o) => stages.isWon(o.stage)).reduce((s, o) => s + Number(o.value), 0),
     };
   }),
 
@@ -912,6 +916,40 @@ type WidgetFilters = {
   source?: string;
 };
 
+/**
+ * The workspace's stage keys in configured sortOrder, plus any key that only
+ * exists in the data.
+ *
+ * Both the funnel and the stage-distribution widget used to hardcode the six
+ * default keys, so a workspace with custom stages got a chart of empty columns
+ * and its real stages were nowhere. A deleted stage keeps its deals (the delete
+ * confirm says so), which is why data-only keys are appended rather than
+ * dropped. crm.stageFunnel reads the same table for the same reason.
+ */
+async function orderedStageKeys(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  rows: Array<{ stage: string }>,
+  keep: (key: string) => boolean,
+): Promise<string[]> {
+  const defs = await db
+    .select({ key: crmPipelineStages.key })
+    .from(crmPipelineStages)
+    .where(eq(crmPipelineStages.workspaceId, workspaceId))
+    .orderBy(crmPipelineStages.sortOrder);
+  const seed = defs.length > 0 ? defs.map((d) => d.key) : DEFAULT_STAGE_ORDER;
+  const out: string[] = [];
+  const seen: Record<string, boolean> = {};
+  const push = (k: string) => {
+    if (!k || seen[k] || !keep(k)) return;
+    seen[k] = true;
+    out.push(k);
+  };
+  for (const k of seed) push(k);
+  for (const r of rows) push(r.stage);
+  return out;
+}
+
 /** Build a date range condition for opportunity.createdAt or closeDate */
 function dateRange(from?: string, to?: string) {
   const conds: any[] = [];
@@ -928,6 +966,10 @@ async function resolveWidgetData(
   const db = await getDb();
   if (!db) return { type: w.type, title: w.title, value: null };
   const cfg = w.config ?? {};
+  // Hoisted once: this function runs once PER WIDGET, so a ten-widget dashboard
+  // would otherwise be ten stage-flag reads on one page load. The index itself
+  // is memoized ~60s per workspace on top of that.
+  const stages = await stageIndexFor(db, workspaceId);
 
   /* ── Helper: build base opportunity conditions with filters ── */
   const oppBase = () => {
@@ -952,33 +994,33 @@ async function resolveWidgetData(
     switch (cfg.metric) {
       case "pipeline_value": {
         const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
-          .from(opportunities).where(and(oppBase(), sql`${opportunities.stage} NOT IN ('won','lost')`));
+          .from(opportunities).where(and(oppBase(), notInArray(opportunities.stage, stages.closedKeys())));
         return { type: w.type, title: w.title, value: Number(r?.s ?? 0), format: "currency" };
       }
       case "closed_won_qtr": {
         const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
-          .from(opportunities).where(and(oppBase(), eq(opportunities.stage, "won")));
+          .from(opportunities).where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
         return { type: w.type, title: w.title, value: Number(r?.s ?? 0), format: "currency" };
       }
       case "revenue": {
         const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
-          .from(opportunities).where(and(oppBase(), eq(opportunities.stage, "won")));
+          .from(opportunities).where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
         return { type: w.type, title: w.title, value: Number(r?.s ?? 0), format: "currency" };
       }
       case "win_rate": {
         const all = await db.select().from(opportunities).where(oppBase());
-        const closed = all.filter((o) => o.stage === "won" || o.stage === "lost");
-        const wr = closed.length === 0 ? 0 : (closed.filter((o) => o.stage === "won").length / closed.length) * 100;
+        const closed = all.filter((o) => stages.isClosed(o.stage));
+        const wr = closed.length === 0 ? 0 : (closed.filter((o) => stages.isWon(o.stage)).length / closed.length) * 100;
         return { type: w.type, title: w.title, value: Math.round(wr), format: "percent" };
       }
       case "avg_deal": {
-        const won = await db.select().from(opportunities).where(and(oppBase(), eq(opportunities.stage, "won")));
+        const won = await db.select().from(opportunities).where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
         const avg = won.length === 0 ? 0 : won.reduce((s, o) => s + Number(o.value), 0) / won.length;
         return { type: w.type, title: w.title, value: Math.round(avg), format: "currency" };
       }
       case "sales_cycle_length": {
         const won = await db.select().from(opportunities)
-          .where(and(oppBase(), eq(opportunities.stage, "won")));
+          .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
         const withDates = won.filter((o) => o.closeDate);
         const avgDays = withDates.length === 0 ? 0 :
           withDates.reduce((s, o) => s + Math.max(0, Math.round((o.closeDate!.getTime() - o.createdAt.getTime()) / 86400000)), 0) / withDates.length;
@@ -1013,16 +1055,20 @@ async function resolveWidgetData(
         return { type: w.type, title: w.title, value: Math.round(rate), format: "percent" };
       }
       case "reply_rate": {
-        // Ratio of won+lost opps to all opps (proxy for reply/engagement)
+        // Share of deals that have REACHED A CLOSING STAGE, won or lost.
+        // 2026-09-20: this used to name-match 'won' + 'negotiation' +
+        // 'proposal', a definition no stage flag can express and that a custom
+        // pipeline never satisfies at all. "Closed" is the closest honest
+        // reading of the engagement proxy this widget claims to be.
         const all = await db.select().from(opportunities).where(oppBase());
-        const engaged = all.filter((o) => o.stage === "won" || o.stage === "negotiation" || o.stage === "proposal").length;
+        const engaged = all.filter((o) => stages.isClosed(o.stage)).length;
         const rate = all.length === 0 ? 0 : (engaged / all.length) * 100;
         return { type: w.type, title: w.title, value: Math.round(rate), format: "percent" };
       }
       default: {
         // Legacy fallback for old metrics
         const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
-          .from(opportunities).where(and(oppBase(), sql`${opportunities.stage} NOT IN ('won','lost')`));
+          .from(opportunities).where(and(oppBase(), notInArray(opportunities.stage, stages.closedKeys())));
         return { type: w.type, title: w.title, value: Number(r?.s ?? 0), format: "currency" };
       }
     }
@@ -1033,10 +1079,12 @@ async function resolveWidgetData(
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "funnel" || w.type === "pipeline_stage") {
     const all = await db.select().from(opportunities).where(oppBase());
-    const stages = ["discovery", "qualified", "proposal", "negotiation", "won"];
+    // Lost is excluded — a funnel is the path to a win — but "excluded" now
+    // means flagged Lost, not named "lost".
+    const stageKeys = await orderedStageKeys(db, workspaceId, all, (k) => !stages.isLost(k));
     return {
       type: w.type, title: w.title,
-      series: stages.map((s) => ({
+      series: stageKeys.map((s) => ({
         stage: s,
         count: all.filter((o) => o.stage === s).length,
         value: all.filter((o) => o.stage === s).reduce((sum, o) => sum + Number(o.value), 0),
@@ -1051,7 +1099,7 @@ async function resolveWidgetData(
     const months = sixMonths();
     if (cfg.metric === "closed_won" || cfg.metric === "revenue") {
       const won = await db.select().from(opportunities)
-        .where(and(oppBase(), eq(opportunities.stage, "won")));
+        .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
       const out = months.map((m) => ({ label: m.label, value: 0 }));
       for (const o of won) {
         if (!o.closeDate) continue;
@@ -1089,7 +1137,7 @@ async function resolveWidgetData(
     }
     // Default: closed-won by month
     const won = await db.select().from(opportunities)
-      .where(and(oppBase(), eq(opportunities.stage, "won")));
+      .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
     const out = months.map((m) => ({ label: m.label, value: 0 }));
     for (const o of won) {
       if (!o.closeDate) continue;
@@ -1106,16 +1154,16 @@ async function resolveWidgetData(
   if (w.type === "pie" || w.type === "donut") {
     if (cfg.metric === "stage_distribution") {
       const all = await db.select().from(opportunities).where(oppBase());
-      const stages = ["discovery", "qualified", "proposal", "negotiation", "won", "lost"];
+      const stageKeys = await orderedStageKeys(db, workspaceId, all, () => true);
       return {
         type: w.type, title: w.title,
-        series: stages.map((s) => ({ name: s, value: all.filter((o) => o.stage === s).length })).filter((s) => s.value > 0),
+        series: stageKeys.map((s) => ({ name: s, value: all.filter((o) => o.stage === s).length })).filter((s) => s.value > 0),
       };
     }
     // Default: win/loss ratio
     const all = await db.select().from(opportunities).where(oppBase());
-    const won = all.filter((o) => o.stage === "won").length;
-    const lost = all.filter((o) => o.stage === "lost").length;
+    const won = all.filter((o) => stages.isWon(o.stage)).length;
+    const lost = all.filter((o) => stages.isLost(o.stage)).length;
     const open = all.length - won - lost;
     return { type: w.type, title: w.title, series: [{ name: "Won", value: won }, { name: "Lost", value: lost }, { name: "Open", value: open }].filter((s) => s.value > 0) };
   }
@@ -1182,7 +1230,7 @@ async function resolveWidgetData(
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "leaderboard") {
     const won = await db.select().from(opportunities)
-      .where(and(oppBase(), eq(opportunities.stage, "won")));
+      .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
     const repMap = new Map<number, { count: number; value: number }>();
     for (const o of won) {
       if (!o.ownerUserId) continue;
@@ -1225,7 +1273,7 @@ async function resolveWidgetData(
   if (w.type === "goal_progress") {
     const target = Number(cfg.target ?? 1000000);
     const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
-      .from(opportunities).where(and(oppBase(), sql`${opportunities.stage} NOT IN ('lost')`));
+      .from(opportunities).where(and(oppBase(), notInArray(opportunities.stage, stages.lostKeys())));
     const current = Number(r?.s ?? 0);
     return { type: "goal_progress", title: w.title, current, target, pct: Math.min(100, Math.round((current / target) * 100)) };
   }
@@ -1243,7 +1291,7 @@ async function resolveWidgetData(
     const getVal = async (from: Date, to: Date) => {
       const conds: any[] = [
         eq(opportunities.workspaceId, workspaceId),
-        eq(opportunities.stage, "won"),
+        inArray(opportunities.stage, stages.wonKeys()),
         sql`${opportunities.closeDate} >= ${from}`,
         sql`${opportunities.closeDate} <= ${to}`,
       ];
@@ -1272,12 +1320,12 @@ async function resolveWidgetData(
 
     const rows = memberRows.map((m) => {
       const myOpps = allOpps.filter((o) => o.ownerUserId === m.userId);
-      const myWon = myOpps.filter((o) => o.stage === "won");
-      const myClosed = myOpps.filter((o) => o.stage === "won" || o.stage === "lost");
+      const myWon = myOpps.filter((o) => stages.isWon(o.stage));
+      const myClosed = myOpps.filter((o) => stages.isClosed(o.stage));
       const myActs = allActs.filter((a) => a.actorUserId === m.userId);
       const winRate = myClosed.length === 0 ? 0 : Math.round((myWon.length / myClosed.length) * 100);
       const revenue = myWon.reduce((s, o) => s + Number(o.value), 0);
-      const pipeline = myOpps.filter((o) => !(["won", "lost"].includes(o.stage))).reduce((s, o) => s + Number(o.value), 0);
+      const pipeline = myOpps.filter((o) => stages.isOpen(o.stage)).reduce((s, o) => s + Number(o.value), 0);
       return { name: m.name ?? `Rep #${m.userId}`, deals: myWon.length, revenue, pipeline, winRate, activities: myActs.length };
     }).filter((r) => r.deals > 0 || r.pipeline > 0 || r.activities > 0)
       .sort((a, b) => b.revenue - a.revenue)

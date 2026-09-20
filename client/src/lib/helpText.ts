@@ -95,7 +95,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/v2/opportunities": { body: "Individual deals with their value, stage and history.", article: "opportunities-deep-dive" },
   "/v2/meetings": { body: "Booked meetings and the AI's meeting preparation.", article: "meeting-autopilot-reminders" },
   "/customers": { body: "Accounts that have already bought, with health scores and renewal dates." },
-  "/renewals": { body: "Contracts coming up for renewal, and which are at risk of churning." },
+  "/renewals": { body: "Contracts coming up for renewal, bucketed by how far off the contract end date is. Past due means the date has gone by with no outcome recorded; renewed and churned come from a contract amendment." },
   "/qbrs": { body: "Quarterly business reviews: the AI drafts the prep, you run the meeting." },
 
   "/v2/deals": { body: "Open deals and what stage each is at.", article: "managing-pipeline" },

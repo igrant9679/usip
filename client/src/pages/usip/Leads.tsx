@@ -12,6 +12,7 @@ import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { isEmptyEmailBody } from "@shared/emailBody";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermissions";
 import {
   Loader2, Plus, Sparkles, Target, UserCheck,
   MoreHorizontal, Pencil, Trash2, Send, Tag, Megaphone, Wand2, Download, UserPlus,
@@ -221,6 +222,10 @@ export default function Leads() {
   const [addToCampaignOpen, setAddToCampaignOpen] = useState(false);
   const [addToSegmentOpen, setAddToSegmentOpen] = useState(false);
   const [editLead, setEditLead] = useState<any | null>(null);
+  // Hiding the Export button is UX, not a boundary — the CSV is built here in
+  // the browser from rows leads.list already returned, so there is no server
+  // call to refuse. See the comment on reports.exportCsv.
+  const { can } = usePermissions();
   const utils = trpc.useUtils();
   const { data, isLoading, error, refetch } = trpc.leads.list.useQuery({ search });
 
@@ -301,6 +306,7 @@ export default function Leads() {
             </Button>
           </>
         )}
+        {can("export_data") && (
         <Button variant="outline" onClick={() => {
           const rows = data ?? [];
           if (!rows.length) return;
@@ -311,6 +317,7 @@ export default function Leads() {
         }} disabled={!data?.length}>
           <Download className="size-4" /> Export CSV
         </Button>
+        )}
         <Button onClick={() => setCreateOpen(true)} data-tour-id="leads-new-button"><Plus className="size-4" /> New lead</Button>
       </PageHeader>
       <div className="p-4 md:p-5">

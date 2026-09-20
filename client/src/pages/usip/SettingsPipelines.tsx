@@ -199,8 +199,11 @@ export default function SettingsPipelines() {
               label: String(f.get("label")),
               sortOrder: (stages[stages.length - 1]?.sortOrder ?? 0) + 10,
               defaultWinProb: Number(f.get("defaultWinProb") ?? 20),
-              isWon: false,
-              isLost: false,
+              // The dialog always sent false/false, so a new closing stage had to
+              // be created and then edited before it counted as anything.
+              // Lost wins when both are ticked, matching shared/stageSemantics.
+              isWon: f.get("isWon") === "on" && f.get("isLost") !== "on",
+              isLost: f.get("isLost") === "on",
             });
             setNewStageOpen(false);
           }}>
@@ -209,6 +212,11 @@ export default function SettingsPipelines() {
           <SelectField name="defaultWinProb" label="Default win probability"
             options={[0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map((p) => ({ value: String(p), label: `${p}%` }))}
             defaultValue="20" />
+          <div className="flex items-center gap-4">
+            <label className="text-xs flex items-center gap-1"><input type="checkbox" name="isWon" /> Counts as Won</label>
+            <label className="text-xs flex items-center gap-1"><input type="checkbox" name="isLost" /> Counts as Lost</label>
+          </div>
+          <p className="text-xs text-muted-foreground">These flags — not the stage key — decide what counts as revenue, what counts as a loss, and what the forecast treats as still open.</p>
         </FormDialog>
       )}
     </Shell>

@@ -10,6 +10,7 @@ import {
   getWorkspaceMembers,
 } from "../db";
 import { eq } from "drizzle-orm";
+import { stageIndexFor } from "../_core/stageSemantics";
 import { workspaces, workspaceSettings, brandVoiceProfiles } from "../../drizzle/schema";
 import { slugify } from "@shared/slugify";
 
@@ -207,7 +208,10 @@ export const workspaceRouter = router({
   }),
 
   summary: workspaceProcedure.query(async ({ ctx }) => {
-    return getWorkspaceCounts(ctx.workspace.id);
+    const db = await getDb();
+    if (!db) return null;
+    const stages = await stageIndexFor(db, ctx.workspace.id);
+    return getWorkspaceCounts(ctx.workspace.id, { closed: stages.closedKeys(), won: stages.wonKeys() });
   }),
 
   /**

@@ -14,6 +14,7 @@ import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermissions";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -170,6 +171,8 @@ export default function SequencesV2() {
   const [hideFilters, setHideFilters] = useState(false);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Status", "Owned by"]));
   const [checked, setChecked] = useState<Set<number>>(new Set());
+  // sequences.create / fork refuse a member whose manage_sequences is denied.
+  const { can } = usePermissions();
   const [choiceOpen, setChoiceOpen] = useState(false);
   const [tplOpen, setTplOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -213,7 +216,7 @@ export default function SequencesV2() {
             <Send className="size-4" style={{ color: accent }} />
             <h1 className="text-[15px] font-semibold tracking-tight">Sequences</h1>
             <div className="flex-1" />
-            <Button size="sm" className="h-7 gap-1.5" style={{ backgroundColor: accent }} onClick={() => setChoiceOpen(true)}><Plus className="size-3.5" /> Create sequence</Button>
+            {can("manage_sequences") && <Button size="sm" className="h-7 gap-1.5" style={{ backgroundColor: accent }} onClick={() => setChoiceOpen(true)}><Plus className="size-3.5" /> Create sequence</Button>}
           </div>
           <div className="flex items-center gap-1 mt-1.5">
             {TABS.map((t) => (

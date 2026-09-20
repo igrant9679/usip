@@ -7,14 +7,18 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
+import { activeOwnerOrNull } from "../_core/activeMembers";
+import { closedStageKeys, resolvedStageFor, stageIndexFor } from "../_core/stageSemantics";
+import { activeTaskStatuses } from "@shared/taskStatus";
 import { TRPCError } from "@trpc/server";
-import { eq, and, isNull, desc, lt, gte, sql } from "drizzle-orm";
+import { eq, and, inArray, isNull, desc, like, lt, gte, notInArray, sql } from "drizzle-orm";
 import {
   pipelineAlerts,
   opportunities,
   activities,
   opportunityContactRoles,
   workflowRules,
+  tasks,
   users,
   crmPipelineStages,
 } from "../../drizzle/schema";
@@ -42,7 +46,8 @@ export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ sc
   const closingSoonCutoff = new Date(now.getTime() + ALERT_THRESHOLDS.closingSoonDays * 86400000);
 
   const opps = await db.select().from(opportunities).where(eq(opportunities.workspaceId, wsId));
-  const activeOpps = opps.filter((o) => !["won", "lost"].includes(o.stage));
+  const stages = await stageIndexFor(db, wsId);
+  const activeOpps = opps.filter((o) => stages.isOpen(o.stage));
   let created = 0;
 
   for (const opp of activeOpps) {
@@ -137,9 +142,8 @@ export const pipelineAlertsRouter = router({
         )
       );
 
-    const activeOpps = opps.filter((o) =>
-      !["won", "lost"].includes(o.stage)
-    );
+    const stages = await stageIndexFor(db, wsId);
+    const activeOpps = opps.filter((o) => stages.isOpen(o.stage));
 
     let created = 0;
 
@@ -420,7 +424,7 @@ export const pipelineAlertsRouter = router({
         .where(
           and(
             eq(opportunities.workspaceId, ctx.workspace.id),
-            sql`${opportunities.stage} NOT IN ('won', 'lost')`,
+            notInArray(opportunities.stage, await closedStageKeys(db, ctx.workspace.id)),
           )
         );
 
@@ -505,7 +509,14 @@ export const pipelineAlertsRouter = router({
         });
       }
       const [opp] = await db
-        .select({ accountId: opportunities.accountId, value: opportunities.value, ownerUserId: opportunities.ownerUserId })
+        .select({
+          accountId: opportunities.accountId,
+          value: opportunities.value,
+          ownerUserId: opportunities.ownerUserId,
+          pipelineId: opportunities.pipelineId,
+          name: opportunities.name,
+          stage: opportunities.stage,
+        })
         .from(opportunities)
         .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)))
         .limit(1);
@@ -518,21 +529,54 @@ export const pipelineAlertsRouter = router({
             eq(opportunities.workspaceId, ctx.workspace.id),
           )
         );
-      // Closed Won here too → ensure the account becomes a Customer (same as the
-      // kanban path). Detect won via canonical "won" or a custom isWon stage.
+      // Won/lost from the flags on the deal's OWN pipeline — the same
+      // resolution crm.setStage uses. 2026-09-20: this used to accept any
+      // isWon row anywhere in the workspace (so a custom Won stage in an
+      // unrelated pipeline decided this deal), and it had no closed-LOST
+      // handling at all. Two endpoints, one user gesture, two behaviours.
       let customerCreated = false;
       if (opp) {
-        const [stageMeta] = await db
-          .select({ isWon: crmPipelineStages.isWon })
-          .from(crmPipelineStages)
-          .where(and(eq(crmPipelineStages.workspaceId, ctx.workspace.id), eq(crmPipelineStages.key, input.newStage)))
-          .limit(1);
-        const isWon = input.newStage === "won" || !!stageMeta?.isWon;
-        if (isWon) {
+        const meta = await resolvedStageFor(db, ctx.workspace.id, opp.pipelineId ?? null, input.newStage);
+        if (meta.isWon) {
           try {
             customerCreated = await ensureCustomerForWonOpp(db, ctx.workspace.id, opp, ctx.user.id);
           } catch (e) {
             console.warn("[pipelineAlerts.moveDealStage] customer creation failed:", e);
+          }
+        }
+        // Closed Lost → the ~90-day win-back touch the kanban path has created
+        // since closed-lost stopped being a dead end. Owner resolved through
+        // the membership gate: an auto-created task filed under a departed rep
+        // sits in nobody's queue.
+        if (meta.isLost) {
+          try {
+            const dealName = opp.name ?? "the deal";
+            const existing = await db.select({ id: tasks.id }).from(tasks).where(and(
+              eq(tasks.workspaceId, ctx.workspace.id),
+              eq(tasks.relatedType, "opportunity"),
+              eq(tasks.relatedId, input.opportunityId),
+              like(tasks.title, "Win-back:%"),
+              inArray(tasks.status, activeTaskStatuses()),
+            )).limit(1);
+            if (existing.length === 0) {
+              await db.insert(tasks).values({
+                workspaceId: ctx.workspace.id,
+                title: `Win-back: ${dealName}`.slice(0, 240),
+                description: `"${dealName}" closed lost from stage "${opp.stage}". Check back in — circumstances (budget, priorities, the champion's role) often change within a quarter.`,
+                type: "follow_up",
+                priority: "normal",
+                status: "open",
+                dueAt: new Date(Date.now() + 90 * 86400000),
+                ownerUserId: await activeOwnerOrNull(ctx.workspace.id, opp.ownerUserId),
+                relatedType: "opportunity",
+                relatedId: input.opportunityId,
+                source: "ai",
+                aiReasoning: "Auto-created on closed-lost so the deal re-enters nurture instead of being abandoned.",
+                aiConfidence: 70,
+              } as never);
+            }
+          } catch (e) {
+            console.warn("[pipelineAlerts.moveDealStage] closed-lost win-back task failed:", e);
           }
         }
       }
@@ -569,7 +613,7 @@ export const pipelineAlertsRouter = router({
     const openOpps = await db
       .select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value, daysInStage: opportunities.daysInStage, ownerId: opportunities.ownerUserId })
       .from(opportunities)
-      .where(and(eq(opportunities.workspaceId, wsId), sql`${opportunities.stage} NOT IN ('won', 'lost')`));
+      .where(and(eq(opportunities.workspaceId, wsId), notInArray(opportunities.stage, await closedStageKeys(db, wsId))));
 
     const stuckDeals = openOpps.filter((opp) => {
       const days = opp.daysInStage ?? 0;

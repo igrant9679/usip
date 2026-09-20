@@ -22,6 +22,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermissions";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -152,12 +153,19 @@ export default function SettingsHub() {
     ? (params.section as string)
     : "profile";
 
+  // "Billing and credits" is the one section behind a per-member permission
+  // (access_billing). Granted by default — only an explicit deny row on the
+  // Team page removes it — so for almost every member this filter is a no-op.
+  const { can } = usePermissions();
+  const canBilling = can("access_billing");
+
   const filteredGroups = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return GROUPS;
-    return GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => i.label.toLowerCase().includes(q)) }))
+    const visible = GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => i.id !== "billing" || canBilling) }));
+    if (!q) return visible.filter((g) => g.items.length > 0);
+    return visible.map((g) => ({ ...g, items: g.items.filter((i) => i.label.toLowerCase().includes(q)) }))
       .filter((g) => g.items.length > 0);
-  }, [query]);
+  }, [query, canBilling]);
 
   const go = (it: HubItem) => {
     if (it.internal) navigate(`/v2/settings/${it.id}`);

@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { activeTaskStatuses } from "@shared/taskStatus";
-import { and, desc, eq, inArray, isNull, isNotNull, like, lt, lte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, isNotNull, like, lt, lte, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { invokeLLM } from "../_core/llm";
 import {
@@ -47,6 +47,7 @@ import { linkEmailLogToDraft } from "../services/email/logSend";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull } from "../_core/activeMembers";
+import { invalidateStageIndex, resolvedStageFor, stageIndexFor, wonStageKeys } from "../_core/stageSemantics";
 import { notifyIfEnabled } from "../services/policyNotify";
 import { isSuppressed, makeUnsubscribeUrl, unsubscribeHeaders } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
@@ -1582,25 +1583,17 @@ export const opportunitiesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(opportunities).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
     if (!before) throw new TRPCError({ code: "NOT_FOUND" });
-    // Look up the new stage's metadata in the configured pipeline to pick up isWon/isLost/defaultWinProb.
-    // Falls back to legacy heuristics ("won" / "lost") for backwards compatibility with custom-built scripts.
-    let winProb = before.winProb;
-    let isWon = input.stage === "won";
-    let isLost = input.stage === "lost";
-    if (before.pipelineId) {
-      const stageRows = await db.select().from(crmPipelineStages)
-        .where(and(
-          eq(crmPipelineStages.workspaceId, ctx.workspace.id),
-          eq(crmPipelineStages.pipelineId, before.pipelineId),
-          eq(crmPipelineStages.key, input.stage),
-        ));
-      const s = stageRows[0];
-      if (s) {
-        isWon = !!s.isWon;
-        isLost = !!s.isLost;
-        winProb = s.defaultWinProb ?? winProb;
-      }
-    }
+    // Won/lost comes from the stage's FLAGS, never from its name — see
+    // server/_core/stageSemantics.ts. 2026-09-20: this used to be gated on
+    // `if (before.pipelineId)`, and pipelineId is nullable with nothing
+    // backfilling it — so every legacy deal, and everything proposals.ts
+    // creates, skipped the flags entirely and fell back to matching the
+    // literal strings "won"/"lost". A workspace whose closing stage is keyed
+    // `signed` never got the Closed Won → Customer step on those deals.
+    const meta = await resolvedStageFor(db, ctx.workspace.id, before.pipelineId ?? null, input.stage);
+    const isWon = meta.isWon;
+    const isLost = meta.isLost;
+    let winProb = meta.defaultWinProb ?? before.winProb;
     if (isWon) winProb = 100;
     if (isLost) winProb = 0;
     await db.update(opportunities).set({ stage: input.stage, winProb, daysInStage: 0 }).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
@@ -1838,8 +1831,9 @@ export const opportunitiesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const allRows = await db.select().from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id));
+    const stageIdx = await stageIndexFor(db, ctx.workspace.id);
     // Collect all available stages (excluding lost) for the filter dropdown
-    const availableStages = [...new Set(allRows.filter((o) => o.stage !== "lost").map((o) => o.stage))].sort();
+    const availableStages = [...new Set(allRows.filter((o) => !stageIdx.isLost(o.stage)).map((o) => o.stage))].sort();
     const filterStages = input?.stages && input.stages.length > 0 ? input.stages : null;
     const rows = filterStages ? allRows.filter((o) => filterStages.includes(o.stage)) : allRows;
     const byMonth: Record<string, { month: string; total: number; weighted: number; count: number; stages: Record<string, number> }> = {};
@@ -1847,7 +1841,7 @@ export const opportunitiesRouter = router({
     let grandTotal = 0;
     let grandWeighted = 0;
     for (const opp of rows) {
-      if (opp.stage === "lost") continue;
+      if (stageIdx.isLost(opp.stage)) continue;
       const val = Number(opp.value ?? 0);
       const prob = opp.winProb ?? 20;
       const weighted = val * (prob / 100);
@@ -1888,7 +1882,12 @@ export const opportunitiesRouter = router({
         : [];
       const cMap = new Map(oppContacts.map((c) => [c.id, c]));
       const contactRoles = roles.map((r) => ({ ...r, contact: cMap.get(r.contactId) ?? null }));
-      return { opportunity: opp, account, contactRoles };
+      // The detail page's Win/Loss reason editors tested `stage === "won"`, so a
+      // workspace with a custom closing stage was offered neither field and
+      // could never record why a deal closed. The row carries pipelineId, so
+      // resolve the flags here rather than making the client guess.
+      const stageMeta = await resolvedStageFor(db, ctx.workspace.id, opp.pipelineId ?? null, opp.stage);
+      return { opportunity: opp, account, contactRoles, stageMeta: { isWon: stageMeta.isWon, isLost: stageMeta.isLost } };
     }),
 
   /**
@@ -1946,6 +1945,7 @@ export const opportunitiesRouter = router({
         .select()
         .from(opportunities)
         .where(eq(opportunities.workspaceId, ctx.workspace.id));
+      const stages = await stageIndexFor(db, ctx.workspace.id);
 
       // Build month buckets for the last N months
       const buckets: Record<string, { label: string; revenue: number; forecast: number }> = {};
@@ -1964,9 +1964,9 @@ export const opportunitiesRouter = router({
         if (!closeDate) continue;
         const key = `${closeDate.getFullYear()}-${String(closeDate.getMonth() + 1).padStart(2, "0")}`;
         if (!buckets[key]) continue;
-        if (opp.stage === "won") {
+        if (stages.isWon(opp.stage)) {
           buckets[key].revenue += val;
-        } else if (opp.stage !== "lost") {
+        } else if (!stages.isLost(opp.stage)) {
           buckets[key].forecast += val * (prob / 100);
         }
       }
@@ -1986,10 +1986,11 @@ export const opportunitiesRouter = router({
     const allOpps = await db.select().from(opportunities).where(eq(opportunities.workspaceId, wid));
     const allLeads = await db.select({ id: leads.id, createdAt: leads.createdAt }).from(leads).where(eq(leads.workspaceId, wid));
     const allCustomers = await db.select({ id: customers.id, createdAt: customers.createdAt }).from(customers).where(eq(customers.workspaceId, wid));
-    const openOpps = allOpps.filter((o) => o.stage !== "won" && o.stage !== "lost");
-    const wonOpps = allOpps.filter((o) => o.stage === "won");
+    const stages = await stageIndexFor(db, wid);
+    const openOpps = allOpps.filter((o) => stages.isOpen(o.stage));
+    const wonOpps = allOpps.filter((o) => stages.isWon(o.stage));
     const pipelineNow = openOpps.reduce((s, o) => s + Number(o.value ?? 0), 0);
-    const pipelinePrev = allOpps.filter((o) => o.stage !== "won" && o.stage !== "lost" && (o.updatedAt ?? 0) >= lastMonthStart && (o.updatedAt ?? 0) <= lastMonthEnd).reduce((s, o) => s + Number(o.value ?? 0), 0);
+    const pipelinePrev = allOpps.filter((o) => stages.isOpen(o.stage) && (o.updatedAt ?? 0) >= lastMonthStart && (o.updatedAt ?? 0) <= lastMonthEnd).reduce((s, o) => s + Number(o.value ?? 0), 0);
     const closedWonNow = wonOpps.filter((o) => (o.updatedAt ?? 0) >= thisMonthStart).length;
     const closedWonPrev = wonOpps.filter((o) => (o.updatedAt ?? 0) >= lastMonthStart && (o.updatedAt ?? 0) <= lastMonthEnd).length;
     const leadsNow = allLeads.filter((l) => (l.createdAt ?? 0) >= thisMonthStart).length;
@@ -2071,6 +2072,7 @@ export const opportunitiesRouter = router({
     const db = await getDb();
     if (!db) return [];
     const opps = await db.select().from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id));
+    const stages = await stageIndexFor(db, ctx.workspace.id);
     const now = new Date();
     const qStart = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
     const qEnd = new Date(qStart.getFullYear(), qStart.getMonth() + 3, 1);
@@ -2080,11 +2082,11 @@ export const opportunitiesRouter = router({
       if (!rollup[key]) rollup[key] = { ownerUserId: o.ownerUserId ?? null, openCount: 0, total: 0, weighted: 0, commit: 0, bestCase: 0, wonThisQuarter: 0 };
       const v = Number(o.value ?? 0);
       const p = o.winProb ?? 20;
-      if (o.stage === "won") {
+      if (stages.isWon(o.stage)) {
         if (o.closeDate && o.closeDate >= qStart && o.closeDate < qEnd) rollup[key].wonThisQuarter += v;
         continue;
       }
-      if (o.stage === "lost") continue;
+      if (stages.isClosed(o.stage)) continue;
       rollup[key].openCount += 1;
       rollup[key].total += v;
       rollup[key].weighted += v * (p / 100);
@@ -2097,7 +2099,8 @@ export const opportunitiesRouter = router({
   stageFunnel: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
-    const rows = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), sql`${opportunities.stage} NOT IN ('won','lost')`))
+    const stages = await stageIndexFor(db, ctx.workspace.id);
+    const rows = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), notInArray(opportunities.stage, stages.closedKeys())))
 
     // The order used to be hardcoded as ["prospect",…,"closing"] — stage keys
     // that do not exist in this system. The real default keys are discovery /
@@ -2121,7 +2124,7 @@ export const opportunitiesRouter = router({
       ? stageDefs
       : LEGACY_STAGES.map((s) => ({ key: s.key, label: s.label, sortOrder: s.sortOrder }));
     for (const s of seed) {
-      if (s.key === "won" || s.key === "lost") continue;
+      if (stages.isClosed(s.key)) continue;
       if (!labelByKey.has(s.key)) { labelByKey.set(s.key, s.label); ordered.push(s.key); }
     }
 
@@ -2147,7 +2150,7 @@ export const opportunitiesRouter = router({
     const db = await getDb();
     if (!db) return [];
     const thisMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
-    const rows = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), eq(opportunities.stage, "won")));
+    const rows = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), inArray(opportunities.stage, await wonStageKeys(db, ctx.workspace.id))));
     const thisMonth = rows.filter((o) => (o.updatedAt ?? 0) >= thisMonthStart);
     const buildMap = (src: typeof rows) => {
       const m: Record<number, { value: number; count: number }> = {};
@@ -2165,9 +2168,10 @@ export const opportunitiesRouter = router({
     const db = await getDb();
     if (!db) return { won: 0, lost: 0, wonValue: 0, lostValue: 0 };
     const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
-    const rows = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), sql`${opportunities.stage} IN ('won','lost')`));
+    const stages = await stageIndexFor(db, ctx.workspace.id);
+    const rows = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), inArray(opportunities.stage, stages.closedKeys())));
     const recent = rows.filter((o) => (o.updatedAt ?? 0) >= cutoff);
-    return { won: recent.filter((o) => o.stage === "won").length, lost: recent.filter((o) => o.stage === "lost").length, wonValue: recent.filter((o) => o.stage === "won").reduce((s, o) => s + Number(o.value ?? 0), 0), lostValue: recent.filter((o) => o.stage === "lost").reduce((s, o) => s + Number(o.value ?? 0), 0) };
+    return { won: recent.filter((o) => stages.isWon(o.stage)).length, lost: recent.filter((o) => stages.isLost(o.stage)).length, wonValue: recent.filter((o) => stages.isWon(o.stage)).reduce((s, o) => s + Number(o.value ?? 0), 0), lostValue: recent.filter((o) => stages.isLost(o.stage)).reduce((s, o) => s + Number(o.value ?? 0), 0) };
   }),
 });
 
@@ -2485,6 +2489,7 @@ export const crmPipelinesRouter = router({
         }
       }
       await db.insert(crmPipelineStages).values(stageRows.map((s) => ({ ...s, workspaceId: ctx.workspace.id, pipelineId })));
+      invalidateStageIndex(ctx.workspace.id);
       return { id: pipelineId };
     }),
 
@@ -2505,6 +2510,9 @@ export const crmPipelinesRouter = router({
       // Clear other defaults, then set this one. Not transactional — acceptable per HANDOFF gotcha #4.
       await db.update(crmPipelines).set({ isDefault: false }).where(eq(crmPipelines.workspaceId, ctx.workspace.id));
       await db.update(crmPipelines).set({ isDefault: true }).where(and(eq(crmPipelines.id, input.id), eq(crmPipelines.workspaceId, ctx.workspace.id)));
+      // The default pipeline is the fallback resolvedStageFor consults for a
+      // deal with no pipelineId, so this changes the answer too.
+      invalidateStageIndex(ctx.workspace.id);
       return { ok: true };
     }),
 
@@ -2519,6 +2527,7 @@ export const crmPipelinesRouter = router({
       if (target.isDefault) throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot delete the default pipeline" });
       await db.delete(crmPipelineStages).where(and(eq(crmPipelineStages.pipelineId, input.id), eq(crmPipelineStages.workspaceId, ctx.workspace.id)));
       await db.delete(crmPipelines).where(and(eq(crmPipelines.id, input.id), eq(crmPipelines.workspaceId, ctx.workspace.id)));
+      invalidateStageIndex(ctx.workspace.id);
       return { ok: true };
     }),
 
@@ -2536,6 +2545,7 @@ export const crmPipelinesRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const r = await db.insert(crmPipelineStages).values({ ...input, workspaceId: ctx.workspace.id });
+      invalidateStageIndex(ctx.workspace.id);
       return { id: Number((r as any)[0]?.insertId ?? 0) };
     }),
 
@@ -2555,6 +2565,9 @@ export const crmPipelinesRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       await db.update(crmPipelineStages).set(input.patch).where(and(eq(crmPipelineStages.id, input.id), eq(crmPipelineStages.workspaceId, ctx.workspace.id)));
+      // Ticking Won on a stage retroactively reclassifies every deal sitting in
+      // it — that is the point of deriving at read time — so the memo has to go.
+      invalidateStageIndex(ctx.workspace.id);
       return { ok: true };
     }),
 
@@ -2562,6 +2575,7 @@ export const crmPipelinesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(crmPipelineStages).where(and(eq(crmPipelineStages.id, input.id), eq(crmPipelineStages.workspaceId, ctx.workspace.id)));
+    invalidateStageIndex(ctx.workspace.id);
     return { ok: true };
   }),
 
@@ -2575,6 +2589,9 @@ export const crmPipelinesRouter = router({
         await db.update(crmPipelineStages).set({ sortOrder: it.sortOrder })
           .where(and(eq(crmPipelineStages.id, it.id), eq(crmPipelineStages.workspaceId, ctx.workspace.id)));
       }
+      // sortOrder decides the column order of the funnel and stage-distribution
+      // widgets, which now read this table instead of a hardcoded list.
+      invalidateStageIndex(ctx.workspace.id);
       return { ok: true };
     }),
 });

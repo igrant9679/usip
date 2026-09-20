@@ -17,6 +17,7 @@
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermissions";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AddToMenu } from "@/components/usip/AddToMenu";
 import { Button } from "@/components/ui/button";
@@ -61,6 +62,9 @@ export function SelectionToolbar({
   onClear: () => void;
 }) {
   const n = selectedIds.length;
+  // UX, not a boundary — the rows come back through prospects.exportSelected
+  // and the file is built here. See the comment on reports.exportCsv.
+  const { can } = usePermissions();
   const utils = trpc.useUtils();
   const [exporting, setExporting] = useState(false);
   const soon = (what: string) => toast.info(`${what} — coming soon for ${n} selected ${n === 1 ? "person" : "people"}`);
@@ -115,9 +119,11 @@ export function SelectionToolbar({
 
       <AddToListMenu selectedIds={selectedIds} />
 
-      <Button variant="ghost" size="sm" className="gap-1.5" disabled={exporting} onClick={exportCsv}>
-        {exporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />} Export
-      </Button>
+      {can("export_data") && (
+        <Button variant="ghost" size="sm" className="gap-1.5" disabled={exporting} onClick={exportCsv}>
+          {exporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />} Export
+        </Button>
+      )}
 
       <EnrichMenu selectedIds={selectedIds} />
 

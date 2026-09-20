@@ -9,6 +9,7 @@ import { PageHeader, Shell, StatCard, SubNav } from "@/components/usip/Shell";
 import { Link, Redirect, useSearch } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermissions";
 import { SWEEP_DAILY_CAP_DEFAULT, SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimits";
 import { NOTIFY_EVENTS, type NotifyPolicy } from "@shared/notifyPolicy";
 import { AlertTriangle, Bell, Building2, CheckCircle2, CreditCard, Download, ExternalLink, Loader2, Mail, Palette, Plug, ShieldCheck, TestTube2, Trash2, User, XCircle, Zap, Settings as SettingsIcon, Database } from "lucide-react";
@@ -74,9 +75,13 @@ export default function Settings() {
 export function LegacySettingsSection({ tab, title }: { tab: TabId; title: string }) {
   const { current } = useWorkspace();
   const isAdmin = current?.role === "admin" || current?.role === "super_admin";
+  const { can } = usePermissions();
+  // usage.currentMonth is the enforcement point for access_billing — asking for
+  // it without the permission returns FORBIDDEN, so don't ask.
+  const canBilling = can("access_billing");
   const summary = trpc.workspace.summary.useQuery(undefined, { enabled: tab === "general" });
   const settings = trpc.settings.get.useQuery();
-  const usage = trpc.usage.currentMonth.useQuery(undefined, { enabled: tab === "billing" });
+  const usage = trpc.usage.currentMonth.useQuery(undefined, { enabled: tab === "billing" && canBilling });
   const utils = trpc.useUtils();
   const save = trpc.settings.save.useMutation({
     onSuccess: () => {
@@ -147,7 +152,16 @@ export function LegacySettingsSection({ tab, title }: { tab: TabId; title: strin
           )}
           {tab === "proposals" && <ProposalsTab settings={settings.data} save={save.mutate} canEdit={isAdmin} />}
           {tab === "enrichment" && <EnrichmentTab canEdit={isAdmin} />}
-          {tab === "billing" && <BillingTab usage={usage.data} canEdit={isAdmin} />}
+          {tab === "billing" && (canBilling
+            ? <BillingTab usage={usage.data} canEdit={isAdmin} />
+            : (
+              <Section title="Billing and credits">
+                <p className="text-sm text-muted-foreground">
+                  You do not have access to billing for this workspace. An admin can grant it
+                  on the Team page under the member's Permissions tab.
+                </p>
+              </Section>
+            ))}
           {tab === "danger" && <DangerTab canEdit={isAdmin} isSuperAdmin={current?.role === "super_admin"} />}
         </div>
       </div>

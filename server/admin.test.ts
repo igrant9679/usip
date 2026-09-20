@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { roleRank } from "./_core/workspace";
+import { PERMISSION_KEYS, defaultGranted, roleTemplate } from "../shared/permissions";
 
 /**
  * Admin / Team / Settings invariants.
@@ -173,18 +174,14 @@ describe("team — getPermissions / setPermissions logic", () => {
     // No DB calls should be made; the procedure returns early
   });
 
+  // 2026-09-20: this used to re-declare the six keys locally, which meant it
+  // agreed with itself rather than with the product. The list now lives in
+  // shared/permissions.ts and is imported by Team.tsx AND server/db.ts.
   it("correctly identifies all 6 expected feature keys", () => {
-    const PERMISSION_FEATURES = [
-      "export_data",
-      "manage_sequences",
-      "view_all_leads",
-      "manage_integrations",
-      "access_billing",
-      "manage_api_keys",
-    ];
-    expect(PERMISSION_FEATURES.length).toBe(6);
-    for (const key of PERMISSION_FEATURES) {
+    expect(PERMISSION_KEYS.length).toBe(6);
+    for (const key of PERMISSION_KEYS) {
       expect(typeof key).toBe("string");
+      // setPermissions stores the key in a varchar(80) column.
       expect(key.length).toBeLessThanOrEqual(80);
     }
   });
@@ -241,97 +238,84 @@ describe("team — getMemberActivityLog logic", () => {
   });
 });
 
+/**
+ * 2026-09-20: this block used to carry its OWN copy of the role-default rule,
+ * so it agreed with itself no matter what server/db.ts did — and by the time
+ * anyone looked, db.ts denied access_billing by default while nothing enforced
+ * the key at all. It now calls the real exported `defaultGranted`, and the
+ * behavioural half (an override row beating the default, the two refusal
+ * messages, the fail-open) lives in permissionEnforcement.test.ts against the
+ * actual resolver.
+ */
 describe("checkPermission — role-based defaults", () => {
-  type Role = "super_admin" | "admin" | "manager" | "rep";
-
-  /**
-   * Mirrors the role-default logic inside checkPermission in server/db.ts.
-   * When no override row exists, restricted features are denied for non-elevated roles.
-   */
-  function defaultGranted(role: Role, feature: string): boolean {
-    const restrictedByDefault = ["export_data", "access_billing", "manage_api_keys"];
-    const isElevated = role === "super_admin" || role === "admin";
-    if (!isElevated && restrictedByDefault.includes(feature)) return false;
-    return true;
-  }
+  const elevated = (role: string) => role === "super_admin" || role === "admin";
 
   it("grants all features to super_admin by default", () => {
-    const features = ["export_data", "manage_sequences", "view_all_leads", "manage_integrations", "access_billing", "manage_api_keys"];
-    for (const f of features) {
-      expect(defaultGranted("super_admin", f)).toBe(true);
-    }
+    for (const f of PERMISSION_KEYS) expect(defaultGranted(f, elevated("super_admin")), f).toBe(true);
   });
 
   it("grants all features to admin by default", () => {
-    const features = ["export_data", "manage_sequences", "view_all_leads", "manage_integrations", "access_billing", "manage_api_keys"];
-    for (const f of features) {
-      expect(defaultGranted("admin", f)).toBe(true);
-    }
+    for (const f of PERMISSION_KEYS) expect(defaultGranted(f, elevated("admin")), f).toBe(true);
   });
 
-  it("denies export_data, access_billing, manage_api_keys for rep by default", () => {
-    expect(defaultGranted("rep", "export_data")).toBe(false);
-    expect(defaultGranted("rep", "access_billing")).toBe(false);
-    expect(defaultGranted("rep", "manage_api_keys")).toBe(false);
+  it("denies export_data and manage_api_keys for rep by default", () => {
+    expect(defaultGranted("export_data", elevated("rep"))).toBe(false);
+    expect(defaultGranted("manage_api_keys", elevated("rep"))).toBe(false);
+  });
+
+  it("but GRANTS access_billing — the flip that made enforcing the key safe", () => {
+    // Enforced for the first time on 2026-09-20 (usage.currentMonth). Under the
+    // old default that single line would have removed Settings → Billing and
+    // credits from every manager and rep in every workspace on deploy.
+    expect(defaultGranted("access_billing", elevated("rep"))).toBe(true);
+    expect(defaultGranted("access_billing", elevated("manager"))).toBe(true);
   });
 
   it("allows manage_sequences and view_all_leads for rep by default", () => {
-    expect(defaultGranted("rep", "manage_sequences")).toBe(true);
-    expect(defaultGranted("rep", "view_all_leads")).toBe(true);
+    // The pin that guards the SAFE default: gating those two keys changes
+    // nothing for a workspace that never opened the Permissions tab.
+    expect(defaultGranted("manage_sequences", elevated("rep"))).toBe(true);
+    expect(defaultGranted("view_all_leads", elevated("rep"))).toBe(true);
   });
 
-  it("denies restricted features for manager by default", () => {
-    expect(defaultGranted("manager", "export_data")).toBe(false);
-    expect(defaultGranted("manager", "access_billing")).toBe(false);
-    expect(defaultGranted("manager", "manage_api_keys")).toBe(false);
-  });
-
-  it("an explicit override row takes precedence over role defaults", () => {
-    // Simulate: rep with an explicit export_data=true override
-    const overrideRow = { granted: true };
-    // If row exists, use its value regardless of role
-    const result = overrideRow !== undefined ? overrideRow.granted : defaultGranted("rep", "export_data");
-    expect(result).toBe(true);
-  });
-
-  it("an explicit override row can deny a feature that would otherwise be allowed", () => {
-    // Simulate: admin with an explicit export_data=false override
-    const overrideRow = { granted: false };
-    const result = overrideRow !== undefined ? overrideRow.granted : defaultGranted("admin", "export_data");
-    expect(result).toBe(false);
+  it("denies the restricted features for manager by default", () => {
+    expect(defaultGranted("export_data", elevated("manager"))).toBe(false);
+    expect(defaultGranted("manage_api_keys", elevated("manager"))).toBe(false);
   });
 });
 
 describe("role permission templates", () => {
+  // The Team page's preset buttons are now DERIVED from the same defaults the
+  // server resolves against, rather than a second table that disagreed with it
+  // on four of the six keys.
   const TEMPLATES: Record<string, Record<string, boolean>> = {
-    super_admin: { export_data: true, manage_sequences: true, view_all_leads: true, manage_integrations: true, access_billing: true, manage_api_keys: true },
-    admin: { export_data: true, manage_sequences: true, view_all_leads: true, manage_integrations: true, access_billing: true, manage_api_keys: false },
-    manager: { export_data: true, manage_sequences: true, view_all_leads: true, manage_integrations: false, access_billing: false, manage_api_keys: false },
-    rep: { export_data: false, manage_sequences: false, view_all_leads: false, manage_integrations: false, access_billing: false, manage_api_keys: false },
+    super_admin: roleTemplate(true),
+    admin: roleTemplate(true),
+    manager: roleTemplate(false),
+    rep: roleTemplate(false),
   };
 
   it("all templates cover exactly 6 features", () => {
     for (const [role, tpl] of Object.entries(TEMPLATES)) {
-      expect(Object.keys(tpl).length).toBe(6);
+      expect(Object.keys(tpl).length, role).toBe(6);
     }
   });
 
-  it("super_admin template grants all features", () => {
+  it("super_admin and admin templates grant all features", () => {
     for (const v of Object.values(TEMPLATES.super_admin)) expect(v).toBe(true);
+    for (const v of Object.values(TEMPLATES.admin)) expect(v).toBe(true);
   });
 
-  it("rep template denies all features", () => {
-    for (const v of Object.values(TEMPLATES.rep)) expect(v).toBe(false);
+  it("the rep template no longer denies everything — it IS the rep defaults", () => {
+    // It used to write `false` for all six, which is how applying the preset
+    // silently revoked manage_sequences, view_all_leads and manage_integrations
+    // from a member the server was granting all three.
+    const denied = Object.entries(TEMPLATES.rep).filter(([, v]) => !v).map(([k]) => k).sort();
+    expect(denied).toEqual(["export_data", "manage_api_keys"]);
   });
 
-  it("admin template denies only manage_api_keys", () => {
-    const denied = Object.entries(TEMPLATES.admin).filter(([, v]) => !v).map(([k]) => k);
-    expect(denied).toEqual(["manage_api_keys"]);
-  });
-
-  it("manager template denies manage_integrations, access_billing, manage_api_keys", () => {
-    const denied = Object.entries(TEMPLATES.manager).filter(([, v]) => !v).map(([k]) => k).sort();
-    expect(denied).toEqual(["access_billing", "manage_api_keys", "manage_integrations"]);
+  it("manager and rep resolve identically — neither role is elevated", () => {
+    expect(TEMPLATES.manager).toEqual(TEMPLATES.rep);
   });
 });
 
