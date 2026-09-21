@@ -112,4 +112,16 @@ temp/
 # Manus version file (auto-generated, not part of source)
 client/public/__manus__/version.json
 
+# Per-machine working notes. SESSION_STATUS.md has been ignored since it was
+# introduced; the handoff and QA notes follow the same convention but were
+# never actually covered, so a `git add -A` would have swept one in.
+#
+# THIS REPOSITORY IS PUBLIC. These notes routinely carry production facts,
+# customer names, member counts and operational detail. They belong on the
+# machine that wrote them, not in the history.
 SESSION_STATUS.md
+/*HANDOFF*
+/*QA_NOTES*
+# Tracked on purpose: a 13-line tombstone pointing at SESSION_STATUS.md
+# (commit 5357e92). Negated so the rule above does not read as contradicting it.
+!SESSION_HANDOFF.md
