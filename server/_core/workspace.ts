@@ -216,8 +216,16 @@ export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next, pat
 /** Role hierarchy: super_admin > admin > manager > rep */
 const ROLE_RANK = { super_admin: 4, admin: 3, manager: 2, rep: 1 } as const;
 
+/**
+ * Ranks a role that the TYPE says is valid. It delegates to `rankOf` anyway,
+ * because the type is a claim about the caller and this is a permission
+ * boundary: routers/admin.ts decides with it who may assign which role and
+ * whom they may act on (`roleRank(input.role) > roleRank(ctx.member.role)`),
+ * and indexing the map raw returns undefined for anything unexpected, which
+ * makes every one of those comparisons false — i.e. ALLOW.
+ */
 export function roleRank(role: keyof typeof ROLE_RANK): number {
-  return ROLE_RANK[role];
+  return rankOf(role);
 }
 
 /**
@@ -252,7 +260,11 @@ export function requireMinRole(role: string, min: keyof typeof ROLE_RANK, messag
 
 function roleAtLeast(min: keyof typeof ROLE_RANK) {
   return workspaceProcedure.use(async ({ ctx, next }) => {
-    if (ROLE_RANK[ctx.member.role] < ROLE_RANK[min]) {
+    // rankOf, NOT ROLE_RANK[...]: a role outside the map indexes to undefined,
+    // and `undefined < 3` is false, so the raw form waves the request THROUGH
+    // — the gate fails open, in the one place every workspace procedure in the
+    // app relies on. rankOf ranks the unknown 0, below rep, so it is denied.
+    if (rankOf(ctx.member.role) < ROLE_RANK[min]) {
       throw new TRPCError({ code: "FORBIDDEN", message: `Requires ${min} role` });
     }
     return next({ ctx });

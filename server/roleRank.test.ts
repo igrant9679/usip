@@ -18,7 +18,15 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, sep } from "node:path";
-import { isAdminRole, rankOf, requireMinRole } from "./_core/workspace";
+import {
+  adminWsProcedure,
+  isAdminRole,
+  rankOf,
+  repProcedure,
+  requireMinRole,
+  roleRank,
+  superAdminProcedure,
+} from "./_core/workspace";
 
 const ROOT = join(__dirname, "..");
 const stripComments = (src: string) =>
@@ -117,6 +125,74 @@ describe("only one rank map", () => {
       const f = files.find((x) => x.rel === rel);
       expect(f, rel).toBeDefined();
       expect(f!.src, rel).toMatch(/isAdminRole|requireMinRole/);
+    }
+  });
+});
+
+describe("the gate every workspace procedure sits behind", () => {
+  /**
+   * `roleAtLeast` is private, so it is reached through the procedures it
+   * builds. The LAST middleware on each builder is the role check: .query()
+   * and .mutation() append the resolver only when a procedure is finished,
+   * and these are still builders. Throws rather than defaulting if tRPC's
+   * internals move, so this cannot quietly start testing nothing.
+   */
+  const roleGate = (proc: unknown) => {
+    const mw = (proc as { _def?: { middlewares?: unknown[] } })?._def?.middlewares;
+    if (!Array.isArray(mw) || mw.length === 0) throw new Error("tRPC builder shape changed");
+    return mw[mw.length - 1] as (o: { ctx: unknown; next: () => unknown }) => Promise<unknown>;
+  };
+  const asRole = (proc: unknown, role: unknown) =>
+    roleGate(proc)({ ctx: { member: { role } }, next: () => "ADMITTED" });
+
+  it("denies a role that is not in the hierarchy at all", async () => {
+    /**
+     * THE FAIL-OPEN BUG. The gate read `ROLE_RANK[ctx.member.role] < ROLE_RANK[min]`.
+     * A role outside the map indexes to undefined, and `undefined < 3` is
+     * FALSE — so the guard did not throw and the request was ADMITTED. Not
+     * reachable while the column is an enum; reachable the moment a role is
+     * added to the schema and not to the map, which is precisely the drift
+     * this file exists to catch.
+     */
+    await expect(asRole(adminWsProcedure, "viewer")).rejects.toThrow(/Requires admin role/);
+    await expect(asRole(repProcedure, "viewer")).rejects.toThrow(/Requires rep role/);
+    await expect(asRole(repProcedure, "")).rejects.toThrow();
+    await expect(asRole(repProcedure, undefined)).rejects.toThrow();
+  });
+
+  it("still admits the roles that should pass", async () => {
+    // The other half, and the one that matters operationally: a fail-CLOSED
+    // rewrite that locked everyone out would satisfy the test above.
+    await expect(asRole(adminWsProcedure, "admin")).resolves.toBe("ADMITTED");
+    await expect(asRole(adminWsProcedure, "super_admin")).resolves.toBe("ADMITTED");
+    await expect(asRole(repProcedure, "rep")).resolves.toBe("ADMITTED");
+    await expect(asRole(superAdminProcedure, "super_admin")).resolves.toBe("ADMITTED");
+  });
+
+  it("still refuses a real role that is merely too low", async () => {
+    await expect(asRole(adminWsProcedure, "rep")).rejects.toThrow(/Requires admin role/);
+    await expect(asRole(adminWsProcedure, "manager")).rejects.toThrow();
+    await expect(asRole(superAdminProcedure, "admin")).rejects.toThrow();
+  });
+});
+
+describe("roleRank", () => {
+  it("ranks an unexpected role 0 rather than undefined", () => {
+    /**
+     * Typed to accept only real roles, so this is about the runtime behind the
+     * type. routers/admin.ts decides privilege CHANGES with it —
+     * `roleRank(input.role) > roleRank(ctx.member.role)` and
+     * `roleRank(target.role) >= roleRank(ctx.member.role)` guard who may assign
+     * which role and whom they may act on. undefined makes every one of those
+     * comparisons false, which is ALLOW.
+     */
+    expect(roleRank("viewer" as never)).toBe(0);
+    expect(roleRank(undefined as never)).toBe(0);
+  });
+
+  it("agrees with rankOf on every real role", () => {
+    for (const r of ["super_admin", "admin", "manager", "rep"] as const) {
+      expect(roleRank(r)).toBe(rankOf(r));
     }
   });
 });
