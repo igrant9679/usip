@@ -29,6 +29,7 @@ import {
   Search, Upload, ChevronDown, Filter, X, Building2, Globe, Link2, Users, Briefcase,
   MapPin, DollarSign, BarChart3, ArrowUpDown, RefreshCw, GitMerge, ListPlus, Sparkles, Gauge,
 } from "lucide-react";
+import { isAdminRole } from "@shared/roleRank";
 
 const RATING_STYLE: Record<string, string> = {
   excellent: "bg-emerald-100 text-emerald-800", good: "bg-blue-100 text-blue-800",
@@ -255,7 +256,7 @@ export default function Companies() {
   const toggleAll = () => setChecked((prev) => { const n = new Set(prev); if (allChecked) rows.forEach((r) => n.delete(r.id)); else rows.forEach((r) => n.add(r.id)); return n; });
 
   const me = trpc.profile.getMe.useQuery();
-  const isAdmin = me.data?.role === "admin" || me.data?.role === "super_admin";
+  const isAdmin = isAdminRole(me.data?.role);
 
   const bulkEnrich = trpc.companies.bulkEnrich.useMutation({
     onSuccess: (r) => { toast.success(`Enriched ${r.ok}/${r.processed} companies`); utils.companies.search.invalidate(); },

@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Database, Loader2, ShieldCheck } from "lucide-react";
 import { confirmAction } from "@/components/usip/Common";
+import { isAdminRole } from "@shared/roleRank";
 
 export function ApolloSourceCard({
   variant = "standalone",
@@ -32,7 +33,7 @@ export function ApolloSourceCard({
 }) {
   const utils = trpc.useUtils();
   const me = trpc.profile.getMe.useQuery();
-  const isAdmin = me.data?.role === "admin" || me.data?.role === "super_admin";
+  const isAdmin = isAdminRole(me.data?.role);
 
   const status = trpc.apollo.get.useQuery();
   const configured = !!status.data?.configured;

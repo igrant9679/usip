@@ -10,10 +10,11 @@ import { trpc } from "@/lib/trpc";
 import { CheckCircle2, Loader2, Play, Plus, Trash2, Users, Zap, SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { isAdminRole } from "@shared/roleRank";
 
 export default function SegmentRules() {
   const { current } = useWorkspace();
-  const isAdmin = current?.role === "admin" || current?.role === "super_admin";
+  const isAdmin = isAdminRole(current?.role);
 
   const utils = trpc.useUtils();
   const rules = trpc.segmentRules.list.useQuery();

@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Loader2, Users, Share2, X, ExternalLink } from "lucide-react";
+import { isAdminRole } from "@shared/roleRank";
 
 const TONES = ["professional", "conversational", "direct", "empathetic", "authoritative"] as const;
 type Tone = (typeof TONES)[number];
@@ -122,7 +123,7 @@ export function BrandingSection() {
   const utils = trpc.useUtils();
 
   const me = trpc.profile.getMe.useQuery();
-  const isAdmin = me.data?.role === "admin" || me.data?.role === "super_admin";
+  const isAdmin = isAdminRole(me.data?.role);
   const settings = trpc.settings.get.useQuery();
   const voice = trpc.brandVoice.get.useQuery();
   const branding = trpc.workspace.getBranding.useQuery();

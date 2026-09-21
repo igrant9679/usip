@@ -38,6 +38,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
+import { isAdminRole } from "@shared/roleRank";
 
 type Agent = Record<string, any>;
 
@@ -67,7 +68,7 @@ function Card({ title, sub, children }: { title: string; sub?: string; children:
 export function VoiceAgentsSection() {
   const utils = trpc.useUtils();
   const me = trpc.profile.getMe.useQuery();
-  const isAdmin = me.data?.role === "admin" || me.data?.role === "super_admin";
+  const isAdmin = isAdminRole(me.data?.role);
 
   const settings = trpc.voiceAgents.getSettings.useQuery();
   const agents = trpc.voiceAgents.list.useQuery();

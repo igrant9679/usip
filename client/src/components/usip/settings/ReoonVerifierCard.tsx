@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MailCheck, Loader2, ShieldCheck } from "lucide-react";
 import { confirmAction } from "@/components/usip/Common";
+import { isAdminRole } from "@shared/roleRank";
 
 export function ReoonVerifierCard({
   variant = "standalone",
@@ -29,7 +30,7 @@ export function ReoonVerifierCard({
 }) {
   const utils = trpc.useUtils();
   const me = trpc.profile.getMe.useQuery();
-  const isAdmin = me.data?.role === "admin" || me.data?.role === "super_admin";
+  const isAdmin = isAdminRole(me.data?.role);
 
   const status = trpc.reoon.get.useQuery();
   const configured = !!status.data?.configured;

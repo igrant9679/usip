@@ -124,10 +124,12 @@ describe("only one rank map", () => {
   it("nothing hard-compares the admin roles", () => {
     const offenders = files
       .filter((f) => f.rel !== CANONICAL)
-      // Backreference, so `myRole === "admin" || myRole === "super_admin"`
-      // is caught too — the literal-`role` form was the only one the first
-      // version could see, and Team.tsx used a different variable name.
-      .filter((f) => /([A-Za-z_$][\w.$]*) === "admin"\s*\|\|\s*\1 === "super_admin"/.test(f.src))
+      // Backreference, so any identifier is caught, not the literal `role`.
+      // The character class must include ?. and brackets: the first two
+      // versions of this regex saw NOTHING, because every real offender was
+      // `me.data?.role` or `current?.role` — 16 files, all invisible. A
+      // scanner narrower than the rule it enforces reports a clean repo.
+      .filter((f) => /([A-Za-z_$][\w.$?[\]"']*) === "admin"\s*\|\|\s*\1 === "super_admin"/.test(f.src))
       .map((f) => f.rel);
     expect(
       offenders,

@@ -89,6 +89,7 @@ import { assistantStore } from "@/lib/assistantStore";
 import { useTheme, PALETTES } from "@/contexts/ThemeContext";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Moon, Sun, Pencil, Check as CheckIcon, X as XIcon, Palette } from "lucide-react";
+import { isAdminRole } from "@shared/roleRank";
 // ── Accent colour context ────────────────────────────────────────────────────
 const AccentContext = createContext<string>("#1D4ED8");
 /**
@@ -668,7 +669,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         </button>
         {!collapsed && (
           <div className="mt-0.5 ml-3 space-y-0.5 border-l-2 pl-1.5" style={{ borderColor: `${color}66` }}>
-            {s.items.filter((it) => !it.adminOnly || current?.role === "admin" || current?.role === "super_admin").map((it) => renderNavLink(it, { color: s.color, darkColor: s.darkColor }))}
+            {s.items.filter((it) => !it.adminOnly || isAdminRole(current?.role)).map((it) => renderNavLink(it, { color: s.color, darkColor: s.darkColor }))}
           </div>
         )}
       </div>
@@ -685,7 +686,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     <AccentContext.Provider value={accentColor}>
     <div className="h-full flex bg-background text-foreground">
       {/* ⌘K palette — mounted once per Shell, listens globally */}
-      <CommandPalette isAdmin={current?.role === "admin" || current?.role === "super_admin"} />
+      <CommandPalette isAdmin={isAdminRole(current?.role)} />
       {/* Workspace enforce2fa. Mounted here because Shell wraps every authed
           page, and a member blocked by the policy can reach no other surface. */}
       <MfaRequiredGate />

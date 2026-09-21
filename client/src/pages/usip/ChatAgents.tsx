@@ -24,6 +24,7 @@ import { HelpTip } from "@/components/usip/HelpTip";
 import {
   MessageSquare, Plus, Trash2, Copy, ExternalLink, Check, Globe, Loader2, Users, CalendarCheck, Code2,
 } from "lucide-react";
+import { isAdminRole } from "@shared/roleRank";
 
 const MODES = [
   { value: "off", label: "Off", blurb: "The widget refuses to serve." },
@@ -34,7 +35,7 @@ const MODES = [
 export default function ChatAgents() {
   const accent = useAccentColor();
   const { current } = useWorkspace();
-  const isAdmin = current?.role === "admin" || current?.role === "super_admin";
+  const isAdmin = isAdminRole(current?.role);
 
   const utils = trpc.useUtils();
   const list = trpc.chatAgents.list.useQuery(undefined as any, { retry: false, enabled: isAdmin });

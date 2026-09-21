@@ -26,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Send, Loader2, CheckCircle2, AlertTriangle, Users } from "lucide-react";
 import { SendgridSenderPicker } from "./SendgridSenderPicker";
+import { isAdminRole } from "@shared/roleRank";
 
 export function SendGridCard({
   variant = "standalone",
@@ -35,7 +36,7 @@ export function SendGridCard({
 }) {
   const utils = trpc.useUtils();
   const me = trpc.profile.getMe.useQuery();
-  const isAdmin = me.data?.role === "admin" || me.data?.role === "super_admin";
+  const isAdmin = isAdminRole(me.data?.role);
 
   const accountsQ = trpc.sendingAccounts.list.useQuery();
   const existing = ((accountsQ.data as any[]) ?? []).find((a) => a.provider === "sendgrid") ?? null;

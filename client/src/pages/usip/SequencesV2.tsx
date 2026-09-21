@@ -34,6 +34,7 @@ import {
   MoreHorizontal, ExternalLink, Layers, Users, Sparkles, BookOpen, PenLine,
 } from "lucide-react";
 import { toast } from "sonner";
+import { isAdminRole } from "@shared/roleRank";
 
 const AI_STEPS = [
   { type: "email", subject: "Quick question, {{first_name}}", body: "Hi {{first_name}},\n\nNoticed {{company}} is scaling — wanted to share how teams like yours speed up pipeline. Worth a quick chat?\n\nBest," },
@@ -133,7 +134,7 @@ export default function SequencesV2() {
   // ── Team template library (multi-user): admins publish, reps fork ──
   const templatesQ = trpc.sequences.listTemplates.useQuery();
   const workspaceTemplates = (templatesQ.data ?? []) as Sequence[];
-  const isAdmin = current?.role === "admin" || current?.role === "super_admin";
+  const isAdmin = isAdminRole(current?.role);
   const forkMut = trpc.sequences.fork.useMutation({
     onSuccess: (res: any) => { utils.sequences.list.invalidate(); setChoiceOpen(false); setTplOpen(false); if (res?.id) setLocation(`/v2/sequences/${res.id}`); },
     onError: (e) => toast.error(e.message),

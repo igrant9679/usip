@@ -82,6 +82,7 @@ import {
   Zap,
   AlertTriangle,
 } from "lucide-react";
+import { isAdminRole } from "@shared/roleRank";
 
 /* ───────────────────────── section registry ───────────────────────────── */
 
@@ -287,7 +288,7 @@ function ProfileSection() {
 
   const me = trpc.profile.getMe.useQuery();
   const wsSettings = trpc.settings.get.useQuery();
-  const isAdmin = me.data?.role === "admin" || me.data?.role === "super_admin";
+  const isAdmin = isAdminRole(me.data?.role);
 
   // form state, seeded from the server once loaded
   const [firstName, setFirstName] = useState("");

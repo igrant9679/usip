@@ -18,6 +18,7 @@ import { useTheme, PALETTES } from "@/contexts/ThemeContext";
 import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { isAdminRole } from "@shared/roleRank";
 
 
 const TABS = [
@@ -74,7 +75,7 @@ export default function Settings() {
  */
 export function LegacySettingsSection({ tab, title }: { tab: TabId; title: string }) {
   const { current } = useWorkspace();
-  const isAdmin = current?.role === "admin" || current?.role === "super_admin";
+  const isAdmin = isAdminRole(current?.role);
   const { can } = usePermissions();
   // usage.currentMonth is the enforcement point for access_billing — asking for
   // it without the permission returns FORBIDDEN, so don't ask.
@@ -443,7 +444,55 @@ function GeneralTab({
         <StatCard label="Closed-won" value={fmt$(summary?.closedWon ?? 0)} tone="success" />
         <StatCard label="Customers" value={summary?.customers ?? 0} />
       </div>
+      <RuntimeSection />
     </>
+  );
+}
+
+/**
+ * What this deploy is actually running.
+ *
+ * The Node version is deliberately NOT on GET /api/health — that endpoint is
+ * public and capped at four non-secret keys (see server/health.ts) — so this
+ * is the only place it surfaces.
+ *
+ * super_admin only, matching `system.deployRuntime`'s own gate, and the query
+ * is DISABLED rather than fired-and-caught for everyone else: asking for
+ * something you may not have returns FORBIDDEN and renders as a broken card.
+ * Same reasoning as usage.currentMonth in LegacySettingsSection above.
+ */
+function RuntimeSection() {
+  const { current } = useWorkspace();
+  const isSuperAdmin = current?.role === "super_admin";
+  const runtime = trpc.system.deployRuntime.useQuery(undefined, { enabled: isSuperAdmin });
+  if (!isSuperAdmin) return null;
+
+  const d = runtime.data;
+  const value = (v: string | undefined) =>
+    runtime.isLoading ? "…" : runtime.error ? "unavailable" : (v ?? "unknown");
+
+  return (
+    <Section
+      title="Runtime"
+      description="The build and the Node version this deploy is serving. Super admins only."
+    >
+      <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="space-y-1">
+          <div className="text-xs text-muted-foreground">Node</div>
+          <div className="text-sm font-mono">{value(d?.node)}</div>
+        </div>
+        <div className="space-y-1">
+          <div className="text-xs text-muted-foreground">Commit</div>
+          <div className="text-sm font-mono">{value(d?.commit ? d.commit.slice(0, 7) : undefined)}</div>
+        </div>
+        <div className="space-y-1">
+          <div className="text-xs text-muted-foreground">Running since</div>
+          <div className="text-sm">
+            {value(d?.startedAt ? new Date(d.startedAt).toLocaleString() : undefined)}
+          </div>
+        </div>
+      </div>
+    </Section>
   );
 }
 
@@ -858,7 +907,7 @@ const ALL_PROVIDERS = Object.keys(PROVIDER_META);
 
 function IntegrationsTab() {
   const { current } = useWorkspace();
-  const isAdmin = current?.role === "admin" || current?.role === "super_admin";
+  const isAdmin = isAdminRole(current?.role);
   const utils = trpc.useUtils();
 
   const listQ = trpc.integrations.list.useQuery();

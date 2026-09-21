@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Radar, Loader2, ShieldCheck } from "lucide-react";
 import { confirmAction } from "@/components/usip/Common";
+import { isAdminRole } from "@shared/roleRank";
 
 export function QuickEnrichSourceCard({
   variant = "standalone",
@@ -29,7 +30,7 @@ export function QuickEnrichSourceCard({
 }) {
   const utils = trpc.useUtils();
   const me = trpc.profile.getMe.useQuery();
-  const isAdmin = me.data?.role === "admin" || me.data?.role === "super_admin";
+  const isAdmin = isAdminRole(me.data?.role);
 
   const status = trpc.quickenrich.get.useQuery();
   const configured = !!status.data?.configured;

@@ -14,11 +14,12 @@ import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { Search, Command } from "lucide-react";
 import { TOOL_GROUPS, searchTools } from "@/lib/toolRegistry";
+import { isAdminRole } from "@shared/roleRank";
 
 export default function Library() {
   const [query, setQuery] = useState("");
   const me = trpc.profile.getMe.useQuery();
-  const isAdmin = me.data?.role === "admin" || me.data?.role === "super_admin";
+  const isAdmin = isAdminRole(me.data?.role);
 
   const results = useMemo(() => searchTools(query, { isAdmin }), [query, isAdmin]);
 

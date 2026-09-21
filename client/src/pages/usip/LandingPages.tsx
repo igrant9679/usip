@@ -18,6 +18,7 @@ import { confirmAction } from "@/components/usip/Common";
 import {
   LayoutTemplate, Plus, Trash2, Copy, ExternalLink, Check, Globe, Eye, Send, Loader2, GripVertical,
 } from "lucide-react";
+import { isAdminRole } from "@shared/roleRank";
 
 const ALL_FIELDS = [
   { key: "name", label: "Full name" },
@@ -33,7 +34,7 @@ type FormField = { key: string; label: string; required?: boolean };
 export default function LandingPages() {
   const accent = useAccentColor();
   const { current } = useWorkspace();
-  const isAdmin = current?.role === "admin" || current?.role === "super_admin";
+  const isAdmin = isAdminRole(current?.role);
 
   const utils = trpc.useUtils();
   const list = trpc.landingPages.list.useQuery(undefined as any, { retry: false, enabled: isAdmin });

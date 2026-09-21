@@ -21,6 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Flame, Loader2, ShieldCheck, AlertTriangle } from "lucide-react";
 import { confirmAction } from "@/components/usip/Common";
+import { isAdminRole } from "@shared/roleRank";
 
 function Bar({ label, used, reserved, limit, resetsAt }: { label: string; used: number; reserved: number; limit: number | null; resetsAt: string | Date | null }) {
   const total = limit ?? null;
@@ -47,7 +48,7 @@ function Bar({ label, used, reserved, limit, resetsAt }: { label: string; used: 
 export function WarmySenderSourceCard({ variant = "standalone" }: { variant?: "standalone" | "bare" }) {
   const utils = trpc.useUtils();
   const me = trpc.profile.getMe.useQuery();
-  const isAdmin = me.data?.role === "admin" || me.data?.role === "super_admin";
+  const isAdmin = isAdminRole(me.data?.role);
   const describe = trpc.prospectSources.describe.useQuery(undefined);
   const source = describe.data?.find((s) => s.slug === "warmysender");
   const cred = source?.credential;
