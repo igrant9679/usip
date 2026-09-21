@@ -40,6 +40,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
+import { isAdminRole } from "@shared/roleRank";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
@@ -757,7 +758,7 @@ export default function HelpCenterPage() {
   // role is "user" lost the Admin tab, and "owner" is not a role value at
   // all (audit 2026-09-20).
   const { data: me } = trpc.profile.getMe.useQuery();
-  const isAdmin = (me as any)?.role === "admin" || (me as any)?.role === "super_admin";
+  const isAdmin = isAdminRole((me as any)?.role);
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
     { id: "browse", label: "Browse Articles", icon: <BookOpen className="h-4 w-4" /> },

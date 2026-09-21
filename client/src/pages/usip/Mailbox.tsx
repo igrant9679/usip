@@ -41,6 +41,7 @@ import {
   Clock, Search, FileText, Download, Paperclip, X, Phone,
 } from "lucide-react";
 import { Link } from "wouter";
+import { rankOf, ROLE_RANK } from "@shared/roleRank";
 
 /** Compact "Agent call-backs" rail link — only renders when Grok voice agents
  *  have actually logged inbound calls, so mailboxes without voice stay clean. */
@@ -1000,7 +1001,7 @@ export default function MailboxPage() {
   const { data: folders = [] } = trpc.mailbox.listFolders.useQuery({ accountId: currentAccountId!, repUserId }, { enabled: !!currentAccountId });
   const { data: teamData } = trpc.team.list.useQuery(undefined, { enabled: true });
 
-  const isManager = (user as any)?.role === "manager" || (user as any)?.role === "admin" || (user as any)?.role === "super_admin";
+  const isManager = rankOf((user as any)?.role) >= ROLE_RANK.manager;
 
   const folderList: Array<{ name: string; path: string }> = (folders as any[]).length
     ? (folders as Array<{ name: string; path: string }>)

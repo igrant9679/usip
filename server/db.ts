@@ -15,6 +15,7 @@ import {
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { PERMISSION_KEYS, defaultGranted } from "@shared/permissions";
+import { isAdminRole } from "@shared/roleRank";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -244,7 +245,7 @@ async function resolvePermission(
 
   // No override row — apply role-based defaults
   const role = ctx.member.role as string;
-  const isElevated = role === "super_admin" || role === "admin";
+  const isElevated = isAdminRole(role);
 
   return { granted: defaultGranted(feature, isElevated), source: "default" };
 }
@@ -284,7 +285,7 @@ export async function hasPermission(ctx: PermissionCtx, feature: string): Promis
  */
 export async function resolvePermissionMap(ctx: PermissionCtx): Promise<Record<string, boolean>> {
   const role = ctx.member.role as string;
-  const isElevated = role === "super_admin" || role === "admin";
+  const isElevated = isAdminRole(role);
   const out: Record<string, boolean> = {};
   for (const k of PERMISSION_KEYS) out[k] = defaultGranted(k, isElevated);
 

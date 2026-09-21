@@ -18,6 +18,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, sep } from "node:path";
+import * as ts from "typescript";
 import {
   adminWsProcedure,
   isAdminRole,
@@ -29,8 +30,6 @@ import {
 } from "./_core/workspace";
 
 const ROOT = join(__dirname, "..");
-const stripComments = (src: string) =>
-  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
 describe("role helpers", () => {
   it("ranks the hierarchy", () => {
@@ -68,16 +67,105 @@ describe("role helpers", () => {
   });
 });
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * WHY THIS IS A PARSER AND NOT A REGEX.
+ *
+ * The rule — "nothing declares a second role hierarchy, and nothing hand-writes
+ * the admin check" — is about SYNTAX, and it was expressed as a text pattern
+ * three times, each narrower than the rule:
+ *
+ *   1. /role === "admin" \|\| role === "super_admin"/ — matched only a literal
+ *      `role`, so Team.tsx's `myRole === …` was invisible.
+ *   2. A backreference fixed the identifier, and found 3 real offenders in
+ *      routers/prospects.ts. The character class still had no `?`, so every
+ *      `me.data?.role` / `current?.role` form stayed invisible — SIXTEEN client
+ *      files, while this suite reported a clean repo.
+ *   3. Widening the class again would have left `"admin" === role`, `==`,
+ *      line-broken operands and bracket access.
+ *
+ * Each time the test passed, which is the dangerous part: a detector that
+ * cannot see is indistinguishable from a repo that is clean. So the detectors
+ * below walk the TypeScript AST — operand order, whitespace, line breaks,
+ * optional chaining and bracket access stop mattering because the tree is the
+ * same shape either way — and the FIXTURES further down assert the detectors
+ * still fire. A future narrowing fails those, loudly, instead of going quiet.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+const parse = (rel: string, code: string) =>
+  ts.createSourceFile(rel, code, ts.ScriptTarget.Latest, true, /\.tsx$/.test(rel) ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+
+const eachNode = (node: ts.Node, fn: (n: ts.Node) => void) => {
+  fn(node);
+  node.forEachChild((c) => eachNode(c, fn));
+};
+
+const lineOf = (sf: ts.SourceFile, n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+const squash = (s: string) => s.replace(/\s+/g, "");
+
+/** `a || b || c` as a flat list, however the tree nested it. */
+function orOperands(node: ts.Expression): ts.Expression[] {
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+    return [...orOperands(node.left), ...orOperands(node.right)];
+  }
+  return [node];
+}
+
+/** `x === "admin"` or `"admin" === x`, loose or strict. */
+function equalityToLiteral(n: ts.Expression, sf: ts.SourceFile): { subject: string; literal: string } | null {
+  if (!ts.isBinaryExpression(n)) return null;
+  const k = n.operatorToken.kind;
+  if (k !== ts.SyntaxKind.EqualsEqualsEqualsToken && k !== ts.SyntaxKind.EqualsEqualsToken) return null;
+  const litNode = ts.isStringLiteral(n.left) ? n.left : ts.isStringLiteral(n.right) ? n.right : null;
+  if (!litNode) return null;
+  const subject = litNode === n.left ? n.right : n.left;
+  if (ts.isStringLiteral(subject)) return null; // "a" === "b", not a role check
+  return { subject: squash(subject.getText(sf)), literal: litNode.text };
+}
+
+/** Any `||` chain that tests ONE subject against both admin role names. */
+export function findHardAdminCompares(rel: string, code: string): string[] {
+  const sf = parse(rel, code);
+  const hits: string[] = [];
+  eachNode(sf, (n) => {
+    if (!ts.isBinaryExpression(n) || n.operatorToken.kind !== ts.SyntaxKind.BarBarToken) return;
+    // Only the outermost || of a chain, so one expression reports once.
+    const p = n.parent;
+    if (p && ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.BarBarToken) return;
+    const bySubject = new Map<string, Set<string>>();
+    for (const part of orOperands(n)) {
+      const eq = equalityToLiteral(part, sf);
+      if (!eq) continue;
+      if (!bySubject.has(eq.subject)) bySubject.set(eq.subject, new Set());
+      bySubject.get(eq.subject)!.add(eq.literal);
+    }
+    bySubject.forEach((lits, subject) => {
+      if (lits.has("admin") && lits.has("super_admin")) hits.push(`${rel}:${lineOf(sf, n)} — ${subject}`);
+    });
+  });
+  return hits;
+}
+
+/** An object literal keyed by the role names with NUMERIC values: a rank map. */
+export function findRankMaps(rel: string, code: string): string[] {
+  const sf = parse(rel, code);
+  const hits: string[] = [];
+  eachNode(sf, (n) => {
+    if (!ts.isObjectLiteralExpression(n)) return;
+    const ranks = new Map<string, boolean>();
+    for (const prop of n.properties) {
+      if (!ts.isPropertyAssignment(prop) || !prop.name) continue;
+      if (!ts.isIdentifier(prop.name) && !ts.isStringLiteral(prop.name)) continue;
+      ranks.set(prop.name.text, ts.isNumericLiteral(prop.initializer));
+    }
+    // Numeric values are what make it a HIERARCHY; a role -> label or
+    // role -> colour map is not a second source of truth about rank.
+    const roleKeys = ["super_admin", "admin", "rep"];
+    if (roleKeys.every((k) => ranks.get(k) === true)) hits.push(`${rel}:${lineOf(sf, n)}`);
+  });
+  return hits;
+}
+
 describe("only one rank map", () => {
-  /**
-   * Walks server/, client/src/ and shared/ — .ts AND .tsx.
-   *
-   * The first consolidation scanned `server/` alone, so it reported success
-   * while THREE client copies stood untouched (Team.tsx, CompanyProfile.tsx,
-   * ProspectScoringPanel.tsx). A scanner narrower than the rule it enforces
-   * is worse than none: it answers the question with the wrong scope and the
-   * green result is read as "there is one map".
-   */
   function sourceFiles(dir: string): string[] {
     const out: string[] = [];
     for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -94,12 +182,12 @@ describe("only one rank map", () => {
 
   const files = [join(ROOT, "server"), join(ROOT, "client", "src"), join(ROOT, "shared")]
     .flatMap(sourceFiles)
-    .map((f) => ({ rel: f.slice(ROOT.length + 1).split(sep).join("/"), src: stripComments(readFileSync(f, "utf8")) }));
+    .map((f) => ({ rel: f.slice(ROOT.length + 1).split(sep).join("/"), src: readFileSync(f, "utf8") }));
 
   it("finds source on BOTH sides to scan (guards the scanner itself)", () => {
     // Separate floors: one number over the union would stay green if the
-    // client half stopped being walked, which is the exact failure this
-    // rewrite exists to fix.
+    // client half stopped being walked, which is how three client copies
+    // survived the first consolidation.
     expect(files.filter((f) => f.rel.startsWith("server/")).length).toBeGreaterThan(150);
     expect(files.filter((f) => f.rel.startsWith("client/")).length).toBeGreaterThan(100);
     expect(files.some((f) => f.rel === CANONICAL)).toBe(true);
@@ -108,44 +196,94 @@ describe("only one rank map", () => {
   it("nothing else declares a role hierarchy", () => {
     const offenders = files
       .filter((f) => f.rel !== CANONICAL)
-      .filter((f) => /super_admin:\s*\d/.test(f.src))
-      .map((f) => f.rel);
+      .flatMap((f) => findRankMaps(f.rel, f.src));
     expect(
       offenders,
       offenders.length
         ? `\n\nA second role rank map in:\n  ${offenders.join("\n  ")}\n\n` +
-            `Import rankOf / isAdminRole / requireMinRole from _core/workspace.\n` +
+            `Import rankOf / isAdminRole / requireMinRole from @shared/roleRank.\n` +
             `A role added to the canonical map and not to a copy is silently denied\n` +
-            `in that router and allowed everywhere else.\n`
+            `in that file and allowed everywhere else.\n`
         : undefined,
     ).toEqual([]);
   });
 
-  it("nothing hard-compares the admin roles", () => {
+  it("nothing hand-writes the admin check", () => {
     const offenders = files
       .filter((f) => f.rel !== CANONICAL)
-      // Backreference, so any identifier is caught, not the literal `role`.
-      // The character class must include ?. and brackets: the first two
-      // versions of this regex saw NOTHING, because every real offender was
-      // `me.data?.role` or `current?.role` — 16 files, all invisible. A
-      // scanner narrower than the rule it enforces reports a clean repo.
-      .filter((f) => /([A-Za-z_$][\w.$?[\]"']*) === "admin"\s*\|\|\s*\1 === "super_admin"/.test(f.src))
-      .map((f) => f.rel);
+      .flatMap((f) => findHardAdminCompares(f.rel, f.src));
     expect(
       offenders,
-      offenders.length ? `\n\nHard-coded admin comparison in:\n  ${offenders.join("\n  ")}\n` : undefined,
+      offenders.length
+        ? `\n\nHand-written admin comparison in:\n  ${offenders.join("\n  ")}\n\n` +
+            `Use isAdminRole(role) from @shared/roleRank — same result for every\n` +
+            `input, and it moves with the hierarchy.\n`
+        : undefined,
     ).toEqual([]);
+  });
+
+  /* ── The detectors have to be able to SEE. ─────────────────────────────────
+   * Without these, "no offenders" means either a clean repo or a blind
+   * detector, and this suite has twice reported the second as the first.
+   * Every entry is a form that really appeared, or that a plausible next
+   * narrowing would drop. */
+
+  const MUST_BE_CAUGHT: ReadonlyArray<readonly [string, string]> = [
+    ["bare identifier (the v1 blind spot was everything else)", `const a = role === "admin" || role === "super_admin";`],
+    ["a different variable name", `const a = myRole === "admin" || myRole === "super_admin";`],
+    ["optional chaining — the v2 blind spot, 16 files", `const a = me.data?.role === "admin" || me.data?.role === "super_admin";`],
+    ["a deep optional path", `const a = x?.y?.member?.role === "admin" || x?.y?.member?.role === "super_admin";`],
+    ["a dotted path", `const a = ctx.member.role === "admin" || ctx.member.role === "super_admin";`],
+    ["bracket access", `const a = m["role"] === "admin" || m["role"] === "super_admin";`],
+    ["reversed operands", `const a = "admin" === role || "super_admin" === role;`],
+    ["reversed literal order", `const a = role === "super_admin" || role === "admin";`],
+    ["loose equality", `const a = role == "admin" || role == "super_admin";`],
+    ["buried in a longer || chain", `const a = other || role === "admin" || role === "super_admin";`],
+    ["split across lines", `const a =\n  role === "admin" ||\n  role === "super_admin";`],
+    ["extra spacing", `const a = role    ===   "admin"   ||   role === "super_admin";`],
+  ];
+
+  it.each(MUST_BE_CAUGHT)("catches: %s", (_label, code) => {
+    expect(findHardAdminCompares("fixture.ts", code)).toHaveLength(1);
+  });
+
+  const MUST_BE_IGNORED: ReadonlyArray<readonly [string, string]> = [
+    ["the shared helper", `const a = isAdminRole(role);`],
+    ["two different subjects", `const a = role === "admin" || other === "super_admin";`],
+    ["a single comparison", `const a = role === "admin";`],
+    ["non-admin roles", `const a = role === "manager" || role === "rep";`],
+    ["string literals either side", `const a = "admin" === "super_admin";`],
+  ];
+
+  it.each(MUST_BE_IGNORED)("does not fire on: %s", (_label, code) => {
+    expect(findHardAdminCompares("fixture.ts", code)).toEqual([]);
+  });
+
+  it("catches a rank map however it is written", () => {
+    const forms = [
+      `const R = { super_admin: 4, admin: 3, manager: 2, rep: 1 };`,
+      `const R = { "super_admin": 4, "admin": 3, "manager": 2, "rep": 1 };`,
+      `const R = { rep: 1, manager: 2, admin: 3, super_admin: 4 };`,
+      `const R: Record<string, number> = {\n  super_admin : 4,\n  admin: 3,\n  manager: 2,\n  rep: 1,\n};`,
+    ];
+    for (const f of forms) expect(findRankMaps("fixture.ts", f), f).toHaveLength(1);
+  });
+
+  it("does not call a role-to-label map a hierarchy", () => {
+    // Team.tsx legitimately maps roles to tones; that is not a second source
+    // of truth about RANK, and flagging it would push the next author to
+    // silence the rule rather than obey it.
+    const tone = `const T = { super_admin: "danger", admin: "warning", manager: "info", rep: "muted" };`;
+    expect(findRankMaps("fixture.ts", tone)).toEqual([]);
   });
 
   it("every former copy now imports the shared helpers", () => {
     for (const rel of [
-      // server, consolidated first
       "server/routers/companies.ts",
       "server/routers/scoring.ts",
       "server/routers/linkedinEnrichment.ts",
       "server/routers/are/scraper.ts",
       "server/routers/linkedinFinder.ts",
-      // client, which the first pass never looked at
       "client/src/pages/usip/Team.tsx",
       "client/src/pages/usip/CompanyProfile.tsx",
       "client/src/components/usip/scoring/ProspectScoringPanel.tsx",
@@ -167,6 +305,7 @@ describe("only one rank map", () => {
     }
   });
 });
+
 
 describe("the gate every workspace procedure sits behind", () => {
   /**
