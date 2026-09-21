@@ -16,9 +16,17 @@
  * the one matcher every contact seam already goes through. A detector that
  * also writes is a second matcher, and two matchers disagree.
  *
- * THE REPAIR IS A LINK, NOT A MERGE AND NOT A DELETE. There is no People merge
- * anywhere in the product, so a `needs_merge` row here stays until a human
- * edits it — the count does not drop after the repair, and the UI says so.
+ * THE REPAIR HERE IS A LINK, NOT A MERGE AND NOT A DELETE. Linking never
+ * removes a row, so a `needs_merge` pair still costs two People rows after it
+ * and this count does not drop — the UI says so.
+ *
+ * ✅ CORRECTED 2026-09-20: this header used to state as fact that there is no
+ * People merge anywhere in the product. There is one now —
+ * `services/personMerge.ts`, surfaced on Data Health as "Duplicate People
+ * (merge)" — and it is what a `needs_merge` row is waiting for. It is
+ * IRREVERSIBLE (the losing People rows are deleted, audit row only), which is
+ * exactly why it lives there behind a plan-then-confirm and not behind the
+ * per-row repair button here.
  *
  * Two reads, not one. A single join cannot classify: the WHERE that keeps the
  * contact's own person out of the candidate list (`person_prospect_id <>

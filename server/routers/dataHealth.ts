@@ -315,9 +315,10 @@ export const dataHealthRouter = router({
   }),
 
   /**
-   * Repair by LINKING. Never a delete, never a People merge — there is no
-   * People merge in the product, which is exactly why `needs_merge` rows are
-   * reported with a reason and no button.
+   * Repair by LINKING. Never a delete and never a People merge: a merge is a
+   * different, irreversible operation and it lives behind its own plan-then-
+   * confirm in `planPeopleMerge` / `executePeopleMerge` below, which is why a
+   * `needs_merge` row is reported here with a reason and no button.
    *
    * The link is not free of side effects and the UI says so: the repair is
    * `upsertPersonForContact`, which runs the contact's curated values through
@@ -410,6 +411,61 @@ export const dataHealthRouter = router({
     const { linkUnlinkedContacts } = await import("../services/personLink");
     return linkUnlinkedContacts({ workspaceId: ctx.workspace.id });
   }),
+
+  /**
+   * PEOPLE MERGE — plan (read-only) and execute (destructive).
+   *
+   * 🔒 WHY adminWsProcedure AND NO FEATURE KEY. The six keys in
+   * `@shared/permissions` are export_data, manage_sequences, view_all_leads,
+   * manage_integrations, access_billing and manage_api_keys. Not one of them
+   * describes "permanently delete a customer's People rows": `export_data` is
+   * about data LEAVING the workspace and gating a delete on it would be a lie
+   * to every admin who reads the Permissions tab, and adding a seventh key
+   * would ship a toggle that defaults to GRANTED for managers and reps
+   * (`defaultGranted` grants anything not in RESTRICTED_BY_DEFAULT), which is
+   * the opposite of what this needs. Role is the right gate: admin or above,
+   * with no way to delegate it per member.
+   *
+   * The plan writes nothing and is safe to render on sight. Execute is the
+   * only destructive path, and it takes the clusters BY NAME.
+   */
+  planPeopleMerge: adminWsProcedure
+    .input(z.object({
+      emails: z.array(z.string()).max(200).optional(),
+      limit: z.number().int().min(1).max(200).default(50),
+    }).default({ limit: 50 }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { planPersonMerge } = await import("../services/personMerge");
+      return planPersonMerge(db, ctx.workspace.id, { emails: input.emails, limit: input.limit });
+    }),
+
+  /**
+   * Apply a merge. IRREVERSIBLE: the losing People rows are deleted.
+   *
+   * `clusters` is REQUIRED and non-empty — there is deliberately no "merge
+   * every duplicate" call. Each entry echoes back the survivor and loser ids
+   * the plan SHOWED, not just the address: the service re-plans server-side and
+   * then refuses any cluster whose rows no longer match what was approved. An
+   * email alone would have let a row imported while the dialog was open — or a
+   * contact linked by the repair section directly above on the same page — move
+   * the survivor underneath the operator (2026-09-20 review, defects 8 and 12).
+   */
+  executePeopleMerge: adminWsProcedure
+    .input(z.object({
+      clusters: z.array(z.object({
+        email: z.string().min(3),
+        survivorId: z.number().int().positive(),
+        loserIds: z.array(z.number().int().positive()).min(1).max(50),
+      })).min(1).max(50),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { executePersonMerge } = await import("../services/personMerge");
+      return executePersonMerge(db, ctx.workspace.id, { clusters: input.clusters, actorUserId: ctx.user.id });
+    }),
 
   /**
    * Provider effectiveness (roadmap P4.1) — which source actually EARNS its

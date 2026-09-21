@@ -2,6 +2,7 @@ import { Shell, PageHeader, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmButton } from "@/components/usip/Common";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
@@ -274,6 +275,12 @@ function SplitPeopleSection() {
     // A merge onto the People row can fill a field the People-duplicate count
     // keys on, so that number can move too.
     utils.dataHealth.getMetrics.invalidate();
+    // Linking writes contacts.personProspectId, which is exactly what the merge
+    // plan below picks its survivor on. Without this the merge card keeps
+    // showing the survivor it chose BEFORE the link, the server re-plans to a
+    // different one, and the confirm is refused as stale — correct, but
+    // baffling to look at (2026-09-20 review, defect 12).
+    utils.dataHealth.planPeopleMerge.invalidate();
   };
   const link = trpc.dataHealth.linkPersonContactPairs.useMutation({
     onSuccess: (r) => {
@@ -398,8 +405,9 @@ function SplitPeopleSection() {
               </div>
             )}
             <p className="text-xs text-muted-foreground mt-3">
-              Velocity merges contacts and companies, not People — where two People rows hold the same
-              address the duplicate stays until you edit it by hand, so this count will not drop.
+              Where two People rows hold the same address, the fix is the People merge below — linking
+              a contact does not remove the second People row, so this count only drops once those rows
+              are merged.
               {data?.skippedGeneric
                 ? ` ${data.skippedGeneric} shared inbox address${data.skippedGeneric === 1 ? "" : "es"} skipped — a team mailbox is not one person.`
                 : ""}
@@ -407,6 +415,237 @@ function SplitPeopleSection() {
           </CardContent>
         </Card>
       )}
+    </section>
+  );
+}
+
+/* ─── People merge (irreversible) ───────────────────────────────────────── */
+/**
+ * The repair the "Needs a merge" badge above had no button for.
+ *
+ * READ FIRST, ALWAYS. The plan query writes nothing, so the whole outcome —
+ * which row survives, which are deleted, which blanks get filled and how many
+ * references move — renders before anything happens. The confirm is the only
+ * destructive step, it names the cluster it is destroying, and the server
+ * re-plans from that name rather than trusting this page's copy.
+ */
+function PeopleMergeSection() {
+  const utils = trpc.useUtils();
+  const plan = trpc.dataHealth.planPeopleMerge.useQuery({ limit: 50 }, { retry: false });
+  const [preview, setPreview] = useState<string | null>(null);
+
+  const merge = trpc.dataHealth.executePeopleMerge.useMutation({
+    onSuccess: (r) => {
+      // A refusal is the safe outcome, not a silent one: say which cluster and
+      // why, because "nothing happened" and "the survivor moved underneath you"
+      // look identical from a count.
+      const refused = r.stale.concat(r.unrecorded);
+      if (r.merged.length) {
+        toast.success(`Merged ${r.merged.length} cluster${r.merged.length === 1 ? "" : "s"} · ${r.peopleDeleted} People row${r.peopleDeleted === 1 ? "" : "s"} deleted`);
+      }
+      refused.forEach((s) => toast.error(`${s.email} not merged — ${s.reason}`));
+      if (!r.merged.length && refused.length === 0) toast.success("Nothing merged — those rows changed since the preview.");
+      setPreview(null);
+      utils.dataHealth.planPeopleMerge.invalidate();
+      utils.dataHealth.personContactDuplicates.invalidate();
+      utils.dataHealth.getMetrics.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const clusters = plan.data?.merge ?? [];
+  const open = clusters.filter((c) => c.email === preview)[0] ?? null;
+
+  return (
+    <section>
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+        Duplicate People (merge)
+      </h2>
+      {plan.isLoading ? (
+        <Skeleton className="h-40 rounded-xl" />
+      ) : plan.error ? (
+        <Card>
+          <CardContent className="py-8 text-center text-sm text-muted-foreground">
+            Merging duplicate People deletes rows for good, so it is admin-only.
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="space-y-1">
+              <CardTitle className="text-sm font-medium">
+                {clusters.length
+                  ? `${clusters.length} email${clusters.length === 1 ? "" : "s"} held by more than one People row`
+                  : "No duplicate People to merge"}
+              </CardTitle>
+              <p className="text-xs text-muted-foreground max-w-2xl">
+                Merging keeps one row and <strong>permanently deletes</strong> the others. The survivor
+                keeps every value it already has and its blanks are filled from the rows being deleted,
+                so a phone on one and a city on the other both survive. Everything pointing at a deleted
+                row — contacts, enrolments, drafts, replies, campaign queues, saved lists, tasks,
+                meetings, activity, scores and enrichment history — is repointed at the survivor first.
+                Where only one row per person is allowed (the LinkedIn dossier, a score for one model,
+                a place on one list) the rows are combined into that one and the emptied duplicate is
+                deleted. This cannot be undone; the deleted rows survive only in the audit log, which
+                is written before anything is destroyed.
+              </p>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {clusters.length === 0 ? (
+              <div className="py-8 text-center text-muted-foreground text-sm">
+                <CheckCircle2 className="size-8 mx-auto mb-2 text-emerald-500" />
+                {plan.data?.capped
+                  ? "No mergeable duplicates inside the bounded cluster scan."
+                  : "No email is held by two People rows."}
+              </div>
+            ) : (
+              <div className="divide-y">
+                {clusters.map((c) => (
+                  <div key={c.email} className="py-3 flex items-start gap-3">
+                    <Badge variant="secondary" className="shrink-0 mt-0.5 bg-rose-100 text-rose-700">
+                      {c.rows.length} rows
+                    </Badge>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">{c.rows[0]?.name || c.email}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5 truncate">{c.email}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        Keeps #{c.survivorId} ({c.survivorReason === "contact-linked" ? "a contact already points at it" : "lowest id"})
+                        {" · deletes "}{c.loserIds.map((id) => `#${id}`).join(", ")}
+                        {c.fieldsFilled.length ? ` · fills ${c.fieldsFilled.length} blank field${c.fieldsFilled.length === 1 ? "" : "s"}` : " · nothing to fill"}
+                        {c.repointTotal ? ` · repoints ${c.repointTotal} reference${c.repointTotal === 1 ? "" : "s"}` : " · no references to move"}
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs px-2 shrink-0"
+                      disabled={merge.isPending}
+                      onClick={() => setPreview(c.email)}
+                    >
+                      <GitMerge className="size-3 mr-1" />
+                      Preview merge
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {plan.data?.skipped.length ? (
+              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-1">
+                <div className="text-xs font-medium text-amber-800">
+                  {plan.data.skipped.length} cluster{plan.data.skipped.length === 1 ? "" : "s"} not offered for merge
+                </div>
+                {plan.data.skipped.map((s) => (
+                  <div key={s.email} className="text-xs text-amber-700">
+                    {s.email} — {s.reason}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {plan.data?.proposalsCapped ? (
+              <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50/60 p-3 text-xs text-rose-800">
+                Too many campaign proposals carry a People-id list to rewrite them all, so merging is
+                refused: a merge that rewrote only some of them would leave the rest naming rows that
+                no longer exist.
+              </div>
+            ) : null}
+            {plan.data?.skippedGeneric ? (
+              <p className="text-xs text-muted-foreground mt-3">
+                {plan.data.skippedGeneric} shared inbox address{plan.data.skippedGeneric === 1 ? "" : "es"} skipped —
+                a team mailbox is not one person, and merging one would fuse several humans into one record.
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog open={open !== null} onOpenChange={(o) => { if (!o) setPreview(null); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Merge {open?.email}</DialogTitle>
+          </DialogHeader>
+          {open && (
+            <div className="space-y-4 text-sm">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Rows</div>
+                <div className="divide-y rounded-md border">
+                  {open.rows.map((r) => (
+                    <div key={r.id} className="px-3 py-2 flex items-center gap-2">
+                      <Badge
+                        variant="secondary"
+                        className={r.id === open.survivorId ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}
+                      >
+                        {r.id === open.survivorId ? "Survives" : "Deleted"}
+                      </Badge>
+                      <span className="text-xs">#{r.id} {r.name || "(no name)"}</span>
+                      <span className="text-xs text-muted-foreground ml-auto">
+                        {r.contactLinkCount} linked contact{r.contactLinkCount === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Fields filled on the survivor</div>
+                {open.fieldsFilled.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">None — the survivor already holds a value for every field the others carry.</p>
+                ) : (
+                  <ul className="text-xs text-muted-foreground space-y-0.5">
+                    {open.fieldsFilled.map((f) => (
+                      <li key={f.field}>{f.field} ← #{f.fromPersonId}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">References moved</div>
+                {open.repoints.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">None — nothing else points at the rows being deleted.</p>
+                ) : (
+                  <ul className="text-xs text-muted-foreground space-y-0.5">
+                    {open.repoints.map((r) => (
+                      <li key={`${r.key}:${r.mode}`}>
+                        {r.key} — {r.rows} row{r.rows === 1 ? "" : "s"}
+                        {r.mode === "combine"
+                          ? " · combined into one row, the duplicate deleted after its values are merged in"
+                          : r.mode === "dedupe"
+                          ? " · moved, or deleted where the survivor already holds an equivalent row"
+                          : " · repointed at the survivor"}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <p className="text-xs text-rose-700">
+                This permanently deletes {open.loserIds.length} People row{open.loserIds.length === 1 ? "" : "s"} and cannot be undone.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setPreview(null)}>Cancel</Button>
+            <ConfirmButton
+              variant="destructive"
+              size="sm"
+              disabled={merge.isPending || !open}
+              title="Delete these People rows?"
+              description={
+                open
+                  ? `#${open.survivorId} survives. ${open.loserIds.map((id) => `#${id}`).join(", ")} are deleted for good, after everything pointing at them is repointed.`
+                  : undefined
+              }
+              confirmLabel="Merge and delete"
+              // The ids go with the address: the server merges this cluster only
+              // if it still resolves to exactly the rows shown above.
+              onConfirm={() => {
+                if (open) merge.mutate({ clusters: [{ email: open.email, survivorId: open.survivorId, loserIds: open.loserIds }] });
+              }}
+            >
+              {merge.isPending ? <Loader2 className="size-3.5 mr-1.5 animate-spin" /> : <GitMerge className="size-3.5 mr-1.5" />}
+              Merge
+            </ConfirmButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }
@@ -703,6 +942,8 @@ export default function DataHealth() {
         </section>
 
         <SplitPeopleSection />
+
+        <PeopleMergeSection />
 
         {/* ── Import mapping audit ──
             Read-only, and run on demand rather than on page load: it replays
