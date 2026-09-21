@@ -32,7 +32,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { TOURS } from "./seedHelpContent";
 
 const ROOT = join(__dirname, "..");
@@ -52,15 +52,25 @@ function resolveSpec(fromFile: string, spec: string): string | null {
   return null;
 }
 
-/** Files reachable from App.tsx, static and lazy imports alike. */
+/**
+ * Files reachable from App.tsx, static and lazy imports alike.
+ *
+ * Deduped case-insensitively (Windows resolves `@/components/Usip/Shell` and
+ * `@/components/usip/Shell` to one file) but the ORIGINAL casing is what comes
+ * back, because these paths get read again by `anchorsIn`. Returning the
+ * lowercased keys instead passes on Windows and harvests ZERO anchors on Linux
+ * — every read throws ENOENT into the catch below, `available` comes back
+ * empty, and every assertion in this file fails at once in CI while staying
+ * green on the machine that wrote it.
+ */
 const reachable = (() => {
-  const seen = new Set<string>();
+  const seen = new Map<string, string>();
   const stack = [join(CLIENT, "App.tsx")];
   while (stack.length) {
     const file = stack.pop()!;
     const key = file.toLowerCase();
     if (seen.has(key)) continue;
-    seen.add(key);
+    seen.set(key, file);
     let src: string;
     try {
       src = read(file);
@@ -74,8 +84,11 @@ const reachable = (() => {
       if (target) stack.push(target);
     }
   }
-  return Array.from(seen);
+  return Array.from(seen.values());
 })();
+
+/** Lowercased, for comparing against paths from a directory walk. */
+const reachableKeys = new Set(reachable.map((f) => f.toLowerCase()));
 
 /** Every file under client/src, for the orphan check further down. */
 const allClientFiles = (() => {
@@ -145,6 +158,25 @@ describe("tour anchors — the scanner itself", () => {
     expect(seededSteps.filter((s) => s.id).length, "no seeded targets found").toBeGreaterThan(40);
   });
 
+  /**
+   * The floor above cannot catch a path-casing mistake on Windows, because
+   * Windows reads `app.tsx` and `App.tsx` as the same file — so the harvest
+   * stays at 110 here and collapses to 0 on Linux. This asserts the casing
+   * directly, off the directory entries, and so fails on either platform.
+   */
+  it("every reachable path is spelled the way the disk spells it", () => {
+    const miscased = reachable.filter((f) => !readdirSync(dirname(f)).includes(basename(f)));
+    expect(
+      miscased.slice(0, 10),
+      miscased.length
+        ? `\n\n${miscased.length} reachable path(s) do not match their real filename.\n` +
+            `Windows resolves them anyway; Linux (CI, Railway) throws ENOENT, the read\n` +
+            `is swallowed by a catch, and every anchor assertion below fails at once:\n  ` +
+            miscased.slice(0, 10).join("\n  ")
+        : undefined,
+    ).toEqual([]);
+  });
+
   it("both dynamic anchor factories still exist", () => {
     /**
      * Without this, deleting Shell.tsx's PageHeader binding would leave the
@@ -160,7 +192,7 @@ describe("tour anchors — the scanner itself", () => {
   });
 
   it("ignores files the app cannot reach, which is the whole point", () => {
-    const orphans = allClientFiles.filter((f) => !reachable.includes(f.toLowerCase()));
+    const orphans = allClientFiles.filter((f) => !reachableKeys.has(f.toLowerCase()));
     expect(
       orphans.length,
       "nothing under client/src is unreachable — the graph walk is resolving too much",
