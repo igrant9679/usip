@@ -226,7 +226,7 @@ describe("system.deployRuntime is gated", () => {
     expect(gateDepth(procs.deployRuntime)).toBeGreaterThan(gateDepth(procs.brandingConfig));
   });
 
-  it("names adminWsProcedure in the source, which depth cannot check", async () => {
+  it("names superAdminProcedure in the source, which depth cannot check", async () => {
     /**
      * The depth test above cannot see the THRESHOLD. roleAtLeast() builds
      * repProcedure, managerProcedure, adminWsProcedure and superAdminProcedure
@@ -239,10 +239,15 @@ describe("system.deployRuntime is gated", () => {
      * gates (see confirmCopyTruth.test.ts and socialReplyScope.test.ts).
      * Between the two tests: depth catches dropping the workspace layer,
      * this catches lowering the bar within it.
+     *
+     * super_admin, not admin: the runtime is a property of the shared host,
+     * and an admin gate is tenant-controlled — a workspace admin can
+     * promote a peer into the reader set, which is the whole reason this
+     * was tightened on 2026-09-21.
      */
     const src = read("server/_core/systemRouter.ts");
     expect(src, "deployRuntime's gate changed or moved").toContain(
-      "deployRuntime: adminWsProcedure",
+      "deployRuntime: superAdminProcedure",
     );
   });
 });

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { notifyOwner } from "./notification";
 import { adminRuntimePayload } from "../health";
 import { adminProcedure, publicProcedure, router } from "./trpc";
-import { adminWsProcedure } from "./workspace";
+import { superAdminProcedure } from "./workspace";
 
 export const systemRouter = router({
   /** Public branding config. The Logo Link client id is public BY DESIGN —
@@ -28,17 +28,21 @@ export const systemRouter = router({
    * added to GET /api/health, which is public and deliberately capped at
    * four non-secret keys — see server/health.ts.
    *
-   * Gated with adminWsProcedure, NOT the adminProcedure used just below.
-   * That one tests `users.role`, a two-value global flag separate from the
-   * workspace role — it IS set to "admin" for the owner, so it would work,
-   * but it has no callers anywhere and nothing in the app writes it, so what
-   * it means today rests on whatever set it by hand. adminWsProcedure is the
-   * gate the rest of this codebase actually uses and reasons about.
+   * superAdminProcedure, deliberately the NARROWEST workspace gate. This is
+   * an infrastructure fact with no workspace dimension: it describes the
+   * host every tenant shares, not the tenant asking. Under adminWsProcedure
+   * the reader set was tenant-controlled and self-expanding — any workspace
+   * admin can promote a peer to admin, and that peer could then read the
+   * production host's exact Node patch version. A super_admin cannot be
+   * minted the same way.
    *
-   * Worth revisiting: this datum has no workspace dimension, and a workspace
-   * admin can promote a peer, so the reader set is tenant-controlled.
+   * NOT adminProcedure, the one used just below: that tests `users.role`, a
+   * two-value global flag separate from the workspace role. It IS set to
+   * "admin" for the owner, so it would work — but it has no other callers,
+   * nothing in the app writes it, and no UI shows it, so what it means
+   * today rests on whatever set it by hand.
    */
-  deployRuntime: adminWsProcedure.query(() => adminRuntimePayload()),
+  deployRuntime: superAdminProcedure.query(() => adminRuntimePayload()),
 
   notifyOwner: adminProcedure
     .input(
