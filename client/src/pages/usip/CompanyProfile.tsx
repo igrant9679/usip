@@ -7,6 +7,7 @@
  * timeline. Reads via the `companies` router; logo falls back to favicon/initials.
  */
 import { useMemo, useState } from "react";
+import { isAdminRole, rankOf, ROLE_RANK } from "@shared/roleRank";
 import { useRoute, useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { AddToMenu } from "@/components/usip/AddToMenu";
@@ -30,7 +31,6 @@ import {
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
-const RANK: Record<string, number> = { super_admin: 4, admin: 3, manager: 2, rep: 1 };
 const RATING_STYLE: Record<string, string> = {
   excellent: "bg-emerald-100 text-emerald-800", good: "bg-blue-100 text-blue-800",
   fair: "bg-amber-100 text-amber-800", not_a_fit: "bg-gray-100 text-gray-600",
@@ -49,8 +49,8 @@ export default function CompanyProfile() {
   const [, setLocation] = useLocation();
   const accent = useAccentColor();
   const auth = useAuth();
-  const canManage = (RANK[(auth.user as any)?.role ?? "rep"] ?? 0) >= RANK.manager;
-  const isAdmin = (RANK[(auth.user as any)?.role ?? "rep"] ?? 0) >= RANK.admin;
+  const canManage = rankOf((auth.user as any)?.role ?? "rep") >= ROLE_RANK.manager;
+  const isAdmin = isAdminRole((auth.user as any)?.role ?? "rep");
   const id = Number(params?.id);
   const utils = trpc.useUtils();
 

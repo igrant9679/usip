@@ -16,7 +16,7 @@ import { z } from "zod";
 import { and, asc, desc, eq, inArray, isNotNull, isNull, like, notInArray, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
-import { adminWsProcedure, requireMinRole, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, isAdminRole, requireMinRole, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { closedStageKeys } from "../_core/stageSemantics";
 import { contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings, prospectLinkedinEnrichments, prospectFieldHistory } from "../../drizzle/schema";
@@ -1202,7 +1202,7 @@ export const prospectsRouter = router({
         workspaceId: ctx.workspace.id,
         prospectId: input.prospectId,
         userId: ctx.user.id,
-        isAdmin: ctx.member.role === "admin" || ctx.member.role === "super_admin",
+        isAdmin: isAdminRole(ctx.member.role),
         trigger: "manual_full",
         queueLinkedInJob: true,
       });
@@ -1252,7 +1252,7 @@ export const prospectsRouter = router({
         workspaceId: ctx.workspace.id,
         prospectId: p.id,
         userId: ctx.user.id,
-        isAdmin: ctx.member.role === "admin" || ctx.member.role === "super_admin",
+        isAdmin: isAdminRole(ctx.member.role),
         trigger: "find_contact_info",
       });
 
@@ -1553,7 +1553,7 @@ export const prospectsRouter = router({
     .input(z.object({ limit: z.number().int().min(1).max(100).default(25) }))
     .mutation(async ({ ctx, input }) => {
       const { backfillQueueCompanies } = await import("../services/enrichmentSweeper");
-      const isAdmin = ctx.member.role === "admin" || ctx.member.role === "super_admin";
+      const isAdmin = isAdminRole(ctx.member.role);
       return backfillQueueCompanies({
         workspaceId: ctx.workspace.id,
         userId: ctx.user.id,

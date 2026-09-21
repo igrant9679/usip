@@ -8,13 +8,13 @@
  * last-calculated time, and a Recalculate button (manager+).
  */
 import { trpc } from "@/lib/trpc";
+import { isAdminRole, rankOf, ROLE_RANK } from "@shared/roleRank";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { ScoreBadge, type Rating, type ObjectType } from "./ScoreBadge";
 import { toast } from "sonner";
 
-const RANK: Record<string, number> = { super_admin: 4, admin: 3, manager: 2, rep: 1 };
 
 function Bar({ label, value, weight }: { label: string; value: number | null; weight: string }) {
   return (
@@ -30,7 +30,7 @@ function Bar({ label, value, weight }: { label: string; value: number | null; we
 
 export function ProspectScoringPanel({ objectType, objectId }: { objectType: ObjectType; objectId: number }) {
   const auth = useAuth();
-  const canRecalc = (RANK[(auth.user as any)?.role ?? "rep"] ?? 0) >= RANK.manager;
+  const canRecalc = rankOf((auth.user as any)?.role ?? "rep") >= ROLE_RANK.manager;
   const utils = trpc.useUtils();
 
   const result = trpc.scoring.getResult.useQuery({ objectType, objectId }, { staleTime: 30_000 });

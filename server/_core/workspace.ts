@@ -11,6 +11,7 @@ import { protectedProcedure } from "./trpc";
 import { mergeRequestContext } from "./requestContext";
 import { mfaGateExemptPath, securityPolicyFor } from "./securityPolicy";
 import { MFA_REQUIRED_ERR_MSG } from "@shared/const";
+import { isAdminRole, rankOf, ROLE_RANK } from "@shared/roleRank";
 
 export type WorkspaceCtxExtension = {
   workspace: Workspace;
@@ -213,8 +214,6 @@ export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next, pat
   );
 });
 
-/** Role hierarchy: super_admin > admin > manager > rep */
-const ROLE_RANK = { super_admin: 4, admin: 3, manager: 2, rep: 1 } as const;
 
 /**
  * Ranks a role that the TYPE says is valid. It delegates to `rankOf` anyway,
@@ -229,27 +228,14 @@ export function roleRank(role: keyof typeof ROLE_RANK): number {
 }
 
 /**
- * Role helpers, exported because four routers had each declared their own copy
- * of the rank map — companies.ts, scoring.ts, linkedinEnrichment.ts (plus
- * literal `role === "admin" || role === "super_admin"` checks in are/scraper.ts
- * and linkedinFinder.ts).
+ * Role helpers. The MAP and the two pure predicates live in @shared/roleRank
+ * so the client reaches the same hierarchy; they are re-exported here because
+ * ~20 server modules already import them from this file, and because a rank
+ * map is a permission boundary that should have exactly one home.
  *
- * All five AGREED when this was written; the drift is latent, not live. But a
- * rank map is a permission boundary, and the failure mode of adding a role here
- * without updating the copies is that the new role is silently DENIED in four
- * routers and allowed everywhere else — which reads as a bug in the feature,
- * not in the map.
- *
- * Unknown roles rank 0, so anything not in the hierarchy is denied rather than
- * compared against `undefined`.
+ * requireMinRole stays here: it throws a TRPCError, which is server-only.
  */
-export function rankOf(role: string): number {
-  return (ROLE_RANK as Record<string, number>)[role] ?? 0;
-}
-
-export function isAdminRole(role: string): boolean {
-  return rankOf(role) >= ROLE_RANK.admin;
-}
+export { isAdminRole, rankOf, ROLE_RANK, ROLES, type Role } from "@shared/roleRank";
 
 /** Throw FORBIDDEN unless `role` is at least `min`. `message` names the action. */
 export function requireMinRole(role: string, min: keyof typeof ROLE_RANK, message: string): void {

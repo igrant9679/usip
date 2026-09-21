@@ -69,27 +69,45 @@ describe("role helpers", () => {
 });
 
 describe("only one rank map", () => {
+  /**
+   * Walks server/, client/src/ and shared/ — .ts AND .tsx.
+   *
+   * The first consolidation scanned `server/` alone, so it reported success
+   * while THREE client copies stood untouched (Team.tsx, CompanyProfile.tsx,
+   * ProspectScoringPanel.tsx). A scanner narrower than the rule it enforces
+   * is worse than none: it answers the question with the wrong scope and the
+   * green result is read as "there is one map".
+   */
   function sourceFiles(dir: string): string[] {
     const out: string[] = [];
     for (const e of readdirSync(dir, { withFileTypes: true })) {
-      if (e.name === "node_modules") continue;
+      if (e.name === "node_modules" || e.name === "dist") continue;
       const p = join(dir, e.name);
       if (e.isDirectory()) out.push(...sourceFiles(p));
-      else if (/\.ts$/.test(e.name) && !/\.(test|spec)\.ts$/.test(e.name)) out.push(p);
+      else if (/\.tsx?$/.test(e.name) && !/\.(test|spec)\.tsx?$/.test(e.name)) out.push(p);
     }
     return out;
   }
 
-  const files = sourceFiles(join(ROOT, "server"))
+  /** The one file allowed to declare the hierarchy. */
+  const CANONICAL = "shared/roleRank.ts";
+
+  const files = [join(ROOT, "server"), join(ROOT, "client", "src"), join(ROOT, "shared")]
+    .flatMap(sourceFiles)
     .map((f) => ({ rel: f.slice(ROOT.length + 1).split(sep).join("/"), src: stripComments(readFileSync(f, "utf8")) }));
 
-  it("finds source to scan (guards the scanner itself)", () => {
-    expect(files.length).toBeGreaterThan(150);
+  it("finds source on BOTH sides to scan (guards the scanner itself)", () => {
+    // Separate floors: one number over the union would stay green if the
+    // client half stopped being walked, which is the exact failure this
+    // rewrite exists to fix.
+    expect(files.filter((f) => f.rel.startsWith("server/")).length).toBeGreaterThan(150);
+    expect(files.filter((f) => f.rel.startsWith("client/")).length).toBeGreaterThan(100);
+    expect(files.some((f) => f.rel === CANONICAL)).toBe(true);
   });
 
   it("nothing else declares a role hierarchy", () => {
     const offenders = files
-      .filter((f) => f.rel !== "server/_core/workspace.ts")
+      .filter((f) => f.rel !== CANONICAL)
       .filter((f) => /super_admin:\s*\d/.test(f.src))
       .map((f) => f.rel);
     expect(
@@ -105,8 +123,11 @@ describe("only one rank map", () => {
 
   it("nothing hard-compares the admin roles", () => {
     const offenders = files
-      .filter((f) => f.rel !== "server/_core/workspace.ts")
-      .filter((f) => /role === "admin"\s*\|\|\s*role === "super_admin"/.test(f.src))
+      .filter((f) => f.rel !== CANONICAL)
+      // Backreference, so `myRole === "admin" || myRole === "super_admin"`
+      // is caught too — the literal-`role` form was the only one the first
+      // version could see, and Team.tsx used a different variable name.
+      .filter((f) => /([A-Za-z_$][\w.$]*) === "admin"\s*\|\|\s*\1 === "super_admin"/.test(f.src))
       .map((f) => f.rel);
     expect(
       offenders,
@@ -114,17 +135,33 @@ describe("only one rank map", () => {
     ).toEqual([]);
   });
 
-  it("the five former copies now import the shared helpers", () => {
+  it("every former copy now imports the shared helpers", () => {
     for (const rel of [
+      // server, consolidated first
       "server/routers/companies.ts",
       "server/routers/scoring.ts",
       "server/routers/linkedinEnrichment.ts",
       "server/routers/are/scraper.ts",
       "server/routers/linkedinFinder.ts",
+      // client, which the first pass never looked at
+      "client/src/pages/usip/Team.tsx",
+      "client/src/pages/usip/CompanyProfile.tsx",
+      "client/src/components/usip/scoring/ProspectScoringPanel.tsx",
     ]) {
       const f = files.find((x) => x.rel === rel);
       expect(f, rel).toBeDefined();
-      expect(f!.src, rel).toMatch(/isAdminRole|requireMinRole/);
+      expect(f!.src, rel).toMatch(/isAdminRole|requireMinRole|rankOf/);
+    }
+  });
+
+  it("the client reaches the hierarchy through @shared, not a local copy", () => {
+    for (const rel of [
+      "client/src/pages/usip/Team.tsx",
+      "client/src/pages/usip/CompanyProfile.tsx",
+      "client/src/components/usip/scoring/ProspectScoringPanel.tsx",
+    ]) {
+      const f = files.find((x) => x.rel === rel);
+      expect(f!.src, rel).toContain('from "@shared/roleRank"');
     }
   });
 });

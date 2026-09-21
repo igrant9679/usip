@@ -29,9 +29,14 @@ export const systemRouter = router({
    * four non-secret keys — see server/health.ts.
    *
    * Gated with adminWsProcedure, NOT the adminProcedure used just below.
-   * That one tests `users.role === "admin"`, a vestigial global flag no
-   * production code path ever sets, so gating on it would ship an endpoint
-   * nobody — including the owner — can call.
+   * That one tests `users.role`, a two-value global flag separate from the
+   * workspace role — it IS set to "admin" for the owner, so it would work,
+   * but it has no callers anywhere and nothing in the app writes it, so what
+   * it means today rests on whatever set it by hand. adminWsProcedure is the
+   * gate the rest of this codebase actually uses and reasons about.
+   *
+   * Worth revisiting: this datum has no workspace dimension, and a workspace
+   * admin can promote a peer, so the reader set is tenant-controlled.
    */
   deployRuntime: adminWsProcedure.query(() => adminRuntimePayload()),
 

@@ -33,10 +33,8 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { isAdminRole, rankOf, ROLES, type Role } from "@shared/roleRank";
 
-type Role = "super_admin" | "admin" | "manager" | "rep";
-const ROLES: Role[] = ["super_admin", "admin", "manager", "rep"];
-const ROLE_RANK: Record<Role, number> = { super_admin: 4, admin: 3, manager: 2, rep: 1 };
 
 function roleTone(r: Role) {
   return r === "super_admin" ? "danger" : r === "admin" ? "warning" : r === "manager" ? "info" : "muted";
@@ -82,7 +80,7 @@ function fmtCountdown(ms: number): string {
 export default function Team() {
   const { current } = useWorkspace();
   const myRole = (current?.role as Role) ?? "rep";
-  const isAdmin = myRole === "admin" || myRole === "super_admin";
+  const isAdmin = isAdminRole(myRole);
 
   const utils = trpc.useUtils();
   const { user } = useAuth();
@@ -357,7 +355,7 @@ export default function Team() {
    * and manage_integrations while presenting itself as the rep default.
    */
   function applyRoleTemplate(role: string) {
-    const tpl = roleTemplate(role === "admin" || role === "super_admin");
+    const tpl = roleTemplate(isAdminRole(role));
     setLocalPerms(tpl);
     const touched: Record<string, boolean> = {};
     for (const k of PERMISSION_KEYS) touched[k] = true;
@@ -435,7 +433,7 @@ export default function Team() {
     if (!isAdmin) return false;
     if (myRole === "super_admin") return true;
     if (targetUserId === (current as any)?.userId) return true;
-    return ROLE_RANK[targetRole] < ROLE_RANK[myRole];
+    return rankOf(targetRole) < rankOf(myRole);
   };
 
   const toggleSelect = (id: number) => {
@@ -531,7 +529,7 @@ export default function Team() {
               <div className="text-sm">{selected.size} selected</div>
               <div className="ml-auto flex items-center gap-1">
                 <span className="text-xs text-muted-foreground mr-1">Change role to:</span>
-                {ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole]).map((r) => (
+                {ROLES.filter((r) => rankOf(r) <= rankOf(myRole)).map((r) => (
                   <Button
                     key={r}
                     size="sm"
@@ -651,7 +649,7 @@ export default function Team() {
                                 value={m.role}
                                 onChange={(e) => changeRole.mutate({ memberId: m.memberId, role: e.target.value as Role })}
                               >
-                                {ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole] || r === m.role).map((r) => (
+                                {ROLES.filter((r) => rankOf(r) <= rankOf(myRole) || r === m.role).map((r) => (
                                   <option key={r} value={r}>
                                     {r}
                                   </option>
@@ -1123,7 +1121,7 @@ export default function Team() {
                       value={editRole}
                       onChange={(e) => setEditRole(e.target.value as Role)}
                     >
-                      {ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole] || r === editTarget?.role).map((r) => (
+                      {ROLES.filter((r) => rankOf(r) <= rankOf(myRole) || r === editTarget?.role).map((r) => (
                         <option key={r} value={r}>{r}</option>
                       ))}
                     </select>
@@ -1331,7 +1329,7 @@ export default function Team() {
                   name="role"
                   label="Role"
                   defaultValue="rep"
-                  options={ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole]).map((r) => ({ value: r, label: r }))}
+                  options={ROLES.filter((r) => rankOf(r) <= rankOf(myRole)).map((r) => ({ value: r, label: r }))}
                 />
                 <Field name="quota" label="Annual quota (optional)" type="number" placeholder="250000" />
                 <DialogFooter>
@@ -1358,7 +1356,7 @@ export default function Team() {
                   value={linkRole}
                   onChange={(e) => { setLinkRole(e.target.value as Role); setActivationUrl(null); }}
                 >
-                  {ROLES.filter((r) => ROLE_RANK[r] <= ROLE_RANK[myRole]).map((r) => (
+                  {ROLES.filter((r) => rankOf(r) <= rankOf(myRole)).map((r) => (
                     <option key={r} value={r}>{r}</option>
                   ))}
                 </select>
