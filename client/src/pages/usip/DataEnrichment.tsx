@@ -258,6 +258,25 @@ export default function DataEnrichment() {
                   </div>
                 </Card>
 
+                {/* Duplicates live on /data-health, which is NOT on the rail
+                    (phase 4 folded Data Health into this tab). Until this card
+                    existed, the only way in was three buttons labelled about
+                    enrichment SCHEDULING, so the duplicate finder and the
+                    People merge were unreachable by anyone looking for them
+                    — the same invisible-surface bug the Sales Pipeline page
+                    had (owner, 2026-09-20). */}
+                <Card title="Duplicates" tag="People & contacts">
+                  <div className="text-center py-6">
+                    <Users className="size-7 mx-auto text-muted-foreground opacity-50 mb-2" />
+                    <div className="text-sm font-medium">Find and merge duplicate people</div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      The same person in People twice, or in People and the CRM with no link between them.
+                      Merging combines them and keeps every field.
+                    </p>
+                    <Button size="sm" className="mt-3" style={{ backgroundColor: accent }} onClick={() => setLocation("/data-health")}>Review duplicates</Button>
+                  </div>
+                </Card>
+
                 <Card title="Credit usage" tag="API & Apollo data">
                   <div className="text-center py-6">
                     <CreditCard className="size-7 mx-auto text-muted-foreground opacity-50 mb-2" />
