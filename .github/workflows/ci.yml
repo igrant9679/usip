@@ -14,7 +14,12 @@ concurrency:
 jobs:
   check:
     name: Typecheck + tests
-    runs-on: ubuntu-latest
+    # Pinned rather than `ubuntu-latest`: that label begins migrating to
+    # Ubuntu 26 on 19 Oct 2026, which would move this build underneath us.
+    # 24.04 is what `ubuntu-latest` already resolved to when this was pinned
+    # (image ubuntu24/20260907.300), so the pin changed nothing on the day.
+    # Bump it deliberately, with a run to prove it.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     # Match railway.toml ([deploy] runs on Node 20) and .node-version.
