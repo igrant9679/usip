@@ -728,7 +728,12 @@ async function invokeViaGemini(
   }
 
   const generationConfig: Record<string, unknown> = {
-    maxOutputTokens: maxTokens ?? max_tokens ?? 4096,
+    // Clamped, not passed through: Gemini rejects a maxOutputTokens above the
+    // model's own cap, and callers now size this to their work (the ARE
+    // sequence calls ask for up to 16000 for a 14-step template). A clamp
+    // turns "the request errors" into "the response may truncate", which
+    // parseLlmJson reports with a readable message.
+    maxOutputTokens: Math.min(8192, maxTokens ?? max_tokens ?? 4096),
   };
   if (typeof temperature === "number") {
     generationConfig.temperature = temperature;

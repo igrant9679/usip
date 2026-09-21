@@ -2736,7 +2736,7 @@ export const contactImports = mysqlTable(
     errorRows: int("errorRows").default(0).notNull(),
     /** Column→field mapping JSON: { "CSV Column": "systemField" | null } */
     fieldMapping: json("fieldMapping"),
-    /** Post-import actions JSON: { tag, ownerUserId, sequenceId, segmentId } */
+    /** Post-import actions JSON: { tag, ownerUserId }. sequenceId/segmentId were removed from the input — see routers/imports.ts. */
     postImportActions: json("postImportActions"),
     ownerId: int("ownerId").notNull(), // user who triggered the import
     completedAt: timestamp("completedAt"),
@@ -3819,8 +3819,9 @@ export const areCampaigns = mysqlTable(
     promptSubject: text("promptSubject"),
     promptBody: text("promptBody"),
     promptSignature: text("promptSignature"),
-    /** Campaign-level 7-step skeleton generated once (one LLM call) and
-     *  reused across every prospect's personalization pass. Stored as
+    /** Campaign-level N-step skeleton generated once (one LLM call) and
+     *  reused across every prospect's personalization pass. N comes from
+     *  sequenceTemplate above, via shared/areSequenceTemplates.ts. Stored as
      *  { steps: [{stepIndex, day, channel, archetype, skeleton, ctaPattern}] }. */
     generatedTemplate: json("generatedTemplate"),
     generatedTemplateAt: timestamp("generatedTemplateAt"),
@@ -5813,6 +5814,53 @@ export const savedReports = mysqlTable(
   (t) => ({ byWs: index("ix_sr_ws").on(t.workspaceId) }),
 );
 export type SavedReport = typeof savedReports.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Saved searches (migration 0185) — the People picker's saved searches.
+
+   They were React state (People.tsx) that died on the next navigation, so one
+   never survived an F5, let alone a second device: "Save as new search" wrote
+   a row into useState and nothing else.
+
+   PER USER AND PRIVATE. `ownerUserId` is the boundary, so every read and write
+   is scoped by workspaceId AND ownerUserId. Sharing is deliberately NOT built
+   — it needs an owner name on the row, an edit-permission rule and a
+   departed-member story — which makes the create sheet's "Visibility and
+   sharing: Restricted" row true rather than decorative.
+
+   `config` is the PAGE's UI state — { columns: ColumnKey[], filters: {…},
+   sort: { field, dir } } — validated by the zod mirror in
+   server/routers/savedSearches.ts and re-checked on the way out by
+   normalizeViewConfig (client/src/components/usip/people/savedSearchConfig.ts).
+   It is NOT prospects.list's input: People.tsx translates (missingEmail →
+   hasEmail:false, the promoted tri-state → a boolean) and the stored shape is
+   the UI side of that.
+
+   `surface` is carried so Companies/Deals can adopt the picker without a
+   second migration; only "people" is written today.
+
+   NOT record_lists (above): a LIST is a hand-picked set of records, a SAVED
+   SEARCH is a query. One word apart, routinely confused.
+   ────────────────────────────────────────────────────────────────────────── */
+export const savedSearches = mysqlTable(
+  "saved_searches",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    ownerUserId: int("ownerUserId").notNull(),
+    surface: varchar("surface", { length: 16 }).default("people").notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    config: json("config").notNull(),
+    /** Stamped on apply; the client restores max(lastAppliedAt) on load. A
+     *  timestamp rather than an isDefault flag: one UPDATE, no clearing pass,
+     *  and two rows can never both claim to be the default. */
+    lastAppliedAt: timestamp("lastAppliedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({ byOwner: index("ix_ss_ws_owner").on(t.workspaceId, t.ownerUserId, t.surface) }),
+);
+export type SavedSearchRow = typeof savedSearches.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
    Optimisation recommendations (migration 0127)

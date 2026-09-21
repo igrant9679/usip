@@ -40,7 +40,7 @@ Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable proces
 ### Admin — 5 min
 1. Deliverability: bounce and spam rates, warmup progress, any sender in `error`. A mailbox under the 30-day recipient floor reads "not enough data", not 0% — a blank is no news, not good news.
 2. Sending Accounts: daily limits not saturated by one campaign — "sent today" is every source through that mailbox, not just campaigns; sender display names set.
-3. Audit Log: skim for surprises (deletes, role changes, dial flips).
+3. Audit Log: skim for surprises (deletes, role changes, dial flips). Filter, then **Export CSV** — the download is the filtered set server-side (2,000 max, newest first) with before/after values, IP and user agent, so the skim leaves evidence behind.
 
 ### End of day — 5 min (everyone)
 - Every touch logged; every active deal and hot contact has a dated next step.

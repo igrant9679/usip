@@ -443,6 +443,12 @@ export const campaignsRouter = router({
         targetProspectCount: 100,
         dailySendCap: 25,
         channelsEnabled: { email: true, linkedin: false },
+        // Inert on purpose, not an oversight: this campaign is copyMode "fixed"
+        // (below), and runSequenceAgent's fixed branch returns before
+        // generateCampaignTemplate is ever reached — so no skeleton is generated
+        // and the step count comes from the converted sequence's own steps. Do
+        // not "unify" this with the workspace default; it would read as a
+        // promise the fixed path never keeps.
         sequenceTemplate: "standard_7step",
         stepGapDays: 7,
         goalType: "reply",
@@ -515,15 +521,22 @@ export const campaignsRouter = router({
       if (rest.targetProspectCount !== undefined) updates.targetProspectCount = rest.targetProspectCount;
       if (rest.dailySendCap !== undefined) updates.dailySendCap = rest.dailySendCap;
       if (rest.channelsEnabled !== undefined) updates.channelsEnabled = rest.channelsEnabled;
-      if (rest.sequenceTemplate !== undefined) updates.sequenceTemplate = rest.sequenceTemplate;
-      if (rest.stepGapDays !== undefined) updates.stepGapDays = effectiveStepGapDays(rest.stepGapDays);
-      // sequencePrompt, promptSubject, and promptBody all feed the LLM prompts
-      // that build the cached campaign skeleton. Editing any of them must clear
-      // generatedTemplate so the change takes effect on the next generation —
-      // otherwise the user edits the prompt and nothing changes (the template
-      // generator only runs when generatedTemplate is null). promptSignature is
-      // appended AFTER generation, so it doesn't need to bust the cache.
+      // sequenceTemplate, sequencePrompt, promptSubject, and promptBody all feed
+      // the LLM prompts that build the cached campaign skeleton. Editing any of
+      // them must clear generatedTemplate so the change takes effect on the next
+      // generation — otherwise the user edits the prompt and nothing changes (the
+      // template generator only runs when generatedTemplate is null).
+      // promptSignature is appended AFTER generation, so it doesn't need to bust
+      // the cache. sequenceTemplate joined the list on 2026-09-20: it now decides
+      // the skeleton's STEP COUNT (shared/areSequenceTemplates.ts), and without a
+      // bust the column could be changed and never read again — generateCampaign-
+      // Template's force=true branch has no caller.
       let bustTemplate = false;
+      if (rest.sequenceTemplate !== undefined) {
+        updates.sequenceTemplate = rest.sequenceTemplate;
+        bustTemplate = true;
+      }
+      if (rest.stepGapDays !== undefined) updates.stepGapDays = effectiveStepGapDays(rest.stepGapDays);
       if (rest.sequencePrompt !== undefined) {
         updates.sequencePrompt = rest.sequencePrompt ?? null;
         bustTemplate = true;

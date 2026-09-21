@@ -66,6 +66,7 @@ import { buildBrandContext } from "../../services/brandContext";
 import { DEFAULT_STEP_GAP_DAYS, defaultDayForStep, stepIndexOf } from "@shared/areSequenceSteps";
 import { cleanScrapedField } from "@shared/fieldHygiene";
 import { MAX_TIMELINE_DAY_OFFSET, MAX_TIMELINE_STEPS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
+import { sequenceMaxTokens, stepCountForTemplate } from "@shared/areSequenceTemplates";
 import { DEFAULT_VARIANT_KEY, normalizeVariantKey } from "@shared/variantKeys";
 
 /* ─── ICP Match Scorer ───────────────────────────────────────────────────── */
@@ -503,7 +504,8 @@ Produce:
  *
  * Two-tier architecture:
  *   1. generateCampaignTemplate — one LLM call per campaign, cached on
- *      are_campaigns.generatedTemplate. Produces a 7-step skeleton with
+ *      are_campaigns.generatedTemplate. Produces an N-step skeleton, N from
+ *      the campaign's sequenceTemplate (shared/areSequenceTemplates.ts), with
  *      structure / archetype / day / channel / CTA pattern. No prospect
  *      data; only the campaign's voice + goal + custom prompt.
  *   2. personalizeForProspect — one LLM call per prospect that takes the
@@ -554,7 +556,11 @@ export async function generateCampaignTemplate(
     campaign.goalType === "meeting_booked" ? "Book a 15-minute discovery call"
     : campaign.goalType === "reply" ? "Get a reply to start a conversation"
     : "Create an opportunity in the pipeline";
-  const stepCount = campaign.sequenceTemplate === "standard_7step" ? 7 : 5;
+  // One table owns the count AND the label the picker prints, so a template
+  // called "Nurture 14-Step" can no longer quietly produce five steps — which
+  // is what the old `=== "standard_7step" ? 7 : 5` did to both non-standard
+  // templates. shared/areSequenceTemplates.ts.
+  const stepCount = stepCountForTemplate(campaign.sequenceTemplate);
 
   const systemContent =
     `You are an elite B2B sales sequence architect. Design a reusable ${stepCount}-step outreach skeleton for a single campaign. The skeleton will be filled in per-prospect later, so do NOT write subject lines or bodies — write the STRUCTURE (archetype, cadence, what each step should accomplish, the CTA pattern) so that any prospect's data can be slotted in.` +
@@ -579,6 +585,12 @@ export async function generateCampaignTemplate(
       { role: "system", content: systemContent },
       { role: "user", content: userContent },
     ],
+    // The whole skeleton comes back in one JSON object, so the response grows
+    // with the step count. Left at the provider default (4096 on OpenAI and
+    // Gemini) a 14-step template truncates, and a truncated response is not a
+    // short skeleton — parseLlmJson throws and generation dies for every
+    // prospect on the campaign.
+    maxTokens: sequenceMaxTokens(stepCount),
     response_format: {
       type: "json_schema",
       json_schema: {
@@ -614,12 +626,26 @@ export async function generateCampaignTemplate(
   const content = result.choices[0]?.message?.content;
   if (!content) return { steps: [] };
   const parsed = parseLlmJson(content, "generateCampaignTemplate") as CampaignTemplate;
+  // The model's count is bounded by the promise, never padded to it: an
+  // invented step has no copy behind it, and the skeleton length is what the
+  // personalizer — and therefore the execution queue — is aligned to. stepIndex
+  // is coerced before sorting for the same reason the pain-signal guard exists:
+  // it arrives from an LLM, and a non-numeric one makes the comparator NaN and
+  // the resulting order undefined.
+  const raw = Array.isArray(parsed.steps) ? parsed.steps.slice() : [];
+  raw.sort((a, b) => (Number(a?.stepIndex) || 0) - (Number(b?.stepIndex) || 0));
+  const template: CampaignTemplate = { steps: raw.slice(0, stepCount) };
+  if (template.steps.length !== stepCount) {
+    await emitSeqLog(db, campaign.workspaceId, campaign.id, "warn", "sequence.template",
+      `Campaign template returned ${template.steps.length} steps for a ${stepCount}-step template (${campaign.sequenceTemplate}) - using what came back`,
+      { requested: stepCount, received: template.steps.length, sequenceTemplate: campaign.sequenceTemplate });
+  }
 
   await db.update(areCampaigns)
-    .set({ generatedTemplate: parsed, generatedTemplateAt: new Date() })
+    .set({ generatedTemplate: template, generatedTemplateAt: new Date() })
     .where(eq(areCampaigns.id, campaign.id));
 
-  return parsed;
+  return template;
 }
 
 /**
@@ -709,6 +735,9 @@ async function personalizeForProspect(
       { role: "system", content: systemContent },
       { role: "user", content: userContent },
     ],
+    // Every step's subject AND body in one response, so this is the call the
+    // provider default truncates first — see sequenceMaxTokens.
+    maxTokens: sequenceMaxTokens(template.steps.length),
     response_format: {
       type: "json_schema",
       json_schema: {
@@ -747,7 +776,12 @@ async function personalizeForProspect(
   const content = result.choices[0]?.message?.content;
   if (!content) return [];
   const parsed = parseLlmJson(content, "personalizeForProspect");
-  return (parsed.steps ?? []).map((s: any) => {
+  // "Return one filled step per template step" is a request, not a guarantee —
+  // and this array, not the skeleton, is what becomes the prospect's stored
+  // sequence and their areExecutionQueue rows. Bound it to the skeleton so a
+  // model that returns extra steps cannot lengthen a campaign nobody asked to
+  // lengthen; a SHORT result is reported by the caller, not padded here.
+  return (parsed.steps ?? []).slice(0, template.steps.length).map((s: any) => {
     const channel = String(s.channel ?? "email").toLowerCase();
     // Scrub AI tells (em dashes, curly/straight mixes, markdown leaks) —
     // the prompt asks, the scrub guarantees. Runs BEFORE the signature
@@ -1008,6 +1042,14 @@ export async function runSequenceAgent(
     const steps = await personalizeForProspect(template, prospect, intel, campaign);
     if (steps.length === 0) {
       throw new Error("Personalization returned 0 steps — LLM did not respond with parseable JSON");
+    }
+    // A prospect who ends up with fewer steps than the skeleton has is a
+    // silently shorter sequence — the usual cause is a truncated LLM response.
+    // Recorded, not repaired: there is no copy to invent for the missing steps.
+    if (steps.length !== template.steps.length) {
+      await emitSeqLog(db, workspaceId, campaignId, "warn", "sequence.personalize",
+        `Personalization returned ${steps.length} of ${template.steps.length} skeleton steps for ${prospect.firstName} ${prospect.lastName} - the sequence is short`,
+        { prospectId, steps: steps.length, expected: template.steps.length });
     }
     await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.personalize",
       `Personalized ${steps.length} steps for ${prospect.firstName} ${prospect.lastName}`, { prospectId, steps: steps.length });

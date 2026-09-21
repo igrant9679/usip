@@ -107,8 +107,14 @@ export async function findPersonForRow(
   // must not depend on every producer staying clean.
   const email = usableEmailOrNull(row.email);
   if (email) {
+    // Ordered for the same reason the name tiers are (see the note below):
+    // two People rows can hold one address, and an unordered LIMIT 1 picks
+    // between them differently on two runs — so "link this contact" and the
+    // Data Health detector that predicted which person it would land on could
+    // disagree (2026-09-20).
     const [hit] = await db.select().from(prospects)
       .where(and(eq(prospects.workspaceId, workspaceId), sql`LOWER(${prospects.email}) = ${email}`))
+      .orderBy(prospects.id)
       .limit(1);
     if (hit) return { person: hit, tier: "email" };
   }

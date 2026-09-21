@@ -15,7 +15,7 @@ const post = async (p, i) => (await (await fetch('/api/trpc/' + p, { method: 'PO
 ```
 
 ## Router mount names that bite
-`server/routers.ts` is the map. The file `server/routers/admin.ts` mounts as **`settings`, `team`, `usage`, `dangerZone`** — there is no `admin.*`. Others: `workspace`, `attention`, `are.campaigns` / `are.prospects` / `are.execution` / `are.metrics` / `are.icp`, `prospects` (People), `contacts`, `accounts`, `leads`, `opportunities`, `deals`, `tasks`, `meetings`, `conversations`, `emailActivity` (Emails page), `sequences`, `recordLists`, `segments`, `personas`, `brandVoice`, `scoring`, `reports`, `notifications`, `proposals`, `quotes`, `forms`, `landingPages`, `chatAgents`, `websiteVisitors`, `bookingLinks`, `voiceAgents`, `sendingAccounts`, `senderPools`, `helpCenter`, `assistant`, `unipile`, `optimization`, `workflows`, `audit`.
+`server/routers.ts` is the map. The file `server/routers/admin.ts` mounts as **`settings`, `team`, `usage`, `dangerZone`** — there is no `admin.*`. Others: `workspace`, `attention`, `are.campaigns` / `are.prospects` / `are.execution` / `are.metrics` / `are.icp`, `prospects` (People), `contacts`, `accounts`, `leads`, `opportunities`, `deals`, `tasks`, `meetings`, `conversations`, `emailActivity` (Emails page), `sequences`, `recordLists`, `savedSearches` (the People picker's saved searches — private per user, not the same thing as `recordLists`), `segments`, `personas`, `brandVoice`, `scoring`, `reports`, `notifications`, `proposals`, `quotes`, `forms`, `landingPages`, `chatAgents`, `websiteVisitors`, `bookingLinks`, `voiceAgents`, `sendingAccounts`, `senderPools`, `helpCenter`, `assistant`, `unipile`, `optimization`, `workflows`, `audit`.
 
 ## Reads you will use constantly
 | Need | Call |
@@ -30,7 +30,7 @@ const post = async (p, i) => (await (await fetch('/api/trpc/' + p, { method: 'PO
 | People | `prospects.list {limit, search?, filters}` · `prospects.get {id}` |
 | CRM | `accounts.list`, `contacts.list`, `leads.list`, `opportunities.list`, `tasks.list`, `meetings.list` / `meetings.stats`, `conversations.list` / `stats` |
 | Inbound | `websiteVisitors.stats`, `forms.list`, `landingPages.list`, `chatAgents.list` / `sessions` |
-| Config | `segments.list`, `personas.list`, `are.icp.getCurrent`, `recordLists.list`, `reports.list`, `sendingAccounts.list`, `scoring.listModels`, `bookingLinks.mine` / `getPublic {slug}` |
+| Config | `segments.list`, `personas.list`, `are.icp.getCurrent`, `recordLists.list`, `savedSearches.list {surface}` (yours only), `reports.list`, `sendingAccounts.list`, `scoring.listModels`, `bookingLinks.mine` / `getPublic {slug}` |
 | Team | `team.list` (members with memberId, role, hasPassword, invitePending) |
 | Sample data | `dangerZone.sampleDataStatus` |
 | Help | `helpCenter.listArticles`, `getArticle {slug}`, `searchArticles {q}`, `askAI` |
@@ -49,6 +49,7 @@ const post = async (p, i) => (await (await fetch('/api/trpc/' + p, { method: 'PO
 | Dispatch controls | `are.execution.pause/resume {campaignId}`, `reviveSkippedSteps`, `addSuppression {email}` | never dispatch from a browser call |
 | Sequences | `sequences.create/update/enroll` | |
 | Lists | `recordLists.create`, `addMembers`, `removeMember` | |
+| Saved searches | `savedSearches.save {id?, surface, name, config}`, `remove {id}`, `markApplied {id}` | private to the caller; `save` with an `id` overwrites |
 | Tasks / meetings | `tasks.create`, `meetings.create`, `meetings.setAutopilotSettings` | |
 | Autonomy dials | `tasks/meetings/conversations/deals.setAutopilotSettings {mode}`, `unipile.setSocialAutopilotSettings`, `chatAgents.setAutopilotSettings` / `setFollowUpSettings`, `prospects.setSweepSettings` / `setBackfillSettings`, `optimization.setSettings` | admin |
 | Workspace | `workspace.create {name, seedDemoData}` (super_admin) | creator becomes super_admin member |
@@ -81,3 +82,4 @@ const post = async (p, i) => (await (await fetch('/api/trpc/' + p, { method: 'PO
 - Health: `GET /api/health` → `{commit, ...}`; deploys are verified by polling for the expected commit.
 - Boot re-seeds help content, tours and the demo ARE campaign (guarded by name).
 - Logs: campaign Logs tab (`are_engine_logs`), Audit Log page, `usage` router for LLM spend.
+- Audit: `audit.list {entityType?, actorUserId?, limit<=500}` (admin; filters applied in SQL) · `audit.entityTypes` → the types this workspace has actually recorded, for the filter dropdown · `audit.exportCsv {entityType?, actorUserId?}` → `{csv, rows, total, capped}` — a mutation, admin **and** `export_data`, capped at 2,000 rows with before/after truncated to 1,000 chars per side, and it writes its own `data_export` audit row.

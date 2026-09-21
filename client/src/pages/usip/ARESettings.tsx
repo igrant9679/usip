@@ -13,6 +13,7 @@ import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
 import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
 import { WarmySenderSourceCard } from "@/components/usip/settings/WarmySenderSourceCard";
+import { ARE_SEQUENCE_TEMPLATES, DEFAULT_ARE_SEQUENCE_TEMPLATE } from "@shared/areSequenceTemplates";
 import { ARE_SOURCES, ARE_SOURCE_IDS, resolveSourceOrder } from "@shared/areSources";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -82,6 +83,18 @@ const AUTONOMY_OPTIONS: { value: AutonomyMode; label: string; description: strin
   },
 ];
 
+/** Icons only. The label, the step count and the description live in
+ *  shared/areSequenceTemplates.ts so the generator and this picker cannot
+ *  disagree about how many steps a template has — they did until 2026-09-20,
+ *  when "Aggressive 3-Step" and "Nurture 14-Step" both produced five. shared/
+ *  stays free of lucide, so the icon stays here. */
+const TEMPLATE_ICONS: Record<string, typeof Mail> = {
+  standard_7step: Mail,
+  aggressive_3step: Zap,
+  nurture_14step: RefreshCw,
+  custom: Sparkles,
+};
+
 const CHANNEL_OPTIONS = [
   { key: "email", label: "Email", icon: Mail, color: "text-blue-500" },
   { key: "linkedin", label: "LinkedIn", icon: Linkedin, color: "text-blue-600" },
@@ -143,7 +156,7 @@ export default function ARESettings() {
   const [notifyAutoApprove, setNotifyAutoApprove] = useState(false);
   const [notifyIcpUpdate, setNotifyIcpUpdate] = useState(true);
   // New settings
-  const [sequenceTemplate, setSequenceTemplate] = useState("standard_7step");
+  const [sequenceTemplate, setSequenceTemplate] = useState(DEFAULT_ARE_SEQUENCE_TEMPLATE);
   // Keys come from the shared ARE_SOURCES vocabulary — the same ids the wizard
   // shows and the engine dispatches on. All on by default: a new campaign
   // sources from everything unless the user narrows it.
@@ -468,32 +481,41 @@ export default function ARESettings() {
         <Section
           icon={FileText}
           title="Default Sequence Template"
-          description="New campaigns inherit this sequence structure. The AI adapts the copy but follows the step cadence."
+          description="New campaigns inherit this sequence structure. Step spacing is the campaign's own step gap (one week by default), and changing this does not alter campaigns that already exist."
         >
           <div className="grid grid-cols-2 gap-2">
-            {[
-              { value: "standard_7step", label: "Standard 7-Step", desc: "Email × 4 + LinkedIn × 2 + call × 1 over 21 days. Best for most B2B campaigns.", icon: Mail },
-              { value: "aggressive_3step", label: "Aggressive 3-Step", desc: "3 emails in 7 days. High velocity, best for warm lists or time-sensitive offers.", icon: Zap },
-              { value: "nurture_14step", label: "Nurture 14-Step", desc: "14 touches over 60 days mixing email, LinkedIn, and value content. Best for enterprise.", icon: RefreshCw },
-              { value: "custom", label: "Custom", desc: "The AI designs the sequence from scratch based on the campaign ICP and channels.", icon: Sparkles },
-            ].map(({ value, label, desc, icon: Icon }) => (
-              <button
-                key={value}
-                onClick={() => { setSequenceTemplate(value); mark(); }}
-                className={`text-left rounded-xl border px-3 py-2.5 transition-all ${
-                  sequenceTemplate === value
-                    ? "border-primary/50 bg-primary/5 shadow-sm"
-                    : "border-border bg-card text-muted-foreground hover:border-primary/20 hover:bg-muted/30"
-                }`}
-              >
-                <div className="flex items-center gap-1.5 mb-0.5">
-                  <Icon className={`size-3.5 ${sequenceTemplate === value ? "text-primary" : "text-muted-foreground"}`} />
-                  <span className="text-xs font-medium">{label}</span>
-                  {sequenceTemplate === value && <CheckCircle2 className="size-3 text-primary ml-auto" />}
-                </div>
-                <p className="text-[10px] text-muted-foreground leading-relaxed">{desc}</p>
-              </button>
-            ))}
+            {/* -- The literal array that used to sit here printed a day span
+                and a channel mix for each template. Both were fiction: the
+                campaign owns the cadence (DEFAULT_STEP_GAP_DAYS — seven steps a
+                week apart is six weeks, whatever span the copy claimed), and no
+                channel mix has ever been enforced, since the prompt only
+                forbids two consecutive non-email steps on the same channel and
+                the channels come from the campaign's own channelsEnabled. The
+                counts were fiction too until the generator started reading the
+                same table this renders from (2026-09-20). The exact old strings
+                are pinned as forbidden in areSequenceTemplateSteps.test.ts, so
+                do not quote them back into this file. -- */}
+            {ARE_SEQUENCE_TEMPLATES.map(({ value, label, description: desc }) => {
+              const Icon = TEMPLATE_ICONS[value] ?? Sparkles;
+              return (
+                <button
+                  key={value}
+                  onClick={() => { setSequenceTemplate(value); mark(); }}
+                  className={`text-left rounded-xl border px-3 py-2.5 transition-all ${
+                    sequenceTemplate === value
+                      ? "border-primary/50 bg-primary/5 shadow-sm"
+                      : "border-border bg-card text-muted-foreground hover:border-primary/20 hover:bg-muted/30"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <Icon className={`size-3.5 ${sequenceTemplate === value ? "text-primary" : "text-muted-foreground"}`} />
+                    <span className="text-xs font-medium">{label}</span>
+                    {sequenceTemplate === value && <CheckCircle2 className="size-3 text-primary ml-auto" />}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground leading-relaxed">{desc}</p>
+                </button>
+              );
+            })}
           </div>
 
           {/* Sequence quality threshold */}

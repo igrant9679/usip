@@ -35,7 +35,7 @@ import {
 import { recordAudit } from "../audit";
 import { recordEmailsSent } from "../usageCounters";
 import { logEmailSend } from "../services/email/logSend";
-import { getDb } from "../db";
+import { checkPermission, getDb } from "../db";
 import { closedStageKeys, stageIndexFor } from "../_core/stageSemantics";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
@@ -720,21 +720,54 @@ export const campaignsRouter = router({
      return { ...c, openRate, clickRate, replyRate, bounceRate };
   }),
 
-  /** Add contacts or leads to a campaign's audience list */
+  /**
+   * Add contacts to a broadcast's audience list.
+   *
+   * A lead-ids array used to sit beside `contactIds` here and was merged into
+   * the same untyped int[], so a lead id was stored as a contact id: the only
+   * reader (the "N contacts" line in the campaign editor) miscounted it, and
+   * any sender wired to this column later would mis-send to whichever contact
+   * shared that integer. Nothing sends it — the Leads page's "Add to Campaign"
+   * button was removed 2026-09-20, and a lead reaches outreach through
+   * AddToMenu → `are.prospects.pushExisting`, which resolves it to its People
+   * row. Dropped for the same reason imports.ts dropped sequenceId/segmentId
+   * from postImportActions: an id the input implies and nothing honours is
+   * worse than no id at all.
+   */
   addAudience: workspaceProcedure
     .input(z.object({
       campaignId: z.number(),
-      contactIds: z.array(z.number()).optional(),
-      leadIds: z.array(z.number()).optional(),
+      contactIds: z.array(z.number().int().positive()).min(1),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [c] = await db.select().from(campaigns).where(and(eq(campaigns.id, input.campaignId), eq(campaigns.workspaceId, ctx.workspace.id)));
       if (!c) throw new TRPCError({ code: "NOT_FOUND" });
+      // `audienceType: "contacts"` was written unconditionally below, so adding
+      // people to a segment-audience broadcast knocked it off its segment and
+      // orphaned audienceSegmentId — getWithDetails still resolved the segment
+      // name while the editor rendered "N contacts". Refuse rather than pick
+      // one of the two audiences on the operator's behalf (2026-09-20).
+      if (c.audienceType === "segment") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This broadcast's audience is a segment. Change it to a contact list in the campaign editor first, or add these people to the segment.",
+        });
+      }
+      // NOT a defence against a lead id: one that collides with a contact id in
+      // this workspace resolves and passes. It catches a stale or foreign id,
+      // which used to be merged into audienceIds unchallenged.
+      const owned = await db.select({ id: contacts.id }).from(contacts)
+        .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, input.contactIds)));
+      if (owned.length !== input.contactIds.length) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "One or more ids are not contacts in this workspace — they may have been deleted, or they are leads/prospects. Broadcast audiences are contact-keyed; put a lead into outreach with Add to… on the Leads page.",
+        });
+      }
       const existing: number[] = Array.isArray(c.audienceIds) ? (c.audienceIds as number[]) : [];
-      const newIds = [...(input.contactIds ?? []), ...(input.leadIds ?? [])];
-      const merged = Array.from(new Set([...existing, ...newIds]));
+      const merged = Array.from(new Set([...existing, ...input.contactIds]));
       await db.update(campaigns).set({ audienceType: "contacts", audienceIds: merged }).where(and(eq(campaigns.id, input.campaignId), eq(campaigns.workspaceId, ctx.workspace.id)));
       return { added: merged.length - existing.length, total: merged.length };
     }),
@@ -1715,11 +1748,62 @@ export const quotesRouter = router({
 
 /* ───── Audit / Notifications / SCIM ─────────────────────────────── */
 
+/**
+ * Row ceiling for the audit CSV. 2x reports.exportCsv (which caps at 1000 and
+ * says nothing); disclosed to the caller rather than swallowed, because
+ * `before`/`after` are unbounded json columns (drizzle/schema.ts) holding whole
+ * record snapshots, so an uncapped export is a multi-megabyte tRPC response.
+ */
+const AUDIT_EXPORT_CAP = 2000;
+/** Per-field ceiling on the serialised diff, for the same reason. */
+const AUDIT_JSON_MAX = 1000;
+
+/**
+ * The audit filters, as SQL. 2026-09-20: `list` used to apply these in JS AFTER
+ * `.limit()`, which returns "the matches inside the newest 500 rows" rather than
+ * "the newest 500 matching rows" — a filtered view of a busy workspace showed
+ * three entries and read as "nothing happened". teamRouter.getMemberActivityLog
+ * (server/routers/admin.ts) already filtered auditLog in SQL; `list` was the
+ * outlier, and the CSV export below could not have been honest built on it.
+ */
+function auditWhere(workspaceId: number, input?: { entityType?: string; actorUserId?: number }) {
+  const conds = [eq(auditLog.workspaceId, workspaceId)];
+  if (input?.entityType) conds.push(eq(auditLog.entityType, input.entityType));
+  if (input?.actorUserId) conds.push(eq(auditLog.actorUserId, input.actorUserId));
+  return and(...conds);
+}
+
+/**
+ * Copy of the escaper in server/routers/reports.ts, kept LOCAL on purpose:
+ * server/routers/are/prospects.ts already carries its own copy, and reports.ts
+ * holds 9 of the pinned tsc errors, so exporting `toCsv` from there means
+ * editing those lines. The shape is what matters — quote-wrap anything holding
+ * a quote, comma or newline and double the quotes — because the browser-built
+ * exports it replaces used `JSON.stringify`, which backslash-escapes and
+ * produces a file Excel opens wrong.
+ */
+function auditToCsv(columns: { key: string; label: string }[], rows: Record<string, unknown>[]): string {
+  const esc = (v: unknown) => {
+    if (v == null) return "";
+    const s = v instanceof Date ? v.toISOString() : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  return [columns.map((c) => esc(c.label)).join(","), ...rows.map((r) => columns.map((c) => esc(r[c.key])).join(","))].join("\n");
+}
+
+function auditJson(v: unknown): string {
+  if (v == null) return "";
+  const s = JSON.stringify(v);
+  return s.length > AUDIT_JSON_MAX ? `${s.slice(0, AUDIT_JSON_MAX)}…truncated` : s;
+}
+
 export const auditRouter = router({
   list: adminWsProcedure
     .input(
       z.object({
-        entityType: z.string().optional(),
+        // varchar(40) in the schema: a longer value can never match a stored
+        // row, so it would silently return zero and read as "nothing happened".
+        entityType: z.string().max(40).optional(),
         actorUserId: z.number().int().optional(),
         limit: z.number().int().min(1).max(500).default(100),
       }).optional(),
@@ -1727,15 +1811,131 @@ export const auditRouter = router({
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
-      let rows = await db
+      const rows = await db
         .select()
         .from(auditLog)
-        .where(eq(auditLog.workspaceId, ctx.workspace.id))
+        .where(auditWhere(ctx.workspace.id, input))
         .orderBy(desc(auditLog.createdAt))
         .limit(input?.limit ?? 100);
-      if (input?.entityType) rows = rows.filter((r) => r.entityType === input.entityType);
-      if (input?.actorUserId) rows = rows.filter((r) => r.actorUserId === input.actorUserId);
       return rows;
+    }),
+
+  /**
+   * The entity types this workspace has actually recorded. The page used to
+   * hardcode twelve, four of which (customer, campaign, workflow_rule,
+   * social_post) are written by nothing at all and so always returned empty,
+   * while ~60 real types — sequence, prospect, task, meeting, people,
+   * workspace, email_draft — could not be selected. An export can only honour
+   * a filter the user is able to express.
+   */
+  entityTypes: adminWsProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return [] as string[];
+    const rows = await db
+      .selectDistinct({ t: auditLog.entityType })
+      .from(auditLog)
+      .where(eq(auditLog.workspaceId, ctx.workspace.id))
+      .orderBy(auditLog.entityType);
+    return rows.map((r) => r.t);
+  }),
+
+  exportCsv: adminWsProcedure
+    .input(
+      z.object({
+        entityType: z.string().max(40).optional(),
+        actorUserId: z.number().int().optional(),
+      }).optional(),
+    )
+    .mutation(async ({ ctx, input }) => {
+      /**
+       * 2026-09-20: this CSV is rendered SERVER-side, so unlike the browser-built
+       * exports it has a call to refuse — and it carries IP, user-agent and the
+       * before/after diff for up to 2,000 rows. It gets the same `export_data`
+       * gate every other server-rendered export got in this pass
+       * (reports.exportCsv, reports.sendNow, are.prospects.exportRejections).
+       * adminWsProcedure alone is not enough: the key exists precisely so an
+       * admin can be trusted to READ the log on screen and still be refused the
+       * file that walks out on a laptop.
+       */
+      await checkPermission(ctx, "export_data");
+      const db = await getDb();
+      if (!db) return { csv: "", rows: 0, total: 0, capped: false };
+      const where = auditWhere(ctx.workspace.id, input ?? undefined);
+
+      const [c] = await db.select({ c: sql<number>`count(*)` }).from(auditLog).where(where);
+      const total = Number(c?.c ?? 0);
+
+      const found = await db.select().from(auditLog).where(where)
+        .orderBy(desc(auditLog.createdAt)).limit(AUDIT_EXPORT_CAP);
+
+      // Actor names come from `users` by id, NOT from a workspaceMembers join:
+      // team.delete HARD-DELETES the membership row (server/routers/admin.ts,
+      // documented at server/_core/activeMembers.ts), and a removed member is
+      // precisely the actor a compliance export exists to name — a join would
+      // render them "User 42". The ids are read off rows already scoped to this
+      // workspace, so this is not a cross-tenant read; same shape as
+      // resolveUserNames in server/routers/reports.ts.
+      const ids = Array.from(new Set(
+        found.map((r) => r.actorUserId).filter((v): v is number => typeof v === "number" && v > 0),
+      ));
+      const nameById = new Map<number, string>();
+      if (ids.length > 0) {
+        // An empty inArray emits broken SQL — a workspace whose matching rows
+        // are all system-actor (actorUserId NULL) reaches here with none.
+        const people = await db.select({ id: users.id, name: users.name, email: users.email })
+          .from(users).where(inArray(users.id, ids));
+        for (let i = 0; i < people.length; i++) {
+          const u = people[i];
+          nameById.set(u.id, u.name || u.email || `User ${u.id}`);
+        }
+      }
+
+      const COLUMNS = [
+        { key: "id", label: "ID" },
+        { key: "createdAt", label: "Timestamp (UTC)" },
+        { key: "action", label: "Action" },
+        { key: "entityType", label: "Entity type" },
+        { key: "entityId", label: "Entity ID" },
+        { key: "actorUserId", label: "Actor user ID" },
+        { key: "actorName", label: "Actor" },
+        { key: "ip", label: "IP" },
+        { key: "userAgent", label: "User agent" },
+        { key: "before", label: "Before" },
+        { key: "after", label: "After" },
+      ];
+      const mapped: Record<string, unknown>[] = found.map((r) => ({
+        id: r.id,
+        createdAt: r.createdAt,
+        action: r.action,
+        entityType: r.entityType,
+        entityId: r.entityId,
+        actorUserId: r.actorUserId,
+        actorName: r.actorUserId ? (nameById.get(r.actorUserId) ?? `User ${r.actorUserId}`) : "system",
+        ip: r.ip,
+        userAgent: r.userAgent,
+        before: auditJson(r.before),
+        after: auditJson(r.after),
+      }));
+      const csv = auditToCsv(COLUMNS, mapped);
+      const capped = total > AUDIT_EXPORT_CAP;
+
+      // Exporting the audit log is itself auditable; "data_export" is already a
+      // filterable entity type. Written AFTER the CSV is built so the row is not
+      // committed for work that never completed, and it records the truncation
+      // so the artefact's own description is honest about what it left out.
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "create",
+        entityType: "data_export",
+        entityId: ctx.workspace.id,
+        after: {
+          kind: "audit_log", rows: mapped.length, total, capped,
+          entityType: input?.entityType ?? null, actorUserId: input?.actorUserId ?? null,
+        },
+      });
+
+      return { csv, rows: mapped.length, total, capped };
     }),
 });
 

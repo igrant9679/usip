@@ -28,6 +28,7 @@ import { emailVerificationRouter } from "./routers/emailVerification";
 import { dataHealthRouter } from "./routers/dataHealth";
 import { segmentsRouter } from "./routers/segments";
 import { recordListsRouter } from "./routers/recordLists";
+import { savedSearchesRouter } from "./routers/savedSearches";
 import { aiPipelineRouter } from "./routers/aiPipeline";
 import { pipelineAlertsRouter } from "./routers/pipelineAlerts";
 import { accountBriefsRouter } from "./routers/accountBriefs";
@@ -150,6 +151,7 @@ export const appRouter = router({
   dataHealth: dataHealthRouter,
   segments: segmentsRouter,
   recordLists: recordListsRouter,
+  savedSearches: savedSearchesRouter,
   aiPipeline: aiPipelineRouter,
   pipelineAlerts: pipelineAlertsRouter,
   accountBriefs: accountBriefsRouter,

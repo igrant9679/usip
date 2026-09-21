@@ -4168,6 +4168,34 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0185: saved searches for the People picker ───────────────────────────
+  // The picker's saved searches lived in People.tsx's useState, so one never
+  // survived a navigation — "Save as new search" wrote a row into memory and
+  // nothing else. Per user and PRIVATE: (workspaceId, ownerUserId) is the
+  // boundary, which is also what makes the create sheet's "Visibility and
+  // sharing: Restricted" row true for the first time.
+  // `config` carries columns + filters + sort, so a search restores the whole
+  // page rather than just its columns — the actual product gap.
+  // No backfill: there is nothing to migrate. The old state was per-tab and
+  // already gone by the time anyone looked.
+  {
+    name: "0185_saved_searches.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `saved_searches` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`ownerUserId` INT NOT NULL, " +
+        "`surface` VARCHAR(16) NOT NULL DEFAULT 'people', " +
+        "`name` VARCHAR(160) NOT NULL, " +
+        "`config` JSON NOT NULL, " +
+        "`lastAppliedAt` TIMESTAMP NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "`updatedAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
+        "INDEX `ix_ss_ws_owner` (`workspaceId`, `ownerUserId`, `surface`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

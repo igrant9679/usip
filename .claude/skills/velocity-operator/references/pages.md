@@ -43,7 +43,7 @@ Hub with tabs:
 - **Find Prospects** (`?tab=find-prospects`) — search new people by role and company shape (QuickEnrich, Apollo search-only, LinkedIn); results go to People or a list.
 - **Source search** (`?tab=source-search`) — the capability-aware vendor search (prospect-source registry, 2026-09-14). The filter panel is the union of every connected vendor's filters; the **source strip** shows per vendor *full match / approximate / cannot honour* for the current query (hover = reason); set a batch target beside the combined remaining allowance; **Run search** walks the vendors in the workspace's checking order and stops at the target, previewing for free (masked emails); select rows → **Promote** shows the exact units the selection will spend before anything is acquired. Promoted people enter People with per-field provenance naming the vendor. No vendor connected → the page routes to Settings → Data sources instead of erroring.
 - **Import Contacts** (`?tab=import-contacts`) — CSV in. Mapping is exact-match on headers, refuses two columns to one field, enforces required fields per destination (People / Leads / Contacts). Bad files fail at mapping time.
-- **Data Health** (`?tab=data-health-center`) — duplicates, gaps, import-mapping audits, what missing data costs in reach.
+- **Data Health** (`?tab=data-health-center`) — duplicates, gaps, import-mapping audits, what missing data costs in reach. Three duplicate surfaces, each naming its table: **Duplicate People** (the KPI card), **Duplicate contacts** (mergeable — the loser row is deleted), and **Split across People & Contacts** (2026-09-20): one human with a People row and a CRM contact that are not linked, or linked to the wrong People row. The repair LINKS — **Link** / **Re-link** per row, **Link all unlinked** for the batch — and also merges the contact’s own values onto the People record. It never deletes a row and never merges two People rows, so pairs marked *Needs a merge* (two People rows holding one address) stay until someone edits them by hand. Re-linking an already-linked contact needs manager.
 - The **Enrichment sweep** and **Company backfill** cards: backlog email-finding (Reoon credits) and LinkedIn company backfill (~100 lookups/day), each with its own dial and daily cap.
 
 ### Saved People / Saved Companies — `/v2/lists?type=people|companies`
@@ -66,7 +66,7 @@ Website chat widgets (`/c/your-slug` and hosted pages). Persona, greeting, quali
 ## CRM
 
 ### ★ People — `/v2/people`
-The master person table. Search, filters (title, seniority, company, email status, confidence tier, verification, list, campaign membership), column chooser, saved views. Row actions and bulk **Add to ▾** menu: add to list, enroll in sequence, add to campaign (opens the Add existing wizard), enrich, verify email, convert to lead, create task, archive. The person drawer shows the dossier, data-source chips (provenance), campaign and sequence memberships, activity timeline, fit score. Needs Review is a filter (`verificationStatus = needs_review`).
+The master person table. Search, filters (title, seniority, company, email status, confidence tier, verification, list, campaign membership), column chooser, saved searches (per user, persisted server-side; private to you — the picker restores the one you last applied, and a search stores its columns, filters and sort). Row actions and bulk **Add to ▾** menu: add to list, enroll in sequence, add to campaign (opens the Add existing wizard), enrich, verify email, convert to lead, create task, archive. The person drawer shows the dossier, data-source chips (provenance), campaign and sequence memberships, activity timeline, fit score. Needs Review is a filter (`verificationStatus = needs_review`).
 
 ### ★ Companies — `/v2/companies`
 Every company with its people, enrichment (industry, size, revenue, HQ, tech), brand identity (logo/domain with pin/merge), account stage, score, deals and activity. Brand pins override every enrichment provider.
@@ -212,6 +212,8 @@ If-this-then-that on CRM events: triggers record created, stage changed, signal 
 
 ### Custom Fields — `/custom-fields` · Team — `/team` · Audit Log — `/audit` · Help Center — `/help`
 Your own fields on records; members, roles, invites, deactivate/reassign/delete; who changed what; guides, articles, tours and Ask AI.
+
+**Audit Log is not read-only.** Filter by entity type (the dropdown is derived from what the workspace has actually recorded, not a fixed list) and by member, then **Export CSV**. The export is rendered server-side, so it returns the filtered set — up to **2,000** entries, newest first, with a warning when there were more — rather than the 500 rows on screen. It carries the before/after diff (1,000 chars per side), the actor's name including deleted members, the IP and the user agent. Admin role **plus** the `export_data` permission; the read alone needs only admin.
 
 ---
 

@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { ProspectAvatar, type ProfileImage } from "../ProspectAvatar";
+import type { ColumnKey, SortField, SortDir } from "./savedSearchConfig";
 import { isGenericInboxEmail } from "@shared/genericEmail";
 import { CompanyLogo as BrandCompanyLogo } from "../company/CompanyLogo";
 import { LinkedInUpdateIndicator, RowEnrichAction, type LinkedInChangeSummary } from "./LinkedInEnrichment";
@@ -224,10 +225,6 @@ function LinkIcon({ href, icon: Icon, title }: { href?: string | null; icon: any
 }
 
 /* ─────────────────────────── column registry ──────────────────────────── */
-
-export type ColumnKey =
-  | "name" | "title" | "velocityScore" | "company" | "emails" | "phone"
-  | "actions" | "links" | "location" | "employees" | "industries" | "keywords";
 
 export type ColumnDef = {
   key: ColumnKey;
@@ -478,11 +475,28 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
   },
 };
 
-/** Default displayed columns, in order. Industries/keywords stay available
- *  via Search settings → Fields (column customization), not the default view. */
-export const DEFAULT_COLUMNS: ColumnKey[] = [
-  "name", "title", "velocityScore", "company", "emails", "phone", "actions", "links", "location",
-];
+/* The saved-search model — column keys, sort values, the stored ViewConfig and
+   the normalizer that makes a stored row safe to apply — lives in
+   ./savedSearchConfig, a plain .ts module so a node test can import it (this
+   file's first JSX literal throws "React is not defined" outside a browser
+   build). Re-exported here so every existing import site is unchanged. */
+export {
+  COLUMN_KEYS,
+  DEFAULT_COLUMNS,
+  SORT_FIELD_VALUES,
+  SYSTEM_DEFAULT_VIEW,
+  normalizeViewConfig,
+  rowToSavedView,
+} from "./savedSearchConfig";
+export type {
+  ColumnKey,
+  SortField,
+  SortDir,
+  TierValue,
+  ViewFilters,
+  ViewConfig,
+  SavedView,
+} from "./savedSearchConfig";
 
 /* ─────────────── "Add fields to table" — available field catalogue ─────── */
 
@@ -563,10 +577,6 @@ export const COMPANY_FIELD_GROUPS: FieldGroup[] = [
 
 /* ────────────────────────────── sorting ───────────────────────────────── */
 
-export type SortField =
-  | "relevance" | "name" | "title" | "emails" | "company" | "phone" | "employees" | "industries";
-export type SortDir = "asc" | "desc";
-
 export const SORT_FIELDS: { value: SortField; label: string }[] = [
   { value: "relevance", label: "Relevance" },
   { value: "name", label: "Name" },
@@ -606,13 +616,3 @@ export function sortRows(rows: Prospect[], field: SortField, dir: SortDir): Pros
   };
   return [...rows].sort(cmp);
 }
-
-/** Default saved view: every workspace starts with the system "Default view". */
-export type SavedView = {
-  id: string;
-  name: string;
-  system?: boolean;
-  starred?: boolean;
-  scope?: "yours" | "shared";
-  columns: ColumnKey[];
-};

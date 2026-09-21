@@ -3,7 +3,8 @@ import { workspaceProcedure } from "../_core/workspace";
 import { z } from "zod";
 import { getDb } from "../db";
 import { audienceSegments, contacts } from "../../drizzle/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 
 // ─── Rule schema ──────────────────────────────────────────────────────────────
 const RuleSchema = z.object({
@@ -216,16 +217,40 @@ export const segmentsRouter = router({
         .filter((r) => r.field === "email" && r.operator === "equals")
         .map((r) => r.value);
       // Fetch emails for the given contactIds
-      const { inArray } = await import("drizzle-orm");
       const rows = await db.select({ id: contacts.id, email: contacts.email })
         .from(contacts)
         .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, input.contactIds)));
+      // NOT a defence against a lead id: a lead id that happens to collide with
+      // a contact id in this workspace resolves fine and this check passes. The
+      // fix for that is that no surface passes lead ids any more (Leads.tsx,
+      // 2026-09-20) and leadsSegmentPlumbing.test.ts pins the shape. What this
+      // catches is a stale or foreign id, which used to be dropped silently
+      // while the toast still said "Added N".
+      if (rows.length !== input.contactIds.length) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "One or more ids are not contacts in this workspace — they may have been deleted, or they are leads/prospects. Segments are contact-keyed; put a lead into outreach with Add to… on the Leads page.",
+        });
+      }
       const newRules: Rule[] = rows
         .filter((r) => r.email && !existingIds.includes(r.email))
         .map((r) => ({ id: `manual-${r.id}`, field: "email" as const, operator: "equals" as const, value: r.email! }));
+      // Membership is expressed as an email-EQUALS rule, so under matchType
+      // "all" (the column default, drizzle/schema.ts) a second such rule can
+      // never match anybody. Appending to a segment that already says something
+      // collapsed it to one person or to nobody, and the update below stamped
+      // that collapsed number over contactCount — a button that destroyed the
+      // segment and reported success. Refuse instead (2026-09-20).
+      const effectiveMatch = (seg.matchType ?? "all") as "all" | "any";
+      if (newRules.length > 0 && effectiveMatch === "all" && existingRules.length + newRules.length > 1) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This segment matches on ALL rules, so adding members by email would make it match nobody. Switch the segment to 'any', or add a rule that describes them.",
+        });
+      }
       const updatedRules = [...existingRules, ...newRules];
       const allContacts = await db.select().from(contacts).where(eq(contacts.workspaceId, ctx.workspace.id));
-      const count = allContacts.filter((c) => evaluateRules(c as Record<string, any>, updatedRules, (seg.matchType ?? "all") as "all" | "any")).length;
+      const count = allContacts.filter((c) => evaluateRules(c as Record<string, any>, updatedRules, effectiveMatch)).length;
       await db.update(audienceSegments).set({ rules: updatedRules, contactCount: count, lastEvaluatedAt: new Date() })
         .where(and(eq(audienceSegments.id, input.segmentId), eq(audienceSegments.workspaceId, ctx.workspace.id)));
       return { added: newRules.length, total: count };

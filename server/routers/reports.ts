@@ -349,7 +349,7 @@ export const reportsRouter = router({
      * /reports CSV button in every workspace — deliberate, and announced.
      *
      * ⚠️ THIS IS NOT A COMPLETE BOUNDARY, and saying otherwise would be the
-     * half-fix that reads as complete. The Leads, Contacts, Pipeline, Audit and
+     * half-fix that reads as complete. The Leads, Contacts, Pipeline and
      * people-selection exports build the CSV IN THE BROWSER out of rows the
      * list query already returned (see client/src/pages/usip/Leads.tsx —
      * `new Blob([...], { type: "text/csv" })`), so there is no server call to
@@ -359,9 +359,12 @@ export const reportsRouter = router({
      * The campaign-rejection export used to be listed above as browser-built.
      * It is not: are.prospects.exportRejections renders that CSV server-side,
      * and on 2026-09-20 it gained this same gate (a wrong comment is how the
-     * next reader inherits a hole). Every SERVER-rendered path off this key is
-     * now gated — exportCsv, exportRejections, sendNow, and setSchedule when it
-     * turns delivery on.
+     * next reader inherits a hole). The AUDIT export was browser-built when
+     * that was written and has since moved to the server too
+     * (auditRouter.exportCsv in operations.ts), so it is gated as well and is
+     * no longer in the list above. Every SERVER-rendered path off this key is
+     * now gated — exportCsv, exportRejections, sendNow, setSchedule when it
+     * turns delivery on, and audit.exportCsv.
      *
      * `run` below is left open, but NOT because "only the file is gated": it
      * shares `specSchema` with exportCsv, accepts the same limit: 1000, and

@@ -292,6 +292,23 @@ describe("export_data", () => {
     expect(msg).toBe("Your role (rep) does not have permission to use: export_data");
   });
 
+  it("audit.exportCsv refuses an admin with the key denied — adminWsProcedure is not the gate", async () => {
+    // 2026-09-20. The audit CSV moved server-side in this pass, which gave it a
+    // call to refuse for the first time; it carries IP, user-agent and the
+    // before/after diff for up to 2,000 rows. The REP case is deliberately not
+    // asserted: audit.exportCsv is an adminWsProcedure, so a rep is refused by
+    // RANK before the permission check ever runs and the assertion would pass
+    // for the wrong reason — same reasoning as sequences.assign above.
+    const msg = await refusal(() => caller("admin", deny("export_data")).audit.exportCsv({}));
+    expect(msg).toBe("You do not have permission to use: export_data");
+  });
+
+  it("but audit.list stays open to that same admin — the gate is on the file, not the page", async () => {
+    // Denying the key must hide the download, not blank the compliance page.
+    const msg = await refusal(() => caller("admin", deny("export_data")).audit.list({ limit: 10 }));
+    expect(msg).toBeNull();
+  });
+
   it("structurally: every SERVER-rendered export path off this key carries the gate", () => {
     // This used to read "reports.ts gates the export and nothing else", which
     // was true and was the problem — the siblings were the hole.
@@ -314,6 +331,17 @@ describe("export_data", () => {
     const rAt = rejections.indexOf("exportRejections: workspaceProcedure");
     expect(rAt).toBeGreaterThan(-1);
     expect(rejections.slice(rAt, rAt + 1400)).toMatch(/checkPermission\(ctx, "export_data"\)/);
+    // 2026-09-20: audit.exportCsv joined the list when the audit CSV stopped
+    // being built in the browser out of the 500 rows already on screen.
+    const ops = readFileSync(join(ROOT, "server/routers/operations.ts"), "utf8");
+    const oAt = ops.indexOf("exportCsv: adminWsProcedure");
+    expect(oAt, "audit.exportCsv has moved or been renamed — re-anchor this scan").toBeGreaterThan(-1);
+    expect(ops.slice(oAt, oAt + 1400)).toMatch(/checkPermission\(ctx, "export_data"\)/);
+    // …and the read it sits beside does NOT carry the gate. Denying the key
+    // takes away the file, not the audit page.
+    const lAt = ops.indexOf("list: adminWsProcedure");
+    expect(lAt).toBeGreaterThan(-1);
+    expect(ops.slice(lAt, oAt)).not.toMatch(/checkPermission/);
     // The rationale comment must not resurrect the claim that the
     // campaign-rejection CSV is built in the browser: it is not, and saying so
     // is what let the one-line gate be skipped in the first place.
@@ -444,7 +472,7 @@ function serverSources(): { rel: string; src: string }[] {
  * somebody wrote down rather than something nobody noticed.
  */
 const ENFORCEMENT: Record<string, { enforced: boolean; files?: string[]; reason?: string }> = {
-  export_data: { enforced: true, files: ["server/routers/admin.ts", "server/routers/are/prospects.ts", "server/routers/reports.ts"] },
+  export_data: { enforced: true, files: ["server/routers/admin.ts", "server/routers/are/prospects.ts", "server/routers/operations.ts", "server/routers/reports.ts"] },
   manage_sequences: { enforced: true, files: ["server/routers/sequences.ts"] },
   manage_integrations: { enforced: true, files: ["server/routers/integrations.ts"] },
   manage_api_keys: { enforced: true, files: ["server/routers/aiCredentials.ts", "server/routers/apollo.ts", "server/routers/prospectSources.ts", "server/routers/quickenrich.ts", "server/routers/reoon.ts"] },

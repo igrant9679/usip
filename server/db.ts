@@ -199,7 +199,9 @@ export type PermissionCtx = { workspace: { id: number }; user: { id: number }; m
  * WHERE THE SIX KEYS ARE ENFORCED, so the next person does not have to grep:
  *   export_data         admin.ts dangerZone.exportData; reports.ts exportCsv,
  *                       sendNow, setSchedule(freq !== "none"); are/prospects.ts
- *                       exportRejections
+ *                       exportRejections; operations.ts audit.exportCsv (the
+ *                       audit CSV is rendered here, so unlike the Leads /
+ *                       Contacts / Pipeline exports it has a call to refuse)
  *   manage_sequences    sequences.ts create/update/delete/fork/updateMeta/
  *                       updateSteps/saveCanvas/setStatus(non-pause)/
  *                       setVisibility/assign, and every sequenceAb mutation

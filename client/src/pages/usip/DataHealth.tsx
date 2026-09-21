@@ -19,6 +19,8 @@ import {
   Mail,
   Phone,
   RefreshCw,
+  Split,
+  Link2,
   Users,
   XCircle, ShieldCheck
 } from "lucide-react";
@@ -252,6 +254,163 @@ function MergeDialog({
   );
 }
 
+/* ─── People split across People and Contacts ───────────────────────────── */
+/**
+ * One human, two rows: a People record and a CRM contact with no link between
+ * them. Card and list read the SAME payload, so the count above can never
+ * disagree with the rows below it.
+ *
+ * The repair LINKS — nothing is deleted and no People row is merged away.
+ * It is not a pure link either, and the copy says so: the contact's curated
+ * values go through the merge onto the People record.
+ */
+function SplitPeopleSection() {
+  const utils = trpc.useUtils();
+  const { data, isLoading } = trpc.dataHealth.personContactDuplicates.useQuery();
+  const [, setLocation] = useLocation();
+
+  const invalidate = () => {
+    utils.dataHealth.personContactDuplicates.invalidate();
+    // A merge onto the People row can fill a field the People-duplicate count
+    // keys on, so that number can move too.
+    utils.dataHealth.getMetrics.invalidate();
+  };
+  const link = trpc.dataHealth.linkPersonContactPairs.useMutation({
+    onSuccess: (r) => {
+      const bits = [`${r.linked} linked`, `${r.relinked} re-linked`];
+      if (r.refused.length) bits.push(`${r.refused.length} refused`);
+      if (r.mismatched.length) bits.push(`${r.mismatched.length} landed on a different person`);
+      toast.success(bits.join(" · "));
+      invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const linkAll = trpc.dataHealth.relinkAllUnlinked.useMutation({
+    onSuccess: (r) => {
+      toast.success(`Scanned ${r.scanned} · linked ${r.linked} · created ${r.created} · failed ${r.failed}`);
+      invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const pairs = data?.pairs ?? [];
+  const busy = link.isPending || linkAll.isPending;
+
+  return (
+    <section>
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+        Split across People &amp; Contacts
+      </h2>
+      {isLoading ? (
+        <Skeleton className="h-40 rounded-xl" />
+      ) : (
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <CardTitle className="text-sm font-medium">
+                  {data?.total ? `${data.total} people exist twice` : "Nothing split"}
+                </CardTitle>
+                <p className="text-xs text-muted-foreground max-w-2xl">
+                  The same person as a People record and a CRM contact, with no link between them.
+                  Linking points the contact at its People record and merges the contact’s own values
+                  into that record — it never deletes a row and never merges two People rows.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0"
+                disabled={busy}
+                onClick={() => linkAll.mutate()}
+              >
+                {linkAll.isPending
+                  ? <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  : <Link2 className="size-3.5 mr-1.5" />}
+                Link all unlinked
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {pairs.length === 0 ? (
+              <div className="py-8 text-center text-muted-foreground text-sm">
+                <CheckCircle2 className="size-8 mx-auto mb-2 text-emerald-500" />
+                {data?.capped
+                  ? `No people split across People and Contacts in the first ${data.scanned} contacts scanned.`
+                  : "No people split across People and Contacts."}
+              </div>
+            ) : (
+              <div className="divide-y">
+                {pairs.map((p) => (
+                  <div key={p.contactId} className="py-3 flex items-start gap-3">
+                    <Badge
+                      variant="secondary"
+                      className={`shrink-0 mt-0.5 ${
+                        p.kind === "unlinked"
+                          ? "bg-blue-100 text-blue-700"
+                          : p.kind === "relinkable"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-slate-100 text-slate-700"
+                      }`}
+                    >
+                      {p.kind === "unlinked" ? "Not linked" : p.kind === "relinkable" ? "Wrong person" : "Needs a merge"}
+                    </Badge>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">{p.contactName || p.email}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5 truncate">
+                        {p.email} ·{" "}
+                        {p.currentPersonId
+                          ? <>linked to <strong>{p.currentPersonName || `#${p.currentPersonId}`}</strong></>
+                          : "not linked to a People record"}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-0.5">{p.reason}</div>
+                      {p.kind === "relinkable" && (
+                        <div className="text-xs text-amber-700 mt-0.5">
+                          Re-linking changes who a campaign “Add existing” would enrol for this contact.
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs px-2"
+                        onClick={() => setLocation(`/prospects/${p.personId}`)}
+                      >
+                        <ExternalLink className="size-3 mr-1" />
+                        {p.personName || `#${p.personId}`}
+                      </Button>
+                      {p.kind !== "needs_merge" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs px-2"
+                          disabled={busy}
+                          onClick={() => link.mutate({ contactIds: [p.contactId] })}
+                        >
+                          <Link2 className="size-3 mr-1" />
+                          {p.kind === "unlinked" ? "Link" : "Re-link"}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground mt-3">
+              Velocity merges contacts and companies, not People — where two People rows hold the same
+              address the duplicate stays until you edit it by hand, so this count will not drop.
+              {data?.skippedGeneric
+                ? ` ${data.skippedGeneric} shared inbox address${data.skippedGeneric === 1 ? "" : "es"} skipped — a team mailbox is not one person.`
+                : ""}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+    </section>
+  );
+}
+
 /* ─── Main Page ─────────────────────────────────────────────────────────── */
 function ProviderEffectivenessCard() {
   const { data, isLoading } = trpc.dataHealth.providerEffectiveness.useQuery();
@@ -308,6 +467,9 @@ function ProviderEffectivenessCard() {
 export default function DataHealth() {
   const { data: metrics, isLoading: metricsLoading, refetch } = trpc.dataHealth.getMetrics.useQuery();
   const { data: dupes, isLoading: dupesLoading, refetch: refetchDupes } = trpc.dataHealth.getDuplicateGroups.useQuery();
+  // One payload feeds both the KPI card and the section below, so the count
+  // and the list it sits above can never disagree.
+  const splits = trpc.dataHealth.personContactDuplicates.useQuery();
 
   const [mergeGroup, setMergeGroup] = useState<DupeGroup | null>(null);
 
@@ -386,11 +548,20 @@ export default function DataHealth() {
                 fixHref="/v2/people?emailStatus=invalid"
                 fixLabel="View Invalid"
               />
+              {/* "Duplicates" counted People and sat directly above a list of
+                  duplicate CONTACTS, so merging from that list never moved the
+                  number. Both now say which table they are about. */}
               <MetricCard
-                label="Duplicates"
+                label="Duplicate People"
                 value={metrics?.estimatedDuplicates ?? 0}
                 icon={Copy}
                 tone={(metrics?.estimatedDuplicates ?? 0) === 0 ? "success" : "warning"}
+              />
+              <MetricCard
+                label={splits.data?.capped ? `Split People (first ${splits.data.scanned} scanned)` : "Split People & Contacts"}
+                value={splits.data?.total ?? 0}
+                icon={Split}
+                tone={(splits.data?.total ?? 0) === 0 ? "success" : "warning"}
               />
             </div>
           )}
@@ -466,10 +637,13 @@ export default function DataHealth() {
           )}
         </section>
 
-        {/* Duplicate Detection */}
+        {/* Duplicate contacts. These rows are `contacts`, and merging one has
+            never moved the KPI card above — which counts People. The heading
+            and that card now name their tables instead of both saying
+            "Duplicates" (2026-09-20). */}
         <section>
           <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-            Duplicate Detection
+            Duplicate contacts
           </h2>
           {dupesLoading ? (
             <Skeleton className="h-40 rounded-xl" />
@@ -527,6 +701,8 @@ export default function DataHealth() {
             </Card>
           )}
         </section>
+
+        <SplitPeopleSection />
 
         {/* ── Import mapping audit ──
             Read-only, and run on demand rather than on page load: it replays

@@ -4,7 +4,6 @@ import { AddToMenu } from "@/components/usip/AddToMenu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
@@ -15,7 +14,7 @@ import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
 import {
   Loader2, Plus, Sparkles, Target, UserCheck,
-  MoreHorizontal, Pencil, Trash2, Send, Tag, Megaphone, Wand2, Download, UserPlus,
+  MoreHorizontal, Pencil, Trash2, Send, Wand2, Download, UserPlus,
   Phone, Mail, Linkedin, Clock
 } from "lucide-react";
 import { useState } from "react";
@@ -106,66 +105,6 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
   );
 }
 
-/* ─── Add to Campaign Modal ─────────────────────────────────────────────── */
-function AddToCampaignModal({ open, onOpenChange, leadIds, onComplete }: { open: boolean; onOpenChange: (v: boolean) => void; leadIds: number[]; onComplete: () => void }) {
-  const [campaignId, setCampaignId] = useState("");
-  const { data: campaigns } = trpc.campaigns.list.useQuery();
-  const addMut = trpc.campaigns.addAudience.useMutation({
-    onSuccess: (d) => { toast.success(`Added ${d.added} lead${d.added !== 1 ? "s" : ""} to campaign`); onComplete(); onOpenChange(false); },
-    onError: (e: any) => toast.error(e.message),
-  });
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader><DialogTitle className="flex items-center gap-2"><Megaphone className="size-4 text-orange-500" />Add to Campaign</DialogTitle></DialogHeader>
-        <div className="space-y-4 py-2">
-          <Select value={campaignId} onValueChange={setCampaignId}>
-            <SelectTrigger><SelectValue placeholder="Choose a campaign..." /></SelectTrigger>
-            <SelectContent>{(campaigns ?? []).map((c: any) => <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>)}</SelectContent>
-          </Select>
-          <div className="flex gap-2 justify-end">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button onClick={() => addMut.mutate({ campaignId: Number(campaignId), contactIds: leadIds })} disabled={!campaignId || addMut.isPending}>
-              {addMut.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Megaphone className="size-4 mr-1" />}
-              Add {leadIds.length}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/* ─── Add to Segment Modal ──────────────────────────────────────────────── */
-function AddToSegmentModal({ open, onOpenChange, leadIds, onComplete }: { open: boolean; onOpenChange: (v: boolean) => void; leadIds: number[]; onComplete: () => void }) {
-  const [segmentId, setSegmentId] = useState("");
-  const { data: segments } = trpc.segments.list.useQuery();
-  const addMut = trpc.segments.addContacts.useMutation({
-    onSuccess: (d) => { toast.success(`Added ${d.added} lead${d.added !== 1 ? "s" : ""} to segment`); onComplete(); onOpenChange(false); },
-    onError: (e: any) => toast.error(e.message),
-  });
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader><DialogTitle className="flex items-center gap-2"><Tag className="size-4 text-violet-500" />Add to Segment</DialogTitle></DialogHeader>
-        <div className="space-y-4 py-2">
-          <Select value={segmentId} onValueChange={setSegmentId}>
-            <SelectTrigger><SelectValue placeholder="Choose a segment..." /></SelectTrigger>
-            <SelectContent>{(segments ?? []).map((s: any) => <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>)}</SelectContent>
-          </Select>
-          <div className="flex gap-2 justify-end">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button onClick={() => addMut.mutate({ segmentId: Number(segmentId), contactIds: leadIds })} disabled={!segmentId || addMut.isPending}>
-              {addMut.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Tag className="size-4 mr-1" />}
-              Add {leadIds.length}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 /* ─── Edit Lead Dialog ──────────────────────────────────────────────────── */
 function EditLeadDialog({ lead, open, onOpenChange, onSaved }: { lead: any; open: boolean; onOpenChange: (v: boolean) => void; onSaved: () => void }) {
   const utils = trpc.useUtils();
@@ -219,8 +158,6 @@ export default function Leads() {
   const [drawer, setDrawer] = useState<{ id: number; name: string; subtitle: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [sendEmailOpen, setSendEmailOpen] = useState(false);
-  const [addToCampaignOpen, setAddToCampaignOpen] = useState(false);
-  const [addToSegmentOpen, setAddToSegmentOpen] = useState(false);
   const [editLead, setEditLead] = useState<any | null>(null);
   // Hiding the Export button is UX, not a boundary — the CSV is built here in
   // the browser from rows leads.list already returned, so there is no server
@@ -281,16 +218,16 @@ export default function Leads() {
             <Button variant="outline" onClick={() => setSendEmailOpen(true)} className="gap-2">
               <Send className="h-4 w-4 text-blue-500" />Send Email ({selectedIds.size})
             </Button>
-            {/* Outreach for leads: ARE campaign or sequence (seams audit,
-                phase 2). "Add to Campaign" below is the legacy broadcast
-                audience — a different, not-yet-sending product. */}
+            {/* The ONE route from a lead into outreach: AddToMenu → ARE
+                campaign or sequence, which resolves leads to their People row
+                (services/crossEngineEnrollment.ts resolveToPeopleIds →
+                leadBridge). The old "Add to Campaign" / "Add to Segment"
+                buttons pushed LEAD ids through the contact-keyed
+                campaigns.addAudience / segments.addContacts inputs — both are
+                int[] so it typechecked, and a lead id silently resolved to
+                whatever CONTACT shared that integer. Removed 2026-09-20;
+                Broadcasts and Segments are contact-keyed products. */}
             <AddToMenu leadIds={Array.from(selectedIds)} label={`Add to… (${selectedIds.size})`} onDone={() => setSelectedIds(new Set())} />
-            <Button variant="outline" onClick={() => setAddToCampaignOpen(true)} className="gap-2">
-              <Megaphone className="h-4 w-4 text-orange-500" />Add to Campaign ({selectedIds.size})
-            </Button>
-            <Button variant="outline" onClick={() => setAddToSegmentOpen(true)} className="gap-2">
-              <Tag className="h-4 w-4 text-violet-500" />Add to Segment ({selectedIds.size})
-            </Button>
             <Button
               variant="outline"
               className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10"
@@ -412,12 +349,6 @@ export default function Leads() {
                           <DropdownMenuItem onClick={() => { setSelectedIds(new Set([l.id])); setSendEmailOpen(true); }}>
                             <Send className="size-4 mr-2" />Send Email
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => { setSelectedIds(new Set([l.id])); setAddToCampaignOpen(true); }}>
-                            <Megaphone className="size-4 mr-2" />Add to Campaign
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => { setSelectedIds(new Set([l.id])); setAddToSegmentOpen(true); }}>
-                            <Tag className="size-4 mr-2" />Add to Segment
-                          </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive" onClick={() => { confirmAction({ title: `Delete ${l.firstName} ${l.lastName}?`, description: "This lead will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { deleteMut.mutate({ id: l.id }); }); }}>
                             <Trash2 className="size-4 mr-2" />Delete
@@ -436,8 +367,6 @@ export default function Leads() {
       <CreateLeadDialog open={createOpen} onOpenChange={setCreateOpen} />
       <RecordDrawer open={!!drawer} onOpenChange={(v) => !v && setDrawer(null)} relatedType="lead" relatedId={drawer?.id ?? null} title={drawer?.name ?? ""} subtitle={drawer?.subtitle} />
       <SendEmailModal open={sendEmailOpen} onOpenChange={setSendEmailOpen} leadIds={Array.from(selectedIds)} onComplete={() => setSelectedIds(new Set())} />
-      <AddToCampaignModal open={addToCampaignOpen} onOpenChange={setAddToCampaignOpen} leadIds={Array.from(selectedIds)} onComplete={() => setSelectedIds(new Set())} />
-      <AddToSegmentModal open={addToSegmentOpen} onOpenChange={setAddToSegmentOpen} leadIds={Array.from(selectedIds)} onComplete={() => setSelectedIds(new Set())} />
       {editLead && (
         <EditLeadDialog lead={editLead} open={!!editLead} onOpenChange={(v) => !v && setEditLead(null)} onSaved={() => setEditLead(null)} />
       )}

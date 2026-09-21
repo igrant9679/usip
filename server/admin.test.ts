@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { roleRank } from "./_core/workspace";
 import { PERMISSION_KEYS, defaultGranted, roleTemplate } from "../shared/permissions";
 
@@ -340,52 +342,35 @@ describe("role permission templates", () => {
   });
 });
 
-describe("audit.list — actorUserId filter", () => {
-  type AuditRow = { id: number; actorUserId: number | null; entityType: string };
-
-  it("returns all rows when no actorUserId filter is set", () => {
-    const rows: AuditRow[] = [
-      { id: 1, actorUserId: 1, entityType: "lead" },
-      { id: 2, actorUserId: 2, entityType: "contact" },
-      { id: 3, actorUserId: null, entityType: "system" },
-    ];
-    const filtered = rows; // no filter applied
-    expect(filtered.length).toBe(3);
-  });
-
-  it("filters rows to only those matching actorUserId", () => {
-    const rows: AuditRow[] = [
-      { id: 1, actorUserId: 1, entityType: "lead" },
-      { id: 2, actorUserId: 2, entityType: "contact" },
-      { id: 3, actorUserId: 1, entityType: "account" },
-    ];
-    const actorUserId = 1;
-    const filtered = rows.filter((r) => r.actorUserId === actorUserId);
-    expect(filtered.length).toBe(2);
-    expect(filtered.every((r) => r.actorUserId === 1)).toBe(true);
-  });
-
-  it("returns empty array when no rows match the actorUserId", () => {
-    const rows: AuditRow[] = [
-      { id: 1, actorUserId: 1, entityType: "lead" },
-    ];
-    const filtered = rows.filter((r) => r.actorUserId === 99);
-    expect(filtered.length).toBe(0);
-  });
-
-  it("can combine entityType and actorUserId filters", () => {
-    const rows: AuditRow[] = [
-      { id: 1, actorUserId: 1, entityType: "lead" },
-      { id: 2, actorUserId: 1, entityType: "contact" },
-      { id: 3, actorUserId: 2, entityType: "lead" },
-    ];
-    const actorUserId = 1;
-    const entityType = "lead";
-    let filtered = rows;
-    if (entityType) filtered = filtered.filter((r) => r.entityType === entityType);
-    if (actorUserId) filtered = filtered.filter((r) => r.actorUserId === actorUserId);
-    expect(filtered.length).toBe(1);
-    expect(filtered[0].id).toBe(1);
+/**
+ * 2026-09-20: `audit.list — actorUserId filter` used to live here as four
+ * in-memory cases that built a local array and applied their own `.filter()`
+ * in the test body. They mirrored the handler instead of reading it, so when
+ * the filtering moved from JS into SQL all four kept passing while describing
+ * code that no longer exists — the trap this repo names by hand at
+ * server/clientMutationErrors.test.ts. Worse, they would have gone on passing
+ * if the handler had reverted to the original bug: filtering AFTER `.limit()`,
+ * which returns the matches inside the newest 500 rows rather than the newest
+ * 500 matches.
+ *
+ * The real assertions are in server/auditCsvExport.test.ts, which reads
+ * server/routers/operations.ts and pins the filters into the WHERE clause.
+ * The describe below is what is left that is worth asserting here: the shared
+ * WHERE builder, seen from admin.ts's side of the same table.
+ */
+describe("audit filtering is SQL-side", () => {
+  it("the list and the export share one workspace-scoped WHERE builder", () => {
+    const ops = readFileSync(join(__dirname, "routers/operations.ts"), "utf8");
+    const at = ops.indexOf("function auditWhere");
+    expect(at, "auditWhere has moved — see server/auditCsvExport.test.ts").toBeGreaterThan(-1);
+    expect(ops.slice(at, at + 400)).toMatch(/eq\(auditLog\.workspaceId, workspaceId\)/);
+    // teamRouter.getMemberActivityLog below has always filtered auditLog in
+    // SQL; audit.list was the outlier, and this is the pin that keeps them
+    // consistent with each other.
+    const admin = readFileSync(join(__dirname, "routers/admin.ts"), "utf8");
+    const mAt = admin.indexOf("getMemberActivityLog");
+    expect(mAt).toBeGreaterThan(-1);
+    expect(admin.slice(mAt, mAt + 1400)).toMatch(/eq\(auditLog\.workspaceId/);
   });
 });
 

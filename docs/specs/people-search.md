@@ -107,7 +107,7 @@ Canonical normalized schema. Global tables are platform-wide and read-only to wo
 
 **`workspace_accounts`** — a saved company. `account_id PK, workspace_id, organization_id (provenance FK), name, domain, owner_user_id, …`.
 
-**`saved_searches`** — `id PK, workspace_id, user_id, name, filters json (canonical filter object), notify_on_new bool, cadence, created_at`.
+**`saved_searches`** — SHIPPED (migration 0185), with three deltas from the sketch below. Actual columns: `id PK, workspaceId, ownerUserId, surface (varchar, 'people' today), name, config json, lastAppliedAt, createdAt, updatedAt` — camelCase, not snake_case. `config` holds **columns + filters + sort** (the page's UI state), not filters alone. `notify_on_new` / `cadence` are NOT built: a saved search does not alert on new matches, and nothing in the product schedules one. Private per user (`workspaceId` + `ownerUserId` on every statement); sharing is a separate, larger item.
 
 **`search_history`** — `id PK, workspace_id, user_id, filters json, normalized_hash, result_count, executed_at, latency_ms`. Powers "recent searches" + rate-limit accounting.
 
@@ -141,7 +141,7 @@ Saving copies **only non-sensitive snapshot fields**. Email/phone remain `NULL` 
 | `global_people` + `person_employments` + `person_locations` + `person_contact_methods` | `prospects` (flat; provider id `cloduraPersonId`; contact methods inline + `email_revealed_at`/`phone_revealed_at`) |
 | `global_organizations` + `global_technographics` + `global_job_postings` | No global org table. Company is denormalized on `prospects.company/companyDomain/industry`. `accounts` is workspace-owned. Technographics/job-postings: **new** (provider-sourced) |
 | `workspace_contacts` / `workspace_accounts` | `contacts` (L151) / `accounts` (L123) |
-| `saved_searches` | `clodura_saved_searches` (L3341) |
+| `saved_searches` | `saved_searches` (migration 0185) — per user, `config` json = columns + filters + sort. The old `clodura_saved_searches` was dropped unused in 0155 |
 | `search_history` | `clodura_search_cache` (L3359, response cache) + `help_search_log`/`places_search_log`. **No** per-user history table yet — add one |
 | `enrichment_requests` | `clodura_enrichment_jobs` (L3392, contact-level) + `clodura_reveal_jobs` (prospect-level reveal). `identifier_set` already exists |
 | `suppression_entries` | `email_suppressions` (L2110, email-level) + `are_suppression_list` (L3066, email/linkedin/domain, richer reasons incl. `do_not_contact`) |
@@ -424,7 +424,9 @@ PeopleSearchPage                     // route /v2/people; owns filter state, pag
 ├─ SearchFilterPanel                 // the fulcrum rail; collapse/expand; "clear all"; entitlement gates
 │  └─ FilterGroup (×N)               // titles, seniority, dept, location(Contact|HQ tabs), firmographics,
 │                                    //   technologies, job-postings, overlays(saved/CRM/list/owner/stage)
-├─ PeopleToolbar                     // saved-view picker, search box, Save-as-search, Sort, Search settings
+├─ PeopleToolbar                     // saved-search picker (server-backed, migration 0185: each row carries
+│                                    //   Update-this-search and Delete affordances; no tabs — searches are
+│                                    //   private per user), search box, Save-as-search, Sort, Search settings
 ├─ BulkActionBar                     // appears on selection; save/enrich/list/sequence/owner/export; "select all N"
 ├─ PeopleResultsTable
 │  ├─ column manager ("+ Add column")

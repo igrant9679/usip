@@ -33,6 +33,7 @@ import { invokeLLM } from "../_core/llm";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
 import { routeProspects } from "./campaignRouter";
 import { campaignHeadroom } from "./are/campaignConcurrency";
+import { DEFAULT_ARE_SEQUENCE_TEMPLATE } from "@shared/areSequenceTemplates";
 
 export const MIN_CLUSTER_SIZE = 8;
 export const MAX_PENDING_PROPOSALS = 3;
@@ -422,7 +423,11 @@ export async function acceptProposal(workspaceId: number, proposalId: number, ac
     targetProspectCount: Math.max(1, p.size),
     dailySendCap: 50,
     channelsEnabled: { email: true, linkedin: false, sms: false, voice: false },
-    sequenceTemplate: "standard_7step",
+    // The schema default, named rather than retyped. Deliberately NOT the
+    // workspace's areDefaultSequenceTemplate: making AI-proposed campaigns
+    // inherit that is a behaviour change to this path and belongs in its own
+    // item, not smuggled in behind a constant rename (2026-09-20).
+    sequenceTemplate: DEFAULT_ARE_SEQUENCE_TEMPLATE,
     stepGapDays: 7,
     goalType: "reply",
     signalToOpportunityEnabled: false,

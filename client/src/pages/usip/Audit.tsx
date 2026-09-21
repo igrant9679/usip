@@ -3,26 +3,16 @@ import { Section, StatusPill, fmtDate } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
-import { Activity, ClipboardList, Download, User } from "lucide-react";
+import { Activity, ClipboardList, Download, Loader2, User } from "lucide-react";
 import { useState } from "react";
-
-function downloadCsv(rows: any[], filename: string) {
-  if (!rows.length) return;
-  const headers = ["id", "action", "entityType", "entityId", "actorUserId", "createdAt"];
-  const lines = [
-    headers.join(","),
-    ...rows.map((r) => headers.map((h) => JSON.stringify(r[h] ?? "")).join(",")),
-  ];
-  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
-}
+import { toast } from "sonner";
 
 export default function Audit() {
-  // UX, not a boundary — downloadCsv above builds the file from rows audit.list
-  // already returned. See the comment on reports.exportCsv.
+  // 2026-09-20: a real boundary now, not only UX. The CSV used to be built here
+  // from the rows audit.list had already returned — capped at the 500 on screen,
+  // missing the before/after diff the page copy promises, and escaped with
+  // JSON.stringify (backslashes, which Excel reads wrong). It is rendered by
+  // audit.exportCsv on the server, which enforces export_data itself.
   const { can } = usePermissions();
   const [entityType, setEntityType] = useState<string>("");
   const [actorUserId, setActorUserId] = useState<number | undefined>(undefined);
@@ -37,6 +27,27 @@ export default function Audit() {
   const { data: teamData } = trpc.team.list.useQuery(undefined);
   const activeMembers = (teamData ?? []).filter((m: any) => !m.deactivatedAt);
 
+  // Derived from what this workspace has recorded, rather than a hardcoded list
+  // — the old one offered four types nothing ever writes and omitted ~60 real
+  // ones, so most of the log could not be filtered or exported at all.
+  const { data: entityTypes } = trpc.audit.entityTypes.useQuery(undefined);
+
+  const exportCsv = trpc.audit.exportCsv.useMutation({
+    onSuccess: (r) => {
+      if (!r.rows) { toast.info("Nothing to export with these filters"); return; }
+      const blob = new Blob([r.csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      if (r.capped) toast.warning(`Exported the ${r.rows} most recent of ${r.total} matching entries — narrow the filters to export the rest`);
+      else toast.success(`Exported ${r.rows} entries`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   return (
     <Shell title="Audit log">
       <PageHeader title="Audit log" description="A complete audit trail of all record creates, updates, and deletes with before-and-after field values. Restricted to workspace admins for compliance and security review." pageKey="audit" icon={<ClipboardList className="size-5" />} />
@@ -50,20 +61,7 @@ export default function Audit() {
             onChange={(e) => setEntityType(e.target.value)}
           >
             <option value="">All entities</option>
-            {[
-              "account",
-              "contact",
-              "lead",
-              "opportunity",
-              "customer",
-              "quote",
-              "campaign",
-              "workflow_rule",
-              "social_post",
-              "workspace_member",
-              "user",
-              "data_export",
-            ].map((t) => (
+            {(entityTypes ?? []).map((t) => (
               <option key={t} value={t}>{t}</option>
             ))}
           </select>
@@ -103,10 +101,10 @@ export default function Audit() {
             size="sm"
             variant="outline"
             className="ml-auto"
-            onClick={() => downloadCsv(data ?? [], `audit-log-${Date.now()}.csv`)}
-            disabled={!data?.length}
+            onClick={() => exportCsv.mutate({ entityType: entityType || undefined, actorUserId })}
+            disabled={exportCsv.isPending}
           >
-            <Download className="size-4 mr-1" /> Export CSV
+            {exportCsv.isPending ? <Loader2 className="size-4 mr-1 animate-spin" /> : <Download className="size-4 mr-1" />} Export CSV
           </Button>
           )}
         </div>

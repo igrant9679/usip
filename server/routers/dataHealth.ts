@@ -3,8 +3,9 @@ import { and, count, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { activities, contacts, emailDrafts, enrollments, opportunityContactRoles, prospects, prospectQueue } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
-import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, repProcedure, requireMinRole, workspaceProcedure } from "../_core/workspace";
 
 export const dataHealthRouter = router({
   /**
@@ -290,6 +291,124 @@ export const dataHealthRouter = router({
       ...rows.map((r: any) => mapGroup(r, "email")),
       ...nameRows.map((r: any) => mapGroup(r, "name")),
     ].slice(0, 20);
+  }),
+
+  /**
+   * People who are ALSO a CRM contact, with no link between the two rows
+   * (2026-09-20). The two duplicate checks above are both single-table —
+   * `getMetrics` counts People against People, `getDuplicateGroups` counts
+   * contacts against contacts — so the commonest real duplicate in the
+   * product was reported by neither: one human, a People row and a contact
+   * row, `person_prospect_id` null or aimed at a third shell record.
+   *
+   * ONE procedure returns the count AND the list, `companies.duplicates`
+   * style, so the card and the rows beneath it are the same payload and
+   * cannot drift apart the way the People "Duplicates" card drifted from the
+   * contacts list under it. Deliberately NOT folded into `getMetrics`: that
+   * payload is also read by Home and Data Enrichment, neither of which
+   * renders a duplicates figure, and neither should pay for a cross-table
+   * join on every load.
+   */
+  personContactDuplicates: workspaceProcedure.query(async ({ ctx }) => {
+    const { findPersonContactDuplicates } = await import("../services/personContactDuplicates");
+    return findPersonContactDuplicates(ctx.workspace.id, { limit: 50 });
+  }),
+
+  /**
+   * Repair by LINKING. Never a delete, never a People merge — there is no
+   * People merge in the product, which is exactly why `needs_merge` rows are
+   * reported with a reason and no button.
+   *
+   * The link is not free of side effects and the UI says so: the repair is
+   * `upsertPersonForContact`, which runs the contact's curated values through
+   * `mergeAll` at the crm_contact tier and writes the winners onto the People
+   * row with a field-history entry.
+   *
+   * The server re-classifies before it writes. A `kind` from the client is a
+   * stale opinion about a row that may have changed since the page loaded,
+   * and acting on it is how a correctly-linked contact gets re-pointed at a
+   * duplicate. Manager gate on `relinkable` only: linking an UNLINKED contact
+   * is what the nightly backfill already does unattended, but re-pointing a
+   * linked one changes who a campaign "Add existing" enrols and which contact
+   * a later promotion reuses.
+   */
+  linkPersonContactPairs: repProcedure
+    .input(z.object({
+      contactIds: z.array(z.number().int().positive()).min(1).max(200),
+      dryRun: z.boolean().default(false),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const wsId = ctx.workspace.id;
+      const { findPersonContactDuplicates, SCAN_CAP } = await import("../services/personContactDuplicates");
+      const fresh = await findPersonContactDuplicates(wsId, { limit: SCAN_CAP });
+      const byContact = new Map<number, (typeof fresh.pairs)[number]>();
+      for (const p of fresh.pairs) byContact.set(p.contactId, p);
+
+      const accepted: typeof fresh.pairs = [];
+      const refused: Array<{ contactId: number; reason: string }> = [];
+      const stale: number[] = [];
+      for (const id of input.contactIds) {
+        const pair = byContact.get(id);
+        if (!pair) { stale.push(id); continue; }
+        if (pair.kind === "needs_merge") { refused.push({ contactId: id, reason: pair.reason }); continue; }
+        accepted.push(pair);
+      }
+      if (accepted.some((p) => p.kind === "relinkable")) {
+        requireMinRole(ctx.member.role, "manager", "Re-pointing a contact that is already linked needs a manager.");
+      }
+      if (input.dryRun) {
+        return {
+          dryRun: true, linked: 0, relinked: 0,
+          wouldLink: accepted.map((p) => ({ contactId: p.contactId, personId: p.personId, kind: p.kind })),
+          refused, stale, mismatched: [] as Array<{ contactId: number; expectedPersonId: number; linkedPersonId: number }>,
+        };
+      }
+
+      const { usableEmailOrNull } = await import("@shared/fieldHygiene");
+      const { upsertPersonForContact } = await import("../services/personLink");
+      const mismatched: Array<{ contactId: number; expectedPersonId: number; linkedPersonId: number }> = [];
+      let linked = 0, relinked = 0;
+      for (const pair of accepted) {
+        const [c] = await db.select().from(contacts)
+          .where(and(eq(contacts.workspaceId, wsId), eq(contacts.id, pair.contactId)))
+          .limit(1);
+        if (!c) { stale.push(pair.contactId); continue; }
+        // Detection matched on the raw column; the matcher's email tier is
+        // shape-gated. A row that passes one and fails the other would fall
+        // through to the name tiers and INSERT a third person — so refuse
+        // rather than turn "link these two" into "create another".
+        if (!usableEmailOrNull(c.email)) {
+          refused.push({ contactId: pair.contactId, reason: "the contact no longer carries a usable email." });
+          continue;
+        }
+        const result = await upsertPersonForContact(wsId, c);
+        if (!result) { refused.push({ contactId: pair.contactId, reason: "the contact has no person identity." }); continue; }
+        if (result.personId !== pair.personId) {
+          mismatched.push({ contactId: pair.contactId, expectedPersonId: pair.personId, linkedPersonId: result.personId });
+          continue;
+        }
+        if (pair.kind === "relinkable") relinked++; else linked++;
+      }
+
+      await recordAudit({
+        workspaceId: wsId, actorUserId: ctx.user.id, action: "update",
+        entityType: "person_contact_link", entityId: 0,
+        after: { linked, relinked, refused, mismatched, stale },
+      });
+      return { dryRun: false, linked, relinked, refused, stale, mismatched, wouldLink: [] as Array<{ contactId: number; personId: number; kind: string }> };
+    }),
+
+  /**
+   * "Link all unlinked" — the existing backfill, not a second batch loop.
+   * `linkUnlinkedContacts` is already keyset-drained, already isolates per-row
+   * failures, and already runs after every CSV import and nightly; the only
+   * thing it was missing was a button.
+   */
+  relinkAllUnlinked: repProcedure.mutation(async ({ ctx }) => {
+    const { linkUnlinkedContacts } = await import("../services/personLink");
+    return linkUnlinkedContacts({ workspaceId: ctx.workspace.id });
   }),
 
   /**

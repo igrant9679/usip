@@ -115,7 +115,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 ## Prospecting
 
-**Data Enrichment** (/v2/data-enrichment) — the hub. *Enrich* fills missing emails, titles and companies (select people → Enrich ▾ → Enrich fully). *Find Prospects* searches new people by role and company shape. *Import Contacts* brings in a CSV with exact-match column mapping and per-destination required fields. *Data Health* shows duplicates, gaps and import audits. The **Enrichment sweep** and **Company backfill** cards run backlog email-finding and LinkedIn company backfill on their own dials and daily caps.
+**Data Enrichment** (/v2/data-enrichment) — the hub. *Enrich* fills missing emails, titles and companies (select people → Enrich ▾ → Enrich fully). *Find Prospects* searches new people by role and company shape. *Import Contacts* brings in a CSV with exact-match column mapping and per-destination required fields. *Data Health* shows three separate checks — duplicate People, duplicate contacts, and people split across People and Contacts (one human with a People row and a CRM contact that are not linked) — plus field gaps and import audits. The **Enrichment sweep** and **Company backfill** cards run backlog email-finding and LinkedIn company backfill on their own dials and daily caps.
 
 **Website Visitors** (/v2/website-visitors) — companies and known contacts seen on your site with intent (pricing and demo pages are high). **Forms** (/v2/forms) — embeddable capture forms; submissions create and route leads. **Landing Pages** (/v2/landing-pages, admin) — hosted pages at /l/your-slug with a capture form, optional booking button and the chat bubble. **Chat Agents** (/v2/chat, admin) — the website chat widget: persona, greeting, qualifying questions, what it knows, booking user, its own Off / Approve / Auto dial, and a follow-up dial for visitors who left an email without booking.
 
@@ -151,7 +151,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 ## Marketing, Proposals, Dialer, Customer Success
 
-**Broadcasts** (/campaigns) prepare one message to a segment (not yet sending). **Segments** (/segments) are saved audiences that stay current; **Segment Rules** auto-enroll matches into a sequence.
+**Broadcasts** (/campaigns) prepare one message to a segment (not yet sending). **Segments** (/segments) are saved audiences that stay current; **Segment Rules** auto-enroll matches into a sequence. Segments are built from Contacts; to put a lead into outreach use Add to… on the Leads page.
 
 **Proposals** (/proposals) are client-facing documents with sections, milestones, a portal link and e-sign; **Quotes** (/quotes) price a deal from the **Products** (/products) catalog.
 
@@ -427,7 +427,7 @@ If the panel is empty, you are done with this block.
 
 1. Deliverability: bounce and spam rates, warmup progress, any sender in error. A mailbox that has not reached enough recipients in the last 30 days reads "not enough data" rather than 0% — a blank is not good news, it is no news.
 2. Sending accounts: no single campaign saturating a daily limit — "sent today" on Mailboxes is everything that mailbox sent, campaign, sequence, CRM, Inbox and warmup together; display names set on every sender.
-3. Audit Log: skim for surprises — deletions, role changes, dial flips.
+3. Audit Log: skim for surprises — deletions, role changes, dial flips. Filter to the entity type or the member you are suspicious about, then **Export CSV**: the download is the filtered set as the server sees it, not just the page in front of you, and it carries the before-and-after values, the IP and the user agent. That is how a skim becomes evidence.
 
 ## End of day (5 minutes, everyone)
 
@@ -479,9 +479,9 @@ Close the week when: performance read, losers retired, pipeline honest, leads ro
 7. **Brand voice and personas**: update avoid-words from what replies complained about; add personas for segments that converted.
 8. **Prompts**: fold the month's lessons into the campaign sequence prompts as do-not lines; regenerate unsent steps if the change is material.
 9. **Customer success**: health tiers reviewed; every card in the 90 days column or nearer has a plan; anything in past due either renews or is recorded as churned; next month's QBRs scheduled.
-10. **Data hygiene**: duplicates in Data Health; company brand pins and merges; departed contacts re-routed.
+10. **Data hygiene**: duplicates in Data Health; the Split across People & Contacts list (Link all unlinked, then work the rest); company brand pins and merges; departed contacts re-routed.
 11. **Team and access**: roles right-sized; departed members deactivated and reassigned; MFA on for admins.
-12. **Backup**: Danger zone → Export if compliance wants an offline copy; skim the month's Audit Log.
+12. **Backup**: Danger zone → Export if compliance wants an offline copy; skim the month's Audit Log and export it — Audit Log → Export CSV takes up to 2,000 matching entries, newest first, and tells you if there were more.
 
 ## Quarterly (half a day)
 
@@ -502,7 +502,7 @@ Close the month when: budgets set, scores recalculated, ICP reviewed, pruned, on
     tags: ["operator-manual", "process", "campaign", "are"],
     pageKey: "are-campaigns",
     bodyMarkdown: `1. **Define the audience in one sentence** — who, and why now. Check the ICP profile agrees; add a persona if one is missing.
-2. **Create the campaign** (Campaigns → New): name; goal; targeting; **sources** as an explicit list (choose existing people only for a curated campaign — an empty list means no discovery); target count; copy mode per person; the **sequence prompt** with one plain sentence of what you do, the voice, and the do-not list (no invented programs or numbers, one meaning across steps, no credentials in names); cadence of five to seven steps at five-to-seven-day gaps; channels; daily cap of 20 to 30; autonomy batch approval.
+2. **Create the campaign** (Campaigns → New): name; goal; targeting; **sources** as an explicit list (choose existing people only for a curated campaign — an empty list means no discovery); target count; copy mode per person; the **sequence prompt** with one plain sentence of what you do, the voice, and the do-not list (no invented programs or numbers, one meaning across steps, no credentials in names); the **sequence template** (3, 7 or 14 steps, or custom) and the campaign's step gap, one week by default; channels; daily cap of 20 to 30; autonomy batch approval.
 3. **Sender**: choose the pool or sender; confirm display names are set; make sure the reply mailbox is connected (for SendGrid, point Reply-To at a connected mailbox); set your booking link timezone.
 4. **Seed people**: Add existing from a list (the Verify step shows duplicates and other memberships) or let discovery run.
 5. **Set active**. Watch Logs for the first tick and Prospects for enrichment. Open the first three written sequences and read them; fix the prompt and regenerate before approving anything.
@@ -599,7 +599,7 @@ Managers: compare forecast to actuals at quarter end and adjust stage probabilit
 
 ## Data hygiene sweep
 
-1. Data Health: merge duplicates; fix import-mapping issues.
+1. Data Health: merge duplicates; link people split across People and Contacts (this LINKS the contact to its People record and merges the contact’s own values into it — it never deletes a row and never merges two People rows); fix import-mapping issues.
 2. Needs Review to zero.
 3. Companies: pin the correct brand and domain where enrichment guessed; merge duplicates.
 4. Recalculate scores; refresh segments.

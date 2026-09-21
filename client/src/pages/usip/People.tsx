@@ -88,6 +88,9 @@ import {
   type SortField,
   type SortDir,
   type SavedView,
+  type ViewConfig,
+  type ViewFilters,
+  type TierValue,
   fitBadge,
   emailStatusBadge,
   genericInboxBadge,
@@ -95,6 +98,8 @@ import {
 
   COLUMN_REGISTRY,
   DEFAULT_COLUMNS,
+  SYSTEM_DEFAULT_VIEW,
+  rowToSavedView,
 } from "@/components/usip/people/peopleShared";
 import { DefaultViewMenu } from "@/components/usip/people/DefaultViewMenu";
 import { ResearchAiMenu } from "@/components/usip/people/ResearchAiMenu";
@@ -248,10 +253,24 @@ export default function People() {
 
   // ── view / column state ──
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(DEFAULT_COLUMNS);
-  const [views, setViews] = useState<SavedView[]>([
-    { id: "default", name: "Default view", system: true, scope: "yours", columns: DEFAULT_COLUMNS },
-  ]);
+  // Saved searches are SERVER state (migration 0185). They were useState here,
+  // so "Save as new search" wrote a row into memory and nothing else: none
+  // survived a navigation, let alone an F5 or a second device.
+  const viewsQ = trpc.savedSearches.list.useQuery({ surface: "people" });
+  const views = useMemo<SavedView[]>(
+    () => [SYSTEM_DEFAULT_VIEW].concat((viewsQ.data ?? []).map(rowToSavedView)),
+    [viewsQ.data],
+  );
   const [activeViewId, setActiveViewId] = useState("default");
+  // A DEEP LINK WINS over the remembered search. Data Health's "Fix now" cards
+  // land on /v2/people?missingEmail=1 and /v2/people?emailStatus=invalid, and
+  // the /contacts/:id redirect lands on ?q=<name>; restoring a saved search
+  // over the top would quietly show a different population than the card that
+  // sent the user here promised. Seeding `viewRestored` true is how the
+  // one-shot restore below is skipped without a second flag.
+  const [viewRestored, setViewRestored] = useState(
+    !!(urlParams?.get("emailStatus") || urlParams?.get("missingEmail") || urlParams?.get("hasEmail") || urlParams?.get("q")),
+  );
 
   // ── view state ──
   const [hideFilters, setHideFilters] = useState(false);
@@ -437,6 +456,10 @@ export default function People() {
   }, [emailStatus, hasEmail, missingEmail, verification, promoted, enrolled, qText, hasPhone, hasLinkedin, tiers, seniorities]);
 
   const removeFilter = (id: string) => {
+    // Dropping a filter means the table is no longer the saved search, so the
+    // picker must stop claiming it is. A button reading "Q4 VPs" over a list
+    // that is not Q4 VPs is a promise the screen is not keeping.
+    setActiveViewId("default");
     if (id.startsWith("tier:")) { const v = id.slice(5); setTiers((p) => { const n = new Set(p); n.delete(v); return n; }); return; }
     if (id.startsWith("sen:")) { const v = id.slice(4); setSeniorities((p) => { const n = new Set(p); n.delete(v); return n; }); return; }
     switch (id) {
@@ -464,22 +487,144 @@ export default function People() {
     setLinkedinQ(""); setEnrolled("all");
     setHasPhone(false); setHasLinkedin(false); setTiers(new Set()); setSeniorities(new Set());
     setPage(1);
+    // Same reason as removeFilter: an unfiltered table is not the saved search.
+    setActiveViewId("default");
   };
 
   // changing a server filter should reset to page 1
   const resetPage = () => setPage(1);
 
-  // ── saved views ──
-  const applyView = (v: SavedView) => {
-    setActiveViewId(v.id);
-    setVisibleColumns(v.columns);
+  // ── saved searches (server-backed, private per user — migration 0185) ──
+  const utils = trpc.useUtils();
+  const saveView = trpc.savedSearches.save.useMutation({
+    onSuccess: (r) => {
+      utils.savedSearches.list.invalidate();
+      setActiveViewId(String(r.id));
+      toast.success("Search saved");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const removeView = trpc.savedSearches.remove.useMutation({
+    // Only the DELETED search loses the label — deleting a search you are not
+    // currently on must not silently switch the one you are.
+    onSuccess: (_r, vars) => {
+      utils.savedSearches.list.invalidate();
+      setActiveViewId((cur) => (cur === String(vars.id) ? "default" : cur));
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  // meta: { silentError: true } — a failed "remember where I was" stamp costs
+  // the user nothing and must not shout at them mid-click.
+  const markApplied = trpc.savedSearches.markApplied.useMutation({ meta: { silentError: true } });
+
+  /** What the page is showing right now, in the stored vocabulary. Only the
+   *  ACTIVE filters go in, so a round trip through normalizeViewConfig is the
+   *  identity rather than a config full of "all"/"" placeholders. */
+  const currentViewConfig = (): ViewConfig => {
+    const filters: ViewFilters = {};
+    if (emailStatus) filters.emailStatus = emailStatus;
+    if (hasEmail) filters.hasEmail = true;
+    if (missingEmail) filters.missingEmail = true;
+    if (verification) filters.verification = verification;
+    if (promoted !== "all") filters.promoted = promoted;
+    if (enrolled !== "all") filters.enrolled = enrolled;
+    if (search) filters.search = search;
+    if (titleQ) filters.titleQ = titleQ;
+    if (companyQ) filters.companyQ = companyQ;
+    if (locationQ) filters.locationQ = locationQ;
+    if (industryQ) filters.industryQ = industryQ;
+    if (educationQ) filters.educationQ = educationQ;
+    if (linkedinQ) filters.linkedinQ = linkedinQ;
+    if (hasPhone) filters.hasPhone = true;
+    if (hasLinkedin) filters.hasLinkedin = true;
+    // Array.from, never [...set] — a Set spread is TS2802 at this target.
+    // The ICP-fit checkboxes are the only writers, so the cast is safe here
+    // the same way the prospects.list call's is.
+    if (tiers.size) filters.tiers = Array.from(tiers) as TierValue[];
+    if (seniorities.size) filters.seniorities = Array.from(seniorities);
+    return { columns: visibleColumns, filters, sort: { field: sortField, dir: sortDir } };
   };
+
+  /**
+   * Applying a search restores the WHOLE page, not just its columns — columns
+   * were all a view ever carried, which is why "my saved search" never showed
+   * the same people twice.
+   *
+   * `stamp` is false on the one-shot restore below: re-stamping on every page
+   * load is a write nobody asked for.
+   */
+  const applyView = (v: SavedView, stamp = true) => {
+    const f = v.config.filters;
+    setActiveViewId(v.id);
+    setVisibleColumns(v.config.columns);
+    setEmailStatus(f.emailStatus ?? "");
+    setHasEmail(!!f.hasEmail);
+    setMissingEmail(!!f.missingEmail);
+    setVerification(f.verification ?? "");
+    setPromoted(f.promoted ?? "all");
+    setEnrolled(f.enrolled ?? "all");
+    setHasPhone(!!f.hasPhone);
+    setHasLinkedin(!!f.hasLinkedin);
+    setTiers(new Set(f.tiers ?? []));
+    setSeniorities(new Set(f.seniorities ?? []));
+    setSearch(f.search ?? "");
+    setTitleQ(f.titleQ ?? "");
+    setCompanyQ(f.companyQ ?? "");
+    setLocationQ(f.locationQ ?? "");
+    setIndustryQ(f.industryQ ?? "");
+    setEducationQ(f.educationQ ?? "");
+    setLinkedinQ(f.linkedinQ ?? "");
+    // The server query reads qText, which the 300 ms debounce writes. Without
+    // this DIRECT write the table shows the PREVIOUS search's people for a
+    // third of a second and then flips — "the saved search showed the wrong
+    // people" is that bug wearing a stopwatch.
+    setQText({
+      search: f.search ?? "", titleQ: f.titleQ ?? "", companyQ: f.companyQ ?? "",
+      locationQ: f.locationQ ?? "", industryQ: f.industryQ ?? "",
+      educationQ: f.educationQ ?? "", linkedinQ: f.linkedinQ ?? "",
+    });
+    setSortField(v.config.sort.field);
+    setSortDir(v.config.sort.dir);
+    setPage(1);
+    if (stamp && !v.system) markApplied.mutate({ id: Number(v.id) });
+  };
+
   const createSavedSearch = (name: string) => {
     if (!name) return;
-    const id = `v_${Date.now()}`;
-    setViews((prev) => [...prev, { id, name, scope: "yours", columns: visibleColumns }]);
-    setActiveViewId(id);
+    saveView.mutate({ surface: "people", name, config: currentViewConfig() });
   };
+  /** The edit path. Without it the only way to change a saved search is
+   *  delete-and-recreate, so every column or filter tweak made while one is
+   *  active is discarded on the next navigation — the same complaint this
+   *  table was created to end, one level down. */
+  const updateSavedSearch = (v: SavedView) => {
+    if (v.system) return;
+    saveView.mutate({ id: Number(v.id), surface: "people", name: v.name, config: currentViewConfig() });
+  };
+  const removeSavedSearch = (v: SavedView) => {
+    if (v.system) return;
+    removeView.mutate({ id: Number(v.id) });
+  };
+
+  // One-shot restore: come back to the search you were last on. Derived from
+  // max(lastAppliedAt) rather than a stored isDefault flag, so two rows can
+  // never both claim it. Runs once — after the first load the user's own
+  // clicks own the picker, and a background refetch must not yank them back.
+  useEffect(() => {
+    if (viewRestored || !viewsQ.data) return;
+    setViewRestored(true);
+    // Indexes, not a running `row | null` — a `let` seeded with null and
+    // reassigned inside a callback is narrowed to `never` after the loop,
+    // which is a tsc error rather than a runtime one.
+    const rows = viewsQ.data;
+    let bestIdx = -1;
+    let bestAt = 0;
+    rows.forEach((r, i) => {
+      const at = r.lastAppliedAt ? new Date(r.lastAppliedAt).getTime() : 0;
+      if (at > bestAt) { bestAt = at; bestIdx = i; }
+    });
+    if (bestIdx >= 0) applyView(rowToSavedView(rows[bestIdx]), false);
+  }, [viewsQ.data, viewRestored]);
 
   // row quick-actions (Actions/Links columns): "open" navigates to the full
   // record; everything else opens the Quick Preview panel. Add-to-list,
@@ -803,6 +948,8 @@ export default function People() {
                 activeViewId={activeViewId}
                 onSelect={applyView}
                 onCreate={() => setSettings({ open: true, mode: "create" })}
+                onUpdate={updateSavedSearch}
+                onRemove={removeSavedSearch}
               />
 
               <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => setHideFilters((v) => !v)}>
