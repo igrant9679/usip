@@ -32,7 +32,7 @@
  * documents.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { workspaceMembers, users, loginHistory } from "../drizzle/schema";
+import { workspaceMembers, users, loginHistory, workspaceSettings } from "../drizzle/schema";
 import { safeReturnPath } from "@shared/returnPath";
 import type { TrpcContext } from "./_core/context";
 
@@ -405,7 +405,10 @@ describe("team.getLoginHistoryFiltered", () => {
         select: (fields?: Record<string, unknown>) => {
           const b: any = {
             _joined: false,
-            from: () => b,
+            // Records the table: the workspace middleware now runs an
+            // UN-joined select of its own (below), so `from` has to be able
+            // to tell it apart from the procedure's.
+            from: (t: unknown) => { b._table = t; return b; },
             innerJoin: () => { b._joined = true; return b; },
             leftJoin: () => b,
             where: () => b,
@@ -419,6 +422,11 @@ describe("team.getLoginHistoryFiltered", () => {
                 }]);
                 return;
               }
+              // 2026-09-20: workspaceProcedure reads workspace_settings for
+              // the enforce2fa policy. Forwarding it to the scripted queue
+              // would exhaust the queue (which throws, by design) before the
+              // procedure ever ran its own selects.
+              if (b._table === workspaceSettings) { res([]); return; }
               (inner.select() as any).then(res, rej);
             },
           };

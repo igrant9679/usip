@@ -108,6 +108,75 @@ describe("settings the engine actually reads", () => {
   });
 });
 
+describe("the engine never offers a channel it cannot send on", () => {
+  // 2026-09-20. ARE Settings and the campaign wizard offered SMS and AI Voice
+  // as ordinary toggles; turning one on wrote steps into are_execution_queue
+  // that nothing has ever been able to deliver (no SMS gateway anywhere in
+  // the repo; voiceBridge exports answerInboundCall and nothing else). Those
+  // steps are skipped, skipped > sent reads as "abandoned", and the prospect
+  // is cancelled with "re-approve to re-enrol" — which regenerates from the
+  // same cached template and cancels again, forever.
+  const settings = client("pages", "usip", "ARESettings.tsx");
+  const campaigns = client("pages", "usip", "ARECampaigns.tsx");
+  const detail = client("pages", "usip", "ARECampaignDetail.tsx");
+  const dossier = client("components", "usip", "are", "IntelligenceDossier.tsx");
+  const prospects = read("routers", "are", "prospects.ts");
+
+  it("ARE Settings marks SMS and AI Voice unsendable and disables them", () => {
+    const opts = settings.slice(settings.indexOf("const CHANNEL_OPTIONS"), settings.indexOf("];", settings.indexOf("const CHANNEL_OPTIONS")));
+    expect(opts).toMatch(/key: "sms"[^}]*sendable: false/);
+    expect(opts).toMatch(/key: "voice"[^}]*sendable: false/);
+    expect(opts).toMatch(/key: "email"[^}]*sendable: true/);
+    expect(opts).toMatch(/key: "linkedin"[^}]*sendable: true/);
+    expect(settings).toContain("disabled={!sendable}");
+    // Derived at the read — a row already holding sms:true renders off
+    // WITHOUT this page rewriting the workspace's stored settings.
+    expect(settings).toContain("const active = !!channels[key] && sendable;");
+  });
+
+  it("the campaign wizard disables them too, and no longer mislabels LinkedIn", () => {
+    expect(campaigns).toContain("disabled={!isSendableChannel(ch)}");
+    expect(campaigns).toContain("checked={form.channelsEnabled[ch] && isSendableChannel(ch)}");
+    // LinkedIn has been wired and sending since 2026-08-15.
+    expect(campaigns).not.toContain('{ch !== "email" && <span');
+    expect(campaigns).not.toContain("v1 engine sends email only");
+  });
+
+  it("both sequence viewers say a step will not send", () => {
+    for (const [name, src] of [["ARECampaignDetail", detail], ["IntelligenceDossier", dossier]] as const) {
+      expect(src, name).toContain("isSendableChannel");
+      expect(src, name).toContain("will not send");
+    }
+  });
+
+  it("the enrichment prompt no longer asks the model to recommend SMS or a phone call", () => {
+    expect(prospects).not.toContain("(email/linkedin/sms/voice)");
+    expect(prospects).toContain("email or linkedin ONLY");
+  });
+
+  it("the sequence-architect prompt is built from the sendable subset", () => {
+    expect(prospects).toContain("const sendableChannels = ARE_SENDABLE_CHANNELS.filter(");
+    expect(prospects).toContain("## Channels enabled\\n${JSON.stringify(sendableChannels.length ? sendableChannels : [\"email\"])}");
+    expect(prospects).not.toContain("JSON.stringify(campaign.channelsEnabled)");
+  });
+
+  it("the clamp sits at BOTH returns of generateCampaignTemplate, cached one included", () => {
+    // The cached branch is the one that matters: a prompt-only fix leaves
+    // every campaign that already has a generatedTemplate minting unsendable
+    // queue rows forever.
+    expect(prospects.match(/return clampTemplateChannels\(/g) ?? []).toHaveLength(2);
+    expect(prospects).toContain("if (cached && Array.isArray(cached.steps) && cached.steps.length > 0) return clampTemplateChannels(cached);");
+    // Stored history stays raw — the clamp is applied at the read.
+    expect(prospects).toContain("generatedTemplate: template, generatedTemplateAt: new Date()");
+  });
+
+  it("the per-prospect writer cannot reintroduce one either", () => {
+    const fn = prospects.slice(prospects.indexOf("async function personalizeForProspect"), prospects.indexOf("export async function runSequenceAgent"));
+    expect(fn).toContain('const channel = isSendableChannel(s.channel) ? String(s.channel).toLowerCase() : "email";');
+    expect(fn).toContain("return { ...s, channel, body, variantKey: DEFAULT_VARIANT_KEY };");
+  });
+});
+
 describe("numbers that used to omit the engine", () => {
   it("the attention aggregator counts all nine queues", () => {
     const att = read("routers", "attention.ts");

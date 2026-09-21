@@ -25,6 +25,8 @@ Every autonomous feature has the same three-way dial (`workspace_settings.*Mode`
 
 Revenue Engine campaigns use their own vocabulary: `full` | `batch_approval` | `review_release` (see `revenue-engine.md`).
 
+**Where a dial can be flipped (2026-09-20):** the Autonomy Center, the feature's own page, or an AI Assistant confirm card. The assistant path is admin-only twice over — every setter is `adminWsProcedure`, and the assistant refuses to mint the card for a rep at all — and the card leads with "⚠ Changes an autonomy dial" (or "⚠⚠ Turns on UNATTENDED action" when the value asked for is `auto`/`full`). Three dials are **not** in the assistant's action catalog and never will be by root absence from `ALLOWED_GROUPS`: Social Autopilot (`unipile`), Job-change Autopilot (`linkedinEnrichment`) and Email AI auto-send (`emailAutoSend`) — for those the assistant navigates the operator to `/v2/workflows`. Revenue Engine `full` is refused through the assistant on every path (`are.campaigns.create` / `update` / `setAllAutonomy`); it is set by a human on the campaign's Settings tab behind the acknowledgement.
+
 **Sane starting posture:** everything that only *does work* (tasks, deals, sweeps, backfill, job-change detection, chat agent) on Auto; everything that *sends* (meetings, conversation replies, social, chat follow-up, campaigns in full mode, email auto-send) on Approve until a week of output has been read. Promote one dial at a time so you can tell which change caused what.
 
 ## Scheduled jobs (server/_core/index.ts)

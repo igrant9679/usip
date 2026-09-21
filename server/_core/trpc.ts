@@ -32,6 +32,13 @@ const withRequestContext = t.middleware(async ({ ctx, next }) => {
   const fwd = ctx.req?.headers?.["x-forwarded-for"];
   const raw = (Array.isArray(fwd) ? fwd[0] : fwd) ?? ctx.req?.socket?.remoteAddress;
   // Same derivation as the express limiters: first hop past our own proxy.
+  //
+  // This is a RATE-LIMIT KEY, not an identity, and Settings → Security's IP
+  // allowlist is deliberately NOT built on it (2026-09-20). Nothing in
+  // server/ calls `app.set('trust proxy', …)`, so at this hop position the
+  // value is caller-supplied: fine for a ceiling that only has to make abuse
+  // expensive, useless as an access control that would wave through anyone
+  // who sets a header. llmRateLimit.test.ts pins this hop for the limiter.
   const clientIp = String(raw ?? "unknown").split(",")[0]!.trim() || "unknown";
   return await mergeRequestContext({ clientIp }, () => next());
 });

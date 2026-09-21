@@ -782,6 +782,35 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
             .set({ status: "finished" })
             .where(eq(enrollments.id, enrollment.id));
         }
+
+      } else {
+        // Terminal arm. Anything the chain above does not name — a legacy row,
+        // hand-written JSON, a channel this engine cannot send — used to fall
+        // straight through writing NOTHING: currentStep and nextActionAt were
+        // left as they were, so the due query re-selected the same enrollment
+        // on every 5-minute tick forever while `processed++` below made the
+        // log read as healthy work. Advance past it instead, and say which
+        // type it was, because there is no reason column on `enrollments` to
+        // record it on (2026-09-20).
+        console.warn(
+          `[SequenceEngine] enrollment ${enrollment.id}: unsupported step type ` +
+          `"${String(step.type)}" at index ${stepIndex} — advancing past it`
+        );
+        if (hasNextStep) {
+          const nextStep = steps[nextStepIndex];
+          const nextActionAt = nextStep.type === "wait"
+            ? new Date(now.getTime() + (nextStep.waitDays ?? 1) * 86400000)
+            : new Date(now.getTime() + 60000);
+          await db
+            .update(enrollments)
+            .set({ currentStep: nextStepIndex, nextActionAt })
+            .where(eq(enrollments.id, enrollment.id));
+        } else {
+          await db
+            .update(enrollments)
+            .set({ status: "finished" })
+            .where(eq(enrollments.id, enrollment.id));
+        }
       }
 
       processed++;

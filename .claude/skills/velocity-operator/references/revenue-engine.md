@@ -56,6 +56,7 @@ Everything is idempotent and per-phase try/caught. Logs tab shows each phase per
 ## Human gates
 - `batch_approval`: the engine enriches; a human approves a batch (Prospects tab → select → Approve). Approving is the gate outbound waits behind. **Approve exactly the rows the owner named**; re-derive the set at the moment of acting — if discovery added strangers since, stop and show them.
 - `review_release`: approve each person's written sequence.
+- `full` is set **only** by a human on the campaign's Settings tab, behind the "I understand…" acknowledgement. The AI Assistant refuses it on every route it can reach — `are.campaigns.create`, `are.campaigns.update` and `are.campaigns.setAllAutonomy` — and it also refuses `launch: true`, so a campaign minted from chat is always a draft (2026-09-20).
 - Reject = `skipped` with a reason; Restore brings a row back to `pending`/`approved`.
 - Attention panel row "Engine approvals" counts these by campaign.
 

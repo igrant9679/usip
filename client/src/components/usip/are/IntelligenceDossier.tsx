@@ -5,6 +5,7 @@
  * show the same dossier — pass { id: queueId }.
  */
 import { trpc } from "@/lib/trpc";
+import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenceSteps";
 import { EmptyState } from "@/components/usip/Shell";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -44,6 +45,7 @@ export function IntelligenceDossier({ prospect }: { prospect: any }) {
   const events = (intel.industryEvents as Array<{ eventName: string; date?: string; role?: string }> | null) ?? [];
   const sequence = (intel.generatedSequence as Array<{ stepIndex: number; day: number; channel: string; subject?: string; body: string }> | null) ?? [];
   const qualityScore = intel.sequenceQualityScore ?? 0;
+  const recommendedChannel = typeof intel.recommendedChannel === "string" ? intel.recommendedChannel : "email";
 
   return (
     <div className="space-y-6 pb-8">
@@ -57,8 +59,20 @@ export function IntelligenceDossier({ prospect }: { prospect: any }) {
         </div>
         <Separator orientation="vertical" className="h-10" />
         <div>
-          <div className="text-sm font-medium capitalize">{typeof intel.recommendedChannel === "string" ? intel.recommendedChannel : "email"}</div>
-          <div className="text-[10px] text-muted-foreground">Recommended channel</div>
+          {/* The enricher used to be asked for one of email/linkedin/sms/voice
+              and whatever it picked was printed here as advice. A prospect
+              "best reached by SMS" is not advice when nothing in the product
+              can send one — the value still shows (it is what is stored) but
+              it is labelled for what it is. 2026-09-20. */}
+          <div className="text-sm font-medium capitalize">{recommendedChannel}</div>
+          <div className="text-[10px] text-muted-foreground">
+            Recommended channel
+            {!isSendableChannel(recommendedChannel) && (
+              <span className="ml-1 text-amber-600" title={UNSENDABLE_CHANNEL_REASON[recommendedChannel]}>
+                · not available
+              </span>
+            )}
+          </div>
         </div>
         {typeof intel.recommendedTiming === "string" && intel.recommendedTiming.length > 0 && (
           <>
@@ -204,6 +218,18 @@ export function IntelligenceDossier({ prospect }: { prospect: any }) {
                   <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 border-blue-500/30 text-blue-600 bg-blue-500/10 capitalize">
                     {step.channel}
                   </Badge>
+                  {/* Sequences written before 2026-09-20 carry sms/voice steps
+                      the engine skips. Saying so here beats a step that reads
+                      as scheduled and silently never leaves. */}
+                  {!isSendableChannel(step.channel) && (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] px-1.5 py-0 h-5 border-amber-500/30 text-amber-600 bg-amber-500/10"
+                      title={UNSENDABLE_CHANNEL_REASON[String(step.channel ?? "").toLowerCase()]}
+                    >
+                      will not send
+                    </Badge>
+                  )}
                   {step.subject && (
                     <span className="text-xs font-medium truncate flex-1">{step.subject}</span>
                   )}

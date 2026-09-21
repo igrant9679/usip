@@ -37,6 +37,16 @@ type TourSeed = {
 // tours were retired here — they are superseded by the 10 SDR tours seeded in
 // seedHelpContent.ts (which also deletes the old rows from existing workspaces).
 // Only the two non-overlapping legacy tours remain below.
+//
+// Both store a ROUTE in `pageKey` ("/leads", "/renewals") rather than a page
+// key. That is not a typo to fix in passing: `pageKeyForRoute` (Elsie.tsx)
+// never returns a string starting with "/", so `tours.getRecommended`'s
+// `eq(tours.pageKey, input.pageKey)` (server/routers/tours.ts) can never match
+// either of them, and they are reachable only from the Help Center's
+// unfiltered tour list. Rewriting them to "leads"/"renewals" would start
+// auto-offering these 5-step legacy tours on top of the SDR tours that already
+// own those page keys. Retiring them is a separate decision; see
+// RETIRED_LEGACY_TOURS in seedHelpContent.ts for how.
 const DEMO_TOURS: TourSeed[] = [
   // ── Adding Your First Lead ──────────────────────────────────────────────────
   {
@@ -80,7 +90,7 @@ const DEMO_TOURS: TourSeed[] = [
       },
       {
         title: "Promoting a Lead",
-        bodyMarkdown: "When a lead is qualified, open the row menu (⋮) and choose **Promote to Contact**. This moves the lead into your Contacts table and creates an Account record if one doesn't exist.",
+        bodyMarkdown: "When a lead is qualified, click **Convert** on its row. That creates the Account, the Contact and the Opportunity together — the person lands in **People**, the company in **Companies**, and the deal in the pipeline. Nothing is retyped.",
         targetDataTourId: "leads-new-button",
         routeTo: "/leads",
         visualTreatment: "spotlight",

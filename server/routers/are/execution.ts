@@ -50,6 +50,7 @@ import { activeOwnerOrNull, workspaceNotifyUserId } from "../../_core/activeMemb
 import { notifyOwner } from "../../_core/notification";
 import { areNotify } from "./notify";
 import { runSignalEnhancement } from "./signalEnhancement";
+import { isSendableChannel, unsendableReason } from "@shared/areSequenceSteps";
 
 /* ─── Prospect → CRM promotion ──────────────────────────────────────────── */
 
@@ -1024,6 +1025,17 @@ export const executionRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // The enum still accepts sms and voice — an owner may be on a client
+      // build from before 2026-09-20 — but reviving those rows only re-queues
+      // them to be skipped again on the next tick, forever, because neither
+      // channel has a provider behind it. A named refusal beats a silent
+      // round trip that reports rows revived and changes nothing.
+      if (!isSendableChannel(input.channel)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: unsendableReason(input.channel) ?? "Channel not wired",
+        });
+      }
       // Matched on the reason PREFIX so both the old wording ("ARE engine v1
       // sends email only") and the current one qualify — the sentence changed
       // when the channel was wired.

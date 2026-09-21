@@ -4196,6 +4196,25 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0186: make sessionTimeoutMin safe to start honouring ────────────────
+  // Settings → Security rendered the session timeout as an ordinary live
+  // control for months while NOTHING read it, so an admin could set 15 and
+  // reasonably believe sessions expired (audit 2026-09-20). passwordAuth now
+  // derives the session lifetime from this column at both mint sites, which
+  // means a stored 15 becomes a real 15-minute forced re-login on the day
+  // this deploys — a regression created by honouring a number the user never
+  // saw take effect. Reset every row to the zod maximum (7 days), which is
+  // the least-surprising stand-in for the "signed in indefinitely" behaviour
+  // they have actually been getting, and move the column default with it so
+  // a newly seeded workspace matches.
+  {
+    name: "0186_session_timeout_default.sql",
+    statements: [
+      "UPDATE `workspace_settings` SET `sessionTimeoutMin` = 10080",
+      "ALTER TABLE `workspace_settings` MODIFY COLUMN `sessionTimeoutMin` int NOT NULL DEFAULT 10080",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

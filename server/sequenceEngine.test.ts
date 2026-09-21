@@ -6,6 +6,7 @@
  *  - processEnrollments: wait step advances without creating draft
  *  - processEnrollments: task step creates task, advances step
  *  - processEnrollments: last step marks enrollment finished
+ *  - processEnrollments: an unsupported step type advances instead of stalling
  *  - processEnrollments: paused enrollment is skipped
  *  - processEnrollments: workspace daily cap enforcement
  *  - autoEnrollByTriggers: status_change trigger matches and enrolls
@@ -18,6 +19,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // ─── Mock the DB module ────────────────────────────────────────────────────────
 
@@ -211,6 +214,90 @@ describe("Sequence Execution Engine", () => {
       // No draft created for the empty step...
       expect(insertValues).not.toHaveBeenCalled();
       // ...but the enrollment advanced past it.
+      expect(updateSet).toHaveBeenCalledWith(
+        expect.objectContaining({ currentStep: 1 }),
+      );
+    });
+
+    it("advances past a step type it cannot execute instead of stalling forever", async () => {
+      // 2026-09-20: the type chain (email / wait / task / linkedin_dm |
+      // linkedin_invite) had no terminal else, so a step it did not recognise
+      // wrote NOTHING — nextActionAt stayed in the past and the due query
+      // re-selected this enrollment on every 5-minute tick for the life of the
+      // row, while `processed++` made the log read as healthy work. Not
+      // reachable from the current stepSchema, which is exactly why it could
+      // sit there unnoticed; a legacy row or hand-written JSON reaches it.
+      const enrollment = {
+        id: 30, workspaceId: 1, sequenceId: 1, contactId: 1, leadId: null,
+        status: "active", currentStep: 0, nextActionAt: new Date(Date.now() - 1000),
+      };
+      const sequence = {
+        id: 1, workspaceId: 1, status: "active",
+        steps: [{ type: "sms", body: "Quick nudge" }, { type: "email", subject: "x", body: "y" }],
+        dailyCap: null,
+      };
+
+      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));
+      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));
+
+      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      mockUpdate.mockReturnValue({ set: updateSet });
+
+      const { processEnrollments } = await import("./sequenceEngine");
+      const result = await processEnrollments();
+
+      expect(result.processed).toBe(1);
+      const call = updateSet.mock.calls.find((c) => c[0]?.currentStep === 1);
+      expect(call).toBeDefined();
+      expect(call![0].nextActionAt).toBeInstanceOf(Date);
+    });
+
+    it("finishes the enrollment when the unexecutable step is the last one", async () => {
+      const enrollment = {
+        id: 31, workspaceId: 1, sequenceId: 1, contactId: 1, leadId: null,
+        status: "active", currentStep: 0, nextActionAt: new Date(Date.now() - 1000),
+      };
+      const sequence = {
+        id: 1, workspaceId: 1, status: "active",
+        steps: [{ type: "voice" }],
+        dailyCap: null,
+      };
+
+      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));
+      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));
+
+      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      mockUpdate.mockReturnValue({ set: updateSet });
+
+      const { processEnrollments } = await import("./sequenceEngine");
+      await processEnrollments();
+
+      expect(updateSet).toHaveBeenCalledWith({ status: "finished" });
+    });
+
+    it("advances past a step with no type at all", async () => {
+      // The shape a hand-edited sequences.steps JSON arrives in: `type` is
+      // undefined, every === comparison is false, and the old fall-through
+      // pinned the enrollment on it.
+      const enrollment = {
+        id: 32, workspaceId: 1, sequenceId: 1, contactId: 1, leadId: null,
+        status: "active", currentStep: 0, nextActionAt: new Date(Date.now() - 1000),
+      };
+      const sequence = {
+        id: 1, workspaceId: 1, status: "active",
+        steps: [{}, { type: "task", body: "Call them" }],
+        dailyCap: null,
+      };
+
+      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));
+      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));
+
+      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      mockUpdate.mockReturnValue({ set: updateSet });
+
+      const { processEnrollments } = await import("./sequenceEngine");
+      await processEnrollments();
+
       expect(updateSet).toHaveBeenCalledWith(
         expect.objectContaining({ currentStep: 1 }),
       );
@@ -469,6 +556,34 @@ describe("Sequence Execution Engine", () => {
 
       expect(updateSet).not.toHaveBeenCalled();
       expect(insertValues).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("the step-type chain terminates in a WRITING else", () => {
+    // Source pin, not a behaviour test: the behaviour tests above can only
+    // reach this through the mocked db, and a refactor that reorders the
+    // chain could reintroduce a silent fall-through without failing them.
+    const src = readFileSync(join(__dirname, "sequenceEngine.ts"), "utf8");
+
+    it("the last arm advances the enrollment and names the step type", () => {
+      expect(src).toMatch(/\}\s*else\s*\{[\s\S]{0,900}unsupported step type/);
+      const tail = src.slice(src.indexOf("unsupported step type"));
+      const window = tail.slice(0, 900);
+      expect(window).toContain("currentStep: nextStepIndex");
+      expect(window).toContain('status: "finished"');
+    });
+
+    it("all four known branches still exist", () => {
+      // Guarding the guard: deleting the named branches would make the
+      // terminal else trivially "cover" everything.
+      for (const branch of [
+        'step.type === "email"',
+        'step.type === "wait"',
+        'step.type === "task"',
+        'step.type === "linkedin_dm"',
+      ]) {
+        expect(src, branch).toContain(branch);
+      }
     });
   });
 

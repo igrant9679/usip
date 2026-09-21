@@ -636,13 +636,15 @@ function BrandingTab({ settings, save, canEdit }: { settings: any; save: (v: any
 }
 
 function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any) => void; canEdit: boolean }) {
-  const [timeout_, setTimeout_] = useState<number>(480);
+  // 10080 min (7 days) is the seeded default since migration 0186 — the old
+  // 480 here would have rendered a value the server does not hold.
+  const [timeout_, setTimeout_] = useState<number>(10080);
   const [ip, setIp] = useState<string>("");
   const [enforce2fa, setEnforce2fa] = useState<boolean>(false);
 
   useEffect(() => {
     if (!settings) return;
-    setTimeout_(settings.sessionTimeoutMin ?? 480);
+    setTimeout_(settings.sessionTimeoutMin ?? 10080);
     setIp((Array.isArray(settings.ipAllowlist) ? settings.ipAllowlist : []).join("\n"));
     setEnforce2fa(Boolean(settings.enforce2fa));
   }, [settings]);
@@ -672,47 +674,57 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
       }
     >
       <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* These three record a policy that NOTHING enforces: no auth or
-            session code path reads sessionTimeoutMin, enforce2fa or
-            ipAllowlist. Previously the timeout rendered as an ordinary live
-            control ("Users re-authenticate after this interval") ABOVE the
-            banner, so an admin could set 15 minutes and reasonably believe
-            sessions expired (audit 2026-09-20). Marked plainly until the
-            auth path actually honours them — a security control that lies
-            is worse than one that's absent. */}
-        <div className="space-y-1 md:col-span-2">
-          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-            <span className="font-semibold">Not enforced yet.</span> The settings below are
-            stored but no sign-in check reads them, so changing them does not currently affect
-            access. They are shown disabled rather than implying protection that isn't there.
-          </div>
-        </div>
-        <div className="space-y-1 opacity-60">
+        {/* THE RECORD OF THIS TAB'S AUDIT — rewritten, not deleted.
+            2026-09-20 found all three controls inert: nothing anywhere read
+            sessionTimeoutMin, enforce2fa or ipAllowlist. Worse, the timeout
+            rendered as an ordinary live control ("Users re-authenticate after
+            this interval"), so an admin could set 15 minutes and reasonably
+            believe sessions expired. A blanket "Not enforced yet" banner went
+            up the same day, because a security control that lies is worse than
+            one that's absent.
+
+            TWO OF THE THREE NOW BITE, so their banner is gone:
+              · sessionTimeoutMin — passwordAuth sets the JWT `exp` and the
+                cookie `maxAge` from it at both mint sites. Migration 0186
+                first reset every stored value to 10080, because the old
+                numbers were never anybody's deliberate choice.
+              · enforce2fa — one gate in workspaceProcedure (_core/workspace).
+
+            ipAllowlist stays disabled, and its narrowed notice below says why:
+            no trusted-proxy hop count is configured anywhere in server/, so
+            the app cannot tell the caller's real address from one a caller
+            supplies. That is infrastructure, not a missing if-statement. */}
+        <div className="space-y-1">
           <Label>Session timeout (minutes)</Label>
           <Input
             type="number"
             value={timeout_}
             onChange={(e) => setTimeout_(Number(e.target.value))}
-            disabled
+            disabled={!canEdit}
             min={15}
             max={60 * 24 * 7}
           />
-          <div className="text-xs text-muted-foreground">No session check reads this interval yet.</div>
+          <div className="text-xs text-muted-foreground">
+            Signs members out this long after they <em>sign in</em> — absolute age, not idle time.
+            Takes effect at each member's next sign-in; anyone already signed in keeps their
+            current session until it expires.
+          </div>
         </div>
-        <div className="space-y-1 opacity-60">
+        <div className="space-y-1">
           <Label>Enforce 2FA</Label>
           <label className="flex items-center gap-2 text-sm pt-1">
             <input
               type="checkbox"
               checked={enforce2fa}
               onChange={(e) => setEnforce2fa(e.target.checked)}
-              disabled
+              disabled={!canEdit}
             />
             Require 2FA for all members
           </label>
           <div className="text-xs text-muted-foreground">
-            Individual members can still enable authenticator-app 2FA on their own account today
-            (Profile → MFA) — that <em>is</em> enforced at sign-in.
+            Members without an authenticator app are blocked from this workspace until they
+            connect one; a super admin is never blocked. You must connect your own first
+            (Profile → MFA) — saving this without it is refused.
           </div>
         </div>
         <div className="space-y-1 md:col-span-2 opacity-60">
@@ -724,7 +736,18 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
             disabled
             placeholder={"203.0.113.0/24\n198.51.100.42"}
           />
-          <div className="text-xs text-muted-foreground">No request path checks this list.</div>
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            <span className="font-semibold">Not enforced yet.</span> The app cannot yet tell your
+            real address from one a caller supplies, because no trusted-proxy hop count is
+            configured. Enabling this before that is settled would either let anyone through or
+            lock everyone out, so the field stores your list and nothing acts on it.
+          </div>
+          <div className="text-xs text-muted-foreground">
+            This request reached us from{" "}
+            <code className="font-mono">{settings?.currentClientIp ?? "unknown"}</code>. Team →
+            a member → sign-in history lists the addresses members actually sign in from, which is
+            what you would build a list out of.
+          </div>
         </div>
       </div>
     </Section>

@@ -9,6 +9,8 @@ import { workspaceMembers, workspaces, type WorkspaceMember, type Workspace } fr
 import { getDb } from "../db";
 import { protectedProcedure } from "./trpc";
 import { mergeRequestContext } from "./requestContext";
+import { mfaGateExemptPath, securityPolicyFor } from "./securityPolicy";
+import { MFA_REQUIRED_ERR_MSG } from "@shared/const";
 
 export type WorkspaceCtxExtension = {
   workspace: Workspace;
@@ -118,7 +120,7 @@ export function shouldRefreshLastActive(
  * `workspaceProcedure` is the workhorse. Every CRUD and read operation
  * uses it so that `ctx.workspace` and `ctx.member` are always present.
  */
-export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next, path }) => {
   const headerVal = ctx.req.headers["x-workspace-id"];
   const headerStr = Array.isArray(headerVal) ? headerVal[0] : headerVal;
   const { workspace, member } = await resolveWorkspace(ctx.user.id, headerStr);
@@ -136,6 +138,37 @@ export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next }) =
       code: "FORBIDDEN",
       message: "This workspace is archived. A super admin can restore it from Settings → Danger Zone.",
     });
+  }
+
+  /**
+   * `enforce2fa` ENFORCEMENT (2026-09-20). Settings → Security stored this
+   * flag and nothing read it — the tab said so in an amber banner, because a
+   * security control that lies is worse than one that is absent.
+   *
+   * Four things keep it from becoming a one-way lockout:
+   *   · super_admin is exempt, exactly as the archive gate above is. They are
+   *     the ones who can switch the policy back off, and `settings.save` is
+   *     itself behind this middleware — a lock nobody can open is a loss.
+   *   · The four enrolment procedures are exempt (`mfaGateExemptPath`); they
+   *     are workspaceProcedure too, so without that the screen that would
+   *     clear the block cannot load.
+   *   · `settings.save` refuses to TURN IT ON for an admin who has not
+   *     enrolled, so the person who flips it is never the first one blocked.
+   *   · securityPolicyFor fails open, so a database fault suspends the policy
+   *     rather than locking the workspace out of its own product.
+   *
+   * MFA state comes off `ctx.user`, which `sdk.authenticateRequest` already
+   * loaded as a full `users` row — no extra query, and therefore no stale
+   * window between confirming enrolment and being let back in.
+   *
+   * Ordering matters: the archive gate stays ABOVE this one. Its message
+   * names the way back (Settings → Danger Zone) and must not be masked.
+   */
+  if (member.role !== "super_admin" && !mfaGateExemptPath(path)) {
+    const policy = await securityPolicyFor(workspace.id);
+    if (policy && policy.enforce2fa && !ctx.user.mfaTotpEnabledAt) {
+      throw new TRPCError({ code: "FORBIDDEN", message: MFA_REQUIRED_ERR_MSG });
+    }
   }
 
   /**

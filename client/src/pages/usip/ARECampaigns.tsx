@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ARE_SOURCES, ARE_SOURCE_IDS, ARE_DEFAULT_SOURCES } from "@shared/areSources";
+import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenceSteps";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
@@ -666,21 +667,30 @@ export default function ARECampaigns() {
               <div>
                 <Label className="text-xs text-muted-foreground mb-2 block">Channels</Label>
                 <div className="flex gap-4">
+                  {/* A "coming" tag used to sit on every non-email channel,
+                      which mislabelled LinkedIn — wired and sending since
+                      2026-08-15 — and promised SMS and voice were on the way
+                      when no provider exists for either. */}
                   {(["email", "linkedin", "sms", "voice"] as const).map((ch) => (
-                    <label key={ch} className="flex items-center gap-1.5 cursor-pointer">
+                    <label
+                      key={ch}
+                      className={`flex items-center gap-1.5 ${isSendableChannel(ch) ? "cursor-pointer" : "cursor-not-allowed opacity-60"}`}
+                      title={isSendableChannel(ch) ? undefined : UNSENDABLE_CHANNEL_REASON[ch]}
+                    >
                       <Checkbox
-                        checked={form.channelsEnabled[ch]}
+                        checked={form.channelsEnabled[ch] && isSendableChannel(ch)}
+                        disabled={!isSendableChannel(ch)}
                         onCheckedChange={(v) => setForm((f) => ({ ...f, channelsEnabled: { ...f.channelsEnabled, [ch]: !!v } }))}
                       />
                       <span className="text-xs text-foreground capitalize">
                         {ch}
-                        {ch !== "email" && <span className="text-muted-foreground/60 ml-1">(coming)</span>}
+                        {!isSendableChannel(ch) && <span className="text-muted-foreground/60 ml-1">(unavailable)</span>}
                       </span>
                     </label>
                   ))}
                 </div>
                 <p className="text-[11px] text-muted-foreground mt-1">
-                  v1 engine sends email only — non-email steps are skipped cleanly.
+                  The engine sends email and LinkedIn. SMS and phone cannot be sent — no gateway is connected and outbound calling is not available.
                 </p>
               </div>
             </div>

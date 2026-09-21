@@ -6,7 +6,7 @@ import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
 import { getLoginUrl } from "./const";
-import { shouldRedirectToLogin } from "./lib/authRedirect";
+import { MFA_REQUIRED_EVENT, isMfaRequiredError, shouldRedirectToLogin } from "./lib/authRedirect";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -27,14 +27,30 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   window.location.href = loginUrl;
 };
 
+/**
+ * Workspace `enforce2fa` refused this call. Deliberately does NOT navigate:
+ * the member's session is valid and every page they could be sent to is
+ * behind the same gate, so a redirect would land them on a screen of failed
+ * queries. It raises an event instead and MfaRequiredGate, mounted inside the
+ * authed shell, takes over the screen with the enrolment dialog.
+ */
+const flagMfaRequired = (error: unknown) => {
+  if (!(error instanceof TRPCClientError)) return;
+  if (typeof window === "undefined") return;
+  if (!isMfaRequiredError(error.message)) return;
+  window.dispatchEvent(new Event(MFA_REQUIRED_EVENT));
+};
+
 queryClient.getQueryCache().subscribe((event) => {
   if (event.type === "updated" && event.action.type === "error") {
     redirectToLoginIfUnauthorized(event.query.state.error);
+    flagMfaRequired(event.query.state.error);
   }
 });
 queryClient.getMutationCache().subscribe((event) => {
   if (event.type === "updated" && event.action.type === "error") {
     redirectToLoginIfUnauthorized(event.mutation.state.error);
+    flagMfaRequired(event.mutation.state.error);
   }
 });
 

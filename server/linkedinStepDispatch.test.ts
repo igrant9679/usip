@@ -146,11 +146,24 @@ describe("the campaign's own switches still govern", () => {
 });
 
 describe("reviving the already-skipped steps is a decision, not a migration", () => {
+  // The procedure's own body, bounded by the next procedure rather than by a
+  // character count. 2026-09-20: the unsendable-channel guard added ~500 chars
+  // at the top and pushed the re-enrol write past the old fixed 3000-char
+  // window, which is a slice drifting, not the behaviour changing.
+  const proc = (() => {
+    const from = execution.slice(execution.indexOf("reviveSkippedSteps:"));
+    const end = from.indexOf("/** Ingest an incoming signal");
+    return end > 0 ? from.slice(0, end) : from;
+  })();
+
   it("is a procedure the owner calls, and dry-runs by default", () => {
     // A migration flipping 54 rows silently would send touches written for a
     // moment two months gone.
     expect(execution).toContain("reviveSkippedSteps:");
     expect(execution).toContain("dryRun: z.boolean().default(true)");
+    // The slice above really is bounded by the next procedure — without this
+    // a renamed neighbour would silently widen every pin here to the whole file.
+    expect(proc.length).toBeLessThan(5000);
   });
 
   it("matches the old wording as well as the new one", () => {
@@ -162,7 +175,17 @@ describe("reviving the already-skipped steps is a decision, not a migration", ()
   it("re-enrols prospects it revives", () => {
     // The completion sweep only scans "enrolled", so a re-queued step under a
     // completed prospect would dispatch beneath a lying status.
-    const proc = execution.slice(execution.indexOf("reviveSkippedSteps:"));
-    expect(proc.slice(0, 3000)).toContain('sequenceStatus: "enrolled"');
+    expect(proc).toContain('sequenceStatus: "enrolled"');
+  });
+
+  it("refuses sms and voice by name rather than re-queueing them to be skipped again", () => {
+    // 2026-09-20: the input enum still accepts all three (an owner may be on
+    // an older client build), but reviving an sms/voice row only puts it back
+    // on the queue for the next tick to skip — a silent no-op that reports
+    // rows revived. The refusal carries the reason the channel cannot send.
+    expect(proc).toContain("if (!isSendableChannel(input.channel))");
+    expect(proc).toContain('code: "BAD_REQUEST"');
+    expect(proc).toContain("unsendableReason(input.channel)");
+    expect(execution).toContain('import { isSendableChannel, unsendableReason } from "@shared/areSequenceSteps";');
   });
 });

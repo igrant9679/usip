@@ -35,6 +35,8 @@ import {
 } from "../../drizzle/schema";
 import { checkPermission, getDb, resolvePermissionMap } from "../db";
 import { adminWsProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
+import { invalidateSecurityPolicyCache } from "../_core/securityPolicy";
+import { getRequestClientIp } from "../_core/requestContext";
 import { publicProcedure, protectedProcedure, router } from "../_core/trpc";
 import { recordAudit } from "../audit";
 import { normalizeSources } from "@shared/areSources";
@@ -228,7 +230,7 @@ export async function getOrSeedSettings(workspaceId: number) {
     brandAccent: "#0F766E",
     emailFromName: null,
     emailSignature: null,
-    sessionTimeoutMin: 480,
+    sessionTimeoutMin: 10080,
     ipAllowlist: [],
     enforce2fa: false,
     notifyPolicy: DEFAULT_NOTIFY_POLICY,
@@ -243,6 +245,14 @@ export const settingsRouter = router({
     return {
       ...s,
       ipAllowlist: Array.isArray(s.ipAllowlist) ? s.ipAllowlist : [],
+      /**
+       * The address THIS request arrived from, shown read-only beside the IP
+       * allowlist. The allowlist is deliberately not enforced (no trusted-
+       * proxy hop count is configured), but an admin still cannot author a
+       * list without knowing what the app sees — and what it sees is exactly
+       * this value, so the field and the future control cannot disagree.
+       */
+      currentClientIp: getRequestClientIp() ?? null,
       notifyPolicy: (s.notifyPolicy as Record<string, any>) ?? DEFAULT_NOTIFY_POLICY,
       companyKeywords: Array.isArray(s.companyKeywords) ? s.companyKeywords : [],
       companyTopics: Array.isArray(s.companyTopics) ? s.companyTopics : [],
@@ -308,6 +318,19 @@ export const settingsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // The person switching enforce2fa on must never be the first one it
+      // blocks. This mutation is adminWsProcedure, i.e. behind the very gate
+      // they would be turning on, so an unenrolled admin who saved this would
+      // lock themselves out of the screen that turns it back off. Free: the
+      // MFA column is already on ctx.user (full `users` row from the session).
+      if (input.enforce2fa === true && !ctx.user.mfaTotpEnabledAt) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Connect your own authenticator app first (Settings → Profile → Multi-factor authentication). " +
+            "Turning this on without it would lock you out.",
+        });
+      }
       await getOrSeedSettings(ctx.workspace.id); // ensure row exists
       const patch: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(input)) {
@@ -315,6 +338,9 @@ export const settingsRouter = router({
       }
       if (Object.keys(patch).length === 0) return { ok: true };
       await db.update(workspaceSettings).set(patch).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      // The middleware's policy cache is 60s; without this the Security tab
+      // would report a change that does not take effect for another minute.
+      invalidateSecurityPolicyCache(ctx.workspace.id);
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,
@@ -1789,6 +1815,44 @@ export const teamRouter = router({
         .where(and(...conditions))
         .orderBy(desc(loginHistory.createdAt))
         .limit(input.limit);
+    }),
+
+  /**
+   * Clear a member's authenticator enrolment so they can re-enrol.
+   *
+   * There is no backup-code table in the schema, so a lost or wiped phone is
+   * otherwise unrecoverable without a database ticket — and with workspace
+   * `enforce2fa` switched on that member is locked out of the product
+   * entirely, not merely inconvenienced at sign-in. Same rank rule as the
+   * rest of the Team page: you can only act on someone below you, or be a
+   * super admin, because clearing a peer's second factor is a way past it.
+   */
+  resetMemberMfa: adminWsProcedure
+    .input(z.object({ memberId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [member] = await db
+        .select({ userId: workspaceMembers.userId, role: workspaceMembers.role })
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+      if (ctx.member.role !== "super_admin" && roleRank(member.role) >= roleRank(ctx.member.role)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot reset 2FA for a member at or above your role" });
+      }
+      await db
+        .update(users)
+        .set({ mfaTotpSecret: null, mfaTotpEnabledAt: null })
+        .where(eq(users.id, member.userId));
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "member",
+        entityId: input.memberId,
+        after: { mfaReset: true },
+      });
+      return { ok: true };
     }),
 
   /** Return the calling member's notification prefs. */

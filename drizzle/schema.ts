@@ -1736,7 +1736,11 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   companyTopics: json("companyTopics"),              // string[] — themes to emphasise in outreach
   emailFromName: varchar("emailFromName", { length: 120 }),
   emailSignature: text("emailSignature"),
-  sessionTimeoutMin: int("sessionTimeoutMin").default(480).notNull(),
+  /** Absolute session age, honoured at the two mint sites in passwordAuth.
+   *  Default moved 480 → 10080 (the zod max, 7 days) by migration 0186: it
+   *  was an inert number until 2026-09-20, so the old 480 was never anybody's
+   *  deliberate choice and enforcing it would have signed everyone out. */
+  sessionTimeoutMin: int("sessionTimeoutMin").default(10080).notNull(),
   ipAllowlist: json("ipAllowlist"),
   enforce2fa: boolean("enforce2fa").default(false).notNull(),
   notifyPolicy: json("notifyPolicy"),

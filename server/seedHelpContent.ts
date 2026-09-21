@@ -698,7 +698,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 4,
     tags: ["autopilot", "autonomy", "overview", "ai"],
     pageKey: "workflows",
-    bodyMarkdown: `With the autopilots on, everything between *"a name exists"* and *"a meeting is on the calendar"* can run itself.\n\n**Fully autonomous (flip to Auto and walk away):**\n- **ARE engine** — discovers prospects against your ICP, enriches, generates sequences, enrolls, and (in Full mode) sends.\n- **Sequence engine + AI auto-send** — cadence sends through your mailbox rotation pools, with caps, suppression, and auto-pause on reply; high-scoring AI drafts can send themselves.\n- **Conversation Autopilot** — classifies every reply (email + LinkedIn) and acts; a "willing to meet" reply automatically receives your booking link.\n- **Meetings** — the Meeting Autopilot proposes and books real calendar events; reminders go out on their own; a no-show creates the re-book task; booking links let prospects self-schedule.\n- **Social Autopilot** — LinkedIn invites (capped), pre-invite warming, opener DM on accept.\n- **Task, Deal, and Job-change Autopilots** — next-step tasks, deal nudges, re-engagement on detected company moves.\n- **Voice agents** — inbound call-backs answered by AI on the rep's behalf, transcribed, and logged to the record.\n- **Plumbing** — workflow rules, form-lead routing + funnel bridging, high-intent visitor tasks, enrichment re-checks, segment auto-enrollment, pipeline alerts, mailbox warmup, scheduled report emails.\n\nEvery autopilot defaults to **Off** with an **Approve** middle mode — autonomy is a dial you set in the Autonomy Center, not a switch someone else flipped.\n\n**Human by design:** the enrichment review queue and data conflicts, draft approval in Approve mode, and meeting dispositions.\n\n**Not autonomous (and why):** outbound AI voice calls (the vendor hasn't released the API yet), accepting inbound LinkedIn invites (no compliant API exists), one-time credentialed setup (mailboxes, LinkedIn, calendars, keys, phone numbers), billing, anonymous website-visitor identification (needs a paid data provider), and — most importantly — your **targeting and strategy**: the machine executes your ICP and sequences; defining them well is still your judgment.`,
+    bodyMarkdown: `With the autopilots on, everything between *"a name exists"* and *"a meeting is on the calendar"* can run itself.\n\n**Fully autonomous (flip to Auto and walk away):**\n- **ARE engine** — discovers prospects against your ICP, enriches, generates sequences, enrolls, and (in Full mode) sends.\n- **Sequence engine + AI auto-send** — cadence sends through your mailbox rotation pools, with caps, suppression, and auto-pause on reply; high-scoring AI drafts can send themselves.\n- **Conversation Autopilot** — classifies every reply (email + LinkedIn) and acts; a "willing to meet" reply automatically receives your booking link.\n- **Meetings** — the Meeting Autopilot proposes and books real calendar events; reminders go out on their own; a no-show creates the re-book task; booking links let prospects self-schedule.\n- **Social Autopilot** — LinkedIn invites (capped), pre-invite warming, opener DM on accept.\n- **Task, Deal, and Job-change Autopilots** — next-step tasks, deal nudges, re-engagement on detected company moves.\n- **Voice agents** — inbound call-backs answered by AI on the rep's behalf, transcribed, and logged to the record.\n- **Plumbing** — workflow rules, form-lead routing + funnel bridging, high-intent visitor tasks, enrichment re-checks, segment auto-enrollment, pipeline alerts, mailbox warmup, scheduled report emails.\n\nEvery autopilot defaults to **Off** with an **Approve** middle mode — autonomy is a dial you set in the Autonomy Center, not a switch someone else flipped.\n\n**Human by design:** the enrichment review queue and data conflicts, draft approval in Approve mode, and meeting dispositions.\n\n**Not autonomous (and why):** outbound AI voice calls (the vendor hasn't released the API yet), outbound SMS (no SMS gateway is connected) — both channels are shown disabled wherever campaigns pick channels, accepting inbound LinkedIn invites (no compliant API exists), one-time credentialed setup (mailboxes, LinkedIn, calendars, keys, phone numbers), billing, anonymous website-visitor identification (needs a paid data provider), and — most importantly — your **targeting and strategy**: the machine executes your ICP and sequences; defining them well is still your judgment.`,
   },
   {
     slug: "workflow-rules",
@@ -761,7 +761,16 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Protect your account with an authenticator app.",
     readingTimeMinutes: 2,
     tags: ["security", "mfa", "2fa", "account"],
-    bodyMarkdown: `Velocity supports **TOTP multi-factor authentication** — the standard authenticator-app codes (Google Authenticator, 1Password, Authy…).\n\n**Enable it:** Settings → Profile → **Multi-factor authentication** tab → *Authenticator App* → **Set up**. Add the secret to your authenticator (link or manual key), then confirm with a live 6-digit code. From then on, password sign-ins require your current code.\n\n**Disable it** from the same tab — you'll need a current code or your password. If you sign in with a linked provider instead of a password, MFA protects the password path specifically.\n\nSMS codes aren't offered (no SMS gateway is connected), and the tab says so honestly. Admins can review sign-in activity under **System activity**. One habit worth keeping: set up MFA the same day you set a password.`,
+    bodyMarkdown: `Velocity supports **TOTP multi-factor authentication** — the standard authenticator-app codes (Google Authenticator, 1Password, Authy…).\n\n**Enable it:** Settings → Profile → **Multi-factor authentication** tab → *Authenticator App* → **Set up**. Add the secret to your authenticator (link or manual key), then confirm with a live 6-digit code. From then on, password sign-ins require your current code.\n\n**Disable it** from the same tab — you'll need a current code or your password. If you sign in with a linked provider instead of a password, MFA protects the password path specifically.\n\n**It is no longer purely personal.** An admin can require it for the whole workspace under **Settings → Security → Enforce 2FA**. A member who has not connected an authenticator then gets a full-screen "Two-factor authentication required" panel instead of the app, with the setup dialog on it and a Sign out button — nothing else in the workspace loads until they enrol. A **super admin is never blocked** (they are the ones who can switch the policy off), and an admin cannot switch it on until they have connected their own authenticator, so the person flipping it is never the first one locked out. See "Session timeout and the 2FA policy".\n\n**If you lose the phone your codes were on**, there are no backup codes — ask an admin to reset your 2FA from the **Team** page, then enrol again. An admin can only reset someone *below* their own role.\n\nSMS codes aren't offered (no SMS gateway is connected), and the tab says so honestly. Admins can review sign-in activity under **System activity**. One habit worth keeping: set up MFA the same day you set a password.`,
+  },
+  {
+    slug: "security-settings-enforcement",
+    categorySlug: "settings-account",
+    title: "Session timeout and the 2FA policy",
+    summary: "What Settings → Security actually enforces — and the one control that is deliberately still off.",
+    readingTimeMinutes: 3,
+    tags: ["security", "settings", "sessions", "2fa", "admin"],
+    bodyMarkdown: `**Settings → Security** holds three workspace controls. Two of them enforce; one deliberately does not, and says so on the page.\n\n### Session timeout\n\nThis is the **absolute age of a sign-in, not idle time**. Set it to 480 and a member is signed out eight hours after they signed in, however busy they were in between — there is no "keep alive by using the app".\n\nTwo consequences worth knowing before you lower it:\n\n- **It applies at each member's next sign-in.** Anyone already signed in keeps the session they hold until it expires. Lowering the number does not sign the team out; it lands one person at a time as they come back.\n- **It is per workspace, and the strictest one wins.** Someone who belongs to two workspaces gets the shorter of the two lifetimes, so a second membership cannot be used to buy a longer session.\n\nThe range is 15 minutes to 7 days. Every workspace was reset to **7 days** when this began enforcing, because the stored numbers pre-dated any enforcement and were never a deliberate choice — the field had been saving values that nothing read.\n\n### Enforce 2FA\n\nSwitch this on and members without an authenticator app are **blocked from the workspace** until they connect one. They see a full-screen panel with the setup dialog and a Sign out button; no other page loads.\n\nThe guards around it exist so it can never become a one-way lockout:\n\n- **You must connect your own authenticator first.** Saving the switch without one is refused, naming Settings → Profile → Multi-factor authentication. The person who turns it on is therefore never the first one blocked.\n- **A super admin is never blocked**, because a super admin is who turns it back off — and that screen is behind the same check.\n- **The enrolment screens stay reachable** for a blocked member. Nothing else does.\n- **If the database cannot be read, the policy is suspended** rather than locking everybody out of a product that is already having a bad day.\n\nA member who loses their phone has no backup codes: an admin resets their 2FA from the **Team** page. See "Multi-factor authentication".\n\n### IP allowlist — stored, and honestly switched off\n\nThe field saves your list and **nothing acts on it**, which the page states in amber next to the box.\n\nThe reason is infrastructure, not a missing check. Velocity does not yet know how many proxy hops sit in front of it, so it cannot tell the address you are really calling from apart from one a caller simply claims in a header. Enforcing on the wrong hop fails in one of two ways, and both are worse than an honest label: trust the near hop and anyone who sets a header walks in while the page promises protection, or trust the far hop and every member — the admin who would switch it off included — is compared against an internal address that matches nobody.\n\nThe page shows the address **this** request arrived from, and **Team → a member → sign-in history** lists the addresses your team actually signs in from, so the list is ready to author the day that is settled.`,
   },
   {
     slug: "mailboxes-guided-setup",
@@ -1424,20 +1433,17 @@ export const TOURS: TourSeed[] = [
       { title: "Map the account", bodyMarkdown: "Sketch org charts, buying committees and deal strategy on a canvas, next to the records they refer to.", routeTo: "/mindmaps", targetDataTourId: "mindmaps-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
     ],
   },
-  {
-    name: "Contacts and Accounts",
-    description: "The CRM records underneath everything.",
-    type: "feature",
-    estimatedMinutes: 2,
-    pageKey: "contacts",
-    route: "/contacts",
-    roleTags: ["sdr"],
-    steps: [
-      { title: "Contacts are people you know", bodyMarkdown: "A prospect becomes a contact once there is a real relationship. Accounts are the companies they belong to.", routeTo: "/contacts", targetDataTourId: "page-contacts", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Created for you on convert", bodyMarkdown: "Converting a qualified lead creates the account, the contact and the opportunity together. You should rarely be typing these by hand.", visualTreatment: "coach", advanceCondition: "next_button" },
-    ],
-  },
-  // Coverage for the rest of the main nav. Anchors live in the same commit.
+  // "Contacts and Accounts" lived here until 2026-09-20. It routed to
+  // /contacts, which has redirected into People since 2026-08-17, so starting
+  // it bounced the user straight out of the tour; its only spotlight target
+  // (page-contacts) came from an orphaned page component nothing renders. Its
+  // surviving substance is the last step of "People and Companies" below, and
+  // its name is in RETIRED_LEGACY_TOURS so already-seeded workspaces drop it.
+
+  // ── Coverage for the rest of the main nav ───────────────────────────────
+  // Every targetDataTourId below is resolved against the real client by
+  // server/tourAnchors.test.ts, so anchors and steps still have to land
+  // together — that is now enforced rather than asked for in a comment.
   {
     name: "Working Your Leads",
     description: "Score, route and qualify inbound leads before they hit the pipeline.",
@@ -1550,6 +1556,8 @@ export const TOURS: TourSeed[] = [
       { title: "Everyone you have found", bodyMarkdown: "Every prospect sourced or imported lives here, with an ICP-fit score and an email status badge, so you can tell at a glance who is worth working.", routeTo: "/v2/people", targetDataTourId: "people-table", visualTreatment: "spotlight", advanceCondition: "next_button" },
       { title: "Fit and deliverability", bodyMarkdown: "Prioritise high fit with a valid email. A great-fit prospect with no verified address cannot be sequenced, so it is not yet a real option.", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Find contact info", bodyMarkdown: "No email? Velocity scrapes the company site, derives the likely address patterns and verifies them. It needs a company domain to work from.", visualTreatment: "coach", advanceCondition: "next_button" },
+      // Inherited from the retired "Contacts and Accounts" tour (2026-09-20).
+      { title: "Created for you on convert", bodyMarkdown: "Converting a qualified lead creates the account, the contact and the opportunity together. You should rarely be typing these by hand.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
   {
@@ -1581,9 +1589,11 @@ export const TOURS: TourSeed[] = [
     ],
   },
   // ── Tours for the surfaces added after the original 10 ──────────────────
-  // Every targetDataTourId below has a matching data-tour-id in the page it
-  // points at. A step whose target does not resolve spotlights nothing and the
-  // tour silently degrades, so anchors and steps must land in the same commit.
+  // server/tourAnchors.test.ts resolves every targetDataTourId in this file
+  // against the real client, so this is checked rather than promised. Note
+  // that a dead anchor does NOT look broken: TourEngine renders the spotlight
+  // overlay for every step, and a step with no target takes the same
+  // full-dim, centred-card path a deliberate `coach` step does.
   {
     name: "Your Website Chat Agent",
     description: "Turn website visitors into booked meetings without sending anything.",
@@ -1766,10 +1776,18 @@ export const TOURS: TourSeed[] = [
   },
 ];
 
-/** Legacy demo tours (seedTours.ts) that the 10 SDR tours above supersede.
- *  "AI Pipeline: Review Drafts" joined the list when /ai-pipeline retired
+/** The delete path for any tour name removed from TOURS. `upsertTour` only
+ *  touches names still present in TOURS, so dropping a TourSeed from the array
+ *  leaves its row — and its steps — alive in every workspace already seeded.
+ *  Naming it here is the only thing that removes it.
+ *
+ *  The first five are the legacy demo tours (seedTours.ts) the SDR tours above
+ *  supersede; "AI Pipeline: Review Drafts" joined when /ai-pipeline retired
  *  (2026-09-15) — its spotlight targets only existed on that page; draft
- *  review lives in the Emails drawer now. */
+ *  review lives in the Emails drawer now. "Contacts and Accounts" is NOT a
+ *  seedTours tour: it was seeded from this file and retired on 2026-09-20 with
+ *  the standalone Contacts page (gone 2026-08-17). Do not remove that entry
+ *  thinking it is a mistake — it would resurrect the broken tour everywhere. */
 const RETIRED_LEGACY_TOURS = [
   "Welcome to Velocity",
   "Building an Email Sequence",
@@ -1777,6 +1795,7 @@ const RETIRED_LEGACY_TOURS = [
   "Automated Revenue Engine (ARE)",
   "AI Draft Queue & Auto-Send",
   "AI Pipeline: Review Drafts",
+  "Contacts and Accounts",
 ];
 
 /* ─── Upsert helpers ─────────────────────────────────────────────────────── */

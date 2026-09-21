@@ -148,12 +148,16 @@ const ROUTE_PAGE_KEYS: Array<[string, string]> = [
   ["/reports", "reports"],
   ["/dashboards", "dashboards"],
   ["/mindmaps", "mindmaps"],
-  // /contacts redirects into People since 2026-08-17; keep the mapping so a
-  // stale deep link still gets the right tour.
-  ["/contacts", "contacts"],
-  ["/v2/people", "contacts"],
-  ["/accounts", "contacts"],
-  ["/v2/companies", "contacts"],
+  // No "contacts" rows here, deliberately (2026-09-20). /contacts and
+  // /accounts redirect away on mount, and nothing is filed under pageKey
+  // "contacts" any more — not a tour, not an article. The four rows that used
+  // to sit here also duplicated /v2/people and /v2/companies, and a duplicate
+  // prefix is worse than a dead one: pageKeyForRoute below keeps `best` on a
+  // STRICT `prefix.length > best.len`, so on equal-length duplicates the FIRST
+  // entry wins silently. That is how the People page spent a month offering a
+  // tour of a retired page instead of "People and Companies", and how its Help
+  // drawer showed an empty article list. server/tourAnchors.test.ts now fails
+  // on any duplicate prefix.
   ["/v2/deals", "deals"],
   ["/v2/meetings", "meetings"],
   ["/v2/tasks", "tasks"],

@@ -10,7 +10,7 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { ALLOWED_GROUPS, DENY_LEAF, SEND_ALLOWLIST, buildCatalogFrom, describeGenericAction, searchCatalog, titleFor, type CatalogEntry } from "./services/assistantActionCatalog";
+import { ALLOWED_GROUPS, AUTONOMY_DIALS, DENY_LEAF, SEND_ALLOWLIST, buildCatalogFrom, describeGenericAction, refusesUnattended, searchCatalog, titleFor, type CatalogEntry } from "./services/assistantActionCatalog";
 import { MUTATING_TOOLS, READ_TOOLS, TOOL_ARGS } from "./services/assistantTools";
 
 const read = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
@@ -48,7 +48,11 @@ describe("action catalog policy on the real router", () => {
     expect(bad.map((a) => a.path)).toEqual([]);
     // Belt and braces: composed sends and admin by name stay out …
     const paths = new Set(cat.map((a) => a.path));
-    for (const p of ["unipile.sendMessage", "proposals.sendToClient", "contacts.sendAdHocEmail", "dangerZone.transferOwnership", "team.setMemberPassword", "prospects.delete", "sequences.delete"]) {
+    // 2026-09-20: the three dials the assistant must NEVER reach stay out by
+    // root absence from ALLOWED_GROUPS (unipile / linkedinEnrichment /
+    // emailAutoSend / settings). The model is told to navigate to the Autonomy
+    // Center for these instead — pinned in the prompt test below.
+    for (const p of ["unipile.sendMessage", "proposals.sendToClient", "contacts.sendAdHocEmail", "dangerZone.transferOwnership", "team.setMemberPassword", "prospects.delete", "sequences.delete", "unipile.setSocialAutopilotSettings", "linkedinEnrichment.setJobChangeSettings", "emailAutoSend.updateAutoSendSettings", "settings.updateAreSettings"]) {
       expect(paths.has(p), p).toBe(false);
     }
     // … and the approval-queue sends (owner decision 2026-09-09) are in, flagged, and say so.
@@ -117,6 +121,11 @@ describe("the assistant's tool surface", () => {
     }
   });
 
+  it("tells the model the assistant-only dial rules and where the three missing dials live", () => {
+    const src = read("./routers/assistant.ts");
+    expect(src).toContain("Social Autopilot, Job Change Autopilot and Email AI auto-send are NOT in the catalog");
+  });
+
   it("is reachable from anywhere: the Shell mounts the drawer, a top-bar button and Ctrl/Cmd+J", () => {
     const shell = read("../client/src/components/usip/Shell.tsx");
     expect(shell).toContain("<AssistantDrawer />");
@@ -128,5 +137,94 @@ describe("the assistant's tool surface", () => {
     expect(drawer).toContain("<AssistantChat");
     // One conversation across page and drawer.
     expect(read("../client/src/components/usip/AssistantChat.tsx")).toContain("useAssistantStore()");
+  });
+});
+
+/**
+ * 2026-09-20: the catalog really does reach the Autonomy Center's setters —
+ * they are the same adminWsProcedure the /v2/workflows page calls — so the
+ * question is no longer "does it work" but "does the card say what arming it
+ * means", and "can chat reach the one mode a human has to acknowledge in
+ * person". Both are pinned here.
+ */
+describe("autonomy dials through the assistant", () => {
+  it("every dial the catalog exposes names itself and its blast radius", async () => {
+    const cat = await realCatalog();
+    for (const path of Object.keys(AUTONOMY_DIALS)) {
+      const entry = cat.find((a) => a.path === path);
+      expect(entry, path).toBeTruthy();
+      // The dial sentence wins over the router's group boilerplate.
+      expect(entry!.description, path).toBe(AUTONOMY_DIALS[path]);
+      expect(entry!.description, path).toMatch(/^AUTONOMY DIAL/);
+      expect(describeGenericAction(entry!, { mode: "approval" }), path).toMatch(/^⚠ Changes an autonomy dial — /);
+    }
+  });
+
+  it("arming Auto is marked louder than arming Approve", async () => {
+    const cat = await realCatalog();
+    for (const path of ["tasks.setAutopilotSettings", "are.campaigns.setRoutingSettings"]) {
+      const entry = cat.find((a) => a.path === path)!;
+      expect(describeGenericAction(entry, { mode: "auto" }), path).toMatch(/^⚠⚠ Turns on UNATTENDED action — /);
+    }
+    const all = cat.find((a) => a.path === "are.campaigns.setAllAutonomy")!;
+    expect(describeGenericAction(all, { mode: "full" })).toMatch(/^⚠⚠ Turns on UNATTENDED action — /);
+  });
+
+  it("no dial setter reaches the model as router boilerplate", async () => {
+    // Catches a new dial router being added to ALLOWED_GROUPS later without a
+    // sentence: the card would say "Tasks: create, complete, snooze…" and
+    // never mention that the workspace starts acting on its own.
+    const cat = await realCatalog();
+    const dialish = cat.filter((a) => {
+      const leaf = a.path.split(".").pop() ?? "";
+      return /^set.*(Autopilot|FollowUp|Sweep|Backfill|Routing)Settings$/.test(leaf)
+        || a.path === "optimization.setSettings"
+        || a.path === "are.campaigns.setAllAutonomy";
+    });
+    expect(dialish.length).toBeGreaterThanOrEqual(11);
+    for (const a of dialish) expect(a.path in AUTONOMY_DIALS, a.path).toBe(true);
+  });
+
+  it("the two unattended-adjacent rows that are not dials still say what they cost", async () => {
+    // workflows.toggle is a per-rule switch (there are many rules) and
+    // prospects.runSweep is a one-shot, so neither belongs in AUTONOMY_DIALS —
+    // but an enabled rule fires with no human, and a sweep spends credits.
+    const cat = await realCatalog();
+    const toggle = cat.find((a) => a.path === "workflows.toggle");
+    expect(toggle).toBeTruthy();
+    expect(toggle!.description).toContain("no human in between");
+    expect(("workflows.toggle" in AUTONOMY_DIALS)).toBe(false);
+    const sweep = cat.find((a) => a.path === "prospects.runSweep");
+    expect(sweep).toBeTruthy();
+    expect(sweep!.description).toContain("SPENDS Reoon");
+  });
+
+  it("the assistant cannot reach fully unattended autonomy by ANY catalog path", () => {
+    // are.campaigns.create is a workspaceProcedure — before this gate a REP
+    // could mint a live, fully-unattended campaign in one confirm through
+    // run_action, walking around every guard on the create_campaign tool.
+    expect(refusesUnattended("are.campaigns.create", { autonomyMode: "full" })).toBeTruthy();
+    expect(refusesUnattended("are.campaigns.create", { launch: true })).toBeTruthy();
+    expect(refusesUnattended("are.campaigns.update", { id: 1, autonomyMode: "full" })).toBeTruthy();
+    expect(refusesUnattended("are.campaigns.update", { id: 1, autonomyMode: "review_release" })).toBeTruthy();
+    expect(refusesUnattended("are.campaigns.setAllAutonomy", { mode: "full" })).toBeTruthy();
+    // The human-in-the-loop values, and the dials that are not campaign
+    // autonomy, are left alone — this is a refusal, not a blanket block.
+    expect(refusesUnattended("are.campaigns.create", { autonomyMode: "batch_approval", launch: false })).toBeNull();
+    expect(refusesUnattended("are.campaigns.setAllAutonomy", { mode: "batch_approval" })).toBeNull();
+    expect(refusesUnattended("tasks.setAutopilotSettings", { mode: "auto" })).toBeNull();
+    expect(refusesUnattended("are.campaigns.update", { id: 1, name: "x" })).toBeNull();
+  });
+
+  it("both run_action legs apply the refusal and the admin gate", () => {
+    const src = read("./routers/assistant.ts");
+    expect((src.match(/refusesUnattended\(/g) ?? []).length).toBe(2); // propose, confirm
+    expect((src.match(/AUTONOMY_DIALS\[entry\.path\]/g) ?? []).length).toBe(2);
+  });
+
+  it("a rep cannot arm a dial through chat", () => {
+    const src = read("./routers/assistant.ts");
+    expect(src).toMatch(/import \{[^}]*isAdminRole[^}]*\} from "\.\.\/_core\/workspace"/);
+    expect(src).toContain("!isAdminRole(ctx.member.role)");
   });
 });

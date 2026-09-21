@@ -23,7 +23,7 @@ import { TRPCError } from "@trpc/server";
 import { and, eq, isNull } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { isAdminRole, workspaceProcedure } from "../_core/workspace";
 import { inArray } from "drizzle-orm";
 import { getDb } from "../db";
 import { stageIndexFor } from "../_core/stageSemantics";
@@ -43,7 +43,7 @@ import {
   validateNavigateHref,
 } from "../services/assistantTools";
 import { buildEntityCatalog, runExplorerQuery } from "../services/assistantDataExplorer";
-import { catalogRowForModel, describeGenericAction, getAction, getActionCatalog, invokeCallerPath, searchCatalog } from "../services/assistantActionCatalog";
+import { AUTONOMY_DIALS, catalogRowForModel, describeGenericAction, getAction, getActionCatalog, invokeCallerPath, refusesUnattended, searchCatalog } from "../services/assistantActionCatalog";
 import { PRODUCT_KNOWLEDGE } from "../productKnowledge";
 
 // 8 rounds: a conversational plan (look up → preview → propose) plus the
@@ -346,6 +346,7 @@ Rules:
 - create_campaign makes a DRAFT only: it never launches. If the user wants it running, that is a second step (set_campaign_status to active) in a later turn, after they have seen the draft. Fill targeting from what the user said; if they gave no name or no targeting, ask rather than invent.
 - For "make a list of everyone who…" requests, call preview_people_filter first and tell the user the real count, then propose create_list_from_filter with the same filter.
 - Sending: you may put email in flight ONLY from the approval queues — send_approved_drafts (drafts already approved) and approve_and_send_meetings (meetings already proposed), or the catalog actions marked "SENDS EMAIL NOW". Each is a confirm card that says email goes out; never propose one the user did not ask for, and never compose-and-send arbitrary mail or LinkedIn messages (those tools do not exist). Approving a draft (emailDrafts.approve / approveAll) sends nothing by itself.
+- Autonomy dials: you may propose an Off / Approve / Auto change only for the dials that are in the catalog, only for an admin, and never fully-unattended campaign autonomy (that is a human's decision on the campaign's own Settings tab, behind an acknowledgement). Social Autopilot, Job Change Autopilot and Email AI auto-send are NOT in the catalog — navigate the user to /v2/workflows for those rather than arming a near-miss dial.
 - Use navigate to hand the user a link when the answer is "go to this page".
 - ask_user ends your turn and shows the options as buttons; the user's pick arrives as their next message. Use it for decisions, not for small talk.
 - Tool results arrive as [tool_result …] messages. After reading one, either call another tool or give your final answer as plain text.
@@ -442,6 +443,18 @@ export const assistantRouter = router({
               if (entry.kind !== "mutation") { messages.push({ role: "user", content: `[tool_result run_action]: {"error":"${entry.path} is a query — use run_read_action"}` }); continue; }
               try { args = { path: entry.path, input: entry.parse(args.input ?? {}) }; }
               catch (e) { messages.push({ role: "user", content: `[tool_result run_action]: {"error":${JSON.stringify(`input rejected: ${(e as Error).message.slice(0, 300)}`)}}` }); continue; }
+              // Inspect the PARSED input — zod defaults land above, and
+              // are.campaigns.create defaults autonomyMode/launch rather than
+              // requiring them. The generic path reaches the same procedures
+              // create_campaign is gated on, so it carries the same refusal
+              // (2026-09-20); the admin check is UX, since every dial setter is
+              // already adminWsProcedure and would FORBID at confirm.
+              const refusal = refusesUnattended(entry.path, (args as { input?: unknown }).input);
+              if (refusal) { messages.push({ role: "user", content: `[tool_result run_action]: {"error":${JSON.stringify(refusal)}}` }); continue; }
+              if (AUTONOMY_DIALS[entry.path] && !isAdminRole(ctx.member.role)) {
+                messages.push({ role: "user", content: `[tool_result run_action]: {"error":"Autonomy dials are admin-only. Point the user at the Autonomy Center (/v2/workflows)."}` });
+                continue;
+              }
               description = describeGenericAction(entry, args.input);
             }
             const nonce = randomBytes(24).toString("base64url");
@@ -705,6 +718,14 @@ export const assistantRouter = router({
           const entry = await getAction(String(args.path));
           if (!entry || entry.kind !== "mutation") throw new TRPCError({ code: "BAD_REQUEST", message: `Action ${args.path} is not allowed` });
           const parsed = entry.parse(args.input ?? {});
+          // Defence in depth: the proposal row is server-held, but the same
+          // refusal runs here so a card minted before this gate existed (or by
+          // a future second proposal path) still cannot arm unattended sending.
+          const refusal = refusesUnattended(entry.path, parsed);
+          if (refusal) throw new TRPCError({ code: "BAD_REQUEST", message: refusal });
+          if (AUTONOMY_DIALS[entry.path] && !isAdminRole(ctx.member.role)) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "Autonomy dials are admin-only — change them on the Autonomy Center (/v2/workflows)." });
+          }
           const r = await invokeCallerPath(caller, entry.path, parsed);
           const out = JSON.stringify(r ?? null);
           summary = `Ran ${entry.path}${out && out !== "null" ? ` → ${out.length > 300 ? out.slice(0, 300) + "…" : out}` : ""}`;

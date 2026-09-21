@@ -4,7 +4,7 @@
  * Sections:
  *  1. Autonomy defaults — default autonomy mode, auto-approve threshold, daily send cap
  *  2. Signal automation — signal-to-opportunity toggle, notification prefs
- *  3. Channel defaults — email, LinkedIn, SMS, voice
+ *  3. Channel defaults — email and LinkedIn (SMS / AI Voice shown disabled: no provider)
  *  4. Capacity — max concurrent campaigns
  *  5. Notification preferences — which ARE events trigger in-app notifications
  */
@@ -14,6 +14,7 @@ import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard"
 import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
 import { WarmySenderSourceCard } from "@/components/usip/settings/WarmySenderSourceCard";
 import { ARE_SEQUENCE_TEMPLATES, DEFAULT_ARE_SEQUENCE_TEMPLATE } from "@shared/areSequenceTemplates";
+import { UNSENDABLE_CHANNEL_REASON } from "@shared/areSequenceSteps";
 import { ARE_SOURCES, ARE_SOURCE_IDS, resolveSourceOrder } from "@shared/areSources";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -95,11 +96,17 @@ const TEMPLATE_ICONS: Record<string, typeof Mail> = {
   custom: Sparkles,
 };
 
+/** `sendable` is what the engine can actually deliver, not what the column can
+ *  hold. SMS and AI Voice were plain enabled toggles here until 2026-09-20 —
+ *  turning one on put steps into the queue that nothing has ever been able to
+ *  send (no SMS gateway; the voice bridge only answers inbound call-backs).
+ *  They stay listed, disabled and reasoned, rather than disappearing: a
+ *  workspace whose row already says sms:true deserves to see why it is off. */
 const CHANNEL_OPTIONS = [
-  { key: "email", label: "Email", icon: Mail, color: "text-blue-500" },
-  { key: "linkedin", label: "LinkedIn", icon: Linkedin, color: "text-blue-600" },
-  { key: "sms", label: "SMS", icon: MessageSquare, color: "text-emerald-500" },
-  { key: "voice", label: "AI Voice", icon: Phone, color: "text-violet-500" },
+  { key: "email", label: "Email", icon: Mail, color: "text-blue-500", sendable: true },
+  { key: "linkedin", label: "LinkedIn", icon: Linkedin, color: "text-blue-600", sendable: true },
+  { key: "sms", label: "SMS", icon: MessageSquare, color: "text-emerald-500", sendable: false },
+  { key: "voice", label: "AI Voice", icon: Phone, color: "text-violet-500", sendable: false },
 ];
 
 /* --- Section card wrapper ------------------------------------------------- */
@@ -372,24 +379,47 @@ export default function ARESettings() {
         <Section
           icon={Globe}
           title="Default Outreach Channels"
-          description="New campaigns will have these channels pre-selected. You can override per campaign."
+          description="New campaigns will have these channels pre-selected. You can override per campaign. The engine sends email and LinkedIn; SMS and AI Voice have no provider connected."
         >
           <div className="grid grid-cols-2 gap-2">
-            {CHANNEL_OPTIONS.map(({ key, label, icon: Icon, color }) => {
-              const active = !!channels[key];
+            {CHANNEL_OPTIONS.map(({ key, label, icon: Icon, color, sendable }) => {
+              // Derived at the read, never written back: a row saved before
+              // 2026-09-20 may hold sms:true, and it renders off here without
+              // this page silently rewriting the workspace's stored settings.
+              const active = !!channels[key] && sendable;
               return (
                 <button
                   key={key}
-                  onClick={() => { setChannels((prev) => ({ ...prev, [key]: !prev[key] })); mark(); }}
+                  disabled={!sendable}
+                  title={sendable ? undefined : UNSENDABLE_CHANNEL_REASON[key]}
+                  onClick={() => {
+                    if (!sendable) return;
+                    setChannels((prev) => ({ ...prev, [key]: !prev[key] }));
+                    mark();
+                  }}
                   className={`flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-xs transition-all ${
-                    active
+                    !sendable
+                      ? "border-border bg-muted/20 text-muted-foreground cursor-not-allowed opacity-70"
+                      : active
                       ? "border-primary/40 bg-primary/5 text-foreground shadow-sm"
                       : "border-border bg-card text-muted-foreground hover:border-primary/20 hover:bg-muted/30"
                   }`}
                 >
                   <Icon className={`size-4 ${active ? color : "text-muted-foreground"}`} />
-                  <span className="font-medium">{label}</span>
+                  <div className="min-w-0 text-left">
+                    <span className="font-medium">{label}</span>
+                    {!sendable && (
+                      <div className="text-[10px] text-muted-foreground leading-tight">
+                        {UNSENDABLE_CHANNEL_REASON[key]}
+                      </div>
+                    )}
+                  </div>
                   {active && <CheckCircle2 className="size-3.5 text-primary ml-auto" />}
+                  {!sendable && (
+                    <span className="ml-auto shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      Unavailable
+                    </span>
+                  )}
                 </button>
               );
             })}

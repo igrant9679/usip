@@ -25,6 +25,44 @@ export const ARE_STEP_CHANNELS = ["email", "linkedin", "sms", "voice"] as const;
 export type AreStepChannel = (typeof ARE_STEP_CHANNELS)[number];
 
 /**
+ * The channels that can ACTUALLY leave the building, which is a smaller list
+ * than what a stored row may hold.
+ *
+ * ARE_STEP_CHANNELS above is the STORAGE vocabulary — it matches the
+ * are_execution_queue channel enum and legacy rows written before 2026-09-20
+ * carry sms/voice, so narrowing it would make the reader lie about what is on
+ * disk. This second list is the SENDING vocabulary: there is no SMS gateway
+ * anywhere in the repo, and the voice bridge only answers inbound calls
+ * (services/voiceBridge.ts exports answerInboundCall and nothing else), so a
+ * step on either channel is minted, queued, and skipped forever.
+ *
+ * Deliberately two lists, never collapsed into one: the reader must keep
+ * reading four, the writer and every UI must only offer two.
+ */
+export const ARE_SENDABLE_CHANNELS = ["email", "linkedin"] as const;
+export type AreSendableChannel = (typeof ARE_SENDABLE_CHANNELS)[number];
+
+export function isSendableChannel(ch: unknown): boolean {
+  return (ARE_SENDABLE_CHANNELS as readonly string[]).includes(String(ch ?? "").toLowerCase());
+}
+
+/**
+ * One sentence per unsendable channel, worded to match the help centre
+ * verbatim (seedHelpContent.ts: "no SMS gateway is connected") so the product
+ * and the docs cannot drift into two different explanations of one fact.
+ */
+export const UNSENDABLE_CHANNEL_REASON: Record<string, string> = {
+  sms: "No SMS gateway is connected — SMS steps are never sent.",
+  voice: "Outbound calling is not available (voice agents answer inbound call-backs only) — voice steps are never sent.",
+};
+
+export function unsendableReason(ch: unknown): string | null {
+  const k = String(ch ?? "").toLowerCase();
+  if (isSendableChannel(k)) return null;
+  return UNSENDABLE_CHANNEL_REASON[k] ?? `Channel '${k}' is not wired — steps on it are never sent.`;
+}
+
+/**
  * Default spacing between consecutive sequence steps, in days. ONE definition:
  * the template generator's cadence rules and normalizeSequence's fallback both
  * read this, so the prompt cannot ask for one rhythm while the fallback

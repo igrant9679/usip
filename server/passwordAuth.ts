@@ -20,8 +20,9 @@ import { and, eq, isNull } from "drizzle-orm";
 import rateLimit from "express-rate-limit";
 import { nanoid } from "nanoid";
 import { getDb } from "./db";
-import { users, loginHistory, workspaceMembers, workspaceInviteLinks } from "../drizzle/schema";
+import { users, loginHistory, workspaceMembers, workspaceInviteLinks, workspaceSettings } from "../drizzle/schema";
 import { sdk } from "./_core/sdk";
+import { sessionLifetimeMs } from "./_core/securityPolicy";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { escapeHtml } from "@shared/escapeHtml";
@@ -38,6 +39,48 @@ const ipKey = (req: Request) =>
   ((req.headers["x-forwarded-for"] as string) ?? req.socket?.remoteAddress ?? "unknown")
     .split(",")[0]
     .trim();
+
+/**
+ * How long this user's session may live, from Settings → Security.
+ *
+ * Enforced HERE rather than in a per-request middleware: jose already refuses
+ * an expired token inside `jwtVerify`, and the whole refusal path downstream
+ * of that (verifySession → authenticateRequest → createContext → requireUser →
+ * the client's redirect to the sign-in form) was already built and already
+ * tested. Setting `exp` and the cookie's `maxAge` from the policy is the
+ * entire feature; the alternative was surgery across sdk, context, the SSE
+ * stream helpers and the storage proxy for the same behaviour.
+ *
+ * The MINIMUM across the user's ACTIVE memberships, not the first workspace's:
+ * a member of a strict workspace must not buy a lax session by holding a
+ * second membership somewhere else. `isNull(deactivatedAt)` is load-bearing —
+ * a workspace someone has left must not set their session lifetime.
+ *
+ * Fails open to ONE_YEAR_MS: a database hiccup at sign-in must not turn into
+ * a 15-minute session for everyone.
+ */
+type LiveDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+async function sessionLifetimeForUser(db: LiveDb, userId: number): Promise<number> {
+  try {
+    const rows = await db
+      .select({ t: workspaceSettings.sessionTimeoutMin })
+      .from(workspaceMembers)
+      .innerJoin(workspaceSettings, eq(workspaceSettings.workspaceId, workspaceMembers.workspaceId))
+      .where(and(eq(workspaceMembers.userId, userId), isNull(workspaceMembers.deactivatedAt)));
+    let min: number | null = null;
+    // Indexed loop, not for-of: the build targets ES5.
+    for (let i = 0; i < rows.length; i++) {
+      const v = Number(rows[i]?.t);
+      if (!Number.isFinite(v) || v <= 0) continue;
+      if (min === null || v < min) min = v;
+    }
+    return sessionLifetimeMs(min, ONE_YEAR_MS);
+  } catch (e) {
+    console.warn("[passwordAuth] session lifetime lookup failed:", (e as Error).message);
+    return ONE_YEAR_MS;
+  }
+}
 
 const passwordLoginLimiter = rateLimit({
   windowMs: 15 * 60 * 1_000,
@@ -349,13 +392,17 @@ export function registerPasswordAuthRoutes(app: Express) {
         });
       } catch (_) { /* non-fatal */ }
 
+      // ABSOLUTE age from sign-in, not idle time. A member already signed in
+      // keeps the session they hold until it expires, so lowering the setting
+      // lands one person at a time as they next sign in.
+      const lifetimeMs = await sessionLifetimeForUser(db, user.id);
       const sessionToken = await sdk.createSessionToken(user.openId, {
         name: user.name || "",
-        expiresInMs: ONE_YEAR_MS,
+        expiresInMs: lifetimeMs,
       });
 
       const cookieOptions = getSessionCookieOptions(req);
-      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: lifetimeMs });
 
       const redirect = safeReturnPath(returnPath);
       const acceptsJson = (req.headers.accept ?? "").includes("application/json");
@@ -519,13 +566,17 @@ export function registerPasswordAuthRoutes(app: Express) {
         });
       } catch (_) { /* non-fatal */ }
 
+      // Read AFTER the activation link was consumed above, so a brand-new
+      // member picks up their new workspace's policy on their very first
+      // session rather than a year-long one.
+      const lifetimeMs = await sessionLifetimeForUser(db, userId);
       const sessionToken = await sdk.createSessionToken(openId, {
         name: cleanName ?? "",
-        expiresInMs: ONE_YEAR_MS,
+        expiresInMs: lifetimeMs,
       });
 
       const cookieOptions = getSessionCookieOptions(req);
-      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: lifetimeMs });
 
       const redirect = safeReturnPath(returnPath);
       const acceptsJson = (req.headers.accept ?? "").includes("application/json");

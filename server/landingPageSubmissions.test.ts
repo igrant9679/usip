@@ -16,7 +16,7 @@
  * open: the interesting assertions are the ones where NO lead is created.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { landingPages, landingPageSubmissions, leads, enrollments } from "../drizzle/schema";
+import { landingPages, landingPageSubmissions, leads, enrollments, workspaceSettings } from "../drizzle/schema";
 import type { TrpcContext } from "./_core/context";
 
 const h = vi.hoisted(() => ({
@@ -375,6 +375,11 @@ describe("landingPages.submissions — reading them back", () => {
               }]);
               return;
             }
+            // 2026-09-20: workspaceProcedure now reads workspace_settings for
+            // the enforce2fa policy. Answered HERE rather than left to the
+            // scripted queue, which holds exactly one row — the middleware's
+            // select would otherwise eat it and `froms` would count two.
+            if (b._table === workspaceSettings) { res([]); return; }
             froms.push(b._table);
             (inner.select() as any).then(res, rej);
           },

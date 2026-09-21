@@ -131,6 +131,63 @@ export const SEND_ALLOWLIST: Record<string, string> = {
   "tasks.sendAllSocialInvites": "SENDS LINKEDIN INVITES NOW: approve every pending Social Autopilot invite task (stops at the LinkedIn limit).",
 };
 
+/**
+ * The Autonomy Center's Off / Approve / Auto dials that the catalog exposes
+ * (2026-09-20). These are real adminWsProcedure setters — the Autonomy Center
+ * calls the identical procedures — so the assistant may arm them, but the
+ * confirm card has to say WHICH dial, what Auto does unattended, and how wide
+ * the write is. Without a sentence here the card read "Run Set autopilot
+ * settings (tasks): Tasks: create, complete, snooze, approve drafts. Input:
+ * {"mode":"auto"}" and never mentioned that the workspace starts acting
+ * without a human.
+ *
+ * These sentences deliberately avoid the tokens sequence / report / list /
+ * create / add / people: searchCatalog gives a hand-described action a x6
+ * description weight plus a flat +4 (below), and those are the words the
+ * pinned ranking queries are made of.
+ */
+export const AUTONOMY_DIALS: Record<string, string> = {
+  "tasks.setAutopilotSettings": "AUTONOMY DIAL — Task Autopilot (admin only). off = nothing; approval = draft tasks wait for a human; auto = the engine opens tasks unattended, up to the daily cap.",
+  "meetings.setAutopilotSettings": "AUTONOMY DIAL — Meeting Autopilot (admin only). off = nothing; approval = proposals wait in the queue; auto = meetings are booked and the invite is mailed unattended.",
+  "conversations.setAutopilotSettings": "AUTONOMY DIAL — Conversation Autopilot (admin only). off = nothing; approval = the suggested action waits for a human; auto = inbound replies are classified and acted on unattended.",
+  "deals.setAutopilotSettings": "AUTONOMY DIAL — Deal Autopilot (admin only). off = nothing; approval = drafts the next step for a human; auto = writes next step and win-probability onto deals unattended.",
+  "chatAgents.setAutopilotSettings": "AUTONOMY DIAL — Chat agent (admin only). Rewrites the mode of EVERY chat agent in the workspace at once. auto = agents answer visitors and book meetings unattended.",
+  "chatAgents.setFollowUpSettings": "AUTONOMY DIAL — Chat follow-up (admin only). Rewrites EVERY chat agent in the workspace at once. auto MAILS abandoned visitors with no human in between.",
+  "prospects.setSweepSettings": "AUTONOMY DIAL — Enrichment sweep (admin only). auto spends Reoon verification credits unattended every 6h, up to the daily cap.",
+  "prospects.setBackfillSettings": "AUTONOMY DIAL — Company backfill (admin only). auto spends the connected LinkedIn account's daily lookup allowance (~100/day) unattended.",
+  "are.campaigns.setRoutingSettings": "AUTONOMY DIAL — Campaign routing and proposals (admin only). approval = routing suggestions on the hub; auto routes best-fit matches into campaigns unattended, up to the daily cap.",
+  "optimization.setSettings": "AUTONOMY DIAL — Optimisation (admin only). approval = proposals only; auto edits live copy within limits unattended, up to the daily change budget.",
+  "are.campaigns.setAllAutonomy": "AUTONOMY DIAL — Revenue Engine autonomy (admin only). Rewrites EVERY non-archived campaign AND the workspace default in one call. batch_approval = a human releases each batch. full is NOT available from chat.",
+};
+
+/**
+ * Fully-unattended Revenue Engine autonomy is a human's decision on the
+ * campaign's own Settings tab, behind the acknowledgement checkbox
+ * (ARECampaignDetail.tsx:2967-2970). assistantTools.ts already pins that the
+ * purpose-built create_campaign tool can never mint one — but run_action
+ * reaches are.campaigns.create / update / setAllAutonomy directly, and
+ * are.campaigns.create is a workspaceProcedure, so before 2026-09-20 any rep
+ * could mint a live fully-unattended campaign in one confirm and walk around
+ * all three guards. `full` puts email in flight with no human (areEngine.ts:938
+ * auto-approves at or above the threshold and sequences), and `launch` makes a
+ * campaign active the moment it is created.
+ */
+export function refusesUnattended(path: string, input: unknown): string | null {
+  const v = (input ?? {}) as Record<string, unknown>;
+  const mode = typeof v.autonomyMode === "string" ? v.autonomyMode : undefined;
+  if (path === "are.campaigns.create" || path === "are.campaigns.update") {
+    if (mode === "full") return "Fully unattended campaign autonomy is set by a human on the campaign's Settings tab, behind an acknowledgement. I can set batch approval.";
+    if (mode && mode !== "batch_approval") return "That autonomy mode is not offered — campaigns run in batch approval, or a human sets full autonomy on the campaign page.";
+  }
+  if (path === "are.campaigns.create" && v.launch === true) {
+    return "I make campaigns as drafts. Activating one is a second, separate confirmation (are.campaigns.setStatus).";
+  }
+  if (path === "are.campaigns.setAllAutonomy" && v.mode === "full") {
+    return "Switching every campaign to fully unattended is done by an admin on the Autonomy Center (/v2/workflows), not from chat. I can set batch approval.";
+  }
+  return null;
+}
+
 /** Humanise "are.prospects.pushExisting" → "Push existing (Revenue Engine › prospects)". */
 export function titleFor(path: string): string {
   const parts = path.split(".");
@@ -191,6 +248,11 @@ export const ACTION_DESCRIPTIONS: Record<string, string> = {
   "conversations.markHandled": "Mark a reply handled.",
   "optimization.approve": "Apply or record one optimisation recommendation.",
   "workflowsAi.applySuggestion": "Turn one AI workflow suggestion into a rule.",
+  // Not an Off/Approve/Auto dial (so not in AUTONOMY_DIALS — there are many
+  // rules, and labelling each one a dial floods the ranking for "workflow"),
+  // but an enabled rule still acts with no human in between. Say so.
+  "workflows.toggle": "Enable or disable ONE workflow rule. An enabled rule fires on its trigger with no human in between.",
+  "prospects.runSweep": "Run an enrichment sweep now — SPENDS Reoon verification credits immediately, bounded by the limit given.",
   "bookingLinks.update": "Edit your booking link (title, duration, window, timezone).",
 };
 
@@ -229,7 +291,7 @@ export function buildCatalogFrom(router: RouterLike): CatalogEntry[] {
       kind: type,
       group: allow.group,
       title: titleFor(path),
-      description: SEND_ALLOWLIST[path] ?? ACTION_DESCRIPTIONS[path] ?? `${allow.description}.`,
+      description: SEND_ALLOWLIST[path] ?? AUTONOMY_DIALS[path] ?? ACTION_DESCRIPTIONS[path] ?? `${allow.description}.`,
       inputSchema,
       parse: (input: unknown) => (zodInput ? zodInput.parse(input ?? {}) : input),
       sends,
@@ -267,7 +329,7 @@ export function searchCatalog(catalog: CatalogEntry[], query: string | undefined
     // their description words carry real signal; a router-group boilerplate
     // description ("Autonomous campaigns: create, update, …") matches every
     // sibling procedure equally and must not outrank them.
-    const described = !!ACTION_DESCRIPTIONS[a.path] || a.sends;
+    const described = !!ACTION_DESCRIPTIONS[a.path] || !!AUTONOMY_DIALS[a.path] || a.sends;
     let score = 0;
     for (const t of tokens) {
       if (path.includes(t)) score += 4;
@@ -286,11 +348,23 @@ export function catalogRowForModel(a: CatalogEntry) {
   return { path: a.path, kind: a.kind, group: a.group, title: a.title, description: a.description, input: a.inputSchema };
 }
 
-/** Confirmation-card sentence for a generic action. */
+/**
+ * Confirmation-card sentence for a generic action. Arming a dial is the one
+ * class of action whose consequence is not in the action itself but in
+ * everything the workspace does afterwards, so the card leads with it — and
+ * louder still when the value asked for is the unattended one.
+ */
 export function describeGenericAction(a: CatalogEntry, input: unknown): string {
   const args = JSON.stringify(input ?? {});
   const short = args.length > 300 ? `${args.slice(0, 300)}…` : args;
-  return `${a.sends ? "⚠ Sends now — " : ""}Run ${a.title}: ${a.description} Input: ${short}`;
+  const v = (input ?? {}) as Record<string, unknown>;
+  const unattended = v.mode === "auto" || v.mode === "full" || v.autonomyMode === "full";
+  const prefix = a.sends
+    ? "⚠ Sends now — "
+    : AUTONOMY_DIALS[a.path]
+      ? (unattended ? "⚠⚠ Turns on UNATTENDED action — " : "⚠ Changes an autonomy dial — ")
+      : "";
+  return `${prefix}Run ${a.title}: ${a.description} Input: ${short}`;
 }
 
 /** Walk a dotted path on the tRPC caller and invoke it. */

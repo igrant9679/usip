@@ -64,6 +64,9 @@ import { buildBrandContext } from "../../services/brandContext";
 // The A/B metadata row must be keyed by the same step index + variant key the
 // execution queue uses, so both sides read one rule. See shared/variantKeys.ts.
 import { DEFAULT_STEP_GAP_DAYS, defaultDayForStep, stepIndexOf } from "@shared/areSequenceSteps";
+// Separate line on purpose: areStepCadence.test.ts pins the import above
+// verbatim, and the sendable-channel vocabulary is a different concern anyway.
+import { ARE_SENDABLE_CHANNELS, isSendableChannel } from "@shared/areSequenceSteps";
 import { cleanScrapedField } from "@shared/fieldHygiene";
 import { MAX_TIMELINE_DAY_OFFSET, MAX_TIMELINE_STEPS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { sequenceMaxTokens, stepCountForTemplate } from "@shared/areSequenceTemplates";
@@ -221,7 +224,7 @@ Produce:
 6. Any industry events they likely attend
 7. A 2-sentence LinkedIn summary for this person
 8. A 1-sentence company description
-9. Recommended outreach channel (email/linkedin/sms/voice) and best timing
+9. Recommended outreach channel — email or linkedin ONLY (no SMS or phone: neither can be sent from this product) — and best timing
 10. inferredCompanyName: the organization this person CURRENTLY works at, extracted from their title/headline (e.g. "Executive Director at Children & Charity International" → "Children & Charity International"). Use the Company field if provided. Empty string if it cannot be determined — never guess.
 `,
         },
@@ -533,6 +536,27 @@ type TemplateStep = {
 type CampaignTemplate = { steps: TemplateStep[] };
 
 /**
+ * Every step the campaign hands downstream lands on a channel that can send.
+ *
+ * The `channel` field is a free string in the json_schema and the model was
+ * being handed `channelsEnabled` with sms/voice in it, so templates generated
+ * before 2026-09-20 carry steps nothing can deliver: areEngine skips them with
+ * "not wired", sequenceCompletion then reads skipped > sent as "abandoned",
+ * and the prospect is cancelled with "re-approve to re-enrol" — which
+ * regenerates from the SAME cached template and cancels again. A permanent
+ * human loop with no exit.
+ *
+ * Applied at the READ, not written back over generatedTemplate: derive-at-read
+ * is this codebase's rule, it leaves stored history honest about what the model
+ * actually returned, and it means one fix covers every already-cached campaign
+ * instead of only the next regeneration.
+ */
+function clampTemplateChannels(t: CampaignTemplate | null): CampaignTemplate {
+  if (!t || !Array.isArray(t.steps)) return { steps: [] };
+  return { steps: t.steps.map((s) => (isSendableChannel(s?.channel) ? s : { ...s, channel: "email" })) };
+}
+
+/**
  * Generate (or refresh) the campaign-level skeleton. Idempotent: callers
  * can pass force=false to reuse a cached template, or force=true after
  * the user edits the campaign's sequencePrompt.
@@ -546,7 +570,7 @@ export async function generateCampaignTemplate(
 
   if (!force && campaign.generatedTemplate) {
     const cached = campaign.generatedTemplate as CampaignTemplate | null;
-    if (cached && Array.isArray(cached.steps) && cached.steps.length > 0) return cached;
+    if (cached && Array.isArray(cached.steps) && cached.steps.length > 0) return clampTemplateChannels(cached);
   }
 
   const customInstructions = (campaign.sequencePrompt ?? "").trim();
@@ -561,6 +585,13 @@ export async function generateCampaignTemplate(
   // is what the old `=== "standard_7step" ? 7 : 5` did to both non-standard
   // templates. shared/areSequenceTemplates.ts.
   const stepCount = stepCountForTemplate(campaign.sequenceTemplate);
+  // The model was previously handed the raw channelsEnabled object, sms and
+  // voice included, and the cadence rule below actively pushes it OFF email —
+  // so it dutifully wrote steps on channels that have no provider behind them.
+  // Only the sendable subset is offered now; an empty selection still says
+  // email rather than leaving the architect to guess.
+  const enabledMap = (campaign.channelsEnabled ?? null) as Record<string, boolean> | null;
+  const sendableChannels = ARE_SENDABLE_CHANNELS.filter((c) => enabledMap?.[c] !== false);
 
   const systemContent =
     `You are an elite B2B sales sequence architect. Design a reusable ${stepCount}-step outreach skeleton for a single campaign. The skeleton will be filled in per-prospect later, so do NOT write subject lines or bodies — write the STRUCTURE (archetype, cadence, what each step should accomplish, the CTA pattern) so that any prospect's data can be slotted in.` +
@@ -570,7 +601,7 @@ export async function generateCampaignTemplate(
 
   const userContent =
     `## Campaign goal\n${goalText}\n\n` +
-    `## Channels enabled\n${JSON.stringify(campaign.channelsEnabled)}\n\n` +
+    `## Channels enabled\n${JSON.stringify(sendableChannels.length ? sendableChannels : ["email"])}\n\n` +
     // Days are stated EXACTLY, not as a window for the model to divide. The
     // old "14-day total window for 7-step" produced 0/3/6/8/10/12/14 — the
     // model's own arithmetic, uneven and ~2 days apart. DEFAULT_STEP_GAP_DAYS
@@ -645,7 +676,7 @@ export async function generateCampaignTemplate(
     .set({ generatedTemplate: template, generatedTemplateAt: new Date() })
     .where(eq(areCampaigns.id, campaign.id));
 
-  return template;
+  return clampTemplateChannels(template);
 }
 
 /**
@@ -782,7 +813,11 @@ async function personalizeForProspect(
   // model that returns extra steps cannot lengthen a campaign nobody asked to
   // lengthen; a SHORT result is reported by the caller, not padded here.
   return (parsed.steps ?? []).slice(0, template.steps.length).map((s: any) => {
-    const channel = String(s.channel ?? "email").toLowerCase();
+    // Belt to the template clamp's braces: this array, not the skeleton, is
+    // what becomes areExecutionQueue rows, and the writer can invent a channel
+    // the skeleton never asked for. A step on a channel with no provider is
+    // queued only to be skipped, and enough of them cancel the prospect.
+    const channel = isSendableChannel(s.channel) ? String(s.channel).toLowerCase() : "email";
     // Scrub AI tells (em dashes, curly/straight mixes, markdown leaks) —
     // the prompt asks, the scrub guarantees. Runs BEFORE the signature
     // append so the owner's own signature text is never rewritten.
@@ -797,7 +832,7 @@ async function personalizeForProspect(
     // The only variant that exists. Assigned here rather than accepted from the
     // model, and normalised again at the read in shared/areSequenceSteps.ts so
     // sequences generated before this still fold into the same cell.
-    return { ...s, body, variantKey: DEFAULT_VARIANT_KEY };
+    return { ...s, channel, body, variantKey: DEFAULT_VARIANT_KEY };
   });
 }
 

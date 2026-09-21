@@ -25,6 +25,7 @@ import {
   parseToolArgs,
   validateNavigateHref,
 } from "./services/assistantTools";
+import { refusesUnattended } from "./services/assistantActionCatalog";
 
 describe("assistant tool registry", () => {
   it("partitions cleanly: read XOR mutating XOR navigate, no strays", () => {
@@ -99,6 +100,16 @@ describe("argument gates", () => {
     expect(text).toContain("DRAFT");
     expect(text).toContain("Nothing runs until you activate it");
     expect(text).toContain("CFO/VP Finance");
+  });
+
+  it("the generic run_action path carries the same invariants as create_campaign", () => {
+    // 2026-09-20: create_campaign's zod gate above is only half the story —
+    // run_action reaches are.campaigns.create directly (it is a
+    // workspaceProcedure), so the same two invariants live there as a refusal.
+    // They sit beside each other so editing one trips the other.
+    expect(refusesUnattended("are.campaigns.create", { autonomyMode: "full" })).toBeTruthy();
+    expect(refusesUnattended("are.campaigns.create", { launch: true })).toBeTruthy();
+    expect(refusesUnattended("are.campaigns.create", { autonomyMode: "batch_approval", launch: false })).toBeNull();
   });
 
   it("the confirm dispatch never passes launch:true for create_campaign (draft by construction)", () => {

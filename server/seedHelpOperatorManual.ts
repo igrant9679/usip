@@ -105,7 +105,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 **Dashboard** (/dashboard) — pipeline at a glance: revenue by period, win/loss, stage funnel, top reps, recent deals. Read-only.
 
-**AI Assistant** (/v2/ai-assistant) — chat over your own data. It searches people and companies, lists sequences, lists and campaigns, reads the pipeline, runs read-only queries over every core table, looks up help, and hands you links. It can *propose* actions — enroll, tasks, add to list, enrich, pause or activate a campaign, draft a campaign, propose meetings, build a list from a filter, pin a company brand, update or archive prospects — which run only when you press Confirm. It cannot send email or LinkedIn messages.
+**AI Assistant** (/v2/ai-assistant) — chat over your own data. It searches people and companies, lists sequences, lists and campaigns, reads the pipeline, runs read-only queries over every core table, looks up help, and hands you links. It can *propose* actions — enroll, tasks, add to list, enrich, pause or activate a campaign, draft a campaign, propose meetings, build a list from a filter, pin a company brand, update or archive prospects — which run only when you press Confirm. Admins can also confirm an Off / Approve / Auto dial change from chat; the card names the dial and says what Auto does unattended. Two things it will not do: fully unattended campaign autonomy (a human sets that on the campaign's Settings tab behind the acknowledgement), and composing mail — it can only send what an approval queue already holds (an approved draft, a proposed meeting, a chat follow-up), and the card says so.
 
 **Inbox** (/inbox) — your notifications: mentions, tasks assigned or due, deals won or lost, renewals due, churn risk, approval requests, workflow fired, email replies, engine events.
 
@@ -165,7 +165,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 ## Configuration
 
-**Settings** (/v2/settings/profile) — personal (profile, mailboxes, phone numbers, notifications, social accounts, MFA) and workspace (overview, users and teams, security, integrations, voice agents, data sources, email delivery, branding, billing and credits, data management, danger zone).
+**Settings** (/v2/settings/profile) — personal (profile, mailboxes, phone numbers, notifications, social accounts, MFA) and workspace (overview, users and teams, security, integrations, voice agents, data sources, email delivery, branding, billing and credits, data management, danger zone). **Security** enforces two of its three controls: **session timeout** is the absolute age of a sign-in (not idle time) and applies at each member's next sign-in, and **Enforce 2FA** blocks members without an authenticator app from the workspace entirely — a super admin is never blocked, and an admin cannot switch it on before connecting their own. The **IP allowlist** stores a list and deliberately enforces nothing until a trusted-proxy hop count is configured; the page says so.
 
 **Email Sending** (/sending-accounts) with **Sender Pools**, **Deliverability** and **Suppressions** — set a display name on every sender; it is the From header and the signature.
 
@@ -480,7 +480,7 @@ Close the week when: performance read, losers retired, pipeline honest, leads ro
 8. **Prompts**: fold the month's lessons into the campaign sequence prompts as do-not lines; regenerate unsent steps if the change is material.
 9. **Customer success**: health tiers reviewed; every card in the 90 days column or nearer has a plan; anything in past due either renews or is recorded as churned; next month's QBRs scheduled.
 10. **Data hygiene**: duplicates in Data Health; the Split across People & Contacts list (Link all unlinked, then work the rest); company brand pins and merges; departed contacts re-routed.
-11. **Team and access**: roles right-sized; departed members deactivated and reassigned; MFA on for admins.
+11. **Team and access**: roles right-sized; departed members deactivated and reassigned; 2FA is now a workspace policy, not a per-person habit — Settings → Security → Enforce 2FA blocks anyone without an authenticator app (connect your own first; a super admin is never blocked), and a lost phone is an admin reset from the Team page, not a support ticket. Check the session timeout while you are there: it is the absolute age of a sign-in and lands at each member's next one.
 12. **Backup**: Danger zone → Export if compliance wants an offline copy; skim the month's Audit Log and export it — Audit Log → Export CSV takes up to 2,000 matching entries, newest first, and tells you if there were more.
 
 ## Quarterly (half a day)
@@ -502,7 +502,7 @@ Close the month when: budgets set, scores recalculated, ICP reviewed, pruned, on
     tags: ["operator-manual", "process", "campaign", "are"],
     pageKey: "are-campaigns",
     bodyMarkdown: `1. **Define the audience in one sentence** — who, and why now. Check the ICP profile agrees; add a persona if one is missing.
-2. **Create the campaign** (Campaigns → New): name; goal; targeting; **sources** as an explicit list (choose existing people only for a curated campaign — an empty list means no discovery); target count; copy mode per person; the **sequence prompt** with one plain sentence of what you do, the voice, and the do-not list (no invented programs or numbers, one meaning across steps, no credentials in names); the **sequence template** (3, 7 or 14 steps, or custom) and the campaign's step gap, one week by default; channels; daily cap of 20 to 30; autonomy batch approval.
+2. **Create the campaign** (Campaigns → New): name; goal; targeting; **sources** as an explicit list (choose existing people only for a curated campaign — an empty list means no discovery); target count; copy mode per person; the **sequence prompt** with one plain sentence of what you do, the voice, and the do-not list (no invented programs or numbers, one meaning across steps, no credentials in names); the **sequence template** (3, 7 or 14 steps, or custom) and the campaign's step gap, one week by default; channels (email and LinkedIn — SMS and AI Voice are shown disabled because no provider is connected); daily cap of 20 to 30; autonomy batch approval.
 3. **Sender**: choose the pool or sender; confirm display names are set; make sure the reply mailbox is connected (for SendGrid, point Reply-To at a connected mailbox); set your booking link timezone.
 4. **Seed people**: Add existing from a list (the Verify step shows duplicates and other memberships) or let discovery run.
 5. **Set active**. Watch Logs for the first tick and Prospects for enrichment. Open the first three written sequences and read them; fix the prompt and regenerate before approving anything.
@@ -608,7 +608,9 @@ Managers: compare forecast to actuals at quarter end and adjust stage probabilit
 
 1. Read a week of that feature's Approve output first.
 2. Flip one dial; write the date somewhere you will see it next month.
-3. Watch Home's digest and the feature's page for three days; revert if quality drops.`,
+3. Watch Home's digest and the feature's page for three days; revert if quality drops.
+
+Dials are admin-only wherever you change them: the Autonomy Center, the feature's own page, or by confirming an AI Assistant card (the card names the dial and what Auto does). Three are Autonomy-Center-only and the assistant cannot touch them at all — Social Autopilot, Job-change Autopilot and Email AI auto-send. Fully autonomous Revenue Engine campaigns are set on the campaign's Settings tab behind the acknowledgement, never from chat.`,
   },
   {
     slug: "om-glossary",

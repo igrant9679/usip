@@ -69,6 +69,7 @@ import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { isHtmlBody } from "@shared/emailBody";
 import { ARE_SOURCES, ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 import { dayOffsetForPosition, sanitizeDayOffsets } from "@shared/areStepCadence";
+import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenceSteps";
 import {
   signalMeta, describeSignal, actionLabel, signalSourceLabel, stepLabelFromPayload,
   type AreSignalChannel,
@@ -1406,6 +1407,14 @@ function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; 
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <Badge variant="secondary" className="text-[10px]">Step {labelIdx}</Badge>
                   <span>{s.channel ?? "email"}</span>
+                  {/* A step on a channel with no provider is queued and then
+                      skipped forever; the viewer showed it exactly like a step
+                      that sends. 2026-09-20. */}
+                  {!isSendableChannel(s.channel ?? "email") && (
+                    <span className="text-amber-600" title={UNSENDABLE_CHANNEL_REASON[String(s.channel ?? "").toLowerCase()]}>
+                      · will not send
+                    </span>
+                  )}
                   <span title={dayOffsets ? "Custom timeline set for this prospect" : `Campaign cadence — every ${campaignGapDays} days`}>
                     · day {day}{dayOffsets ? " (custom)" : ""}
                   </span>

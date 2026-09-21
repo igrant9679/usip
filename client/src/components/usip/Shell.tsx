@@ -8,6 +8,7 @@ import { HelpHover } from "@/components/usip/HelpTip";
 import { navHelpFor } from "@/lib/helpText";
 import { PRIMARY_TOOLS, TOOLS, type ToolGroup } from "@/lib/toolRegistry";
 import { CommandPalette, openCommandPalette } from "@/components/usip/CommandPalette";
+import { MfaRequiredGate } from "@/components/usip/MfaRequiredGate";
 import { LayoutGrid } from "lucide-react";
 import {
   Activity,
@@ -685,6 +686,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     <div className="h-full flex bg-background text-foreground">
       {/* ⌘K palette — mounted once per Shell, listens globally */}
       <CommandPalette isAdmin={current?.role === "admin" || current?.role === "super_admin"} />
+      {/* Workspace enforce2fa. Mounted here because Shell wraps every authed
+          page, and a member blocked by the policy can reach no other surface. */}
+      <MfaRequiredGate />
       {/* Mobile backdrop */}
       {mobileOpen && (
         <div
