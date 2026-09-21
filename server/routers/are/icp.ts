@@ -362,36 +362,71 @@ Based on this data, produce a comprehensive ICP with:
  * the ICP, so in production the "living" profile only ever changed when a human
  * clicked a button.
  *
- * Each run costs one LLM call per workspace, so it is gated hard:
+ * Each run costs one LLM call per workspace, so it is gated hard, in this order:
+ *   • skip archived workspaces — they are frozen
+ *   • skip workspaces whose ICP Re-inference Schedule is "manual"
  *   • skip workspaces with NO evidence at all (no closed deals, no contacted
  *     prospects) — there is nothing to infer from and it would burn spend
- *   • skip if the active profile is younger than MIN_AGE_HOURS
- *   • skip if neither the closed-deal count nor the contacted count has moved
- *     since that profile was generated
+ *   • skip if the NEWEST profile is younger than the schedule's age floor
+ *   • on "on_new_deal" only, skip if the won-deal count has not moved since
+ *     that profile was generated
  * Background LLM spend on idle workspaces has bitten this codebase before.
+ *
+ * Until 2026-09-20 the schedule the user picked on ARE Settings was written to
+ * workspace_settings and read by nothing: every workspace ran this daily
+ * cadence whatever the card said, and "Manual Only" was not an Off switch at
+ * all. Honouring it is what makes the control true.
  */
 const ICP_MIN_AGE_HOURS = 20;
+/** Age floor for workspaces on "weekly". 164h rather than a strict 7*24: the
+ *  cron is boot-relative (server/_core/index.ts registers it as a setTimeout +
+ *  24h setInterval), so a full 168 would push a pass past the next tick and
+ *  silently stretch weekly into fortnightly on any restart. */
+const ICP_WEEKLY_MIN_AGE_HOURS = 164;
 
-export async function runIcpInferenceAllWorkspaces(): Promise<{ regenerated: number; skipped: number }> {
+export async function runIcpInferenceAllWorkspaces(): Promise<{ regenerated: number; skipped: number; failed: number }> {
   const db = await getDb();
-  if (!db) return { regenerated: 0, skipped: 0 };
-  const { workspaces } = await import("../../../drizzle/schema");
-  const rows = await db.select({ id: workspaces.id }).from(workspaces);
+  if (!db) return { regenerated: 0, skipped: 0, failed: 0 };
+  const { workspaces, workspaceSettings } = await import("../../../drizzle/schema");
+  // One join for the whole fleet rather than a settings SELECT inside the loop.
+  // leftJoin because getOrSeedSettings inserts the row lazily, so a workspace
+  // can legitimately have none; workspaceId is the PK on workspace_settings, so
+  // the join is 1:1 and cannot multiply rows. Same shape as the cadence join in
+  // services/enrichmentSweeper.ts.
+  const rows = await db
+    .select({ id: workspaces.id, schedule: workspaceSettings.areIcpRegenSchedule })
+    .from(workspaces)
+    .leftJoin(workspaceSettings, eq(workspaceSettings.workspaceId, workspaces.id));
 
   let regenerated = 0;
   let skipped = 0;
+  let failed = 0;
     const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
     if (archivedWs.has(ws.id)) continue; // archived workspaces are frozen (2026-08-12)
+    // NULL means the workspace never touched the card, so it keeps the cadence
+    // this cron has always run — wiring the setting up must not silently
+    // re-time every existing workspace.
+    const schedule = ws.schedule ?? "daily";
+    // The Off position, and the cheapest gate here, so it precedes every query.
+    if (schedule === "manual") { skipped++; continue; }
     try {
+      const wonKeys = await wonStageKeys(db, ws.id);
       const [closed] = await db
-        .select({ n: sql<number>`count(*)` })
+        .select({
+          n: sql<number>`count(*)`,
+          // Folded into the existing aggregate rather than a second query. Won
+          // stages are workspace-configurable, so this must ask stageSemantics
+          // rather than compare against a literal 'won'.
+          won: sql<number>`sum(case when ${inArray(opportunities.stage, wonKeys)} then 1 else 0 end)`,
+        })
         .from(opportunities)
         .where(and(
           eq(opportunities.workspaceId, ws.id),
           inArray(opportunities.stage, await closedStageKeys(db, ws.id)),
         ));
       const closedCount = Number(closed?.n ?? 0);
+      const wonCount = Number(closed?.won ?? 0); // mysql2 returns SUM() as a string
 
       let contactedCount = 0;
       try {
@@ -405,28 +440,60 @@ export async function runIcpInferenceAllWorkspaces(): Promise<{ regenerated: num
       // No evidence of any kind → nothing to infer, no spend.
       if (closedCount === 0 && contactedCount === 0) { skipped++; continue; }
 
-      const [active] = await db
+      // NEWEST, not ACTIVE: the question is "when did we last generate", not
+      // "how old is the row that happens to be active". icp.restore re-activates
+      // an older version and only flips isActive — icp_profiles.createdAt is
+      // defaultNow with no onUpdateNow — so reading the active row made the very
+      // next cron pass regenerate over the version a human had just chosen.
+      // newest.createdAt is always >= active.createdAt, so this can only ever
+      // skip more, never spend more.
+      const [newest] = await db
         .select({
           createdAt: icpProfiles.createdAt,
           sampleWonDeals: icpProfiles.sampleWonDeals,
         })
         .from(icpProfiles)
-        .where(and(eq(icpProfiles.workspaceId, ws.id), eq(icpProfiles.isActive, true)))
+        .where(eq(icpProfiles.workspaceId, ws.id))
+        .orderBy(desc(icpProfiles.createdAt))
         .limit(1);
 
-      if (active?.createdAt) {
-        const ageHours = (Date.now() - new Date(active.createdAt).getTime()) / 3600000;
-        if (ageHours < ICP_MIN_AGE_HOURS) { skipped++; continue; }
+      const minAgeHours = schedule === "weekly" ? ICP_WEEKLY_MIN_AGE_HOURS : ICP_MIN_AGE_HOURS;
+      if (newest?.createdAt) {
+        const ageHours = (Date.now() - new Date(newest.createdAt).getTime()) / 3600000;
+        if (ageHours < minAgeHours) { skipped++; continue; }
+        // "On new won deal" can never be event-driven — nothing hooks a stage
+        // move — so it re-infers on the first pass AFTER the won count moves.
+        // The stored counter is the size of the 200-row won sample the profile
+        // was built from (the .limit(200) above), so the live count is capped to
+        // match. Past 200 wins that degrades to "never": failing closed costs
+        // nothing, failing open would regenerate forever. The age floor still
+        // applies on this branch, because POST /api/scheduled/icp-regen reaches
+        // the same function and an external scheduler can call it at any rate.
+        if (schedule === "on_new_deal" && Math.min(wonCount, 200) === newest.sampleWonDeals) { skipped++; continue; }
       }
 
       await runIcpInference(ws.id);
       regenerated++;
-      console.log(`[IcpCron] ws ${ws.id} regenerated (closed=${closedCount}, contacted=${contactedCount})`);
+      // The only ICP regeneration that happens behind the user's back, and
+      // until 2026-09-20 the only one that told nobody — both existing
+      // icp_updated notices answer a button the user just pressed, so the
+      // "ICP profile updated" switch on ARE Settings gated a confirmation of
+      // the user's own click and nothing else. Bounded to at most one per
+      // workspace per pass by the age floor above.
+      await areNotify({
+        workspaceId: ws.id,
+        eventType: "icp_updated",
+        title: "ARE: ICP profile re-inferred",
+        body: "Your Ideal Customer Profile was regenerated automatically from the latest won and lost deals. Review the new version on the ICP Agent page.",
+        relatedType: "icp_profile",
+      });
+      console.log(`[IcpCron] ws ${ws.id} regenerated (schedule=${schedule}, closed=${closedCount}, contacted=${contactedCount})`);
     } catch (e) {
+      failed++;
       console.error(`[IcpCron] ws ${ws.id} failed:`, (e as Error).message);
     }
   }
-  return { regenerated, skipped };
+  return { regenerated, skipped, failed };
 }
 
 export const icpRouter = router({

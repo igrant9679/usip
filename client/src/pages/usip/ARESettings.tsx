@@ -46,6 +46,7 @@ import {
   Zap, Settings2, MailCheck, Radar, ChevronUp, ChevronDown, Flame
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Link } from "wouter";
 import { toast } from "sonner";
 
 /** Descriptions keyed by source id, so this page and the campaign wizard
@@ -59,6 +60,12 @@ const ARE_SOURCE_DESC: Record<string, string> = Object.fromEntries(
 // behaved like batch_approval minus the junk floor while the copy promised
 // a per-email hold). Rows still carrying it are treated as batch_approval.
 type AutonomyMode = "full" | "batch_approval";
+
+// Mirrors the z.enum the save mutation now accepts (server/routers/admin.ts).
+// The column drives real LLM spend in the ICP cron, so the domain is closed at
+// both ends rather than left as a free string (2026-09-20).
+type IcpRegenSchedule = "daily" | "weekly" | "on_new_deal" | "manual";
+const ICP_REGEN_SCHEDULES: IcpRegenSchedule[] = ["daily", "weekly", "on_new_deal", "manual"];
 
 const AUTONOMY_OPTIONS: { value: AutonomyMode; label: string; description: string; color: string }[] = [
   {
@@ -137,7 +144,6 @@ export default function ARESettings() {
   const [notifyIcpUpdate, setNotifyIcpUpdate] = useState(true);
   // New settings
   const [sequenceTemplate, setSequenceTemplate] = useState("standard_7step");
-  const [brandVoice, setBrandVoice] = useState("professional");
   // Keys come from the shared ARE_SOURCES vocabulary — the same ids the wizard
   // shows and the engine dispatches on. All on by default: a new campaign
   // sources from everything unless the user narrows it.
@@ -149,7 +155,10 @@ export default function ARESettings() {
   const [sourceOrder, setSourceOrder] = useState<string[]>(
     resolveSourceOrder(null, {}, ARE_SOURCE_IDS),
   );
-  const [icpRegenSchedule, setIcpRegenSchedule] = useState("weekly");
+  // "daily" both here and at the hydrate below: a workspace that never touched
+  // this card stores NULL and the cron runs it daily, so displaying "Weekly"
+  // was showing a cadence nothing was on (2026-09-20).
+  const [icpRegenSchedule, setIcpRegenSchedule] = useState<IcpRegenSchedule>("daily");
   const [sequenceQualityThreshold, setSequenceQualityThreshold] = useState(65);
   const [dirty, setDirty] = useState(false);
 
@@ -166,7 +175,6 @@ export default function ARESettings() {
     setNotifyAutoApprove(settings.areNotifyOnAutoApprove ?? false);
     setNotifyIcpUpdate(settings.areNotifyOnIcpUpdate ?? true);
     setSequenceTemplate((settings.areDefaultSequenceTemplate as string) ?? "standard_7step");
-    setBrandVoice((settings as any).areBrandVoice ?? "professional");
     // Saved values may predate the unified vocabulary (linkedin_company /
     // linkedin_people / events). Read only the live ids and default anything
     // absent to on, so an old row doesn't silently disable a working source.
@@ -177,7 +185,12 @@ export default function ARESettings() {
       );
     }
     setSourceOrder(resolveSourceOrder((settings as any).areSourceOrder ?? null, {}, ARE_SOURCE_IDS));
-    setIcpRegenSchedule((settings as any).areIcpRegenSchedule ?? "weekly");
+    // A row written before the domain closed could hold anything 20 chars long;
+    // anything unrecognised reads as the cadence the cron actually runs for it.
+    {
+      const saved = (settings as any).areIcpRegenSchedule ?? "daily";
+      setIcpRegenSchedule(ICP_REGEN_SCHEDULES.indexOf(saved) >= 0 ? saved : "daily");
+    }
     setSequenceQualityThreshold((settings as any).areSequenceQualityThreshold ?? 65);
     setDirty(false);
   }, [settings]);
@@ -203,7 +216,6 @@ export default function ARESettings() {
       areNotifyOnAutoApprove: notifyAutoApprove,
       areNotifyOnIcpUpdate: notifyIcpUpdate,
       areDefaultSequenceTemplate: sequenceTemplate,
-      areBrandVoice: brandVoice,
       areScraperSources: scraperSources,
       areSourceOrder: sourceOrder,
       areIcpRegenSchedule: icpRegenSchedule,
@@ -401,7 +413,11 @@ export default function ARESettings() {
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-xs font-medium">Max Concurrent Campaigns</div>
-                <div className="text-[11px] text-muted-foreground">The ARE will not start new campaigns beyond this limit.</div>
+                <div className="text-[11px] text-muted-foreground">
+                  How many campaigns may be <span className="font-medium">active</span> at once. At the limit, launching or
+                  starting another is refused and the Auto router holds its proposals until a slot frees up. Campaigns
+                  already running are never stopped by this — pause one to make room. Drafts are always allowed.
+                </div>
               </div>
               <span className="text-sm font-bold tabular-nums text-primary">{maxConcurrent}</span>
             </div>
@@ -419,11 +435,17 @@ export default function ARESettings() {
           </div>
         </Section>
 
-        {/* -- 5. Notification Preferences -- */}
+        {/* -- 5. Notification Preferences --
+            The description used to read "which ARE agent events generate
+            in-app notifications", which is how three switches over a six-event
+            vocabulary read as complete coverage. Engagement signals fire on
+            every email open and the weekly rejection digest is written
+            straight to `notifications` by the email tracker; neither passes
+            the gate these three control (2026-09-20). -- */}
         <Section
           icon={Bell}
           title="Notification Preferences"
-          description="Choose which ARE agent events generate in-app notifications in your Inbox."
+          description="Choose which of these ARE events notify you. Engagement signals and the weekly rejection digest always appear."
         >
           <div className="space-y-2">
             {[
@@ -494,35 +516,33 @@ export default function ARESettings() {
           </div>
         </Section>
 
-        {/* -- 7. Brand Voice -- */}
+        {/* -- 7. Brand Voice --
+            This was a four-button tone picker of its own, saving to a
+            workspace_settings column no AI writer has ever read. The ARE
+            sequence writer builds its prompt from buildBrandContext(), which
+            reads brand_voice_profiles, so the picker was a second vocabulary
+            that could never win — and one of its four tones was not even a
+            value the real tone enum accepts.
+            Removed 2026-09-20 rather than rewired: that row already has two
+            editors (/brand-voice and Settings → Branding) and a master
+            off-switch a third picker would silently ignore. -- */}
         <Section
           icon={Mic2}
           title="Brand Voice"
-          description="The AI uses this voice profile when writing all outreach copy for new campaigns."
+          description="ARE outreach copy is written in your workspace Brand Voice profile — its tone, preferred words and words to avoid."
         >
-          <div className="grid grid-cols-2 gap-2">
-            {[
-              { value: "professional", label: "Professional", desc: "Formal, precise, and credibility-focused. Suits financial services, legal, and enterprise SaaS.", color: "text-blue-500" },
-              { value: "conversational", label: "Conversational", desc: "Warm, human, and approachable. Suits SMB, HR tech, and consumer-adjacent B2B.", color: "text-emerald-500" },
-              { value: "direct", label: "Direct", desc: "Short, punchy, and action-oriented. Suits sales tools, growth products, and time-sensitive offers.", color: "text-orange-500" },
-              { value: "consultative", label: "Consultative", desc: "Insight-led and value-first. Suits consulting, advisory, and complex solution selling.", color: "text-violet-500" },
-            ].map(({ value, label, desc, color }) => (
-              <button
-                key={value}
-                onClick={() => { setBrandVoice(value); mark(); }}
-                className={`text-left rounded-xl border px-3 py-2.5 transition-all ${
-                  brandVoice === value
-                    ? "border-primary/50 bg-primary/5 shadow-sm"
-                    : "border-border bg-card text-muted-foreground hover:border-primary/20 hover:bg-muted/30"
-                }`}
-              >
-                <div className="flex items-center gap-1.5 mb-0.5">
-                  <span className={`text-xs font-semibold ${brandVoice === value ? color : "text-muted-foreground"}`}>{label}</span>
-                  {brandVoice === value && <CheckCircle2 className="size-3 text-primary ml-auto" />}
-                </div>
-                <p className="text-[10px] text-muted-foreground leading-relaxed">{desc}</p>
-              </button>
-            ))}
+          <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              There is one profile for the whole workspace, shared by every AI writer rather than set per
+              page. Turning <span className="font-medium text-foreground">Apply to AI</span> off there
+              disables branding for all of them, ARE included — copy is then written with no voice
+              instructions at all.
+            </p>
+            <Link href="/brand-voice">
+              <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5">
+                <Mic2 className="size-3.5" /> Edit Brand Voice
+              </Button>
+            </Link>
           </div>
         </Section>
 
@@ -628,15 +648,19 @@ export default function ARESettings() {
         <Section
           icon={Clock}
           title="ICP Re-inference Schedule"
-          description="How often the ICP Agent re-reads your CRM data and updates the ideal customer profile."
+          description="How often the ICP Agent re-reads your CRM data and updates the ideal customer profile. The engine's pass is boot-relative, not a wall clock, so these are minimum intervals rather than appointments."
         >
           <div className="grid grid-cols-2 gap-2">
-            {[
-              { value: "daily", label: "Daily", desc: "Re-infer every night at 02:00 UTC. Best for high-velocity teams closing deals frequently.", icon: RefreshCw },
-              { value: "weekly", label: "Weekly", desc: "Re-infer every Monday at 02:00 UTC. Recommended default for most teams.", icon: Clock },
-              { value: "on_new_deal", label: "On New Deal", desc: "Re-infer automatically whenever a deal is marked Won or Lost.", icon: Zap },
+            {/* No option may name a clock time. Two of these used to promise a
+                nightly and a Monday run at a fixed UTC hour; the pass is a
+                setTimeout + 24h setInterval from server boot, so no wall clock
+                was ever reachable (2026-09-20). */}
+            {([
+              { value: "daily", label: "Daily", desc: "Re-infer on the engine's daily pass — at most once a day. Recommended for most teams.", icon: RefreshCw },
+              { value: "weekly", label: "Weekly", desc: "Re-infer at most once every 7 days. Lowest AI spend.", icon: Clock },
+              { value: "on_new_deal", label: "On New Won Deal", desc: "Re-infer on the first daily pass after a deal closes Won.", icon: Zap },
               { value: "manual", label: "Manual Only", desc: "Only re-infer when you click Regenerate on the ICP Agent page.", icon: Shield },
-            ].map(({ value, label, desc, icon: Icon }) => (
+            ] as { value: IcpRegenSchedule; label: string; desc: string; icon: typeof Clock }[]).map(({ value, label, desc, icon: Icon }) => (
               <button
                 key={value}
                 onClick={() => { setIcpRegenSchedule(value); mark(); }}

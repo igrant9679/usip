@@ -290,19 +290,17 @@ export default function AREHub() {
   // number that says whether the engine is waiting on a human.
   const { data: attention } = trpc.attention.summary.useQuery(undefined, { refetchInterval: 60_000 });
 
-  /* aggregate metrics */
-  const totals = (campaigns ?? []).reduce(
-    (acc, c) => ({
-      discovered: acc.discovered + (c.prospectsDiscovered ?? 0),
-      enriched: acc.enriched + (c.prospectsEnriched ?? 0),
-      approved: acc.approved + (c.prospectsApproved ?? 0),
-      contacted: acc.contacted + (c.prospectsContacted ?? 0),
-      replied: acc.replied + (c.prospectsReplied ?? 0),
-      meetings: acc.meetings + (c.meetingsBooked ?? 0),
-      opps: acc.opps + (c.opportunitiesCreated ?? 0),
-    }),
-    { discovered: 0, enriched: 0, approved: 0, contacted: 0, replied: 0, meetings: 0, opps: 0 },
-  );
+  /* aggregate metrics — workspace-wide and DERIVED.
+     2026-09-20: this was a reduce over `campaigns`, i.e. over the newest 100
+     rows `list({ limit: 100 })` returns, summing denormalised counter columns.
+     Both halves were wrong: a 101st campaign dropped out of the workspace
+     total without a word, and the counters have drifted from the source rows
+     before (migration 0175 hand-decremented meetingsBooked). The proc reads
+     prospect_queue / are_execution_queue / are_signal_log through the same
+     module /v2/analytics uses, so the hub funnel and the analytics funnel
+     cannot disagree about "contacted". */
+  const { data: funnelTotals } = trpc.are.campaigns.funnelTotals.useQuery();
+  const totals = funnelTotals ?? { discovered: 0, enriched: 0, approved: 0, contacted: 0, replied: 0, meetings: 0, opps: 0 };
 
   const activeCampaigns = (campaigns ?? []).filter((c) => c.status === "active");
   const pausedCampaigns = (campaigns ?? []).filter((c) => c.status === "paused");
@@ -460,7 +458,7 @@ export default function AREHub() {
                   <div className="flex items-center justify-between">
                     <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Pipeline Funnel</h2>
                     {totals.discovered > 0 && (
-                      <span className="text-[10px] text-muted-foreground">{totals.discovered.toLocaleString()} discovered</span>
+                      <span className="text-[10px] text-muted-foreground">{totals.discovered.toLocaleString()} discovered · every campaign</span>
                     )}
                   </div>
 

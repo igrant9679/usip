@@ -87,6 +87,31 @@ export const REMINDABLE_MEETING_STATUSES: readonly MeetingStatus[] = [
   "rescheduled",
 ];
 
+/**
+ * Statuses meaning A MEETING WAS ACTUALLY BOOKED — it happened, or is still
+ * going to.
+ *
+ * 🔴 Spans LIVE and CLOSED on purpose. `meetings.stats.booked` counts only
+ * `scheduled` + `invited`, so the Analytics "Meetings booked" band FELL every
+ * time a meeting took place: the number the product optimises for went down
+ * when it succeeded (2026-09-20). A funnel band that empties as meetings
+ * complete is not a funnel band.
+ *
+ * `proposed` is excluded — an AI-drafted candidate the attendee never agreed
+ * to, the same exclusion REMINDABLE makes and for the same reason — and
+ * `cancelled` is excluded because the booking was undone.
+ *
+ * A third question, not a set operation on the two above: BOOKED deliberately
+ * overlaps both, which is why it is named rather than derived.
+ */
+export const BOOKED_MEETING_STATUSES: readonly MeetingStatus[] = [
+  "invited",
+  "scheduled",
+  "rescheduled",
+  "completed",
+  "no_show",
+];
+
 /** Mutable copies for Drizzle's `inArray`, which does not take a readonly array. */
 export function liveMeetingStatuses(): MeetingStatus[] {
   return [...LIVE_MEETING_STATUSES];
@@ -94,6 +119,10 @@ export function liveMeetingStatuses(): MeetingStatus[] {
 
 export function remindableMeetingStatuses(): MeetingStatus[] {
   return [...REMINDABLE_MEETING_STATUSES];
+}
+
+export function bookedMeetingStatuses(): MeetingStatus[] {
+  return [...BOOKED_MEETING_STATUSES];
 }
 
 export function isLiveMeetingStatus(status: string): boolean {

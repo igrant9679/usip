@@ -4146,6 +4146,28 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0184: make Max Concurrent Campaigns safe to start enforcing ──────────
+  // The slider has saved areMaxConcurrentCampaigns since it shipped and
+  // nothing read it; routers/are/campaigns.ts and services/campaignProposals
+  // now refuse an ACTIVATION past the limit. 0044 back-filled every existing
+  // row to the default 5, so without this a workspace quietly running 6+
+  // active campaigns is locked out of its next activation the moment this
+  // deploys — a regression created by honouring a number the user never
+  // actually chose. Raise the cap to what each workspace is already doing.
+  // LEAST(50, …) because the slider is min 1 / max 50 and cannot render more.
+  //
+  // The DROP is the first in this file. It is safe: errno 1091 is tolerated,
+  // so a re-run or a database that never had the column is a no-op. It is
+  // also irreversible — a workspace that picked "consultative" loses that
+  // string. Nothing has ever read it, so no behaviour changes with it.
+  {
+    name: "0184_are_campaign_cap_backfill.sql",
+    statements: [
+      "UPDATE `workspace_settings` ws SET ws.`areMaxConcurrentCampaigns` = LEAST(50, GREATEST(ws.`areMaxConcurrentCampaigns`, (SELECT COUNT(*) FROM `are_campaigns` c WHERE c.`workspaceId` = ws.`workspaceId` AND c.`status` = 'active')))",
+      "ALTER TABLE `workspace_settings` DROP COLUMN `areBrandVoice`",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

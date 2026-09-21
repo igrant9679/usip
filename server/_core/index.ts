@@ -526,13 +526,16 @@ async function startServer() {
   // "Regenerate" button and POST /api/scheduled/icp-regen, which its own comment
   // says was called by the retired Manus scheduler — so the "living" ICP only
   // ever changed when a human clicked. This is that missing loop. The worker
-  // skips workspaces with no evidence and profiles younger than 20h, so idle
-  // workspaces cost no LLM spend.
+  // skips workspaces with no evidence and profiles younger than the age floor
+  // their ICP Re-inference Schedule sets (Manual Only skips them outright), so
+  // idle workspaces cost no LLM spend. The tick stays daily because that is the
+  // FLOOR resolution — a weekly workspace is held back by profile age, not by a
+  // slower tick.
   const runIcpCron = () => {
     import("../routers/are/icp")
       .then((m) => m.runIcpInferenceAllWorkspaces())
       .then((r) => {
-        if (r.regenerated > 0) console.log(`[IcpCron] regenerated=${r.regenerated} skipped=${r.skipped}`);
+        if (r.regenerated > 0 || r.failed > 0) console.log(`[IcpCron] regenerated=${r.regenerated} skipped=${r.skipped} failed=${r.failed}`);
       })
       .catch((e) => console.error("[IcpCron] run failed:", e));
   };

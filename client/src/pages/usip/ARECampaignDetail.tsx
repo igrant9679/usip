@@ -2653,10 +2653,23 @@ export default function ARECampaignDetail() {
                     an experiment that was not running — and a reader compares
                     the two labels it was promised. */}
                 {stepFunnel && stepFunnel.nodes.length > 0 && (
-                  <StepFunnelSankey funnel={stepFunnel} onSelectStep={(i) => void openStepPreview(i)} onSelectMembers={(sel) => { funnelSel.clear(); setFunnelList(sel); }} />
+                  <div className="space-y-1.5">
+                    <StepFunnelSankey funnel={stepFunnel} onSelectStep={(i) => void openStepPreview(i)} onSelectMembers={(sel) => { funnelSel.clear(); setFunnelList(sel); }} />
+                    {/* The chart follows per-prospect JOURNEYS; the table below
+                        filters individual dispatch rows. The two cannot be
+                        narrowed by the same control, so the one that ignores
+                        the filter says so instead of looking like a roll-up of
+                        whatever the table currently shows (2026-09-20). */}
+                    {isFiltered(perf) && (
+                      <div className="text-[11px] text-muted-foreground">
+                        <span className="rounded-full border px-2 py-0.5">Whole campaign</span>{" "}
+                        — the filters below narrow the dispatch rows, not these bands.
+                      </div>
+                    )}
+                  </div>
                 )}
                 <p className="text-sm text-muted-foreground">
-                  The engine writes uniquely personalised copy for every prospect, so every dispatch is its own message. Each row below is <strong>one message that was actually sent</strong> — who it went to, what it said, and whether that person opened or replied — grouped by step. The bands above are the roll-up of these. Click a row to read the message and its stats.
+                  The engine writes uniquely personalised copy for every prospect, so every dispatch is its own message. Each row below is <strong>one message that was actually sent</strong> — who it went to, what it said, and whether that person opened or replied — grouped by step. The bands above cover <strong>every prospect in this campaign</strong>, filtered or not. Click a row to read the message and its stats.
                 </p>
                 {/* One table, a header row per step (2026-09-03: was a grid of
                     cards, three to a row — 80 dispatches meant 27 rows of

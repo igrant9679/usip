@@ -1700,7 +1700,8 @@
 - [x] Schema: add `enhancedHook` (text) and `signalEnhancedAt` (timestamp) to prospectIntelligence
 - [x] Schema: add `restore` procedure to ICP router (set isActive=true for version, false for others)
 - [x] Server: areNotify() helper — writes in-app notification with ARE-specific kind and relatedType
-- [x] Server: fire areNotify on meeting_booked, auto_approved, icp_updated, campaign_completed, signal_classified
+- [x] Server: fire areNotify on meeting_booked, auto_approved, icp_updated, signal_classified — and honour the three ARE Settings switches inside areNotify (2026-09-20; meeting_booked and auto_approved had no dispatch site at all until then, so two of the switches gated nothing in either position)
+- [ ] Server: `campaign_completed` is declared in AreEventType and dispatched from NOWHERE — either emit it when a campaign reaches targetProspectCount, or drop it from the union
 - [x] Server: Signal Enhancement agent — on email_open/click, fetch recent news for prospect company, rewrite top hook with LLM, store in prospectIntelligence.enhancedHook
 - [x] Server: ICP restore procedure — sets chosen version isActive=true, all others false
 - [x] UI: Notification bell — ARE-specific card styles (Bot icon, violet accent, relatedType=are_campaign)

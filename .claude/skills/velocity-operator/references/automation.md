@@ -53,7 +53,7 @@ Revenue Engine campaigns use their own vocabulary: `full` | `batch_approval` | `
 | Social autopilot | 1 h | LinkedIn invites or draft tasks |
 | Enrichment sweep / company backfill / image mirror / logo backfill / brand reconcile | 6 h | data-quality backfills (auto-mode workspaces only where a dial exists) |
 | Attribution | 12 h | judge applied optimisations; auto-revert regressions |
-| Optimisation, ICP inference, person-link backfill, normalized backfill, verification snapshot, nightly AI batch (midnight), LinkedIn job-change check (~01:00) | 24 h | daily learning and hygiene |
+| Optimisation, ICP inference, person-link backfill, normalized backfill, verification snapshot, nightly AI batch (midnight), LinkedIn job-change check (~01:00) | 24 h | daily learning and hygiene. ICP inference ticks daily but honours each workspace's `areIcpRegenSchedule` (`daily` / `weekly` = 164 h floor / `on_new_deal` = floor plus a moved won count / `manual` = off) |
 | Boot only | — | demo ARE seed, tours seed, help-content re-seed (+20 s) |
 
 Archived workspaces are excluded from every job. Jobs are `guardOverlap`-ed so a slow run never doubles up.

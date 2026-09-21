@@ -32,6 +32,7 @@ import { areCampaigns, campaignProposals, prospects, workspaceSettings } from ".
 import { invokeLLM } from "../_core/llm";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
 import { routeProspects } from "./campaignRouter";
+import { campaignHeadroom } from "./are/campaignConcurrency";
 
 export const MIN_CLUSTER_SIZE = 8;
 export const MAX_PENDING_PROPOSALS = 3;
@@ -394,6 +395,23 @@ export async function acceptProposal(workspaceId: number, proposalId: number, ac
   // (departed-owner cascade: nothing new may be filed under someone gone).
   const ownerUserId = actorUserId ?? (await workspaceNotifyUserId(workspaceId));
   if (!ownerUserId) throw new Error("No active workspace owner to own the new campaign");
+
+  // The campaign this creates is born ACTIVE, so it is subject to Max
+  // Concurrent Campaigns like any other activation (2026-09-20). RETURN rather
+  // than throw: the Auto cron would abort the workspace's remaining proposals
+  // in its outer catch, and the manual accept at routers/are/campaigns.ts
+  // converts any throw here into NOT_FOUND "Proposal not found" — a lie about
+  // a proposal that is sitting right there. Autonomy convention: Auto acts and
+  // reports; at the cap it reports and leaves the decision to the human. The
+  // proposal stays pending and is retried each tick, which costs one COUNT(*)
+  // because the check short-circuits before any write. console.log, not
+  // console.error, for the same reason — this is a held proposal, not a fault.
+  const h = await campaignHeadroom(workspaceId);
+  if (!h.hasRoom) {
+    console.log(`[CampaignProposals] ws ${workspaceId}: proposal ${proposalId} held — ${h.active}/${h.max} active campaigns`);
+    return { campaignId: null, added: 0, skipped: 0 };
+  }
+
   const [row] = await db.insert(areCampaigns).values({
     workspaceId,
     name: p.name,

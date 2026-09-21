@@ -114,7 +114,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/workflows": { body: "If-this-then-that rules over CRM events — e.g. when a lead comes in from the web form, assign it. Record rules are scoped to leads, contacts or opportunities, and the conditions offered are the fields that event carries.", article: "workflow-rules" },
   "/lead-scoring": { body: "The rules that decide a lead's 0-100 score, so the best ones surface first.", article: "understanding-scores-badges" },
   "/lead-routing": { body: "Who a new lead gets assigned to, and on what basis." },
-  "/v2/analytics": { body: "Trends over time — sending volume, reply rates, pipeline created." },
+  "/v2/analytics": { body: "The autonomous funnel — sourced through closed-won, all time, plus pipeline and outreach performance." },
   "/reports": { body: "Build your own report over any records in the system.", article: "reports-builder" },
   "/dashboards": { body: "Saved charts and numbers you want to check regularly." },
   "/mindmaps": { body: "Visual account maps — who reports to whom inside a target company." },

@@ -339,7 +339,6 @@ export const settingsRouter = router({
       areNotifyOnMeetingBooked: s.areNotifyOnMeetingBooked,
       areNotifyOnAutoApprove: s.areNotifyOnAutoApprove,
       areNotifyOnIcpUpdate: s.areNotifyOnIcpUpdate,
-      areBrandVoice: (s as any).areBrandVoice ?? null,
       areScraperSources: (s as any).areScraperSources ?? null,
       areSourceOrder: (s as any).areSourceOrder ?? null,
       areIcpRegenSchedule: (s as any).areIcpRegenSchedule ?? null,
@@ -362,10 +361,13 @@ export const settingsRouter = router({
       areNotifyOnMeetingBooked: z.boolean().optional(),
       areNotifyOnAutoApprove: z.boolean().optional(),
       areNotifyOnIcpUpdate: z.boolean().optional(),
-      areBrandVoice: z.string().max(40).optional(),
       areScraperSources: z.record(z.string(), z.boolean()).optional(),
       areSourceOrder: z.array(z.string()).max(20).optional(),
-      areIcpRegenSchedule: z.string().max(20).optional(),
+      // Closed domain since 2026-09-20, when the ICP cron started branching on
+      // this value: an open string meant anything 20 chars long ("off",
+      // "Manual", "weekly ") stored fine and fell through to the daily arm,
+      // which is the same quiet lie the wiring was fixed to remove.
+      areIcpRegenSchedule: z.enum(["daily", "weekly", "on_new_deal", "manual"]).optional(),
       areSequenceQualityThreshold: z.number().int().min(0).max(100).optional(),
     }))
     .mutation(async ({ ctx, input }) => {

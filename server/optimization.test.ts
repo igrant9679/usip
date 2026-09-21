@@ -401,6 +401,44 @@ describe("ICP autonomous loop", () => {
     // It triggers an LLM call per workspace; it must not stay open to anyone.
     expect(src).toMatch(/requireScheduledSecret\(req, res, "icp-regen"\)/);
   });
+
+  /**
+   * 2026-09-20: the external endpoint used to walk the workspace table itself
+   * and call runIcpInference directly, so it obeyed NONE of the cron's gates —
+   * not the archive freeze, not the evidence check, not the freshness floor,
+   * and it would not have obeyed the schedule either. Two entry points into one
+   * LLM loop must not have two sets of rules.
+   */
+  it("the scheduled endpoint delegates to the gated pass instead of looping itself", async () => {
+    const src = await import("node:fs").then((fs) => fs.readFileSync("server/emailTracking.ts", "utf8"));
+    expect(src).toContain("runIcpInferenceAllWorkspaces");
+    expect(src).not.toContain("const allWorkspaces = await db");
+  });
+
+  /**
+   * The schedule the user picks on ARE Settings was written to
+   * workspace_settings and read by nothing for months — every workspace ran the
+   * daily cadence whatever the card said, and "Manual Only" was not an Off
+   * switch. server/icpSchedule.test.ts pins the behaviour; this pins that the
+   * worker still reads the column at all.
+   */
+  it("the cron reads the workspace's ICP re-inference schedule", async () => {
+    const src = await import("node:fs").then((fs) => fs.readFileSync("server/routers/are/icp.ts", "utf8"));
+    expect(src).toContain("areIcpRegenSchedule");
+  });
+
+  /**
+   * The card promised "every night at 02:00 UTC" and "every Monday at 02:00
+   * UTC". The pass is registered as a setTimeout + 24h setInterval from boot,
+   * so no wall clock is reachable — and the client default displayed "Weekly"
+   * while a NULL column ran daily. Both halves pinned together, because it was
+   * the drift between them that produced the lie.
+   */
+  it("the ARE Settings schedule card promises no wall clock and defaults with the server", async () => {
+    const src = await import("node:fs").then((fs) => fs.readFileSync("client/src/pages/usip/ARESettings.tsx", "utf8"));
+    expect(src).not.toContain("02:00 UTC");
+    expect(src).toContain('areIcpRegenSchedule ?? "daily"');
+  });
 });
 
 describe("retired steps survive being saved", () => {

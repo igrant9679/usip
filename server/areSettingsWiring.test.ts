@@ -35,22 +35,26 @@ const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
  * setting itself if it turns out nobody wants it.
  */
 const KNOWN_UNENFORCED: Record<string, string> = {
-  areMaxConcurrentCampaigns:
-    "No concurrency cap is enforced anywhere. canLaunchCampaign() is a readiness checklist, not this.",
   areSequenceQualityThreshold:
     "No reader. Nothing scores or gates generated sequences against it.",
-  areIcpRegenSchedule:
-    "No reader. runIcpInferenceAllWorkspaces uses its own fixed daily cadence + a <20h freshness skip.",
-  areBrandVoice:
-    "Only read back to redisplay. AI writers use buildBrandContext()/the brandVoice router instead — this is a second, losing vocabulary.",
-  // These three are doubly dead: no reader AND no feature. areEngine.ts never
-  // inserts a notification at all, so there is nothing for the toggles to gate.
-  // Turning "Notify me when a meeting is booked" ON does nothing, and OFF does
-  // equally nothing — which is the worse half, because a user who wants the
-  // alert has no way to learn they will never get one.
-  areNotifyOnMeetingBooked: "No reader, and areEngine sends no notifications at all.",
-  areNotifyOnAutoApprove: "No reader, and areEngine sends no notifications at all.",
-  areNotifyOnIcpUpdate: "No reader, and the ICP cron sends no notification.",
+  // 2026-09-20: areIcpRegenSchedule left this list. runIcpInferenceAllWorkspaces
+  // now joins workspace_settings and branches on it — "manual" skips the
+  // workspace entirely, "weekly" raises the age floor to 164h, "on_new_deal"
+  // additionally requires the won count to have moved. The sibling test below
+  // is now its regression guard: unwire it and the build fails.
+  //
+  // 2026-09-20: areMaxConcurrentCampaigns and the three areNotifyOn* switches
+  // left too — see areToggleWiring.test.ts, which is now their guard. The cap
+  // is enforced at the three activation doors by services/are/
+  // campaignConcurrency.ts; the switches are honoured inside areNotify, and
+  // the two events that had no dispatch site anywhere (auto_approved,
+  // meeting_booked's in-app notice) now have one.
+  //
+  // areBrandVoice is gone from this list because the SETTING is gone: the
+  // picker, the getAreSettings key and the column were all removed. The note
+  // here used to read "only read back to redisplay" — accurate, and it sat
+  // here for months, which is the argument for deleting a dead control rather
+  // than documenting it forever.
 };
 
 /** Files that merely define/serve/edit the setting rather than act on it. */

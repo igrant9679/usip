@@ -13,6 +13,14 @@
  *                    joined to email_replies (draftId → replyClass, meetingId)
  *   ARE A/B        → are_execution_queue (status='sent', messageContent.variantKey)
  *                    joined to are_signal_log (email_reply / meeting_booked)
+ *   revenue funnel → prospect_queue, and the two tables above keyed back to it
+ *
+ * The funnel adds a second rule on top of that one: ONE POPULATION. Its five
+ * bands all count DISTINCT prospect_queue ids, because /v2/analytics used to
+ * draw five bands over five different populations in five different windows —
+ * transmitted mail, reply rows, live meetings, 90-day wins — with conversion
+ * chevrons between them. A scope is not just a date and a campaign id; it is
+ * the set of people being counted, and every band must share it.
  *
  * This is why Phase 0 needed no migration: the linkage columns already existed,
  * only the aggregation was missing. `are_ab_variants.sentCount/openCount/
@@ -34,7 +42,7 @@
  *     the denominator would understate the rate forever. `opensTracked` is
  *     false for those cells, so the UI can say "not tracked" rather than "0%".
  */
-import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { genuineReplyScope } from "./replyScope";
 import { getDb } from "../db";
 import { stageIndexFor } from "../_core/stageSemantics";
@@ -45,10 +53,12 @@ import {
   chatSessions,
   emailDrafts,
   emailReplies,
+  meetings,
   opportunities,
   prospectQueue,
   voiceCalls,
 } from "../../drizzle/schema";
+import { bookedMeetingStatuses } from "@shared/meetingStatus";
 import { normalizeVariantKey } from "@shared/variantKeys";
 
 /** Percentage (0-100, one decimal) guarded against a zero denominator. */
@@ -1473,4 +1483,252 @@ export async function getChatFunnelStats(workspaceId: number): Promise<ChatFunne
     stats.biggestDropCount = drops[0][1];
   }
   return stats;
+}
+
+/* ─── The revenue funnel — ONE population, five moments ─────────────────── */
+
+export type RevenueFunnelStageKey = "sourced" | "contacted" | "replied" | "meetings" | "closed";
+
+export interface RevenueFunnelStage {
+  key: RevenueFunnelStageKey;
+  label: string;
+  value: number;
+  /**
+   * People and deals are different units. A "% conversion" chevron drawn
+   * across that boundary is a people-to-deals ratio wearing a conversion
+   * rate's label, so the unit travels with the band and the UI suppresses the
+   * percentage where it changes.
+   */
+  unit: "people" | "deals";
+}
+
+/** Band order, labels and units — one declaration, so the page cannot rename a
+ *  stage the help tour still describes. */
+export const REVENUE_FUNNEL_STAGES: ReadonlyArray<{
+  key: RevenueFunnelStageKey;
+  label: string;
+  unit: RevenueFunnelStage["unit"];
+}> = [
+  { key: "sourced", label: "Sourced", unit: "people" },
+  { key: "contacted", label: "Contacted", unit: "people" },
+  { key: "replied", label: "Replied", unit: "people" },
+  { key: "meetings", label: "Meetings booked", unit: "people" },
+  { key: "closed", label: "Closed won", unit: "deals" },
+];
+
+export interface RevenueFunnelScope {
+  campaignId: number | null;
+  population: "are_prospect_queue";
+}
+
+export interface RevenueFunnel {
+  stages: RevenueFunnelStage[];
+  scope: RevenueFunnelScope;
+  /**
+   * Meetings the WHOLE workspace holds, whatever booked them — the number that
+   * belongs on a workspace card, not in the funnel. Returned beside the bands
+   * so the two can differ ON THE SAME PAGE without either being unlabelled:
+   * the band is ARE-sourced people, this is every meeting.
+   */
+  reconciliation: { workspaceMeetingsBooked: number };
+}
+
+function revenueFunnelStages(values: Record<RevenueFunnelStageKey, number>): RevenueFunnelStage[] {
+  return REVENUE_FUNNEL_STAGES.map((s) => ({ key: s.key, label: s.label, value: values[s.key], unit: s.unit }));
+}
+
+/**
+ * The seven hub bands, derived at read time.
+ *
+ * `are_campaigns.prospectsDiscovered` … `meetingsBooked` are DENORMALISED
+ * counters, and the hub summed the newest 100 campaigns' copies of them
+ * (`are.campaigns.list({ limit: 100 })`) and presented the result as the
+ * workspace total. Two separate lies in one number: a 101st campaign silently
+ * left the funnel, and migration 0175 had to hand-decrement `meetingsBooked`
+ * for phantom bookings, so the counters themselves have drifted before.
+ *
+ * Contacted/replied/meetings come straight from getRevenueFunnel, so the hub
+ * funnel and /v2/analytics cannot print different numbers for the same word.
+ */
+export interface AreHubFunnelTotals {
+  discovered: number;
+  enriched: number;
+  approved: number;
+  contacted: number;
+  replied: number;
+  meetings: number;
+  opps: number;
+}
+
+export async function getAreHubFunnelTotals(workspaceId: number): Promise<AreHubFunnelTotals> {
+  const empty: AreHubFunnelTotals = {
+    discovered: 0, enriched: 0, approved: 0, contacted: 0, replied: 0, meetings: 0, opps: 0,
+  };
+  const db = await getDb();
+  if (!db) return empty;
+
+  const funnel = await getRevenueFunnel(workspaceId);
+  const band = (key: RevenueFunnelStageKey): number =>
+    funnel.stages.filter((s) => s.key === key).reduce((n, s) => n + s.value, 0);
+
+  const [agg] = await db
+    .select({
+      // Same predicates the engine's counter phase uses (areEngine.ts Phase 6),
+      // so a per-campaign card and this roll-up agree band for band.
+      enriched: sql<number>`sum(case when ${prospectQueue.enrichmentStatus} = 'complete' then 1 else 0 end)`,
+      approved: sql<number>`sum(case when ${prospectQueue.sequenceStatus} in ('approved','enrolled','completed','replied') then 1 else 0 end)`,
+      opps: sql<number>`count(distinct ${prospectQueue.linkedOpportunityId})`,
+    })
+    .from(prospectQueue)
+    .where(eq(prospectQueue.workspaceId, workspaceId));
+
+  return {
+    discovered: band("sourced"),
+    enriched: Number(agg?.enriched ?? 0),
+    approved: Number(agg?.approved ?? 0),
+    contacted: band("contacted"),
+    replied: band("replied"),
+    meetings: band("meetings"),
+    opps: Number(agg?.opps ?? 0),
+  };
+}
+
+/**
+ * The five bands of the revenue funnel.
+ *
+ * ONE population — prospect_queue rows this workspace sourced — measured at
+ * five moments. Every stage counts DISTINCT prospect_queue ids, so band N+1 is
+ * a subset of band N and a conversion percentage can never exceed 100.
+ *
+ * 🔴 What it replaces: a hand-built array on /v2/analytics whose first band was
+ * every email the workspace ever transmitted (notifications and test sends
+ * included), whose "Replies" was reply ROWS not people, whose "Meetings
+ * booked" silently dropped a meeting the moment it took place, and whose
+ * "Deals won" was a 90-day window sitting unlabelled beside four all-time
+ * bands. Five questions about five different populations, drawn as one funnel
+ * with conversion chevrons between them.
+ *
+ * With campaignId set, `contacted` / `replied` / `meetings` equal the campaign
+ * Sankey's totalProspects / `replied` node / `meeting` node (getStepFunnel,
+ * this file) because they read the same two tables.
+ *
+ * All time, deliberately: a window is a second scope, and the bug this
+ * function exists to remove was two scopes in one chart. A campaignId is the
+ * only narrowing offered, and it narrows every band at once.
+ */
+export async function getRevenueFunnel(
+  workspaceId: number,
+  opts?: { campaignId?: number | null },
+): Promise<RevenueFunnel> {
+  const campaignId = opts?.campaignId ?? null;
+  const scope: RevenueFunnelScope = { campaignId, population: "are_prospect_queue" };
+  const zero = { sourced: 0, contacted: 0, replied: 0, meetings: 0, closed: 0 };
+
+  const db = await getDb();
+  if (!db) return { stages: revenueFunnelStages(zero), scope, reconciliation: { workspaceMeetingsBooked: 0 } };
+
+  // 'sourcing' is the no-email staging status (migration 0180): those rows are
+  // explicitly "invisible to the campaign queue and its counters" and the
+  // Prospects tab hides them, so counting them here would put the funnel's top
+  // band above the tab beneath it. Rejected/auto-screened rows ('skipped') DO
+  // count — they were sourced, and dropping them would make the band shrink
+  // as screening improves.
+  const [sourcedRow] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(prospectQueue)
+    .where(and(
+      eq(prospectQueue.workspaceId, workspaceId),
+      ne(prospectQueue.sequenceStatus, "sourcing"),
+      campaignId !== null ? eq(prospectQueue.campaignId, campaignId) : undefined,
+    ));
+
+  // The SAME expression the engine's counter phase uses for prospectsContacted
+  // and the same table the Sankey reads, so the Analytics funnel, the hub band,
+  // the campaign stat card and the Sankey cannot diverge. Cross-channel for
+  // free — the `channel` enum covers email/linkedin/sms/voice. Deliberately
+  // NOT email_log: that is workspace-wide transmitted mail with no prospect
+  // spine, and it is what made band 1 bigger than band 0.
+  const [contactedRow] = await db
+    .select({ n: sql<number>`count(distinct ${areExecutionQueue.prospectQueueId})` })
+    .from(areExecutionQueue)
+    .where(and(
+      eq(areExecutionQueue.workspaceId, workspaceId),
+      eq(areExecutionQueue.status, "sent" as never),
+      campaignId !== null ? eq(areExecutionQueue.campaignId, campaignId) : undefined,
+    ));
+
+  // email_replies is the ROW-level record (one row per message); are_signal_log
+  // is the per-PROSPECT one, and a funnel band counts people. Reading the
+  // signal log also picks up LinkedIn and SMS replies, which email_replies
+  // cannot see at all. getReplyMix above keeps the genuineReplyScope() call
+  // site this module owes the reply-scope contract.
+  const [repliedRow] = await db
+    .select({ n: sql<number>`count(distinct ${areSignalLog.prospectQueueId})` })
+    .from(areSignalLog)
+    .where(and(
+      eq(areSignalLog.workspaceId, workspaceId),
+      inArray(areSignalLog.signalType, ["email_reply", "linkedin_reply", "sms_reply"]),
+      campaignId !== null ? eq(areSignalLog.campaignId, campaignId) : undefined,
+    ));
+
+  // are_signal_log is deduped per prospect by attributeMeetingBookingToAre
+  // ("Only the first booking for a prospect counts"), and migration 0175 purged
+  // the phantom meeting signals, so this is the trustworthy spine — not the
+  // are_campaigns counter it once disagreed with.
+  const [meetingsRow] = await db
+    .select({ n: sql<number>`count(distinct ${areSignalLog.prospectQueueId})` })
+    .from(areSignalLog)
+    .where(and(
+      eq(areSignalLog.workspaceId, workspaceId),
+      eq(areSignalLog.signalType, "meeting_booked" as never),
+      campaignId !== null ? eq(areSignalLog.campaignId, campaignId) : undefined,
+    ));
+
+  // Won-ness lives on crm_pipeline_stages.isWon, not on the string "won":
+  // `opportunities.stage` has been a per-workspace VARCHAR since migration
+  // 0082, so a workspace whose closing stage is keyed `signed` would read 0
+  // here forever. linkedOpportunityId is written when a prospect is promoted.
+  const wonKeys = (await stageIndexFor(db, workspaceId)).wonKeys();
+  let closed = 0;
+  if (wonKeys.length > 0) {
+    const [closedRow] = await db
+      .select({ n: sql<number>`count(distinct ${prospectQueue.linkedOpportunityId})` })
+      .from(prospectQueue)
+      .innerJoin(opportunities, and(
+        eq(opportunities.id, prospectQueue.linkedOpportunityId),
+        eq(opportunities.workspaceId, workspaceId),
+      ))
+      .where(and(
+        eq(prospectQueue.workspaceId, workspaceId),
+        isNotNull(prospectQueue.linkedOpportunityId),
+        inArray(opportunities.stage, wonKeys),
+        campaignId !== null ? eq(prospectQueue.campaignId, campaignId) : undefined,
+      ));
+    closed = Number(closedRow?.n ?? 0);
+  }
+
+  // The cross-check, for the workspace card beside the funnel — every meeting
+  // that is actually booked, whoever booked it. bookedMeetingStatuses() spans
+  // live AND completed on purpose (@shared/meetingStatus): meetings.stats
+  // counts `scheduled` + `invited` only, so its "booked" number FALLS when a
+  // meeting takes place.
+  const [wsMeetingsRow] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(meetings)
+    .where(and(
+      eq(meetings.workspaceId, workspaceId),
+      inArray(meetings.status, bookedMeetingStatuses()),
+    ));
+
+  return {
+    stages: revenueFunnelStages({
+      sourced: Number(sourcedRow?.n ?? 0),
+      contacted: Number(contactedRow?.n ?? 0),
+      replied: Number(repliedRow?.n ?? 0),
+      meetings: Number(meetingsRow?.n ?? 0),
+      closed,
+    }),
+    scope,
+    reconciliation: { workspaceMeetingsBooked: Number(wsMeetingsRow?.n ?? 0) },
+  };
 }

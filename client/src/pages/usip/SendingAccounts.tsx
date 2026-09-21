@@ -152,7 +152,12 @@ function ConnectionBadge({ status }: { status: ConnectionStatus }) {
   );
 }
 
-function ReputationBadge({ tier }: { tier: ReputationTier }) {
+function ReputationBadge({ tier }: { tier: ReputationTier | null }) {
+  // The unrated case FIRST. `map[tier] ?? map.fair` below would paint a mailbox
+  // with too few recipients an amber "Fair" — trading the old lie ("Excellent"
+  // for everyone) for a newer one, which is not a fix (audit 2026-09-20).
+  if (!tier)
+    return <Badge className="bg-zinc-100 text-zinc-500 border-zinc-200 text-xs">Reputation: not enough data</Badge>;
   const map: Record<ReputationTier, { label: string; cls: string }> = {
     excellent: { label: "Excellent", cls: "bg-emerald-100 text-emerald-700 border-emerald-200" },
     good: { label: "Good", cls: "bg-blue-100 text-blue-700 border-blue-200" },
@@ -714,7 +719,7 @@ function AccountFormDialog({
 
 // ─── Account Card ─────────────────────────────────────────────────────────────
 
-function AccountCard({ account, onEdit }: { account: any; onEdit: (id: number) => void }) {
+function AccountCard({ account, tier, onEdit }: { account: any; tier: ReputationTier | null; onEdit: (id: number) => void }) {
   const utils = trpc.useUtils();
 
   const testMutation = trpc.sendingAccounts.testConnection.useMutation({
@@ -759,7 +764,7 @@ function AccountCard({ account, onEdit }: { account: any; onEdit: (id: number) =
               <span className="font-medium text-sm truncate">{account.name}</span>
               <ConnectionBadge status={account.connectionStatus as ConnectionStatus} />
               <WarmupBadge status={account.warmupStatus as WarmupStatus} />
-              <ReputationBadge tier={account.reputationTier as ReputationTier} />
+              <ReputationBadge tier={tier} />
               {account.imapHost && (
                 <Badge className="gap-1 bg-indigo-100 text-indigo-700 border-indigo-200 text-[10px] px-1.5 py-0">
                   IMAP
@@ -911,6 +916,10 @@ export default function SendingAccounts() {
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<number | undefined>(undefined);
   const { data: accounts = [], isLoading } = trpc.sendingAccounts.list.useQuery();
+  // Reputation is derived from email_log, not read off the account row — the
+  // stored column had no writer and reported "Excellent" for every mailbox.
+  const ratesQ = trpc.sendingAccounts.deliverability.useQuery();
+  const tierOf = (id: number) => ratesQ.data?.rows.find((r) => r.accountId === id)?.tier ?? null;
 
   const connected = accounts.filter((a) => a.connectionStatus === "connected").length;
   const totalCapacity = accounts.reduce((s, a) => s + (a.enabled ? a.dailySendLimit : 0), 0);
@@ -1006,7 +1015,7 @@ export default function SendingAccounts() {
         ) : (
           <div className="space-y-1.5">
             {accounts.map((a) => (
-              <AccountCard key={a.id} account={a} onEdit={openEdit} />
+              <AccountCard key={a.id} account={a} tier={tierOf(a.id)} onEdit={openEdit} />
             ))}
           </div>
         )}

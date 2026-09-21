@@ -3,9 +3,10 @@
  *
  * Empty state → "Link mailbox" opens the GuidedMailboxSetup wizard; once
  * accounts exist, a horizontally-scrollable table lists them with setup
- * progress, warmup toggle, live daily-limit usage (sentToday from
- * sending_account_daily_stats), deliverability (reputation/connection from
- * sendingAccounts.testConnection), aliases popover, header tooltips, and a
+ * progress, warmup toggle, live daily-limit usage (sentToday from the shared
+ * per-mailbox send budget), deliverability (connection from
+ * sendingAccounts.testConnection, reputation DERIVED by
+ * sendingAccounts.deliverability), aliases popover, header tooltips, and a
  * row action menu (refresh aliases / configure / check deliverability /
  * unlink). All data comes from the real sending-accounts backend.
  */
@@ -56,7 +57,7 @@ const HEADER_TIPS: Record<string, string> = {
     "Mailbox health encompasses the overall well-being of an email account, maintained through proper authentication, sending limits, opt-out links, and other email configurations. A healthy mailbox ensures reliable email delivery to inboxes without issues.",
   Warmup: "Warming up gradually raises sending volume so providers trust the mailbox. Learn more in the Deliverability suite.",
   Deliverability:
-    'Deliverability scores enable you to monitor mailbox health based on factors such as spam rate, open rate, bounce rate, and more. Choose "Check deliverability" in the dropdown menu to generate insights and suggestions to improve your email deliverability.',
+    'Reputation derived from this mailbox\'s own send history: the share of recipients it reached in the last 30 days that went on to bounce. It reads "Not enough data" until the mailbox has reached enough recipients to say anything honest. "Check deliverability" in the row menu tests the connection; it does not change this.',
   "Last Synced": "Email last synced at",
 };
 
@@ -67,6 +68,12 @@ export function MailboxesSection() {
   const utils = trpc.useUtils();
   const accountsQ = trpc.sendingAccounts.list.useQuery();
   const accounts = (accountsQ.data ?? []) as MailboxAccount[];
+  // The Deliverability column used to read sending_accounts.reputationTier, a
+  // column nothing writes, so every mailbox read "Good" (audit 2026-09-20). The
+  // tier is derived from email_log now, and is null until the mailbox has
+  // reached enough recipients to say anything honest.
+  const ratesQ = trpc.sendingAccounts.deliverability.useQuery();
+  const tierOf = (id: number) => ratesQ.data?.rows.find((r) => r.accountId === id)?.tier ?? null;
 
   const [query, setQuery] = useState("");
   const [wizard, setWizard] = useState<{ open: boolean; account?: MailboxAccount | null; step?: any }>({ open: false });
@@ -184,7 +191,7 @@ export function MailboxesSection() {
                       </tr>
                     ) : (
                       filtered.map((a) => (
-                        <MailboxRow key={a.id} a={a} onConfigure={() => openConfigure(a)} />
+                        <MailboxRow key={a.id} a={a} tier={tierOf(a.id)} onConfigure={() => openConfigure(a)} />
                       ))
                     )}
                   </tbody>
@@ -211,7 +218,7 @@ export function MailboxesSection() {
 
 /* ─────────────────────────────── row ──────────────────────────────────── */
 
-function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => void }) {
+function MailboxRow({ a, tier, onConfigure }: { a: MailboxAccount; tier: "excellent" | "good" | "fair" | "poor" | null; onConfigure: () => void }) {
   const utils = trpc.useUtils();
   const aliases = Array.isArray(a.aliases) ? (a.aliases as string[]) : [];
   const progress = setupProgress(a);
@@ -235,7 +242,9 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
   const checkDeliv = trpc.sendingAccounts.testConnection.useMutation({
     onSuccess: (r: any) => {
       utils.sendingAccounts.list.invalidate();
-      if (r.ok) toast.success("Connection verified — reputation updated");
+      // No longer "reputation updated": the test stamps connection status only.
+      // Reputation is derived from send history, which a connection test cannot move.
+      if (r.ok) toast.success("Connection verified");
       else toast.error(r.error ?? "Connection check failed");
     },
     onError: (e: any) => toast.error(e?.message ?? "Deliverability check failed"),
@@ -256,12 +265,17 @@ function MailboxRow({ a, onConfigure }: { a: MailboxAccount; onConfigure: () => 
     onError: (e: any) => toast.error(forbiddenMessage(e, "Only admins can change the default mailbox")),
   });
 
+  // A connected mailbox with no derived tier says so. The old `?? "good"`
+  // default painted an unmeasured mailbox emerald "Good", which is the reading
+  // an operator acts on when deciding to scale volume.
   const deliverability =
     a.connectionStatus === "untested"
       ? null
       : a.connectionStatus === "error"
         ? { label: "Connection error", cls: "text-rose-600" }
-        : { label: `${String(a.reputationTier ?? "good")[0].toUpperCase()}${String(a.reputationTier ?? "good").slice(1)}`, cls: a.reputationTier === "poor" ? "text-rose-600" : a.reputationTier === "fair" ? "text-amber-600" : "text-emerald-600" };
+        : tier == null
+          ? { label: "Not enough data", cls: "text-muted-foreground" }
+          : { label: `${tier[0].toUpperCase()}${tier.slice(1)}`, cls: tier === "poor" ? "text-rose-600" : tier === "fair" ? "text-amber-600" : "text-emerald-600" };
 
   const cell = "border-b border-border/60 px-3 py-2.5 align-middle whitespace-nowrap";
   // Solid row bg (incl. hover) so the sticky-right actions cell's bg-inherit

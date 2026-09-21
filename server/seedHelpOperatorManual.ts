@@ -161,7 +161,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 ## Analytics
 
-**Analytics** (/v2/analytics) is the one cross-channel funnel. **Reports** (/reports) is the row-level builder with schedules. **Dashboards** (/dashboards) hold custom boards. **Engine Performance** (/are/performance) shows what the engine sent, booked and learned. **Forecast** (/forecast) projects revenue from the open pipeline. **Email Analytics** covers drafts and CRM sends only.
+**Analytics** (/v2/analytics) is the one cross-channel funnel: five bands over ONE population — the people the engine sourced — all time, every campaign, stated on the page. A campaign's Step performance tab answers a narrower question (one campaign's journeys, step by step) and is not expected to match band for band. **Reports** (/reports) is the row-level builder with schedules. **Dashboards** (/dashboards) hold custom boards. **Engine Performance** (/are/performance) shows what the engine sent, booked and learned. **Forecast** (/forecast) projects revenue from the open pipeline. **Email Analytics** covers drafts and CRM sends only.
 
 ## Configuration
 
@@ -234,7 +234,7 @@ super_admin (everything, including creating and transferring workspaces) → adm
 
 ## Lists, segments, personas, ICP, brand voice
 
-Lists are hand-picked and static. Segments are rule-based and stay current. Personas describe the buyers the AI writes toward. The ICP profile is regenerated daily from won deals and engagement and drives discovery targeting. Brand voice (tone, vocabulary, avoid-words, from-name) is read by every AI-written email and chat reply.`,
+Lists are hand-picked and static. Segments are rule-based and stay current. Personas describe the buyers the AI writes toward. The ICP profile is regenerated from won deals and engagement on the workspace's ICP Re-inference Schedule (ARE Settings) — daily by default, and Manual Only turns the automatic pass off — and drives discovery targeting. Brand voice (tone, vocabulary, avoid-words, from-name) is read by every AI-written email and chat reply.`,
   },
   {
     slug: "om-revenue-engine-lifecycle",
@@ -296,6 +296,14 @@ In batch approval, the engine enriches and then waits. On the Prospects tab, sel
 
 A reply marks the person replied, stops their remaining steps and lands in Conversations classified. Mailboxes are polled every minute. **SendGrid senders have no inbox**: set their Reply-To to a mailbox that is connected under Settings → Mailboxes, or replies will never appear. Set a **display name** on every sender; it is the From header and fills the signature.
 
+## Workspace limits and notices (ARE Settings)
+
+**Max Concurrent Campaigns** (default 5) is how many campaigns may be *active* at once. It is checked when a campaign is launched, when one is started from draft or pause, and when the Auto router accepts a proposal — never while a campaign is running, so moving the slider down will not freeze work in flight. At the limit, starting another is refused with the count and the limit, drafts are still allowed, and pausing a campaign frees a slot at once. Only an **admin** can raise it, and the reps who hit it cannot, so the message tells them to ask one. The Auto router does not fail at the limit: it leaves the proposal pending on the hub for a human.
+
+**Notification Preferences** are three switches: meeting booked (on), prospect auto-approved (off — one digest per campaign per engine pass, only in full autonomy), and ICP profile updated or restored (on, and it covers the automatic re-inference as well as the buttons). Two ARE notices are **not** covered by them and always arrive: engagement signals (every open, click and LinkedIn accept) and the weekly rejection digest.
+
+**Brand voice is not set here.** ARE writes in the one workspace Brand Voice profile (Configuration → Brand Voice, or Settings → Branding). Turning **Apply to AI** off there stops every AI writer using it, ARE included — check that first when copy ignores the tone you set.
+
 ## Before you set a campaign active
 
 1. Sender display names set; reply mailbox connected.
@@ -353,7 +361,8 @@ A sane starting posture: everything that only does work (tasks, deals, sweeps, b
 | Segment rules, scheduled reports, campaign proposals, meeting reminders, deal autopilot, social autopilot | hourly | |
 | Enrichment sweep, company backfill, photo and logo backfill, brand reconcile | 6 h | data-quality backfills |
 | Attribution of optimisations | 12 h | judge and revert |
-| Optimisation, ICP inference, nightly AI batch, LinkedIn job-change check, hygiene backfills | daily | |
+| Optimisation, nightly AI batch, LinkedIn job-change check, hygiene backfills | daily | |
+| ICP inference | daily pass | per-workspace: the pass runs daily but honours each workspace's ICP Re-inference Schedule (daily / weekly / on new won deal / manual) |
 
 Archived workspaces are excluded from every job.
 
@@ -416,7 +425,7 @@ If the panel is empty, you are done with this block.
 
 ## Admin (about 5 minutes)
 
-1. Deliverability: bounce and spam rates, warmup progress, any sender in error.
+1. Deliverability: bounce and spam rates, warmup progress, any sender in error. A mailbox that has not reached enough recipients in the last 30 days reads "not enough data" rather than 0% — a blank is not good news, it is no news.
 2. Sending accounts: no single campaign saturating a daily limit — "sent today" on Mailboxes is everything that mailbox sent, campaign, sequence, CRM, Inbox and warmup together; display names set on every sender.
 3. Audit Log: skim for surprises — deletions, role changes, dial flips.
 
@@ -463,10 +472,10 @@ Close the week when: performance read, losers retired, pipeline honest, leads ro
 
 1. **Budgets** (Settings → Billing and credits): AI token usage against the monthly budget; verification and QuickEnrich credit cycles have no rollover — if a cycle ended with credits unspent raise the sweep's daily cap, if it ran dry early lower it; LinkedIn lookup usage.
 2. **Recalculate lead scoring** (Lead Scoring → Recalculate) and confirm the primary model is still right. A month of enrichment changed the fields it reads.
-3. **ICP review** (ICP Agent): read this month's profile against last month's. If won deals moved it, adjust campaign targeting and consider running campaign proposals.
+3. **ICP review** (ICP Agent): read this month's profile against last month's. If won deals moved it, adjust campaign targeting and consider running campaign proposals. If you Restore an older version, it now holds — the automatic pass dates itself from the newest version generated, not from whichever is active — and setting ARE Settings → ICP Re-inference Schedule to Manual Only stops the pass entirely.
 4. **Prune**: complete or archive finished campaigns; archive sequences nobody enrolls into; delete lists that served their purpose; clear Needs Review to zero once.
 5. **Autonomy review**: any dial that spent a clean month on Approve with everything approved unchanged is a candidate for Auto. Promote one per month and write down the date.
-6. **Deliverability month-end**: domain health, warmup graduations, suppression growth, unsubscribes by campaign; retire any sender with rising bounces.
+6. **Deliverability month-end**: warmup graduations, suppression growth, unsubscribes by campaign; retire any sender with rising bounces. Bounce and spam are a rolling 30-day window counted per RECIPIENT, shown only once a mailbox has reached enough recipients to rate, so a quiet sender stays blank rather than looking clean.
 7. **Brand voice and personas**: update avoid-words from what replies complained about; add personas for segments that converted.
 8. **Prompts**: fold the month's lessons into the campaign sequence prompts as do-not lines; regenerate unsent steps if the change is material.
 9. **Customer success**: health tiers reviewed; every card in the 90 days column or nearer has a plan; anything in past due either renews or is recorded as churned; next month's QBRs scheduled.
@@ -632,7 +641,7 @@ Managers: compare forecast to actuals at quarter end and adjust stage probabilit
 - **Fit gate** — the score a person must reach before the campaign spends enrichment on them.
 - **Fit score** — how well a person or company matches your primary scoring model.
 - **Full mode** — a campaign that discovers and sends with no human gate.
-- **ICP** — the ideal customer profile, regenerated daily from wins and engagement.
+- **ICP** — the ideal customer profile, regenerated from wins and engagement on the workspace's ICP Re-inference Schedule (daily by default).
 - **Job change** — a detected move to a new company; triggers re-engagement.
 - **Lead** — an engaged or inbound person awaiting qualification.
 - **List** — a hand-picked static set of people or companies.

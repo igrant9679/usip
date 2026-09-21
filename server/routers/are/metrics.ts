@@ -16,6 +16,7 @@ import { workspaceProcedure } from "../../_core/workspace";
 import {
   getAbVariantStats,
   getReplyMix,
+  getRevenueFunnel,
   getSequenceStepStats,
   getSourceYieldStats,
   getStepFunnel,
@@ -53,6 +54,17 @@ export const metricsRouter = router({
   stepFunnel: workspaceProcedure
     .input(z.object({ campaignId: z.number().int() }))
     .query(async ({ ctx, input }) => getStepFunnel(ctx.workspace.id, input.campaignId)),
+
+  /**
+   * The five-band revenue funnel behind /v2/analytics. ONE population
+   * (prospect_queue), all time. With campaignId set it reconciles band for
+   * band with stepFunnel above — both read are_execution_queue and
+   * are_signal_log — which is why it lives beside it rather than in a router
+   * of its own.
+   */
+  revenueFunnel: workspaceProcedure
+    .input(z.object({ campaignId: z.number().int().nullable().default(null) }).optional())
+    .query(async ({ ctx, input }) => getRevenueFunnel(ctx.workspace.id, { campaignId: input?.campaignId ?? null })),
 
   /** Thresholds the UI must respect so it never implies a winner from noise. */
   thresholds: workspaceProcedure.query(async () => ({ minVariantSample: MIN_VARIANT_SAMPLE })),

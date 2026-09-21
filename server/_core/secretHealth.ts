@@ -63,7 +63,7 @@ const DEGRADING_SECRETS: Array<{ env: string; protects: string[] }> = [
     env: "SCHEDULED_TASK_SECRET",
     protects: [
       "the /api/scheduled/* cron endpoints — proposal-followup (mails clients, " +
-        "auto-expires proposals), icp-regen (one LLM call per workspace), " +
+        "auto-expires proposals), icp-regen (up to one LLM call per workspace), " +
         "rejection-digest — which stay open to anonymous callers while it is unset",
     ],
   },

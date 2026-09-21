@@ -38,7 +38,7 @@ Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable proces
 3. QBRs due this month: review the AI prep draft, schedule the meeting.
 
 ### Admin — 5 min
-1. Deliverability: bounce and spam rates, warmup progress, any sender in `error`.
+1. Deliverability: bounce and spam rates, warmup progress, any sender in `error`. A mailbox under the 30-day recipient floor reads "not enough data", not 0% — a blank is no news, not good news.
 2. Sending Accounts: daily limits not saturated by one campaign — "sent today" is every source through that mailbox, not just campaigns; sender display names set.
 3. Audit Log: skim for surprises (deletes, role changes, dial flips).
 
@@ -73,7 +73,7 @@ Contents: Daily (by role) · Weekly · Monthly · Quarterly · Repeatable proces
 3. **ICP review** (ICP Agent): read the current version vs last month; if won deals moved the profile, adjust campaign targeting; consider a campaign proposal run.
 4. **Prune**: complete or archive finished campaigns; archive sequences nobody enrolls into; delete lists that served their purpose; clear Needs Review to zero once.
 5. **Autonomy review**: any dial that spent a clean month on Approve with everything approved unchanged is a candidate for Auto. Promote one per month.
-6. **Deliverability month-end**: domain health, warmup graduations, suppression list growth, unsubscribes by campaign; retire any sender with rising bounces.
+6. **Deliverability month-end**: warmup graduations, suppression list growth, unsubscribes by campaign; retire any sender with rising bounces. Rates are a rolling 30-day per-recipient window and appear only once a mailbox has reached the recipient floor. (No domain-health panel exists on the page — SPF/DKIM/DMARC rows come from SendGrid domain auth, not `/v2/deliverability`.)
 7. **Brand voice and personas**: re-read; update avoid-words from what replies complained about; add personas for new segments that converted.
 8. **Prompt templates and campaign prompts**: fold the month's learnings (do-not lines) into the prompts; regenerate unsent steps if the change is material.
 9. **Customer success**: health tiers reviewed; every card in the `ninety` column or nearer has a plan; anything `at_risk` (past due) either renews or gets recorded as churned via an amendment; QBRs scheduled for next month.

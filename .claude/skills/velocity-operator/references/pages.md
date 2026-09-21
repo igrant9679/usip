@@ -156,7 +156,7 @@ Renewal stages (early → 90 → 60 → 30 → past due → renewed/churned) der
 ## Analytics
 
 ### ★ Analytics — `/v2/analytics`
-The one cross-channel funnel: sending volume, opens, replies, meetings, pipeline created, over time and by campaign/sequence/source.
+The one cross-channel funnel: Sourced → Contacted → Replied → Meetings booked → Closed won, all five bands counting DISTINCT prospect_queue people (`are.metrics.revenueFunnel`), all time and across every campaign — the scope is printed under the heading. No filters and no date selector: a second scope is what made the old bands measure different populations. Beside it: pipeline by stage, win/loss (90 days, labelled), outreach performance ("Emails transmitted" = every email_log row, split out from the funnel's Contacted on purpose), top reps, and a LinkedIn/social funnel when there is social activity.
 
 ### ★ Reports — `/reports`
 Row-level report builder over any object (columns, filters, group by, sort), CSV export, saved reports, schedules (daily/weekly/monthly email to recipients), presets.
@@ -186,7 +186,7 @@ Personal: Profile, Appearance (theme + personal signature), Mailboxes, Phone num
 ### Email Sending cluster
 - **Email Sending / Sending Accounts** — `/sending-accounts`: mailboxes (Gmail/Outlook/SMTP) and SendGrid senders, from name (**set a display name on every sender**, it is the From header and the `{{senderName}}` signature), daily limits, warmup, reply-to, test send. "Sent today" is ONE allowance per mailbox — campaign, sequence, CRM, Inbox and warmup sends all draw from it (2026-09-20); before that it showed campaign-pool volume only.
 - **Sender Pools** — `/sender-pools`: rotate campaign sends across senders.
-- **Deliverability** — `/v2/deliverability`: domain health (SPF/DKIM/DMARC), warmup progress, bounce and spam rates.
+- **Deliverability** — `/v2/deliverability`: sending accounts, suppressions and sender pools, with warmup progress and bounce/spam rates. The rates are DERIVED at read time from `email_log` joined to `email_suppressions` (`sendingAccounts.deliverability`) — a rolling 30-day window counted per RECIPIENT, not per message — and a mailbox that has not reached the recipient floor shows "—" rather than 0%. There is no SPF/DKIM/DMARC panel on this page; the DNS rows SendGrid needs come from `sendingAccounts.getDomainAuthDns`.
 - **Suppressions** — `/email-suppressions`: unsubscribes and do-not-contact; honoured by every sender.
 
 ### Connected Accounts — `/connected-accounts`
@@ -202,7 +202,7 @@ Multiple named pipelines per workspace, each with its own stages (key, label, or
 Fit and engagement models with grade thresholds (install defaults, set primary, **Recalculate** after enrichment waves); assignment rules for new leads (round-robin, territory, owner rules).
 
 ### Brand Voice — `/brand-voice` · Personas — `/personas` · ICP Agent — `/are/icp`
-How the AI sounds; who it writes to; the living ideal-customer profile (current version, history, regenerate, override, restore).
+How the AI sounds; who it writes to; the living ideal-customer profile (current version, history, regenerate, override, restore). There is **one** brand voice profile per workspace, edited here or at Settings → Branding, and every AI writer reads it — ARE Settings has no voice picker of its own (the one that was there wrote a column nobody read; removed 2026-09-20). **Apply to AI** off here silences branding for all of them.
 
 ### Prompt Templates — `/prompt-templates`
 Versioned prompts behind the AI generators (sequence writer, reply drafts, QBR prep). Edit with care; the campaign's own **sequence prompt** (voice + do-not list) overrides per campaign.

@@ -14,6 +14,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   pickAccountFromPool,
   AccountCreateInput,
+  reputationTierFromRate,
   type PoolMemberWithAccount,
 } from "./routers/sendingAccounts";
 
@@ -196,22 +197,21 @@ describe("Provider validation (the real create schema)", () => {
 
 // ─── Reputation Tier ─────────────────────────────────────────────────────────
 
+// 2026-09-20: this block used to define its OWN deriveReputationTier with
+// PERCENT thresholds 1/3/5 and assert against it — a mirror test passing
+// against itself, in the one file whose header condemns exactly that, while the
+// shipped ladder takes a 0-1 FRACTION and cuts at 0.02/0.05/0.10. It now
+// imports the real function, so the thresholds an operator sees are the ones
+// under test.
 describe("Reputation tier derivation", () => {
-  function deriveReputationTier(bounceRate: number): "excellent" | "good" | "fair" | "poor" {
-    if (bounceRate < 1) return "excellent";
-    if (bounceRate < 3) return "good";
-    if (bounceRate < 5) return "fair";
-    return "poor";
-  }
-
-  it("0% bounce rate → excellent", () => expect(deriveReputationTier(0)).toBe("excellent"));
-  it("0.9% bounce rate → excellent", () => expect(deriveReputationTier(0.9)).toBe("excellent"));
-  it("1% bounce rate → good", () => expect(deriveReputationTier(1)).toBe("good"));
-  it("2.9% bounce rate → good", () => expect(deriveReputationTier(2.9)).toBe("good"));
-  it("3% bounce rate → fair", () => expect(deriveReputationTier(3)).toBe("fair"));
-  it("4.9% bounce rate → fair", () => expect(deriveReputationTier(4.9)).toBe("fair"));
-  it("5% bounce rate → poor", () => expect(deriveReputationTier(5)).toBe("poor"));
-  it("100% bounce rate → poor", () => expect(deriveReputationTier(100)).toBe("poor"));
+  it("0 bounces → excellent", () => expect(reputationTierFromRate(0)).toBe("excellent"));
+  it("1.9% → excellent", () => expect(reputationTierFromRate(0.019)).toBe("excellent"));
+  it("2% → good", () => expect(reputationTierFromRate(0.02)).toBe("good"));
+  it("4.9% → good", () => expect(reputationTierFromRate(0.049)).toBe("good"));
+  it("5% → fair", () => expect(reputationTierFromRate(0.05)).toBe("fair"));
+  it("9.9% → fair", () => expect(reputationTierFromRate(0.099)).toBe("fair"));
+  it("10% → poor", () => expect(reputationTierFromRate(0.10)).toBe("poor"));
+  it("100% → poor", () => expect(reputationTierFromRate(1)).toBe("poor"));
 });
 
 // ─── Pool Rotation Strategy Labels ───────────────────────────────────────────

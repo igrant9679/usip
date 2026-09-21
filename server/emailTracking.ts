@@ -1012,9 +1012,13 @@ export function registerEmailTrackingRoutes(app: Express) {
 
   /* -- Scheduled: ARE ICP re-inference --
      POST /api/scheduled/icp-regen
-     Called by the Manus scheduled task agent nightly.
-     Runs the ICP inference agent for every workspace that has at least one
-     won or lost opportunity, updating the active ICP profile.
+     External trigger for the same pass the internal cron runs.
+     It used to walk every workspace calling runIcpInference DIRECTLY, which
+     meant it obeyed none of that pass's gates: it ran archived workspaces,
+     ran workspaces with no evidence, ignored the freshness floor, and — once
+     the schedule became real — would have ignored "Manual Only" too. A caller
+     hitting it on a tight loop bought one LLM call per workspace per request.
+     Delegating is what makes the two entry points behave the same (2026-09-20).
   ----------------------------------------------------------------- */
   app.post("/api/scheduled/icp-regen", async (req: any, res: any) => {
     try {
@@ -1027,24 +1031,10 @@ export function registerEmailTrackingRoutes(app: Express) {
       if (!requireScheduledSecret(req, res, "icp-regen")) return;
       const db = await getDb();
       if (!db) return res.status(503).json({ ok: false, error: "DB unavailable" });
-      const { workspaces } = await import("../drizzle/schema");
-      const { runIcpInference } = await import("./routers/are/icp");
-      const allWorkspaces = await db.select({ id: workspaces.id }).from(workspaces);
-      let succeeded = 0;
-      let failed = 0;
-      const errors: string[] = [];
-      for (const ws of allWorkspaces) {
-        try {
-          await runIcpInference(ws.id);
-          succeeded++;
-        } catch (e) {
-          failed++;
-          errors.push("ws " + ws.id + ": " + String(e).slice(0, 120));
-          console.error("[IcpRegen] Failed for workspace " + ws.id + ":", e);
-        }
-      }
-      console.log("[IcpRegen] Completed: " + succeeded + " succeeded, " + failed + " failed");
-      return res.json({ ok: true, succeeded, failed, errors });
+      const { runIcpInferenceAllWorkspaces } = await import("./routers/are/icp");
+      const r = await runIcpInferenceAllWorkspaces();
+      console.log("[IcpRegen] Completed: regenerated=" + r.regenerated + " skipped=" + r.skipped + " failed=" + r.failed);
+      return res.json({ ok: true, regenerated: r.regenerated, skipped: r.skipped, failed: r.failed });
     } catch (e) {
       console.error("[IcpRegen] Endpoint error:", e);
       return res.status(500).json({ ok: false, error: String(e) });

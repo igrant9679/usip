@@ -2,10 +2,17 @@
  * Deliverability — the "Deliverability suite" surface (/v2/deliverability).
  *
  * A hub that ties together the existing email-infrastructure data:
- *   - sendingAccounts.list      (warmup, bounce/spam rate, reputation, volume)
- *   - emailSuppressions.summary (unsubscribe / bounce / spam / manual counts)
- *   - senderPools.list          (rotation pools)
+ *   - sendingAccounts.list          (warmup, volume, connection status)
+ *   - sendingAccounts.deliverability (bounce/spam rate + reputation, DERIVED)
+ *   - emailSuppressions.summary     (unsubscribe / bounce / spam / manual counts)
+ *   - senderPools.list              (rotation pools)
  * with deep-links to the existing management pages for editing.
+ *
+ * The rates used to come off `list` from sending_accounts.bounceRate, a column
+ * nothing writes — so this page told every operator "0% · Excellent" for every
+ * mailbox, which is precisely the reassurance it exists to withhold (audit
+ * 2026-09-20). They now come from a rolling 30-day per-recipient window, and a
+ * mailbox under the sample floor renders an em-dash rather than a zero.
  */
 import { useMemo } from "react";
 import { useLocation } from "wouter";
@@ -34,16 +41,20 @@ type SendingAccount = {
   fromEmail?: string | null;
   dailySendLimit?: number | null;
   warmupStatus?: string | null;
-  bounceRate?: number | string | null;
-  spamRate?: number | string | null;
-  reputationTier?: string | null;
   connectionStatus?: string | null;
   enabled?: boolean | null;
   sentToday?: number | null;
   remainingToday?: number | null;
 };
 
-/** bounce/spam values may be stored as a fraction (0.02) or a percent (2). */
+/**
+ * bounce/spam values may be stored as a fraction (0.02) or a percent (2).
+ *
+ * NOTE both helpers turn null and undefined into 0 / "0%". That is why an
+ * unrated mailbox has to be branched on explicitly at every call site below:
+ * handing one of these a null does not blow up, it quietly prints the exact
+ * reassurance this page was fixed to stop printing.
+ */
 function pct(v: number | string | null | undefined): string {
   const n = typeof v === "number" ? v : parseFloat(String(v ?? "0"));
   if (!Number.isFinite(n) || n === 0) return "0%";
@@ -80,6 +91,7 @@ export default function Deliverability() {
   const accent = useAccentColor();
 
   const accountsQ = trpc.sendingAccounts.list.useQuery();
+  const ratesQ = trpc.sendingAccounts.deliverability.useQuery();
   const supprQ = trpc.emailSuppressions.summary.useQuery();
   const poolsQ = trpc.senderPools.list.useQuery();
 
@@ -87,25 +99,44 @@ export default function Deliverability() {
   const suppr = supprQ.data as { unsubscribe: number; bounce: number; spam_complaint: number; manual: number; total: number } | undefined;
   const pools = (poolsQ.data ?? []) as { id: number; name?: string | null; rotationStrategy?: string | null; enabled?: boolean | null; members?: any[] }[];
 
+  // A handful of mailboxes, so a .find beats building a Map (and stays ES5-safe).
+  const rateRows = ratesQ.data?.rows ?? [];
+  const minRecipients = ratesQ.data?.minRecipients ?? 0;
+  const windowDays = ratesQ.data?.windowDays ?? 30;
+  const rateOf = (id: number) => rateRows.find((r) => r.accountId === id);
+
   const stats = useMemo(() => {
     const n = accounts.length;
-    const avg = (sel: (a: SendingAccount) => number) => (n ? accounts.reduce((s, a) => s + sel(a), 0) / n : 0);
+    // Only RATED mailboxes enter the average. Folding an unrated one in as 0 is
+    // the original bug wearing a new hat — it drags the workspace number toward
+    // "healthy" exactly when there is no evidence either way.
+    const rated = rateRows.filter((r) => r.bounceRate != null);
+    const mean = (vals: Array<number | null>) => {
+      const nums: number[] = [];
+      vals.forEach((v) => { if (v != null) nums.push(v); });
+      return nums.length ? nums.reduce((s, v) => s + v, 0) / nums.length : null;
+    };
     const warming = accounts.filter((a) => (a.warmupStatus ?? "").toLowerCase().includes("warm") || (a.warmupStatus ?? "").toLowerCase().includes("progress")).length;
     const sentToday = accounts.reduce((s, a) => s + (a.sentToday ?? 0), 0);
     const capacity = accounts.reduce((s, a) => s + (a.dailySendLimit ?? 0), 0);
     return {
       n,
-      avgBounce: avg((a) => pctNum(a.bounceRate)),
-      avgSpam: avg((a) => pctNum(a.spamRate)),
+      ratedCount: rated.length,
+      // FRACTIONS 0–1, or null when no mailbox has enough recipients to rate.
+      avgBounce: mean(rated.map((r) => r.bounceRate)),
+      avgSpam: mean(rated.map((r) => r.spamRate)),
       warming,
       sentToday,
       capacity,
     };
-  }, [accounts]);
+  }, [accounts, rateRows]);
 
-  const isLoading = accountsQ.isLoading || supprQ.isLoading || poolsQ.isLoading;
-  const bounceTone = stats.avgBounce >= 5 ? "danger" : stats.avgBounce >= 2 ? "warning" : "success";
-  const spamTone = stats.avgSpam >= 0.3 ? "danger" : stats.avgSpam >= 0.1 ? "warning" : "success";
+  const isLoading = accountsQ.isLoading || ratesQ.isLoading || supprQ.isLoading || poolsQ.isLoading;
+  const avgBouncePct = stats.avgBounce == null ? null : pctNum(stats.avgBounce);
+  const avgSpamPct = stats.avgSpam == null ? null : pctNum(stats.avgSpam);
+  const bounceTone = avgBouncePct == null ? "default" : avgBouncePct >= 5 ? "danger" : avgBouncePct >= 2 ? "warning" : "success";
+  const spamTone = avgSpamPct == null ? "default" : avgSpamPct >= 0.3 ? "danger" : avgSpamPct >= 0.1 ? "warning" : "success";
+  const ratedHint = `${stats.ratedCount} of ${stats.n} mailboxes rated`;
 
   return (
     <Shell title="Deliverability suite">
@@ -124,8 +155,8 @@ export default function Deliverability() {
           {/* stat cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <StatCard label="Sending accounts" value={stats.n} hint={`${stats.warming} warming up`} />
-            <StatCard label="Avg bounce rate" value={isLoading ? "—" : pct(stats.avgBounce / 100)} tone={bounceTone as any} />
-            <StatCard label="Avg spam rate" value={isLoading ? "—" : pct(stats.avgSpam / 100)} tone={spamTone as any} />
+            <StatCard label="Avg bounce rate" value={isLoading || stats.avgBounce == null ? "—" : pct(stats.avgBounce)} tone={bounceTone as any} hint={ratedHint} />
+            <StatCard label="Avg spam rate" value={isLoading || stats.avgSpam == null ? "—" : pct(stats.avgSpam)} tone={spamTone as any} hint={ratedHint} />
             <StatCard label="Sent today" value={stats.sentToday} hint={stats.capacity ? `of ${stats.capacity} cap` : undefined} />
           </div>
 
@@ -159,16 +190,26 @@ export default function Deliverability() {
                     </tr>
                   </thead>
                   <tbody>
-                    {accounts.map((a) => (
+                    {accounts.map((a) => {
+                      const r = rateOf(a.id);
+                      // Null is "not enough recipients to say", NOT zero — see pct().
+                      const bouncePct = r?.bounceRate == null ? null : pctNum(r.bounceRate);
+                      const spamPct = r?.spamRate == null ? null : pctNum(r.spamRate);
+                      const unrated = `${r?.recipients ?? 0} recipients in the last ${windowDays} days — ${minRecipients} needed to rate`;
+                      return (
                       <tr key={a.id} className="border-b border-border/60 last:border-0 hover:bg-muted/40">
                         <td className="px-3 py-2">
                           <div className="font-medium truncate max-w-[200px]">{a.name || a.fromEmail || `Account ${a.id}`}</div>
                           <div className="text-[11px] text-muted-foreground truncate max-w-[200px]">{a.fromEmail}{a.provider ? ` · ${a.provider}` : ""}</div>
                         </td>
                         <td className="px-3 py-2">{warmupBadge(a.warmupStatus)}</td>
-                        <td className="px-3 py-2">{repBadge(a.reputationTier)}</td>
-                        <td className={cn("px-3 py-2 text-right tabular-nums", pctNum(a.bounceRate) >= 5 && "text-rose-600", pctNum(a.bounceRate) >= 2 && pctNum(a.bounceRate) < 5 && "text-amber-600")}>{pct(a.bounceRate)}</td>
-                        <td className={cn("px-3 py-2 text-right tabular-nums", pctNum(a.spamRate) >= 0.3 && "text-rose-600")}>{pct(a.spamRate)}</td>
+                        <td className="px-3 py-2" title={r?.tier ? undefined : unrated}>{repBadge(r?.tier)}</td>
+                        <td className={cn("px-3 py-2 text-right tabular-nums", bouncePct != null && bouncePct >= 5 && "text-rose-600", bouncePct != null && bouncePct >= 2 && bouncePct < 5 && "text-amber-600")}>
+                          {bouncePct == null ? <span className="text-muted-foreground" title={unrated}>—</span> : pct(r!.bounceRate)}
+                        </td>
+                        <td className={cn("px-3 py-2 text-right tabular-nums", spamPct != null && spamPct >= 0.3 && "text-rose-600")}>
+                          {spamPct == null ? <span className="text-muted-foreground" title={unrated}>—</span> : pct(r!.spamRate)}
+                        </td>
                         <td className="px-3 py-2 text-right tabular-nums text-xs text-muted-foreground">{a.sentToday ?? 0}{a.dailySendLimit ? ` / ${a.dailySendLimit}` : ""}</td>
                         <td className="px-3 py-2">
                           {a.enabled === false ? (
@@ -180,11 +221,15 @@ export default function Deliverability() {
                           )}
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               )}
             </div>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Bounce and spam are a rolling {windowDays}-day window, counted per recipient rather than per message, and only from bounces the provider reported back. A mailbox shows “—” until it has reached {minRecipients} recipients.
+            </p>
           </section>
 
           <div className="grid lg:grid-cols-2 gap-6">

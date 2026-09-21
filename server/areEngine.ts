@@ -74,6 +74,7 @@ import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./serv
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { queueIdentityKeys } from "./services/are/queueIdentity";
 import { promoteApprovedProspects } from "./services/are/approvePromotion";
+import { areNotify } from "./routers/are/notify";
 import {
   buildQuickenrichFilters,
   currentQuickenrichPage,
@@ -928,6 +929,10 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       );
     const mode = campaign.autonomyMode;
     const threshold = campaign.autoApproveThreshold ?? DEFAULT_APPROVE_THRESHOLD;
+    // Counted, not notified per prospect: a full-autonomy tick can approve a
+    // hundred people, and a hundred rows in the Inbox is how a channel gets
+    // muted permanently. One digest per campaign per tick, below.
+    let autoApprovedThisTick = 0;
     for (const p of enriched) {
       const score = p.icpMatchScore ?? 0;
       if (mode === "full") {
@@ -938,6 +943,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             .set({ sequenceStatus: "approved", approvedAt: new Date() })
             .where(eq(prospectQueue.id, p.id));
           result.approved++;
+          autoApprovedThisTick++;
         } else {
           await db
             .update(prospectQueue)
@@ -986,6 +992,20 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     if (enriched.length > 0) {
       await emitLog(wsId, campId, "screen", "info",
         `Screened ${enriched.length} (mode=${mode}, threshold=${threshold})`);
+    }
+    // "Prospect auto-approved" on ARE Settings named an event this engine had
+    // never once emitted (2026-09-20). Only full autonomy reaches here, which
+    // is the case worth reporting: nobody looked at these people before they
+    // entered a sequence. The switch defaults to OFF, so this is opt-in noise.
+    if (autoApprovedThisTick > 0) {
+      await areNotify({
+        workspaceId: wsId,
+        eventType: "auto_approved",
+        title: "ARE: prospects auto-approved",
+        body: `${autoApprovedThisTick} prospect(s) scored at or above the ICP threshold of ${threshold} and were approved without review on campaign "${campaign.name}".`,
+        relatedId: campId,
+        relatedType: "are_campaign",
+      });
     }
     // Approved prospects' companies belong on the Companies page (owner ask
     // 2026-09-15). Unconditional, bounded catch-up: covers engine approvals
@@ -1697,6 +1717,11 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       .from(areExecutionQueue)
       .where(
         and(
+          // Campaign ids are globally unique, so this is defence in depth
+          // rather than a live leak — but every other count in this phase
+          // carries the tenant and a recompute that does not is one refactor
+          // away from being the exception that matters.
+          eq(areExecutionQueue.workspaceId, wsId),
           eq(areExecutionQueue.campaignId, campId),
           eq(areExecutionQueue.status, "sent"),
         ),

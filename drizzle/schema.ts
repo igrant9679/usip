@@ -1786,7 +1786,10 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   areNotifyOnAutoApprove: boolean("areNotifyOnAutoApprove").default(false).notNull(),
   areNotifyOnIcpUpdate: boolean("areNotifyOnIcpUpdate").default(true).notNull(),
   // ARE Settings UI fields that previously had no persistence (Migration 0087)
-  areBrandVoice: varchar("areBrandVoice", { length: 40 }),
+  // areBrandVoice was here until 2026-09-20 (dropped by migration 0184). No AI
+  // writer ever read it — outreach voice comes from brand_voice_profiles via
+  // buildBrandContext() — so it was a tone picker that stored a preference and
+  // changed nothing.
   areScraperSources: json("areScraperSources"),
   areIcpRegenSchedule: varchar("areIcpRegenSchedule", { length: 20 }),
   areSequenceQualityThreshold: int("areSequenceQualityThreshold"),

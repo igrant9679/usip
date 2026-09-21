@@ -17,6 +17,12 @@ import {
 } from "../../drizzle/schema";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
+import {
+  DELIVERABILITY_WINDOW_DAYS,
+  MIN_DELIVERABILITY_RECIPIENTS,
+  deliverabilityRatesByAccount,
+  ratesFromCounts,
+} from "../services/deliverabilityRates";
 import { buildTransporter } from "./smtpConfig";
 import { encryptSecret, tryDecryptSecret } from "../_core/crypto";
 import { recordAudit } from "../audit";
@@ -29,20 +35,11 @@ export function todayUtc(): string {
 }
 
 /**
- * Derive reputation tier from bounce rate (0–1 float).
- * < 2%  → excellent
- * < 5%  → good
- * < 10% → fair
- * ≥ 10% → poor
+ * The tier ladder moved to services/deliverabilityRates.ts when reputation
+ * stopped being a stored column and became a derived one (audit 2026-09-20).
+ * Re-exported so its original import path still resolves.
  */
-export function reputationTierFromRate(
-  bounceRate: number,
-): "excellent" | "good" | "fair" | "poor" {
-  if (bounceRate < 0.02) return "excellent";
-  if (bounceRate < 0.05) return "good";
-  if (bounceRate < 0.10) return "fair";
-  return "poor";
-}
+export { reputationTierFromRate } from "../services/deliverabilityRates";
 
 /**
  * Validate sending account credentials (lightweight — no live socket).
@@ -431,7 +428,12 @@ export const sendingAccountsRouter = router({
     // "no key" about mailboxes that send perfectly well.
     const { getWorkspaceSendgridKey } = await import("../services/sendgridKey");
     const workspaceHasKey = !!(await getWorkspaceSendgridKey(ctx.workspace.id));
-    return accounts.map(({ sendgridApiKeyEnc, ...a }) => ({
+    // bounceRate / spamRate / reputationTier are DROPPED here, not nulled.
+    // Nothing has ever written those columns, so serving them told every
+    // mailbox it was at 0% and "excellent" (audit 2026-09-20). Dropping them
+    // turns a surface that still wants a rate into a compile error rather than
+    // a silent "0%"; the real numbers come from `deliverability` below.
+    return accounts.map(({ sendgridApiKeyEnc, bounceRate, spamRate, reputationTier, ...a }) => ({
       ...a,
       // The key never leaves the server, not even as ciphertext. The UI only
       // needs to know whether one is USABLE, so it can say "leave blank to keep
@@ -469,7 +471,9 @@ export const sendingAccountsRouter = router({
             eq(sendingAccountDailyStats.date, today),
           ),
         );
-      const { sendgridApiKeyEnc, ...safe } = account;
+      // Same three dead columns dropped as in `list` — the detail view must not
+      // be able to disagree with the row the operator clicked to reach it.
+      const { sendgridApiKeyEnc, bounceRate, spamRate, reputationTier, ...safe } = account;
       const { getWorkspaceSendgridKey } = await import("../services/sendgridKey");
       // Same split as `list`: the gating number from the shared counter, the
       // bounce number from the stats row that is its only home.
@@ -889,13 +893,16 @@ export const sendingAccountsRouter = router({
         sendgridApiKey: await resolveSendgridKey(db, ctx.workspace.id, undefined, account.id),
       });
 
+      // Reputation is DERIVED in sendingAccounts.deliverability from email_log;
+      // it is no longer written here. This line read a column nothing writes,
+      // so it re-stamped "excellent" from a hardcoded 0 on every connection
+      // test — a stored copy of a number nobody computes (drizzle/schema.ts:851-857).
       await db
         .update(sendingAccounts)
         .set({
           connectionStatus: result.ok ? "connected" : "error",
           lastTestedAt: new Date(),
           lastTestError: result.error ?? null,
-          reputationTier: reputationTierFromRate(parseFloat(account.bounceRate ?? "0")),
         })
         .where(and(eq(sendingAccounts.id, input.id), eq(sendingAccounts.workspaceId, ctx.workspace.id)));
 
@@ -946,6 +953,49 @@ export const sendingAccountsRouter = router({
           ),
         );
       return { ok: true };
+    }),
+
+  /**
+   * Bounce and spam rates per mailbox, derived at read time.
+   *
+   * Deliberately its OWN procedure rather than extra columns on `list`: `list`
+   * is called from eleven places — the mailbox wizard, the sender picker, the
+   * proposal sender dropdown — and eight of them never render a rate. They must
+   * not pay for a grouped scan of email_log, the highest-volume table here.
+   *
+   * Rep-visible, like `list`. Tenancy holds on both sides of the join: the ids
+   * are re-derived from this workspace, and the join itself carries
+   * s.workspaceId = el.workspaceId.
+   */
+  deliverability: workspaceProcedure
+    .input(z.object({ accountIds: z.array(z.number().int()).max(500).optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Same population as `list`: workspace-owned, Unipile-bridged excluded.
+      const owned = await db
+        .select({ id: sendingAccounts.id })
+        .from(sendingAccounts)
+        .where(
+          and(
+            eq(sendingAccounts.workspaceId, ctx.workspace.id),
+            isNull(sendingAccounts.unipileAccountId),
+          ),
+        );
+      const wanted = input?.accountIds;
+      const ids = owned
+        .map((a) => a.id)
+        .filter((id) => !wanted || wanted.length === 0 || wanted.indexOf(id) >= 0);
+
+      const byId = await deliverabilityRatesByAccount(db, ctx.workspace.id, ids);
+      return {
+        windowDays: DELIVERABILITY_WINDOW_DAYS,
+        minRecipients: MIN_DELIVERABILITY_RECIPIENTS,
+        // An ARRAY, not the Map: a mailbox that sent nothing in the window has
+        // no row in the aggregate and must still come back as a zero sample, or
+        // the UI cannot tell "unrated" from "unknown".
+        rows: ids.map((id) => byId.get(id) ?? ratesFromCounts(id, 0, 0, 0)),
+      };
     }),
 });
 
@@ -1005,7 +1055,8 @@ export const senderPoolsRouter = router({
           provider: sendingAccounts.provider,
           dailySendLimit: sendingAccounts.dailySendLimit,
           connectionStatus: sendingAccounts.connectionStatus,
-          reputationTier: sendingAccounts.reputationTier,
+          // No reputationTier: the stored column is the same lie by a side door.
+          // A pool member's real tier comes from sendingAccounts.deliverability.
           enabled: sendingAccounts.enabled,
         })
         .from(senderPoolMembers)

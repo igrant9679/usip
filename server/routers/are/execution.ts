@@ -430,15 +430,20 @@ export async function processSignal(
     // strongest positive signal there is). The campaign's
     // signalToOpportunityEnabled flag now governs only the heavier step —
     // whether a deal is also opened in the pipeline.
-    const [campaign] = await db.select().from(areCampaigns).where(eq(areCampaigns.id, campaignId)).limit(1);
+    // Scoped by workspace as well as id (2026-09-20): ingestSignal takes
+    // campaignId as raw user input and never checks it against the caller's
+    // workspace, so an unscoped read let another tenant's campaign name into
+    // this tenant's notification body below.
+    const [campaign] = await db.select().from(areCampaigns)
+      .where(and(eq(areCampaigns.id, campaignId), eq(areCampaigns.workspaceId, workspaceId))).limit(1);
     const [prospect] = await db.select().from(prospectQueue).where(eq(prospectQueue.id, prospectQueueId)).limit(1);
     const promoted = await promoteProspectToCrm(workspaceId, prospectQueueId, campaignId, {
       createOpportunity: !!campaign?.signalToOpportunityEnabled,
     });
 
+    const who = `${prospect?.firstName ?? ""} ${prospect?.lastName ?? ""}`.trim() || "A prospect";
+    const where = prospect?.companyName ?? "their company";
     if (promoted) {
-      const who = `${prospect?.firstName ?? ""} ${prospect?.lastName ?? ""}`.trim() || "A prospect";
-      const where = prospect?.companyName ?? "their company";
       if (promoted.opportunityId) {
         actionTaken = "opportunity_created";
         await notifyOwner({
@@ -452,6 +457,29 @@ export async function processSignal(
         }).catch(() => {/* non-fatal */});
       }
     }
+
+    // The in-app notice the "Meeting booked via signal" switch on ARE Settings
+    // was always supposed to control: until 2026-09-20 the only thing this
+    // branch emitted was notifyOwner, which POSTs the external forge service
+    // and writes no `notifications` row — so the toggle gated nothing and the
+    // Inbox never showed the strongest signal ARE produces. Outside the
+    // `if (promoted)` arm on purpose: a booking is worth telling someone about
+    // even when CRM promotion failed. The autonomous path —
+    // attributeMeetingBookingToAre, which is the DOMINANT one in an autopilot
+    // workspace — checks are_signal_log for a prior meeting_booked first, so a
+    // reschedule or a repeat invite produces one notice, not one per invite.
+    // A hand-POSTed ingestSignal is not deduped and never has been.
+    await areNotify({
+      workspaceId,
+      eventType: "meeting_booked",
+      title: "ARE: Meeting booked",
+      body: `${who} at ${where} booked a meeting from campaign "${campaign?.name ?? ""}".`
+        + (promoted?.opportunityId
+          ? " An opportunity was created in the pipeline."
+          : promoted ? " They have been added to your CRM." : ""),
+      relatedId: campaignId,
+      relatedType: "are_campaign",
+    });
   }
 
   // Handle bounces and unsubscribes

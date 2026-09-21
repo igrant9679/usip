@@ -13,6 +13,8 @@ import { router } from "../../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
 import { runAreEngine } from "../../areEngine";
 import { promoteApprovedProspects } from "../../services/are/approvePromotion";
+import { campaignCapMessage, campaignHeadroom } from "../../services/are/campaignConcurrency";
+import { getAreHubFunnelTotals } from "../../services/performanceMetrics";
 import { recordAudit } from "../../audit";
 import { invokeLLM } from "../../_core/llm";
 import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
@@ -36,6 +38,19 @@ export const campaignsRouter = router({
         .orderBy(desc(areCampaigns.createdAt))
         .limit(input.limit);
     }),
+
+  /**
+   * The hub's Pipeline Funnel, for the WHOLE workspace.
+   *
+   * 🔴 The hub used to build it by summing the counter columns of whatever
+   * `list({ limit: 100 })` returned — the newest hundred campaigns, ordered by
+   * createdAt — and print the result as "{n} discovered". A 101st campaign
+   * left the funnel silently, and the summed counters are denormalised (0175
+   * had to hand-decrement meetingsBooked for phantom bookings). Derived from
+   * source rows instead, by the same module /v2/analytics reads, so the two
+   * funnels cannot print different numbers for the same word.
+   */
+  funnelTotals: workspaceProcedure.query(async ({ ctx }) => getAreHubFunnelTotals(ctx.workspace.id)),
 
   get: workspaceProcedure
     .input(z.object({ id: z.number() }))
@@ -130,6 +145,15 @@ export const campaignsRouter = router({
             ...(input.icpOverrides ?? {}),
           };
         }
+      }
+
+      // Max Concurrent Campaigns, enforced at the door rather than in the tick
+      // loop (2026-09-20 — the slider had saved a number nothing read since it
+      // shipped). Drafts are always allowed: the limit is on what RUNS, and
+      // refusing to let someone write a campaign down helps nobody.
+      if (input.launch) {
+        const h = await campaignHeadroom(ctx.workspace.id);
+        if (!h.hasRoom) throw new TRPCError({ code: "FORBIDDEN", message: campaignCapMessage(h) });
       }
 
       const [row] = await db
@@ -606,6 +630,20 @@ export const campaignsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      if (input.status === "active") {
+        // Re-read first, scoped: a campaign that is ALREADY active occupies a
+        // slot it is being counted against, so a no-op re-save (or a second
+        // click on Start) would fail at exactly the limit and look like a bug.
+        const [current] = await db
+          .select({ status: areCampaigns.status })
+          .from(areCampaigns)
+          .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)))
+          .limit(1);
+        if (current && current.status !== "active") {
+          const h = await campaignHeadroom(ctx.workspace.id);
+          if (!h.hasRoom) throw new TRPCError({ code: "FORBIDDEN", message: campaignCapMessage(h) });
+        }
+      }
       const updates: Partial<typeof areCampaigns.$inferInsert> = { status: input.status };
       if (input.status === "active") updates.startedAt = new Date();
       if (input.status === "completed") updates.completedAt = new Date();
