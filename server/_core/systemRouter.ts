@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { notifyOwner } from "./notification";
+import { adminRuntimePayload } from "../health";
 import { adminProcedure, publicProcedure, router } from "./trpc";
+import { adminWsProcedure } from "./workspace";
 
 export const systemRouter = router({
   /** Public branding config. The Logo Link client id is public BY DESIGN —
@@ -20,6 +22,18 @@ export const systemRouter = router({
     .query(() => ({
       ok: true,
     })),
+
+  /**
+   * Which runtime this deploy actually landed on. Admin-gated rather than
+   * added to GET /api/health, which is public and deliberately capped at
+   * four non-secret keys — see server/health.ts.
+   *
+   * Gated with adminWsProcedure, NOT the adminProcedure used just below.
+   * That one tests `users.role === "admin"`, a vestigial global flag no
+   * production code path ever sets, so gating on it would ship an endpoint
+   * nobody — including the owner — can call.
+   */
+  deployRuntime: adminWsProcedure.query(() => adminRuntimePayload()),
 
   notifyOwner: adminProcedure
     .input(

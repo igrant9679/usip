@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Request, Response } from "express";
-import { deployedCommit, healthPayload, registerHealthRoute } from "./health";
+import { adminRuntimePayload, deployedCommit, healthPayload, registerHealthRoute } from "./health";
 
 const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
 
@@ -132,6 +132,20 @@ describe("the route itself", () => {
     expect(res.json.mock.calls[0][0]).toMatchObject({ ok: true });
   });
 
+  it("serves the PUBLIC payload, never the admin one", () => {
+    /**
+     * The whole point of the split. adminRuntimePayload is a superset, so
+     * handing it to this route instead would still satisfy every other
+     * assertion in this file while publishing the runtime version to anyone
+     * who can curl it.
+     */
+    const res = { json: vi.fn(), setHeader: vi.fn() };
+    mount()["/api/health"]({} as Request, res as unknown as Response);
+    expect(Object.keys(res.json.mock.calls[0][0]).sort()).toEqual(
+      ["commit", "ok", "startedAt", "uptimeSeconds"].sort(),
+    );
+  });
+
   it("needs no request fields, so a bare prober works", () => {
     const res = { json: vi.fn(), setHeader: vi.fn() };
     expect(() => mount()["/api/health"](undefined as never, res as unknown as Response)).not.toThrow();
@@ -161,3 +175,75 @@ describe("registration order", () => {
     expect(health).toBeLessThan(trpc);
   });
 });
+
+describe("the admin-only runtime payload", () => {
+  it("is the public payload plus exactly one field", () => {
+    expect(Object.keys(adminRuntimePayload()).sort()).toEqual(
+      [...Object.keys(healthPayload()), "node"].sort(),
+    );
+  });
+
+  it("reports the Node this process is actually running, unprefixed", () => {
+    // "v22.14.0" would never compare equal to the pin in railway.toml /
+    // .node-version, which is the one comparison this field exists for.
+    const p = adminRuntimePayload();
+    expect(p.node).toBe(process.versions.node);
+    expect(p.node).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  it("does not leak into the public payload", () => {
+    expect(Object.keys(healthPayload())).not.toContain("node");
+    expect(JSON.stringify(healthPayload())).not.toContain(process.versions.node);
+  });
+});
+
+describe("system.deployRuntime is gated", () => {
+  /**
+   * Counts the middleware a procedure carries. Throws rather than returning a
+   * default if tRPC's internals move, because a silent 0 here would make the
+   * comparison below pass for the wrong reason — the exact vacuous-pin failure
+   * this suite has been bitten by before.
+   */
+  const gateDepth = (proc: unknown): number => {
+    const def = (proc as { _def?: Record<string, unknown> } | undefined)?._def;
+    const mw = def?.middlewares ?? def?.middleware;
+    if (!Array.isArray(mw)) {
+      throw new Error(`tRPC procedure shape changed; _def keys: ${Object.keys(def ?? {}).join(",")}`);
+    }
+    return mw.length;
+  };
+
+  it("carries more gating than a public procedure in the same router", async () => {
+    /**
+     * Compared against brandingConfig rather than a hardcoded number: the
+     * absolute count changes whenever shared middleware is added, but a
+     * procedure downgraded to publicProcedure collapses to the same depth as
+     * its public sibling, and that is what must fail.
+     */
+    const { systemRouter } = await import("./_core/systemRouter");
+    const procs = (systemRouter as unknown as { _def: { procedures: Record<string, unknown> } })._def.procedures;
+    expect(procs.deployRuntime, "system.deployRuntime is gone").toBeDefined();
+    expect(gateDepth(procs.deployRuntime)).toBeGreaterThan(gateDepth(procs.brandingConfig));
+  });
+
+  it("names adminWsProcedure in the source, which depth cannot check", async () => {
+    /**
+     * The depth test above cannot see the THRESHOLD. roleAtLeast() builds
+     * repProcedure, managerProcedure, adminWsProcedure and superAdminProcedure
+     * identically — workspaceProcedure plus one middleware — and closes over
+     * the required role, so all four measure the same. Swapping this endpoint
+     * to repProcedure would leave every count unchanged and hand the deploy's
+     * runtime to any member of any workspace.
+     *
+     * So the role is pinned as source text, the way this repo pins other
+     * gates (see confirmCopyTruth.test.ts and socialReplyScope.test.ts).
+     * Between the two tests: depth catches dropping the workspace layer,
+     * this catches lowering the bar within it.
+     */
+    const src = read("server/_core/systemRouter.ts");
+    expect(src, "deployRuntime's gate changed or moved").toContain(
+      "deployRuntime: adminWsProcedure",
+    );
+  });
+});
+

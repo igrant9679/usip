@@ -17,6 +17,13 @@
  * counts. Each of those is a small leak on its own and a map of the deployment
  * together. `health.test.ts` pins the exact key set and fails on any addition,
  * which is the point: adding a field should require deciding to.
+ *
+ * The Node version is the worked example. It was asked for in order to
+ * confirm which runtime a deploy actually landed on, and it is precisely
+ * the kind of field the paragraph above refuses — so it is NOT here. It
+ * lives in `adminRuntimePayload` below, served only by
+ * `system.deployRuntime`, which is admin-gated. The public payload is
+ * unchanged and still pinned at four keys.
  */
 import type { Express, Request, Response } from "express";
 
@@ -54,6 +61,37 @@ export function healthPayload(): HealthPayload {
     startedAt: STARTED_AT,
     uptimeSeconds: Math.floor(process.uptime()),
   };
+}
+
+/**
+ * The public facts PLUS the runtime version, for a caller who has already
+ * authenticated as an admin. Served only by `system.deployRuntime`; it must
+ * never be handed to `registerHealthRoute`, which health.test.ts pins.
+ *
+ * WHY IT IS WANTED: nothing else reports which Node a deploy landed on. The
+ * pins that choose it (railway.toml's nixPkgs and .node-version) are read at
+ * BUILD time, so a build that resolved a different Node than intended looks
+ * identical from outside — the same gap in deploy identity that the commit
+ * field above exists to close.
+ *
+ * `process.versions.node` rather than `process.version`, so the value is a
+ * bare "22.14.0" rather than a "v"-prefixed string. The pins are MAJOR only
+ * (.node-version is "22", railway.toml is nodejs_22), so the check that
+ * closes the loop is on the major — `node.split(".")[0]` — not on equality
+ * with the whole string, which can never hold.
+ *
+ * LIMIT, so a reading of it is not over-claimed: this is behind the
+ * workspace gate, which needs the database. It answers for a deploy that
+ * came up, not for one that did not — a failure here says nothing about the
+ * runtime. The public route above remains the only DB-free signal.
+ */
+export type AdminRuntimePayload = HealthPayload & {
+  /** e.g. "22.14.0" — the Node this process is actually executing on. */
+  node: string;
+};
+
+export function adminRuntimePayload(): AdminRuntimePayload {
+  return { ...healthPayload(), node: process.versions.node };
 }
 
 export function registerHealthRoute(app: Express): void {
