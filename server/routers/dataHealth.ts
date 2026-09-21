@@ -431,14 +431,26 @@ export const dataHealthRouter = router({
    */
   planPeopleMerge: adminWsProcedure
     .input(z.object({
+      /**
+       * WHAT THE ROWS ARE GROUPED ON. "email" is the pass that ran against
+       * production on 2026-09-20 and stays the default, so a client that does
+       * not know the option gets exactly the behaviour it had.
+       *
+       * "linkedin" groups on the normalised `/in/<slug>` instead — the ~90 LSI
+       * Media duplicates the email pass cannot see, because enrichment guessed
+       * two address PATTERNS for one human and both rows kept theirs.
+       */
+      by: z.enum(["email", "linkedin"]).default("email"),
       emails: z.array(z.string()).max(200).optional(),
+      /** The general spelling of `emails`; in email mode they are the same. */
+      keys: z.array(z.string()).max(200).optional(),
       limit: z.number().int().min(1).max(200).default(50),
-    }).default({ limit: 50 }))
+    }).default({ by: "email", limit: 50 }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const { planPersonMerge } = await import("../services/personMerge");
-      return planPersonMerge(db, ctx.workspace.id, { emails: input.emails, limit: input.limit });
+      return planPersonMerge(db, ctx.workspace.id, { by: input.by, emails: input.emails, keys: input.keys, limit: input.limit });
     }),
 
   /**
@@ -454,17 +466,25 @@ export const dataHealthRouter = router({
    */
   executePeopleMerge: adminWsProcedure
     .input(z.object({
+      /** Must match the pass the operator was LOOKING at: one cluster is named
+       *  by an address in email mode and by a LinkedIn slug in linkedin mode,
+       *  and a key resolved in the wrong mode resolves to nothing — which is
+       *  reported as stale rather than guessed at. */
+      by: z.enum(["email", "linkedin"]).default("email"),
       clusters: z.array(z.object({
-        email: z.string().min(3),
+        // `email` is how every caller written before the LinkedIn key spells
+        // it; `key` is the general one. At least one of them is required.
+        email: z.string().min(3).optional(),
+        key: z.string().min(3).optional(),
         survivorId: z.number().int().positive(),
         loserIds: z.array(z.number().int().positive()).min(1).max(50),
-      })).min(1).max(50),
+      }).refine((c) => !!(c.email || c.key), { message: "a cluster must name its email or its key" })).min(1).max(50),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const { executePersonMerge } = await import("../services/personMerge");
-      return executePersonMerge(db, ctx.workspace.id, { clusters: input.clusters, actorUserId: ctx.user.id });
+      return executePersonMerge(db, ctx.workspace.id, { by: input.by, clusters: input.clusters, actorUserId: ctx.user.id });
     }),
 
   /**

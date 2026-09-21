@@ -47,8 +47,14 @@ import {
   PERSON_REF_TABLES,
   PROPOSAL_JSON_REF,
   PROPOSAL_SCAN_CAP,
+  discardedEmailsFor,
+  emailStatusRank,
+  emailQualityRank,
   identityConflict,
+  isBlankField,
   isBlankValue,
+  isPlaceholderProfileUrl,
+  linkedinProfileKey,
   pickSurvivor,
   sameIdSet,
   trimAuditPayload,
@@ -1221,6 +1227,795 @@ describe("a proposal scan that hits its ceiling refuses the merge", () => {
   });
 });
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE SECOND CLUSTER KEY — the same LinkedIn profile (2026-09-20).
+ *
+ * The email pass ran in production and merged 169 clusters. LSI Media still
+ * showed ~90 duplicates it could not see: enrichment guessed two address
+ * PATTERNS for one human (bprestridge@ vs blake.prestridge@), so no
+ * address-based scan can group them. All 90 share one linkedinUrl.
+ *
+ * Two things are genuinely dangerous here and are pinned below:
+ *  · AN EMPTY KEY. Most People rows have no LinkedIn url at all. Grouping on
+ *    "" would fuse every one of them into a single cluster and delete all but
+ *    one — the worst outcome this file can produce.
+ *  · THE DISCARDED ADDRESS. The rows hold DIFFERENT emails and the union keeps
+ *    the survivor's, so one real address stops existing. It is named in the
+ *    plan, in the result and on the audit row before the delete.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+describe("the LinkedIn profile key is a normalised /in/ slug", () => {
+  const KEY = "linkedin.com/in/blake-prestridge";
+
+  it("protocol, www and case are not a difference", () => {
+    expect(linkedinProfileKey("https://www.LinkedIn.com/in/Blake-Prestridge")).toBe(KEY);
+    expect(linkedinProfileKey("http://linkedin.com/in/blake-prestridge")).toBe(KEY);
+    expect(linkedinProfileKey("linkedin.com/in/BLAKE-PRESTRIDGE")).toBe(KEY);
+    // A country subdomain is the same profile, and prod is full of them.
+    expect(linkedinProfileKey("https://uk.linkedin.com/in/blake-prestridge")).toBe(KEY);
+  });
+
+  it("a trailing slash, a tracking query and a hash are not a difference", () => {
+    expect(linkedinProfileKey("https://www.linkedin.com/in/blake-prestridge/")).toBe(KEY);
+    expect(linkedinProfileKey("https://www.linkedin.com/in/blake-prestridge?trk=public_profile")).toBe(KEY);
+    expect(linkedinProfileKey("https://www.linkedin.com/in/blake-prestridge/?originalSubdomain=uk")).toBe(KEY);
+    expect(linkedinProfileKey("https://www.linkedin.com/in/blake-prestridge#experience")).toBe(KEY);
+    expect(linkedinProfileKey("  https://www.linkedin.com/in/blake-prestridge/  ")).toBe(KEY);
+  });
+
+  it("an escaped slug decodes to the same profile", () => {
+    expect(linkedinProfileKey("https://www.linkedin.com/in/bl%61ke-prestridge")).toBe(KEY);
+  });
+
+  it("NOTHING USABLE IS NEVER A KEY — the empty-key fusion is impossible", () => {
+    // Every one of these would otherwise become the key "" and put unrelated
+    // humans in one cluster.
+    [null, undefined, "", "   ", "<UNKNOWN>", "n/a", "blake-prestridge",
+      "https://www.linkedin.com/company/alliance-animal-health",
+      "https://www.linkedin.com/in/",
+      "https://linkedin.com/sales/people/ACwAAA,NAME_SEARCH",
+      "https://example.com/in/blake-prestridge",
+      "https://notlinkedin.com/in/blake-prestridge",
+    ].forEach((v) => expect(linkedinProfileKey(v), String(v)).toBeNull());
+  });
+
+  it("two different people are two different keys", () => {
+    expect(linkedinProfileKey("https://linkedin.com/in/tyler-house"))
+      .not.toBe(linkedinProfileKey("https://linkedin.com/in/andy-seul"));
+  });
+
+  it("🔴 A PLACEHOLDER SLUG IS NOT A PROFILE — the /in/N/A fusion is impossible", () => {
+    // 2026-09-20 review, defect 4. quickenrich.ts templates whatever a provider
+    // returned into `https://www.linkedin.com/in/<value>` with no hygiene, so a
+    // field holding "N/A" or "unknown" is STORED as a profile url on every row
+    // that provider touched. `/in/N%2FA` decodes to "n/a" and `/in/N/A` leaves
+    // the slug "n": both used to be keys, and every row holding one — unrelated
+    // humans — landed in a single cluster whose only remaining guard was two
+    // identity fields that are routinely blank.
+    [
+      "https://www.linkedin.com/in/N%2FA",
+      "https://www.linkedin.com/in/n%2fa",
+      "https://www.linkedin.com/in/N/A",
+      "https://www.linkedin.com/in/unknown",
+      "https://www.linkedin.com/in/UNKNOWN",
+      "https://www.linkedin.com/in/null",
+      "https://www.linkedin.com/in/none",
+      "https://www.linkedin.com/in/<UNKNOWN>",
+      "https://www.linkedin.com/in/.",
+      "https://www.linkedin.com/in/-",
+      "https://www.linkedin.com/in/n",
+      "https://www.linkedin.com/in/%20",
+      // A url pasted inside a url: the slug capture takes the host, which is a
+      // string thousands of rows could share.
+      "https://www.linkedin.com/in/www.linkedin.com/in/jane",
+    ].forEach((v) => expect(linkedinProfileKey(v), String(v)).toBeNull());
+    // …and each of those is REPORTED, not silently absent: the operator is told
+    // how many rows hold one, the way skippedGeneric names shared inboxes.
+    expect(isPlaceholderProfileUrl("https://www.linkedin.com/in/N%2FA")).toBe(true);
+    expect(isPlaceholderProfileUrl("https://www.linkedin.com/in/unknown")).toBe(true);
+    // A url that is not a /in/ profile at all is a different thing and is not
+    // counted as one: a company page is nobody's placeholder.
+    expect(isPlaceholderProfileUrl("https://www.linkedin.com/company/alliance-animal-health")).toBe(false);
+    expect(isPlaceholderProfileUrl(null)).toBe(false);
+    expect(isPlaceholderProfileUrl("https://www.linkedin.com/in/blake-prestridge")).toBe(false);
+  });
+
+  it("a real slug is still a key — the guard rejects placeholders, not people", () => {
+    expect(linkedinProfileKey("https://www.linkedin.com/in/blake-prestridge")).toBe(KEY);
+    expect(linkedinProfileKey("https://www.linkedin.com/in/tyler-house-8a4b21")).toBe("linkedin.com/in/tyler-house-8a4b21");
+    expect(linkedinProfileKey("https://www.linkedin.com/in/aseul")).toBe("linkedin.com/in/aseul");
+    expect(linkedinProfileKey("https://www.linkedin.com/in/j_smith")).toBe("linkedin.com/in/j_smith");
+  });
+});
+
+/* ── The survivor order, in full ──────────────────────────────────────────── */
+
+describe("survivor order: contact link, then email quality, then lowest id", () => {
+  it("ranks Reoon's verdicts, and NEVER prefers invalid", () => {
+    expect(emailStatusRank("valid")).toBeLessThan(emailStatusRank("accept_all"));
+    expect(emailStatusRank("accept_all")).toBeLessThan(emailStatusRank("risky"));
+    expect(emailStatusRank("risky")).toBe(emailStatusRank("unknown"));
+    expect(emailStatusRank("invalid")).toBeGreaterThan(emailStatusRank("unknown"));
+    // Never verified is not verified-bad: NULL ranks with unknown, not invalid.
+    expect(emailStatusRank(null)).toBe(emailStatusRank("unknown"));
+    expect(emailStatusRank("")).toBe(emailStatusRank("unknown"));
+    expect(emailStatusRank("something-new")).toBe(emailStatusRank("unknown"));
+  });
+
+  it("PRODUCTION CASE 1/2: the valid row has the HIGHER id and a contact — it survives", () => {
+    // andy.seul@fiant.io (#4302, valid, contact-linked) vs aseul@fiant.io
+    // (#4301, unknown). 16 of LSI's 18 mixed-verdict groups have the valid row
+    // at the lower id; these are the two where it does not.
+    const v = pickSurvivor([
+      { id: 4301, contactLinkCount: 0, emailStatus: "unknown", email: "aseul@fiant.io" },
+      { id: 4302, contactLinkCount: 1, emailStatus: "valid", email: "andy.seul@fiant.io" },
+    ], true);
+    expect(v.survivorId).toBe(4302);
+    expect(v.reason).toBe("contact-linked");
+    expect(v.loserIds).toEqual([4301]);
+  });
+
+  it("PRODUCTION CASE 2/2: same shape, marcus.leanos@mjl.capital", () => {
+    const v = pickSurvivor([
+      { id: 4601, contactLinkCount: 0, emailStatus: "accept_all", email: "marcus@mjl.capital" },
+      { id: 4602, contactLinkCount: 2, emailStatus: "valid", email: "marcus.leanos@mjl.capital" },
+    ], true);
+    expect(v.survivorId).toBe(4602);
+    expect(v.reason).toBe("contact-linked");
+  });
+
+  it("🔴 THE CONTACT-LINKED ROW WINS EVEN HOLDING AN INVALID ADDRESS", () => {
+    // tyler@richeymay.com (#4201, INVALID, a contact points at it) vs
+    // tyler.house@richeymay.com (#4202, valid, nothing points at it).
+    //
+    // Decided deliberately: (a) beats (b). The contact link is a statement a
+    // human made about which row this person IS — the CRM, promotion and the
+    // "Add existing" wizard all resolve through it — and breaking it silently
+    // re-points a salesperson's account. The address is the recoverable half:
+    // the valid one is reported in discardedEmails, shown in the preview and
+    // written to the audit row, so an operator can paste it back in one edit.
+    const v = pickSurvivor([
+      { id: 4201, contactLinkCount: 1, emailStatus: "invalid", email: "tyler@richeymay.com" },
+      { id: 4202, contactLinkCount: 0, emailStatus: "valid", email: "tyler.house@richeymay.com" },
+    ], true);
+    expect(v.survivorId).toBe(4201);
+    expect(v.reason).toBe("contact-linked");
+    expect(v.loserIds).toEqual([4202]);
+  });
+
+  it("with no contact link, the VALID row beats the lower id", () => {
+    // 2026-09-20: every fixture in this block carries the ADDRESS its verdict is
+    // about. A verdict with no address ranks last now (review defect 2), so a
+    // fixture without one is not "a valid row", it is a row with no address.
+    const v = pickSurvivor([
+      { id: 4101, contactLinkCount: 0, emailStatus: "unknown", email: "bprestridge@allianceanimal.com" },
+      { id: 4102, contactLinkCount: 0, emailStatus: "valid", email: "blake.prestridge@allianceanimal.com" },
+    ], true);
+    expect(v.survivorId).toBe(4102);
+    expect(v.reason).toBe("email-quality");
+  });
+
+  it("accept_all beats risky/unknown, and invalid loses to everything", () => {
+    expect(pickSurvivor([
+      { id: 10, contactLinkCount: 0, emailStatus: "unknown", email: "a@x.com" },
+      { id: 20, contactLinkCount: 0, emailStatus: "accept_all", email: "b@x.com" },
+    ], true).survivorId).toBe(20);
+    expect(pickSurvivor([
+      { id: 10, contactLinkCount: 0, emailStatus: "risky", email: "a@x.com" },
+      { id: 20, contactLinkCount: 0, emailStatus: "accept_all", email: "b@x.com" },
+    ], true).survivorId).toBe(20);
+    // The invalid row is the LOWEST id and still does not survive.
+    expect(pickSurvivor([
+      { id: 10, contactLinkCount: 0, emailStatus: "invalid", email: "a@x.com" },
+      { id: 20, contactLinkCount: 0, emailStatus: "unknown", email: "b@x.com" },
+    ], true).survivorId).toBe(20);
+    expect(pickSurvivor([
+      { id: 10, contactLinkCount: 0, emailStatus: "invalid", email: "a@x.com" },
+      { id: 20, contactLinkCount: 0, emailStatus: null, email: "b@x.com" },
+    ], true).survivorId).toBe(20);
+  });
+
+  it("equal verdicts still tie-break on the LOWEST id — (d), unchanged", () => {
+    const v = pickSurvivor([
+      { id: 90, contactLinkCount: 0, emailStatus: "valid", email: "c@x.com" },
+      { id: 40, contactLinkCount: 0, emailStatus: "valid", email: "a@x.com" },
+      { id: 70, contactLinkCount: 0, emailStatus: "valid", email: "b@x.com" },
+    ], true);
+    expect(v.survivorId).toBe(40);
+    expect(v.reason).toBe("lowest-id");
+    // …and the input order still decides nothing.
+    const a = pickSurvivor([
+      { id: 5, contactLinkCount: 0, emailStatus: "invalid", email: "a@x.com" },
+      { id: 9, contactLinkCount: 0, emailStatus: "valid", email: "c@x.com" },
+      { id: 7, contactLinkCount: 0, emailStatus: "valid", email: "b@x.com" },
+    ], true);
+    const b = pickSurvivor([
+      { id: 7, contactLinkCount: 0, emailStatus: "valid", email: "b@x.com" },
+      { id: 5, contactLinkCount: 0, emailStatus: "invalid", email: "a@x.com" },
+      { id: 9, contactLinkCount: 0, emailStatus: "valid", email: "c@x.com" },
+    ], true);
+    expect(a).toEqual(b);
+    expect(a.survivorId).toBe(7);
+  });
+
+  it("THE EMAIL PASS IS UNCHANGED: quality is off unless the caller asks", () => {
+    // Every row in an email cluster holds the SAME address, so the verdicts are
+    // two opinions about one string. That pass has already run against
+    // production; re-ordering it now would change which row dies for no gain.
+    const v = pickSurvivor([
+      { id: 10, contactLinkCount: 0, emailStatus: "invalid", email: "rfrye@displayitinc.com" },
+      { id: 20, contactLinkCount: 0, emailStatus: "valid", email: "rfrye@displayitinc.com" },
+    ]);
+    expect(v.survivorId).toBe(10);
+    expect(v.reason).toBe("lowest-id");
+    // …and the planner only turns it on for the LinkedIn key.
+    const src = read("server/services/personMerge.ts");
+    const planner = src.slice(
+      src.indexOf("export async function planPersonMerge"),
+      src.indexOf("async function readProposalRefs"),
+    );
+    expect(planner).toContain('by === "linkedin",');
+  });
+});
+
+/* ── The address the merge destroys ───────────────────────────────────────── */
+
+describe("every discarded address is named before it is destroyed", () => {
+  it("a loser's DIFFERENT address is reported", () => {
+    expect(discardedEmailsFor("blake.prestridge@allianceanimal.com", [
+      { id: 4101, email: "bprestridge@allianceanimal.com" },
+    ])).toEqual(["bprestridge@allianceanimal.com"]);
+  });
+
+  it("an address the survivor already holds is NOT reported — nothing is lost", () => {
+    expect(discardedEmailsFor("rfrye@displayitinc.com", [
+      { id: 3491, email: "rfrye@displayitinc.com" },
+      { id: 3495, email: "RFrye@DisplayItInc.com" },
+      { id: 3496, email: null },
+      { id: 3497, email: "<UNKNOWN>" },
+    ])).toEqual([]);
+  });
+
+  it("an address the survivor INHERITS is kept, not discarded", () => {
+    // The survivor's email was blank and the union filled it from #1; that
+    // address survives, so only #2's is dropped.
+    expect(discardedEmailsFor("first@acme.com", [
+      { id: 1, email: "first@acme.com" },
+      { id: 2, email: "second@acme.com" },
+    ])).toEqual(["second@acme.com"]);
+  });
+
+  it("several losers report in ascending id order, de-duplicated", () => {
+    expect(discardedEmailsFor("keep@acme.com", [
+      { id: 9, email: "c@acme.com" },
+      { id: 4, email: "a@acme.com" },
+      { id: 6, email: "A@acme.com" },
+    ])).toEqual(["a@acme.com", "c@acme.com"]);
+  });
+});
+
+/* ── The verdict belongs to ONE address (2026-09-20 review, defects 1/5) ──── */
+
+describe("emailStatus is a fact about an address, not about a row", () => {
+  const WHEN = new Date("2026-09-01T00:00:00Z");
+
+  it("🔴 A SURVIVOR KEEPING ITS OWN ADDRESS NEVER INHERITS THE DELETED ROW'S VERDICT", () => {
+    // tyler@richeymay.com (#4201, an enrichment pattern GUESS, never checked, a
+    // contact points at it) survives over tyler.house@richeymay.com (#4202,
+    // verified valid). emailStatus/emailVerifiedAt/emailRevealedAt used to fill
+    // independently, so the survivor's guessed address ended up marked
+    // verified-valid with a timestamp: comprehensivePass then calls it proven
+    // and finalCheck stops flagging the person, so nothing ever looks for the
+    // real address again — and the verified one exists only in the audit row.
+    const { patch, filled } = unionPersonFields(
+      { id: 4201, email: "tyler@richeymay.com", emailStatus: null, emailVerifiedAt: null, emailRevealedAt: null },
+      [{ id: 4202, email: "tyler.house@richeymay.com", emailStatus: "valid", emailVerifiedAt: WHEN, emailRevealedAt: WHEN }],
+    );
+    expect(patch).toEqual({});
+    expect(filled).toEqual([]);
+  });
+
+  it("the mirror case: a never-checked address is not relabelled `invalid` either", () => {
+    // Survivor rank 2 (no verdict) beats the loser's `invalid`, survives keeping
+    // its own untested address — and used to inherit "invalid" from the row that
+    // was deleted, making it unmailable and counting it in the Data Health tile.
+    const { patch } = unionPersonFields(
+      { id: 10, email: "a@x.com", emailStatus: null },
+      [{ id: 20, email: "b@x.com", emailStatus: "invalid" }],
+    );
+    expect(patch.emailStatus).toBeUndefined();
+    expect("emailStatus" in patch).toBe(false);
+  });
+
+  it("an INHERITED address brings its own verdict, from the row it came from", () => {
+    const { patch, filled } = unionPersonFields(
+      { id: 1, email: null, emailStatus: null, emailVerifiedAt: null },
+      [
+        { id: 2, email: "good@x.com", emailStatus: "valid", emailVerifiedAt: WHEN },
+        { id: 3, email: "other@x.com", emailStatus: "invalid", emailVerifiedAt: WHEN },
+      ],
+    );
+    expect(patch.email).toBe("good@x.com");
+    expect(patch.emailStatus).toBe("valid");
+    expect(patch.emailVerifiedAt).toBe(WHEN);
+    expect(filled.filter((f) => f.field === "emailStatus")).toEqual([{ field: "emailStatus", fromPersonId: 2 }]);
+  });
+
+  it("a third row's verdict never describes the address a different row supplied", () => {
+    // The 3-row variant: the survivor is blank in both columns, #2 has the
+    // address and no verdict, #3 has a verdict about an address that is being
+    // DISCARDED. Independent fills produced email from #2 and "valid" from #3.
+    const { patch } = unionPersonFields(
+      { id: 1, email: null, emailStatus: null },
+      [
+        { id: 2, email: "a@x.com", emailStatus: null },
+        { id: 3, email: null, emailStatus: "valid" },
+      ],
+    );
+    expect(patch.email).toBe("a@x.com");
+    expect("emailStatus" in patch).toBe(false);
+  });
+
+  it("a loser holding the SAME address may still describe it", () => {
+    // Two rows, one address, one of them checked: the verdict is about the
+    // string the survivor keeps, so it travels. This is the email pass's case.
+    const { patch } = unionPersonFields(
+      { id: 3491, email: "rfrye@displayitinc.com", emailStatus: null, emailVerifiedAt: null },
+      [{ id: 3492, email: "RFrye@DisplayItInc.com", emailStatus: "valid", emailVerifiedAt: WHEN }],
+    );
+    expect(patch.emailStatus).toBe("valid");
+    expect(patch.emailVerifiedAt).toBe(WHEN);
+    // …and the address itself is not touched, so the email pass writes exactly
+    // the same UPDATE it wrote when it ran against production.
+    expect("email" in patch).toBe(false);
+  });
+
+  it("an inherited address does not keep a verdict about a DIFFERENT address", () => {
+    // The survivor's "valid" was about the address it used to hold — here, none
+    // at all (prospectImports writes the two columns independently). Inheriting
+    // an address and keeping that verdict labels bad@x.com verified-valid, the
+    // same wrong-address stamp from the other direction.
+    const { patch } = unionPersonFields(
+      { id: 10, email: null, emailStatus: "valid", emailVerifiedAt: WHEN },
+      [{ id: 20, email: "bad@x.com", emailStatus: null, emailVerifiedAt: null }],
+    );
+    expect(patch.email).toBe("bad@x.com");
+    expect(patch.emailStatus).toBeNull();
+    expect(patch.emailVerifiedAt).toBeNull();
+    // Only a TIED group clears: profileImageStatus is NOT NULL with a default,
+    // so a null there is not a legal write.
+    const image = unionPersonFields(
+      { id: 10, profileImageUrl: null, profileImageStatus: "blocked" },
+      [{ id: 20, profileImageUrl: "https://cdn/x.jpg", profileImageStatus: null }],
+    );
+    expect(image.patch.profileImageUrl).toBe("https://cdn/x.jpg");
+    expect("profileImageStatus" in image.patch).toBe(false);
+  });
+
+  it("the email columns are declared as ONE tied group, not four columns", () => {
+    const email = ATOMIC_FIELD_GROUPS.filter((g) => g.lead === "email")[0];
+    expect(email, "email must be an atomic group").toBeTruthy();
+    expect(email.carry).toEqual(["emailStatus", "emailVerifiedAt", "emailRevealedAt"]);
+    expect(typeof email.tied?.same).toBe("function");
+  });
+});
+
+/* ── A verdict with no address (2026-09-20 review, defect 2) ──────────────── */
+
+describe("the quality tier ranks ADDRESSES, so a row without one ranks last", () => {
+  it("no usable address sorts below `invalid`", () => {
+    // prospectImports.ts writes `email` and `emailStatus` independently, so a
+    // blank address beside a stale "valid" is a row this product can produce.
+    expect(emailQualityRank({ email: null, emailStatus: "valid" }))
+      .toBeGreaterThan(emailQualityRank({ email: "bad@x.com", emailStatus: "invalid" }));
+    expect(emailQualityRank({ email: "<UNKNOWN>", emailStatus: "valid" }))
+      .toBe(emailQualityRank({ email: null, emailStatus: "valid" }));
+    expect(emailQualityRank({ email: "good@x.com", emailStatus: "valid" })).toBe(0);
+  });
+
+  it("🔴 THE BLANK-ADDRESS ROW DOES NOT WIN THE TIER AND IS NOT CALLED VERIFIED", () => {
+    // #10 (no address, a stale "valid") used to win on rank 0 and the preview
+    // told the operator "its address is the verified one" — about a row with no
+    // address — while good@x.com was deleted.
+    const v = pickSurvivor([
+      { id: 10, contactLinkCount: 0, emailStatus: "valid", email: null },
+      { id: 20, contactLinkCount: 0, emailStatus: "invalid", email: "bad@x.com" },
+      { id: 30, contactLinkCount: 0, emailStatus: "valid", email: "good@x.com" },
+    ], true);
+    expect(v.survivorId).toBe(30);
+    expect(v.reason).toBe("email-quality");
+  });
+
+  it("a cluster where NOBODY has an address falls back to the lowest id", () => {
+    const v = pickSurvivor([
+      { id: 10, contactLinkCount: 0, emailStatus: "valid", email: null },
+      { id: 20, contactLinkCount: 0, emailStatus: "unknown", email: "<UNKNOWN>" },
+    ], true);
+    expect(v.survivorId).toBe(10);
+    // NOT "email-quality": there is no address here to call verified.
+    expect(v.reason).toBe("lowest-id");
+  });
+
+  it("an inherited address is the BEST one in the cluster, not the oldest", () => {
+    // The survivor kept its row on rule (a) and holds no address. Filling by
+    // pure id order took bad@x.com from #20 and deleted good@x.com with #30 —
+    // the exact outcome the quality tier was added to prevent.
+    const { patch, filled } = unionPersonFields(
+      { id: 10, email: null, emailStatus: null },
+      [
+        { id: 20, email: "bad@x.com", emailStatus: "invalid" },
+        { id: 30, email: "good@x.com", emailStatus: "valid" },
+      ],
+    );
+    expect(patch.email).toBe("good@x.com");
+    expect(patch.emailStatus).toBe("valid");
+    expect(filled.filter((f) => f.field === "email")).toEqual([{ field: "email", fromPersonId: 30 }]);
+    // …and equal verdicts still take the oldest row, as everything else does.
+    expect(unionPersonFields(
+      { id: 10, email: null },
+      [{ id: 30, email: "c@x.com", emailStatus: "valid" }, { id: 20, email: "b@x.com", emailStatus: "valid" }],
+    ).patch.email).toBe("b@x.com");
+  });
+});
+
+/* ── An unmailable address is not an address (review defect 3) ────────────── */
+
+describe("a placeholder in the email column is a blank, not an answer", () => {
+  it("🔴 A SURVIVOR HOLDING '<UNKNOWN>' INHERITS THE REAL ADDRESS", () => {
+    // isBlankValue("<UNKNOWN>") is false, so the survivor counted as already
+    // having an address: it never inherited and the cluster's only mailable
+    // address was deleted with its row. That person is then permanently
+    // unmailable AND invisible to the repair sweeper, which selects on
+    // `email IS NULL OR email = ''`.
+    const { patch, filled } = unionPersonFields(
+      { id: 10, email: "<UNKNOWN>", emailStatus: null },
+      [{ id: 20, email: "tyler.house@richeymay.com", emailStatus: "valid" }],
+    );
+    expect(patch.email).toBe("tyler.house@richeymay.com");
+    expect(patch.emailStatus).toBe("valid");
+    expect(filled.filter((f) => f.field === "email")).toEqual([{ field: "email", fromPersonId: 20 }]);
+    // Nothing is discarded: the address the survivor ends up holding is the
+    // loser's, so the merge drops no address at all.
+    expect(discardedEmailsFor(patch.email, [{ id: 20, email: "tyler.house@richeymay.com" }])).toEqual([]);
+  });
+
+  it("a malformed address is blank too, and the general rule is untouched", () => {
+    expect(isBlankField("email", "<UNKNOWN>")).toBe(true);
+    expect(isBlankField("email", "n/a")).toBe(true);
+    // No TLD — usableEmailOrNull's shape test, the same one the rest of the
+    // product uses to decide whether a person can be mailed.
+    expect(isBlankField("email", "tyler.house@richeymay")).toBe(true);
+    expect(isBlankField("email", "tyler.house@richeymay.com")).toBe(false);
+    // ONLY the email column: "<UNKNOWN>" in a title is junk, but replacing it
+    // would be an overwrite, and this merge never overwrites.
+    expect(isBlankValue("<UNKNOWN>")).toBe(false);
+    expect(isBlankField("title", "<UNKNOWN>")).toBe(false);
+    expect(isBlankField("phone", "<UNKNOWN>")).toBe(false);
+  });
+});
+
+/* ── Executed: the LinkedIn pass against a recording fake db ──────────────── */
+
+/** A prospects row shaped like the LSI rows this pass exists for. */
+const L = (id: number, over: Record<string, unknown> = {}) => ({
+  id, workspaceId: WS, firstName: "Blake", lastName: "Prestridge",
+  title: "Director of Operations", company: "Alliance Animal Health",
+  companyDomain: "allianceanimal.com", email: null, emailStatus: null,
+  linkedinUrl: null, phone: null, city: null, confidenceScore: null,
+  linkedinUrlVerified: false, ...over,
+});
+
+/**
+ * The fixture, taken from the shape of the live data:
+ *  · blake-prestridge — two guessed patterns, no contact on either, the VALID
+ *    row at the HIGHER id. The urls differ by www/case/trailing slash/query.
+ *  · tyler-house — the contact-linked row holds the INVALID address.
+ *  · andy-seul and marcus-leanos — the two real cases where the valid row has
+ *    the higher id AND is the contact-linked one.
+ *  · dbell — one profile, two surnames: skipped by the identity guard.
+ *  · 4501-4505 — five people with NO usable profile url between them. If the
+ *    empty key ever became a cluster these five would merge into one row.
+ */
+const LINKEDIN_PEOPLE: Array<Record<string, unknown> & { id: number }> = [
+  L(4101, { email: "bprestridge@allianceanimal.com", emailStatus: "unknown", linkedinUrl: "https://www.LinkedIn.com/in/Blake-Prestridge/" }),
+  L(4102, { email: "blake.prestridge@allianceanimal.com", emailStatus: "valid", linkedinUrl: "linkedin.com/in/blake-prestridge?trk=public_profile#experience" }),
+  L(4201, { firstName: "Tyler", lastName: "House", company: "Richey May", companyDomain: "richeymay.com", email: "tyler@richeymay.com", emailStatus: "invalid", linkedinUrl: "https://linkedin.com/in/tyler-house" }),
+  L(4202, { firstName: "Tyler", lastName: "House", company: "Richey May", companyDomain: "richeymay.com", email: "tyler.house@richeymay.com", emailStatus: "valid", linkedinUrl: "http://uk.linkedin.com/in/Tyler-House/" }),
+  L(4301, { firstName: "Andy", lastName: "Seul", company: "Fiant", companyDomain: "fiant.io", email: "aseul@fiant.io", emailStatus: "unknown", linkedinUrl: "https://www.linkedin.com/in/andy-seul" }),
+  L(4302, { firstName: "Andy", lastName: "Seul", company: "Fiant", companyDomain: "fiant.io", email: "andy.seul@fiant.io", emailStatus: "valid", linkedinUrl: "https://www.linkedin.com/in/andy-seul/" }),
+  L(4601, { firstName: "Marcus", lastName: "Leanos", company: "MJL Capital", companyDomain: "mjl.capital", email: "marcus@mjl.capital", emailStatus: "accept_all", linkedinUrl: "https://www.linkedin.com/in/marcus-leanos" }),
+  L(4602, { firstName: "Marcus", lastName: "Leanos", company: "MJL Capital", companyDomain: "mjl.capital", email: "marcus.leanos@mjl.capital", emailStatus: "valid", linkedinUrl: "https://www.linkedin.com/in/marcus-leanos?trk=people" }),
+  L(4401, { firstName: "Dana", lastName: "Bell", company: "SVP", companyDomain: "svpworldwide.com", email: "d.bell@svpworldwide.com", emailStatus: "valid", linkedinUrl: "https://www.linkedin.com/in/dbell" }),
+  L(4402, { firstName: "Dana", lastName: "Fitzgerald", company: "SVP", companyDomain: "svpworldwide.com", email: "dana.f@svpworldwide.com", emailStatus: "valid", linkedinUrl: "https://www.linkedin.com/in/dbell/" }),
+  L(4501, { firstName: "Ann", lastName: "Reed", email: "ann@x.com", linkedinUrl: null }),
+  L(4502, { firstName: "Bo", lastName: "Katz", email: "bo@x.com", linkedinUrl: "" }),
+  L(4503, { firstName: "Cy", lastName: "Doe", email: "cy@x.com", linkedinUrl: "<UNKNOWN>" }),
+  L(4504, { firstName: "Di", lastName: "Fox", email: "di@x.com", linkedinUrl: "https://www.linkedin.com/company/alliance-animal-health" }),
+  L(4505, { firstName: "Ed", lastName: "Gray", email: "ed@x.com", linkedinUrl: "https://www.linkedin.com/company/richey-may" }),
+  // 4701-4705 — five strangers a provider handed back "N/A" or "unknown" for,
+  // templated into a /in/ url by quickenrich.ts. They share nothing but that
+  // string. Three of them carry no lastName and no companyDomain, so the
+  // identity guard would NOT have refused the cluster (review defect 4).
+  L(4701, { firstName: "Fay", lastName: null, company: null, companyDomain: null, email: "fay@x.com", linkedinUrl: "https://www.linkedin.com/in/N%2FA" }),
+  L(4702, { firstName: "Gil", lastName: null, company: null, companyDomain: null, email: "gil@x.com", linkedinUrl: "https://www.linkedin.com/in/N%2FA" }),
+  L(4703, { firstName: "Hal", lastName: null, company: null, companyDomain: null, email: "hal@x.com", linkedinUrl: "https://www.linkedin.com/in/n/a" }),
+  L(4704, { firstName: "Ivy", lastName: "Nunez", companyDomain: "nunez.com", email: "ivy@x.com", linkedinUrl: "https://www.linkedin.com/in/unknown" }),
+  L(4705, { firstName: "Jo", lastName: "Park", companyDomain: "park.io", email: "jo@x.com", linkedinUrl: "https://www.linkedin.com/in/unknown" }),
+  // rita-frye — the lowest id is contact-linked and holds the placeholder
+  // "<UNKNOWN>" in its email column, which the repair sweeper cannot see.
+  L(4801, { firstName: "Rita", lastName: "Frye", company: "Display It", companyDomain: "displayitinc.com", email: "<UNKNOWN>", emailStatus: null, linkedinUrl: "https://www.linkedin.com/in/rita-frye" }),
+  L(4802, { firstName: "Rita", lastName: "Frye", company: "Display It", companyDomain: "displayitinc.com", email: "rita.frye@displayitinc.com", emailStatus: "valid", linkedinUrl: "https://www.linkedin.com/in/rita-frye/" }),
+];
+
+function linkedinHandler(st: State): unknown[] {
+  const keys = st.sel ? Object.keys(st.sel).sort().join(",") : "*";
+  const q = render(st.where);
+  if (st.table === "prospects") {
+    // The profile scan: two columns, every row with a url of any kind — the
+    // blank and non-profile ones included, so the JS is what must drop them.
+    if (keys === "id,linkedinUrl") {
+      return LINKEDIN_PEOPLE.map((p) => ({ id: p.id, linkedinUrl: p.linkedinUrl }));
+    }
+    // The plan's cluster fetch and the executor's survivor/loser reads are the
+    // same shape; both ask for exactly the ids they name.
+    if (keys === "*") return LINKEDIN_PEOPLE.filter((p) => q.params.indexOf(p.id) !== -1);
+    return [];
+  }
+  if (st.table === "contacts") {
+    if (keys === "personId") return [{ personId: 4201 }, { personId: 4302 }, { personId: 4602 }, { personId: 4801 }];
+    if (keys === "n,personId") return [];
+    return [{ n: 0 }];
+  }
+  if (st.table === "campaign_proposals") return [];
+  if (keys === "n,personId") return [];
+  if (keys === "*") return [];
+  return [{ n: 0 }];
+}
+
+describe("planPersonMerge by LinkedIn profile, run for real", () => {
+  const log: Op[] = [];
+  const out = (async () => {
+    h.db = makeDb(linkedinHandler, log);
+    const { planPersonMerge } = await import("./services/personMerge");
+    return planPersonMerge(h.db as never, WS, { by: "linkedin" });
+  })();
+
+  it("groups the four same-profile pairs the email pass cannot see", async () => {
+    const plan = await out;
+    expect(plan.by).toBe("linkedin");
+    expect(plan.merge.map((c) => c.key)).toEqual([
+      "linkedin.com/in/andy-seul",
+      "linkedin.com/in/blake-prestridge",
+      "linkedin.com/in/marcus-leanos",
+      "linkedin.com/in/rita-frye",
+      "linkedin.com/in/tyler-house",
+    ]);
+    expect(plan.clustersFound).toBe(6);
+    expect(plan.peopleDeleted).toBe(5);
+    // There is no shared address to name, and inventing one would name an
+    // arbitrary row's.
+    plan.merge.forEach((c) => expect(c.email).toBeNull());
+  });
+
+  it("🔴 A BLANK OR UNUSABLE URL NEVER FORMS A CLUSTER", async () => {
+    // Five people share "no LinkedIn url". If "" were a key they would be one
+    // cluster and four of them would be deleted.
+    const plan = await out;
+    const clustered: number[] = [];
+    plan.merge.forEach((c) => c.rows.forEach((r) => clustered.push(r.id)));
+    plan.skipped.forEach((s) => s.ids.forEach((id) => clustered.push(id)));
+    [4501, 4502, 4503, 4504, 4505].forEach((id) => {
+      expect(clustered, `#${id} has no usable profile url and must not be clustered`).not.toContain(id);
+    });
+    expect(plan.merge.filter((c) => !c.key)).toEqual([]);
+  });
+
+  it("🔴 A PLACEHOLDER SLUG FORMS NO CLUSTER — five strangers stay five rows", async () => {
+    // 4701-4705 all hold /in/N%2FA or /in/unknown, which normalised to one key
+    // ("linkedin.com/in/n" for the escaped one). Three of them have no lastName
+    // and no companyDomain, so the identity guard — the only thing between a
+    // cluster and a delete — would have let it through, and confirming would
+    // have deleted four unrelated humans onto one arbitrary survivor.
+    const plan = await out;
+    const clustered: number[] = [];
+    plan.merge.forEach((c) => c.rows.forEach((r) => clustered.push(r.id)));
+    plan.skipped.forEach((s) => s.ids.forEach((id) => clustered.push(id)));
+    [4701, 4702, 4703, 4704, 4705].forEach((id) => {
+      expect(clustered, `#${id} holds a placeholder slug and must not be clustered`).not.toContain(id);
+    });
+    // Reported, the way skippedGeneric reports a shared inbox: a row silently
+    // absent from a scan is indistinguishable from a workspace with no problem.
+    expect(plan.skippedPlaceholderProfiles).toBe(5);
+  });
+
+  it("the survivor holding '<UNKNOWN>' inherits the real address, and drops nothing", async () => {
+    // #4801 is contact-linked, so it survives rule (a) — holding a placeholder
+    // no repair pass can see. Its address column is a blank, so the union fills
+    // it from #4802, and since the address the merge keeps IS #4802's, there is
+    // nothing to report as discarded.
+    const plan = await out;
+    const rita = plan.merge.filter((c) => c.key === "linkedin.com/in/rita-frye")[0];
+    expect(rita.survivorId).toBe(4801);
+    expect(rita.survivorReason).toBe("contact-linked");
+    expect(rita.fieldsFilled).toContainEqual({ field: "email", fromPersonId: 4802 });
+    expect(rita.fieldsFilled).toContainEqual({ field: "emailStatus", fromPersonId: 4802 });
+    expect(rita.discardedEmails).toEqual([]);
+  });
+
+  it("case, www, a trailing slash and a tracking query all land in one cluster", async () => {
+    const plan = await out;
+    const blake = plan.merge.filter((c) => c.key === "linkedin.com/in/blake-prestridge")[0];
+    expect(blake.rows.map((r) => r.id)).toEqual([4101, 4102]);
+  });
+
+  it("the valid address survives when nothing is contact-linked", async () => {
+    const plan = await out;
+    const blake = plan.merge.filter((c) => c.key === "linkedin.com/in/blake-prestridge")[0];
+    expect(blake.survivorId).toBe(4102);
+    expect(blake.survivorReason).toBe("email-quality");
+    expect(blake.discardedEmails).toEqual(["bprestridge@allianceanimal.com"]);
+  });
+
+  it("the contact-linked row survives holding the INVALID address, and says what it drops", async () => {
+    const plan = await out;
+    const tyler = plan.merge.filter((c) => c.key === "linkedin.com/in/tyler-house")[0];
+    expect(tyler.survivorId).toBe(4201);
+    expect(tyler.survivorReason).toBe("contact-linked");
+    expect(tyler.discardedEmails).toEqual(["tyler.house@richeymay.com"]);
+    // The preview can show the verdict on each row, which is how an operator
+    // sees that the kept address is the broken one.
+    const rows: Record<number, string | null> = {};
+    tyler.rows.forEach((r) => { rows[r.id] = r.emailStatus; });
+    expect(rows[4201]).toBe("invalid");
+    expect(rows[4202]).toBe("valid");
+  });
+
+  it("the two production cases: valid + contact-linked at the HIGHER id", async () => {
+    const plan = await out;
+    const andy = plan.merge.filter((c) => c.key === "linkedin.com/in/andy-seul")[0];
+    expect(andy.survivorId).toBe(4302);
+    expect(andy.survivorReason).toBe("contact-linked");
+    expect(andy.discardedEmails).toEqual(["aseul@fiant.io"]);
+    const marcus = plan.merge.filter((c) => c.key === "linkedin.com/in/marcus-leanos")[0];
+    expect(marcus.survivorId).toBe(4602);
+    expect(marcus.discardedEmails).toEqual(["marcus@mjl.capital"]);
+  });
+
+  it("the identity guard still applies to a shared profile", async () => {
+    // One profile url, two surnames. A shared LinkedIn URL is strong evidence,
+    // but the guard is cheap and the posture is refuse-rather-than-guess.
+    const plan = await out;
+    expect(plan.skipped.map((s) => s.key)).toEqual(["linkedin.com/in/dbell"]);
+    expect(plan.skipped[0].reason).toContain("lastName");
+    expect(plan.skipped[0].ids).toEqual([4401, 4402]);
+    expect(plan.skipped[0].by).toBe("linkedin");
+  });
+
+  it("writes NOTHING, and every read is workspace-scoped", async () => {
+    await out;
+    expect(log.filter((o) => o.kind !== "select")).toEqual([]);
+    const unscoped = log
+      .filter((o) => o.kind === "select" && o.table !== "contact_import_rows")
+      .filter((o) => !render(o.where).params.includes(WS));
+    expect(unscoped.map((o) => o.table)).toEqual([]);
+  });
+});
+
+describe("executePersonMerge by LinkedIn profile, run for real", () => {
+  const log: Op[] = [];
+  const out = (async () => {
+    h.db = makeDb(linkedinHandler, log);
+    const { executePersonMerge } = await import("./services/personMerge");
+    return executePersonMerge(h.db as never, WS, {
+      by: "linkedin",
+      clusters: [{ key: "linkedin.com/in/tyler-house", survivorId: 4201, loserIds: [4202] }],
+      actorUserId: 42,
+    });
+  })();
+
+  it("merges the approved cluster and reports the address it dropped", async () => {
+    const r = await out;
+    expect(r.stale).toEqual([]);
+    expect(r.unrecorded).toEqual([]);
+    expect(r.merged.length).toBe(1);
+    expect(r.merged[0].key).toBe("linkedin.com/in/tyler-house");
+    expect(r.merged[0].by).toBe("linkedin");
+    expect(r.merged[0].email).toBeNull();
+    expect(r.merged[0].survivorId).toBe(4201);
+    expect(r.merged[0].discardedEmails).toEqual(["tyler.house@richeymay.com"]);
+    expect(r.peopleDeleted).toBe(1);
+  });
+
+  it("THE DISCARDED ADDRESS IS ON THE AUDIT ROW, WRITTEN BEFORE THE DELETE", async () => {
+    // It exists nowhere else afterwards: prospects has no honest second-address
+    // column (catchAllEmail means "the GENERIC inbox this address replaced" and
+    // the People UI labels it that way), and this merge does not invent one.
+    await out;
+    const auditAt = log.findIndex((o) => o.kind === "insert" && o.table === "audit_log");
+    const delAt = log.findIndex((o) => o.kind === "delete" && o.table === "prospects");
+    expect(auditAt).toBeGreaterThan(-1);
+    expect(delAt).toBeGreaterThan(auditAt);
+    const row = log[auditAt].set as Record<string, unknown>;
+    const before = row.before as Record<string, unknown>;
+    const after = row.after as Record<string, unknown>;
+    expect(before.discardedEmails).toEqual(["tyler.house@richeymay.com"]);
+    expect(before.key).toBe("linkedin.com/in/tyler-house");
+    expect(after.discardedEmails).toEqual(["tyler.house@richeymay.com"]);
+    // …and the whole deleted row is there too, which is where the address came
+    // from in the first place.
+    expect((before.losers as Array<{ id: number }>)[0].id).toBe(4202);
+  });
+
+  it("the delete carries workspaceId and the explicit loser id", async () => {
+    await out;
+    const del = log.filter((o) => o.kind === "delete" && o.table === "prospects")[0];
+    const q = render(del.where);
+    expect(q.params).toContain(WS);
+    expect(q.params).toContain(4202);
+    expect(q.params).not.toContain(4201);
+  });
+
+  it("a cluster approved in the WRONG mode is refused, not merged", async () => {
+    // The same rows are named by a slug in one pass and by an address in the
+    // other. A key resolved in the wrong mode resolves to nothing.
+    await out;
+    const mislog: Op[] = [];
+    h.db = makeDb(linkedinHandler, mislog);
+    const { executePersonMerge } = await import("./services/personMerge");
+    const r = await executePersonMerge(h.db as never, WS, {
+      clusters: [{ key: "linkedin.com/in/tyler-house", survivorId: 4201, loserIds: [4202] }],
+      actorUserId: 42,
+    });
+    expect(r.merged).toEqual([]);
+    expect(r.stale.length).toBe(1);
+    expect(r.stale[0].reason).toContain("not a usable email address");
+    expect(mislog.filter((o) => o.kind !== "select")).toEqual([]);
+  });
+
+  it("a survivor that moved since the preview is still refused", async () => {
+    await out;
+    const mislog: Op[] = [];
+    h.db = makeDb(linkedinHandler, mislog);
+    const { executePersonMerge } = await import("./services/personMerge");
+    const r = await executePersonMerge(h.db as never, WS, {
+      by: "linkedin",
+      clusters: [{ key: "linkedin.com/in/tyler-house", survivorId: 4202, loserIds: [4201] }],
+      actorUserId: 42,
+    });
+    expect(r.merged).toEqual([]);
+    expect(r.stale[0].reason).toContain("changed since the preview");
+    expect(mislog.filter((o) => o.kind !== "select")).toEqual([]);
+  });
+});
+
+describe("the email pass is untouched by the second key", () => {
+  it("an email cluster still reports no discarded address", async () => {
+    // Every row holds the same address, so nothing is dropped — the field is
+    // present and empty rather than absent.
+    const log: Op[] = [];
+    h.db = makeDb(scriptedHandler, log);
+    const { planPersonMerge } = await import("./services/personMerge");
+    const plan = await planPersonMerge(h.db as never, WS, {});
+    expect(plan.by).toBe("email");
+    expect(plan.merge[0].discardedEmails).toEqual([]);
+    expect(plan.merge[0].by).toBe("email");
+    // The key and the address are the same string in this mode.
+    expect(plan.merge[0].key).toBe("rfrye@displayitinc.com");
+    expect(plan.merge[0].email).toBe("rfrye@displayitinc.com");
+  });
+
+  it("the email pass never runs the profile scan", async () => {
+    // Every extra query is a query against a production table; the email pass
+    // is the one that already ran and its reads are unchanged.
+    const log: Op[] = [];
+    h.db = makeDb(scriptedHandler, log);
+    const { planPersonMerge } = await import("./services/personMerge");
+    await planPersonMerge(h.db as never, WS, {});
+    const scans = log.filter((o) => o.kind === "select" && o.table === "prospects");
+    scans.forEach((o) => expect(render(o.where).sql).not.toContain("linkedin_url"));
+  });
+});
+
 /* ── The seam: router and page ────────────────────────────────────────────── */
 
 describe("a merge nobody can reach is not a merge", () => {
@@ -1270,6 +2065,54 @@ describe("a merge nobody can reach is not a merge", () => {
     expect(page).toContain("Preview merge");
     expect(page).toContain("<ConfirmButton");
     expect(page).toContain("clusters: [{ email: open.email, survivorId: open.survivorId, loserIds: open.loserIds }]");
+  });
+
+  it("the LinkedIn pass is reachable and SAYS what it groups on", () => {
+    // "Duplicate People" without the grouping rule is not a claim an operator
+    // can check, and these two passes group on different things.
+    expect(page).toContain('<PeopleMergeSection by="linkedin" />');
+    expect(page).toContain("the same LinkedIn profile");
+    expect(page).toContain("LinkedIn profile${clusters.length === 1 ? \"\" : \"s\"} held by more than one People row");
+    // The email pass is still rendered exactly as it was.
+    expect(page).toContain("<PeopleMergeSection />");
+    expect(page).toContain("email${clusters.length === 1 ? \"\" : \"s\"} held by more than one People row");
+  });
+
+  it("the rows dropped for a placeholder slug are REPORTED, not silently absent", () => {
+    // The same posture as the shared-inbox line: a scan that quietly drops rows
+    // reads as "this workspace has no duplicates" (2026-09-20 review, defect 4).
+    expect(page).toContain("skippedPlaceholderProfiles");
+    expect(page).toContain("placeholder LinkedIn URL");
+    // …and the pass says the guard exists before an operator wonders where a
+    // person they expected to see went.
+    expect(page).toContain("placeholder slug");
+  });
+
+  it("the page does not promise a verdict the merge no longer transplants", () => {
+    // The survivor keeping its own address keeps its own verdict with it
+    // (review defects 1/5), and a row with no address never wins the tier
+    // (defect 2) — both are stated where the operator reads the rule.
+    expect(page).toContain("no address at all never wins on its verdict");
+    expect(page).toContain("never inherits the deleted row");
+  });
+
+  it("the preview names the address the merge will drop, and where it goes", () => {
+    // The rows hold DIFFERENT addresses and one of them stops existing. It is
+    // named before the confirm, not counted afterwards.
+    expect(page).toContain("which the merge will drop");
+    expect(page).toContain("Addresses this merge drops");
+    expect(page).toContain("audit log");
+    // …and the copy does not promise a field that does not exist.
+    expect(page).toContain("there is no second-address field on a person");
+  });
+
+  it("both procedures take the pass they are running", () => {
+    const plan = router.slice(router.indexOf("planPeopleMerge:"), router.indexOf("executePeopleMerge:"));
+    const exec = router.slice(router.indexOf("executePeopleMerge:"), router.indexOf("providerEffectiveness"));
+    expect(plan).toContain('by: z.enum(["email", "linkedin"]).default("email")');
+    expect(exec).toContain('by: z.enum(["email", "linkedin"]).default("email")');
+    // Defaulted, so a client that does not know the option keeps its behaviour.
+    expect(exec).toContain('.default("email")');
   });
 
   it("the page says the merge is permanent, in those words", () => {

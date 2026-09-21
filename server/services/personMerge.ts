@@ -36,6 +36,43 @@
  *    model, an enrichment row folded into another) go into `before.deleted` in
  *    full before they go.
  *
+ * 🔵 THE SECOND CLUSTER KEY (2026-09-20, same day, after the email pass ran).
+ * The email pass merged 169 clusters in production. LSI Media still showed ~90
+ * "duplicate people" it could not see, because the two rows carry DIFFERENT
+ * addresses — the enrichment providers guessed two PATTERNS for one human:
+ *
+ *     bprestridge@allianceanimal.com  vs  blake.prestridge@allianceanimal.com
+ *     tyler@richeymay.com             vs  tyler.house@richeymay.com
+ *
+ * All 90 groups share the SAME linkedinUrl and none disagrees on title. A
+ * LinkedIn profile is a unique person identifier, so `by: "linkedin"` groups on
+ * the normalised `/in/<slug>` instead of the address. Everything else — the
+ * identity guard, the field union, the approved-ids assertion, the audit row,
+ * the repoint-then-delete order — is the SAME code path. There is one merge.
+ *
+ * ⚠️ WHAT THE LINKEDIN PASS RISKS THAT THE EMAIL PASS DID NOT: merging two rows
+ * with different addresses DISCARDS one of them, and the field union keeps the
+ * SURVIVOR's address (a non-blank survivor value is never overwritten — though
+ * an unmailable placeholder is not a value, see `FIELD_IS_BLANK`). So the
+ * survivor rule takes email quality into account (see `pickSurvivor`), and every
+ * address the merge drops is recorded — `discardedEmails` on the plan, on the
+ * result and on the audit row.
+ *
+ * AND EVERY RULE ABOUT THE ADDRESS IS A RULE ABOUT ONE ADDRESS. The email pass
+ * could treat `email`, `emailStatus`, `emailVerifiedAt` and `emailRevealedAt` as
+ * four independent columns because every row in one of its clusters holds the
+ * SAME address; here they differ by design, so the verdict columns travel with
+ * the address they describe and never on their own (ATOMIC_FIELD_GROUPS' tied
+ * group), a verdict with no address ranks below `invalid` rather than above
+ * everything (`emailQualityRank`), and a slug that names nobody is not a cluster
+ * key (`linkedinProfileKey`). Each of those was a way to lose a real address or
+ * fuse real strangers, found by review before this pass ran. `prospects.catchAllEmail` is NOT a home for it:
+ * that column means "the GENERIC inbox this person's address replaced" and the
+ * People UI labels it "Catch-all (generic inbox)", so parking a personal
+ * pattern-guess there would be a lie rendered in the product. No column is
+ * invented either; the audit row is where the discarded address lives, and the
+ * preview says so in those words.
+ *
  * THE 18 COMPLEMENTARY CLUSTERS ARE WHY THE FIELD UNION EXISTS. Measured on
  * prod: rfrye@displayitinc.com rows 3491/3492 — one holds a phone and no city,
  * the other a city and no phone. NEITHER row is wrong. A merge that picks a
@@ -76,7 +113,7 @@ import {
   voiceCalls,
 } from "../../drizzle/schema";
 import type { getDb } from "../db";
-import { usableEmailOrNull } from "@shared/fieldHygiene";
+import { isPlaceholderToken, usableEmailOrNull } from "@shared/fieldHygiene";
 import { isGenericInboxEmail } from "@shared/genericEmail";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -86,6 +123,21 @@ type Row = Record<string, unknown> & { id: number };
  *  size: past this the answer stops being "here is every duplicate" and starts
  *  being "here is what fitted", which is what `capped` reports. */
 export const CLUSTER_CAP = 200;
+
+/**
+ * WHAT THE ROWS ARE GROUPED ON. "email" is the pass that ran in production on
+ * 2026-09-20 and is the DEFAULT everywhere, so every caller written before the
+ * LinkedIn key existed keeps its exact behaviour.
+ */
+export type PersonMergeBy = "email" | "linkedin";
+
+/** Page size and page ceiling for the LinkedIn scan. Unlike the email pass the
+ *  grouping CANNOT be a GROUP BY — the key is a normalised slug, and a
+ *  `LOWER(...)`-shaped expression over a `text` column indexes nothing — so the
+ *  candidate rows are keyset-drained (id + url only) and grouped in JS. Draining
+ *  the whole ceiling sets `capped`, exactly like the cluster scan. */
+export const LINKEDIN_SCAN_CAP = 2000;
+export const LINKEDIN_SCAN_PAGES = 25;
 
 /* ── Every table that holds a People (`prospects`) id ─────────────────────── */
 
@@ -331,9 +383,50 @@ export const NON_MERGEABLE_FIELDS: Record<string, string> = {
  * come from that same loser. This is not an overwrite of a value the survivor
  * chose — it is refusing to describe one row's URL with another row's status.
  */
-export const ATOMIC_FIELD_GROUPS: Array<{ lead: string; carry: string[] }> = [
+export interface AtomicFieldGroup {
+  lead: string;
+  carry: string[];
+  /**
+   * 🔴 A TIED GROUP: the carry columns are a VERDICT ABOUT THE LEAD'S VALUE, so
+   * they may only ever be filled from a row holding that same value, and the
+   * inherited lead is chosen by `rank` rather than by age.
+   *
+   * 2026-09-20 review, defects 1/5: without this, `email` and the three columns
+   * that describe it (`emailStatus`, `emailVerifiedAt`, `emailRevealedAt`) fill
+   * INDEPENDENTLY. A LinkedIn-keyed survivor that keeps its OWN address — the
+   * rows in that pass hold different ones by design — inherited the DELETED
+   * row's verdict: an enrichment pattern guess stamped `valid` with a
+   * verification timestamp (so comprehensivePass calls it proven and finalCheck
+   * stops flagging it, and the address that was really verified is gone), or a
+   * never-checked address stamped `invalid` (so it is unmailable and counted in
+   * the Data Health tile). In EMAIL mode every row in the cluster holds the same
+   * address, so `same` is true of every loser and that pass is unchanged.
+   */
+  tied?: {
+    /** Is the loser's lead value the value the survivor will hold? */
+    same: (kept: unknown, candidate: unknown) => boolean;
+    /** Lower is better; which loser an inheriting survivor takes the lead from. */
+    rank: (row: Record<string, unknown>) => number;
+  };
+}
+
+export const ATOMIC_FIELD_GROUPS: AtomicFieldGroup[] = [
   { lead: "profileImageUrl", carry: ["profileImageSource", "profileImageSourceUrl", "profileImageStatus", "profileImageLastVerifiedAt"] },
   { lead: "linkedinUrl", carry: ["linkedinUrlVerified"] },
+  {
+    lead: "email",
+    carry: ["emailStatus", "emailVerifiedAt", "emailRevealedAt"],
+    tied: {
+      same: (kept, candidate) => {
+        const k = usableEmailOrNull(kept);
+        return k !== null && k === usableEmailOrNull(candidate);
+      },
+      // A blank survivor address inherits the BEST-VERDICT loser's, not the
+      // oldest one's — inheriting `bad@x.com` from #20 while `good@x.com` on
+      // #30 is deleted is the outcome the quality tier exists to prevent.
+      rank: (row) => emailQualityRank(row),
+    },
+  },
 ];
 
 /** Never unioned between two `prospect_linkedin_enrichments` rows: identity,
@@ -363,21 +456,190 @@ export function isBlankValue(value: unknown): boolean {
   return typeof value === "string" ? value.trim() === "" : false;
 }
 
+/**
+ * 🔴 COLUMNS WHERE "PRESENT" IS NOT "USABLE" (2026-09-20 review, defect 3).
+ *
+ * `isBlankValue("<UNKNOWN>")` is false, so a survivor holding an unmailable
+ * placeholder counted as "already has an address": it never inherited, and the
+ * cluster's one real address was deleted with its row. That person is then
+ * permanently unmailable AND unrepairable — `if (!prospect.email)` gates every
+ * acquisition path and "<UNKNOWN>" is truthy, and the repair sweeper selects on
+ * `email IS NULL OR email = ''`. The union uses the SAME definition of a real
+ * address as `discardedEmailsFor` and the rest of the product: shared/fieldHygiene.
+ *
+ * In email mode nothing changes — a cluster key IS a usable address, so every
+ * row in one holds one by construction.
+ */
+export const FIELD_IS_BLANK: Record<string, (value: unknown) => boolean> = {
+  email: (value) => usableEmailOrNull(value) === null,
+};
+
+/** `isBlankValue`, except where a column has a stricter idea of "absent". */
+export function isBlankField(field: string, value: unknown): boolean {
+  const stricter = FIELD_IS_BLANK[field];
+  return stricter ? stricter(value) : isBlankValue(value);
+}
+
+/**
+ * 🔵 THE LINKEDIN CLUSTER KEY — the `/in/<slug>` a URL names, or null.
+ *
+ * Two rows whose urls differ only by protocol, `www.`/`uk.`, case, a trailing
+ * slash or a tracking query (`?trk=`, `?originalSubdomain=`, `#experience`) are
+ * ONE profile, so all of that is stripped before anything is grouped.
+ *
+ * ⚠️ NULL IS NOT A KEY. Most People rows have no LinkedIn url at all, and
+ * grouping on "" would fuse every one of them into a single cluster and then
+ * delete all but one — the worst outcome this file can produce, and the reason
+ * `personMerge.test.ts` asserts a blank url never forms a cluster. A value that
+ * is not a linkedin.com `/in/` profile (a company page, a Sales Navigator lead
+ * url, "<UNKNOWN>", a bare word) is unusable in exactly the same way: it is not
+ * evidence that two rows are one human, so it returns null too.
+ *
+ * 🔴 AND NEITHER IS A PLACEHOLDER SLUG (2026-09-20 review, defect 4). A /in/ url
+ * is only evidence of ONE human if its slug names one. quickenrich.ts templates
+ * whatever a provider returned into `https://www.linkedin.com/in/<value>` with
+ * no hygiene at all, so a field holding "N/A", "unknown" or "null" is stored as
+ * a profile url on EVERY row that provider touched — and `/in/N%2FA` normalises
+ * to one key. Every one of those People rows would land in a single cluster of
+ * unrelated humans, held back from a delete only by the identity guard, which
+ * compares two fields that are routinely blank. This is the email pass's
+ * generic-inbox guard (`isGenericInboxEmail` -> `skippedGeneric`) applied to the
+ * slug, and it is reported the same way: `skippedPlaceholderProfiles`.
+ */
+export const LINKEDIN_SLUG = /^[a-z0-9][a-z0-9\-_%]{1,98}[a-z0-9]$/;
+
+/** The `/in/` slug a url names, before the identity guard below. */
+function linkedinProfileSlug(value: unknown): string | null {
+  const s = String(value ?? "").trim().toLowerCase();
+  if (!s) return null;
+  // The hash and the query are tracking, not identity — dropped first so a
+  // slug is never read out of `?trk=public_profile`.
+  const bare = s.split("#")[0].split("?")[0];
+  const m = bare.match(/^(?:https?:\/\/)?(?:[a-z0-9-]+\.)*linkedin\.com\/in\/([^/]+)/);
+  if (!m) return null;
+  let slug = m[1];
+  try { slug = decodeURIComponent(slug); } catch { /* an invalid escape: keep the raw slug */ }
+  slug = slug.trim().replace(/\/+$/, "");
+  return slug || null;
+}
+
+/**
+ * A slug that cannot identify one human: a placeholder token ("unknown", "n/a",
+ * "null", "none", dashes — shared/fieldHygiene's one vocabulary), or a shape no
+ * real public identifier has (too short, a dot, a space, a stray host).
+ */
+function isUnusableProfileSlug(slug: string): boolean {
+  return isPlaceholderToken(slug) || !LINKEDIN_SLUG.test(slug);
+}
+
+export function linkedinProfileKey(value: unknown): string | null {
+  const slug = linkedinProfileSlug(value);
+  if (!slug || isUnusableProfileSlug(slug)) return null;
+  return `linkedin.com/in/${slug}`;
+}
+
+/** True where a url DOES name a `/in/` profile but its slug names nobody — the
+ *  rows the scan drops for the reason above, counted so the operator is told
+ *  they exist rather than left wondering where they went. */
+export function isPlaceholderProfileUrl(value: unknown): boolean {
+  const slug = linkedinProfileSlug(value);
+  return slug !== null && isUnusableProfileSlug(slug);
+}
+
+/**
+ * Reoon's verdicts, worst LAST. Checked against production: `valid`,
+ * `accept_all`, `risky`, `unknown` and `invalid` are what `prospects.email_status`
+ * actually holds (the schema comment's verified/unverified/unavailable wording
+ * is stale and empty in both workspaces; `verified` is mapped anyway rather than
+ * silently ranked as "no verdict").
+ *
+ * ANYTHING UNRECOGNISED — including NULL, which is most rows — ranks with
+ * `unknown`, NOT with `invalid`: never verified is not the same as verified bad,
+ * and a merge that treated it as bad would start preferring the row whose
+ * address someone had bothered to check as broken.
+ */
+export const EMAIL_STATUS_RANK: Record<string, number> = {
+  valid: 0,
+  verified: 0,
+  accept_all: 1,
+  "accept-all": 1,
+  catch_all: 1,
+  risky: 2,
+  unknown: 2,
+  invalid: 3,
+};
+/** Rank of one verdict; 2 ("no usable verdict") for anything unrecognised. */
+export function emailStatusRank(status: unknown): number {
+  const s = String(status ?? "").trim().toLowerCase();
+  if (!s) return 2;
+  const known = EMAIL_STATUS_RANK[s];
+  return known === undefined ? 2 : known;
+}
+
+/**
+ * 🔴 A VERDICT WITH NO ADDRESS RANKS LAST (2026-09-20 review, defect 2).
+ *
+ * `emailStatus` and `email` are written independently (prospectImports.ts:246
+ * writes both from a CSV), so a row can hold a stale or imported `valid` with a
+ * NULL address. Ranking that row on its verdict alone let it WIN the quality
+ * tier and be reported to the operator as "its address is the verified one" —
+ * for a row with no address — while the row actually holding the cluster's
+ * verified address was deleted. Nothing is worse here than having no address at
+ * all, so `NO_ADDRESS_RANK` sorts below `invalid`.
+ */
+export const NO_ADDRESS_RANK = 4;
+
+/** The quality tier's real comparator: a row's verdict, or NO_ADDRESS_RANK when
+ *  the verdict describes nothing this product could send mail to. */
+export function emailQualityRank(row: { email?: unknown; emailStatus?: unknown }): number {
+  return usableEmailOrNull(row.email) === null ? NO_ADDRESS_RANK : emailStatusRank(row.emailStatus);
+}
+
 export interface SurvivorCandidate {
   id: number;
   /** How many `contacts.personProspectId` rows point at this People row. */
   contactLinkCount: number;
+  /** Reoon's verdict on THIS row's address. Only consulted when the caller asks
+   *  for it — see `useEmailQuality` below. */
+  emailStatus?: string | null;
+  /** The address that verdict is ABOUT. Required for the quality tier to mean
+   *  anything: a verdict without one is not a better address, it is no address. */
+  email?: string | null;
 }
 
 export interface SurvivorChoice {
   survivorId: number;
-  reason: "contact-linked" | "lowest-id";
+  reason: "contact-linked" | "email-quality" | "lowest-id";
   loserIds: number[];
 }
 
 /**
- * SURVIVOR RULE: prefer the row a contact already points at; if several rows
- * qualify, or none does, the LOWEST id wins.
+ * SURVIVOR RULE, in full and in order:
+ *
+ *   (a) a row a contact already points at (`contacts.personProspectId`);
+ *   (b) then — only when `useEmailQuality` is on — a row whose `emailStatus` is
+ *       `valid`;
+ *   (c) then `accept_all`, then `risky` / `unknown` / no verdict at all, then
+ *       `invalid`, and LAST of everything a row holding no usable address at
+ *       all — a verdict is a fact about an address, and a row without one has
+ *       nothing for the tier to prefer;
+ *   (d) then the LOWEST id.
+ *
+ * 🔴 (a) BEATS (b), DELIBERATELY. A contact-linked row holding an INVALID
+ * address survives over a non-linked row holding a valid one. The link is a
+ * statement a human made about which record this person IS — the CRM, promotion
+ * and the "Add existing" wizard all resolve through it — and breaking it
+ * silently re-points a salesperson's account at a different row. The address is
+ * the recoverable half: the valid one is listed in `discardedEmails`, shown in
+ * the preview before the operator confirms, and written to the audit row. An
+ * operator who wants it can paste it back in one edit; nobody can reconstruct
+ * a broken contact link from a count.
+ *
+ * WHY (b) AND (c) ARE OPT-IN. In email mode every row in the cluster holds the
+ * SAME address, so the verdicts are two opinions about one string: re-ordering
+ * there could only churn which row dies, and that pass has already run against
+ * production. In linkedin mode the rows hold DIFFERENT addresses and the merge
+ * discards one, so which row survives decides which address the product keeps.
  *
  * Deterministic on purpose, and deliberately NOT "most recently updated":
  * `prospects.updatedAt` carries `onUpdateNow()`, so every enrichment sweep and
@@ -394,15 +656,56 @@ export interface SurvivorChoice {
  * between a preview and a confirm. That is why executePersonMerge asserts the
  * approved ids rather than trusting this to agree with itself.
  */
-export function pickSurvivor(rows: SurvivorCandidate[]): SurvivorChoice {
+export function pickSurvivor(rows: SurvivorCandidate[], useEmailQuality = false): SurvivorChoice {
   const ordered = rows.slice().sort((a, b) => a.id - b.id);
   const linked = ordered.filter((r) => r.contactLinkCount > 0);
-  const survivor = linked.length > 0 ? linked[0] : ordered[0];
+  const pool = linked.length > 0 ? linked : ordered;
+  // Already ascending by id, so a STABLE sort on the verdict alone leaves the
+  // lowest id winning every tie — step (d) with no second comparator to drift.
+  let survivor = pool[0];
+  if (useEmailQuality) {
+    pool.forEach((r) => {
+      if (emailQualityRank(r) < emailQualityRank(survivor)) survivor = r;
+    });
+  }
+  // NO_ADDRESS_RANK is the worst rank there is, so a survivor holding no usable
+  // address can never be "outranked" and never claims `email-quality` — which
+  // the preview renders as "its address is the verified one".
+  const outranked = useEmailQuality
+    && pool.filter((r) => emailQualityRank(r) > emailQualityRank(survivor)).length > 0;
   return {
     survivorId: survivor.id,
-    reason: linked.length > 0 ? "contact-linked" : "lowest-id",
+    reason: linked.length > 0 ? "contact-linked" : outranked ? "email-quality" : "lowest-id",
     loserIds: ordered.filter((r) => r.id !== survivor.id).map((r) => r.id),
   };
+}
+
+/**
+ * THE ADDRESSES THIS MERGE WILL DROP.
+ *
+ * The union keeps the survivor's own non-blank email and fills a blank one from
+ * the oldest loser that has one — so in a LinkedIn-keyed cluster every OTHER
+ * address in the cluster ceases to exist when the losers are deleted. Naming
+ * them is the difference between "merged 90 duplicates" and "deleted 88
+ * addresses nobody was shown".
+ *
+ * `keptEmail` is the address the survivor will HOLD AFTER the union, not the one
+ * it holds now: a survivor whose email is blank inherits one, and that inherited
+ * address is kept, not discarded. Empty in email mode, where every row in the
+ * cluster holds the same address by construction.
+ */
+export function discardedEmailsFor(
+  keptEmail: unknown,
+  losers: Array<Record<string, unknown> & { id: number }>,
+): string[] {
+  const kept = usableEmailOrNull(keptEmail);
+  const out: string[] = [];
+  losers.slice().sort((a, b) => a.id - b.id).forEach((row) => {
+    const addr = usableEmailOrNull(row.email);
+    if (!addr || addr === kept) return;
+    if (out.indexOf(addr) === -1) out.push(addr);
+  });
+  return out;
 }
 
 export interface PersonMergeFill {
@@ -417,7 +720,8 @@ export interface PersonMergeFill {
  *
  * A non-blank survivor value is NEVER overwritten, with the one stated
  * exception of ATOMIC_FIELD_GROUPS: a column that only describes another
- * column travels with it.
+ * column travels with it — and for a TIED group it may travel ONLY with it,
+ * never on its own from a row describing some other value.
  */
 export function unionPersonFields(
   survivor: Record<string, unknown>,
@@ -427,15 +731,59 @@ export function unionPersonFields(
   const ordered = losers.slice().sort((a, b) => a.id - b.id);
   const patch: Record<string, unknown> = {};
   const filled: PersonMergeFill[] = [];
-  fields.forEach((field) => {
-    if (!isBlankValue(survivor[field])) return;
+
+  /**
+   * The value the survivor will HOLD for one field after the union: its own
+   * where it has one, otherwise the best candidate among the losers it is
+   * allowed to take from. `from` is null when the value is the survivor's own.
+   */
+  const resolve = (
+    field: string,
+    allow?: (row: Record<string, unknown>) => boolean,
+    rank?: (row: Record<string, unknown>) => number,
+  ): { value: unknown; from: number | null } | null => {
+    if (!isBlankField(field, survivor[field])) return { value: survivor[field], from: null };
+    let best: { value: unknown; from: number } | null = null;
+    let bestRank = Infinity;
     for (let i = 0; i < ordered.length; i++) {
-      const candidate = ordered[i][field];
-      if (isBlankValue(candidate)) continue;
-      patch[field] = candidate;
-      filled.push({ field, fromPersonId: ordered[i].id });
-      return;
+      const row = ordered[i];
+      if (allow && !allow(row)) continue;
+      const candidate = row[field];
+      if (isBlankField(field, candidate)) continue;
+      // Unranked fields take the OLDEST loser that has one, unchanged.
+      if (!rank) return { value: candidate, from: row.id };
+      const r = rank(row);
+      // Strictly better only, and `ordered` is ascending, so an equal rank
+      // leaves the lowest id holding it — the same tie-break as everywhere else.
+      if (r < bestRank) { bestRank = r; best = { value: candidate, from: row.id }; }
     }
+    return best;
+  };
+
+  /**
+   * Which losers may describe the survivor's kept LEAD value, per carry column.
+   * A verdict is a fact about ONE value: a row holding a different address has
+   * nothing to say about the address this merge keeps, in either direction —
+   * whether the survivor kept its own or inherited one.
+   */
+  const describes = new Map<string, (row: Record<string, unknown>) => boolean>();
+  const leadRank = new Map<string, (row: Record<string, unknown>) => number>();
+  ATOMIC_FIELD_GROUPS.forEach((group) => {
+    const tied = group.tied;
+    if (!tied || fields.indexOf(group.lead) === -1) return;
+    leadRank.set(group.lead, tied.rank);
+    const kept = resolve(group.lead, undefined, tied.rank);
+    group.carry.forEach((field) => {
+      describes.set(field, (row) => kept !== null && tied.same(kept.value, row[group.lead]));
+    });
+  });
+
+  fields.forEach((field) => {
+    if (!isBlankField(field, survivor[field])) return;
+    const hit = resolve(field, describes.get(field), leadRank.get(field));
+    if (!hit || hit.from === null) return;
+    patch[field] = hit.value;
+    filled.push({ field, fromPersonId: hit.from });
   });
 
   ATOMIC_FIELD_GROUPS.forEach((group) => {
@@ -448,7 +796,25 @@ export function unionPersonFields(
     group.carry.forEach((field) => {
       if (fields.indexOf(field) === -1) return;
       const value = source[field];
-      if (isBlankValue(value)) return;
+      if (isBlankField(field, value)) {
+        /*
+         * A TIED carry column is a verdict about the value the survivor now
+         * HOLDS, so a source row with no verdict leaves it with none: keeping
+         * the survivor's own `valid` would stamp it on the address it just
+         * inherited — a verdict about the address it used to hold, or about no
+         * address at all (2026-09-20 review, defects 1/5, same class).
+         *
+         * Tied groups ONLY: `profileImageStatus` is NOT NULL with a default, so
+         * clearing a carry column is not a legal write for every group.
+         */
+        if (!group.tied) return;
+        // Blank already, or filled just now from a row holding the SAME value —
+        // which is a verdict about the right address, so it stays.
+        if (isBlankField(field, survivor[field]) || field in patch) return;
+        patch[field] = null;
+        filled.push({ field, fromPersonId: source.id });
+        return;
+      }
       if (field in patch && patch[field] === value) return;
       patch[field] = value;
       for (let i = filled.length - 1; i >= 0; i--) if (filled[i].field === field) filled.splice(i, 1);
@@ -550,6 +916,9 @@ export interface PersonMergeRowSummary {
   id: number;
   name: string;
   email: string | null;
+  /** Reoon's verdict on this row's address — the preview shows it, because in
+   *  linkedin mode it is half the reason one row survives and the other dies. */
+  emailStatus: string | null;
   /** Contacts whose `personProspectId` points here today. */
   contactLinkCount: number;
 }
@@ -572,24 +941,41 @@ export interface PersonMergeRepoint {
 }
 
 export interface PersonMergeClusterPlan {
-  email: string;
+  /** WHAT THESE ROWS SHARE: the address in email mode, the normalised
+   *  `linkedin.com/in/<slug>` in linkedin mode. The cluster's identity, and the
+   *  string the confirm echoes back. */
+  key: string;
+  by: PersonMergeBy;
+  /** The shared address, or NULL in linkedin mode — where the whole point is
+   *  that the rows carry DIFFERENT addresses, so there is no one address to
+   *  name and pretending otherwise would name an arbitrary row's. */
+  email: string | null;
   survivorId: number;
   survivorReason: SurvivorChoice["reason"];
   loserIds: number[];
   rows: PersonMergeRowSummary[];
   fieldsFilled: PersonMergeFill[];
+  /** Addresses that exist today and will not after this merge. Empty in email
+   *  mode; the reason the preview can say "also holds <addr>, which the merge
+   *  will drop" in linkedin mode. */
+  discardedEmails: string[];
   repoints: PersonMergeRepoint[];
   repointTotal: number;
 }
 
 export interface PersonMergeSkippedCluster {
-  email: string;
+  key: string;
+  by: PersonMergeBy;
+  email: string | null;
   ids: number[];
   reason: string;
 }
 
 export interface PersonMergePlan {
   workspaceId: number;
+  /** What this plan grouped on. Echoed back so a UI showing two passes cannot
+   *  render one pass's clusters under the other's explanation. */
+  by: PersonMergeBy;
   /** Clusters the scan saw, before the identity guard. */
   clustersFound: number;
   /** True when the cluster scan hit CLUSTER_CAP — a zero from a bounded scan
@@ -601,6 +987,11 @@ export interface PersonMergePlan {
   proposalsCapped: boolean;
   /** Clusters dropped because the shared address is a shared inbox. */
   skippedGeneric: number;
+  /** ROWS (not clusters) dropped because their `/in/` slug is a placeholder or
+   *  a shape no real profile has — `/in/N%2FA`, `/in/unknown`. The LinkedIn
+   *  pass's answer to `skippedGeneric`: one such slug can be held by dozens of
+   *  unrelated People rows, so it is named rather than silently absent. */
+  skippedPlaceholderProfiles: number;
   merge: PersonMergeClusterPlan[];
   skipped: PersonMergeSkippedCluster[];
   /** How many People rows executing this plan would DELETE. */
@@ -608,15 +999,21 @@ export interface PersonMergePlan {
 }
 
 export interface PersonMergeOptions {
+  /** What to group on. DEFAULTS TO "email" — the pass that ran in production —
+   *  so a caller written before the LinkedIn key existed is unchanged. */
+  by?: PersonMergeBy;
   /** Restrict to these cluster emails. Omitted = plan every cluster found. */
   emails?: string[];
+  /** Restrict to these cluster KEYS, in whichever mode is running. The general
+   *  spelling of `emails`; in email mode the two mean the same thing. */
+  keys?: string[];
   /** Cap on clusters RETURNED in `merge`; the scan is always CLUSTER_CAP wide. */
   limit?: number;
 }
 
-const EMPTY_PLAN = (workspaceId: number): PersonMergePlan => ({
-  workspaceId, clustersFound: 0, capped: false, proposalsCapped: false, skippedGeneric: 0,
-  merge: [], skipped: [], peopleDeleted: 0,
+const EMPTY_PLAN = (workspaceId: number, by: PersonMergeBy = "email"): PersonMergePlan => ({
+  workspaceId, by, clustersFound: 0, capped: false, proposalsCapped: false, skippedGeneric: 0,
+  skippedPlaceholderProfiles: 0, merge: [], skipped: [], peopleDeleted: 0,
 });
 
 function nameOf(first: unknown, last: unknown): string {
@@ -627,24 +1024,86 @@ function nameOf(first: unknown, last: unknown): string {
  * What a merge WOULD do. Writes nothing — `personMerge.test.ts` pins that this
  * function's body window contains no `.insert(` / `.update(` / `.delete(`.
  *
- * A cluster is two or more People rows in ONE workspace sharing a usable,
- * non-generic email. Same definition as the detector in
+ * A cluster in EMAIL mode is two or more People rows in ONE workspace sharing a
+ * usable, non-generic email. Same definition as the detector in
  * personContactDuplicates.ts, through the same two helpers, so a pair reported
  * as `needs_merge` there is a cluster here — a merge that disagreed with the
  * detector about what a duplicate is would be a second matcher.
+ *
+ * A cluster in LINKEDIN mode is two or more rows in ONE workspace whose
+ * `linkedinUrl` normalises to the same `/in/<slug>`. Rows with no usable
+ * profile url are not clustered at ALL — they are not "a cluster with an empty
+ * key", they are simply absent.
  */
 export async function planPersonMerge(
   db: Db,
   workspaceId: number,
   opts: PersonMergeOptions = {},
 ): Promise<PersonMergePlan> {
+  const by: PersonMergeBy = opts.by ?? "email";
+  const normalizeKey = by === "linkedin" ? linkedinProfileKey : usableEmailOrNull;
+
+  // `keys` is the general spelling, `emails` the one every caller written
+  // before 2026-09-20 uses. In email mode they mean the same thing.
+  const restrictTo = opts.keys ?? opts.emails;
   const wanted: string[] = [];
-  (opts.emails ?? []).forEach((e) => {
-    const key = usableEmailOrNull(e);
+  (restrictTo ?? []).forEach((e) => {
+    const key = normalizeKey(e);
     if (key && wanted.indexOf(key) === -1) wanted.push(key);
   });
-  if (opts.emails && wanted.length === 0) return EMPTY_PLAN(workspaceId);
+  if (restrictTo && wanted.length === 0) return EMPTY_PLAN(workspaceId, by);
 
+  let capped = false;
+  let skippedGeneric = 0;
+  let skippedPlaceholderProfiles = 0;
+  /** Cluster keys to plan, and the rows behind each. */
+  const keys: string[] = [];
+  const byKey = new Map<string, Row[]>();
+  let personRows: Row[] = [];
+
+  if (by === "linkedin") {
+    /*
+     * PROFILE SCAN. Not a GROUP BY: the key is a normalised slug, so two rows
+     * that differ by `www.`, by case or by a `?trk=` tracking parameter are one
+     * profile and no expression over the raw `text` column would group them (or
+     * use an index if it tried). The candidates are keyset-drained id + url
+     * only, grouped here, and `capped` says when the ceiling was reached.
+     */
+    const scan = await readLinkedinProfileKeys(db, workspaceId);
+    capped = scan.capped;
+    skippedPlaceholderProfiles = scan.placeholders;
+
+    const idsByKey = new Map<string, number[]>();
+    scan.rows.forEach((r) => {
+      if (wanted.length > 0 && wanted.indexOf(r.key) === -1) return;
+      const bucket = idsByKey.get(r.key);
+      if (bucket) bucket.push(r.id);
+      else idsByKey.set(r.key, [r.id]);
+    });
+    const multi = Array.from(idsByKey.keys())
+      .filter((k) => (idsByKey.get(k) ?? []).length > 1)
+      .sort();
+    if (multi.length > CLUSTER_CAP) capped = true;
+    multi.slice(0, CLUSTER_CAP).forEach((k) => keys.push(k));
+
+    const clusterIds: number[] = [];
+    keys.forEach((k) => (idsByKey.get(k) ?? []).forEach((id) => clusterIds.push(id)));
+    if (clusterIds.length === 0) return { ...EMPTY_PLAN(workspaceId, by), capped, skippedPlaceholderProfiles };
+
+    personRows = (await db
+      .select()
+      .from(prospects)
+      .where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.id, clusterIds)))
+      .orderBy(prospects.id)) as Row[];
+    personRows.forEach((row) => {
+      const key = linkedinProfileKey(row.linkedinUrl);
+      // A null key never reaches a bucket: see linkedinProfileKey's header.
+      if (!key || keys.indexOf(key) === -1) return;
+      const bucket = byKey.get(key);
+      if (bucket) bucket.push(row);
+      else byKey.set(key, [row]);
+    });
+  } else {
   /*
    * Cluster scan. Plain GROUP BY on the raw `email` column, NOT
    * `LOWER(TRIM(...))`: `prospects.email` is varchar(320) in a utf8mb4 table
@@ -670,8 +1129,7 @@ export async function planPersonMerge(
     .orderBy(prospects.email)
     .limit(CLUSTER_CAP + 1);
 
-  const capped = clusterRows.length > CLUSTER_CAP;
-  let skippedGeneric = 0;
+  capped = clusterRows.length > CLUSTER_CAP;
   const emails: string[] = [];
   clusterRows.slice(0, CLUSTER_CAP).forEach((r) => {
     const key = usableEmailOrNull(r.email);
@@ -682,22 +1140,23 @@ export async function planPersonMerge(
     if (wanted.length > 0 && wanted.indexOf(key) === -1) return;
     if (emails.indexOf(key) === -1) emails.push(key);
   });
-  if (emails.length === 0) return { ...EMPTY_PLAN(workspaceId), capped, skippedGeneric };
+  if (emails.length === 0) return { ...EMPTY_PLAN(workspaceId, by), capped, skippedGeneric };
+  emails.forEach((e) => keys.push(e));
 
-  const personRows = await db
+  personRows = (await db
     .select()
     .from(prospects)
     .where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.email, emails)))
-    .orderBy(prospects.id);
+    .orderBy(prospects.id)) as Row[];
 
-  const byEmail = new Map<string, Row[]>();
   personRows.forEach((row) => {
     const key = usableEmailOrNull((row as Record<string, unknown>).email);
     if (!key) return;
-    const bucket = byEmail.get(key);
+    const bucket = byKey.get(key);
     if (bucket) bucket.push(row as Row);
-    else byEmail.set(key, [row as Row]);
+    else byKey.set(key, [row as Row]);
   });
+  }
 
   const allIds = personRows.map((r) => (r as { id: number }).id);
 
@@ -716,21 +1175,40 @@ export async function planPersonMerge(
   const skipped: PersonMergeSkippedCluster[] = [];
   let clustersFound = 0;
 
-  emails.forEach((email) => {
-    const rows = byEmail.get(email) ?? [];
+  keys.forEach((key) => {
+    const rows = byKey.get(key) ?? [];
     if (rows.length < 2) return;
     clustersFound++;
     const ids = rows.map((r) => r.id);
+    // A shared LinkedIn profile is strong evidence, but the guard is cheap and
+    // the posture is refuse-rather-than-guess: it applies in BOTH modes.
     const conflict = identityConflict(rows);
-    if (conflict) { skipped.push({ email, ids, reason: conflict }); return; }
+    if (conflict) { skipped.push({ key, by, email: by === "email" ? key : null, ids, reason: conflict }); return; }
 
-    const choice = pickSurvivor(rows.map((r) => ({ id: r.id, contactLinkCount: linkCount.get(r.id) ?? 0 })));
+    const choice = pickSurvivor(
+      rows.map((r) => ({
+        id: r.id,
+        contactLinkCount: linkCount.get(r.id) ?? 0,
+        emailStatus: (r.emailStatus as string | null) ?? null,
+        // The address the verdict is about travels with it: a `valid` on a row
+        // with no address is not a better address (review defect 2).
+        email: (r.email as string | null) ?? null,
+      })),
+      // Email quality only orders rows that hold DIFFERENT addresses — see
+      // pickSurvivor's header for why the email pass must not use it.
+      by === "linkedin",
+    );
     const survivor = rows.filter((r) => r.id === choice.survivorId)[0];
     const losers = rows.filter((r) => r.id !== choice.survivorId);
-    const { filled } = unionPersonFields(survivor, losers);
+    const { patch, filled } = unionPersonFields(survivor, losers);
+    // isBlankField, not isBlankValue: a survivor holding "<UNKNOWN>" inherits a
+    // real address, so the address it KEEPS is the inherited one.
+    const keptEmail = isBlankField("email", survivor.email) ? patch.email : survivor.email;
 
     merge.push({
-      email,
+      key,
+      by,
+      email: by === "email" ? key : null,
       survivorId: choice.survivorId,
       survivorReason: choice.reason,
       loserIds: choice.loserIds,
@@ -738,9 +1216,11 @@ export async function planPersonMerge(
         id: r.id,
         name: nameOf(r.firstName, r.lastName),
         email: (r.email as string | null) ?? null,
+        emailStatus: (r.emailStatus as string | null) ?? null,
         contactLinkCount: linkCount.get(r.id) ?? 0,
       })),
       fieldsFilled: filled,
+      discardedEmails: discardedEmailsFor(keptEmail, losers),
       repoints: [],
       repointTotal: 0,
     });
@@ -831,7 +1311,7 @@ export async function planPersonMerge(
   const limited = merge.slice(0, opts.limit ?? CLUSTER_CAP);
   let peopleDeleted = 0;
   limited.forEach((c) => { peopleDeleted += c.loserIds.length; });
-  return { workspaceId, clustersFound, capped, proposalsCapped, skippedGeneric, merge: limited, skipped, peopleDeleted };
+  return { workspaceId, by, clustersFound, capped, proposalsCapped, skippedGeneric, skippedPlaceholderProfiles, merge: limited, skipped, peopleDeleted };
 }
 
 /**
@@ -871,26 +1351,86 @@ async function readProposalRefs(
   return { rows: out, capped: true };
 }
 
+/**
+ * Every People row in this workspace that names a usable LinkedIn profile, as
+ * (id, normalised key). Read-only, keyset-drained by id exactly like the
+ * proposal scan, and it selects TWO COLUMNS — a workspace with 6,004 People
+ * rows is not a reason to pull 6,004 full prospects rows through node to group
+ * them.
+ *
+ * ⚠️ A ROW WITH NO USABLE KEY IS DROPPED HERE, not carried with an empty key:
+ * grouping on "" would put every person without a LinkedIn url in one cluster.
+ * The SQL prefilter is deliberately conservative — it never excludes a url
+ * `linkedinProfileKey` would accept, and the JS is what actually decides.
+ *
+ * `placeholders` counts the rows dropped for holding a /in/ url whose SLUG is a
+ * placeholder — the rows that would otherwise have fused into one cluster of
+ * strangers. Reported to the operator the way `skippedGeneric` is.
+ */
+async function readLinkedinProfileKeys(
+  db: Db,
+  workspaceId: number,
+): Promise<{ rows: Array<{ id: number; key: string }>; capped: boolean; placeholders: number }> {
+  const out: Array<{ id: number; key: string }> = [];
+  let placeholders = 0;
+  let after = 0;
+  for (let page = 0; page < LINKEDIN_SCAN_PAGES; page++) {
+    const rows = await db
+      .select({ id: prospects.id, linkedinUrl: prospects.linkedinUrl })
+      .from(prospects)
+      .where(and(
+        eq(prospects.workspaceId, workspaceId),
+        sql`${prospects.linkedinUrl} IS NOT NULL AND ${prospects.linkedinUrl} <> ''`,
+        // Only a /in/ profile url can produce a key, so nothing else is read.
+        sql`${prospects.linkedinUrl} LIKE '%/in/%'`,
+        gt(prospects.id, after),
+      ))
+      .orderBy(prospects.id)
+      .limit(LINKEDIN_SCAN_CAP);
+    rows.forEach((r) => {
+      after = Math.max(after, Number(r.id) || 0);
+      const key = linkedinProfileKey(r.linkedinUrl);
+      if (key) { out.push({ id: Number(r.id), key }); return; }
+      if (isPlaceholderProfileUrl(r.linkedinUrl)) placeholders++;
+    });
+    if (rows.length < LINKEDIN_SCAN_CAP) return { rows: out, capped: false, placeholders };
+  }
+  return { rows: out, capped: true, placeholders };
+}
+
 /* ── Execute ──────────────────────────────────────────────────────────────── */
 
 /** One cluster exactly as the plan described it and a human approved it. */
 export interface PersonMergeApprovedCluster {
-  email: string;
+  /** The cluster key the plan showed. `email` is the spelling every caller
+   *  written before the LinkedIn key existed uses, and in email mode the two
+   *  are the same string; `key` is the general one and is what a linkedin-mode
+   *  caller sends. Exactly one of them has to be there. */
+  key?: string;
+  email?: string;
   survivorId: number;
   loserIds: number[];
 }
 
 export interface PersonMergeExecuteOptions {
+  /** What the approved clusters were grouped on. DEFAULTS TO "email". */
+  by?: PersonMergeBy;
   /** The clusters to act on, echoed back from the plan. Required — see below. */
   clusters: PersonMergeApprovedCluster[];
   actorUserId: number | null;
 }
 
 export interface PersonMergeOutcome {
-  email: string;
+  key: string;
+  by: PersonMergeBy;
+  /** The shared address, or null in linkedin mode. */
+  email: string | null;
   survivorId: number;
   loserIds: number[];
   fieldsFilled: PersonMergeFill[];
+  /** Addresses that existed on the deleted rows and do not survive this merge.
+   *  They live on in the audit row and nowhere else — see the file header. */
+  discardedEmails: string[];
   repoints: PersonMergeRepoint[];
   peopleDeleted: number;
   /** Columns the audit row could not carry in full, hashed instead. */
@@ -898,7 +1438,8 @@ export interface PersonMergeOutcome {
 }
 
 export interface PersonMergeRefusal {
-  email: string;
+  key: string;
+  email: string | null;
   reason: string;
 }
 
@@ -943,26 +1484,43 @@ export async function executePersonMerge(
     throw new Error("executePersonMerge needs the clusters to merge, named explicitly.");
   }
 
+  const by: PersonMergeBy = opts.by ?? "email";
+  const normalizeKey = by === "linkedin" ? linkedinProfileKey : usableEmailOrNull;
+
   const stale: PersonMergeRefusal[] = [];
   const unrecorded: PersonMergeRefusal[] = [];
   const approved = new Map<string, PersonMergeApprovedCluster>();
   opts.clusters.forEach((c) => {
-    const key = usableEmailOrNull(c.email);
-    if (!key) { stale.push({ email: c.email, reason: "not a usable email address." }); return; }
-    approved.set(key, { email: key, survivorId: c.survivorId, loserIds: c.loserIds.slice() });
+    const given = c.key ?? c.email ?? "";
+    const key = normalizeKey(given);
+    if (!key) {
+      stale.push({
+        key: given,
+        email: by === "email" ? (c.email ?? null) : null,
+        reason: by === "linkedin" ? "not a usable LinkedIn profile url." : "not a usable email address.",
+      });
+      return;
+    }
+    approved.set(key, { key, email: by === "email" ? key : undefined, survivorId: c.survivorId, loserIds: c.loserIds.slice() });
   });
-  const emails = Array.from(approved.keys());
-  if (emails.length === 0) return { merged: [], skipped: [], stale, unrecorded, peopleDeleted: 0 };
+  const wantedKeys = Array.from(approved.keys());
+  if (wantedKeys.length === 0) return { merged: [], skipped: [], stale, unrecorded, peopleDeleted: 0 };
 
-  const plan = await planPersonMerge(db, workspaceId, { emails, limit: CLUSTER_CAP });
+  const plan = await planPersonMerge(db, workspaceId, { by, keys: wantedKeys, limit: CLUSTER_CAP });
   const planned = new Map<string, PersonMergeClusterPlan>();
-  plan.merge.forEach((c) => planned.set(c.email, c));
+  plan.merge.forEach((c) => planned.set(c.key, c));
 
-  emails.forEach((key) => {
+  wantedKeys.forEach((key) => {
     if (planned.has(key)) return;
     // Already reported with its own reason in `plan.skipped`; not a second entry.
-    if (plan.skipped.filter((s) => s.email === key).length > 0) return;
-    stale.push({ email: key, reason: "no longer a cluster — the duplicate rows are gone or the address changed." });
+    if (plan.skipped.filter((s) => s.key === key).length > 0) return;
+    stale.push({
+      key,
+      email: by === "email" ? key : null,
+      reason: by === "linkedin"
+        ? "no longer a cluster — the duplicate rows are gone or the LinkedIn url changed."
+        : "no longer a cluster — the duplicate rows are gone or the address changed.",
+    });
   });
 
   const merged: PersonMergeOutcome[] = [];
@@ -970,12 +1528,13 @@ export async function executePersonMerge(
 
   for (let i = 0; i < plan.merge.length; i++) {
     const cluster = plan.merge[i];
-    const want = approved.get(cluster.email);
+    const want = approved.get(cluster.key);
     if (!want) continue;
 
     /* 0. THE APPROVED PLAN IS THE ONLY PLAN. */
     if (want.survivorId !== cluster.survivorId || !sameIdSet(want.loserIds, cluster.loserIds)) {
       stale.push({
+        key: cluster.key,
         email: cluster.email,
         reason: `the rows changed since the preview — #${cluster.survivorId} now survives and ${cluster.loserIds.map((id) => `#${id}`).join(", ")} would be deleted; you approved #${want.survivorId} surviving and ${want.loserIds.map((id) => `#${id}`).join(", ")} deleted.`,
       });
@@ -984,7 +1543,7 @@ export async function executePersonMerge(
     if (plan.proposalsCapped) {
       // Rewriting the first N proposals and leaving the rest naming deleted ids
       // is worse than not merging: the preview counted a bounded set too.
-      stale.push({ email: cluster.email, reason: `more than ${PROPOSAL_SCAN_CAP * PROPOSAL_SCAN_PAGES} campaign proposals carry a People-id list, so the ids inside them cannot all be rewritten. Nothing was merged.` });
+      stale.push({ key: cluster.key, email: cluster.email, reason: `more than ${PROPOSAL_SCAN_CAP * PROPOSAL_SCAN_PAGES} campaign proposals carry a People-id list, so the ids inside them cannot all be rewritten. Nothing was merged.` });
       continue;
     }
 
@@ -1006,7 +1565,7 @@ export async function executePersonMerge(
       .where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.id, loserIds)))
       .orderBy(prospects.id);
     if (survivorRows.length === 0 || loserRows.length === 0) {
-      stale.push({ email: cluster.email, reason: "the rows disappeared between the plan and the merge." });
+      stale.push({ key: cluster.key, email: cluster.email, reason: "the rows disappeared between the plan and the merge." });
       continue;
     }
 
@@ -1014,6 +1573,18 @@ export async function executePersonMerge(
       survivorRows[0] as Record<string, unknown>,
       loserRows as Row[],
     );
+
+    /*
+     * THE ADDRESSES THIS MERGE DESTROYS, computed from the rows as they are NOW
+     * rather than copied from the preview — the preview is a claim, these rows
+     * are the fact. Empty in email mode. In linkedin mode this is the only
+     * record that `bprestridge@allianceanimal.com` ever existed once its row is
+     * gone, so it is written into the audit payload below, BEFORE the delete.
+     */
+    const survivorEmailAfter = isBlankField("email", (survivorRows[0] as Record<string, unknown>).email)
+      ? union.patch.email
+      : (survivorRows[0] as Record<string, unknown>).email;
+    const discardedEmails = discardedEmailsFor(survivorEmailAfter, loserRows as Row[]);
 
     /** Rows this merge will DELETE rather than move, captured in full. */
     const destroyed: Array<{ key: string; rows: unknown[] }> = [];
@@ -1245,9 +1816,15 @@ export async function executePersonMerge(
      * told the merge succeeded. Here a failure throws, the cluster is abandoned
      * with every row still in place, and the caller is told which one. */
     const trimmedPayload = trimAuditPayload({
+      key: cluster.key,
+      by: cluster.by,
       email: cluster.email,
       losers: loserRows,
       deleted: destroyed,
+      // The addresses that cease to exist with these rows. The whole loser rows
+      // are above this line too, but only if they fit the payload budget — this
+      // list is small, never trimmed, and is what an operator greps for.
+      discardedEmails,
     });
     try {
       await db.insert(auditLog).values({
@@ -1262,6 +1839,7 @@ export async function executePersonMerge(
           losedIds: loserIds,
           survivorReason: cluster.survivorReason,
           fieldsFilled: union.filled,
+          discardedEmails,
           repoints,
           auditTrimmed: trimmedPayload.trimmed,
         } as never,
@@ -1270,6 +1848,7 @@ export async function executePersonMerge(
       });
     } catch (e) {
       unrecorded.push({
+        key: cluster.key,
         email: cluster.email,
         reason: `the audit row could not be written (${(e as Error).message}), so nothing was deleted for this cluster.`,
       });
@@ -1298,10 +1877,13 @@ export async function executePersonMerge(
     peopleDeleted += loserIds.length;
 
     merged.push({
+      key: cluster.key,
+      by: cluster.by,
       email: cluster.email,
       survivorId,
       loserIds,
       fieldsFilled: union.filled,
+      discardedEmails,
       repoints,
       peopleDeleted: loserIds.length,
       auditTrimmed: trimmedPayload.trimmed,

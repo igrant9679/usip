@@ -428,10 +428,18 @@ function SplitPeopleSection() {
  * references move — renders before anything happens. The confirm is the only
  * destructive step, it names the cluster it is destroying, and the server
  * re-plans from that name rather than trusting this page's copy.
+ *
+ * TWO PASSES, ONE MERGE (2026-09-20). `by="email"` is the original: rows that
+ * share an address. `by="linkedin"` groups on the same LinkedIn profile instead
+ * — LSI Media's remaining ~90 duplicates carry two enrichment-guessed addresses
+ * for one human, so no address-based scan can see them. The label says which,
+ * because "duplicate People" without the grouping rule is not a claim an
+ * operator can check.
  */
-function PeopleMergeSection() {
+function PeopleMergeSection({ by = "email" }: { by?: "email" | "linkedin" }) {
+  const linkedinPass = by === "linkedin";
   const utils = trpc.useUtils();
-  const plan = trpc.dataHealth.planPeopleMerge.useQuery({ limit: 50 }, { retry: false });
+  const plan = trpc.dataHealth.planPeopleMerge.useQuery({ by, limit: 50 }, { retry: false });
   const [preview, setPreview] = useState<string | null>(null);
 
   const merge = trpc.dataHealth.executePeopleMerge.useMutation({
@@ -442,8 +450,15 @@ function PeopleMergeSection() {
       const refused = r.stale.concat(r.unrecorded);
       if (r.merged.length) {
         toast.success(`Merged ${r.merged.length} cluster${r.merged.length === 1 ? "" : "s"} · ${r.peopleDeleted} People row${r.peopleDeleted === 1 ? "" : "s"} deleted`);
+        // An address the merge dropped is named once more, after the fact: the
+        // row that held it no longer exists anywhere but the audit log.
+        r.merged.forEach((m) => {
+          if (m.discardedEmails.length) {
+            toast.message(`Dropped ${m.discardedEmails.join(", ")} — kept only in the audit log for this merge.`);
+          }
+        });
       }
-      refused.forEach((s) => toast.error(`${s.email} not merged — ${s.reason}`));
+      refused.forEach((s) => toast.error(`${s.key} not merged — ${s.reason}`));
       if (!r.merged.length && refused.length === 0) toast.success("Nothing merged — those rows changed since the preview.");
       setPreview(null);
       utils.dataHealth.planPeopleMerge.invalidate();
@@ -454,12 +469,12 @@ function PeopleMergeSection() {
   });
 
   const clusters = plan.data?.merge ?? [];
-  const open = clusters.filter((c) => c.email === preview)[0] ?? null;
+  const open = clusters.filter((c) => c.key === preview)[0] ?? null;
 
   return (
     <section>
       <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-        Duplicate People (merge)
+        {linkedinPass ? "Duplicate People (same LinkedIn profile)" : "Duplicate People (merge)"}
       </h2>
       {plan.isLoading ? (
         <Skeleton className="h-40 rounded-xl" />
@@ -475,9 +490,31 @@ function PeopleMergeSection() {
             <div className="space-y-1">
               <CardTitle className="text-sm font-medium">
                 {clusters.length
-                  ? `${clusters.length} email${clusters.length === 1 ? "" : "s"} held by more than one People row`
+                  ? linkedinPass
+                    ? `${clusters.length} LinkedIn profile${clusters.length === 1 ? "" : "s"} held by more than one People row`
+                    : `${clusters.length} email${clusters.length === 1 ? "" : "s"} held by more than one People row`
                   : "No duplicate People to merge"}
               </CardTitle>
+              {linkedinPass ? (
+                <p className="text-xs text-muted-foreground max-w-2xl">
+                  This pass groups rows that name <strong>the same LinkedIn profile</strong> — the same
+                  <code className="mx-1">/in/</code>slug, ignoring the protocol, <code>www.</code>,
+                  capitals, a trailing slash and tracking parameters. It finds the duplicates the email pass cannot:
+                  two rows for one person whose addresses were <em>guessed</em> by enrichment from
+                  different patterns (<code>tyler@richeymay.com</code> and{" "}
+                  <code>tyler.house@richeymay.com</code>). Rows with no LinkedIn URL are never grouped, and
+                  neither are rows whose URL holds a placeholder slug (<code>/in/unknown</code>,{" "}
+                  <code>/in/N/A</code>) — dozens of unrelated people can carry the same one.
+                  Because the two rows hold different addresses, the merge <strong>drops one of them</strong>:
+                  the survivor keeps its own, and the other is listed below and written to the audit log —
+                  Velocity has no honest field to park a second personal address in, so it is not
+                  invented. The row that a contact points at wins; otherwise the row whose address
+                  Reoon called valid wins, an <code>invalid</code> one is never preferred, and a row holding
+                  no address at all never wins on its verdict — a verdict describing no address is not a
+                  better address. The verdict stays with the address it describes: a survivor keeping its own
+                  address never inherits the deleted row's <code>valid</code> or <code>invalid</code>.
+                </p>
+              ) : null}
               <p className="text-xs text-muted-foreground max-w-2xl">
                 Merging keeps one row and <strong>permanently deletes</strong> the others. The survivor
                 keeps every value it already has and its blanks are filled from the rows being deleted,
@@ -497,31 +534,42 @@ function PeopleMergeSection() {
                 <CheckCircle2 className="size-8 mx-auto mb-2 text-emerald-500" />
                 {plan.data?.capped
                   ? "No mergeable duplicates inside the bounded cluster scan."
+                  : linkedinPass
+                  ? "No LinkedIn profile is held by two People rows."
                   : "No email is held by two People rows."}
               </div>
             ) : (
               <div className="divide-y">
                 {clusters.map((c) => (
-                  <div key={c.email} className="py-3 flex items-start gap-3">
+                  <div key={c.key} className="py-3 flex items-start gap-3">
                     <Badge variant="secondary" className="shrink-0 mt-0.5 bg-rose-100 text-rose-700">
                       {c.rows.length} rows
                     </Badge>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{c.rows[0]?.name || c.email}</div>
-                      <div className="text-xs text-muted-foreground mt-0.5 truncate">{c.email}</div>
+                      <div className="text-sm font-medium truncate">{c.rows[0]?.name || c.key}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5 truncate">{c.key}</div>
                       <div className="text-xs text-muted-foreground mt-0.5">
-                        Keeps #{c.survivorId} ({c.survivorReason === "contact-linked" ? "a contact already points at it" : "lowest id"})
+                        Keeps #{c.survivorId} ({c.survivorReason === "contact-linked"
+                          ? "a contact already points at it"
+                          : c.survivorReason === "email-quality"
+                          ? "its address is the verified one"
+                          : "lowest id"})
                         {" · deletes "}{c.loserIds.map((id) => `#${id}`).join(", ")}
                         {c.fieldsFilled.length ? ` · fills ${c.fieldsFilled.length} blank field${c.fieldsFilled.length === 1 ? "" : "s"}` : " · nothing to fill"}
                         {c.repointTotal ? ` · repoints ${c.repointTotal} reference${c.repointTotal === 1 ? "" : "s"}` : " · no references to move"}
                       </div>
+                      {c.discardedEmails.length ? (
+                        <div className="text-xs text-amber-700 mt-0.5">
+                          Also holds {c.discardedEmails.join(", ")}, which the merge will drop.
+                        </div>
+                      ) : null}
                     </div>
                     <Button
                       size="sm"
                       variant="outline"
                       className="h-7 text-xs px-2 shrink-0"
                       disabled={merge.isPending}
-                      onClick={() => setPreview(c.email)}
+                      onClick={() => setPreview(c.key)}
                     >
                       <GitMerge className="size-3 mr-1" />
                       Preview merge
@@ -536,8 +584,8 @@ function PeopleMergeSection() {
                   {plan.data.skipped.length} cluster{plan.data.skipped.length === 1 ? "" : "s"} not offered for merge
                 </div>
                 {plan.data.skipped.map((s) => (
-                  <div key={s.email} className="text-xs text-amber-700">
-                    {s.email} — {s.reason}
+                  <div key={s.key} className="text-xs text-amber-700">
+                    {s.key} — {s.reason}
                   </div>
                 ))}
               </div>
@@ -555,6 +603,15 @@ function PeopleMergeSection() {
                 a team mailbox is not one person, and merging one would fuse several humans into one record.
               </p>
             ) : null}
+            {plan.data?.skippedPlaceholderProfiles ? (
+              <p className="text-xs text-muted-foreground mt-3">
+                {plan.data.skippedPlaceholderProfiles} People row
+                {plan.data.skippedPlaceholderProfiles === 1 ? "" : "s"} hold a placeholder LinkedIn URL
+                (<code>/in/unknown</code>, <code>/in/N/A</code>) and {plan.data.skippedPlaceholderProfiles === 1 ? "is" : "are"} never
+                grouped — that is what an enrichment provider stored when it had no profile to give, not a
+                profile, and every row holding one would otherwise land in a single cluster of unrelated people.
+              </p>
+            ) : null}
           </CardContent>
         </Card>
       )}
@@ -562,7 +619,7 @@ function PeopleMergeSection() {
       <Dialog open={open !== null} onOpenChange={(o) => { if (!o) setPreview(null); }}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Merge {open?.email}</DialogTitle>
+            <DialogTitle>Merge {open?.key}</DialogTitle>
           </DialogHeader>
           {open && (
             <div className="space-y-4 text-sm">
@@ -578,7 +635,12 @@ function PeopleMergeSection() {
                         {r.id === open.survivorId ? "Survives" : "Deleted"}
                       </Badge>
                       <span className="text-xs">#{r.id} {r.name || "(no name)"}</span>
-                      <span className="text-xs text-muted-foreground ml-auto">
+                      {/* The address and its verdict, per row: in the LinkedIn
+                          pass they are what one row keeps and the other loses. */}
+                      <span className="text-xs text-muted-foreground truncate">
+                        {r.email || "(no email)"}{r.emailStatus ? ` · ${r.emailStatus}` : " · no verdict"}
+                      </span>
+                      <span className="text-xs text-muted-foreground ml-auto shrink-0">
                         {r.contactLinkCount} linked contact{r.contactLinkCount === 1 ? "" : "s"}
                       </span>
                     </div>
@@ -597,6 +659,24 @@ function PeopleMergeSection() {
                   </ul>
                 )}
               </div>
+              {open.discardedEmails.length ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50/60 p-3">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-amber-800 mb-1">
+                    Addresses this merge drops
+                  </div>
+                  <ul className="text-xs text-amber-800 space-y-0.5">
+                    {open.discardedEmails.map((e) => (
+                      <li key={e}>{e}</li>
+                    ))}
+                  </ul>
+                  <p className="text-xs text-amber-700 mt-1">
+                    The survivor keeps its own address, so these stop existing in Velocity when their rows
+                    are deleted. They are written to the audit log for this merge and kept nowhere else —
+                    there is no second-address field on a person, and this merge does not invent one. Copy
+                    one out now if you want it.
+                  </p>
+                </div>
+              ) : null}
               <div>
                 <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">References moved</div>
                 {open.repoints.length === 0 ? (
@@ -630,14 +710,21 @@ function PeopleMergeSection() {
               title="Delete these People rows?"
               description={
                 open
-                  ? `#${open.survivorId} survives. ${open.loserIds.map((id) => `#${id}`).join(", ")} are deleted for good, after everything pointing at them is repointed.`
+                  ? `#${open.survivorId} survives. ${open.loserIds.map((id) => `#${id}`).join(", ")} are deleted for good, after everything pointing at them is repointed.${
+                      open.discardedEmails.length
+                        ? ` ${open.discardedEmails.join(", ")} goes with them — the audit log is the only place it will exist.`
+                        : ""
+                    }`
                   : undefined
               }
               confirmLabel="Merge and delete"
-              // The ids go with the address: the server merges this cluster only
-              // if it still resolves to exactly the rows shown above.
+              // The ids go with the cluster key: the server merges this cluster
+              // only if it still resolves to exactly the rows shown above, and
+              // `by` says which key it is — an address, or a LinkedIn profile.
               onConfirm={() => {
-                if (open) merge.mutate({ clusters: [{ email: open.email, survivorId: open.survivorId, loserIds: open.loserIds }] });
+                if (!open) return;
+                if (open.by === "linkedin") merge.mutate({ by: "linkedin", clusters: [{ key: open.key, survivorId: open.survivorId, loserIds: open.loserIds }] });
+                else if (open.email) merge.mutate({ clusters: [{ email: open.email, survivorId: open.survivorId, loserIds: open.loserIds }] });
               }}
             >
               {merge.isPending ? <Loader2 className="size-3.5 mr-1.5 animate-spin" /> : <GitMerge className="size-3.5 mr-1.5" />}
@@ -944,6 +1031,11 @@ export default function DataHealth() {
         <SplitPeopleSection />
 
         <PeopleMergeSection />
+
+        {/* The same merge, keyed on the LinkedIn profile instead of the address
+            — the duplicates the email pass cannot see, because enrichment
+            guessed two address patterns for one human. */}
+        <PeopleMergeSection by="linkedin" />
 
         {/* ── Import mapping audit ──
             Read-only, and run on demand rather than on page load: it replays
