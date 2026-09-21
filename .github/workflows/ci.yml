@@ -17,7 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    # Match railway.toml ([deploy] runs on Node 20).
+    # Match railway.toml ([deploy] runs on Node 20) and .node-version.
+    # This is the Node the APP is built and tested on. It is unrelated to
+    # the Node the actions themselves run on -- those are pinned to majors
+    # whose runtime is node24, because the runner deprecated node20 for
+    # action code. Bumping this to 24 would break parity with production.
     env:
       NODE_VERSION: "20"
       # Required by tests that probe env-dependent code paths.
@@ -35,17 +39,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           # Version is read from package.json's `packageManager` field —
           # passing `version:` here would conflict with that source.
           run_install: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
