@@ -3,7 +3,11 @@ builder = "nixpacks"
 buildCommand = "pnpm install --frozen-lockfile && pnpm build"
 
 [build.nixpacksPlan.phases.setup]
-nixPkgs = ["nodejs_20"]
+# Keep this equal to .node-version. nixPkgs names the ATTRIBUTE, but
+# .node-version is what selects the nixpkgs snapshot the attribute is
+# resolved in -- change only one and the build silently lands on a
+# different Node minor than intended.
+nixPkgs = ["nodejs_22"]
 
 [deploy]
 startCommand = "pnpm db:migrate && pnpm start"

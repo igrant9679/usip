@@ -6,8 +6,9 @@
  * the workspace's xAI key, pushes the agent's session config (voice,
  * instructions, VAD), triggers the greeting via response.create, then follows
  * events to keep the voice_calls row truthful (in_progress → completed,
- * duration, transcript digest). Uses the `ws` package because Railway runs
- * Node 20 (no global WebSocket) and the Authorization header is required.
+ * duration, transcript digest). Uses the `ws` package because the handshake
+ * needs an Authorization header, which the global WebSocket cannot send --
+ * so this stays even now that Railway runs a Node that HAS a global one.
  */
 import WebSocket from "ws";
 import { eq } from "drizzle-orm";

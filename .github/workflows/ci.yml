@@ -22,13 +22,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
-    # Match railway.toml ([deploy] runs on Node 20) and .node-version.
+    # Match railway.toml ([deploy] runs on Node 22) and .node-version.
     # This is the Node the APP is built and tested on. It is unrelated to
     # the Node the actions themselves run on -- those are pinned to majors
     # whose runtime is node24, because the runner deprecated node20 for
-    # action code. Bumping this to 24 would break parity with production.
+    # action code. Raising this past production would break parity; all
+    # three pins move together or not at all.
     env:
-      NODE_VERSION: "20"
+      NODE_VERSION: "22"
       # Required by tests that probe env-dependent code paths.
       NODE_ENV: test
       # Stub out env vars that some tests/imports read at module load time.
