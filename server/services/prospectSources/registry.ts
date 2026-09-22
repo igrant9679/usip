@@ -171,7 +171,7 @@ export async function eligibleFor(
   for (let i = 0; i < sources.length; i++) {
     const s = sources[i];
     if (!isImplemented(s)) { skipped.push({ slug: s.slug, reason: "not_implemented", detail: "registered, not implemented" }); continue; }
-    if (only && !only.has(s.slug)) { skipped.push({ slug: s.slug, reason: "not_selected", detail: "not selected for this campaign" }); continue; }
+    if (only && !only.has(s.slug)) { skipped.push({ slug: s.slug, reason: "not_selected", detail: "not selected for this run" }); continue; }
     if (mask[s.slug] === false) { skipped.push({ slug: s.slug, reason: "disabled", detail: "disabled in workspace Settings" }); continue; }
     const creds = await loadCredentials(workspaceId, s);
     if (!creds) { skipped.push({ slug: s.slug, reason: "no_credentials", detail: "no API key for this workspace" }); continue; }

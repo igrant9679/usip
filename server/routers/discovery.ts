@@ -47,11 +47,15 @@ const AccountInput = z.object({
 export const discoveryRouter = router({
   search: workspaceProcedure
     .input(z.discriminatedUnion("mode", [
-      z.object({ mode: z.literal("person"), input: PersonInput, campaignId: z.number().optional() }),
-      z.object({ mode: z.literal("account"), input: AccountInput, campaignId: z.number().optional() }),
+      // `sources` is the per-run picker (Find Prospects, owner ask 2026-09-22):
+      // ids from @shared/areSources; the service drops anything the mode does
+      // not offer and the workspace mask still wins. Absent = every enabled
+      // candidate, as before.
+      z.object({ mode: z.literal("person"), input: PersonInput, campaignId: z.number().optional(), sources: z.array(z.string().max(40)).min(1).max(20).optional() }),
+      z.object({ mode: z.literal("account"), input: AccountInput, campaignId: z.number().optional(), sources: z.array(z.string().max(40)).min(1).max(20).optional() }),
     ]))
     .mutation(async ({ ctx, input }) => {
-      return runDiscovery(ctx.workspace.id, ctx.user.id, input.mode, input.input, input.campaignId ?? null);
+      return runDiscovery(ctx.workspace.id, ctx.user.id, input.mode, input.input, input.campaignId ?? null, { sources: input.sources ?? null });
     }),
 
   /** Recent discovery runs scoped to a campaign (powers the per-campaign

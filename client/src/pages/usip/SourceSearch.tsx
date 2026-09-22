@@ -26,7 +26,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { confirmAction } from "@/components/usip/Common";
-import { FILTER_LABELS, activeFilters, emptyCriteria, filterUnion, type FilterType, type SearchCriteria } from "@shared/prospectSources";
+import { FILTER_LABELS, activeFilters, emptyCriteria, filterUnion, type FilterType, type ProspectSourceSlug, type SearchCriteria } from "@shared/prospectSources";
 import { Loader2, Search, ShieldCheck, AlertTriangle, EyeOff, Sparkles } from "lucide-react";
 
 function Chips({ value, onChange, placeholder }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
@@ -66,17 +66,32 @@ export function SourceSearchPanel() {
   const [target, setTarget] = useState("25");
   const [runId, setRunId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  // Per-run source picker (owner ask 2026-09-22). null = every usable source,
+  // which is what the page ran before it had a picker. A source that is not
+  // usable (no key, disabled, circuit open, invalid key) cannot be chosen.
+  const [chosen, setChosen] = useState<Set<ProspectSourceSlug> | null>(null);
 
   const describe = trpc.prospectSources.describe.useQuery({ criteria }, { placeholderData: (prev) => prev });
   const sources = describe.data ?? [];
   const connected = sources.filter((s) => s.credential.configured && s.implemented);
   const union = useMemo(() => filterUnion(sources.map((s) => s.capabilities)), [sources]);
   const active = activeFilters(criteria);
+  const usableSlugs = useMemo(
+    () => sources.filter((s) => s.implemented && s.credential.configured && s.enabled && !s.circuit.open && s.credential.status !== "invalid").map((s) => s.slug),
+    [sources],
+  );
+  const chosenSet = useMemo(() => chosen ?? new Set<ProspectSourceSlug>(usableSlugs), [chosen, usableSlugs]);
+  const runSources = usableSlugs.filter((slug) => chosenSet.has(slug));
+  const toggleSource = (slug: ProspectSourceSlug) => setChosen((prev) => {
+    const next = new Set<ProspectSourceSlug>(prev ?? usableSlugs);
+    if (next.has(slug)) next.delete(slug); else next.add(slug);
+    return next;
+  });
   const combinedRemaining = useMemo(() => {
     let sum = 0; let uncapped = false;
-    for (const s of connected) { if (!s.enabled) continue; if (s.leadsRemaining == null) uncapped = true; else sum += s.leadsRemaining; }
+    for (const s of connected) { if (!s.enabled || !chosenSet.has(s.slug)) continue; if (s.leadsRemaining == null) uncapped = true; else sum += s.leadsRemaining; }
     return { sum, uncapped };
-  }, [connected]);
+  }, [connected, chosenSet]);
   const targetNum = Math.max(1, Math.min(200, Math.floor(Number(target) || 25)));
 
   const start = trpc.prospectSources.startSearch.useMutation({
@@ -171,6 +186,9 @@ export function SourceSearchPanel() {
             : m.verdict === "approximate" ? `approximates ${m.approximated.map((f) => FILTER_LABELS[f]).join(", ")}` : `cannot filter on ${m.missing.map((f) => FILTER_LABELS[f]).join(", ")}`;
           return (
             <div key={s.slug} title={reason} className={cn("rounded-lg border px-2.5 py-1.5 text-[11.5px] flex items-center gap-1.5", tone)}>
+              {usable && (
+                <Checkbox className="size-3.5" aria-label={`Use ${s.displayName} in this run`} checked={chosenSet.has(s.slug)} onCheckedChange={() => toggleSource(s.slug)} />
+              )}
               <span className="font-medium">{s.displayName}</span>
               <span className="opacity-80">· {!usable ? reason : active.length === 0 ? "—" : m?.verdict === "full" ? "full match" : m?.verdict === "approximate" ? "approximate" : "cannot honour"}</span>
               {usable && s.leadsRemaining != null && <span className="opacity-70 tabular-nums">· {s.leadsRemaining} left</span>}
@@ -189,11 +207,12 @@ export function SourceSearchPanel() {
           Combined remaining allowance: <span className="font-medium text-foreground tabular-nums">{combinedRemaining.sum.toLocaleString()}{combinedRemaining.uncapped ? "+" : ""}</span>
           {!combinedRemaining.uncapped && targetNum > combinedRemaining.sum && <span className="ml-2 inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"><AlertTriangle className="size-3.5" /> target exceeds what your sources can acquire today</span>}
         </div>
-        <Button size="sm" className="gap-1.5" disabled={start.isPending || active.length === 0 || status === "running" || status === "queued"}
-          onClick={() => start.mutate({ criteria, batchTarget: targetNum })}>
+        <Button size="sm" className="gap-1.5" disabled={start.isPending || active.length === 0 || runSources.length === 0 || status === "running" || status === "queued"}
+          onClick={() => start.mutate({ criteria, batchTarget: targetNum, sources: runSources })}>
           {start.isPending || status === "running" || status === "queued" ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} Run search (free preview)
         </Button>
         {active.length === 0 && <span className="text-[11.5px] text-muted-foreground pb-2">Set at least one filter.</span>}
+        {active.length > 0 && runSources.length === 0 && <span className="text-[11.5px] text-muted-foreground pb-2">Pick at least one source.</span>}
       </div>
 
       {/* 4. Results */}

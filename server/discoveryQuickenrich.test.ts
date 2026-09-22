@@ -74,9 +74,12 @@ describe("QuickEnrich as a Find-prospects source", () => {
     expect(svc).toContain("raw_find row unstorable, skipped");
   });
 
-  it("the wizard's source list matches the fan-out per mode, QuickEnrich and Apollo included", () => {
-    expect(page).toContain("LinkedIn · Web · News · Apollo · QuickEnrich");
-    expect(page).toContain("Google Business · Web · News · Apollo");
+  it("the page's source list matches the fan-out per mode, QuickEnrich and Apollo included", () => {
+    // The page no longer prints the fan-out as prose: its per-run picker
+    // (2026-09-22) is built from these two lists, which sourcePicker.test.ts
+    // pins equal to the service's candidate arrays. Pin the entries here too.
+    expect(page).toContain('const PERSON_SOURCES: AreSourceId[] = ["linkedin", "web", "news", "apollo", "quickenrich"]');
+    expect(page).toContain('const ACCOUNT_SOURCES: AreSourceId[] = ["google_business", "web", "news", "apollo"]');
   });
 });
 

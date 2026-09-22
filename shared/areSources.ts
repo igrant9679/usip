@@ -137,3 +137,32 @@ export function resolveSourceOrder(
   const sel = new Set<AreSourceId>(selected);
   return full.filter((s) => sel.has(s) && mask[s] !== false);
 }
+
+/**
+ * The sources one MANUAL run will use (Find Prospects; owner ask
+ * 2026-09-22): the surface's candidate list for the mode, narrowed by the
+ * workspace mask and then by the user's per-run selection.
+ *
+ * The mask wins: a selection can never re-enable a source Settings
+ * disabled, nor add one the mode does not offer. An absent selection means
+ * every enabled candidate, which is what the page ran before it had a
+ * picker. An explicit selection that names nothing the mode offers runs
+ * nothing — the run log says so rather than quietly running everything.
+ * Returns what runs and, for the log, why the rest did not.
+ */
+export function selectRunSources(
+  candidates: readonly AreSourceId[],
+  enabled: ReadonlySet<string>,
+  selected?: readonly string[] | null,
+): { run: AreSourceId[]; masked: AreSourceId[]; unselected: AreSourceId[] } {
+  const chosen = selected == null ? null : new Set<string>(selected);
+  const run: AreSourceId[] = [];
+  const masked: AreSourceId[] = [];
+  const unselected: AreSourceId[] = [];
+  for (const id of candidates) {
+    if (!enabled.has(id)) masked.push(id);
+    else if (chosen && !chosen.has(id)) unselected.push(id);
+    else run.push(id);
+  }
+  return { run, masked, unselected };
+}

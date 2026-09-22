@@ -36,7 +36,14 @@ import { commit, ensurePeriodRows, releaseStaleHolds, remainingUnits, reserve } 
 
 export const MAX_BATCH_TARGET = 200;
 
-export async function startRun(workspaceId: number, userId: number | null, criteria: SearchCriteria, batchTarget: number): Promise<{ runId: number }> {
+export async function startRun(
+  workspaceId: number,
+  userId: number | null,
+  criteria: SearchCriteria,
+  batchTarget: number,
+  /** Per-run source picker (owner ask 2026-09-22): null = every eligible source, as before. */
+  only?: ProspectSourceSlug[] | null,
+): Promise<{ runId: number }> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
   if (activeFilters(criteria).length === 0) throw new Error("Set at least one filter — searching every vendor's whole database is not an audience.");
@@ -45,11 +52,19 @@ export async function startRun(workspaceId: number, userId: number | null, crite
     workspaceId, userId, criteria: criteria as never, batchTarget: target, status: "queued",
   } as never).$returningId();
   const runId = created.id;
-  void executeRun(workspaceId, runId).catch((e) => console.error(`[prospectSources] run ${runId} crashed:`, e));
+  void executeRun(workspaceId, runId, { only: only ?? null }).catch((e) => console.error(`[prospectSources] run ${runId} crashed:`, e));
   return { runId };
 }
 
-export async function executeRun(workspaceId: number, runId: number): Promise<void> {
+export async function executeRun(
+  workspaceId: number,
+  runId: number,
+  /** The picker's selection travels in memory: the run is executed by the
+   *  same process that queued it, and the completed run's perSource records
+   *  every source it skipped as "not_selected", so the inspector still shows
+   *  what was chosen. */
+  opts?: { only?: ProspectSourceSlug[] | null },
+): Promise<void> {
   const db = await getDb();
   if (!db) return;
   const [run] = await db.select().from(prospectSearchRuns)
@@ -59,7 +74,10 @@ export async function executeRun(workspaceId: number, runId: number): Promise<vo
     .where(and(eq(prospectSearchRuns.id, runId), eq(prospectSearchRuns.workspaceId, workspaceId)));
   try {
     const criteria = run.criteria as SearchCriteria;
-    const { eligible, skipped } = await eligibleFor(workspaceId, criteria);
+    // The selection goes through `only`, the same door the engine uses for a
+    // campaign's prospectSources — so the mask, credentials, capability match,
+    // circuit and budget checks all still apply to a chosen source.
+    const { eligible, skipped } = await eligibleFor(workspaceId, criteria, { only: opts?.only ?? null });
     const deduper = await workspaceDeduper(workspaceId);
     const result = await runWaterfall({
       workspaceId, criteria, target: run.batchTarget, sources: eligible, deduper,

@@ -163,7 +163,12 @@ export const prospectSourcesRouter = router({
     }),
 
   startSearch: workspaceProcedure
-    .input(z.object({ criteria: criteriaSchema, batchTarget: z.number().int().min(1).max(MAX_BATCH_TARGET).default(25) }))
+    .input(z.object({
+      criteria: criteriaSchema,
+      batchTarget: z.number().int().min(1).max(MAX_BATCH_TARGET).default(25),
+      /** Per-run source picker (owner ask 2026-09-22). Absent = every eligible source, as before. */
+      sources: z.array(slugSchema).min(1).optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const view = await credentialView(ctx.workspace.id, getSource("warmysender"));
       const any = view.configured || (await loadCredentials(ctx.workspace.id, getSource("quickenrich"))) || (await loadCredentials(ctx.workspace.id, getSource("apollo")));
@@ -171,7 +176,7 @@ export const prospectSourcesRouter = router({
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No prospect-data vendor is connected yet. Add a key under Settings → Data sources." });
       }
       try {
-        const r = await startRun(ctx.workspace.id, ctx.user.id, input.criteria, input.batchTarget);
+        const r = await startRun(ctx.workspace.id, ctx.user.id, input.criteria, input.batchTarget, input.sources ?? null);
         await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "prospect_search_run", entityId: r.runId, after: { batchTarget: input.batchTarget } });
         return r;
       } catch (e) {

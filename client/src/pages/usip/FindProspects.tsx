@@ -22,6 +22,8 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ARE_SOURCES, type AreSourceId } from "@shared/areSources";
 import { toast } from "sonner";
 import {
   Search,
@@ -427,6 +429,15 @@ function initialParams(): { runId: number | null; q: string } {
  * (dataEnrichmentTabs.foldRedirectUrl), so ProspectDetail's "Run #N" link and
  * People's typed-query link keep landing on exactly what they name.
  */
+/**
+ * The sources each mode fans out to — the SAME lists services/discovery runs
+ * (sourcePicker.test.ts pins them equal), so the picker can never offer a
+ * source the run would not use, or hide one it would. Order as the service.
+ */
+const PERSON_SOURCES: AreSourceId[] = ["linkedin", "web", "news", "apollo", "quickenrich"];
+const ACCOUNT_SOURCES: AreSourceId[] = ["google_business", "web", "news", "apollo"];
+const SOURCE_LABEL: Record<string, string> = Object.fromEntries(ARE_SOURCES.map((s) => [s.id, s.label]));
+
 export function FindProspectsPanel() {
   // This page ignored its own URL params entirely, so two links elsewhere in
   // the app quietly went nowhere useful: ProspectDetail's "Run #N" link
@@ -440,6 +451,22 @@ export function FindProspectsPanel() {
   );
   const [accountForm, setAccountForm] = useState<AccountForm>(EMPTY_ACCOUNT);
   const [activeRunId, setActiveRunId] = useState<number | null>(params.runId);
+
+  // Per-run source picker (owner ask 2026-09-22). null = every source the
+  // workspace has enabled for the mode, which is what the page ran before it
+  // had a picker. The workspace mask still wins: a disabled source is shown
+  // unticked and locked, so the user can see why it will not run.
+  const { data: wsSettings } = trpc.settings.getAreSettings.useQuery();
+  const sourceMask = ((wsSettings as any)?.areScraperSources ?? {}) as Record<string, boolean | undefined>;
+  const sourceEnabled = (id: AreSourceId) => sourceMask[id] !== false;
+  const [chosenSources, setChosenSources] = useState<Set<AreSourceId> | null>(null);
+  const modeSources = mode === "person" ? PERSON_SOURCES : ACCOUNT_SOURCES;
+  const runSources = modeSources.filter((id) => sourceEnabled(id) && (chosenSources === null || chosenSources.has(id)));
+  const toggleSource = (id: AreSourceId) => setChosenSources((prev) => {
+    const next = new Set<AreSourceId>(prev ?? [...PERSON_SOURCES, ...ACCOUNT_SOURCES].filter(sourceEnabled));
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   const utils = trpc.useUtils();
   const search = trpc.discovery.search.useMutation({
@@ -456,20 +483,24 @@ export function FindProspectsPanel() {
   });
 
   const runSearch = () => {
+    if (runSources.length === 0) {
+      toast.error("Pick at least one source");
+      return;
+    }
     if (mode === "person") {
       const i = personForm;
       if (![i.jobTitle, i.industry, i.companyName, i.location, i.seniority, i.department].some(Boolean) && i.keywords.length === 0) {
         toast.error("Fill at least one field");
         return;
       }
-      search.mutate({ mode: "person", input: { ...i, keywords: i.keywords.length ? i.keywords : undefined } });
+      search.mutate({ mode: "person", input: { ...i, keywords: i.keywords.length ? i.keywords : undefined }, sources: runSources });
     } else {
       const i = accountForm;
       if (![i.companyName, i.industry, i.location, i.companySize, i.revenueRange, i.website, i.buyerPersona].some(Boolean) && i.keywords.length === 0) {
         toast.error("Fill at least one field");
         return;
       }
-      search.mutate({ mode: "account", input: { ...i, keywords: i.keywords.length ? i.keywords : undefined } });
+      search.mutate({ mode: "account", input: { ...i, keywords: i.keywords.length ? i.keywords : undefined }, sources: runSources });
     }
   };
 
@@ -498,13 +529,32 @@ export function FindProspectsPanel() {
                 <AccountForm value={accountForm} onChange={setAccountForm} />
               </TabsContent>
             </Tabs>
-            <div className="flex items-center justify-between pt-2 border-t">
-              <div className="text-[11px] text-muted-foreground">
-                {/* The list matches the fan-out (services/discovery), Apollo
-                    included — the old copy under-reported it. */}
-                Fans out to {mode === "person"
-                  ? "LinkedIn · Web · News · Apollo · QuickEnrich"
-                  : "Google Business · Web · News · Apollo"}. Typical run: 5–15 s.
+            <div className="flex items-end justify-between gap-4 pt-2 border-t">
+              <div className="space-y-1.5">
+                <div className="text-[11px] font-medium text-foreground">Sources for this run</div>
+                {/* The list IS the fan-out (services/discovery; pinned equal),
+                    so this can neither under-report it, as the old copy did,
+                    nor offer a source the run would ignore. */}
+                <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                  {modeSources.map((id) => {
+                    const enabled = sourceEnabled(id);
+                    return (
+                      <label
+                        key={id}
+                        title={enabled ? undefined : "Disabled in Settings → Revenue Engine"}
+                        className={enabled ? "flex items-center gap-1.5 cursor-pointer" : "flex items-center gap-1.5 opacity-50 cursor-not-allowed"}
+                      >
+                        <Checkbox className="size-3.5" disabled={!enabled} checked={enabled && runSources.includes(id)} onCheckedChange={() => toggleSource(id)} />
+                        <span className="text-[11.5px]">{SOURCE_LABEL[id] ?? id}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  {runSources.length === 0
+                    ? "Pick at least one source."
+                    : `Fans out to ${runSources.length} of ${modeSources.length} sources. Typical run: 5–15 s.`}
+                </div>
               </div>
               <Button onClick={runSearch} disabled={search.isPending} className="gap-1.5">
                 {search.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}

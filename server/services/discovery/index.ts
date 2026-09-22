@@ -32,7 +32,7 @@ import {
   rawFinds,
   workspaceSettings,
 } from "../../../drizzle/schema";
-import { ARE_SOURCE_IDS, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
+import { ARE_SOURCE_IDS, resolveSourceOrder, selectRunSources, type AreSourceId } from "@shared/areSources";
 import {
   scrapeGoogleBusiness,
   scrapeNews,
@@ -378,6 +378,8 @@ export async function runDiscovery(
   mode: SearchMode,
   input: DiscoveryInput,
   campaignId?: number | null,
+  /** Per-run source picker (Find Prospects). Absent = every enabled candidate. */
+  opts?: { sources?: readonly string[] | null },
 ): Promise<RunResult> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
@@ -396,7 +398,7 @@ export async function runDiscovery(
   const query = buildQuery(mode, input);
   const icpContext = buildIcpContext(mode, input);
   await emitLog(workspaceId, runId, "discovery.start", "info",
-    `Discovery run started — mode=${mode}, query="${query}"`, { input });
+    `Discovery run started — mode=${mode}, query="${query}"`, { input, sources: opts?.sources ?? null });
 
   if (!query) {
     await emitLog(workspaceId, runId, "discovery.skip", "warn",
@@ -443,12 +445,21 @@ export async function runDiscovery(
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
   const enabledSources = new Set(resolveSourceOrder(wsSourceRow?.order, wsSourceRow?.mask, ARE_SOURCE_IDS));
-  const maskedSources = candidates.filter((c) => !enabledSources.has(c.id)).map((c) => c.id);
-  if (maskedSources.length > 0) {
+  // The per-run picker (owner ask 2026-09-22) narrows the mode's candidates
+  // AFTER the mask: a selection can never re-enable a source Settings
+  // disabled, nor add one the mode does not offer. Absent = every enabled
+  // candidate, which is what this page ran before it had a picker.
+  const pick = selectRunSources(candidates.map((c) => c.id), enabledSources, opts?.sources);
+  if (pick.masked.length > 0) {
     await emitLog(workspaceId, runId, "discovery.mask", "info",
-      `Skipped — disabled in workspace Settings: ${maskedSources.join(", ")}`);
+      `Skipped — disabled in workspace Settings: ${pick.masked.join(", ")}`);
   }
-  const tasks = candidates.filter((c) => enabledSources.has(c.id)).map((c) => c.run());
+  if (pick.unselected.length > 0) {
+    await emitLog(workspaceId, runId, "discovery.select", "info",
+      `Skipped — not selected for this run: ${pick.unselected.join(", ")}`);
+  }
+  const runSet = new Set<AreSourceId>(pick.run);
+  const tasks = candidates.filter((c) => runSet.has(c.id)).map((c) => c.run());
 
   const settled = await Promise.allSettled(tasks);
   const perSource: Record<string, { found: number; error?: string }> = {};
