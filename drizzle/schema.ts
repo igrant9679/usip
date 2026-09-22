@@ -1118,6 +1118,8 @@ export const linkedinActivityLimits = mysqlTable(
     dailyInviteCap: int("dailyInviteCap").default(15).notNull(),
     dailyMessageCap: int("dailyMessageCap").default(40).notNull(),
     dailyLookupCap: int("dailyLookupCap").default(100).notNull(),
+    /** People searches (migration 0187): the action LinkedIn pauses search over. */
+    dailySearchCap: int("dailySearchCap").default(30).notNull(),
     /** Every kind together — the budget the four separate caps never had. */
     dailyActionCap: int("dailyActionCap").default(120).notNull(),
     minSpacingSeconds: int("minSpacingSeconds").default(90).notNull(),
@@ -1154,7 +1156,7 @@ export const linkedinActivityLog = mysqlTable(
     id: int("id").autoincrement().primaryKey(),
     workspaceId: int("workspaceId").notNull(),
     unipileAccountId: varchar("unipileAccountId", { length: 200 }).notNull(),
-    /** invite | message | lookup | reaction — @shared/linkedinLimits. */
+    /** invite | message | lookup | reaction | search — @shared/linkedinLimits. */
     kind: varchar("kind", { length: 16 }).notNull(),
     /** What triggered it: social_autopilot | enrichment | manual | are_engine. */
     source: varchar("source", { length: 32 }),

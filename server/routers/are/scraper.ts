@@ -42,6 +42,7 @@ async function realLinkedInSearch(
     isAdmin: isAdminRole(ctx.member.role),
     keywords: query,
     limit: Math.min(Math.max(limit, 1), 25),
+    source: "scraper",
   });
   if (!res.ok) return [];
   return res.hits.map((h) => ({

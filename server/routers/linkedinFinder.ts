@@ -109,6 +109,7 @@ export const linkedinFinderRouter = router({
         keywords: parts.join(" "),
         limit: input.limit,
         requestedAccountId: isAdmin ? input.accountId : undefined,
+        source: "finder",
       });
     }),
 

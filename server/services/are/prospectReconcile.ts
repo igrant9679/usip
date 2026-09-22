@@ -246,8 +246,16 @@ export async function reconcileQueueProspects(opts: {
       try {
         const res = await searchLinkedInProfiles({
           workspaceId, userId: opts.userId, isAdmin: opts.isAdmin,
-          keywords: `${first} ${last} ${company}`.trim(), limit: 3,
+          keywords: `${first} ${last} ${company}`.trim(), limit: 3, source: "reconcile",
         });
+        if (!res.ok && res.blocked) {
+          // The account policy refused (paused, capped, paced, outside hours).
+          // Every further search this run would be refused the same way, so
+          // stop spending the budget on refusals and say why, once.
+          result.notes.push(`LinkedIn discovery held by LinkedIn limits: ${res.message}`);
+          searchBudget = 0;
+          continue;
+        }
         if (!res.ok && res.hits.length === 0 && /bridged/i.test(res.message)) {
           // No bridged LinkedIn account in THIS workspace — every further
           // search would fail the same way. Say so ONCE, loudly: this was

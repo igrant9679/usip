@@ -17,7 +17,8 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
-import { checkLinkedInAction, recordLinkedInAction } from "./linkedin/activityGate";
+import { checkLinkedInAction, pickAccountForAction, recordLinkedInAction } from "./linkedin/activityGate";
+import type { BlockReason } from "@shared/linkedinLimits";
 import {
   unipileAccounts,
   linkedinLookupLog,
@@ -425,6 +426,12 @@ export type SearchResult = {
   viaAccountId: string | null;
   hits: SearchHit[];
   message: string;
+  /**
+   * Set when the account policy refused the search (paused, capped, paced,
+   * outside hours). Nothing reached LinkedIn; callers with a budget of
+   * searches should stop rather than spend it on refusals.
+   */
+  blocked?: BlockReason;
 };
 
 /** Pull a company name off a hit whose company field may be a string or object. */
@@ -475,6 +482,8 @@ export async function searchLinkedInProfiles(opts: {
   limit: number;
   /** Explicit account to route through. Admins only. */
   requestedAccountId?: string;
+  /** What triggered it, for the activity ledger: finder | scraper | discovery | reconcile | enrichment. */
+  source?: string;
 }): Promise<SearchResult> {
   const keywords = opts.keywords.trim();
   if (keywords.length < 2) {
@@ -509,14 +518,43 @@ export async function searchLinkedInProfiles(opts: {
         message: "Requested LinkedIn account isn't available in this workspace pool.",
       };
     }
-  } else {
-    chosen = pool[0]; // listUsableAccounts is sorted most-headroom first
   }
+
+  /**
+   * Account-level policy (migration 0167): the same gate every invite, message
+   * and profile lookup passes. A search is LinkedIn activity too — it is the
+   * action LinkedIn pauses search over — and until 2026-09-22 nothing here
+   * asked. A pinned account is checked alone; otherwise the pool is tried in
+   * headroom order (listUsableAccounts sorts most-headroom first) and the
+   * first account the policy allows runs the search. A refusal reaches no
+   * vendor and is reported with its reason, never as "no results".
+   */
+  const candidates = chosen ? [chosen.unipileAccountId] : pool.map((a) => a.unipileAccountId);
+  const pick = await pickAccountForAction({ workspaceId: opts.workspaceId, candidates, kind: "search" });
+  if (!pick.unipileAccountId) {
+    return {
+      ok: false,
+      viaAccountId: candidates[0] ?? null,
+      hits: [],
+      message: pick.verdict?.message ?? "LinkedIn search is not available right now.",
+      blocked: pick.verdict?.reason ?? undefined,
+    };
+  }
+  chosen = pool.find((a) => a.unipileAccountId === pick.unipileAccountId) ?? pool[0];
 
   try {
     const { items } = await searchLinkedInPeople(chosen.unipileAccountId, {
       keywords,
       limit: opts.limit,
+    });
+    // Recorded AFTER the vendor call: a refused or failed search is not
+    // activity LinkedIn saw.
+    await recordLinkedInAction({
+      workspaceId: opts.workspaceId,
+      unipileAccountId: chosen.unipileAccountId,
+      kind: "search",
+      source: opts.source ?? "search",
+      targetIdentifier: keywords,
     });
     const hits = items.map(mapSearchHit).filter((h) => h.name.length > 0);
     return {

@@ -12,6 +12,12 @@
  *                              was overridden every time
  *   • opener DMs               the stored setting at face value (default 50)
  *   • job-change re-engagement 25/day
+ *   • people searches          no limit at all: the Revenue Engine's LinkedIn
+ *                              discovery, the finder, the scraper, reconcile,
+ *                              name-and-company enrichment and the Social page
+ *                              search all ran outside the gate (closed
+ *                              2026-09-22, after LinkedIn paused search on the
+ *                              owner's account for "unusual search activity")
  *
  * None of them knew the others existed, so one account could take 170 actions
  * in a day with every subsystem correctly believing it was within its limit.
@@ -29,10 +35,10 @@
  * without waiting a week to see whether an account got restricted.
  */
 
-export type LinkedInActionKind = "invite" | "message" | "lookup" | "reaction";
+export type LinkedInActionKind = "invite" | "message" | "lookup" | "reaction" | "search";
 
 export const LINKEDIN_ACTION_KINDS: readonly LinkedInActionKind[] = [
-  "invite", "message", "lookup", "reaction",
+  "invite", "message", "lookup", "reaction", "search",
 ] as const;
 
 export const ACTION_LABEL: Record<LinkedInActionKind, string> = {
@@ -40,6 +46,7 @@ export const ACTION_LABEL: Record<LinkedInActionKind, string> = {
   message: "Messages",
   lookup: "Profile lookups",
   reaction: "Likes and reactions",
+  search: "People searches",
 };
 
 export interface LinkedInLimitPolicy {
@@ -50,6 +57,13 @@ export interface LinkedInLimitPolicy {
   dailyInviteCap: number;
   dailyMessageCap: number;
   dailyLookupCap: number;
+  /**
+   * People searches: the Revenue Engine's LinkedIn discovery, the finder, the
+   * scraper, reconcile, name-and-company enrichment and the Social page
+   * search. A search is the action LinkedIn flags as "unusual search
+   * activity", and its response is to pause search for the whole account.
+   */
+  dailySearchCap: number;
   /**
    * All action kinds together, per account, per day. The gap the four separate
    * caps left: each was individually reasonable and their sum was not.
@@ -90,6 +104,7 @@ export const DEFAULT_LINKEDIN_POLICY: LinkedInLimitPolicy = {
   dailyInviteCap: 15,
   dailyMessageCap: 40,
   dailyLookupCap: 100,
+  dailySearchCap: 30,
   dailyActionCap: 120,
   minSpacingSeconds: 90,
   jitterSeconds: 60,
@@ -106,6 +121,7 @@ export const POLICY_BOUNDS = {
   dailyInviteCap: { min: 0, max: 100 },
   dailyMessageCap: { min: 0, max: 200 },
   dailyLookupCap: { min: 0, max: 500 },
+  dailySearchCap: { min: 0, max: 300 },
   dailyActionCap: { min: 0, max: 800 },
   minSpacingSeconds: { min: 0, max: 3600 },
   jitterSeconds: { min: 0, max: 3600 },
@@ -135,6 +151,7 @@ export function clampPolicy(input: Partial<LinkedInLimitPolicy>): LinkedInLimitP
     dailyInviteCap: clamp(p.dailyInviteCap, "dailyInviteCap"),
     dailyMessageCap: clamp(p.dailyMessageCap, "dailyMessageCap"),
     dailyLookupCap: clamp(p.dailyLookupCap, "dailyLookupCap"),
+    dailySearchCap: clamp(p.dailySearchCap, "dailySearchCap"),
     dailyActionCap: clamp(p.dailyActionCap, "dailyActionCap"),
     minSpacingSeconds: clamp(p.minSpacingSeconds, "minSpacingSeconds"),
     jitterSeconds: clamp(p.jitterSeconds, "jitterSeconds"),
@@ -186,6 +203,7 @@ export interface ActionVerdict {
     dailyInvite: number;
     dailyMessage: number;
     dailyLookup: number;
+    dailySearch: number;
     dailyAction: number;
     weeklyInvite: number;
   };
@@ -256,6 +274,7 @@ export function evaluateLinkedInAction(input: {
     dailyInvite: scaleCap(policy.dailyInviteCap, factor),
     dailyMessage: scaleCap(policy.dailyMessageCap, factor),
     dailyLookup: scaleCap(policy.dailyLookupCap, factor),
+    dailySearch: scaleCap(policy.dailySearchCap, factor),
     dailyAction: scaleCap(policy.dailyActionCap, factor),
     weeklyInvite: scaleCap(policy.weeklyInviteCap, factor),
   };
@@ -302,7 +321,8 @@ export function evaluateLinkedInAction(input: {
     kind === "invite" ? effectiveCaps.dailyInvite
       : kind === "message" ? effectiveCaps.dailyMessage
         : kind === "lookup" ? effectiveCaps.dailyLookup
-          : effectiveCaps.dailyAction;
+          : kind === "search" ? effectiveCaps.dailySearch
+            : effectiveCaps.dailyAction;
   if (todayOf(kind) >= kindCap) {
     return block("daily_kind_cap", `Daily ${ACTION_LABEL[kind].toLowerCase()} limit reached (${todayOf(kind)}/${kindCap}).`);
   }

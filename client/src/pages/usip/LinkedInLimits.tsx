@@ -131,7 +131,8 @@ function PolicyEditor({
       {!draft.enabled && (
         <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400">
           <AlertTriangle className="size-3.5 mt-0.5 shrink-0" />
-          Paused means every automated LinkedIn action is refused — invites, messages, profile lookups and enrichment.
+          Paused means every automated LinkedIn action is refused — invites, messages, profile lookups, people searches
+          (including the Revenue Engine's LinkedIn discovery) and enrichment.
           It does not mean unlimited.
         </div>
       )}
@@ -166,6 +167,13 @@ function PolicyEditor({
             value={draft.dailyLookupCap}
             bounds={POLICY_BOUNDS.dailyLookupCap}
             onChange={(n) => set("dailyLookupCap", n)}
+          />
+          <NumField
+            label="People searches per day"
+            hint="Revenue Engine LinkedIn discovery, the finder, the scraper, reconcile and name lookups. The action LinkedIn pauses search over."
+            value={draft.dailySearchCap}
+            bounds={POLICY_BOUNDS.dailySearchCap}
+            onChange={(n) => set("dailySearchCap", n)}
           />
           <NumField
             label="Total actions per day"
@@ -396,7 +404,7 @@ export default function LinkedInLimits() {
                         </span>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
                         <Budget
                           label="Invites this week"
                           used={a.usage.invitesWeek}
@@ -406,10 +414,16 @@ export default function LinkedInLimits() {
                         <Budget label="Invites today" used={a.usage.invitesToday} cap={a.effectiveCaps.dailyInvite} />
                         <Budget label="Messages today" used={a.usage.messagesToday} cap={a.effectiveCaps.dailyMessage} />
                         <Budget
+                          label="Searches today"
+                          used={a.usage.searchesToday}
+                          cap={a.effectiveCaps.dailySearch}
+                          hint="People searches from every path — the action LinkedIn pauses search over."
+                        />
+                        <Budget
                           label="All actions today"
                           used={a.usage.totalToday}
                           cap={a.effectiveCaps.dailyAction}
-                          hint="Invites, messages, lookups and warming likes together."
+                          hint="Invites, messages, lookups, searches and warming likes together."
                         />
                       </div>
 

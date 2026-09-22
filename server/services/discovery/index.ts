@@ -66,6 +66,7 @@ async function discoverLinkedInPeople(
     isAdmin: true,
     keywords: query,
     limit: 25,
+    source: "discovery",
   });
   if (!res.ok) return [];
   return res.hits.map((h) => ({

@@ -4215,6 +4215,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // 0187 — LinkedIn people searches join the activity gate (2026-09-22).
+  // Until now every search path (Revenue Engine LinkedIn discovery, the
+  // finder, the scraper, reconcile, name-and-company enrichment, the Social
+  // page search) ran outside the per-account policy: the Paused switch did
+  // not stop them, no cap bounded them, and the activity ledger never saw
+  // them — while a search is precisely the action LinkedIn flags as
+  // "unusual search activity". Searches now carry kind "search" in
+  // linkedin_activity_log and are bounded by this new per-day cap.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0187_linkedin_search_cap.sql",
+    statements: [
+      "ALTER TABLE `linkedin_activity_limits` ADD COLUMN `dailySearchCap` int NOT NULL DEFAULT 30",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

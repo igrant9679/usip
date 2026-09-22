@@ -863,9 +863,21 @@ export const unipileRouter = router({
       if (!db) return { items: [] as UnipileLinkedInSearchHit[] };
       const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
       if (!acct) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Connect a LinkedIn account to search." });
+      // The same gate every automated search now passes (Paused, daily search
+      // cap, pacing, hours). A click on the Social page is still a search on
+      // the account LinkedIn is watching — and the action it pauses search over.
+      const { checkLinkedInAction, recordLinkedInAction } = await import("../services/linkedin/activityGate");
+      const searchGate = await checkLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: acct, kind: "search" });
+      if (!searchGate.allowed) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Held by LinkedIn limits: ${searchGate.message}` });
+      }
       const res = await searchLinkedIn(acct, {
         api: input.api, category: input.category, keywords: input.keywords,
         filters: input.filters, limit: input.limit ?? 10,
+      });
+      await recordLinkedInAction({
+        workspaceId: ctx.workspace.id, unipileAccountId: acct, kind: "search", source: "manual",
+        targetIdentifier: input.keywords ?? null,
       });
       return { items: res.items, cursor: res.cursor };
     }),

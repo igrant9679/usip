@@ -33,6 +33,22 @@ const lookup = readFileSync("server/services/linkedinLookup.ts", "utf8");
 const gate = readFileSync("server/services/linkedin/activityGate.ts", "utf8");
 const page = readFileSync("client/src/pages/usip/LinkedInLimits.tsx", "utf8");
 const registry = readFileSync("client/src/lib/toolRegistry.ts", "utf8");
+const engine = readFileSync("server/areEngine.ts", "utf8");
+const unipileRouter = readFileSync("server/routers/unipile.ts", "utf8");
+
+/**
+ * The body of one function, anchored by its declaration. Asserting the anchor
+ * exists is the point: a pin that slices from -1 reads the whole file and
+ * passes for the wrong reason, which is how a checker stops seeing.
+ */
+function fnBody(src: string, decl: string, label: string): string {
+  const start = src.indexOf(decl);
+  expect(start, `${label}: anchor "${decl}" moved — re-anchor`).toBeGreaterThan(-1);
+  const next = src.indexOf("\nasync function ", start + decl.length);
+  const nextExport = src.indexOf("\nexport ", start + decl.length);
+  const ends = [next, nextExport].filter((i) => i > -1);
+  return src.slice(start, ends.length ? Math.min(...ends) : undefined);
+}
 
 /** A Wednesday at 10:00 UTC — inside every default window. */
 const WED_10AM = new Date("2026-08-12T10:00:00Z");
@@ -210,7 +226,7 @@ describe("the policy cannot be saved into a state that refuses everything", () =
 
 describe("paused means refused, not unlimited", () => {
   it("blocks every action when disabled", () => {
-    for (const kind of ["invite", "message", "lookup", "reaction"]) {
+    for (const kind of ["invite", "message", "lookup", "reaction", "search"]) {
       expect(verdict({ enabled: false }, {}, kind).allowed, kind).toBe(false);
     }
     expect(verdict({ enabled: false }, {}).reason).toBe("disabled");
@@ -270,6 +286,132 @@ describe("every LinkedIn action path passes the gate", () => {
     // Absence of a row is never permission.
     expect(load).toContain("r.unipileAccountId === null");
     expect(load).toContain("DEFAULT_LINKEDIN_POLICY");
+  });
+});
+
+/**
+ * 2026-09-22: LinkedIn paused search on the owner's account for "unusual
+ * search activity". Every search path — the Revenue Engine's LinkedIn
+ * discovery, the finder, the scraper, reconcile, name-and-company enrichment
+ * and the Social page search — ran outside the gate: the Paused switch did
+ * not stop them, no cap bounded them, the ledger never saw them, and the
+ * engine fell back to an account with no headroom at all.
+ */
+describe("people searches pass the gate too", () => {
+  it("is a governed kind with its own daily cap", () => {
+    expect(DEFAULT_LINKEDIN_POLICY.dailySearchCap).toBeGreaterThan(0);
+    // Searches are the action LinkedIn pauses search over: the default sits
+    // well under the lookup cap rather than inheriting it.
+    expect(DEFAULT_LINKEDIN_POLICY.dailySearchCap).toBeLessThan(DEFAULT_LINKEDIN_POLICY.dailyLookupCap);
+    const v = verdict({ dailySearchCap: 5 }, { today: { search: 5 }, todayTotal: 5 }, "search");
+    expect(v.allowed).toBe(false);
+    expect(v.reason).toBe("daily_kind_cap");
+    expect(v.message).toMatch(/search/i);
+    expect(verdict({ dailySearchCap: 5 }, { today: { search: 4 }, todayTotal: 4 }, "search").allowed).toBe(true);
+    expect(v.effectiveCaps.dailySearch).toBe(5);
+  });
+
+  it("counts searches against the shared daily budget", () => {
+    const v = verdict({ dailySearchCap: 50, dailyActionCap: 10 }, { today: { search: 3 }, todayTotal: 10 }, "search");
+    expect(v.allowed).toBe(false);
+    expect(v.reason).toBe("daily_action_cap");
+  });
+
+  it("clamps the search cap like every other number", () => {
+    expect(clampPolicy({ dailySearchCap: 99999 }).dailySearchCap).toBe(300);
+    expect(clampPolicy({ dailySearchCap: NaN as never }).dailySearchCap).toBe(DEFAULT_LINKEDIN_POLICY.dailySearchCap);
+  });
+
+  it("the engine's LinkedIn discovery asks the gate, records the search, and never falls back to an account with no headroom", () => {
+    const body = fnBody(engine, "async function discoverViaLinkedIn(", "engine");
+    expect(body).toContain('kind: "search"');
+    expect(body).toContain("pickAccountForAction(");
+    expect(body).not.toContain("?? accounts[0]");
+    expect(body).toContain("return [];");
+    // Recorded AFTER the vendor call, never before.
+    const search = body.indexOf("searchLinkedInPeople(");
+    const record = body.indexOf("recordLinkedInAction(");
+    expect(search).toBeGreaterThan(-1);
+    expect(record).toBeGreaterThan(search);
+  });
+
+  it("the shared people search asks the gate and records; a refusal is reported as a refusal, not as no results", () => {
+    const body = fnBody(lookup, "export async function searchLinkedInProfiles(", "lookup");
+    expect(body).toContain("pickAccountForAction(");
+    expect(body).toContain('kind: "search"');
+    expect(body).toContain("blocked:");
+    const search = body.indexOf("searchLinkedInPeople(");
+    const record = body.indexOf("recordLinkedInAction(");
+    expect(search).toBeGreaterThan(-1);
+    expect(record).toBeGreaterThan(search);
+  });
+
+  it("the gate picks the first allowed account from a pool, and says why when none is", () => {
+    const body = fnBody(gate, "export async function pickAccountForAction(", "gate");
+    expect(body).toContain("checkLinkedInAction(");
+    expect(body).toContain("if (verdict.allowed) return { unipileAccountId, verdict };");
+    expect(body).toContain("return { unipileAccountId: null, verdict: first };");
+  });
+
+  it("every caller of the shared search names itself in the ledger", () => {
+    const callers: Array<[string, string]> = [
+      ["server/routers/linkedinFinder.ts", "finder"],
+      ["server/routers/are/scraper.ts", "scraper"],
+      ["server/services/discovery/index.ts", "discovery"],
+      ["server/services/are/prospectReconcile.ts", "reconcile"],
+      ["server/services/linkedinEnrichment/unipileProfile.ts", "enrichment"],
+    ];
+    for (const [file, source] of callers) {
+      const src = readFileSync(file, "utf8");
+      const at = src.indexOf("searchLinkedInProfiles({");
+      expect(at, file).toBeGreaterThan(-1);
+      expect(src.slice(at, src.indexOf("});", at)), file).toContain(`source: "${source}"`);
+    }
+  });
+
+  it("the Social page search asks the gate, refuses with the reason, and records", () => {
+    const start = unipileRouter.indexOf("searchLinkedIn: workspaceProcedure");
+    const end = unipileRouter.indexOf("resolveSearchParam: workspaceProcedure");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const body = unipileRouter.slice(start, end);
+    expect(body).toContain('kind: "search"');
+    expect(body).toContain("if (!searchGate.allowed)");
+    expect(body).toContain("throw new TRPCError");
+    expect(body.indexOf("recordLinkedInAction(")).toBeGreaterThan(body.indexOf("await searchLinkedIn(acct"));
+  });
+
+  it("a refused enrichment search is retry-later, never a verdict on the person", () => {
+    const src = readFileSync("server/services/linkedinEnrichment/unipileProfile.ts", "utf8");
+    const body = fnBody(src, "export async function retrieveByNameCompany(", "unipileProfile");
+    expect(body).toContain('res.blocked ? "rate_limited"');
+  });
+
+  it("reconcile stops spending its search budget once the gate refuses", () => {
+    const src = readFileSync("server/services/are/prospectReconcile.ts", "utf8");
+    const at = src.indexOf("if (!res.ok && res.blocked) {");
+    expect(at).toBeGreaterThan(-1);
+    expect(src.slice(at, at + 500)).toContain("searchBudget = 0;");
+  });
+
+  it("the column exists in the schema and ships in a raw migration", () => {
+    const schema = readFileSync("drizzle/schema.ts", "utf8");
+    const limits = schema.slice(schema.indexOf('"linkedin_activity_limits"'), schema.indexOf('"linkedin_activity_log"'));
+    expect(limits).toContain('dailySearchCap: int("dailySearchCap").default(30).notNull()');
+    const raw = readFileSync("server/_core/rawMigrations.ts", "utf8");
+    expect(raw).toContain('name: "0187_linkedin_search_cap.sql"');
+    expect(raw).toContain("ALTER TABLE `linkedin_activity_limits` ADD COLUMN `dailySearchCap` int NOT NULL DEFAULT 30");
+  });
+
+  it("the panel exposes the cap, the usage, and tells the truth about Paused", () => {
+    expect(page).toContain("People searches per day");
+    expect(page).toContain('set("dailySearchCap", n)');
+    expect(page).toContain('label="Searches today"');
+    expect(page).toContain("a.usage.searchesToday");
+    expect(page).toMatch(/Paused means every automated LinkedIn action is refused[^]*?people searches/);
+    const router = readFileSync("server/routers/linkedinLimits.ts", "utf8");
+    expect(router).toContain("dailySearchCap: z.number()");
+    expect(router).toContain("searchesToday: usage.today.search ?? 0");
   });
 });
 

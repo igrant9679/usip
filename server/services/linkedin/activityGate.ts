@@ -15,6 +15,10 @@
  *   …do the LinkedIn thing…
  *   await recordLinkedInAction({...});
  *
+ * A caller that chooses an account from a pool (the search paths) uses
+ * pickAccountForAction, which runs the same check per candidate and returns
+ * the first one that may act.
+ *
  * Recording AFTER the action, not before, because a refused or failed API call
  * is not activity LinkedIn saw. The window between the two is a race in
  * principle — two concurrent callers can both pass a cap boundary — and it is
@@ -45,6 +49,7 @@ function rowToPolicy(row: typeof linkedinActivityLimits.$inferSelect): LinkedInL
     dailyInviteCap: row.dailyInviteCap,
     dailyMessageCap: row.dailyMessageCap,
     dailyLookupCap: row.dailyLookupCap,
+    dailySearchCap: row.dailySearchCap,
     dailyActionCap: row.dailyActionCap,
     minSpacingSeconds: row.minSpacingSeconds,
     jitterSeconds: row.jitterSeconds,
@@ -180,11 +185,43 @@ export async function checkLinkedInAction(input: GateInput): Promise<ActionVerdi
         dailyInvite: DEFAULT_LINKEDIN_POLICY.dailyInviteCap,
         dailyMessage: DEFAULT_LINKEDIN_POLICY.dailyMessageCap,
         dailyLookup: DEFAULT_LINKEDIN_POLICY.dailyLookupCap,
+        dailySearch: DEFAULT_LINKEDIN_POLICY.dailySearchCap,
         dailyAction: DEFAULT_LINKEDIN_POLICY.dailyActionCap,
         weeklyInvite: DEFAULT_LINKEDIN_POLICY.weeklyInviteCap,
       },
     };
   }
+}
+
+/**
+ * The first of `candidates` (in the caller's preference order) that may take
+ * this action right now, or null with the FIRST candidate's verdict so the
+ * caller can say why nothing ran.
+ *
+ * The search paths pick from the workspace pool rather than a fixed account,
+ * and "most headroom first" by the old daily lookup counter is not the same
+ * question as "allowed by the policy": an account with lookups to spare may
+ * still be paused, outside its hours, or too soon after its last action.
+ * Never throws: checkLinkedInAction already fails open per candidate.
+ */
+export async function pickAccountForAction(input: {
+  workspaceId: number;
+  candidates: string[];
+  kind: LinkedInActionKind;
+  now?: Date;
+}): Promise<{ unipileAccountId: string | null; verdict: ActionVerdict | null }> {
+  let first: ActionVerdict | null = null;
+  for (const unipileAccountId of input.candidates) {
+    const verdict = await checkLinkedInAction({
+      workspaceId: input.workspaceId,
+      unipileAccountId,
+      kind: input.kind,
+      now: input.now,
+    });
+    if (verdict.allowed) return { unipileAccountId, verdict };
+    if (!first) first = verdict;
+  }
+  return { unipileAccountId: null, verdict: first };
 }
 
 /** Record an action that actually happened. Best-effort; never throws. */

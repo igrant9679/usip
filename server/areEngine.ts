@@ -60,6 +60,7 @@ import {
 } from "./routers/are/scraper";
 import { searchLinkedInPeople, type UnipileLinkedInSearchHit } from "./lib/unipile";
 import { listUsableAccounts } from "./services/linkedinLookup";
+import { pickAccountForAction, recordLinkedInAction } from "./services/linkedin/activityGate";
 import { randomUUID } from "node:crypto";
 import { sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
 import { dispatchLinkedInStep, HEALABLE_NO_LINKEDIN } from "./services/are/linkedinStep";
@@ -2650,8 +2651,7 @@ async function discoverViaLinkedIn(
       userId: campaign.ownerUserId ?? 0,
       isAdmin: true, // engine runs without a user; pull from the whole workspace pool
     });
-    const acct = accounts.find((a) => a.remainingToday > 0) ?? accounts[0];
-    if (!acct) {
+    if (accounts.length === 0) {
       console.warn(
         `[AreEngine] campaign ${campaign.id} — no bridged LinkedIn account in workspace ${campaign.workspaceId}, LinkedIn discovery skipped`,
       );
@@ -2659,13 +2659,42 @@ async function discoverViaLinkedIn(
         "LinkedIn source skipped — no bridged LinkedIn account in this workspace. Connect one in Settings › Social accounts or disable the LinkedIn source on this campaign.");
       return [];
     }
+    /**
+     * The account policy every invite, message and lookup obeys (migration
+     * 0167). This search never asked it — and fell back to an account with no
+     * headroom at all — so the Paused switch on LinkedIn Limits did not stop
+     * the engine searching, no cap bounded it, and the ledger never saw it. A
+     * search is the action LinkedIn pauses search over. Pool order is most
+     * headroom first; the first account the policy allows runs the search.
+     */
+    const pick = await pickAccountForAction({
+      workspaceId: campaign.workspaceId,
+      candidates: accounts.map((a) => a.unipileAccountId),
+      kind: "search",
+    });
+    if (!pick.unipileAccountId) {
+      // Pacing is a retry-next-tick condition; anything else earns a warning.
+      await emitLog(campaign.workspaceId, campaign.id, "discovery", pick.verdict?.reason === "spacing" ? "info" : "warn",
+        `LinkedIn source skipped — ${pick.verdict?.message ?? "held by LinkedIn limits."} Adjust under Settings › LinkedIn limits.`);
+      return [];
+    }
+    const acct = pick.unipileAccountId;
     // 25 is the Unipile wrapper's per-call max (searchLinkedInPeople clamps
     // there). True cursor-based multi-page paging needs Unipile's paging
     // contract confirmed against a live account before we spend daily-cap
     // credits on it — tracked as a follow-up.
-    const { items } = await searchLinkedInPeople(acct.unipileAccountId, {
+    const { items } = await searchLinkedInPeople(acct, {
       keywords,
       limit: 25,
+    });
+    // Recorded AFTER the vendor call: a refused or failed search is not
+    // activity LinkedIn saw.
+    await recordLinkedInAction({
+      workspaceId: campaign.workspaceId,
+      unipileAccountId: acct,
+      kind: "search",
+      source: "are_engine",
+      targetIdentifier: keywords,
     });
     return items
       .map((h: UnipileLinkedInSearchHit) => {

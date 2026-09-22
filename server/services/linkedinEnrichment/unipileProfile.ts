@@ -103,10 +103,13 @@ export async function retrieveByNameCompany(opts: {
     return { ok: false, status: "invalid_url", profile: null, viaAccountId: null, identifier: null, message: "Insufficient identifiers for an authorized lookup" };
   }
   const res = await searchLinkedInProfiles({
-    workspaceId: opts.workspaceId, userId: opts.userId, isAdmin: opts.isAdmin, keywords, limit: 3,
+    workspaceId: opts.workspaceId, userId: opts.userId, isAdmin: opts.isAdmin, keywords, limit: 3, source: "enrichment",
   });
   if (!res.ok) {
-    return { ok: false, status: classify(res.message, true), profile: null, viaAccountId: res.viaAccountId, identifier: null, message: res.message };
+    // A policy refusal (paused, capped, paced, outside hours) reached no
+    // vendor: a retry-later condition, never a verdict on the person.
+    const status: RetrieveStatus = res.blocked ? "rate_limited" : classify(res.message, true);
+    return { ok: false, status, profile: null, viaAccountId: res.viaAccountId, identifier: null, message: res.message };
   }
   if (res.hits.length === 0) {
     return { ok: false, status: "no_match", profile: null, viaAccountId: res.viaAccountId, identifier: null, message: "No LinkedIn profile matched these identifiers" };
