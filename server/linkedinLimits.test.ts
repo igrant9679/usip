@@ -416,10 +416,22 @@ describe("people searches pass the gate too", () => {
 });
 
 describe("the panel is reachable and honest", () => {
-  it("is registered in the one nav source", () => {
+  it("is registered in the one nav source, on the rail beside Social", () => {
     // A page missing from toolRegistry is invisible to the rail, the Library
     // and Cmd+K.
-    expect(registry).toContain('href: "/settings/linkedin-limits"');
+    const at = registry.indexOf('href: "/settings/linkedin-limits"');
+    expect(at).toBeGreaterThan(-1);
+    // On the rail (owner ask 2026-09-22): only `primary` tools render there,
+    // and only inside a product section — Configuration has none — so the
+    // entry sits in Outreach, after Social.
+    const row = registry.slice(at, registry.indexOf("}", at));
+    expect(row).toContain('group: "Outreach"');
+    expect(row).toContain("primary: true");
+    expect(at).toBeGreaterThan(registry.indexOf('href: "/social"'));
+    // Every rail link needs hover copy, and the assistant's page map lists
+    // rail tools under their section.
+    expect(readFileSync("client/src/lib/helpText.ts", "utf8")).toContain('"/settings/linkedin-limits":');
+    expect(readFileSync("server/productKnowledge.ts", "utf8")).toContain("Social /social, LinkedIn Limits /settings/linkedin-limits");
   });
 
   it("says the defaults are guesses, because LinkedIn publishes nothing", () => {

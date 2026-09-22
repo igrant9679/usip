@@ -181,6 +181,15 @@ export const TOOLS: Tool[] = [
     description: "LinkedIn, WhatsApp and social DMs in one place.", keywords: ["multichannel"] },
   { href: "/social", label: "Social", icon: Share2, group: "Outreach", primary: true,
     description: "LinkedIn outreach: invites, DMs, and replies.", keywords: ["linkedin", "multichannel"] },
+  // On the rail beside Social (owner ask 2026-09-22, the day LinkedIn paused
+  // search on the owner's account): the Paused switch and the per-account
+  // caps are controls a restricted account needs found in seconds, not via
+  // the palette. Only `primary` tools render on the rail, and only inside a
+  // product section — Configuration has none — so it lives in Outreach, the
+  // product it governs.
+  { href: "/settings/linkedin-limits", label: "LinkedIn Limits", icon: Linkedin, group: "Outreach", primary: true,
+    description: "Per-account caps, pacing, working hours and the Paused switch that keep LinkedIn accounts safe.",
+    keywords: ["throttle", "rate limit", "invites", "ban", "restriction", "warmup", "pause", "search"] },
   // Both were views of the same drafts table as Emails (phase 4): they are
   // now saved filters of it. The old routes stay for the per-draft editor
   // tools (subject A/B, research context, regenerate) until those are
@@ -260,9 +269,6 @@ export const TOOLS: Tool[] = [
     description: "Unsubscribes and do-not-contact addresses (part of Email Sending)." },
   { href: "/connected-accounts", label: "Connected Accounts", icon: Plug, group: "Configuration",
     description: "OAuth links: mailboxes, calendars, LinkedIn." },
-  { href: "/settings/linkedin-limits", label: "LinkedIn Limits", icon: Linkedin, group: "Configuration",
-    description: "Per-account caps, pacing and working hours that keep LinkedIn accounts safe.",
-    keywords: ["throttle", "rate limit", "invites", "ban", "restriction", "warmup"] },
   // Lead handling: scoring and routing are one router and one workflow; the
   // two pages SubNav-link each other (phase 4).
   { href: "/lead-scoring", label: "Lead Scoring", icon: Target, group: "Configuration",

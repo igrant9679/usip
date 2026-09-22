@@ -147,7 +147,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 **Meetings** (/v2/meetings) — proposed, invited, scheduled, completed, no-show. Confirm AI proposals here; a proposal whose offered times have all passed shows a **Regenerate** button (fresh future times, fresh invite — also swept automatically each autopilot tick, and "Regenerate expired" does the whole backlog). Your **booking link** lives here: set its timezone (it defaults to UTC).
 
-**Unified Inbox** (/unified-inbox) — LinkedIn, WhatsApp and social DMs. **Social** (/social) — LinkedIn invites, DMs and replies under the Social Autopilot and LinkedIn Limits.
+**Unified Inbox** (/unified-inbox) — LinkedIn, WhatsApp and social DMs. **Social** (/social) — LinkedIn invites, DMs and replies under the Social Autopilot and LinkedIn Limits. **LinkedIn Limits** (/settings/linkedin-limits) — per-account caps, pacing, working hours and the Active/Paused switch; people searches, invites, messages and profile lookups all pass this gate, so Paused stops the Revenue Engine's LinkedIn discovery too.
 
 ## Marketing, Proposals, Dialer, Customer Success
 

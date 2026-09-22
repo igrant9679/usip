@@ -72,6 +72,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/v2/calls": { body: "Call logs and outcomes, including AI voice-agent calls.", article: "calls-page" },
   "/v2/tasks": { body: "Your to-do queue. AI-proposed tasks land here for approval before they become real work.", article: "autonomy-control-center" },
   "/social": { body: "LinkedIn outreach — connection requests, messages and replies.", article: "linkedin-social-outreach" },
+  "/settings/linkedin-limits": { body: "Per-account LinkedIn caps, pacing, working hours and the Paused switch. Searches, invites, messages and lookups all pass this gate.", article: "linkedin-social-outreach" },
 
   // ── Inbound (no outbound send required) ──
   "/v2/chat": { body: "The AI chat agent on your website. It qualifies visitors and can book meetings on its own, with no email sent.", article: "website-chat-agent" },
