@@ -84,6 +84,7 @@ export const linkedinLimitsRouter = {
         userId: unipileAccounts.userId,
         status: unipileAccounts.status,
         createdAt: unipileAccounts.createdAt,
+        displayName: unipileAccounts.displayName,
         ownerName: users.name,
         ownerEmail: users.email,
       })
@@ -107,6 +108,14 @@ export const linkedinLimitsRouter = {
       const verdict = evaluateLinkedInAction({ policy, usage, kind: "invite", now, accountAgeDays: ageDays });
       return {
         unipileAccountId: a.unipileAccountId,
+        /**
+         * The LinkedIn profile's own name (Unipile's account name): WHOSE
+         * LinkedIn this is. ownerName is the Velocity user who pressed Connect,
+         * which is not always the same person — on 2026-09-22 a workspace's
+         * LinkedIn had been connected by the owner on the CEO's behalf, the
+         * panel named the owner, and the CEO's account nearly got disconnected.
+         */
+        profileName: a.displayName ?? null,
         ownerName: a.ownerName ?? null,
         ownerEmail: a.ownerEmail ?? null,
         status: a.status,

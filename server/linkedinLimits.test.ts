@@ -434,6 +434,20 @@ describe("the panel is reachable and honest", () => {
     expect(readFileSync("server/productKnowledge.ts", "utf8")).toContain("Social /social, LinkedIn Limits /settings/linkedin-limits");
   });
 
+  it("names the LinkedIn profile, not the user who pressed Connect", () => {
+    // 2026-09-22: CommunityForce's LinkedIn had been connected by the owner on
+    // the CEO's behalf; the panel said "Idris Grant" and the CEO's account
+    // nearly got disconnected. The profile name is whose LinkedIn it is; the
+    // Velocity user is shown as "connected by" only when the two differ.
+    const router = readFileSync("server/routers/linkedinLimits.ts", "utf8");
+    expect(router).toContain("displayName: unipileAccounts.displayName");
+    expect(router).toContain("profileName: a.displayName ?? null");
+    expect(page).toContain("{a.profileName || a.ownerName || a.ownerEmail || a.unipileAccountId}");
+    expect(page).toContain("connected by {a.ownerName}");
+    expect(page).toContain("atRisk.map((a) => a.profileName || a.ownerName || a.unipileAccountId)");
+    expect(page).toContain("Limits for ${a.profileName || a.ownerName || a.unipileAccountId}");
+  });
+
   it("says the defaults are guesses, because LinkedIn publishes nothing", () => {
     expect(page).toMatch(/publishes no limits/i);
   });

@@ -356,7 +356,7 @@ export default function LinkedInLimits() {
               <AlertTriangle className="size-4 mt-0.5 shrink-0 text-amber-600" />
               <div className="text-xs text-amber-700 dark:text-amber-400">
                 {atRisk.length} account{atRisk.length === 1 ? " is" : "s are"} currently held:{" "}
-                {atRisk.map((a) => a.ownerName || a.unipileAccountId).join(", ")}. Automation will resume on its own —
+                {atRisk.map((a) => a.profileName || a.ownerName || a.unipileAccountId).join(", ")}. Automation will resume on its own —
                 nothing is broken.
               </div>
             </div>
@@ -382,7 +382,18 @@ export default function LinkedInLimits() {
                     <div className="p-4 space-y-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <Linkedin className="size-4 text-[#0A66C2]" />
-                        <span className="text-sm font-medium">{a.ownerName || a.ownerEmail || a.unipileAccountId}</span>
+                        {/* Whose LinkedIn this is — the profile's own name. The Velocity
+                            user who pressed Connect is not always the same person, and
+                            naming them here once sent someone to disconnect the wrong account. */}
+                        <span className="text-sm font-medium">{a.profileName || a.ownerName || a.ownerEmail || a.unipileAccountId}</span>
+                        {a.profileName && a.ownerName && a.profileName !== a.ownerName && (
+                          <span
+                            className="text-[11px] text-muted-foreground"
+                            title="The LinkedIn profile behind this connection belongs to someone other than the Velocity user who connected it."
+                          >
+                            connected by {a.ownerName}
+                          </span>
+                        )}
                         <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 capitalize">{a.status}</Badge>
                         {a.policySource === "account" ? (
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 border-primary/40 text-primary">Custom limits</Badge>
@@ -454,7 +465,7 @@ export default function LinkedInLimits() {
                     {isOpen && (
                       <div className="border-t bg-muted/20 p-4">
                         <PolicyEditor
-                          title={`Limits for ${a.ownerName || a.unipileAccountId}`}
+                          title={`Limits for ${a.profileName || a.ownerName || a.unipileAccountId}`}
                           subtitle="These override the workspace default for this account only."
                           policy={a.policy}
                           saving={save.isPending}
