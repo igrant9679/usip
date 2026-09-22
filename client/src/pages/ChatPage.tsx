@@ -16,6 +16,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Loader2, Send, CalendarCheck, CheckCircle2, MessageSquare } from "lucide-react";
+import { ChatMarkdown } from "@/components/usip/ChatMarkdown";
 
 type Msg = { role: "visitor" | "agent"; text: string };
 
@@ -147,12 +148,12 @@ export default function ChatPage() {
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === "visitor" ? "justify-end" : "justify-start"}`}>
             <div
-              className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-[14px] leading-relaxed whitespace-pre-wrap ${
-                m.role === "visitor" ? "text-white rounded-br-sm" : "bg-muted rounded-bl-sm"
+              className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-[14px] leading-relaxed ${
+                m.role === "visitor" ? "text-white rounded-br-sm whitespace-pre-wrap" : "bg-muted rounded-bl-sm"
               }`}
               style={m.role === "visitor" ? { backgroundColor: accent } : undefined}
             >
-              {m.text}
+              {m.role === "visitor" ? m.text : <ChatMarkdown text={m.text} />}
             </div>
           </div>
         ))}

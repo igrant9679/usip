@@ -17,6 +17,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
+import { ChatMarkdown } from "@/components/usip/ChatMarkdown";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { useAccentColor } from "@/components/usip/Shell";
@@ -193,7 +194,9 @@ function MessageRow({ m, index, accent, loading, onConfirm, onDecline, onPick }:
             ))}
           </div>
         )}
-        <p className="whitespace-pre-wrap leading-relaxed">{m.body}</p>
+        {m.role === "assistant"
+          ? <ChatMarkdown text={m.body} />
+          : <p className="whitespace-pre-wrap leading-relaxed">{m.body}</p>}
         {m.role === "assistant" && (m.navigations?.length ?? 0) > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {m.navigations!.map((n, j) => (

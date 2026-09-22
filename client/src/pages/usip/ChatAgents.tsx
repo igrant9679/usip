@@ -25,6 +25,7 @@ import {
   MessageSquare, Plus, Trash2, Copy, ExternalLink, Check, Globe, Loader2, Users, CalendarCheck, Code2,
 } from "lucide-react";
 import { isAdminRole } from "@shared/roleRank";
+import { renderChatInline } from "@/components/usip/ChatMarkdown";
 
 const MODES = [
   { value: "off", label: "Off", blurb: "The widget refuses to serve." },
@@ -405,7 +406,9 @@ export default function ChatAgents() {
                               {msgs.map((m, i) => (
                                 <div key={i} className="text-[12px]">
                                   <span className="font-medium">{m.role === "visitor" ? "Visitor" : form.displayName}:</span>{" "}
-                                  <span className="text-muted-foreground">{m.text}</span>
+                                  <span className="text-muted-foreground">
+                                    {m.role === "visitor" ? m.text : renderChatInline(m.text)}
+                                  </span>
                                 </div>
                               ))}
                               <div className="pt-1.5">

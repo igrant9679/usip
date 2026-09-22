@@ -15,6 +15,7 @@ import { useLocation } from "wouter";
 import { trpc } from "../../lib/trpc";
 import { useTourEngine, type Tour } from "./TourEngine";
 import { toast } from "sonner";
+import { ChatMarkdown } from "@/components/usip/ChatMarkdown";
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
 
@@ -212,7 +213,9 @@ function AskAITab({ pageKey }: { pageKey: string }) {
                   : "bg-muted text-foreground"
               }`}
             >
-              <p className="whitespace-pre-wrap leading-relaxed">{msg.body}</p>
+              {msg.role === "user"
+                ? <p className="whitespace-pre-wrap leading-relaxed">{msg.body}</p>
+                : <ChatMarkdown text={msg.body} />}
               {msg.citedArticleIds && msg.citedArticleIds.length > 0 && (
                 <p className="text-xs mt-1 opacity-60">
                   Sources: Article {msg.citedArticleIds.join(", ")}
