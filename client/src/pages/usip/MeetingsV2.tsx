@@ -153,8 +153,14 @@ export default function MeetingsV2() {
     onSuccess: () => { invalidateAll(); toast.success("Proposal regenerated — fresh times offered"); },
     onError: (e) => toast.error(e.message),
   });
-  const regenerateAllExpired = trpc.meetings.regenerateAllExpired.useMutation({
-    onSuccess: (r) => { invalidateAll(); toast.success(`${r.regenerated} proposal${r.regenerated === 1 ? "" : "s"} regenerated with fresh times`); },
+  const regenerateAllOutdated = trpc.meetings.regenerateAllOutdated.useMutation({
+    onSuccess: (r) => {
+      invalidateAll();
+      toast.success(
+        `${r.regenerated} proposal${r.regenerated === 1 ? "" : "s"} regenerated with fresh times` +
+        (r.remaining > 0 ? ` · ${r.remaining} still outdated — click again` : " · none left outdated"),
+      );
+    },
     onError: (e) => toast.error(e.message),
   });
   const complete = trpc.meetings.complete.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
@@ -289,10 +295,10 @@ export default function MeetingsV2() {
                   <Send className="size-3.5" /> Approve & send all ({proposals.length})
                 </ConfirmButton>
                 <Button size="sm" variant="outline" className="h-7 gap-1.5"
-                  disabled={regenerateAllExpired.isPending}
-                  title="Fresh future times and a fresh invite for every proposal whose offered times have all passed"
-                  onClick={() => regenerateAllExpired.mutate()}>
-                  <Sparkles className="size-3.5" /> Regenerate expired
+                  disabled={regenerateAllOutdated.isPending}
+                  title="Fresh times and a fresh invite for every proposal whose offered times have all passed or fall outside 9:00–16:00 in the workspace time zone. Sends nothing. Up to 10 per click."
+                  onClick={() => regenerateAllOutdated.mutate()}>
+                  <Sparkles className="size-3.5" /> {regenerateAllOutdated.isPending ? "Regenerating…" : "Regenerate outdated"}
                 </Button>
               </div>
               <div className="space-y-2">

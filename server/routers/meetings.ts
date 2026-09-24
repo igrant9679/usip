@@ -270,11 +270,17 @@ export const meetingsRouter = router({
       return { ok: true };
     }),
 
-  /** Every all-times-past proposal, freshened in one click (bounded at 15). */
-  regenerateAllExpired: repProcedure.mutation(async ({ ctx }) => {
-    const regenerated = await regenerateStaleProposals(ctx.workspace.id, 15);
-    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "meeting", entityId: 0, after: { regenerateAllExpired: regenerated } });
-    return { regenerated };
+  /**
+   * Every OUTDATED proposal in the queue — times all past, or any time outside
+   * the 9:00–16:00 window — freshened, whatever its source (the button is
+   * attended; owner ask 2026-09-24). Bounded at 10 per click so a pass of LLM
+   * drafts finishes well inside the client's request timeout; `remaining`
+   * tells the page whether to offer another pass. Never sends anything.
+   */
+  regenerateAllOutdated: repProcedure.mutation(async ({ ctx }) => {
+    const res = await regenerateStaleProposals(ctx.workspace.id, 10, { anySource: true });
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "meeting", entityId: 0, after: { regenerateAllOutdated: res.regenerated, remaining: res.remaining } });
+    return res;
   }),
 
   reschedule: repProcedure

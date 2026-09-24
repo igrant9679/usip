@@ -69,10 +69,19 @@ const ACTIVE_MEETING_STATUSES = liveMeetingStatuses();
  * booking link ("It was UTC, which offered prospects 4am ET"), fixed there and
  * missed here — in the path that mails a stranger a proposal.
  *
- * Now one generator for both (@shared/availability), given a 9–17 window in the
- * workspace's zone and a 24h minimum notice, sampled hourly so a 2-slot proposal
- * still lands mid-morning and mid-afternoon rather than back-to-back at 09:00.
+ * Now one generator for both (@shared/availability), given the proposal window
+ * below in the workspace's zone and a 24h minimum notice, sampled hourly so a
+ * 2-slot proposal still lands mid-morning and mid-afternoon rather than
+ * back-to-back at 09:00.
  */
+/**
+ * The hours an offered time may START in, inclusive, in the workspace's zone
+ * (owner ask 2026-09-24: "suggested dates/times range from 9am - 4pm EST").
+ * Was 9:00–17:00. A 30-minute meeting offered at 16:00 ends by 16:30.
+ */
+export const PROPOSAL_FIRST_START_HOUR = 9;
+export const PROPOSAL_LAST_START_HOUR = 16;
+
 export function computeSlots(
   busy: { startAt: Date | string | null; endAt: Date | string | null }[],
   count: number,
@@ -84,8 +93,10 @@ export function computeSlots(
     .map((b) => ({ startAt: new Date(b.startAt as any), endAt: new Date(b.endAt as any) }));
   const all = generateSlots(ranges, 60, Date.now(), {
     timezone,
-    startHour: 9,
-    endHour: 18,
+    startHour: PROPOSAL_FIRST_START_HOUR,
+    // The generator samples hourly and its endHour is the first hour a slot
+    // may NOT start in (start + 60 min must fit), hence LAST_START + 1.
+    endHour: PROPOSAL_LAST_START_HOUR + 1,
     // A proposal that lands in someone's inbox tonight must not offer 9am
     // tomorrow: the meeting is negotiated by email, not booked on the spot.
     leadMs: 24 * 60 * 60 * 1000,
@@ -305,40 +316,73 @@ export async function regenerateMeetingProposal(workspaceId: number, meetingId: 
 }
 
 /**
- * Freshen every all-times-past proposal, bounded. Runs from the autopilot
- * tick (so the backlog can never accumulate again) and from the
- * "Regenerate all expired" button. Rows with NO offered times are left
- * alone — that is a creation failure, not staleness.
+ * Does a proposal need fresh times? Yes when every offered time has passed
+ * (it can neither send nor be re-proposed: it holds the dedupe slot), or when
+ * ANY offered time starts outside the proposal window — times drafted before
+ * the window moved to 9:00–16:00 (2026-09-24), or in a zone the workspace has
+ * since changed. An unreadable time cannot be offered either. A row with NO
+ * times is a creation failure, not staleness: left alone. Pure, so the rule
+ * is tested directly.
  */
-export async function regenerateStaleProposals(workspaceId: number, limit: number): Promise<number> {
+export function proposalIsOutdated(times: unknown, timezone: string, nowMs: number): boolean {
+  const list = Array.isArray(times) ? times.filter((t): t is string => typeof t === "string") : [];
+  if (list.length === 0) return false;
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    timeZone: safeTimezone(timezone), hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  });
+  let anyFuture = false;
+  for (const t of list) {
+    const ms = new Date(t).getTime();
+    if (!Number.isFinite(ms)) return true;
+    if (ms > nowMs) anyFuture = true;
+    const parts = fmt.formatToParts(new Date(ms));
+    const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0) % 24;
+    const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+    const mins = h * 60 + m;
+    if (mins < PROPOSAL_FIRST_START_HOUR * 60 || mins > PROPOSAL_LAST_START_HOUR * 60) return true;
+  }
+  return !anyFuture;
+}
+
+/**
+ * Freshen outdated proposals (proposalIsOutdated), bounded. Runs from the
+ * autopilot tick (so the backlog can never accumulate again) and from the
+ * Meetings page's "Regenerate outdated" button.
+ *
+ * Unattended (the tick): only the autopilot's own proposals — never a
+ * booking-link row (an agreed time carries scheduledAt) and never an inbound
+ * or manual one. Attended (`anySource`, the button): every proposal in the
+ * queue without an agreed time, because the owner pressed it knowing what it
+ * does (owner ask 2026-09-24: "regenerate all existing meeting invites in the
+ * queue"). `remaining` is what is still outdated after this pass, so the
+ * page can say whether another pass is needed. Regeneration never sends.
+ */
+export async function regenerateStaleProposals(
+  workspaceId: number,
+  limit: number,
+  opts?: { anySource?: boolean },
+): Promise<{ regenerated: number; remaining: number }> {
   const db = await getDb();
-  if (!db) return 0;
+  if (!db) return { regenerated: 0, remaining: 0 };
+  const where = [
+    eq(meetings.workspaceId, workspaceId),
+    eq(meetings.status, "proposed"),
+    isNull(meetings.scheduledAt),
+  ];
+  if (!opts?.anySource) where.push(eq(meetings.source, "ai"));
   const rows = await db.select({ id: meetings.id, proposedTimes: meetings.proposedTimes }).from(meetings)
-    .where(and(
-      eq(meetings.workspaceId, workspaceId),
-      eq(meetings.status, "proposed"),
-      // Only the autopilot's own proposals: never a booking-link row (an
-      // agreed time carries scheduledAt) and never an inbound/manual one.
-      eq(meetings.source, "ai"),
-      isNull(meetings.scheduledAt),
-    ))
+    .where(and(...where))
     .orderBy(meetings.id);
+  const tz = await getWorkspaceTimezone(workspaceId);
   const nowMs = Date.now();
+  const outdated = rows.filter((r) => proposalIsOutdated(r.proposedTimes, tz, nowMs));
   let done = 0;
-  for (const r of rows) {
+  for (const r of outdated) {
     if (done >= limit) break;
-    const times = Array.isArray(r.proposedTimes) ? (r.proposedTimes as string[]) : [];
-    if (times.length === 0) continue;
-    let anyFuture = false;
-    for (const t of times) {
-      const ms = new Date(t).getTime();
-      if (Number.isFinite(ms) && ms > nowMs) { anyFuture = true; break; }
-    }
-    if (anyFuture) continue;
     const res = await regenerateMeetingProposal(workspaceId, r.id);
     if (res.ok) done++;
   }
-  return done;
+  return { regenerated: done, remaining: outdated.length - done };
 }
 
 /** Draft + persist a proposed meeting for one prospect. Returns the new meeting id (or null). */
@@ -595,17 +639,20 @@ export async function runMeetingAutopilotAllWorkspaces(): Promise<{ workspaces: 
     const mode = ws.meetingAutopilotMode as "approval" | "auto";
     const cap = ws.meetingAutopilotDailyCap ?? 10;
     try {
+      // Regenerate outdated proposals FIRST (owner ask 2026-09-20): a proposal
+      // whose every offered time has passed can neither send nor be
+      // re-proposed (it holds the dedupe slot), so the backlog only ever
+      // grew — 99 rows on LSI by the time this shipped. Bounded per tick.
+      // And BEFORE the daily cap check (2026-09-24): regeneration creates no
+      // meeting, so the cap on NEW proposals must not gate it — it did, and a
+      // workspace that hit its cap left its backlog stale until midnight UTC.
+      const swept = await regenerateStaleProposals(ws.workspaceId, 10);
+      if (swept.regenerated > 0) console.log(`[MeetingAutopilot] ws ${ws.workspaceId}: regenerated ${swept.regenerated} outdated proposal(s), ${swept.remaining} left`);
+
       const [row] = await db.select({ n: sql<number>`count(*)` }).from(meetings)
         .where(and(eq(meetings.workspaceId, ws.workspaceId), eq(meetings.source, "ai"), gte(meetings.createdAt, dayStart)));
       const remaining = cap - Number(row?.n ?? 0);
       if (remaining <= 0) continue;
-
-      // Regenerate stale proposals FIRST (owner ask 2026-09-20): a proposal
-      // whose every offered time has passed can neither send nor be
-      // re-proposed (it holds the dedupe slot), so the backlog only ever
-      // grew — 99 rows on LSI by the time this shipped. Bounded per tick.
-      const swept = await regenerateStaleProposals(ws.workspaceId, 10);
-      if (swept > 0) console.log(`[MeetingAutopilot] ws ${ws.workspaceId}: regenerated ${swept} stale proposal(s)`);
 
       const r = await runMeetingAutopilotForWorkspace(ws.workspaceId, mode, Math.min(remaining, 10));
       proposed += r.proposed;
