@@ -199,6 +199,17 @@ export default function MeetingsV2() {
   // (owner ask 2026-09-24: move CommunityForce's proposals to Khaja Syed).
   const ownersQ = trpc.meetings.proposalOwners.useQuery();
   const owners = (ownersQ.data ?? []) as ProposalOwner[];
+  // Who owns every NEW proposal ("rep" = the default routing).
+  const setProposalOwner = trpc.meetings.setProposalOwner.useMutation({
+    onSuccess: (_r, v) => {
+      utils.meetings.getAutopilotSettings.invalidate();
+      const who = owners.find((o) => o.userId === v.userId)?.name;
+      toast.success(who ? `New proposals will belong to ${who} and send from ${who}'s calendar` : "New proposals go to each prospect's rep again");
+    },
+    onError: (e) => toast.error(forbiddenMessage(e, "Only admins can choose who owns new proposals")),
+  });
+  const proposalOwnerId = autopilot.data?.proposalOwnerUserId ?? null;
+  const proposalOwner = owners.find((o) => o.userId === proposalOwnerId);
   const [reassignOpen, setReassignOpen] = useState(false);
   const [reassignTo, setReassignTo] = useState<string>("");
   const reassign = trpc.meetings.reassignProposals.useMutation({
@@ -277,7 +288,7 @@ export default function MeetingsV2() {
 
         <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-5">
           {/* Autopilot status strip */}
-          <div className="rounded-lg border bg-card px-4 py-2.5 flex items-center gap-3 shadow-sm">
+          <div className="rounded-lg border bg-card px-4 py-2.5 flex flex-wrap items-center gap-3 shadow-sm">
             <span className="shrink-0 size-8 rounded-full flex items-center justify-center" style={{ backgroundColor: mode === "off" ? "hsl(var(--muted))" : "#7c3aed1f", color: mode === "off" ? undefined : "#7c3aed" }}>
               <Bot className="size-4" />
             </span>
@@ -285,6 +296,25 @@ export default function MeetingsV2() {
               <div className="text-sm font-medium">{MODE_META[mode]?.label}</div>
               <div className="text-[12px] text-muted-foreground">{MODE_META[mode]?.blurb}</div>
             </div>
+            {owners.length > 0 && (
+              <div className="shrink-0 flex items-center gap-1.5 text-[11px] text-muted-foreground"
+                title="Default: the rep who owns the prospect's contact or lead, otherwise whoever asked (a workspace admin for the autopilot). Choosing a member makes them the owner of every new proposal, so its invite sends from their calendar. Existing proposals stay put; use Reassign all… for those.">
+                <UserRound className="size-3.5" />
+                <span>New proposals go to</span>
+                <Select value={proposalOwnerId ? String(proposalOwnerId) : "rep"}
+                  onValueChange={(v) => setProposalOwner.mutate({ userId: v === "rep" ? null : Number(v) })}>
+                  <SelectTrigger className="h-7 w-auto min-w-[140px] gap-1 text-xs">
+                    <SelectValue>{proposalOwnerId ? (proposalOwner?.name ?? "A former member (so each prospect's rep)") : "Each prospect's rep"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="rep">Each prospect's rep (default)</SelectItem>
+                    {owners.map((o) => (
+                      <SelectItem key={o.userId} value={String(o.userId)}>{o.name} · {CALENDAR_NOTE[o.calendar]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             {autopilot.data?.lastRunAt && (
               <div className="shrink-0 text-[11px] text-muted-foreground hidden sm:block">Last run {fmtDateTime(autopilot.data.lastRunAt)}</div>
             )}

@@ -469,13 +469,14 @@ export const meetingsRouter = router({
 
   getAutopilotSettings: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
-    if (!db) return { mode: "off" as const, dailyCap: 10, lastRunAt: null as Date | null };
+    if (!db) return { mode: "off" as const, dailyCap: 10, lastRunAt: null as Date | null, proposalOwnerUserId: null as number | null };
     const [row] = await db.select({
       mode: workspaceSettings.meetingAutopilotMode,
       dailyCap: workspaceSettings.meetingAutopilotDailyCap,
       lastRunAt: workspaceSettings.meetingAutopilotLastRunAt,
+      proposalOwnerUserId: workspaceSettings.meetingProposalOwnerUserId,
     }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
-    if (!row) return { mode: "off" as const, dailyCap: 10, lastRunAt: null };
+    if (!row) return { mode: "off" as const, dailyCap: 10, lastRunAt: null, proposalOwnerUserId: null };
     // Approval-only since 2026-09-24: a stored 'auto' (a row migration 0188
     // has not reached yet) reads as what the engine now does with it.
     return { ...row, mode: row.mode === "off" ? "off" as const : "approval" as const };
@@ -493,6 +494,31 @@ export const meetingsRouter = router({
         .values({ workspaceId: ctx.workspace.id, ...set } as never)
         .onDuplicateKeyUpdate({ set });
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "meeting_autopilot_settings", entityId: ctx.workspace.id, after: input });
+      return { ok: true };
+    }),
+
+  /**
+   * Who owns every NEW proposal (owner ask 2026-09-24), so its invite sends
+   * from that member's calendar; null = each prospect's rep. Applied in
+   * createMeetingProposal, the one path every proposal takes. Existing
+   * proposals are not moved: that is reassignProposals.
+   */
+  setProposalOwner: adminWsProcedure
+    .input(z.object({ userId: z.number().int().nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      if (input.userId !== null) {
+        const active = await activeMemberIds(ctx.workspace.id, [input.userId]);
+        if (!active.has(input.userId)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an active member of this workspace." });
+        }
+      }
+      const set = { meetingProposalOwnerUserId: input.userId };
+      await db.insert(workspaceSettings)
+        .values({ workspaceId: ctx.workspace.id, ...set } as never)
+        .onDuplicateKeyUpdate({ set });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "meeting_autopilot_settings", entityId: ctx.workspace.id, after: { proposalOwnerUserId: input.userId } });
       return { ok: true };
     }),
 });

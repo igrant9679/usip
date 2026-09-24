@@ -1919,6 +1919,8 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   meetingAutopilotMode: mysqlEnum("meetingAutopilotMode", ["off", "approval", "auto"]).default("off").notNull(),
   meetingAutopilotDailyCap: int("meetingAutopilotDailyCap").default(10).notNull(),
   meetingAutopilotLastRunAt: timestamp("meetingAutopilotLastRunAt"),
+  /** Owns EVERY new meeting proposal when set (Migration 0189); null = each prospect's rep. */
+  meetingProposalOwnerUserId: int("meetingProposalOwnerUserId"),
   // ── Conversation Autopilot (Migration 0101) — autonomous reply handling ──
   // off = never; approval = AI classifies replies + suggests actions for review;
   // auto = AI classifies AND executes actions (propose meeting / task / suppress).

@@ -145,6 +145,24 @@ export interface MeetingTarget {
 }
 
 /**
+ * The member chosen to own new proposals (workspace_settings.
+ * meetingProposalOwnerUserId; owner ask 2026-09-24: CommunityForce's
+ * proposals should be Khaja Syed's, so their invites send from his
+ * calendar). Null when unset, or when that member has since left: the
+ * caller's own owner stands, as it did before the setting existed.
+ */
+export async function configuredProposalOwner(workspaceId: number): Promise<number | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select({ owner: workspaceSettings.meetingProposalOwnerUserId })
+    .from(workspaceSettings).where(eq(workspaceSettings.workspaceId, workspaceId)).limit(1);
+  const owner = row?.owner ?? null;
+  if (!owner) return null;
+  const stillHere = await activeMemberIds(workspaceId, [owner]);
+  return stillHere.has(owner) ? owner : null;
+}
+
+/**
  * Draft + persist a proposed meeting for any target (prospect, contact, or an
  * inbound reply's sender). Computes real open slots from the owner's calendar,
  * asks the LLM to draft a title + invite, inserts a `meetings` row. Returns id.
@@ -152,11 +170,16 @@ export interface MeetingTarget {
 export async function createMeetingProposal(workspaceId: number, target: MeetingTarget): Promise<number | null> {
   const db = await getDb();
   if (!db) return null;
-  const draft = await draftProposalContent(workspaceId, target);
+  // The workspace's proposal owner, when set, owns EVERY new proposal: the
+  // autopilot, Find meetings with AI, Propose meeting, a positive reply. It
+  // is resolved BEFORE drafting because the offered times come from the
+  // owner's calendar.
+  const ownerUserId = (await configuredProposalOwner(workspaceId)) ?? target.ownerUserId ?? null;
+  const draft = await draftProposalContent(workspaceId, { ...target, ownerUserId });
   try {
     const ins = await db.insert(meetings).values({
       workspaceId,
-      ownerUserId: target.ownerUserId ?? null,
+      ownerUserId,
       relatedType: target.relatedType ?? null,
       relatedId: target.relatedId ?? null,
       contactName: target.name || "there",

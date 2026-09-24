@@ -299,6 +299,20 @@ const SURFACES: Array<{
     gate: /const active = await activeMemberIds\(ctx\.workspace\.id, \[input\.toUserId\]\);\s*if \(!active\.has\(input\.toUserId\)\) \{\s*throw new TRPCError\(\{ code: "BAD_REQUEST"/,
   },
   {
+    what: "the workspace's new-proposal owner can only be set to an active member",
+    file: "server/routers/meetings.ts",
+    start: "setProposalOwner: adminWsProcedure",
+    end: "db.insert(workspaceSettings)",
+    gate: /const active = await activeMemberIds\(ctx\.workspace\.id, \[input\.userId\]\);\s*if \(!active\.has\(input\.userId\)\) \{\s*throw new TRPCError\(\{ code: "BAD_REQUEST"/,
+  },
+  {
+    what: "a new-proposal owner who has since left owns nothing new",
+    file: "server/services/meetingScheduler.ts",
+    start: "export async function configuredProposalOwner(",
+    end: "export async function createMeetingProposal(",
+    gate: /const stillHere = await activeMemberIds\(workspaceId, \[owner\]\);\s*return stillHere\.has\(owner\) \? owner : null;/,
+  },
+  {
     what: "a high-intent visit task is not filed under a departed record owner",
     file: "server/websiteTracking.ts",
     start: "await db.insert(tasks).values({",
@@ -354,7 +368,8 @@ describe("every session-less path that names a member gates on active membership
     // unipile_accounts.userId, a rep who may have left since.
     // 2026-09-24: 32, with meetings.reassignProposals — an invite sends from
     // its owner's calendar, so a proposal must not move to a leaver.
-    expect(SURFACES.length).toBe(32);
+    // Same day: 34, with the new-proposal owner setting (set, and applied).
+    expect(SURFACES.length).toBe(34);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 

@@ -4244,6 +4244,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0189: who owns new meeting proposals ──────────────────────────────────
+  // Owner ask 2026-09-24: an invite sends from its proposal owner's calendar,
+  // and CommunityForce's proposals should all be Khaja Syed's. NULL keeps the
+  // old routing (each prospect's rep, else whoever asked / a workspace admin).
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0189_meeting_proposal_owner.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `meetingProposalOwnerUserId` int NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
