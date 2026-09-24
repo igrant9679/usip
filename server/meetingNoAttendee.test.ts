@@ -139,6 +139,12 @@ describe("meetings.removeBookings: out of Velocity, never out of the calendar", 
     expect(q.sql).toMatch(/`meetings`\.`status` in \(\?, \?, \?\)/);
     expect(q.params).toEqual(expect.arrayContaining([WS, "invited", "scheduled", "rescheduled", 21, 22]));
     expect(q.params).not.toContain("proposed");
+    // Upcoming only: past meetings still marked scheduled are history.
+    expect(q.sql).toContain("`meetings`.`scheduledAt` > ?");
+    // Drizzle renders the cutoff as a UTC "YYYY-MM-DD HH:MM:SS.mmm" string.
+    const cutoff = q.params.find((p: unknown) => typeof p === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(p)) as string | undefined;
+    expect(cutoff).toBeDefined();
+    expect(Math.abs(Date.parse(cutoff!.replace(" ", "T") + "Z") - Date.now())).toBeLessThan(60_000);
   });
 
   it("dry run by default: lists them, changes nothing", async () => {

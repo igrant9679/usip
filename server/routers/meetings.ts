@@ -10,7 +10,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { activeTaskStatuses } from "@shared/taskStatus";
-import { and, desc, eq, inArray, isNull, like, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, like, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { calendarAccounts, calendarEvents, meetings, prospects, tasks, users, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -18,7 +18,8 @@ import { recordAudit } from "../audit";
 import { activeMemberIds } from "../_core/activeMembers";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
-import { proposeMeetingForProspect, regenerateMeetingProposal, regenerateProposalsNotSince, regenerateStaleProposals, runMeetingAutopilotForWorkspace, sendMeetingInvite } from "../services/meetingScheduler";
+import { proposeMeetingForProspect, regenerateMeetingProposal, regenerateProposalsNotSince, regenerateStaleProposals, runMeetingAutopilotForWorkspace, sendMeetingInvite, startsInProposalWindow } from "../services/meetingScheduler";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { MEETING_STATUSES, remindableMeetingStatuses } from "@shared/meetingStatus";
 
 // Was a fourth hand-written copy of the enum, for this router's z.enum(). The
@@ -201,6 +202,12 @@ export const meetingsRouter = router({
         const times = Array.from(new Set(input.proposedTimes.map((t) => new Date(t).toISOString()))).sort();
         if (times.some((t) => new Date(t).getTime() <= nowMs)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Every offered time must be in the future." });
+        }
+        // The same window sending enforces: a time saved outside it could
+        // never be sent.
+        const tz = await getWorkspaceTimezone(ctx.workspace.id);
+        if (times.some((t) => !startsInProposalWindow(t, tz))) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `Every offered time must start between 9:00 AM and 4:00 PM ${tz.replace(/_/g, " ")} time.` });
         }
         set.proposedTimes = times;
       }
@@ -485,6 +492,9 @@ export const meetingsRouter = router({
       const booked = and(
         eq(meetings.workspaceId, ws),
         inArray(meetings.status, remindableMeetingStatuses()),
+        // Upcoming only: a past meeting still marked scheduled is history (LSI
+        // had four from July and August), not part of any pile-up.
+        gt(meetings.scheduledAt, new Date()),
         input?.ids ? inArray(meetings.id, input.ids) : undefined,
       );
       const rows = await db.select({

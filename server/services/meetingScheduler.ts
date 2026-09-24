@@ -478,21 +478,31 @@ export async function regenerateMeetingProposal(workspaceId: number, meetingId: 
 export function proposalIsOutdated(times: unknown, timezone: string, nowMs: number): boolean {
   const list = Array.isArray(times) ? times.filter((t): t is string => typeof t === "string") : [];
   if (list.length === 0) return false;
-  const fmt = new Intl.DateTimeFormat("en-GB", {
-    timeZone: safeTimezone(timezone), hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  });
   let anyFuture = false;
   for (const t of list) {
     const ms = new Date(t).getTime();
     if (!Number.isFinite(ms)) return true;
     if (ms > nowMs) anyFuture = true;
-    const parts = fmt.formatToParts(new Date(ms));
-    const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0) % 24;
-    const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
-    const mins = h * 60 + m;
-    if (mins < PROPOSAL_FIRST_START_HOUR * 60 || mins > PROPOSAL_LAST_START_HOUR * 60) return true;
+    if (!startsInProposalWindow(t, timezone)) return true;
   }
   return !anyFuture;
+}
+
+/**
+ * Does this time START inside the proposal window (9:00–16:00) in the given
+ * zone? The one window test, shared by staleness, sending and editing. An
+ * unreadable time is outside it.
+ */
+export function startsInProposalWindow(time: string | Date, timezone: string): boolean {
+  const ms = new Date(time).getTime();
+  if (!Number.isFinite(ms)) return false;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: safeTimezone(timezone), hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date(ms));
+  const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0) % 24;
+  const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  const mins = h * 60 + m;
+  return mins >= PROPOSAL_FIRST_START_HOUR * 60 && mins <= PROPOSAL_LAST_START_HOUR * 60;
 }
 
 /**
@@ -626,18 +636,28 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
    */
   const nowMs = Date.now();
   const isFuture = (t: string) => { const ms = new Date(t).getTime(); return Number.isFinite(ms) && ms > nowMs; };
+  // Offered times must start inside 9:00–16:00 in the workspace's CURRENT
+  // zone (2026-09-24: LSI Media's proposals were drafted while its zone was
+  // UTC, so "10:00" meant 6:00 AM Eastern by the time they were approved,
+  // and 98 meetings were booked at 6 AM). A time the prospect already agreed
+  // (scheduledAt) is theirs and is not second-guessed.
+  const tz = await getWorkspaceTimezone(workspaceId);
+  const inWindow = (t: string) => startsInProposalWindow(t, tz);
+  const offerable = times.filter(isFuture).filter(inWindow).sort();
   const when = chosenTime
     ?? (m.scheduledAt ? new Date(m.scheduledAt).toISOString() : undefined)
-    ?? times.filter(isFuture).sort()[0];
+    ?? offerable[0];
   if (!when) {
-    // Distinguish "never had times" from "had times, all expired": the second
-    // is a proposal that needs regenerating, and a caller that cannot tell
-    // them apart cannot say anything useful to the user.
-    return { sent: false, scheduledAt: null, reason: times.length ? "all_times_expired" : "no_time" };
+    // Distinguish "never had times" from "had times, all expired" from "has
+    // future times, none in the window": each needs regenerating, and a
+    // caller that cannot tell them apart cannot say anything useful.
+    const reason = times.some(isFuture) ? "outside_window" : times.length ? "all_times_expired" : "no_time";
+    return { sent: false, scheduledAt: null, reason };
   }
   let start = new Date(when);
   if (!Number.isFinite(start.getTime())) return { sent: false, scheduledAt: null, reason: "invalid_time" };
   if (start.getTime() <= nowMs) return { sent: false, scheduledAt: null, reason: "time_in_past" };
+  if (chosenTime && !m.scheduledAt && !inWindow(chosenTime)) return { sent: false, scheduledAt: null, reason: "outside_window" };
   const durMs = (m.durationMin ?? 30) * 60000;
   let end = new Date(start.getTime() + durMs);
 
@@ -659,7 +679,7 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
    * agreed (scheduledAt, from a booking link) is theirs and is not moved.
    */
   if (acc && m.ownerUserId && !m.scheduledAt) {
-    const candidates = chosenTime ? [start] : times.filter(isFuture).sort().map((t) => new Date(t));
+    const candidates = chosenTime ? [start] : offerable.map((t) => new Date(t));
     const last = candidates[candidates.length - 1];
     const taken = await takenRanges(workspaceId, m.ownerUserId, acc, meetingId, candidates[0], new Date(last.getTime() + durMs));
     const free = candidates.find((c) => !taken.some((r) => r.startAt.getTime() < c.getTime() + durMs && r.endAt.getTime() > c.getTime()));
