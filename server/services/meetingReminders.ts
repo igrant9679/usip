@@ -18,15 +18,20 @@ import { meetings } from "../../drizzle/schema";
 import { sendWorkspaceEmail } from "../emailDelivery";
 import { resolveBookingUrl } from "../mergeVars";
 import { escapeHtml } from "@shared/escapeHtml";
-import { remindableMeetingStatuses } from "@shared/meetingStatus";
+import { confirmedMeetingStatuses } from "@shared/meetingStatus";
 
 /**
  * ⚠️ BEHAVIOUR CHANGE: `rescheduled` was missing, so a meeting the attendee
  * MOVED got no reminder — while the time they moved away from had already had
  * one. Reminders now go out for rescheduled meetings too. `proposed` stays
  * excluded on purpose; see @shared/meetingStatus.
+ *
+ * And `invited` is excluded since 2026-09-24 (owner ask: "Hold reminders
+ * until the prospect accepts"): an invite nobody has accepted gets no
+ * reminder. It becomes `scheduled` when the attendee accepts
+ * (services/meetingResponses), and the reminder follows then.
  */
-const REMINDER_STATUSES = remindableMeetingStatuses();
+const REMINDER_STATUSES = confirmedMeetingStatuses();
 
 function fmtWhen(d: Date): string {
   // No attendee timezone on file — label UTC explicitly to avoid ambiguity.

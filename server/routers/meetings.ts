@@ -164,9 +164,16 @@ export const meetingsRouter = router({
   generateProposals: repProcedure
     .input(z.object({ limit: z.number().int().min(1).max(20).optional() }).optional())
     .mutation(async ({ ctx, input }) => {
-      const res = await runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "ai_generate", entityType: "meeting", entityId: 0, after: { ...res } });
-      return res;
+      // Honours the workspace's mode like the 45-minute cron: in Autonomous
+      // what the button finds is sent at once (every send guard still
+      // applies); in Approve it waits for approval.
+      const db = await getDb();
+      const [s] = db ? await db.select({ mode: workspaceSettings.meetingAutopilotMode })
+        .from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id)).limit(1) : [];
+      const send = s?.mode === "auto";
+      const res = await runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id, { send });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "ai_generate", entityType: "meeting", entityId: 0, after: { ...res, send } });
+      return { ...res, send };
     }),
 
   /**
@@ -539,14 +546,17 @@ export const meetingsRouter = router({
       proposalOwnerUserId: workspaceSettings.meetingProposalOwnerUserId,
     }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
     if (!row) return { mode: "off" as const, dailyCap: 10, lastRunAt: null, proposalOwnerUserId: null };
-    // Approval-only since 2026-09-24: a stored 'auto' (a row migration 0188
-    // has not reached yet) reads as what the engine now does with it.
-    return { ...row, mode: row.mode === "off" ? "off" as const : "approval" as const };
+    return { ...row, mode: row.mode as "off" | "approval" | "auto" };
   }),
 
-  /** Off or Approve only — meeting proposals have no Autonomous mode (owner ask 2026-09-24). */
+  /**
+   * Off, Approve or Autonomous. Autonomous was removed and restored on
+   * 2026-09-24 (owner: "I want to turn that on for meeting proposals"): it
+   * sends each NEW proposal's invite as soon as it is drafted; proposals
+   * already waiting in the queue still need Approve & send.
+   */
   setAutopilotSettings: adminWsProcedure
-    .input(z.object({ mode: z.enum(["off", "approval"]), dailyCap: z.number().int().min(1).max(200).optional() }))
+    .input(z.object({ mode: z.enum(["off", "approval", "auto"]), dailyCap: z.number().int().min(1).max(200).optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });

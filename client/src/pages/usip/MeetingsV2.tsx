@@ -6,7 +6,7 @@
  *   • Off       — fully manual.
  *   • Approve   — AI proposes meetings (times + drafted invite) for review; a
  *                 human approves to send the invite.
- *   • Autopilot — AI proposes AND sends the calendar invite automatically.
+ *   • Autonomous — AI proposes AND sends each new calendar invite itself.
  *
  * Backed by the `meetings.*` tRPC procedures. When the owner has a connected
  * calendar the invite is a real provider event; otherwise the meeting is
@@ -98,6 +98,7 @@ function fmtDateTime(d?: string | Date | null): string {
 const MODE_META: Record<string, { label: string; blurb: string }> = {
   off: { label: "Autopilot off", blurb: "AI won't schedule meetings. Everything is manual." },
   approval: { label: "Autopilot: Approve", blurb: "AI proposes meetings with times + a drafted invite. Edit any of it; nothing sends until you approve." },
+  auto: { label: "Autopilot: Autonomous", blurb: "AI proposes meetings and sends each new invite straight away from the owner's calendar, at a free time between 9 and 4. It counts as booked when the prospect accepts. Proposals already in the queue still need approval." },
 };
 
 export default function MeetingsV2() {
@@ -125,7 +126,8 @@ export default function MeetingsV2() {
     onSuccess: (r) => {
       invalidateAll();
       if (r.proposed === 0) toast.info(r.skipped > 0 ? "Top prospects already have meetings proposed" : "No best-fit prospects to schedule yet");
-      // Proposals only: nothing this button finds is ever sent without approval.
+      // Autonomous sends what it finds; Approve leaves it for review.
+      else if (r.send) toast.success(`AI proposed ${r.proposed} meeting${r.proposed === 1 ? "" : "s"} and sent ${r.sent} invite${r.sent === 1 ? "" : "s"}${r.sent < r.proposed ? ` (${r.proposed - r.sent} kept for review: see each card)` : ""}`);
       else toast.success(`AI proposed ${r.proposed} meeting${r.proposed === 1 ? "" : "s"} to review`);
     },
     onError: (e) => toast.error(e.message),
@@ -277,12 +279,13 @@ export default function MeetingsV2() {
           <div className="flex-1" />
           <div className="flex items-center gap-1.5">
             <Bot className="size-3.5 text-muted-foreground" />
-            {/* Off or Approve: meeting proposals have no Autonomous mode (2026-09-24). */}
-            <Select value={mode} onValueChange={(v) => setMode.mutate({ mode: v as "off" | "approval" })}>
+            {/* Off, Approve or Autonomous (Autonomous restored 2026-09-24). */}
+            <Select value={mode} onValueChange={(v) => setMode.mutate({ mode: v as "off" | "approval" | "auto" })}>
               <SelectTrigger className="h-7 w-[168px] text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="off">Autopilot: Off</SelectItem>
                 <SelectItem value="approval">Autopilot: Approve</SelectItem>
+                <SelectItem value="auto">Autopilot: Autonomous</SelectItem>
               </SelectContent>
             </Select>
           </div>

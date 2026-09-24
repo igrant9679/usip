@@ -28,14 +28,16 @@ describe("proposal drafts carry the workspace's identity", () => {
   });
 });
 
-describe("the Find-meetings button only ever proposes", () => {
-  it("generateProposals proposes without reading any autonomy mode and never sends", () => {
-    // Owner ask 2026-09-24 replaced the 2026-08-26 one: meeting proposals are
-    // approval-only, so the button's finds wait for a person like the cron's.
+describe("the Find-meetings button follows the workspace's mode", () => {
+  it("generateProposals sends only in Autonomous, and only through the engine", () => {
+    // Approval-only from the morning of 2026-09-24; Autonomous restored that
+    // evening at the owner's ask. The button behaves like the cron: its finds
+    // wait for a person in Approve and are sent at once in Autonomous.
     const fn = router.slice(router.indexOf("generateProposals:"), router.indexOf("updateProposal:"));
     expect(fn.length).toBeGreaterThan(100);
-    expect(fn).toContain("runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id)");
-    expect(fn).not.toContain("meetingAutopilotMode");
+    expect(fn).toContain('const send = s?.mode === "auto";');
+    expect(fn).toContain("runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id, { send })");
+    // The send itself is the engine's, never a second path here.
     expect(fn).not.toContain("sendMeetingInvite(");
   });
 });

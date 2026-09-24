@@ -1,19 +1,20 @@
 /**
- * Meeting proposals are approval-only (owner ask 2026-09-24: "the Proposal
- * generation function should not have an Autonomous mode. Should require
- * approval and/or edits").
+ * Meeting proposal modes: Off, Approve, Autonomous.
  *
- *   • nothing the autopilot or the Find button drafts is sent by the engine:
- *     only approveAndSend, approveAllProposed and a booking-link self-booking
- *     reach sendMeetingInvite;
- *   • the dial offers Off and Approve, on the Meetings page and the Autonomy
- *     Center; the API refuses 'auto'; migration 0188 moves stored 'auto' rows;
+ * 2026-09-24 morning the owner removed Autonomous ("should not have an
+ * Autonomous mode. Should require approval and/or edits"); the same evening,
+ * once sending could no longer double-book the owner, book outside 9–16,
+ * invite nobody, or count an unanswered invite as a booking, they asked for
+ * it back ("I want to turn that on for meeting proposals").
+ *
+ *   • Approve: nothing the autopilot or the Find button drafts is sent;
+ *     only Approve & send / Approve & send all / a booking link reach
+ *     sendMeetingInvite;
+ *   • Autonomous: each NEW proposal is sent as soon as it is drafted, by the
+ *     cron and by the Find button, through sendMeetingInvite and its guards;
+ *     proposals already waiting in the queue are never sent by it;
  *   • a proposal can be edited (title, invite text, times) before approval;
- *   • the whole queue can be rewritten with the current brand profile, in
- *     anchored passes that walk the queue instead of rewriting the same rows.
- *
- * Structural pins, because every one of these is a line that could quietly
- * come back — the 'auto' send branch was 12 lines inside the proposing loop.
+ *   • the whole queue can be rewritten with the current brand profile.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -34,62 +35,65 @@ const between = (src: string, from: string, to: string) => {
   return src.slice(a, b);
 };
 
-describe("the engine proposes and never sends", () => {
-  it("the proposing loop has no send path and no mode", () => {
+describe("the engine sends only in Autonomous, and only what it just drafted", () => {
+  it("the proposing loop sends a proposal it has just created, only when asked to", () => {
     const fn = between(svc, "export async function runMeetingAutopilotForWorkspace(", "/** Cron entry:");
-    expect(fn).not.toContain("sendMeetingInvite(");
-    expect(fn).not.toContain('"auto"');
-    expect(fn).toContain("): Promise<{ proposed: number; skipped: number }> {");
+    expect(fn).toContain("  opts: { send?: boolean } = {},");
+    expect(fn).toContain("    if (opts.send) {\n      const r = await sendMeetingInvite(workspaceId, id);");
+    // One send, on the id this loop just created: never the queue.
+    expect(fn.split("sendMeetingInvite(").length - 1).toBe(1);
   });
 
-  it("the cron reads no mode and sends nothing", () => {
+  it("the cron sends only for workspaces on Autonomous", () => {
     const cron = svc.slice(svc.indexOf("export async function runMeetingAutopilotAllWorkspaces"));
-    expect(cron.length).toBeGreaterThan(200);
+    expect(cron).toContain('const send = ws.meetingAutopilotMode === "auto";');
+    expect(cron).toContain("runMeetingAutopilotForWorkspace(ws.workspaceId, Math.min(remaining, 10), undefined, { send })");
     expect(cron).not.toContain("sendMeetingInvite(");
-    expect(cron).not.toMatch(/meetingAutopilotMode as/);
-    expect(cron).toContain("runMeetingAutopilotForWorkspace(ws.workspaceId, Math.min(remaining, 10))");
   });
 
-  it("only human approval paths reach sendMeetingInvite in the router", () => {
+  it("the Find button honours the workspace's mode", () => {
+    const ep = between(router, "generateProposals: repProcedure", "updateProposal: repProcedure");
+    expect(ep).toContain('const send = s?.mode === "auto";');
+    expect(ep).toContain("runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id, { send })");
+  });
+
+  it("besides the engine, only human approval paths reach sendMeetingInvite in the router", () => {
     const calls = router.split("sendMeetingInvite(").length - 1;
     expect(calls).toBe(2);
     expect(between(router, "approveAndSend: repProcedure", "approveAllProposed:")).toContain("sendMeetingInvite(");
     expect(between(router, "approveAllProposed: repProcedure", "regenerateProposal:")).toContain("sendMeetingInvite(");
   });
 
-  it("the mode type has no auto", () => {
-    expect(svc).toContain('export type MeetingAutopilotMode = "off" | "approval";');
+  it("the mode type has all three", () => {
+    expect(svc).toContain('export type MeetingAutopilotMode = "off" | "approval" | "auto";');
   });
 });
 
-describe("the dial is Off or Approve everywhere", () => {
-  it("the API refuses auto and reads a stored auto as approval", () => {
-    expect(router).toContain('mode: z.enum(["off", "approval"])');
-    expect(router).not.toContain('mode: z.enum(["off", "approval", "auto"])');
-    expect(router).toContain('mode: row.mode === "off" ? "off" as const : "approval" as const');
+describe("the dial is Off, Approve or Autonomous everywhere", () => {
+  it("the API takes auto and reads it back as stored", () => {
+    expect(router).toContain('mode: z.enum(["off", "approval", "auto"])');
+    expect(router).toContain('return { ...row, mode: row.mode as "off" | "approval" | "auto" };');
   });
 
-  it("migration 0188 moves every stored auto to approval", () => {
+  it("migration 0188 is history and stays (it only moved rows, once)", () => {
     expect(raw).toContain('name: "0188_meeting_autopilot_approval_only.sql"');
-    expect(raw).toContain("UPDATE `workspace_settings` SET `meetingAutopilotMode` = 'approval' WHERE `meetingAutopilotMode` = 'auto'");
   });
 
-  it("the Meetings page offers no Autonomous option", () => {
-    expect(meetingsPage).not.toContain('<SelectItem value="auto">');
-    expect(meetingsPage).not.toMatch(/auto: \{ label: "Autopilot: Autonomous"/);
+  it("the Meetings page offers Autonomous and says what it does", () => {
+    expect(meetingsPage).toContain('<SelectItem value="auto">Autopilot: Autonomous</SelectItem>');
+    expect(meetingsPage).toContain('auto: { label: "Autopilot: Autonomous"');
+    expect(meetingsPage).toContain("Proposals already in the queue still need approval.");
   });
 
-  it("the Autonomy Center hides Autonomous for meetings, and All: Autonomous leaves them on Approve", () => {
-    expect(autonomy).toContain('const NO_AUTO = new Set<string>(["meetings"]);');
-    expect(autonomy).toContain('{!NO_AUTO.has(a.key) && <SelectItem value="auto">Autonomous</SelectItem>}');
-    expect(autonomy).toContain('setMeetAp.mutate({ mode: (mode === "auto" ? "approval" : mode) as any });');
+  it("the Autonomy Center offers Autonomous for meetings, and All: Autonomous sets it", () => {
+    expect(autonomy).toContain("const NO_AUTO = new Set<string>([]);");
+    expect(autonomy).toContain("setMeetAp.mutate({ mode: mode as any });");
   });
 
-  it("the assistant and the Help Center no longer describe an auto-sending meeting autopilot", () => {
-    expect(catalog).toContain("There is no auto mode: a meeting invite never sends without approval.");
-    expect(help).not.toContain("proposes and sends invites to prospects who look ready");
-    expect(help).not.toContain("in Auto mode books the event");
-    expect(help).not.toContain("Meeting Autopilot proposes times and sends the invite");
+  it("the assistant and the Help Center describe all three modes", () => {
+    expect(catalog).toContain("auto = each NEW proposal's invite is sent unattended from the owner's calendar");
+    expect(help).toContain("(Autonomy Control Center, Off / Approve / Autonomous)");
+    expect(help).not.toContain("It has no Autonomous mode");
   });
 });
 

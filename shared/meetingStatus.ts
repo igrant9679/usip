@@ -115,6 +115,19 @@ export const BOOKED_MEETING_STATUSES: readonly MeetingStatus[] = [
   "no_show",
 ];
 
+/**
+ * Statuses meaning THE ATTENDEE HAS AGREED and the meeting is still ahead:
+ * they accepted the invite, or picked the time themselves (a booking link),
+ * or moved it. What the reminder email waits for (owner ask 2026-09-24: "Hold
+ * reminders until the prospect accepts"). REMINDABLE also includes `invited`,
+ * because the calendar and the attention panel still show an invite awaiting
+ * an answer; a reminder for a meeting nobody has accepted is not sent.
+ */
+export const CONFIRMED_MEETING_STATUSES: readonly MeetingStatus[] = [
+  "scheduled",
+  "rescheduled",
+];
+
 /** Mutable copies for Drizzle's `inArray`, which does not take a readonly array. */
 export function liveMeetingStatuses(): MeetingStatus[] {
   return [...LIVE_MEETING_STATUSES];
@@ -122,6 +135,10 @@ export function liveMeetingStatuses(): MeetingStatus[] {
 
 export function remindableMeetingStatuses(): MeetingStatus[] {
   return [...REMINDABLE_MEETING_STATUSES];
+}
+
+export function confirmedMeetingStatuses(): MeetingStatus[] {
+  return [...CONFIRMED_MEETING_STATUSES];
 }
 
 export function bookedMeetingStatuses(): MeetingStatus[] {

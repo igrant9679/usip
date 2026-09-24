@@ -148,7 +148,7 @@ export const SEND_ALLOWLIST: Record<string, string> = {
  */
 export const AUTONOMY_DIALS: Record<string, string> = {
   "tasks.setAutopilotSettings": "AUTONOMY DIAL — Task Autopilot (admin only). off = nothing; approval = draft tasks wait for a human; auto = the engine opens tasks unattended, up to the daily cap.",
-  "meetings.setAutopilotSettings": "AUTONOMY DIAL — Meeting Autopilot (admin only). off = nothing; approval = proposals wait in the queue for a person to edit and approve. There is no auto mode: a meeting invite never sends without approval.",
+  "meetings.setAutopilotSettings": "AUTONOMY DIAL — Meeting Autopilot (admin only). off = nothing; approval = proposals wait in the queue for a person to edit and approve; auto = each NEW proposal's invite is sent unattended from the owner's calendar (never double-booked, only 9:00–16:00 workspace time, never without an attendee email; counts as booked only when the prospect accepts). Proposals already queued still need approval.",
   "conversations.setAutopilotSettings": "AUTONOMY DIAL — Conversation Autopilot (admin only). off = nothing; approval = the suggested action waits for a human; auto = inbound replies are classified and acted on unattended.",
   "deals.setAutopilotSettings": "AUTONOMY DIAL — Deal Autopilot (admin only). off = nothing; approval = drafts the next step for a human; auto = writes next step and win-probability onto deals unattended.",
   "chatAgents.setAutopilotSettings": "AUTONOMY DIAL — Chat agent (admin only). Rewrites the mode of EVERY chat agent in the workspace at once. auto = agents answer visitors and book meetings unattended.",
