@@ -1,7 +1,7 @@
 /**
  * No more one-slot pile-ups (2026-09-24). Every CommunityForce proposal
  * offered the same three times, and "Approve & send all" booked each at its
- * earliest one: 17 prospects invited to the same 2 PM slot on Khaja Syed's
+ * earliest one: 33 prospects invited to the same 2 PM slot on Khaja Syed's
  * calendar before the run was cut off by a deploy.
  *
  *  1. Drafting spreads offers: least-offered slots first, and the owner's

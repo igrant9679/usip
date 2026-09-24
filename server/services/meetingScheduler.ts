@@ -25,7 +25,7 @@
  * workspace on it to 'approval', and nothing here reads it any more.
  */
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
-import { and, eq, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { calendarAccounts, calendarEvents, contacts, leads, meetings, prospects, workspaceMembers, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
@@ -119,7 +119,7 @@ export function computeSlots(
   const preferred = all.filter((s) => hourIn(s) === 10 || hourIn(s) === 14);
   const rest = all.filter((s) => !preferred.includes(s));
   // Least-offered first (2026-09-24): every CommunityForce proposal offered
-  // the same three times, so approving them in bulk booked 17 prospects into
+  // the same three times, so approving them in bulk booked 33 prospects into
   // one slot. The sort is stable, so among equally-offered slots the order
   // above still decides, and with nothing offered yet this is the old pick.
   const ordered = [...preferred, ...rest]
@@ -597,6 +597,10 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
 
   const [m] = await db.select().from(meetings).where(and(eq(meetings.id, meetingId), eq(meetings.workspaceId, workspaceId)));
   if (!m) return { sent: false, scheduledAt: null, reason: "not_found" };
+  // No attendee, no invite (2026-09-24): 8 of CommunityForce's bulk-approved
+  // proposals had no email, and each still booked a Teams meeting on the
+  // owner's calendar with nobody invited, marked "scheduled, invite sent".
+  if (!m.contactEmail?.trim()) return { sent: false, scheduledAt: null, reason: "no_attendee_email" };
 
   const times = Array.isArray(m.proposedTimes) ? (m.proposedTimes as string[]) : [];
 
@@ -780,6 +784,10 @@ export async function runMeetingAutopilotForWorkspace(
     .where(and(
       eq(prospects.workspaceId, workspaceId),
       or(isNull(prospects.verificationStatus), ne(prospects.verificationStatus, "rejected")),
+      // An invite needs somewhere to go: a prospect with no email can never
+      // be sent one, so proposing to them only fills the review queue.
+      isNotNull(prospects.email),
+      ne(prospects.email, ""),
     ))
     .orderBy(sql`${prospects.confidenceScore} DESC`, sql`${prospects.updatedAt} DESC`)
     .limit(limit * 5);

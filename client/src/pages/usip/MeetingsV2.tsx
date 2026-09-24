@@ -139,6 +139,7 @@ export default function MeetingsV2() {
       else if (r.reason === "no_calendar_connected") toast.error("No calendar connected — the invite was not sent and the proposal was kept. Connect a calendar in Settings, or record an agreed meeting manually.");
       else if (r.reason === "provider_error") toast.error("The calendar provider rejected the invite — nothing was sent; the proposal was kept.");
       else if (r.reason === "all_times_expired") toast.error("Every proposed time has passed — regenerate the proposal to offer new times.");
+      else if (r.reason === "no_attendee_email") toast.error("This prospect has no email address, so there is no one to send the invite to. Nothing was sent.");
       else if (r.reason === "time_taken") toast.error("That time is already booked on the owner's calendar. Pick another offered time; nothing was sent.");
       else if (r.reason === "all_times_taken") toast.error("Every offered time is already booked on the owner's calendar. Regenerate the proposal for free times; nothing was sent.");
       else toast.error(`Invite not sent (${r.reason ?? "unknown"}) — the proposal was kept.`);
@@ -567,6 +568,7 @@ function ProposalCard({
     setEditing(false);
   };
   const owner = owners.find((o) => o.userId === m.ownerUserId);
+  const noEmail = !m.contactEmail?.trim();
   const times = (m.proposedTimes ?? []) as string[];
   // A proposal has no expiry, so its times go stale in place. The server
   // refuses a past booking (sendMeetingInvite is the one path both this and
@@ -617,6 +619,11 @@ function ProposalCard({
             // is regeneration, not a different click.
             <div className="text-[11px] text-amber-700 dark:text-amber-500 mt-1.5">
               Every proposed time has passed. Regenerate this proposal to offer new times.
+            </div>
+          )}
+          {noEmail && (
+            <div className="text-[11px] text-amber-700 dark:text-amber-500 mt-1.5">
+              No email address for this prospect, so an invite can't be sent. Add one to the prospect, or dismiss this proposal.
             </div>
           )}
           <div className="text-[11px] text-muted-foreground mt-1.5 flex items-center gap-1 min-w-0">
@@ -693,8 +700,8 @@ function ProposalCard({
           <Button size="sm" variant="outline" className="h-7" disabled={pending || editPending}
             title="Edit the title, invite text or offered times before approving"
             onClick={() => (editing ? setEditing(false) : startEdit())}>{editing ? "Close" : "Edit"}</Button>
-          <Button size="sm" className="h-7 gap-1" disabled={pending || expired || !chosen}
-            title={expired ? "Every proposed time has passed — regenerate this proposal" : undefined}
+          <Button size="sm" className="h-7 gap-1" disabled={pending || expired || !chosen || noEmail}
+            title={noEmail ? "This prospect has no email address, so there is no one to send the invite to" : expired ? "Every proposed time has passed — regenerate this proposal" : undefined}
             onClick={() => onApprove(chosen)}><Send className="size-3.5" /> Approve &amp; send</Button>
           <Button size="icon" variant="ghost" className="size-7 text-muted-foreground" title="Dismiss" onClick={onDismiss}><X className="size-4" /></Button>
         </div>

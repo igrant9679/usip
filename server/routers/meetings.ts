@@ -12,14 +12,14 @@ import { TRPCError } from "@trpc/server";
 import { activeTaskStatuses } from "@shared/taskStatus";
 import { and, desc, eq, inArray, isNull, like, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { calendarAccounts, meetings, prospects, tasks, users, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
+import { calendarAccounts, calendarEvents, meetings, prospects, tasks, users, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { recordAudit } from "../audit";
 import { activeMemberIds } from "../_core/activeMembers";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { proposeMeetingForProspect, regenerateMeetingProposal, regenerateProposalsNotSince, regenerateStaleProposals, runMeetingAutopilotForWorkspace, sendMeetingInvite } from "../services/meetingScheduler";
-import { MEETING_STATUSES } from "@shared/meetingStatus";
+import { MEETING_STATUSES, remindableMeetingStatuses } from "@shared/meetingStatus";
 
 // Was a fourth hand-written copy of the enum, for this router's z.enum(). The
 // anti-drift scanner found it on its first run — exactly as the task-status
@@ -144,6 +144,9 @@ export const meetingsRouter = router({
       const [p] = await db.select().from(prospects)
         .where(and(eq(prospects.id, input.relatedId), eq(prospects.workspaceId, ctx.workspace.id)));
       if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found" });
+      if (!p.email?.trim()) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This prospect has no email address, so a meeting invite can't be sent. Add one first." });
+      }
       const id = await proposeMeetingForProspect(ctx.workspace.id, p as any, ctx.user.id, "manual");
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not draft meeting" });
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "propose", entityType: "meeting", entityId: id, after: { relatedId: input.relatedId } });
@@ -457,6 +460,54 @@ export const meetingsRouter = router({
     const reboundTaskId = await createMeetingReboundTask(db, ctx.workspace.id, m, "cancelled");
     return { ok: true, reboundTaskId };
   }),
+
+  /**
+   * Take booked meetings out of Velocity (owner ask 2026-09-24, after a bulk
+   * approve booked 33 CommunityForce prospects into one 2 PM slot: "remove
+   * any booked meetings from velocity. I'll remove [them] from his outlook
+   * calendar"). Marks each cancelled and drops Velocity's stored copy of the
+   * calendar event. Never touches the provider calendar: deleting the event
+   * there is what emails each attendee a cancellation, so that stays the
+   * calendar owner's call. No rebound task: a cleanup, not a prospect
+   * cancelling. `ids` omitted = every upcoming booked meeting in the
+   * workspace. Dry run by default.
+   */
+  removeBookings: adminWsProcedure
+    .input(z.object({
+      ids: z.array(z.number().int()).min(1).max(500).optional(),
+      dryRun: z.boolean().default(true),
+    }).optional())
+    .mutation(async ({ ctx, input }) => {
+      const dryRun = input?.dryRun ?? true;
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const ws = ctx.workspace.id;
+      const booked = and(
+        eq(meetings.workspaceId, ws),
+        inArray(meetings.status, remindableMeetingStatuses()),
+        input?.ids ? inArray(meetings.id, input.ids) : undefined,
+      );
+      const rows = await db.select({
+        id: meetings.id, status: meetings.status, calendarEventId: meetings.calendarEventId,
+        contactName: meetings.contactName, scheduledAt: meetings.scheduledAt,
+      }).from(meetings).where(booked);
+      const listed = rows.map((r) => ({ id: r.id, contactName: r.contactName, scheduledAt: r.scheduledAt }));
+      if (dryRun || rows.length === 0) return { dryRun, removed: 0, meetings: listed };
+      const ids = rows.map((r) => r.id);
+      const eventIds = rows.map((r) => r.calendarEventId).filter((x): x is number => typeof x === "number" && x > 0);
+      if (eventIds.length > 0) {
+        await db.delete(calendarEvents).where(and(eq(calendarEvents.workspaceId, ws), inArray(calendarEvents.id, eventIds)));
+      }
+      await db.update(meetings)
+        .set({ status: "cancelled", calendarEventId: null } as never)
+        .where(and(booked, inArray(meetings.id, ids)));
+      await recordAudit({
+        workspaceId: ws, actorUserId: ctx.user.id, action: "update", entityType: "meeting", entityId: 0,
+        before: { meetings: rows.map((r) => ({ id: r.id, status: r.status, calendarEventId: r.calendarEventId })) },
+        after: { removedFromVelocity: ids.length, status: "cancelled", providerCalendarTouched: false },
+      });
+      return { dryRun, removed: ids.length, meetings: listed };
+    }),
 
   /** Dismiss (delete) an unbooked AI proposal. */
   dismissProposal: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {

@@ -49,7 +49,8 @@ describe("expired meeting proposals cannot be booked (report #1)", () => {
   it("the guard is on the shared path, not only the button", () => {
     // sendMeetingInvite is what the autonomous scheduler calls too.
     const client = read("client/src/pages/usip/MeetingsV2.tsx");
-    expect(client).toContain("disabled={pending || expired || !chosen}");
+    // 2026-09-24: extended with noEmail (no attendee, no invite).
+    expect(client).toContain("disabled={pending || expired || !chosen || noEmail}");
     expect(client).toMatch(/const future = times\.filter/);
   });
 });
