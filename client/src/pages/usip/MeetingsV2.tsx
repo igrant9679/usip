@@ -139,6 +139,8 @@ export default function MeetingsV2() {
       else if (r.reason === "no_calendar_connected") toast.error("No calendar connected — the invite was not sent and the proposal was kept. Connect a calendar in Settings, or record an agreed meeting manually.");
       else if (r.reason === "provider_error") toast.error("The calendar provider rejected the invite — nothing was sent; the proposal was kept.");
       else if (r.reason === "all_times_expired") toast.error("Every proposed time has passed — regenerate the proposal to offer new times.");
+      else if (r.reason === "time_taken") toast.error("That time is already booked on the owner's calendar. Pick another offered time; nothing was sent.");
+      else if (r.reason === "all_times_taken") toast.error("Every offered time is already booked on the owner's calendar. Regenerate the proposal for free times; nothing was sent.");
       else toast.error(`Invite not sent (${r.reason ?? "unknown"}) — the proposal was kept.`);
     },
     onError: (e) => toast.error(e.message),
@@ -360,7 +362,7 @@ export default function MeetingsV2() {
                 <h2 className="text-sm font-semibold flex items-center gap-2"><Sparkles className="size-4" style={{ color: "#7c3aed" }} /> AI meeting proposals ({proposals.length})</h2>
                 <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={approveAllProposed.isPending || approveSend.isPending}
                   title={`Approve and send all ${proposals.length} proposal${proposals.length === 1 ? "" : "s"}?`}
-                  description="Each proposal books its earliest future time and the calendar invite is emailed to the prospect now. Proposals whose times have all passed are skipped and kept for you to regenerate."
+                  description="Each proposal books its earliest offered time that is still free on the owner's calendar, and the calendar invite is emailed to the prospect now. Proposals whose times have all passed or are all booked are skipped and kept for you to regenerate."
                   confirmLabel="Approve & send all" onConfirm={() => approveAllProposed.mutate()}>
                   <Send className="size-3.5" /> Approve & send all ({proposals.length})
                 </ConfirmButton>

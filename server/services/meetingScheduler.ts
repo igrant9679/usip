@@ -92,6 +92,8 @@ export function computeSlots(
   count: number,
   durationMin: number,
   timezone: string,
+  /** ISO start → how many of the owner's other open proposals offer it. */
+  offered?: ReadonlyMap<string, number>,
 ): string[] {
   const ranges = busy
     .filter((b) => b.startAt && b.endAt)
@@ -116,7 +118,15 @@ export function computeSlots(
       .format(new Date(iso)).replace(/\D/g, "")) % 24;
   const preferred = all.filter((s) => hourIn(s) === 10 || hourIn(s) === 14);
   const rest = all.filter((s) => !preferred.includes(s));
-  const picked = [...preferred, ...rest].slice(0, count);
+  // Least-offered first (2026-09-24): every CommunityForce proposal offered
+  // the same three times, so approving them in bulk booked 17 prospects into
+  // one slot. The sort is stable, so among equally-offered slots the order
+  // above still decides, and with nothing offered yet this is the old pick.
+  const ordered = [...preferred, ...rest]
+    .map((s, i) => ({ s, i, n: offered?.get(s) ?? 0 }))
+    .sort((a, b) => a.n - b.n || a.i - b.i)
+    .map((x) => x.s);
+  const picked = ordered.slice(0, count);
   // A slot list must be chronological — the LLM is told to reference these in
   // order and the first one is what `sendMeetingInvite` books by default.
   return picked.sort();
@@ -245,17 +255,83 @@ async function liveOwnerBusy(
 }
 
 /**
+ * Everything that makes a time unbookable for the owner right now: their
+ * booked meetings in Velocity plus their live calendar, read fresh (not the
+ * drafting cache: a bulk approve books one slot after another). A calendar
+ * read failure leaves the Velocity bookings to decide.
+ */
+async function takenRanges(
+  workspaceId: number,
+  ownerUserId: number,
+  acc: any,
+  meetingId: number,
+  from: Date,
+  to: Date,
+): Promise<{ startAt: Date; endAt: Date }[]> {
+  const { booked } = await ownerCommitments(workspaceId, ownerUserId, meetingId);
+  try {
+    const events = await createCalendarAdapter(acc).listEvents(acc.calendarId ?? "primary", from, to);
+    return booked.concat(events.map((e) => ({ startAt: new Date(e.startAt), endAt: new Date(e.endAt) })));
+  } catch (e) {
+    console.error(`[MeetingScheduler] live calendar check failed for meeting ${meetingId}:`, e instanceof Error ? e.message : String(e));
+    return booked;
+  }
+}
+
+/**
+ * What the owner has already committed inside Velocity: how often each time
+ * is offered by their other open proposals, and the meetings already booked
+ * for them (invites out, or a time agreed through a booking link). The live
+ * calendar can lag a booking; these rows cannot, which is what stops a bulk
+ * approve booking everyone into one slot.
+ */
+async function ownerCommitments(
+  workspaceId: number,
+  ownerUserId: number,
+  excludeMeetingId?: number,
+): Promise<{ offered: Map<string, number>; booked: { startAt: Date; endAt: Date }[] }> {
+  const offered = new Map<string, number>();
+  const booked: { startAt: Date; endAt: Date }[] = [];
+  const db = await getDb();
+  if (!db) return { offered, booked };
+  const rows = await db.select({
+    id: meetings.id, status: meetings.status, proposedTimes: meetings.proposedTimes,
+    scheduledAt: meetings.scheduledAt, durationMin: meetings.durationMin,
+  }).from(meetings).where(and(
+    eq(meetings.workspaceId, workspaceId),
+    eq(meetings.ownerUserId, ownerUserId),
+    inArray(meetings.status, ACTIVE_MEETING_STATUSES),
+  ));
+  for (const r of rows) {
+    if (r.id === excludeMeetingId) continue;
+    if (r.scheduledAt) {
+      const s = new Date(r.scheduledAt);
+      booked.push({ startAt: s, endAt: new Date(s.getTime() + (r.durationMin ?? 30) * 60000) });
+    } else if (r.status === "proposed") {
+      for (const t of Array.isArray(r.proposedTimes) ? (r.proposedTimes as string[]) : []) {
+        const ms = Date.parse(t);
+        if (!Number.isFinite(ms)) continue;
+        const k = new Date(ms).toISOString();
+        offered.set(k, (offered.get(k) ?? 0) + 1);
+      }
+    }
+  }
+  return { offered, booked };
+}
+
+/**
  * The drafting core createMeetingProposal and regenerateMeetingProposal
  * share: fresh FUTURE slots from the owner's current calendar, and an LLM
  * title + invite in the workspace's own voice. Extracted 2026-09-20 so
  * regeneration can never drift from first-time proposal quality.
  */
-async function draftProposalContent(workspaceId: number, target: MeetingTarget) {
+async function draftProposalContent(workspaceId: number, target: MeetingTarget, opts: { excludeMeetingId?: number } = {}) {
   const db = await getDb();
 
   const durationMin = 30;
   const ownerUserId = target.ownerUserId ?? null;
   let busy: { startAt: Date | string | null; endAt: Date | string | null }[] = [];
+  let offered: Map<string, number> | undefined;
   if (db && ownerUserId) {
     const from = new Date();
     const to = new Date(Date.now() + 14 * 86400000);
@@ -269,13 +345,16 @@ async function draftProposalContent(workspaceId: number, target: MeetingTarget) 
         lte(calendarEvents.startAt, to),
       ));
     busy = busy.concat(await liveOwnerBusy(workspaceId, ownerUserId, from, to));
+    const mine = await ownerCommitments(workspaceId, ownerUserId, opts.excludeMeetingId);
+    busy = busy.concat(mine.booked);
+    offered = mine.offered;
   }
   // The workspace's own timezone (workspace_settings.timezone, default "UTC").
   // Settings.tsx describes it as "used for scheduling, reporting, and activity
   // timestamps" and until now NOTHING read it — a saved setting enforced by
   // nothing, on the screen that promises it governs scheduling.
   const workspaceTz = await getWorkspaceTimezone(workspaceId);
-  const slots = computeSlots(busy, 3, durationMin, workspaceTz);
+  const slots = computeSlots(busy, 3, durationMin, workspaceTz, offered);
   const name = target.name || "there";
   const firstName = target.firstName || name.split(" ")[0] || "there";
 
@@ -376,7 +455,7 @@ export async function regenerateMeetingProposal(workspaceId: number, meetingId: 
     company: m.company,
     descriptor,
     source: (m.source as MeetingTarget["source"]) ?? "ai",
-  });
+  }, { excludeMeetingId: meetingId }); // its own old offers must not count against it
   await db.update(meetings).set({
     title: draft.title,
     proposedTimes: draft.slots,
@@ -552,10 +631,11 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
     // them apart cannot say anything useful to the user.
     return { sent: false, scheduledAt: null, reason: times.length ? "all_times_expired" : "no_time" };
   }
-  const start = new Date(when);
+  let start = new Date(when);
   if (!Number.isFinite(start.getTime())) return { sent: false, scheduledAt: null, reason: "invalid_time" };
   if (start.getTime() <= nowMs) return { sent: false, scheduledAt: null, reason: "time_in_past" };
-  const end = new Date(start.getTime() + (m.durationMin ?? 30) * 60000);
+  const durMs = (m.durationMin ?? 30) * 60000;
+  let end = new Date(start.getTime() + durMs);
 
   // Owner's connected calendar (if any) → send a real provider invite.
   let acc: any = null;
@@ -563,6 +643,25 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
     const rows = await db.select().from(calendarAccounts)
       .where(and(eq(calendarAccounts.workspaceId, workspaceId), eq(calendarAccounts.userId, m.ownerUserId)));
     acc = rows[0] ?? null;
+  }
+
+  /**
+   * Never book a slot the owner is already booked in (2026-09-24: a bulk
+   * approve booked 17 CommunityForce prospects into one 2 PM slot, every
+   * proposal having offered the same times). Checked against the owner's
+   * booked meetings in Velocity, which cannot lag, and their live calendar.
+   * A time the approver picked is refused when taken; with no pick, the
+   * next free offered time is booked instead. A time the prospect already
+   * agreed (scheduledAt, from a booking link) is theirs and is not moved.
+   */
+  if (acc && m.ownerUserId && !m.scheduledAt) {
+    const candidates = chosenTime ? [start] : times.filter(isFuture).sort().map((t) => new Date(t));
+    const last = candidates[candidates.length - 1];
+    const taken = await takenRanges(workspaceId, m.ownerUserId, acc, meetingId, candidates[0], new Date(last.getTime() + durMs));
+    const free = candidates.find((c) => !taken.some((r) => r.startAt.getTime() < c.getTime() + durMs && r.endAt.getTime() > c.getTime()));
+    if (!free) return { sent: false, scheduledAt: null, reason: chosenTime ? "time_taken" : "all_times_taken" };
+    start = free;
+    end = new Date(free.getTime() + durMs);
   }
 
   if (acc) {
@@ -604,6 +703,8 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
         status: "scheduled", scheduledAt: start, inviteSent: true,
         calendarEventId: calEventId, calendarAccountId: acc.id, meetingUrl: result.meetingUrl ?? null,
       } as never).where(eq(meetings.id, meetingId));
+      // The drafting cache no longer knows this slot is taken.
+      liveBusyCache.delete(acc.id);
       // Count this toward the ARE campaign KPI if the attendee is an ARE
       // prospect (non-blocking, deduped, no-op otherwise).
       void attributeMeetingBookingToAre(workspaceId, { id: meetingId, contactEmail: m.contactEmail });
