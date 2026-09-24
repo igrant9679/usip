@@ -49,6 +49,7 @@ function makeDb() {
         if (st.table === meetings) {
           if (fields && "attendeeResponse" in fields) res(w.invites);          // the sync's pick
           else if (fields && "proposedTimes" in fields) res([]);              // ownerCommitments
+          else if (fields && Object.keys(fields).length === 1 && "id" in fields) res([]);                                         // one-invite-per-person check
           else res([w.meeting]);                                              // sendMeetingInvite
         } else if (st.table === calendarAccounts) res(w.accounts);
         else if (st.table === calendarEvents) res([{ externalId: "ms-evt-1" }]);

@@ -144,6 +144,7 @@ export default function MeetingsV2() {
       else if (r.reason === "provider_error") toast.error("The calendar provider rejected the invite — nothing was sent; the proposal was kept.");
       else if (r.reason === "all_times_expired") toast.error("Every proposed time has passed — regenerate the proposal to offer new times.");
       else if (r.reason === "outside_window") toast.error("The offered times fall outside 9 AM–4 PM in the workspace's time zone (drafted under an older zone). Regenerate the proposal; nothing was sent.");
+      else if (r.reason === "already_invited") toast.error("This person already has an upcoming invite or meeting (perhaps under a duplicate record). Nothing was sent.");
       else if (r.reason === "no_attendee_email") toast.error("This prospect has no email address, so there is no one to send the invite to. Nothing was sent.");
       else if (r.reason === "time_taken") toast.error("That time is already booked on the owner's calendar. Pick another offered time; nothing was sent.");
       else if (r.reason === "all_times_taken") toast.error("Every offered time is already booked on the owner's calendar. Regenerate the proposal for free times; nothing was sent.");

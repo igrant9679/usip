@@ -35,6 +35,7 @@ vi.mock("./routers/are/execution", async (importActual) => ({
 import { runMeetingAutopilotForWorkspace } from "./services/meetingScheduler";
 
 let inserted: any[];
+let dupProspects = false;
 function makeDb() {
   const builder = (fields?: Record<string, unknown>) => {
     const st: { table?: unknown } = {};
@@ -42,7 +43,10 @@ function makeDb() {
       from(t: unknown) { st.table = t; return b; },
       innerJoin() { return b; }, where() { return b; }, orderBy() { return b; }, limit() { return b; },
       then(res: (v: unknown) => void) {
-        if (st.table === prospects) res([
+        if (st.table === prospects) res(dupProspects ? [
+          { id: 1, firstName: "Erika", lastName: "D", email: "erika@example.org", company: "Acme" },
+          { id: 2, firstName: "Erika", lastName: "D", email: "Erika@Example.org ", company: "Acme" },
+        ] : [
           { id: 1, firstName: "Ada", lastName: "One", email: "ada@example.org", company: "Acme" },
           { id: 2, firstName: "Bo", lastName: "Two", email: "bo@example.org", company: "Beta" },
         ]);
@@ -82,6 +86,16 @@ describe("Autonomous", () => {
     const res = await runMeetingAutopilotForWorkspace(4, 2, 5721);
     expect(res).toEqual({ proposed: 2, sent: 0, skipped: 0 });
     expect(h.createEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("one person, one proposal", () => {
+  it("a duplicate prospect row with the same email is skipped, not proposed twice", async () => {
+    dupProspects = true;
+    const res = await runMeetingAutopilotForWorkspace(4, 3, 5721, { send: true });
+    dupProspects = false;
+    expect(res).toMatchObject({ proposed: 1, skipped: 1 });
+    expect(h.createEvent).toHaveBeenCalledTimes(1);
   });
 });
 

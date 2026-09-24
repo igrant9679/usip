@@ -69,7 +69,7 @@ describe("1. drafting spreads offers across proposals", () => {
 });
 
 type Row = { id: number; status: string; proposedTimes: string[] | null; scheduledAt: Date | null; durationMin: number };
-type World = { meeting: any; others: Row[]; accounts: any[]; updates: any[]; inserts: any[] };
+type World = { meeting: any; others: Row[]; dupes: { id: number }[]; accounts: any[]; updates: any[]; inserts: any[] };
 let w: World;
 
 function makeDb() {
@@ -81,7 +81,8 @@ function makeDb() {
       orderBy() { return b; },
       limit() { return b; },
       then(res: (v: unknown) => void) {
-        if (st.table === meetings) res(fields ? w.others : [w.meeting]);
+        // The one-invite-per-person check reads ids only.
+        if (st.table === meetings) res(fields && Object.keys(fields).length === 1 && "id" in fields ? w.dupes : fields ? w.others : [w.meeting]);
         else if (st.table === calendarAccounts) res(w.accounts);
         else if (st.table === workspaces) res([{ name: "CommunityForce" }]);
         else if (st.table === calendarEvents || st.table === workspaceSettings) res([]);
@@ -114,6 +115,7 @@ beforeEach(() => {
   w = {
     meeting: { id: 9, workspaceId: 4, ownerUserId: KHAJA, status: "proposed", proposedTimes: T, scheduledAt: null, durationMin: 30, title: "Intro", contactEmail: "ada@example.org", contactName: "Ada", inviteMessage: "Hi", meetingUrl: null },
     others: [],
+    dupes: [],
     accounts: [{ id: 2, workspaceId: 4, userId: KHAJA, calendarId: null, unipileAccountId: "acc-ms365" }],
     updates: [],
     inserts: [],
@@ -168,6 +170,13 @@ describe("2. sending never books a taken slot", () => {
     // 30-minute booking at T0 - 30min ends exactly at T0.
     w.others = [booked(1, new Date(Date.parse(T[0]) - 30 * 60000).toISOString())];
     expect(await sendMeetingInvite(4, 9)).toEqual({ sent: true, scheduledAt: T[0] });
+  });
+
+  it("one live invite per person: a second one to the same address is refused", async () => {
+    w.dupes = [{ id: 77 }];
+    expect(await sendMeetingInvite(4, 9)).toEqual({ sent: false, scheduledAt: null, reason: "already_invited" });
+    expect(h.createEvent).not.toHaveBeenCalled();
+    expect(w.updates).toEqual([]);
   });
 
   it("after a booking, the next draft reads the calendar again rather than a stale cache", async () => {

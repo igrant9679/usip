@@ -39,7 +39,7 @@ import { formatInZone, generateSlots, safeTimezone } from "@shared/availability"
 import { getWorkspaceTimezone } from "./workspaceTimezone";
 import { rankOf } from "../_core/workspace";
 import { activeMemberIds } from "../_core/activeMembers";
-import { liveMeetingStatuses } from "@shared/meetingStatus";
+import { liveMeetingStatuses, remindableMeetingStatuses } from "@shared/meetingStatus";
 
 // Every offerable time derives from the workspace's configured zone rather than
 // the host's clock — the container runs on UTC, which is a deployment detail, not
@@ -611,6 +611,16 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
   // proposals had no email, and each still booked a Teams meeting on the
   // owner's calendar with nobody invited, marked "scheduled, invite sent".
   if (!m.contactEmail?.trim()) return { sent: false, scheduledAt: null, reason: "no_attendee_email" };
+  // One live invite per person (2026-09-24): a duplicate prospect record, or
+  // a second proposal for the same address, must not send them another.
+  const [already] = await db.select({ id: meetings.id }).from(meetings).where(and(
+    eq(meetings.workspaceId, workspaceId),
+    ne(meetings.id, meetingId),
+    sql`lower(${meetings.contactEmail}) = ${m.contactEmail.trim().toLowerCase()}`,
+    inArray(meetings.status, remindableMeetingStatuses()),
+    gte(meetings.scheduledAt, new Date()),
+  )).limit(1);
+  if (already) return { sent: false, scheduledAt: null, reason: "already_invited" };
 
   const times = Array.isArray(m.proposedTimes) ? (m.proposedTimes as string[]) : [];
 
@@ -838,6 +848,19 @@ export async function runMeetingAutopilotForWorkspace(
       inArray(meetings.status, ACTIVE_MEETING_STATUSES),
     ));
   const busy = new Set(existing.map((r: any) => r.relatedId));
+  // And prospects whose EMAIL already has one (2026-09-24): the same person
+  // can exist as several prospect rows (CommunityForce had Erika Donalds
+  // three times), and the id check above let each copy get its own
+  // proposal, which Autonomous would send as its own invite.
+  const emailOf = (p: any) => String(p.email ?? "").trim().toLowerCase();
+  const emails = Array.from(new Set(candidates.map(emailOf).filter(Boolean)));
+  const liveByEmail = emails.length ? await db.select({ contactEmail: meetings.contactEmail }).from(meetings)
+    .where(and(
+      eq(meetings.workspaceId, workspaceId),
+      inArray(meetings.contactEmail, emails),
+      inArray(meetings.status, ACTIVE_MEETING_STATUSES),
+    )) : [];
+  const busyEmails = new Set(liveByEmail.map((r: any) => String(r.contactEmail ?? "").trim().toLowerCase()));
 
   // Per-prospect owner: assign each meeting to the rep who owns the prospect's
   // linked contact/lead, so on 'auto' the invite sends from THAT rep's own
@@ -862,11 +885,12 @@ export async function runMeetingAutopilotForWorkspace(
   let proposed = 0, sent = 0, skipped = 0;
   for (const p of candidates) {
     if (proposed >= limit) break;
-    if (busy.has(p.id)) { skipped++; continue; }
+    if (busy.has(p.id) || busyEmails.has(emailOf(p))) { skipped++; continue; }
     const id = await proposeMeetingForProspect(workspaceId, p, ownerFor(p), "ai");
     if (!id) continue;
     proposed++;
     busy.add(p.id);
+    busyEmails.add(emailOf(p));
     if (opts.send) {
       const r = await sendMeetingInvite(workspaceId, id);
       if (r.sent) sent++;

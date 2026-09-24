@@ -52,7 +52,8 @@ function makeDb() {
           res([{ ws: { id: 2, name: "LSI Media", ownerUserId: 2, archivedAt: null },
             mb: { id: 1, userId: 2, workspaceId: 2, role: w.role, deactivatedAt: null, lastActiveAt: new Date() } }]);
         // ownerCommitments reads proposedTimes across proposals: none here.
-        } else if (st.table === meetings) res(fields && "proposedTimes" in (fields as object) ? [] : [w.meeting]);
+        // ...and the one-invite-per-person check reads ids only: none here.
+        } else if (st.table === meetings) res(fields && ("proposedTimes" in (fields as object) || (Object.keys(fields as object).length === 1 && "id" in (fields as object))) ? [] : [w.meeting]);
         else if (st.table === calendarAccounts) res([{ id: 1, workspaceId: 2, userId: 2, calendarId: null, unipileAccountId: "acc" }]);
         else res([]);
       },
