@@ -31,6 +31,13 @@ export const HEALABLE_NO_EMAIL = "Prospect has no email address";
 export const HEALABLE_POOL_PREFIX = "Pool send failed:";
 
 /**
+ * Written by the self-heal on a revivable copy it deliberately does NOT put
+ * back (a duplicate, or a step already handled). Must never match either
+ * healable class above, or the next tick would revive it after all.
+ */
+export const HEAL_SUPERSEDED = "Superseded by self-heal: duplicate or already-handled step";
+
+/**
  * What the sweep should do with a prospect whose steps are all settled.
  *
  * "completed" and "not completed" were the only two answers, and that is

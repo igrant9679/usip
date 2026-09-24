@@ -70,7 +70,7 @@ import { ARE_DEFAULT_SOURCES, normalizeSources, resolveSourceOrder, type AreSour
 // One rule for a step's index + variant key, shared with the A/B metadata
 // upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
 import { normalizeSequence } from "@shared/areSequenceSteps";
-import { effectiveStepGapDays, dueAtForDay, dayOffsetForPosition, sanitizeDayOffsets } from "@shared/areStepCadence";
+import { effectiveStepGapDays, dueAtForDay, dayOffsetForPosition, planHealRevival, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { queueIdentityKeys } from "./services/are/queueIdentity";
@@ -89,6 +89,7 @@ import {
 } from "./services/quickenrich";
 import { stripNameCredentials } from "./services/enrichment/personName";
 import {
+  HEAL_SUPERSEDED,
   HEALABLE_NO_EMAIL,
   HEALABLE_POOL_PREFIX,
   sequenceCompletionVerdict,
@@ -443,6 +444,75 @@ async function enrichPendingGlobally(result: AreEngineResult): Promise<void> {
     await emitLog(b.ws, campId, "enrich", "info",
       `Enriched ${b.ok}/${b.total} prospects (serial, global pass)`);
   }
+}
+
+/**
+ * Apply the self-heal to a set of revivable failed rows (email found, pool
+ * recovered, LinkedIn URL found), per prospect, through planHealRevival
+ * (@shared/areStepCadence). One copy per step goes back on the queue, spaced
+ * a campaign gap apart from now (or from the last send); duplicates and
+ * already-handled steps are superseded so the next tick cannot revive them;
+ * later scheduled steps move back only as far as the spacing needs. It used
+ * to flip every such row to `scheduled` at its ORIGINAL, long-past time —
+ * a burst of the whole sequence, duplicates included, the moment an email
+ * turned up (audit 2026-09-24: 8 CommunityForce and 9 LSI prospects exposed,
+ * bursts of up to 8). Every write is conditional on the row still being in
+ * the state the plan read.
+ */
+async function applyHealRevival(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  wsId: number,
+  campId: number,
+  gapDays: number,
+  healable: { id: number; prospectQueueId: number }[],
+): Promise<{ revived: number; superseded: number; pushed: number; revivedProspectIds: number[] }> {
+  const prospectIds = Array.from(new Set(healable.map((h) => h.prospectQueueId)));
+  if (prospectIds.length === 0) return { revived: 0, superseded: 0, pushed: 0, revivedProspectIds: [] };
+  const healIds = new Set(healable.map((h) => h.id));
+  const rows = await db
+    .select({
+      id: areExecutionQueue.id,
+      prospectQueueId: areExecutionQueue.prospectQueueId,
+      stepIndex: areExecutionQueue.stepIndex,
+      status: areExecutionQueue.status,
+      scheduledAt: areExecutionQueue.scheduledAt,
+      executedAt: areExecutionQueue.executedAt,
+    })
+    .from(areExecutionQueue)
+    .where(and(
+      eq(areExecutionQueue.workspaceId, wsId),
+      eq(areExecutionQueue.campaignId, campId),
+      inArray(areExecutionQueue.prospectQueueId, prospectIds),
+    ));
+  const nowMs = Date.now();
+  let revived = 0, superseded = 0, pushed = 0;
+  const revivedProspectIds: number[] = [];
+  for (const pid of prospectIds) {
+    const mine = rows
+      .filter((r) => r.prospectQueueId === pid)
+      .map((r) => ({ ...r, healable: healIds.has(r.id) }));
+    const plan = planHealRevival(mine, gapDays, nowMs);
+    for (const v of plan.revive) {
+      await db.update(areExecutionQueue)
+        .set({ status: "scheduled", failureReason: null, executedAt: null, scheduledAt: v.to } as never)
+        .where(and(eq(areExecutionQueue.id, v.id), eq(areExecutionQueue.status, "failed")));
+      revived++;
+    }
+    if (plan.supersede.length > 0) {
+      await db.update(areExecutionQueue)
+        .set({ status: "skipped", failureReason: HEAL_SUPERSEDED, executedAt: new Date() } as never)
+        .where(and(inArray(areExecutionQueue.id, plan.supersede), eq(areExecutionQueue.status, "failed")));
+      superseded += plan.supersede.length;
+    }
+    for (const c of plan.reschedule) {
+      await db.update(areExecutionQueue)
+        .set({ scheduledAt: c.to } as never)
+        .where(and(eq(areExecutionQueue.id, c.id), eq(areExecutionQueue.status, "scheduled")));
+      pushed++;
+    }
+    if (plan.revive.length > 0) revivedProspectIds.push(pid);
+  }
+  return { revived, superseded, pushed, revivedProspectIds };
 }
 
 /* ─── Per-campaign tick ─────────────────────────────────────────────────── */
@@ -1146,6 +1216,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       // otherwise the whole sequence sits dormant until its next step's day
       // arrives, even though the prospect is now reachable.
       try {
+        const healGapDays = effectiveStepGapDays((campaign as { stepGapDays?: number | null }).stepGapDays);
         const healable = await db
           .select({ id: areExecutionQueue.id, prospectQueueId: areExecutionQueue.prospectQueueId })
           .from(areExecutionQueue)
@@ -1187,24 +1258,26 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             ),
           );
         if (healable.length > 0) {
-          await db
-            .update(areExecutionQueue)
-            .set({ status: "scheduled", failureReason: null, executedAt: null })
-            .where(inArray(areExecutionQueue.id, healable.map((h) => h.id)));
+          // One copy per step, spaced a campaign gap apart (applyHealRevival).
+          const healed = await applyHealRevival(db, wsId, campId, healGapDays, healable);
           // Revive the completed prospects the steps belong to, or the
           // completion sweep (which only scans "enrolled") never re-evaluates
           // them and the re-scheduled steps dispatch under a lying status.
-          const revivedIds = Array.from(new Set(healable.map((h) => h.prospectQueueId)));
-          const revived = await db
-            .update(prospectQueue)
-            .set({ sequenceStatus: "enrolled" })
-            .where(and(
-              inArray(prospectQueue.id, revivedIds),
-              eq(prospectQueue.sequenceStatus, "completed"),
-            ));
-          void revived;
+          const revivedIds = healed.revivedProspectIds;
+          if (revivedIds.length > 0) {
+            const revived = await db
+              .update(prospectQueue)
+              .set({ sequenceStatus: "enrolled" })
+              .where(and(
+                inArray(prospectQueue.id, revivedIds),
+                eq(prospectQueue.sequenceStatus, "completed"),
+              ));
+            void revived;
+          }
           await emitLog(wsId, campId, "dispatch", "info",
-            `Re-scheduled ${healable.length} failed step(s) (email resolved or send infra recovered)`);
+            `Re-scheduled ${healed.revived} failed step(s) (email resolved or send infra recovered), one per step, ${healGapDays} day(s) apart` +
+            (healed.superseded ? `; ${healed.superseded} duplicate or already-handled cop${healed.superseded === 1 ? "y" : "ies"} superseded` : "") +
+            (healed.pushed ? `; ${healed.pushed} later step(s) moved back to keep the gap` : ""));
         }
 
         /**
@@ -1232,12 +1305,11 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             isNotNull(prospectQueue.linkedinUrl),
           ));
         if (linkedinHealable.length > 0) {
-          await db
-            .update(areExecutionQueue)
-            .set({ status: "scheduled", failureReason: null, executedAt: null })
-            .where(inArray(areExecutionQueue.id, linkedinHealable.map((h) => h.id)));
+          // Same rule as the email heal: one copy per step, spaced.
+          const healedLi = await applyHealRevival(db, wsId, campId, healGapDays, linkedinHealable);
           await emitLog(wsId, campId, "dispatch", "info",
-            `Re-scheduled ${linkedinHealable.length} LinkedIn step(s) (profile URL resolved)`);
+            `Re-scheduled ${healedLi.revived} LinkedIn step(s) (profile URL resolved), one per step, ${healGapDays} day(s) apart` +
+            (healedLi.superseded ? `; ${healedLi.superseded} duplicate or already-handled cop${healedLi.superseded === 1 ? "y" : "ies"} superseded` : ""));
         }
       } catch (e) {
         console.error(`[AreEngine] campaign ${campId} step heal failed:`, e);
