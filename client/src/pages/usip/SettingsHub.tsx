@@ -23,6 +23,8 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { Building2 as WsIcon, Check as WsCheck, ChevronsUpDown as WsChevrons } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -159,6 +161,7 @@ export default function SettingsHub() {
   // Team page removes it — so for almost every member this filter is a no-op.
   const { can } = usePermissions();
   const canBilling = can("access_billing");
+  const { current: currentWorkspace } = useWorkspace();
 
   const filteredGroups = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -185,6 +188,9 @@ export default function SettingsHub() {
           >
             <ArrowLeft className="size-4" /> Settings
           </button>
+        </div>
+        <div className="shrink-0 px-3 pb-2">
+          <SettingsWorkspaceSwitcher />
         </div>
         <div className="shrink-0 px-3 pb-2">
           <div className="flex h-8 items-center gap-2 rounded-md border border-border bg-background px-2">
@@ -236,12 +242,18 @@ export default function SettingsHub() {
       </aside>
 
       {/* ── content panel ── */}
-      <main className="flex-1 min-w-0 flex flex-col min-h-0">
+      {/* Keyed by workspace: switching remounts every section, so a form
+          half-edited in one workspace can never be saved into the next one
+          (several sections copy their query data into local state once). */}
+      <main key={currentWorkspace?.id ?? 0} className="flex-1 min-w-0 flex flex-col min-h-0">
         {/* mobile top bar (rail is hidden below md) */}
         <div className="md:hidden shrink-0 flex items-center gap-2 border-b border-border px-4 h-12">
           <button type="button" onClick={() => navigate("/")} className="flex items-center gap-1.5 text-sm font-semibold">
             <ArrowLeft className="size-4" /> Settings
           </button>
+          <div className="ml-auto w-44 min-w-0">
+            <SettingsWorkspaceSwitcher />
+          </div>
         </div>
         {section === "profile" && <ProfileSection />}
         {section === "mailboxes" && <MailboxesSection />}
@@ -991,5 +1003,51 @@ function ChangeEmailDialog({ open, onClose, hasPassword, currentEmail }: { open:
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Which workspace these settings belong to, and a way to change it without
+ * leaving Settings (owner ask 2026-09-24: "most, if not all settings should
+ * have a workspace switcher"). The hub renders outside the main Shell, so it
+ * had no switcher and never said which workspace it was showing: an admin of
+ * several workspaces edited whichever one they last picked elsewhere. The
+ * switch itself is the shared one (WorkspaceContext.switchTo), which
+ * invalidates every query; the hub's content is keyed by workspace id so
+ * local form state resets with it.
+ */
+function SettingsWorkspaceSwitcher() {
+  const { workspaces, current, switchTo, isLoading } = useWorkspace();
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative min-w-0">
+      <button
+        type="button"
+        aria-label="Switch workspace"
+        title="Which workspace these settings belong to"
+        disabled={isLoading || !current}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full min-w-0 items-center gap-2 rounded-md border border-border bg-background px-2 py-1.5 text-[13px] hover:bg-muted"
+      >
+        <WsIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-left font-medium">{current?.name ?? "Loading…"}</span>
+        <WsChevrons className="size-3.5 shrink-0 text-muted-foreground" />
+      </button>
+      {open && (
+        <div className="absolute left-0 right-0 top-full z-40 mt-1 rounded-md border bg-popover p-1 shadow-lg">
+          {workspaces.map((w) => (
+            <button
+              key={w.id}
+              type="button"
+              onClick={() => { setOpen(false); if (w.id !== current?.id) switchTo(w.id); }}
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] hover:bg-muted"
+            >
+              {current?.id === w.id ? <WsCheck className="size-3.5 shrink-0 text-primary" /> : <span className="size-3.5 shrink-0" />}
+              <span className="min-w-0 flex-1 truncate">{w.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
