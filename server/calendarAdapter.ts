@@ -56,6 +56,8 @@ export interface CalendarAdapter {
   createEvent(calendarId: string, event: CalendarEventInput): Promise<CalendarEventResult>;
   updateEvent(calendarId: string, externalId: string, event: Partial<CalendarEventInput>): Promise<CalendarEventResult>;
   deleteEvent(calendarId: string, externalId: string): Promise<void>;
+  /** One event, with each attendee's responseStatus. Unipile only; CalDAV has no attendee answers. */
+  getEvent?(calendarId: string, externalId: string): Promise<CalendarEventResult>;
 }
 
 /* ─── CalDAV Adapter (Outlook, Apple, generic) ───────────────────────────── */

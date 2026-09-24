@@ -545,6 +545,10 @@ export const meetings = mysqlTable(
     disposition: varchar("disposition", { length: 48 }),
     // When the pre-meeting reminder email was sent to the attendee (Migration 0111).
     reminderSentAt: timestamp("reminderSentAt"),
+    // The attendee's answer to the calendar invite, read back from the owner's
+    // calendar (Migration 0190): none | accepted | tentative | declined.
+    attendeeResponse: varchar("attendeeResponse", { length: 16 }),
+    attendeeRespondedAt: timestamp("attendeeRespondedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

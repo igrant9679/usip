@@ -128,10 +128,11 @@ export const meetingsRouter = router({
       if (r.status === "proposed") s.proposed++;
       else if (r.status === "completed") s.completed++;
       else if (r.status === "no_show") s.noShow++;
-      if (r.status === "scheduled" || r.status === "invited") {
-        s.booked++;
-        if (r.scheduledAt && new Date(r.scheduledAt).getTime() >= now) s.upcoming++;
-      }
+      // Booked = accepted (or agreed); an invite awaiting an answer is upcoming
+      // but not booked (owner ask 2026-09-24).
+      if (r.status === "scheduled" || r.status === "rescheduled") s.booked++;
+      if ((r.status === "scheduled" || r.status === "rescheduled" || r.status === "invited")
+        && r.scheduledAt && new Date(r.scheduledAt).getTime() >= now) s.upcoming++;
     }
     return s;
   }),

@@ -22,9 +22,11 @@ describe("sendMeetingInvite cannot fabricate a booking", () => {
 
   it("a 'scheduled' status is only ever written alongside a real invite", () => {
     // The single booking write is the provider-success path (inviteSent: true).
-    const writes = scheduler.match(/status: "scheduled"/g) ?? [];
+    // Since 2026-09-24 it books only an AGREED time; an offered one is
+    // `invited` until the attendee accepts (services/meetingResponses).
+    const writes = scheduler.match(/"scheduled"/g) ?? [];
     expect(writes.length).toBe(1);
-    expect(scheduler).toContain('status: "scheduled", scheduledAt: start, inviteSent: true');
+    expect(scheduler).toContain('status: agreed ? "scheduled" : "invited", scheduledAt: start, inviteSent: true,');
   });
 
   it("ARE attribution fires only on genuine delivery", () => {

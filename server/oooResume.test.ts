@@ -279,7 +279,9 @@ describe("the sweep runs on the existing sequence tick", () => {
   it("adds no new timer", () => {
     // 38 as of 2026-09-20. The sweep touches the same table the sequence tick
     // does; a timer of its own would be a second overlap surface.
-    expect(read("_core", "index.ts").split("setInterval(").length - 1).toBe(38);
+    // 39 since 2026-09-24: the meeting-invite answer sync (meetingResponses),
+    // which touches only meetings, not the sequence tables.
+    expect(read("_core", "index.ts").split("setInterval(").length - 1).toBe(39);
   });
 });
 

@@ -4256,6 +4256,19 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0190: the attendee's answer to a meeting invite ───────────────────────
+  // Owner ask 2026-09-24: "Count bookings only when the prospect accepts". An
+  // offered invite is now `invited` until the attendee accepts on the owner's
+  // calendar; meetingResponses reads the answer back into these columns.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0190_meeting_attendee_response.sql",
+    statements: [
+      "ALTER TABLE `meetings` ADD COLUMN `attendeeResponse` varchar(16) NULL",
+      "ALTER TABLE `meetings` ADD COLUMN `attendeeRespondedAt` timestamp NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

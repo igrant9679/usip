@@ -184,6 +184,12 @@ export class UnipileCalendarAdapter implements CalendarAdapter {
     return (res.data ?? []).map(unipileEventToResult);
   }
 
+  /** GET /calendars/{id}/events/{event_id} — one event, attendee answers included. */
+  async getEvent(calendarId: string, externalId: string): Promise<CalendarEventResult> {
+    const realId = await this.resolveCalendarId(calendarId);
+    return unipileEventToResult(await getCalendarEvent(realId, externalId, this.unipileAccountId));
+  }
+
   /** POST /calendars/{id}/events — create a new event. */
   async createEvent(
     calendarId: string,

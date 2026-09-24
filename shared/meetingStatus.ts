@@ -101,11 +101,14 @@ export const REMINDABLE_MEETING_STATUSES: readonly MeetingStatus[] = [
  * to, the same exclusion REMINDABLE makes and for the same reason — and
  * `cancelled` is excluded because the booking was undone.
  *
+ * `invited` is excluded too (owner ask 2026-09-24: "Count bookings only when
+ * the prospect accepts"): an invite the attendee has not accepted is not a
+ * booking. It becomes `scheduled` when they accept (services/meetingResponses).
+ *
  * A third question, not a set operation on the two above: BOOKED deliberately
  * overlaps both, which is why it is named rather than derived.
  */
 export const BOOKED_MEETING_STATUSES: readonly MeetingStatus[] = [
-  "invited",
   "scheduled",
   "rescheduled",
   "completed",

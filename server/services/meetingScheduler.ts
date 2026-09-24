@@ -723,15 +723,26 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
         relatedId: m.relatedId,
       } as never);
       const calEventId = Number((ins as any)[0]?.insertId ?? 0) || null;
+      /**
+       * An invite is not a booking (owner ask 2026-09-24: "Count bookings
+       * only when the prospect accepts"). A time WE offered is `invited`
+       * until the attendee accepts on the calendar (meetingResponses reads
+       * the answer back and books it then); counting it at send stopped 22
+       * CommunityForce prospects' sequences for meetings nobody had agreed
+       * to. A time the prospect already picked (scheduledAt, a booking link)
+       * is agreed, so it is booked now.
+       */
+      const agreed = !!m.scheduledAt;
       await db.update(meetings).set({
-        status: "scheduled", scheduledAt: start, inviteSent: true,
+        status: agreed ? "scheduled" : "invited", scheduledAt: start, inviteSent: true,
+        attendeeResponse: agreed ? "accepted" : "none", attendeeRespondedAt: agreed ? new Date() : null,
         calendarEventId: calEventId, calendarAccountId: acc.id, meetingUrl: result.meetingUrl ?? null,
       } as never).where(eq(meetings.id, meetingId));
       // The drafting cache no longer knows this slot is taken.
       liveBusyCache.delete(acc.id);
-      // Count this toward the ARE campaign KPI if the attendee is an ARE
-      // prospect (non-blocking, deduped, no-op otherwise).
-      void attributeMeetingBookingToAre(workspaceId, { id: meetingId, contactEmail: m.contactEmail });
+      // Count toward the ARE campaign KPI (non-blocking, deduped, no-op for a
+      // non-ARE attendee): now only for an agreed time.
+      if (agreed) void attributeMeetingBookingToAre(workspaceId, { id: meetingId, contactEmail: m.contactEmail });
       return { sent: true, scheduledAt: start.toISOString() };
     } catch (e) {
       console.error(`[MeetingScheduler] provider send failed for meeting ${meetingId}:`, e);

@@ -69,6 +69,8 @@ type Meeting = {
   aiReasoning?: string | null;
   aiConfidence?: number | null;
   inviteSent?: boolean | null;
+  /** The attendee's answer, read back from the owner's calendar. */
+  attendeeResponse?: string | null;
   disposition?: string | null;
   createdAt?: string | Date | null;
 };
@@ -479,6 +481,15 @@ export default function MeetingsV2() {
                       <div className="text-sm font-medium truncate flex items-center gap-1.5">
                         {m.title}
                         {m.inviteSent === false && <span title="No calendar connected — invite not sent" className="inline-flex items-center"><MailWarning className="size-3 text-amber-500" /></span>}
+                        {m.status === "invited" && (
+                          <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                            title="Not a booking yet: it counts once the prospect accepts the invite. Checked on the owner's calendar every 15 minutes.">
+                            {m.attendeeResponse === "tentative" ? "Tentative" : "Awaiting response"}
+                          </span>
+                        )}
+                        {m.status === "scheduled" && m.attendeeResponse === "accepted" && (
+                          <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Accepted</span>
+                        )}
                       </div>
                       <ContactLine m={m} />
                     </div>
@@ -507,7 +518,7 @@ export default function MeetingsV2() {
                 {past.map((m) => (
                   <div key={m.id} className="flex items-center gap-3 px-3 py-2 border-b border-border/60 last:border-0">
                     <div className="min-w-0 flex-1"><div className="text-sm truncate">{m.title}</div><ContactLine m={m} /></div>
-                    <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-[10px] capitalize", m.status === "completed" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : m.status === "no_show" ? "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300" : "bg-secondary text-muted-foreground")}>{(m.disposition || m.status).replace(/_/g, " ")}</span>
+                    <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-[10px] capitalize", m.status === "completed" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : m.status === "no_show" ? "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300" : "bg-secondary text-muted-foreground")}>{(m.disposition || (m.attendeeResponse === "declined" ? "declined" : m.status)).replace(/_/g, " ")}</span>
                     <div className="shrink-0 text-[11px] w-32 text-right tabular-nums text-muted-foreground">{fmtDateTime(m.scheduledAt)}</div>
                   </div>
                 ))}

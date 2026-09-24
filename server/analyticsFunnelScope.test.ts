@@ -109,8 +109,10 @@ describe("getRevenueFunnel — one population, applied five times", () => {
 });
 
 describe("BOOKED_MEETING_STATUSES — the third question about meeting status", () => {
-  it("is the enum minus proposed and minus cancelled", () => {
-    const expected = [...MEETING_STATUSES].filter((s) => s !== "proposed" && s !== "cancelled").sort();
+  it("is the enum minus proposed, invited and cancelled", () => {
+    // invited left the set 2026-09-24 (owner ask: "Count bookings only when
+    // the prospect accepts"): an invite nobody has answered is not a booking.
+    const expected = [...MEETING_STATUSES].filter((s) => s !== "proposed" && s !== "invited" && s !== "cancelled").sort();
     expect([...BOOKED_MEETING_STATUSES].sort()).toEqual(expected);
   });
 

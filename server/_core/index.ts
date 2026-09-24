@@ -51,6 +51,7 @@ import { runCampaignRoutingAllWorkspaces } from "../services/campaignRouter";
 import { runCampaignProposalsAllWorkspaces } from "../services/campaignProposals";
 import { runMeetingAutopilotAllWorkspaces } from "../services/meetingScheduler";
 import { sendDueMeetingReminders } from "../services/meetingReminders";
+import { syncInviteResponses } from "../services/meetingResponses";
 import { runConversationAutopilotAllWorkspaces } from "../services/replyClassifier";
 import { runDealAutopilotAllWorkspaces } from "../services/dealAutopilot";
 import { runSocialAutopilotAllWorkspaces } from "../services/socialAutopilot";
@@ -455,6 +456,17 @@ async function startServer() {
   };
   setTimeout(runMeetingReminders, 5 * 60 * 1000); // first run 5 minutes after boot
   setInterval(runMeetingReminders, 60 * 60 * 1000); // hourly
+
+  // Invite answers: an offered meeting is `invited` until the attendee
+  // accepts on the owner's calendar; this reads each answer back (accepted →
+  // booked + the ARE signal, declined → cancelled). Every 15 minutes.
+  const runInviteResponses = () => {
+    syncInviteResponses().catch((e) =>
+      console.error("[MeetingResponses] cron run failed:", e)
+    );
+  };
+  setTimeout(runInviteResponses, 3 * 60 * 1000); // first run 3 minutes after boot
+  setInterval(runInviteResponses, 15 * 60 * 1000); // every 15 minutes
 
   // Conversation Autopilot: classify inbound replies (email_replies) with the
   // 8-class taxonomy; in 'auto' mode also apply the per-class action (a positive
