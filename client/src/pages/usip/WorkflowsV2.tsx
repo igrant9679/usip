@@ -39,6 +39,13 @@ function fmtWhen(d?: string | Date | null): string {
 const MODE_LABEL: Record<string, string> = { off: "Off", approval: "Approve", auto: "Autonomous" };
 
 /**
+ * Engines with no Autonomous mode: they only ever propose, and a person
+ * approves. Meeting proposals since 2026-09-24 (owner: "should not have an
+ * Autonomous mode. Should require approval and/or edits").
+ */
+const NO_AUTO = new Set<string>(["meetings"]);
+
+/**
  * One sentence for a sweep result, used by BOTH the toast and the persistent
  * "Last sweep" line on the card — one definition so the two surfaces cannot
  * describe the same run differently. `domainsResolved` no longer exists on
@@ -137,7 +144,7 @@ export default function WorkflowsV2() {
 
   const autopilots = [
     { key: "tasks", label: "Task Autopilot", icon: ListTodo, blurb: "Next-best-action per prospect", href: "/v2/tasks", mode: taskAp.data?.mode ?? "off", lastRunAt: taskAp.data?.lastRunAt, set: (m: string) => setTaskAp.mutate({ mode: m as any }) },
-    { key: "meetings", label: "Meeting Autopilot", icon: CalendarClock, blurb: "Propose times + book meetings", href: "/v2/meetings", mode: meetAp.data?.mode ?? "off", lastRunAt: meetAp.data?.lastRunAt, set: (m: string) => setMeetAp.mutate({ mode: m as any }) },
+    { key: "meetings", label: "Meeting Autopilot", icon: CalendarClock, blurb: "Propose times + a drafted invite for you to edit and approve (never sends on its own)", href: "/v2/meetings", mode: meetAp.data?.mode ?? "off", lastRunAt: meetAp.data?.lastRunAt, set: (m: string) => setMeetAp.mutate({ mode: m as any }) },
     { key: "conversations", label: "Conversation Autopilot", icon: MessageSquare, blurb: "Classify replies + act", href: "/v2/conversations", mode: convAp.data?.mode ?? "off", lastRunAt: convAp.data?.lastRunAt, set: (m: string) => setConvAp.mutate({ mode: m as any }) },
     { key: "deals", label: "Deal Autopilot", icon: KanbanSquare, blurb: "Advance deals toward close", href: "/v2/deals", mode: dealAp.data?.mode ?? "off", lastRunAt: dealAp.data?.lastRunAt, set: (m: string) => setDealAp.mutate({ mode: m as any }) },
     { key: "social", label: "Social Autopilot", icon: Share2, blurb: "Auto-invite leads → opener on accept", href: "/v2/conversations", mode: socialAp.data?.mode ?? "off", lastRunAt: socialAp.data?.lastRunAt, set: (m: string) => setSocialAp.mutate({ mode: m as any }) },
@@ -157,7 +164,8 @@ export default function WorkflowsV2() {
 
   const setAll = (mode: string) => {
     setTaskAp.mutate({ mode: mode as any });
-    setMeetAp.mutate({ mode: mode as any });
+    // No Autonomous meeting proposals: "All: Autonomous" leaves them on Approve.
+    setMeetAp.mutate({ mode: (mode === "auto" ? "approval" : mode) as any });
     setConvAp.mutate({ mode: mode as any });
     setDealAp.mutate({ mode: mode as any });
     setSocialAp.mutate({ mode: mode as any });
@@ -317,7 +325,7 @@ export default function WorkflowsV2() {
                     <SelectContent>
                       <SelectItem value="off">Off</SelectItem>
                       <SelectItem value="approval">Approve</SelectItem>
-                      <SelectItem value="auto">Autonomous</SelectItem>
+                      {!NO_AUTO.has(a.key) && <SelectItem value="auto">Autonomous</SelectItem>}
                     </SelectContent>
                   </Select>
                 </div>

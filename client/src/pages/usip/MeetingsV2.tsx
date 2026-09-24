@@ -12,7 +12,7 @@
  * calendar the invite is a real provider event; otherwise the meeting is
  * recorded locally and flagged "not sent" (never a false "booked").
  */
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { forbiddenMessage } from "@/lib/forbidden";
 import { Link } from "wouter";
 import { toast } from "sonner";
@@ -86,8 +86,7 @@ function fmtDateTime(d?: string | Date | null): string {
 
 const MODE_META: Record<string, { label: string; blurb: string }> = {
   off: { label: "Autopilot off", blurb: "AI won't schedule meetings. Everything is manual." },
-  approval: { label: "Autopilot: Approve", blurb: "AI proposes meetings with times + a drafted invite for your review before anything sends." },
-  auto: { label: "Autopilot: Autonomous", blurb: "AI proposes and sends the calendar invite automatically for your best-fit prospects." },
+  approval: { label: "Autopilot: Approve", blurb: "AI proposes meetings with times + a drafted invite. Edit any of it; nothing sends until you approve." },
 };
 
 export default function MeetingsV2() {
@@ -115,9 +114,7 @@ export default function MeetingsV2() {
     onSuccess: (r) => {
       invalidateAll();
       if (r.proposed === 0) toast.info(r.skipped > 0 ? "Top prospects already have meetings proposed" : "No best-fit prospects to schedule yet");
-      // In Autonomous mode the button sends what it finds (same as the cron);
-      // the toast must say which of the two actually happened.
-      else if ((r as { sent?: number }).sent && (r as { sent?: number }).sent! > 0) toast.success(`AI proposed ${r.proposed} meeting${r.proposed === 1 ? "" : "s"} — ${(r as { sent?: number }).sent} invite${(r as { sent?: number }).sent === 1 ? "" : "s"} sent (Autonomous mode)`);
+      // Proposals only: nothing this button finds is ever sent without approval.
       else toast.success(`AI proposed ${r.proposed} meeting${r.proposed === 1 ? "" : "s"} to review`);
     },
     onError: (e) => toast.error(e.message),
@@ -171,6 +168,24 @@ export default function MeetingsV2() {
   });
 
   const mode = autopilot.data?.mode ?? "off";
+  const updateProposal = trpc.meetings.updateProposal.useMutation({
+    onSuccess: () => { invalidateAll(); toast.success("Proposal updated"); },
+    onError: (e) => toast.error(e.message),
+  });
+  // A "Regenerate all" pass: the server anchors it and hands the anchor back
+  // until nothing older than it is left (see meetings.regenerateAllProposals).
+  const [regenPass, setRegenPass] = useState<{ since: string; remaining: number } | null>(null);
+  const regenerateAll = trpc.meetings.regenerateAllProposals.useMutation({
+    onSuccess: (r) => {
+      invalidateAll();
+      setRegenPass(r.remaining > 0 ? { since: r.since, remaining: r.remaining } : null);
+      toast.success(
+        `${r.regenerated} proposal${r.regenerated === 1 ? "" : "s"} rewritten` +
+        (r.remaining > 0 ? ` · ${r.remaining} to go — click Continue` : " · every proposal is current"),
+      );
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const meetings = (all.data ?? []) as Meeting[];
   const s = stats.data ?? { proposed: 0, upcoming: 0, completed: 0, noShow: 0, booked: 0 };
   const now = Date.now();
@@ -220,12 +235,12 @@ export default function MeetingsV2() {
           <div className="flex-1" />
           <div className="flex items-center gap-1.5">
             <Bot className="size-3.5 text-muted-foreground" />
-            <Select value={mode} onValueChange={(v) => setMode.mutate({ mode: v as "off" | "approval" | "auto" })}>
+            {/* Off or Approve: meeting proposals have no Autonomous mode (2026-09-24). */}
+            <Select value={mode} onValueChange={(v) => setMode.mutate({ mode: v as "off" | "approval" })}>
               <SelectTrigger className="h-7 w-[168px] text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="off">Autopilot: Off</SelectItem>
                 <SelectItem value="approval">Autopilot: Approve</SelectItem>
-                <SelectItem value="auto">Autopilot: Autonomous</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -239,7 +254,7 @@ export default function MeetingsV2() {
           {/* Autopilot status strip */}
           <div className="rounded-lg border bg-card px-4 py-2.5 flex items-center gap-3 shadow-sm">
             <span className="shrink-0 size-8 rounded-full flex items-center justify-center" style={{ backgroundColor: mode === "off" ? "hsl(var(--muted))" : "#7c3aed1f", color: mode === "off" ? undefined : "#7c3aed" }}>
-              {mode === "auto" ? <Zap className="size-4" /> : <Bot className="size-4" />}
+              <Bot className="size-4" />
             </span>
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium">{MODE_META[mode]?.label}</div>
@@ -300,6 +315,20 @@ export default function MeetingsV2() {
                   onClick={() => regenerateAllOutdated.mutate()}>
                   <Sparkles className="size-3.5" /> {regenerateAllOutdated.isPending ? "Regenerating…" : "Regenerate outdated"}
                 </Button>
+                {regenPass ? (
+                  <Button size="sm" variant="outline" className="h-7 gap-1.5" disabled={regenerateAll.isPending}
+                    title="Carry on rewriting the proposals this pass has not reached yet. Sends nothing."
+                    onClick={() => regenerateAll.mutate({ since: regenPass.since })}>
+                    <Sparkles className="size-3.5" /> {regenerateAll.isPending ? "Rewriting…" : `Continue (${regenPass.remaining} to go)`}
+                  </Button>
+                ) : (
+                  <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={regenerateAll.isPending}
+                    title={`Rewrite all ${proposals.length} proposal${proposals.length === 1 ? "" : "s"}?`}
+                    description="Fresh times and a freshly written invite for every open proposal, using the current brand profile, including proposals you have edited. Nothing is sent. Runs 10 at a time; click Continue until none are left."
+                    confirmLabel="Rewrite all" onConfirm={() => regenerateAll.mutate({})}>
+                    <Sparkles className="size-3.5" /> {regenerateAll.isPending ? "Rewriting…" : "Regenerate all"}
+                  </ConfirmButton>
+                )}
               </div>
               <div className="space-y-2">
                 {proposals.map((m) => (
@@ -307,6 +336,8 @@ export default function MeetingsV2() {
                     onApprove={(chosenTime) => approveSend.mutate({ id: m.id, chosenTime })}
                     onDismiss={() => dismiss.mutate({ id: m.id })}
                     onRegenerate={() => regenerate.mutate({ id: m.id })}
+                    onEdit={(patch) => updateProposal.mutate({ id: m.id, ...patch })}
+                    editPending={updateProposal.isPending}
                     pending={approveSend.isPending || regenerate.isPending}
                     ContactLine={<ContactLine m={m} />}
                   />
@@ -389,16 +420,46 @@ export default function MeetingsV2() {
   );
 }
 
+/** ISO instant → the browser-local value a datetime-local input shows. */
+function toLocalInput(iso: string): string {
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 function ProposalCard({
-  m, onApprove, onDismiss, onRegenerate, pending, ContactLine,
+  m, onApprove, onDismiss, onRegenerate, onEdit, editPending, pending, ContactLine,
 }: {
   m: Meeting;
   onApprove: (chosenTime?: string) => void;
   onDismiss: () => void;
   onRegenerate: () => void;
+  onEdit: (patch: { title?: string; inviteMessage?: string; proposedTimes?: string[] }) => void;
+  editPending: boolean;
   pending: boolean;
   ContactLine: ReactNode;
 }) {
+  // Edit before approving (owner ask 2026-09-24). Times are edited in the
+  // browser's own zone and saved as instants.
+  const [editing, setEditing] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(m.title);
+  const [draftMessage, setDraftMessage] = useState(m.inviteMessage ?? "");
+  const [draftTimes, setDraftTimes] = useState<string[]>([]);
+  const startEdit = () => {
+    setDraftTitle(m.title);
+    setDraftMessage(m.inviteMessage ?? "");
+    setDraftTimes(((m.proposedTimes ?? []) as string[]).map(toLocalInput));
+    setEditing(true);
+  };
+  const saveEdit = () => {
+    const times = draftTimes.filter(Boolean).map((v) => new Date(v).toISOString());
+    onEdit({
+      title: draftTitle.trim() || undefined,
+      inviteMessage: draftMessage.trim() || undefined,
+      proposedTimes: times.length ? times : undefined,
+    });
+    setEditing(false);
+  };
   const times = (m.proposedTimes ?? []) as string[];
   // A proposal has no expiry, so its times go stale in place. The server
   // refuses a past booking (sendMeetingInvite is the one path both this and
@@ -408,6 +469,10 @@ function ProposalCard({
   const future = times.filter((t) => !isPast(t));
   const expired = times.length > 0 && future.length === 0;
   const [chosen, setChosen] = useState<string | undefined>(future[0]);
+  // Times change under the card after an edit or a regeneration: re-pick the
+  // earliest future one rather than keep a slot the proposal no longer offers.
+  const timesKey = times.join("|");
+  useEffect(() => { setChosen(future[0]); }, [timesKey]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="rounded-xl border bg-card p-3 shadow-sm" style={{ borderColor: "#7c3aed40" }}>
       <div className="flex items-start gap-3">
@@ -447,13 +512,47 @@ function ProposalCard({
               Every proposed time has passed. Regenerate this proposal to offer new times.
             </div>
           )}
+          {editing && (
+            <div className="mt-2 space-y-2 rounded-md border bg-muted/30 p-2.5">
+              <div className="space-y-1">
+                <Label className="text-[11px]">Title</Label>
+                <Input value={draftTitle} onChange={(e) => setDraftTitle(e.target.value)} className="h-8 text-[12.5px]" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[11px]">Invite text</Label>
+                <Textarea value={draftMessage} onChange={(e) => setDraftMessage(e.target.value)} rows={4} className="text-[12.5px]" />
+                <div className="text-[10.5px] text-muted-foreground">The invite quotes the times in words. If you change a time below, change it here too.</div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[11px]">Offered times (your local time)</Label>
+                {draftTimes.map((v, i) => (
+                  <div key={i} className="flex items-center gap-1.5">
+                    <Input type="datetime-local" value={v} className="h-8 w-[220px] text-[12.5px]"
+                      onChange={(e) => setDraftTimes((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))} />
+                    <Button size="icon" variant="ghost" className="size-7 text-muted-foreground" title="Remove this time"
+                      disabled={draftTimes.length <= 1}
+                      onClick={() => setDraftTimes((prev) => prev.filter((_, j) => j !== i))}><X className="size-3.5" /></Button>
+                  </div>
+                ))}
+                {draftTimes.length < 5 && (
+                  <Button size="sm" variant="ghost" className="h-7 gap-1 text-[11.5px]"
+                    onClick={() => setDraftTimes((prev) => [...prev, prev[prev.length - 1] ?? ""])}><Plus className="size-3.5" /> Add a time</Button>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 pt-1">
+                <Button size="sm" className="h-7" disabled={editPending || !draftTitle.trim() || !draftMessage.trim()} onClick={saveEdit}>Save changes</Button>
+                <Button size="sm" variant="ghost" className="h-7" onClick={() => setEditing(false)}>Cancel</Button>
+              </div>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          {expired && (
-            <Button size="sm" variant="outline" className="h-7 gap-1" disabled={pending}
-              title="Fresh future times and a fresh invite for this proposal"
-              onClick={onRegenerate}><Sparkles className="size-3.5" /> Regenerate</Button>
-          )}
+          <Button size="sm" variant="outline" className="h-7 gap-1" disabled={pending}
+            title="Fresh times and a freshly written invite for this proposal"
+            onClick={onRegenerate}><Sparkles className="size-3.5" /> Regenerate</Button>
+          <Button size="sm" variant="outline" className="h-7" disabled={pending || editPending}
+            title="Edit the title, invite text or offered times before approving"
+            onClick={() => (editing ? setEditing(false) : startEdit())}>{editing ? "Close" : "Edit"}</Button>
           <Button size="sm" className="h-7 gap-1" disabled={pending || expired || !chosen}
             title={expired ? "Every proposed time has passed — regenerate this proposal" : undefined}
             onClick={() => onApprove(chosen)}><Send className="size-3.5" /> Approve &amp; send</Button>

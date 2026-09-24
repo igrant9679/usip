@@ -17,7 +17,7 @@ import { getDb } from "../db";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
-import { proposeMeetingForProspect, regenerateMeetingProposal, regenerateStaleProposals, runMeetingAutopilotForWorkspace, sendMeetingInvite } from "../services/meetingScheduler";
+import { proposeMeetingForProspect, regenerateMeetingProposal, regenerateProposalsNotSince, regenerateStaleProposals, runMeetingAutopilotForWorkspace, sendMeetingInvite } from "../services/meetingScheduler";
 import { MEETING_STATUSES } from "@shared/meetingStatus";
 
 // Was a fourth hand-written copy of the enum, for this router's z.enum(). The
@@ -150,26 +150,58 @@ export const meetingsRouter = router({
     }),
 
   /**
-   * On-demand: propose meetings for the best-fit prospects. HONORS the
-   * workspace's Meeting Autopilot mode (owner ask 2026-08-26): in 'auto',
-   * what the button finds sends immediately — exactly like the 45-minute
-   * cron — because a workspace that chose full autonomy should not have its
-   * manual "find more" pass demand approvals the cron doesn't. 'approval'
-   * and 'off' keep every find as a reviewable proposal.
+   * On-demand: propose meetings for the best-fit prospects. Every find is a
+   * reviewable proposal: meeting proposals are approval-only (owner ask
+   * 2026-09-24, which replaced the 2026-08-26 ask that made this button send
+   * in 'auto'). Nothing here sends.
    */
   generateProposals: repProcedure
     .input(z.object({ limit: z.number().int().min(1).max(20).optional() }).optional())
     .mutation(async ({ ctx, input }) => {
+      const res = await runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id);
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "ai_generate", entityType: "meeting", entityId: 0, after: { ...res } });
+      return res;
+    }),
+
+  /**
+   * Edit a proposal before approving it (owner ask 2026-09-24: proposals
+   * "should require approval and/or edits"). Title, invite text and offered
+   * times; only an open proposal without an agreed time. Offered times must
+   * all be in the future, deduped and sorted, at most five. The invite text
+   * is what the calendar invite carries when it is approved.
+   */
+  updateProposal: repProcedure
+    .input(z.object({
+      id: z.number(),
+      title: z.string().trim().min(1).max(240).optional(),
+      inviteMessage: z.string().trim().min(1).max(1500).optional(),
+      proposedTimes: z.array(z.string().datetime()).min(1).max(5).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [s] = await db.select({ mode: workspaceSettings.meetingAutopilotMode })
-        .from(workspaceSettings)
-        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
-        .limit(1);
-      const mode = s?.mode === "auto" ? "auto" as const : "approval" as const;
-      const res = await runMeetingAutopilotForWorkspace(ctx.workspace.id, mode, input?.limit ?? 8, ctx.user.id);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "ai_generate", entityType: "meeting", entityId: 0, after: { ...res, mode } });
-      return { ...res, mode };
+      const [m] = await db.select({ status: meetings.status, scheduledAt: meetings.scheduledAt }).from(meetings)
+        .where(and(eq(meetings.workspaceId, ctx.workspace.id), eq(meetings.id, input.id))).limit(1);
+      if (!m) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found." });
+      if (m.status !== "proposed" || m.scheduledAt) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Only an open proposal can be edited." });
+      }
+      const set: Record<string, unknown> = {};
+      if (input.title !== undefined) set.title = input.title;
+      if (input.inviteMessage !== undefined) set.inviteMessage = input.inviteMessage;
+      if (input.proposedTimes !== undefined) {
+        const nowMs = Date.now();
+        const times = Array.from(new Set(input.proposedTimes.map((t) => new Date(t).toISOString()))).sort();
+        if (times.some((t) => new Date(t).getTime() <= nowMs)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Every offered time must be in the future." });
+        }
+        set.proposedTimes = times;
+      }
+      if (Object.keys(set).length === 0) return { ok: true };
+      await db.update(meetings).set(set as never)
+        .where(and(eq(meetings.workspaceId, ctx.workspace.id), eq(meetings.id, input.id)));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "meeting", entityId: input.id, after: { edited: Object.keys(set) } });
+      return { ok: true };
     }),
 
   /** Manually create a meeting (already agreed or being scheduled). */
@@ -283,6 +315,22 @@ export const meetingsRouter = router({
     return res;
   }),
 
+  /**
+   * Rewrite every open proposal — times AND invite text — with the current
+   * brand profile, 10 per call (owner ask 2026-09-24). The first call anchors
+   * the pass (`since` omitted = now on the server, whose clock the rows'
+   * updatedAt shares far better than the browser's) and returns it; the page
+   * sends it back until `remaining` is 0. Overwrites edits. Never sends.
+   */
+  regenerateAllProposals: repProcedure
+    .input(z.object({ since: z.string().datetime().optional() }).optional())
+    .mutation(async ({ ctx, input }) => {
+      const since = input?.since ? new Date(input.since) : new Date();
+      const res = await regenerateProposalsNotSince(ctx.workspace.id, since, 10);
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "meeting", entityId: 0, after: { regenerateAllProposals: res.regenerated, remaining: res.remaining } });
+      return { ...res, since: since.toISOString() };
+    }),
+
   reschedule: repProcedure
     .input(z.object({ id: z.number(), scheduledAt: z.string() }))
     .mutation(async ({ ctx, input }) => {
@@ -358,11 +406,15 @@ export const meetingsRouter = router({
       dailyCap: workspaceSettings.meetingAutopilotDailyCap,
       lastRunAt: workspaceSettings.meetingAutopilotLastRunAt,
     }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
-    return row ?? { mode: "off" as const, dailyCap: 10, lastRunAt: null };
+    if (!row) return { mode: "off" as const, dailyCap: 10, lastRunAt: null };
+    // Approval-only since 2026-09-24: a stored 'auto' (a row migration 0188
+    // has not reached yet) reads as what the engine now does with it.
+    return { ...row, mode: row.mode === "off" ? "off" as const : "approval" as const };
   }),
 
+  /** Off or Approve only — meeting proposals have no Autonomous mode (owner ask 2026-09-24). */
   setAutopilotSettings: adminWsProcedure
-    .input(z.object({ mode: z.enum(["off", "approval", "auto"]), dailyCap: z.number().int().min(1).max(200).optional() }))
+    .input(z.object({ mode: z.enum(["off", "approval"]), dailyCap: z.number().int().min(1).max(200).optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });

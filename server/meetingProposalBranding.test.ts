@@ -28,13 +28,14 @@ describe("proposal drafts carry the workspace's identity", () => {
   });
 });
 
-describe("the Find-meetings button honors the workspace's autopilot mode", () => {
-  it("generateProposals resolves the stored mode instead of hardcoding approval", () => {
-    // Owner ask 2026-08-26: a workspace in full autonomy should not have its
-    // manual "find more" pass demand approvals the 45-minute cron doesn't.
-    const fn = router.slice(router.indexOf("generateProposals:"), router.indexOf("/** Manually create a meeting"));
-    expect(fn).toContain("workspaceSettings.meetingAutopilotMode");
-    expect(fn).toContain('s?.mode === "auto" ? "auto"');
-    expect(fn).not.toMatch(/runMeetingAutopilotForWorkspace\(ctx\.workspace\.id,\s*"approval"/);
+describe("the Find-meetings button only ever proposes", () => {
+  it("generateProposals proposes without reading any autonomy mode and never sends", () => {
+    // Owner ask 2026-09-24 replaced the 2026-08-26 one: meeting proposals are
+    // approval-only, so the button's finds wait for a person like the cron's.
+    const fn = router.slice(router.indexOf("generateProposals:"), router.indexOf("updateProposal:"));
+    expect(fn.length).toBeGreaterThan(100);
+    expect(fn).toContain("runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id)");
+    expect(fn).not.toContain("meetingAutopilotMode");
+    expect(fn).not.toContain("sendMeetingInvite(");
   });
 });

@@ -12,15 +12,20 @@
  *     and flags inviteSent=false (never falsely claims an invite went out).
  *   • runMeetingAutopilotAllWorkspaces — cron: for each workspace whose
  *     meetingAutopilotMode != 'off', propose meetings for the best-fit prospects
- *     that don't have one yet (respecting the daily cap); in 'auto' mode it also
- *     sends the invite. Best-effort — one failure never aborts the batch.
+ *     that don't have one yet (respecting the daily cap). Best-effort — one
+ *     failure never aborts the batch.
  *
  * Compliance: never targets prospects with verificationStatus='rejected'.
- * Auto-send is opt-in per workspace (default 'off') — the toggle is the user's
- * explicit authorization for the outward action of sending an invite.
+ * APPROVAL ONLY (owner ask 2026-09-24: "the Proposal generation function
+ * should not have an Autonomous mode. Should require approval and/or
+ * edits"). The autopilot proposes; a person edits if they want and approves;
+ * only approveAndSend / approveAllProposed / a booking-link self-booking ever
+ * call sendMeetingInvite. There used to be an 'auto' mode that sent the
+ * invite the moment a proposal was drafted; migration 0188 moved every
+ * workspace on it to 'approval', and nothing here reads it any more.
  */
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
-import { and, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { calendarAccounts, calendarEvents, contacts, leads, meetings, prospects, workspaceMembers, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
@@ -42,7 +47,7 @@ import { liveMeetingStatuses } from "@shared/meetingStatus";
 // getWorkspaceTimezone lives in services/workspaceTimezone.ts, shared with the
 // Tasks "due today" counter and the activity heatmap, which had the same bug.
 
-export type MeetingAutopilotMode = "off" | "approval" | "auto";
+export type MeetingAutopilotMode = "off" | "approval";
 
 /**
  * 🔴 THIS ARRAY WAS MISSING `rescheduled`, and it is the autopilot's dedupe —
@@ -385,6 +390,38 @@ export async function regenerateStaleProposals(
   return { regenerated: done, remaining: outdated.length - done };
 }
 
+/**
+ * Rewrite EVERY open proposal once (owner ask 2026-09-24: new brand messaging
+ * must reach the invites already in the queue, not only new ones). A pass is
+ * anchored at `since`, the moment it started, and takes proposals not touched
+ * since then: regeneration bumps updatedAt, so repeated clicks walk the queue
+ * instead of rewriting the same ten. Any source; never a row with an agreed
+ * time. Never sends.
+ */
+export async function regenerateProposalsNotSince(
+  workspaceId: number,
+  since: Date,
+  limit: number,
+): Promise<{ regenerated: number; remaining: number }> {
+  const db = await getDb();
+  if (!db) return { regenerated: 0, remaining: 0 };
+  const rows = await db.select({ id: meetings.id }).from(meetings)
+    .where(and(
+      eq(meetings.workspaceId, workspaceId),
+      eq(meetings.status, "proposed"),
+      isNull(meetings.scheduledAt),
+      lt(meetings.updatedAt, since),
+    ))
+    .orderBy(meetings.id);
+  let done = 0;
+  for (const r of rows) {
+    if (done >= limit) break;
+    const res = await regenerateMeetingProposal(workspaceId, r.id);
+    if (res.ok) done++;
+  }
+  return { regenerated: done, remaining: rows.length - done };
+}
+
 /** Draft + persist a proposed meeting for one prospect. Returns the new meeting id (or null). */
 export async function proposeMeetingForProspect(
   workspaceId: number,
@@ -543,17 +580,17 @@ async function pickWorkspaceOwner(db: any, workspaceId: number): Promise<number 
 }
 
 /**
- * Propose (and, in 'auto' mode, book) meetings for a single workspace's best-fit
- * prospects. Exposed for the on-demand "Find meetings with AI" button too.
+ * Propose meetings for a single workspace's best-fit prospects. Exposed for
+ * the on-demand "Find meetings with AI" button too. Proposes ONLY: every
+ * invite waits for a person to approve it (see the file header).
  */
 export async function runMeetingAutopilotForWorkspace(
   workspaceId: number,
-  mode: "approval" | "auto",
   limit: number,
   ownerUserId?: number | null,
-): Promise<{ proposed: number; sent: number; skipped: number }> {
+): Promise<{ proposed: number; skipped: number }> {
   const db = await getDb();
-  if (!db) return { proposed: 0, sent: 0, skipped: 0 };
+  if (!db) return { proposed: 0, skipped: 0 };
 
   const fallbackOwner = ownerUserId !== undefined ? ownerUserId : await pickWorkspaceOwner(db, workspaceId);
 
@@ -572,7 +609,7 @@ export async function runMeetingAutopilotForWorkspace(
     .orderBy(sql`${prospects.confidenceScore} DESC`, sql`${prospects.updatedAt} DESC`)
     .limit(limit * 5);
 
-  if (!candidates.length) return { proposed: 0, sent: 0, skipped: 0 };
+  if (!candidates.length) return { proposed: 0, skipped: 0 };
 
   // Skip prospects that already have an active meeting.
   const ids = candidates.map((p: any) => p.id);
@@ -605,7 +642,7 @@ export async function runMeetingAutopilotForWorkspace(
   const ownerFor = (p: any): number | null =>
     (p.linkedContactId && cMap.get(p.linkedContactId)) || (p.linkedLeadId && lMap.get(p.linkedLeadId)) || fallbackOwner;
 
-  let proposed = 0, sent = 0, skipped = 0;
+  let proposed = 0, skipped = 0;
   for (const p of candidates) {
     if (proposed >= limit) break;
     if (busy.has(p.id)) { skipped++; continue; }
@@ -613,15 +650,8 @@ export async function runMeetingAutopilotForWorkspace(
     if (!id) continue;
     proposed++;
     busy.add(p.id);
-    if (mode === "auto") {
-      const r = await sendMeetingInvite(workspaceId, id);
-      if (r.sent) sent++;
-      // The reason used to be dropped on the floor, so "auto mode proposes
-      // but nothing sends" was undiagnosable from the logs (audit 2026-09-20).
-      else console.log(`[MeetingAutopilot] ws ${workspaceId}: proposal ${id} not sent (${r.reason ?? "unknown"})`);
-    }
   }
-  return { proposed, sent, skipped };
+  return { proposed, skipped };
 }
 
 /** Cron entry: run the meeting autopilot for every workspace with mode != 'off'. */
@@ -636,7 +666,6 @@ export async function runMeetingAutopilotAllWorkspaces(): Promise<{ workspaces: 
     const archivedWs = await archivedWorkspaceIds();
   for (const ws of rows) {
     if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
-    const mode = ws.meetingAutopilotMode as "approval" | "auto";
     const cap = ws.meetingAutopilotDailyCap ?? 10;
     try {
       // Regenerate outdated proposals FIRST (owner ask 2026-09-20): a proposal
@@ -654,12 +683,12 @@ export async function runMeetingAutopilotAllWorkspaces(): Promise<{ workspaces: 
       const remaining = cap - Number(row?.n ?? 0);
       if (remaining <= 0) continue;
 
-      const r = await runMeetingAutopilotForWorkspace(ws.workspaceId, mode, Math.min(remaining, 10));
+      const r = await runMeetingAutopilotForWorkspace(ws.workspaceId, Math.min(remaining, 10));
       proposed += r.proposed;
       workspaces++;
       await db.update(workspaceSettings).set({ meetingAutopilotLastRunAt: new Date() } as never)
         .where(eq(workspaceSettings.workspaceId, ws.workspaceId));
-      if (r.proposed > 0) console.log(`[MeetingAutopilot] ws ${ws.workspaceId} (${mode}): proposed ${r.proposed}, sent ${r.sent}, skipped ${r.skipped}`);
+      if (r.proposed > 0) console.log(`[MeetingAutopilot] ws ${ws.workspaceId}: proposed ${r.proposed} for approval, skipped ${r.skipped}`);
     } catch (e) {
       console.error(`[MeetingAutopilot] ws ${ws.workspaceId} failed:`, e);
     }

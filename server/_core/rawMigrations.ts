@@ -4231,6 +4231,19 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // 0188 — meeting proposals are approval-only (owner ask 2026-09-24: "the
+  // Proposal generation function should not have an Autonomous mode. Should
+  // require approval and/or edits"). The engine no longer sends on its own;
+  // every workspace that had the dial on 'auto' moves to 'approval' so the
+  // setting says what the engine does. The ENUM keeps 'auto' so a rollback
+  // cannot fail on a narrowed column; nothing writes it any more.
+  {
+    name: "0188_meeting_autopilot_approval_only.sql",
+    statements: [
+      "UPDATE `workspace_settings` SET `meetingAutopilotMode` = 'approval' WHERE `meetingAutopilotMode` = 'auto'",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
