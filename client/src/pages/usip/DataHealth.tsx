@@ -470,6 +470,20 @@ function PeopleMergeSection({ by = "email" }: { by?: "email" | "linkedin" }) {
 
   const clusters = plan.data?.merge ?? [];
   const open = clusters.filter((c) => c.key === preview)[0] ?? null;
+  // "Merge all shown" (owner ask 2026-09-24): one confirmed click for every
+  // cluster on screen instead of one dialog each. It sends exactly the
+  // survivor/loser ids rendered below, so the server's approved-ids check
+  // still refuses any cluster that changed since this plan was drawn.
+  const allDeleted = clusters.reduce((n, c) => n + c.loserIds.length, 0);
+  const allDropped = clusters.flatMap((c) => c.discardedEmails);
+  const mergeAll = () => {
+    if (linkedinPass) {
+      merge.mutate({ by: "linkedin", clusters: clusters.map((c) => ({ key: c.key, survivorId: c.survivorId, loserIds: c.loserIds })) });
+    } else {
+      const withEmail = clusters.filter((c) => !!c.email);
+      if (withEmail.length) merge.mutate({ clusters: withEmail.map((c) => ({ email: c.email!, survivorId: c.survivorId, loserIds: c.loserIds })) });
+    }
+  };
 
   return (
     <section>
@@ -488,13 +502,36 @@ function PeopleMergeSection({ by = "email" }: { by?: "email" | "linkedin" }) {
         <Card>
           <CardHeader className="pb-2">
             <div className="space-y-1">
-              <CardTitle className="text-sm font-medium">
-                {clusters.length
-                  ? linkedinPass
-                    ? `${clusters.length} LinkedIn profile${clusters.length === 1 ? "" : "s"} held by more than one People row`
-                    : `${clusters.length} email${clusters.length === 1 ? "" : "s"} held by more than one People row`
-                  : "No duplicate People to merge"}
-              </CardTitle>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle className="text-sm font-medium">
+                  {clusters.length
+                    ? linkedinPass
+                      ? `${clusters.length} LinkedIn profile${clusters.length === 1 ? "" : "s"} held by more than one People row`
+                      : `${clusters.length} email${clusters.length === 1 ? "" : "s"} held by more than one People row`
+                    : "No duplicate People to merge"}
+                </CardTitle>
+                {clusters.length > 1 && !plan.data?.proposalsCapped && (
+                  <ConfirmButton
+                    variant="destructive"
+                    size="sm"
+                    className="h-7 text-xs"
+                    disabled={merge.isPending}
+                    title={`Merge all ${clusters.length} and delete ${allDeleted} People row${allDeleted === 1 ? "" : "s"}?`}
+                    description={
+                      `Every group listed below keeps the row marked as its survivor; the other ${allDeleted} row${allDeleted === 1 ? " is" : "s are"} deleted for good, after everything pointing at them is repointed. ` +
+                      (allDropped.length
+                        ? `${allDropped.length} address${allDropped.length === 1 ? "" : "es"} will be dropped and kept only in the audit log: ${allDropped.join(", ")}. `
+                        : "") +
+                      "Any group that changed since this list loaded is refused, not guessed at."
+                    }
+                    confirmLabel={`Merge all ${clusters.length}`}
+                    onConfirm={mergeAll}
+                  >
+                    {merge.isPending ? <Loader2 className="size-3.5 mr-1.5 animate-spin" /> : <GitMerge className="size-3.5 mr-1.5" />}
+                    Merge all {clusters.length} shown
+                  </ConfirmButton>
+                )}
+              </div>
               {linkedinPass ? (
                 <p className="text-xs text-muted-foreground max-w-2xl">
                   This pass groups rows that name <strong>the same LinkedIn profile</strong> — the same
