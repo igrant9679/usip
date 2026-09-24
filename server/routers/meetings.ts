@@ -527,6 +527,28 @@ export const meetingsRouter = router({
       return { dryRun, removed: ids.length, meetings: listed };
     }),
 
+  /**
+   * Undo the ARE "meeting booked" effects of invites nobody accepted (owner
+   * ask 2026-09-24): restores the sequence, revives the steps the fake
+   * booking skipped (spaced, never a burst), corrects the campaign count and
+   * deletes the signal. Reports, never deletes, the CRM records it created.
+   * Dry run by default. See services/are/undoInviteBookings.
+   */
+  undoInviteBookingSignals: adminWsProcedure
+    .input(z.object({ dryRun: z.boolean().default(true) }).optional())
+    .mutation(async ({ ctx, input }) => {
+      const { undoInviteBookingSignals } = await import("../services/are/undoInviteBookings");
+      const res = await undoInviteBookingSignals(ctx.workspace.id, { dryRun: input?.dryRun ?? true });
+      if (!res.dryRun && res.undone > 0) {
+        await recordAudit({
+          workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_signal", entityId: 0,
+          before: { signals: res.rows.map((r) => ({ signalId: r.signalId, prospectQueueId: r.prospectQueueId, campaignId: r.campaignId, statusBefore: r.statusBefore })) },
+          after: { undoneMeetingBooked: res.undone, statusesRestored: res.rows.filter((r) => r.restoresStatus).length, stepsRevived: res.rows.reduce((a, r) => a + r.stepsRevived, 0) },
+        });
+      }
+      return res;
+    }),
+
   /** Dismiss (delete) an unbooked AI proposal. */
   dismissProposal: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
