@@ -202,6 +202,49 @@ export async function createMeetingProposal(workspaceId: number, target: Meeting
 }
 
 /**
+ * The owner's busy times read LIVE from the calendar their invites send from
+ * (the row sendMeetingInvite books on). Stored calendar_events alone missed
+ * them: a Unipile-bridged calendar only lands there on a manual sync, so an
+ * owner who never pressed Sync was offered times they were already booked
+ * (found 2026-09-24 regenerating CommunityForce's proposals around Khaja
+ * Syed's calendar: lastSyncAt null, no stored events). Cached per calendar
+ * for five minutes so a Regenerate all pass reads each calendar once, not
+ * once per proposal. Best-effort: a provider failure leaves the stored events
+ * to decide, as before.
+ */
+const LIVE_BUSY_TTL_MS = 5 * 60_000;
+const liveBusyCache = new Map<number, { at: number; busy: { startAt: Date; endAt: Date }[] }>();
+
+export function __resetLiveBusyCacheForTests(): void {
+  liveBusyCache.clear();
+}
+
+async function liveOwnerBusy(
+  workspaceId: number,
+  ownerUserId: number,
+  from: Date,
+  to: Date,
+): Promise<{ startAt: Date; endAt: Date }[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const [acc] = await db.select().from(calendarAccounts)
+    .where(and(eq(calendarAccounts.workspaceId, workspaceId), eq(calendarAccounts.userId, ownerUserId)))
+    .limit(1);
+  if (!acc) return [];
+  const hit = liveBusyCache.get(acc.id);
+  if (hit && Date.now() - hit.at < LIVE_BUSY_TTL_MS) return hit.busy;
+  try {
+    const events = await createCalendarAdapter(acc as any).listEvents(acc.calendarId ?? "primary", from, to);
+    const busy = events.map((e) => ({ startAt: new Date(e.startAt), endAt: new Date(e.endAt) }));
+    liveBusyCache.set(acc.id, { at: Date.now(), busy });
+    return busy;
+  } catch (e) {
+    console.error(`[MeetingScheduler] live calendar read failed for calendar ${acc.id}:`, e instanceof Error ? e.message : String(e));
+    return [];
+  }
+}
+
+/**
  * The drafting core createMeetingProposal and regenerateMeetingProposal
  * share: fresh FUTURE slots from the owner's current calendar, and an LLM
  * title + invite in the workspace's own voice. Extracted 2026-09-20 so
@@ -225,6 +268,7 @@ async function draftProposalContent(workspaceId: number, target: MeetingTarget) 
         gte(calendarEvents.startAt, from),
         lte(calendarEvents.startAt, to),
       ));
+    busy = busy.concat(await liveOwnerBusy(workspaceId, ownerUserId, from, to));
   }
   // The workspace's own timezone (workspace_settings.timezone, default "UTC").
   // Settings.tsx describes it as "used for scheduling, reporting, and activity
