@@ -176,6 +176,8 @@ export const meetingsRouter = router({
       title: z.string().trim().min(1).max(240).optional(),
       inviteMessage: z.string().trim().min(1).max(1500).optional(),
       proposedTimes: z.array(z.string().datetime()).min(1).max(5).optional(),
+      /** Alternate join link (Zoom, Meet, …); "" clears it, and the invite then carries a Teams link. */
+      meetingUrl: z.union([z.string().trim().url().max(1000).refine((u) => /^https:\/\//i.test(u), "Use an https:// meeting link"), z.literal("")]).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -189,6 +191,7 @@ export const meetingsRouter = router({
       const set: Record<string, unknown> = {};
       if (input.title !== undefined) set.title = input.title;
       if (input.inviteMessage !== undefined) set.inviteMessage = input.inviteMessage;
+      if (input.meetingUrl !== undefined) set.meetingUrl = input.meetingUrl === "" ? null : input.meetingUrl;
       if (input.proposedTimes !== undefined) {
         const nowMs = Date.now();
         const times = Array.from(new Set(input.proposedTimes.map((t) => new Date(t).toISOString()))).sort();

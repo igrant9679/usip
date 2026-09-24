@@ -434,7 +434,7 @@ function ProposalCard({
   onApprove: (chosenTime?: string) => void;
   onDismiss: () => void;
   onRegenerate: () => void;
-  onEdit: (patch: { title?: string; inviteMessage?: string; proposedTimes?: string[] }) => void;
+  onEdit: (patch: { title?: string; inviteMessage?: string; proposedTimes?: string[]; meetingUrl?: string }) => void;
   editPending: boolean;
   pending: boolean;
   ContactLine: ReactNode;
@@ -445,9 +445,11 @@ function ProposalCard({
   const [draftTitle, setDraftTitle] = useState(m.title);
   const [draftMessage, setDraftMessage] = useState(m.inviteMessage ?? "");
   const [draftTimes, setDraftTimes] = useState<string[]>([]);
+  const [draftLink, setDraftLink] = useState(m.meetingUrl ?? "");
   const startEdit = () => {
     setDraftTitle(m.title);
     setDraftMessage(m.inviteMessage ?? "");
+    setDraftLink(m.meetingUrl ?? "");
     setDraftTimes(((m.proposedTimes ?? []) as string[]).map(toLocalInput));
     setEditing(true);
   };
@@ -457,6 +459,8 @@ function ProposalCard({
       title: draftTitle.trim() || undefined,
       inviteMessage: draftMessage.trim() || undefined,
       proposedTimes: times.length ? times : undefined,
+      // "" clears an alternate link, so the invite goes back to a Teams link.
+      meetingUrl: draftLink.trim(),
     });
     setEditing(false);
   };
@@ -512,6 +516,12 @@ function ProposalCard({
               Every proposed time has passed. Regenerate this proposal to offer new times.
             </div>
           )}
+          <div className="text-[11px] text-muted-foreground mt-1.5 flex items-center gap-1 min-w-0">
+            <Video className="size-3 shrink-0" />
+            {m.meetingUrl
+              ? <span className="truncate">Meeting link: <a href={m.meetingUrl} target="_blank" rel="noreferrer" className="underline">{m.meetingUrl}</a></span>
+              : <span>Microsoft Teams link added to the invite when it is sent</span>}
+          </div>
           {editing && (
             <div className="mt-2 space-y-2 rounded-md border bg-muted/30 p-2.5">
               <div className="space-y-1">
@@ -522,6 +532,11 @@ function ProposalCard({
                 <Label className="text-[11px]">Invite text</Label>
                 <Textarea value={draftMessage} onChange={(e) => setDraftMessage(e.target.value)} rows={4} className="text-[12.5px]" />
                 <div className="text-[10.5px] text-muted-foreground">The invite quotes the times in words. If you change a time below, change it here too.</div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[11px]">Meeting link (optional)</Label>
+                <Input value={draftLink} onChange={(e) => setDraftLink(e.target.value)} placeholder="https://zoom.us/j/… or any meeting link" className="h-8 text-[12.5px]" />
+                <div className="text-[10.5px] text-muted-foreground">Leave blank to include a Microsoft Teams link automatically. A link here is used instead, and added to the invite text.</div>
               </div>
               <div className="space-y-1">
                 <Label className="text-[11px]">Offered times (your local time)</Label>

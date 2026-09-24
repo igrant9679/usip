@@ -502,12 +502,19 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
     try {
       const adapter = createCalendarAdapter(acc);
       const attendees = m.contactEmail ? [{ email: m.contactEmail, name: m.contactName ?? undefined }] : undefined;
+      // The join link (owner ask 2026-09-24): an alternate link set on the
+      // proposal is used as-is and written into the invite text; otherwise
+      // the calendar generates a Microsoft Teams meeting, whose join details
+      // Microsoft adds to the invite itself.
+      const altLink = m.meetingUrl?.trim() || null;
       const result = await adapter.createEvent(acc.calendarId ?? "primary", {
         title: m.title,
-        description: m.inviteMessage ?? undefined,
+        description: [m.inviteMessage ?? "", altLink ? `Join: ${altLink}` : ""].filter(Boolean).join("\n\n") || undefined,
         startAt: start,
         endAt: end,
         attendees,
+        meetingUrl: altLink ?? undefined,
+        onlineMeeting: altLink ? undefined : "teams",
       });
       const ins = await db.insert(calendarEvents).values({
         workspaceId,

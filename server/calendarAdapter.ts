@@ -14,7 +14,16 @@ export interface CalendarEventInput {
   title: string;
   description?: string;
   location?: string;
+  /** An existing join link to attach (Zoom, Meet, Teams, anything). Wins over onlineMeeting. */
   meetingUrl?: string;
+  /**
+   * Ask the calendar provider to GENERATE an online meeting when no
+   * meetingUrl is given (owner ask 2026-09-24: every meeting invite carries
+   * a Microsoft Teams link). Honoured by the Unipile adapter — every
+   * Unipile-bridged calendar is Microsoft 365 (services/microsoftBridge) —
+   * and ignored by CalDAV, which has no way to create one.
+   */
+  onlineMeeting?: "teams";
   startAt: Date;
   endAt: Date;
   allDay?: boolean;

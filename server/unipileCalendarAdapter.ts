@@ -30,6 +30,7 @@ import type {
 import {
   createCalendarEvent,
   deleteCalendarEvent,
+  getCalendarEvent,
   listCalendars,
   listCalendarEvents,
   updateCalendarEvent,
@@ -190,12 +191,18 @@ export class UnipileCalendarAdapter implements CalendarAdapter {
   ): Promise<CalendarEventResult> {
     const realId = await this.resolveCalendarId(calendarId);
     const allDay = event.allDay ?? false;
+    // An existing link is attached as-is. With none, and a Teams meeting
+    // requested, the conference goes WITHOUT a url: Unipile then creates a
+    // new Teams meeting itself ("If not provided, it will automatically
+    // create a new conference — only teams and google_meet available").
     const conference = event.meetingUrl
       ? {
           provider: detectConferenceProvider(event.meetingUrl),
           url: event.meetingUrl,
         }
-      : undefined;
+      : event.onlineMeeting === "teams"
+        ? { provider: "teams" as const }
+        : undefined;
 
     const res = await createCalendarEvent({
       accountId: this.unipileAccountId,
@@ -210,12 +217,25 @@ export class UnipileCalendarAdapter implements CalendarAdapter {
       notify: true,
     });
 
+    // The create response is the event id only, so a GENERATED join link has
+    // to be read back from the event. Best-effort: the invite already went
+    // out with it; failing to read it back only means we cannot show it.
+    let meetingUrl = event.meetingUrl;
+    if (!meetingUrl && conference) {
+      try {
+        const created = await getCalendarEvent(realId, res.event_id, this.unipileAccountId);
+        meetingUrl = created.conference?.url ?? undefined;
+      } catch (e) {
+        console.error(`[UnipileCalendarAdapter] could not read back the generated meeting link for ${res.event_id}:`, e instanceof Error ? e.message : String(e));
+      }
+    }
+
     return {
       externalId: res.event_id,
       title: event.title,
       description: event.description,
       location: event.location,
-      meetingUrl: event.meetingUrl,
+      meetingUrl,
       startAt: event.startAt,
       endAt: event.endAt,
       allDay,
