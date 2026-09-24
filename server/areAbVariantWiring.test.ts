@@ -272,10 +272,14 @@ describe("every messageContent writer goes through the shared rule", () => {
   it("finds the writers (guards the scanner itself)", () => {
     // areEngine's enroll phase and the step-edit path in prospects.ts. A scan
     // that finds nothing looks exactly like a repo with no problem.
+    // services/are/rewriteNotStarted.ts (2026-09-24) re-snapshots the copy of
+    // not-yet-started prospects after a brand change, in enrolment's shape,
+    // from normalizeSequence (@shared/areSequenceSteps).
     expect(writers.map((w) => w.rel).sort()).toEqual([
       "server/areEngine.ts",
       "server/demoSeedExtras.ts",
       "server/routers/are/prospects.ts",
+      "server/services/are/rewriteNotStarted.ts",
     ]);
   });
 

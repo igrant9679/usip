@@ -460,6 +460,33 @@ export const campaignsRouter = router({
       return { id: row.id, name, steps: fixedSteps.length };
     }),
 
+  /**
+   * Rewrite enrolled sequences whose first step has not gone out, with the
+   * workspace's current brand (owner ask 2026-09-24: "CommunityForce only,
+   * not-yet-started prospects" — see services/are/rewriteNotStarted.ts).
+   * Admin only. DRY RUN BY DEFAULT: returns what would be rewritten, per
+   * campaign, and changes nothing; `dryRun: false` starts the background job.
+   * Never sends; never moves a scheduled time; skips anyone already started.
+   */
+  rewriteNotStartedSequences: adminWsProcedure
+    .input(z.object({ dryRun: z.boolean().default(true) }).optional())
+    .mutation(async ({ ctx, input }) => {
+      const { findNotStartedEnrolled, startRewriteNotStarted } = await import("../../services/are/rewriteNotStarted");
+      const targets = await findNotStartedEnrolled(ctx.workspace.id);
+      const byCampaign: Record<number, number> = {};
+      for (const t of targets) byCampaign[t.campaignId] = (byCampaign[t.campaignId] ?? 0) + 1;
+      if (input?.dryRun !== false) return { dryRun: true, eligible: targets.length, byCampaign, started: false };
+      const started = startRewriteNotStarted(ctx.workspace.id, targets);
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_rewrite_not_started", entityId: ctx.workspace.id, after: { eligible: targets.length, byCampaign, started } });
+      return { dryRun: false, eligible: targets.length, byCampaign, started };
+    }),
+
+  /** Progress of the job above. */
+  rewriteNotStartedStatus: workspaceProcedure.query(async ({ ctx }) => {
+    const { rewriteJobState } = await import("../../services/are/rewriteNotStarted");
+    return rewriteJobState(ctx.workspace.id);
+  }),
+
   setAllAutonomy: adminWsProcedure
     .input(z.object({ mode: z.enum(["full", "batch_approval"]) }))
     .mutation(async ({ ctx, input }) => {

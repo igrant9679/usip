@@ -45,6 +45,18 @@ export function mergeRequestContext<T>(
   return als.run({ ...(als.getStore() ?? {}), ...patch }, fn);
 }
 
+/**
+ * Run `fn` with NO request context — the way the cron engines run. For a
+ * bulk job a person starts from a request that must not be billed against
+ * that person's INTERACTIVE model ceiling (_core/llm.ts, 30 calls a minute):
+ * async work started inside a request inherits its store, so a background
+ * loop would fail part-way through. The caller must then pass workspaceId
+ * explicitly to every model call, exactly as the engines do.
+ */
+export function runOutsideRequestContext(fn: () => void): void {
+  als.exit(fn);
+}
+
 export function getRequestWorkspaceId(): number | undefined {
   return als.getStore()?.workspaceId;
 }
