@@ -293,6 +293,11 @@ async function* parseSSE(
 export type StreamParams = InvokeParams & { signal?: AbortSignal };
 
 export async function* streamLLM(params: StreamParams): AsyncGenerator<string> {
+  // Same contract as invokeLLM's sendersBrand (see InvokeParams).
+  if (params.sendersBrand && params.workspaceId) {
+    const { withSendersBrand } = await import("../services/brandContext");
+    params = { ...params, messages: await withSendersBrand(params.workspaceId, params.messages) };
+  }
   const creds = await loadCreds(params.workspaceId);
   const provider = resolveProvider(params.provider, creds);
   const signal = params.signal ?? new AbortController().signal;

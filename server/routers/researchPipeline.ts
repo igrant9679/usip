@@ -83,10 +83,11 @@ async function getRecipientContext(
   return { personName, personTitle, personEmail, companyName, companyIndustry, companySize, companyRevenue };
 }
 
-async function llmJson<T>(messages: any[], schema: any, fallback: T): Promise<T> {
+async function llmJson<T>(messages: any[], schema: any, fallback: T, opts?: { sendersBrand?: boolean }): Promise<T> {
   try {
     const out = await invokeLLM({
       messages,
+      sendersBrand: opts?.sendersBrand,
       response_format: {
         type: "json_schema",
         json_schema: { name: "output", strict: true, schema },
@@ -278,6 +279,8 @@ export const researchPipelineRouter = router({
             additionalProperties: false,
           },
           { variants: [] },
+          // Stage 4 writes the emails a prospect receives; stages 1-3 are research.
+          { sendersBrand: true },
         );
         await db.update(researchPipelines).set({ stage4_draft: stage4, currentStage: 5 }).where(eq(researchPipelines.id, pipelineId));
 

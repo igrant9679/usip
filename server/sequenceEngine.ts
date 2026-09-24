@@ -160,6 +160,7 @@ async function generateDynamicEmail(
 
   try {
     const out = await invokeLLM({
+      sendersBrand: true,
       workspaceId,
       maxTokens: 700,
       temperature: 0.7,

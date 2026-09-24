@@ -442,6 +442,7 @@ export const emailTemplatesRouter = router({
       };
       const prompt = instructionMap[input.instruction] ?? instructionMap.rewrite!;
       const res = await invokeLLM({
+        sendersBrand: true,
         messages: [
           {
             role: "system",
@@ -539,6 +540,7 @@ Rules:
     )
     .mutation(async ({ ctx, input }) => {
       const res = await invokeLLM({
+        sendersBrand: true,
         messages: [
           {
             role: "system",
@@ -753,6 +755,7 @@ export const snippetsRouter = router({
       };
       const desc = categoryDescriptions[input.category] ?? "email content";
       const res = await invokeLLM({
+        sendersBrand: true,
         messages: [
           {
             role: "system",

@@ -476,6 +476,7 @@ export const mailboxRouter = router({
         .map((m, i) => `[Message ${i + 1}] From: ${m.fromName || m.fromEmail} <${m.fromEmail}>\nSubject: ${m.subject}\n${m.bodyText?.slice(0, 800) ?? ""}`)
         .join("\n\n---\n\n");
       const res = await invokeLLM({
+        sendersBrand: true,
         messages: [
           {
             role: "system",
@@ -508,6 +509,7 @@ ${HUMAN_COPY_RULES}`,
       const senderName = input.senderName ?? acc.fromName ?? acc.name ?? "";
       const msg = input.originalMessage;
       const res = await invokeLLM({
+        sendersBrand: true,
         messages: [
           {
             role: "system",

@@ -27,6 +27,28 @@ import { workspaces, workspaceSettings, brandVoiceProfiles } from "../../drizzle
 const asList = (v: unknown, max = 20): string[] =>
   Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean).slice(0, max) : [];
 
+/**
+ * Put the sender's brand into a message list: appended to the first string
+ * system message, or as a leading system message when there is none. The
+ * mechanism behind InvokeParams.sendersBrand — see _core/llm.ts.
+ */
+export async function withSendersBrand<M extends { role: string; content: unknown }>(
+  workspaceId: number,
+  messages: M[],
+): Promise<M[]> {
+  return appendSendersBrand(messages, await buildBrandContext(workspaceId).catch(() => ""));
+}
+
+/** The pure half of withSendersBrand, so the placement rule is tested directly. */
+export function appendSendersBrand<M extends { role: string; content: unknown }>(messages: M[], brand: string): M[] {
+  if (!brand) return messages;
+  const i = messages.findIndex((m) => m.role === "system" && typeof m.content === "string");
+  if (i === -1) return [{ role: "system", content: brand } as unknown as M, ...messages];
+  const out = messages.slice();
+  out[i] = { ...out[i], content: `${out[i].content as string}\n\n${brand}` };
+  return out;
+}
+
 export async function buildBrandContext(workspaceId: number): Promise<string> {
   const db = await getDb();
   if (!db) return "";

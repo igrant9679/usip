@@ -81,6 +81,7 @@ export const subjectABRouter = router({
       let variants: { subject: string; rationale: string }[] = [];
       try {
         const out = await invokeLLM({
+          sendersBrand: true,
           messages: [
             {
               role: "system",

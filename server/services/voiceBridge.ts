@@ -17,6 +17,7 @@ import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { logCallActivity } from "./voiceCrmLink";
+import { buildBrandContext } from "./brandContext";
 
 const XAI_REALTIME_WS = "wss://api.x.ai/v1/realtime";
 const XAI_API_BASE = "https://api.x.ai/v1";
@@ -110,6 +111,9 @@ export function answerInboundCall(opts: BridgeOpts): void {
       const [owner] = await db.select({ name: users.name }).from(users).where(eq(users.id, voiceOwnerUserId)).limit(1);
       ownerName = owner?.name ?? null;
     }
+    // The caller hears the workspace's own company facts and voice (owner ask
+    // 2026-09-24: every AI communication informed by the workspace's messaging).
+    const brand = await buildBrandContext(agent.workspaceId).catch(() => "");
 
     const startedAtMs = Date.now();
     const transcript: string[] = [];
@@ -152,7 +156,7 @@ export function answerInboundCall(opts: BridgeOpts): void {
       opened = true;
       const session: Record<string, unknown> = {
         voice: agent.voice || "eve",
-        instructions: agent.instructions?.trim() || defaultInstructions(agent.name, ownerName),
+        instructions: [agent.instructions?.trim() || defaultInstructions(agent.name, ownerName), brand].filter(Boolean).join("\n\n"),
         turn_detection: { type: "server_vad" },
       };
       if (agent.languageHint) {

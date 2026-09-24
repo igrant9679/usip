@@ -80,6 +80,7 @@ ${HUMAN_COPY_RULES}`;
 
       try {
         for await (const delta of streamLLM({
+          sendersBrand: true,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },

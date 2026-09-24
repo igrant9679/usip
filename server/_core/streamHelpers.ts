@@ -40,6 +40,8 @@ export type StreamHandlerContext = {
 
 export type BuildMessagesResult = {
   messages: Message[];
+  /** Prospect-facing copy: append the sender's brand (InvokeParams.sendersBrand). */
+  sendersBrand?: boolean;
   provider?: ProviderName;
   model?: string;
   temperature?: number;

@@ -86,6 +86,16 @@ export type InvokeParams = {
   // BYOK — when set, the workspace's configured API key + model are used in
   // preference to the server-level env vars. Falls back to env on any miss.
   workspaceId?: number;
+  /**
+   * PROSPECT-FACING COPY: append the sender's brand (company facts and voice,
+   * services/brandContext) to the system prompt, for the resolved workspace.
+   * Set by every writer whose output is emailed, messaged, spoken, put in an
+   * invite or a client-facing proposal (owner ask 2026-09-24: all AI
+   * communications informed by each workspace's own messaging). Writers that
+   * already build the brand block themselves leave it off, as do internal
+   * calls (scoring, research, classification, summaries for the rep).
+   */
+  sendersBrand?: boolean;
 };
 
 type ResolvedCreds = {
@@ -997,6 +1007,10 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   //   2. async-local store set by workspaceProcedure middleware (every tRPC call)
   //   3. undefined → env-only credentials
   const workspaceId = params.workspaceId ?? getRequestWorkspaceId();
+  if (params.sendersBrand && workspaceId) {
+    const { withSendersBrand } = await import("../services/brandContext");
+    params = { ...params, messages: await withSendersBrand(workspaceId, params.messages) };
+  }
 
   // Both ceilings are checked BEFORE the provider call and before a
   // concurrency slot is taken — a limit enforced after the money is spent is

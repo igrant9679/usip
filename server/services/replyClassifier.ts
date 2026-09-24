@@ -92,6 +92,7 @@ Return: {
   let cls: ReplyClassification = { replyClass: "none_of_the_above", sentiment: "neutral", confidence: 50, reasoning: "", suggestedReply: "", returnsAt: "" };
   try {
     const res = await invokeLLM({
+      sendersBrand: true,
       messages: [{ role: "user", content: prompt }],
       // outputSchema forces valid JSON for Anthropic (see taskAutopilot note).
       outputSchema: {

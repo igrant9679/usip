@@ -226,6 +226,8 @@ Return JSON with these exact fields:
     let draftsGenerated = 0;
     for (const { tone, instruction } of tones) {
       const draftRes = await invokeLLM({
+        workspaceId,
+        sendersBrand: true,
         messages: [
           {
             role: "system",
@@ -574,6 +576,7 @@ export const aiPipelineRouter = router({
       };
 
       const regenRes = await invokeLLM({
+        sendersBrand: true,
         messages: [
           {
             role: "system",

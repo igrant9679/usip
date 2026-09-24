@@ -118,6 +118,7 @@ export function registerProposalsStreamRoutes(app: Express) {
 
       try {
         for await (const delta of streamLLM({
+          sendersBrand: true,
           messages: [
             { role: "system", content: system },
             { role: "user", content: user },

@@ -611,6 +611,7 @@ export async function generateCampaignTemplate(
     `Return ${stepCount} steps. For each: stepIndex (0-based), day (cumulative from start), channel, archetype (one of: opener | value | social_proof | resource | check_in | break_up), skeleton (1–2 sentences describing what to write — placeholders like {hook}, {pain}, {company}, {firstName} for what the personalizer will fill), and ctaPattern (one short sentence like "Open with question, close with a 15-min Tue/Thu offer").`;
 
   const result = await invokeLLM({
+    sendersBrand: true,
     workspaceId: campaign.workspaceId,
     messages: [
       { role: "system", content: systemContent },

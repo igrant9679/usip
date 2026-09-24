@@ -309,6 +309,7 @@ async function runAction(
         let body = "";
         try {
           const out = await invokeLLM({
+            sendersBrand: true,
             workspaceId: ws,
             maxTokens: 700,
             temperature: 0.7,
