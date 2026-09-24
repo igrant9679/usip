@@ -74,7 +74,7 @@ describe("the invite sender and the proposal editor", () => {
   });
 
   it("updateProposal takes an https link, and an empty string clears it", () => {
-    const upd = router.slice(router.indexOf("updateProposal: repProcedure"), router.indexOf("/** Manually create a meeting"));
+    const upd = router.slice(router.indexOf("updateProposal: repProcedure"), router.indexOf("proposalOwners: workspaceProcedure"));
     expect(upd).toContain("meetingUrl: z.union([z.string().trim().url().max(1000)");
     expect(upd).toContain('set.meetingUrl = input.meetingUrl === "" ? null : input.meetingUrl;');
   });

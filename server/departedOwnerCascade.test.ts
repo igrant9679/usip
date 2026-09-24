@@ -292,6 +292,13 @@ const SURFACES: Array<{
     gate: /const owner = await activeOwnerOrNull\(workspaceId, ownerUserId\);/,
   },
   {
+    what: "meeting proposals are never reassigned to someone who left",
+    file: "server/routers/meetings.ts",
+    start: "reassignProposals: repProcedure",
+    end: "db.update(meetings)",
+    gate: /const active = await activeMemberIds\(ctx\.workspace\.id, \[input\.toUserId\]\);\s*if \(!active\.has\(input\.toUserId\)\) \{\s*throw new TRPCError\(\{ code: "BAD_REQUEST"/,
+  },
+  {
     what: "a high-intent visit task is not filed under a departed record owner",
     file: "server/websiteTracking.ts",
     start: "await db.insert(tasks).values({",
@@ -345,7 +352,9 @@ describe("every session-less path that names a member gates on active membership
     // 2026-09-20: 31, with classifyAndHandleSocialMessage — the social half of
     // the reply classifier filed its meeting proposal and its task under
     // unipile_accounts.userId, a rep who may have left since.
-    expect(SURFACES.length).toBe(31);
+    // 2026-09-24: 32, with meetings.reassignProposals — an invite sends from
+    // its owner's calendar, so a proposal must not move to a leaver.
+    expect(SURFACES.length).toBe(32);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 

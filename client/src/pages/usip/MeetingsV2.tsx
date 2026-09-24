@@ -35,8 +35,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { ConfirmButton } from "@/components/usip/Common";
 import {
   CalendarClock, CalendarCheck, CalendarX, Sparkles, Bot, Zap, Check, X, Clock, Video, Send,
-  MoreHorizontal, Plus, AlertTriangle, Link2, Building2, MailWarning, Copy, ExternalLink,
+  MoreHorizontal, Plus, AlertTriangle, Link2, Building2, MailWarning, Copy, ExternalLink, UserRound,
 } from "lucide-react";
+
+/** A member who can own a proposal, and the calendar its invite would send from. */
+type ProposalOwner = { userId: number; name: string; calendar: "teams" | "no_teams" | "none" };
+
+const CALENDAR_NOTE: Record<ProposalOwner["calendar"], string> = {
+  teams: "Microsoft 365 calendar connected",
+  no_teams: "calendar connected, no Teams links",
+  none: "no calendar connected, so invites can't send yet",
+};
 
 type Meeting = {
   id: number;
@@ -186,6 +195,22 @@ export default function MeetingsV2() {
     },
     onError: (e) => toast.error(e.message),
   });
+  // Who a proposal belongs to decides whose calendar its invite sends from
+  // (owner ask 2026-09-24: move CommunityForce's proposals to Khaja Syed).
+  const ownersQ = trpc.meetings.proposalOwners.useQuery();
+  const owners = (ownersQ.data ?? []) as ProposalOwner[];
+  const [reassignOpen, setReassignOpen] = useState(false);
+  const [reassignTo, setReassignTo] = useState<string>("");
+  const reassign = trpc.meetings.reassignProposals.useMutation({
+    onSuccess: (r, v) => {
+      invalidateAll();
+      setReassignOpen(false);
+      const who = owners.find((o) => o.userId === v.toUserId)?.name ?? "them";
+      if (r.reassigned === 0) toast.info(`Nothing to move: those proposals already belong to ${who}`);
+      else toast.success(`${r.reassigned} proposal${r.reassigned === 1 ? "" : "s"} moved to ${who}. Invites will send from ${who}'s calendar.`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const meetings = (all.data ?? []) as Meeting[];
   const s = stats.data ?? { proposed: 0, upcoming: 0, completed: 0, noShow: 0, booked: 0 };
   const now = Date.now();
@@ -329,7 +354,48 @@ export default function MeetingsV2() {
                     <Sparkles className="size-3.5" /> {regenerateAll.isPending ? "Rewriting…" : "Regenerate all"}
                   </ConfirmButton>
                 )}
+                {owners.length > 1 && (
+                  <Button size="sm" variant="outline" className="h-7 gap-1.5"
+                    title="Move every open proposal to another member, so the invites send from that member's calendar. Sends nothing."
+                    onClick={() => { setReassignTo(""); setReassignOpen(true); }}>
+                    <UserRound className="size-3.5" /> Reassign all…
+                  </Button>
+                )}
               </div>
+              <Dialog open={reassignOpen} onOpenChange={setReassignOpen}>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Reassign all open proposals</DialogTitle>
+                    <DialogDescription>
+                      Each invite sends from its owner's calendar, so the new owner needs a Microsoft 365 calendar connected in this workspace for Teams links. Nothing is sent now. Offered times stay as they are; regenerate to fit them around the new owner's calendar.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-1.5">
+                    <Label className="text-[12px]">Move to</Label>
+                    <Select value={reassignTo} onValueChange={setReassignTo}>
+                      <SelectTrigger className="h-9"><SelectValue placeholder="Choose a member" /></SelectTrigger>
+                      <SelectContent>
+                        {owners.map((o) => (
+                          <SelectItem key={o.userId} value={String(o.userId)}>{o.name} · {CALENDAR_NOTE[o.calendar]}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="ghost" onClick={() => setReassignOpen(false)}>Cancel</Button>
+                    {(() => {
+                      const to = Number(reassignTo);
+                      const moving = reassignTo ? proposals.filter((m) => m.ownerUserId !== to).length : 0;
+                      return (
+                        <Button disabled={!reassignTo || moving === 0 || reassign.isPending}
+                          onClick={() => reassign.mutate({ toUserId: to })}>
+                          {reassign.isPending ? "Moving…" : `Move ${moving} proposal${moving === 1 ? "" : "s"}`}
+                        </Button>
+                      );
+                    })()}
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
               <div className="space-y-2">
                 {proposals.map((m) => (
                   <ProposalCard key={m.id} m={m}
@@ -337,6 +403,8 @@ export default function MeetingsV2() {
                     onDismiss={() => dismiss.mutate({ id: m.id })}
                     onRegenerate={() => regenerate.mutate({ id: m.id })}
                     onEdit={(patch) => updateProposal.mutate({ id: m.id, ...patch })}
+                    owners={owners}
+                    onReassign={(toUserId) => reassign.mutate({ toUserId, ids: [m.id] })}
                     editPending={updateProposal.isPending}
                     pending={approveSend.isPending || regenerate.isPending}
                     ContactLine={<ContactLine m={m} />}
@@ -428,13 +496,15 @@ function toLocalInput(iso: string): string {
 }
 
 function ProposalCard({
-  m, onApprove, onDismiss, onRegenerate, onEdit, editPending, pending, ContactLine,
+  m, onApprove, onDismiss, onRegenerate, onEdit, owners, onReassign, editPending, pending, ContactLine,
 }: {
   m: Meeting;
   onApprove: (chosenTime?: string) => void;
   onDismiss: () => void;
   onRegenerate: () => void;
   onEdit: (patch: { title?: string; inviteMessage?: string; proposedTimes?: string[]; meetingUrl?: string }) => void;
+  owners: ProposalOwner[];
+  onReassign: (toUserId: number) => void;
   editPending: boolean;
   pending: boolean;
   ContactLine: ReactNode;
@@ -464,6 +534,7 @@ function ProposalCard({
     });
     setEditing(false);
   };
+  const owner = owners.find((o) => o.userId === m.ownerUserId);
   const times = (m.proposedTimes ?? []) as string[];
   // A proposal has no expiry, so its times go stale in place. The server
   // refuses a past booking (sendMeetingInvite is the one path both this and
@@ -520,8 +591,30 @@ function ProposalCard({
             <Video className="size-3 shrink-0" />
             {m.meetingUrl
               ? <span className="truncate">Meeting link: <a href={m.meetingUrl} target="_blank" rel="noreferrer" className="underline">{m.meetingUrl}</a></span>
-              : <span>Microsoft Teams link added to the invite when it is sent</span>}
+              : owner?.calendar === "no_teams"
+                ? <span className="text-amber-700 dark:text-amber-500">No meeting link: {owner.name}'s calendar can't create Teams meetings. Add a link with Edit.</span>
+                : <span>Microsoft Teams link added to the invite when it is sent</span>}
           </div>
+          {owners.length > 0 && (
+            <div className="text-[11px] text-muted-foreground mt-1 flex items-center gap-1.5 min-w-0 flex-wrap">
+              <UserRound className="size-3 shrink-0" />
+              <span>Sends from</span>
+              <Select value={m.ownerUserId ? String(m.ownerUserId) : ""} onValueChange={(v) => onReassign(Number(v))}>
+                <SelectTrigger className="h-6 w-auto gap-1 px-2 text-[11px]">
+                  {/* The name only; the calendar note follows the picker. */}
+                  <SelectValue placeholder="No owner">{owner?.name ?? (m.ownerUserId ? "A former member" : undefined)}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {owners.map((o) => (
+                    <SelectItem key={o.userId} value={String(o.userId)}>{o.name} · {CALENDAR_NOTE[o.calendar]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className={cn(owner?.calendar !== "teams" && "text-amber-700 dark:text-amber-500")}>
+                {owner ? CALENDAR_NOTE[owner.calendar] : "no owner, so the invite can't send"}
+              </span>
+            </div>
+          )}
           {editing && (
             <div className="mt-2 space-y-2 rounded-md border bg-muted/30 p-2.5">
               <div className="space-y-1">

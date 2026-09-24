@@ -10,11 +10,12 @@
  */
 import { TRPCError } from "@trpc/server";
 import { activeTaskStatuses } from "@shared/taskStatus";
-import { and, desc, eq, inArray, like } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { meetings, prospects, tasks, workspaceSettings } from "../../drizzle/schema";
+import { calendarAccounts, meetings, prospects, tasks, users, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { recordAudit } from "../audit";
+import { activeMemberIds } from "../_core/activeMembers";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { proposeMeetingForProspect, regenerateMeetingProposal, regenerateProposalsNotSince, regenerateStaleProposals, runMeetingAutopilotForWorkspace, sendMeetingInvite } from "../services/meetingScheduler";
@@ -205,6 +206,71 @@ export const meetingsRouter = router({
         .where(and(eq(meetings.workspaceId, ctx.workspace.id), eq(meetings.id, input.id)));
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "meeting", entityId: input.id, after: { edited: Object.keys(set) } });
       return { ok: true };
+    }),
+
+  /**
+   * Who can own a proposal, and what an invite would send from: the
+   * workspace's active members, each with the calendar sendMeetingInvite
+   * would use (the owner's first connected one). Only a Unipile-bridged
+   * calendar (Microsoft 365) can generate the Teams link; a CalDAV one sends
+   * without it. Owner ask 2026-09-24: CommunityForce's proposals should send
+   * from Khaja Syed's calendar.
+   */
+  proposalOwners: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const members = await db.select({ userId: workspaceMembers.userId, name: users.name, email: users.email })
+      .from(workspaceMembers)
+      .innerJoin(users, eq(users.id, workspaceMembers.userId))
+      .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), isNull(workspaceMembers.deactivatedAt)));
+    const cals = await db.select({ userId: calendarAccounts.userId, unipileAccountId: calendarAccounts.unipileAccountId })
+      .from(calendarAccounts)
+      .where(eq(calendarAccounts.workspaceId, ctx.workspace.id));
+    return members.map((mb) => {
+      const cal = cals.find((c) => c.userId === mb.userId);
+      const calendar: "teams" | "no_teams" | "none" = !cal ? "none" : cal.unipileAccountId ? "teams" : "no_teams";
+      return { userId: mb.userId, name: mb.name?.trim() || mb.email || `User ${mb.userId}`, calendar };
+    });
+  }),
+
+  /**
+   * Move open proposals to another member, so their invites send from THAT
+   * member's calendar (sendMeetingInvite books on the owner's). `ids`
+   * omitted = every open proposal in the workspace. Sends nothing and
+   * rewrites nothing: the invite text never names the sender. updatedAt is
+   * kept as it was, because a Regenerate all pass walks proposals by
+   * updatedAt and would otherwise skip every row reassigned mid-pass.
+   */
+  reassignProposals: repProcedure
+    .input(z.object({
+      toUserId: z.number().int(),
+      ids: z.array(z.number().int()).min(1).max(500).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const active = await activeMemberIds(ctx.workspace.id, [input.toUserId]);
+      if (!active.has(input.toUserId)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an active member of this workspace." });
+      }
+      const open = and(
+        eq(meetings.workspaceId, ctx.workspace.id),
+        eq(meetings.status, "proposed"),
+        or(isNull(meetings.ownerUserId), ne(meetings.ownerUserId, input.toUserId)),
+        input.ids ? inArray(meetings.id, input.ids) : undefined,
+      );
+      const rows = await db.select({ id: meetings.id, ownerUserId: meetings.ownerUserId }).from(meetings).where(open);
+      if (rows.length === 0) return { reassigned: 0 };
+      await db.update(meetings)
+        .set({ ownerUserId: input.toUserId, updatedAt: sql`${meetings.updatedAt}` } as never)
+        .where(and(open, inArray(meetings.id, rows.map((r) => r.id))));
+      await recordAudit({
+        workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "meeting",
+        entityId: rows.length === 1 ? rows[0].id : 0,
+        before: { owners: rows.map((r) => ({ id: r.id, ownerUserId: r.ownerUserId })) },
+        after: { reassignedTo: input.toUserId, count: rows.length },
+      });
+      return { reassigned: rows.length };
     }),
 
   /** Manually create a meeting (already agreed or being scheduled). */

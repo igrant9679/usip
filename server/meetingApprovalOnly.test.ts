@@ -94,7 +94,7 @@ describe("the dial is Off or Approve everywhere", () => {
 });
 
 describe("a proposal can be edited before approval", () => {
-  const upd = between(router, "updateProposal: repProcedure", "/** Manually create a meeting");
+  const upd = between(router, "updateProposal: repProcedure", "proposalOwners: workspaceProcedure");
 
   it("only an open proposal without an agreed time", () => {
     expect(upd).toContain('if (m.status !== "proposed" || m.scheduledAt)');
