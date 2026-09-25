@@ -151,7 +151,7 @@ export const meetingsRouter = router({
       }
       const id = await proposeMeetingForProspect(ctx.workspace.id, p as any, ctx.user.id, "manual");
       if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not draft meeting" });
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "propose", entityType: "meeting", entityId: id, after: { relatedId: input.relatedId } });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "meeting", entityId: id, after: { relatedId: input.relatedId, proposed: true } });
       return { id };
     }),
 
@@ -172,7 +172,7 @@ export const meetingsRouter = router({
         .from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id)).limit(1) : [];
       const send = s?.mode === "auto";
       const res = await runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id, { send });
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "ai_generate", entityType: "meeting", entityId: 0, after: { ...res, send } });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "meeting", entityId: 0, after: { ...res, send, findMeetings: true } });
       return { ...res, send };
     }),
 
@@ -338,7 +338,10 @@ export const meetingsRouter = router({
     .input(z.object({ id: z.number(), chosenTime: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const res = await sendMeetingInvite(ctx.workspace.id, input.id, input.chosenTime);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "book", entityType: "meeting", entityId: input.id, after: res });
+      // "update" + book: true, as Approve & send all records it. The action
+      // column is a database enum; "book" was rejected there and swallowed,
+      // so single approvals went unrecorded until 2026-09-25.
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "meeting", entityId: input.id, after: { ...res, book: true, chosenTime: input.chosenTime ?? null } });
       return res;
     }),
 
