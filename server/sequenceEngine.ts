@@ -14,6 +14,7 @@
  */
 
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
+import { inSendWindow } from "./services/sendWindow";
 import { and, eq, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import {
   activities,
@@ -353,6 +354,12 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           .where(eq(enrollments.id, enrollment.id));
         processed++;
         continue;
+      }
+
+      // A LinkedIn DM goes out the moment its step runs, with no gate of its
+      // own: it waits for the workspace send window (owner ask 2026-09-25, see @shared/sendWindow).
+      if (step.type === "linkedin_dm" && !(await inSendWindow(enrollment.workspaceId))) {
+        continue; // outside the workspace send window — try next tick
       }
 
       if (step.type === "email") {

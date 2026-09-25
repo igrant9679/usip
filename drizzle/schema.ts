@@ -1727,6 +1727,12 @@ export type LeadRoutingRule = typeof leadRoutingRules.$inferSelect;
 export const workspaceSettings = mysqlTable("workspace_settings", {
   workspaceId: int("workspaceId").primaryKey(),
   timezone: varchar("timezone", { length: 64 }).default("UTC").notNull(),
+  // The send window (Migration 0191): everything Velocity sends to prospects on
+  // its own waits for [start, end) on these weekdays, in `timezone`. See
+  // @shared/sendWindow. Days are JS weekday numbers, 0 = Sunday.
+  sendWindowStartHour: int("sendWindowStartHour").default(6).notNull(),
+  sendWindowEndHour: int("sendWindowEndHour").default(17).notNull(),
+  sendWindowDays: varchar("sendWindowDays", { length: 20 }).default("1,2,3,4,5").notNull(),
   brandPrimary: varchar("brandPrimary", { length: 16 }).default("#14B89A").notNull(),
   brandAccent: varchar("brandAccent", { length: 16 }).default("#0F766E").notNull(),
   /** Per-workspace company profile (Migration 0125) — the seller's OWN company
@@ -3344,6 +3350,8 @@ export const emailReplies = mysqlTable(
     meetingId: int("meetingId"),                       // link to the meetings row a positive reply created
     handledAt: timestamp("handledAt"),
     handledBy: varchar("handledBy", { length: 16 }),   // ai|user
+    // A booking-link auto-reply held for the send window (Migration 0191).
+    bookingLinkPendingAt: timestamp("bookingLinkPendingAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
@@ -3483,6 +3491,8 @@ export const unipileMessages = mysqlTable(
     autoActionTaken: varchar("autoActionTaken", { length: 48 }),
     meetingId: int("meetingId"),
     handledAt: timestamp("handledAt"),
+    // A booking-link DM held for the send window (Migration 0191).
+    bookingLinkPendingAt: timestamp("bookingLinkPendingAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({

@@ -54,6 +54,8 @@ import { isPermissionKey } from "@shared/permissions";
 import { liveMeetingStatuses } from "@shared/meetingStatus";
 import { defaultMemberNotifyPrefs, defaultNotifyPolicy, memberWantsEmail, memberWantsInApp, pickKnownNotifyPrefs } from "@shared/notifyPolicy";
 import { invalidateArchivedWorkspaceCache } from "../_core/workspaceArchive";
+import { formatSendDays } from "@shared/sendWindow";
+import { invalidateSendWindowCache } from "../services/sendWindow";
 
 /**
  * `status IN (…)` over the LIVE-work set, as bound parameters.
@@ -313,6 +315,11 @@ export const settingsRouter = router({
         companyWebsite: z.string().max(255).nullable().optional(),
         companyKeywords: z.array(z.string().max(80)).max(50).nullable().optional(),
         companyTopics: z.array(z.string().max(80)).max(50).nullable().optional(),
+        // The send window (Migration 0191, owner ask 2026-09-25). Validated
+        // together below: start before end, at least one day.
+        sendWindowStartHour: z.number().int().min(0).max(23).optional(),
+        sendWindowEndHour: z.number().int().min(1).max(24).optional(),
+        sendWindowDays: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -331,16 +338,30 @@ export const settingsRouter = router({
             "Turning this on without it would lock you out.",
         });
       }
-      await getOrSeedSettings(ctx.workspace.id); // ensure row exists
+      const current = await getOrSeedSettings(ctx.workspace.id); // ensure row exists
+      // The send window's two hours are checked TOGETHER, against whichever
+      // half is not being changed: saving an end hour of 5 must not leave a
+      // start of 6 behind it and a window that never opens.
+      if (input.sendWindowStartHour !== undefined || input.sendWindowEndHour !== undefined) {
+        const start = input.sendWindowStartHour ?? current.sendWindowStartHour;
+        const end = input.sendWindowEndHour ?? current.sendWindowEndHour;
+        if (!(start < end)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "The send window must start before it ends." });
+        }
+      }
       const patch: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(input)) {
         if (v !== undefined) patch[k] = v;
       }
+      // Stored as "1,2,3,4,5" (JS weekdays, 0 = Sunday).
+      if (input.sendWindowDays !== undefined) patch.sendWindowDays = formatSendDays(input.sendWindowDays);
       if (Object.keys(patch).length === 0) return { ok: true };
       await db.update(workspaceSettings).set(patch).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
       // The middleware's policy cache is 60s; without this the Security tab
       // would report a change that does not take effect for another minute.
       invalidateSecurityPolicyCache(ctx.workspace.id);
+      // The engines cache the window (and its time zone) for a minute.
+      invalidateSendWindowCache(ctx.workspace.id);
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,

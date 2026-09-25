@@ -25,6 +25,7 @@
  * were already waiting in the queue: those still need Approve & send.
  */
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
+import { inSendWindow } from "./sendWindow";
 import { and, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { calendarAccounts, calendarEvents, contacts, leads, meetings, prospects, workspaceMembers, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -924,6 +925,10 @@ export async function runMeetingAutopilotAllWorkspaces(): Promise<{ workspaces: 
       // workspace that hit its cap left its backlog stale until midnight UTC.
       const swept = await regenerateStaleProposals(ws.workspaceId, 10);
       if (swept.regenerated > 0) console.log(`[MeetingAutopilot] ws ${ws.workspaceId}: regenerated ${swept.regenerated} outdated proposal(s), ${swept.remaining} left`);
+
+      // Autonomous sends each invite as it drafts it, so it drafts only inside
+      // the workspace send window (owner ask 2026-09-25, see @shared/sendWindow). Approve (nothing sent) runs any time.
+      if (ws.meetingAutopilotMode === "auto" && !(await inSendWindow(ws.workspaceId))) continue;
 
       const [row] = await db.select({ n: sql<number>`count(*)` }).from(meetings)
         .where(and(eq(meetings.workspaceId, ws.workspaceId), eq(meetings.source, "ai"), gte(meetings.createdAt, dayStart)));

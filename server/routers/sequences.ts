@@ -1,4 +1,5 @@
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
+import { inSendWindow } from "../services/sendWindow";
 import { TRPCError } from "@trpc/server";
 import { and, asc, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -1930,6 +1931,8 @@ export async function autoSendForAllWorkspaces(): Promise<{
     const archivedWs = await archivedWorkspaceIds();
   for (const ws of enabledWs) {
     if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
+    // The workspace send window (owner ask 2026-09-25, see @shared/sendWindow): drafts wait, and send inside it.
+    if (!(await inSendWindow(ws.workspaceId))) continue;
     const scoreMin = ws.aiAutoSendScoreMin ?? 70;
 
     // The recipient's score decides whether a draft can send, so it decides

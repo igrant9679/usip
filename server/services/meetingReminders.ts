@@ -13,6 +13,7 @@
  * reminder is sent at most once.
  */
 import { and, eq, gte, inArray, isNull, lte } from "drizzle-orm";
+import { inSendWindow } from "./sendWindow";
 import { getDb } from "../db";
 import { meetings } from "../../drizzle/schema";
 import { sendWorkspaceEmail } from "../emailDelivery";
@@ -76,6 +77,9 @@ export async function sendDueMeetingReminders(): Promise<{ sent: number; conside
   let sent = 0;
   for (const m of live) {
     if (!m.contactEmail || !m.scheduledAt) continue;
+    // The workspace send window (owner ask 2026-09-25, see @shared/sendWindow). Left unstamped, so the first hourly
+    // tick inside the window (still 1–24h before the meeting) sends it.
+    if (!(await inSendWindow(m.workspaceId))) continue;
     const when = fmtWhen(m.scheduledAt as Date);
     const name = m.contactName?.trim() || "there";
 

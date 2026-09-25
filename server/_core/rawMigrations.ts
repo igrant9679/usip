@@ -4269,6 +4269,23 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0191: the workspace send window ───────────────────────────────────────
+  // Owner ask 2026-09-25: "Build the send window, 6 AM–5 PM weekdays", adjustable
+  // per workspace. Everything sent to prospects without a person clicking waits
+  // for it (see @shared/sendWindow). The two bookingLinkPendingAt columns hold a
+  // booking-link auto-reply until the window opens instead of dropping it.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0191_send_window.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `sendWindowStartHour` int NOT NULL DEFAULT 6",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `sendWindowEndHour` int NOT NULL DEFAULT 17",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `sendWindowDays` varchar(20) NOT NULL DEFAULT '1,2,3,4,5'",
+      "ALTER TABLE `email_replies` ADD COLUMN `bookingLinkPendingAt` timestamp NULL",
+      "ALTER TABLE `unipile_messages` ADD COLUMN `bookingLinkPendingAt` timestamp NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

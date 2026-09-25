@@ -23,6 +23,7 @@
  *    worse, not better.
  */
 import { and, eq, isNull, isNotNull } from "drizzle-orm";
+import { inSendWindow } from "./sendWindow";
 import { getDb } from "../db";
 import { activities, chatAgents, chatSessions, notifications, tasks } from "../../drizzle/schema";
 import { invokeLLM } from "../_core/llm";
@@ -239,6 +240,9 @@ export async function runChatFollowUps(): Promise<FollowUpRunResult> {
   const now = new Date();
 
   for (const agent of active) {
+    // The workspace send window (owner ask 2026-09-25, see @shared/sendWindow): an auto agent's follow-ups wait for
+    // it. Approval mode only queues drafts, so it runs any time.
+    if (agent.followUpMode === "auto" && !(await inSendWindow(agent.workspaceId))) continue;
     try {
       const sessions = await db.select({
         id: chatSessions.id,

@@ -98,6 +98,7 @@ import { appBaseUrl as publicAppOrigin } from "./appUrl";
 import { isSuppressed as isSuppressedSitewide, makeUnsubscribeUrl, unsubscribeHeaders } from "./unsubscribe";
 import { escapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
+import { inSendWindow } from "./services/sendWindow";
 import { cleanScrapedField } from "@shared/fieldHygiene";
 import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
 
@@ -1315,7 +1316,10 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         console.error(`[AreEngine] campaign ${campId} step heal failed:`, e);
       }
 
-      const due = await db
+      // The workspace send window (owner ask 2026-09-25, see @shared/sendWindow): outside it nothing is dispatched.
+      // Due rows stay `scheduled` and go at the first tick inside it.
+      const windowOpen = await inSendWindow(wsId);
+      const due = !windowOpen ? [] : await db
         .select()
         .from(areExecutionQueue)
         .where(

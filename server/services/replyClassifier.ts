@@ -17,7 +17,8 @@ import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { genuineReplyScope } from "./replyScope";
-import { emailReplies, emailSuppressions, enrollments, tasks, unipileMessages, workspaceSettings } from "../../drizzle/schema";
+import { emailReplies, emailSuppressions, enrollments, tasks, unipileAccounts, unipileMessages, workspaceSettings } from "../../drizzle/schema";
+import { inSendWindow } from "./sendWindow";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { humanizeAiCopy } from "./humanCopy";
@@ -269,28 +270,28 @@ export async function applyReplyAction(workspaceId: number, reply: any, byUser: 
       // highest-intent moment into a booked meeting with no human step. In
       // approval mode a rep sends it. Best-effort: falls back to proposal + task.
       let bookingLinkSent = false;
+      let bookingLinkHeld = false;
       if (!byUser && reply.fromEmail) {
-        try {
-          const bookingUrl = await resolveBookingUrl(workspaceId, reply.userId ?? null);
-          if (bookingUrl) {
-            const first = String(reply.fromName || "").trim().split(/\s+/)[0] || "there";
-            const subject = reply.subject ? `Re: ${reply.subject}`.slice(0, 255) : "Great — let's find a time";
-            const html =
-              `<p>Hi ${escHtml(first)},</p>` +
-              `<p>Glad to hear it! Pick whatever time works best for you and it'll drop straight onto my calendar:</p>` +
-              `<p><a href="${escHtml(bookingUrl)}">Book a time</a></p>` +
-              `<p>Looking forward to it.</p>`;
-            const res = await sendWorkspaceEmail(workspaceId, { to: reply.fromEmail, subject, html });
-            bookingLinkSent = res.ok;
+        if (!(await inSendWindow(workspaceId))) {
+          // Outside the workspace send window (owner ask 2026-09-25): held,
+          // not dropped. sendHeldBookingLinks sends it once the window opens.
+          await db.update(emailReplies).set({ bookingLinkPendingAt: new Date() } as never)
+            .where(eq(emailReplies.id, reply.id));
+          bookingLinkHeld = true;
+        } else {
+          try {
+            bookingLinkSent = await sendBookingLinkEmail(workspaceId, reply);
+          } catch (e) {
+            console.error(`[ReplyClassifier] booking-link auto-reply failed for reply ${reply.id}:`, e);
           }
-        } catch (e) {
-          console.error(`[ReplyClassifier] booking-link auto-reply failed for reply ${reply.id}:`, e);
         }
       }
       if (bookingLinkSent) action = "booking_link_sent";
       await createReplyTask(
         db, workspaceId, reply,
-        bookingLinkSent ? `Booking link sent — ${name} (awaiting self-book)` : `Meeting requested — ${name}`,
+        bookingLinkSent ? `Booking link sent — ${name} (awaiting self-book)`
+          : bookingLinkHeld ? `Meeting requested — ${name} (booking link goes out when the send window opens)`
+          : `Meeting requested — ${name}`,
         "high", "meeting_prep",
       );
       break;
@@ -551,20 +552,31 @@ Classes (pick exactly one):
       // to receive our calendar link, so that tier gets the proposal and the
       // task and no outbound DM.
       let bookingLinkSent = false;
+      let bookingLinkHeld = false;
       if (mode === "auto" && msg.chatId && socialAutopilotMaySend(tier)) {
-        try {
-          const bookingUrl = await resolveBookingUrl(workspaceId, owner);
-          if (bookingUrl) {
-            const first = String(name).trim().split(/\s+/)[0] || "there";
-            await sendMessage({ chatId: msg.chatId, text: `Great to hear, ${first}! Grab whatever time works best for you here and it'll go straight on my calendar: ${bookingUrl}` });
-            bookingLinkSent = true;
+        if (!(await inSendWindow(workspaceId))) {
+          // Held for the workspace send window, as the email path is.
+          await db.update(unipileMessages).set({ bookingLinkPendingAt: new Date() } as never)
+            .where(eq(unipileMessages.id, msg.id));
+          bookingLinkHeld = true;
+        } else {
+          try {
+            const bookingUrl = await resolveBookingUrl(workspaceId, owner);
+            if (bookingUrl) {
+              await sendMessage({ chatId: msg.chatId, text: bookingLinkDmText(name, bookingUrl) });
+              bookingLinkSent = true;
+            }
+          } catch (e) {
+            console.error(`[SocialClassifier] booking-link DM failed for message ${msg.id}:`, e);
           }
-        } catch (e) {
-          console.error(`[SocialClassifier] booking-link DM failed for message ${msg.id}:`, e);
         }
       }
       if (bookingLinkSent) action = "booking_link_sent";
-      await socialTask(db, workspaceId, msg, owner, bookingLinkSent ? `Booking link sent (${chan}) — ${name}` : `Meeting requested (${chan}) — ${name}`, "high", "meeting_prep");
+      await socialTask(db, workspaceId, msg, owner,
+        bookingLinkSent ? `Booking link sent (${chan}) — ${name}`
+          : bookingLinkHeld ? `Meeting requested (${chan}) — ${name} (booking link goes out when the send window opens)`
+          : `Meeting requested (${chan}) — ${name}`,
+        "high", "meeting_prep");
       break;
     }
     case "follow_up_question":
@@ -591,6 +603,116 @@ Classes (pick exactly one):
       .where(eq(unipileMessages.id, msg.id));
   }
   return action;
+}
+
+/** Email an interested replier the owner's booking link. True when it went. */
+async function sendBookingLinkEmail(
+  workspaceId: number,
+  reply: { id: number; userId: number | null; fromEmail: string | null; fromName: string | null; subject: string | null },
+): Promise<boolean> {
+  if (!reply.fromEmail) return false;
+  const bookingUrl = await resolveBookingUrl(workspaceId, reply.userId ?? null);
+  if (!bookingUrl) return false;
+  const first = String(reply.fromName || "").trim().split(/\s+/)[0] || "there";
+  const subject = reply.subject ? `Re: ${reply.subject}`.slice(0, 255) : "Great — let's find a time";
+  const html =
+    `<p>Hi ${escHtml(first)},</p>` +
+    `<p>Glad to hear it! Pick whatever time works best for you and it'll drop straight onto my calendar:</p>` +
+    `<p><a href="${escHtml(bookingUrl)}">Book a time</a></p>` +
+    `<p>Looking forward to it.</p>`;
+  const res = await sendWorkspaceEmail(workspaceId, { to: reply.fromEmail, subject, html });
+  return res.ok;
+}
+
+/** The in-thread booking-link DM to an interested LinkedIn replier. */
+function bookingLinkDmText(name: string, bookingUrl: string): string {
+  const first = String(name).trim().split(/\s+/)[0] || "there";
+  return `Great to hear, ${first}! Grab whatever time works best for you here and it'll go straight on my calendar: ${bookingUrl}`;
+}
+
+/** A held booking link older than this is dropped: the conversation has moved on. */
+export const HELD_BOOKING_LINK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Send the booking-link auto-replies held for the send window (owner ask
+ * 2026-09-25). Runs at the start of every conversation-autopilot tick, so a
+ * held reply goes at the first tick inside its workspace's window. One
+ * attempt, as when it is sent straight away; the pending mark is cleared
+ * either way so nothing is sent twice.
+ */
+export async function sendHeldBookingLinks(nowMs = Date.now()): Promise<{ sent: number; held: number; dropped: number }> {
+  const out = { sent: 0, held: 0, dropped: 0 };
+  const db = await getDb();
+  if (!db) return out;
+  const archived = await archivedWorkspaceIds();
+  const staleBefore = nowMs - HELD_BOOKING_LINK_MAX_AGE_MS;
+
+  const emails = await db.select({
+    id: emailReplies.id, workspaceId: emailReplies.workspaceId, userId: emailReplies.userId,
+    fromEmail: emailReplies.fromEmail, fromName: emailReplies.fromName, subject: emailReplies.subject,
+    pendingAt: emailReplies.bookingLinkPendingAt,
+  }).from(emailReplies).where(and(isNotNull(emailReplies.bookingLinkPendingAt), genuineReplyScope())).limit(100);
+  for (const r of emails) {
+    if (archived.has(r.workspaceId)) continue;
+    const pendingMs = r.pendingAt ? new Date(r.pendingAt).getTime() : nowMs;
+    if (pendingMs < staleBefore) {
+      await db.update(emailReplies).set({ bookingLinkPendingAt: null } as never).where(eq(emailReplies.id, r.id));
+      out.dropped++;
+      continue;
+    }
+    if (!(await inSendWindow(r.workspaceId, nowMs))) { out.held++; continue; }
+    let ok = false;
+    try { ok = await sendBookingLinkEmail(r.workspaceId, r); } catch (e) {
+      console.error(`[ReplyClassifier] held booking link failed for reply ${r.id}:`, e);
+    }
+    await db.update(emailReplies)
+      .set((ok ? { bookingLinkPendingAt: null, autoActionTaken: "booking_link_sent" } : { bookingLinkPendingAt: null }) as never)
+      .where(eq(emailReplies.id, r.id));
+    if (ok) out.sent++;
+  }
+
+  const dms = await db.select({
+    id: unipileMessages.id, workspaceId: unipileMessages.workspaceId, chatId: unipileMessages.chatId,
+    senderName: unipileMessages.senderName, unipileAccountId: unipileMessages.unipileAccountId,
+    senderProviderId: unipileMessages.senderProviderId,
+    pendingAt: unipileMessages.bookingLinkPendingAt,
+  }).from(unipileMessages).where(isNotNull(unipileMessages.bookingLinkPendingAt)).limit(100);
+  for (const m of dms) {
+    if (archived.has(m.workspaceId)) continue;
+    const pendingMs = m.pendingAt ? new Date(m.pendingAt).getTime() : nowMs;
+    if (pendingMs < staleBefore || !m.chatId) {
+      await db.update(unipileMessages).set({ bookingLinkPendingAt: null } as never).where(eq(unipileMessages.id, m.id));
+      out.dropped++;
+      continue;
+    }
+    if (!(await inSendWindow(m.workspaceId, nowMs))) { out.held++; continue; }
+    let ok = false;
+    try {
+      // Re-checked at send time, not trusted from when it was held: an
+      // inbound message is not permission to write back to someone we never
+      // contacted, and a week can change what this conversation is.
+      const { resolveSocialOutreachScope, socialAutopilotMaySend } = await import("./replyScope");
+      const { tier } = await resolveSocialOutreachScope(db, {
+        workspaceId: m.workspaceId, chatId: m.chatId, senderProviderId: m.senderProviderId,
+      });
+      const [acct] = await db.select({ userId: unipileAccounts.userId }).from(unipileAccounts)
+        .where(and(eq(unipileAccounts.workspaceId, m.workspaceId), eq(unipileAccounts.unipileAccountId, m.unipileAccountId)))
+        .limit(1);
+      const owner = await activeOwnerOrNull(m.workspaceId, acct?.userId ?? null);
+      const bookingUrl = await resolveBookingUrl(m.workspaceId, owner);
+      if (socialAutopilotMaySend(tier) && bookingUrl) {
+        await sendMessage({ chatId: m.chatId, text: bookingLinkDmText(m.senderName || "there", bookingUrl) });
+        ok = true;
+      }
+    } catch (e) {
+      console.error(`[SocialClassifier] held booking link failed for message ${m.id}:`, e);
+    }
+    await db.update(unipileMessages)
+      .set((ok ? { bookingLinkPendingAt: null, autoActionTaken: "booking_link_sent" } : { bookingLinkPendingAt: null }) as never)
+      .where(eq(unipileMessages.id, m.id));
+    if (ok) out.sent++;
+  }
+  return out;
 }
 
 /** Classify (and, in 'auto' mode, action) up to `limit` unclassified replies for one workspace. */
@@ -661,6 +783,14 @@ function startOfUtcDay(): Date {
 export async function runConversationAutopilotAllWorkspaces(): Promise<{ workspaces: number; classified: number }> {
   const db = await getDb();
   if (!db) return { workspaces: 0, classified: 0 };
+
+  // Booking links held overnight or over a weekend go out once the window opens.
+  try {
+    const held = await sendHeldBookingLinks();
+    if (held.sent || held.dropped) console.log(`[ConversationAutopilot] held booking links: sent ${held.sent}, still held ${held.held}, dropped ${held.dropped}`);
+  } catch (e) {
+    console.error("[ConversationAutopilot] held booking links failed:", e);
+  }
 
   const rows = await db.select().from(workspaceSettings).where(sql`${workspaceSettings.conversationAutopilotMode} <> 'off'`);
   const dayStart = startOfUtcDay();

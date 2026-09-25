@@ -19,6 +19,85 @@ import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { isAdminRole } from "@shared/roleRank";
+import { DEFAULT_SEND_WINDOW, WEEKDAY_LABELS, describeSendWindow, isWithinSendWindow, normalizeSendWindow, parseSendDays } from "@shared/sendWindow";
+
+/**
+ * The workspace send window (owner ask 2026-09-25: "give me the ability to
+ * adjust the sending window (setting within each workspace)"). Everything
+ * Velocity sends to prospects on its own waits for it; see @shared/sendWindow.
+ */
+function SendWindowSection({ settings, save, canEdit }: { settings: any; save: (v: any) => void; canEdit: boolean }) {
+  const [startHour, setStartHour] = useState(DEFAULT_SEND_WINDOW.startHour);
+  const [endHour, setEndHour] = useState(DEFAULT_SEND_WINDOW.endHour);
+  const [days, setDays] = useState<number[]>([...DEFAULT_SEND_WINDOW.days]);
+  useEffect(() => {
+    if (!settings) return;
+    const w = normalizeSendWindow({ startHour: settings.sendWindowStartHour, endHour: settings.sendWindowEndHour, days: settings.sendWindowDays });
+    setStartHour(w.startHour);
+    setEndHour(w.endHour);
+    setDays(w.days);
+  }, [settings?.sendWindowStartHour, settings?.sendWindowEndHour, settings?.sendWindowDays]);
+  const tz = settings?.timezone || "UTC";
+  const valid = startHour < endHour && days.length > 0;
+  const openNow = valid && isWithinSendWindow(Date.now(), tz, { startHour, endHour, days });
+  const saved = normalizeSendWindow({ startHour: settings?.sendWindowStartHour, endHour: settings?.sendWindowEndHour, days: settings?.sendWindowDays });
+  const dirty = startHour !== saved.startHour || endHour !== saved.endHour || days.join(",") !== parseSendDays(settings?.sendWindowDays).join(",");
+  const hourLabel = (h: number) => (h === 24 ? "Midnight" : `${h % 12 === 0 ? 12 : h % 12}:00 ${h < 12 ? "AM" : "PM"}`);
+  const toggleDay = (d: number) => setDays((cur) => (cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d].sort((a, b) => a - b)));
+  return (
+    <Section
+      title="Send window"
+      description={`When Velocity may send to prospects on its own, in this workspace's time zone (${tz}). Outside it, Revenue Engine emails, sequence auto-sends and LinkedIn DMs, Autonomous meeting invites, meeting reminders, booking-link replies and chat follow-ups wait, and go out once it opens. Anything a person sends by hand is not held.`}
+      right={
+        canEdit ? (
+          <Button size="sm" disabled={!valid || !dirty}
+            onClick={() => save({ sendWindowStartHour: startHour, sendWindowEndHour: endHour, sendWindowDays: days })}>
+            Save
+          </Button>
+        ) : null
+      }
+    >
+      <div className="p-4 space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-md">
+          <div className="space-y-1">
+            <Label>From</Label>
+            <Select value={String(startHour)} onValueChange={(v) => setStartHour(Number(v))} disabled={!canEdit}>
+              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+              <SelectContent className="max-h-64">
+                {Array.from({ length: 24 }, (_, h) => <SelectItem key={h} value={String(h)}>{hourLabel(h)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label>Until</Label>
+            <Select value={String(endHour)} onValueChange={(v) => setEndHour(Number(v))} disabled={!canEdit}>
+              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+              <SelectContent className="max-h-64">
+                {Array.from({ length: 24 }, (_, i) => i + 1).map((h) => <SelectItem key={h} value={String(h)}>{hourLabel(h)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="space-y-1">
+          <Label>Days</Label>
+          <div className="flex flex-wrap gap-1.5">
+            {WEEKDAY_LABELS.map((label, d) => (
+              <Button key={d} type="button" size="sm" variant={days.includes(d) ? "default" : "outline"} className="h-7 w-12 text-xs"
+                disabled={!canEdit} aria-pressed={days.includes(d)} onClick={() => toggleDay(d)}>
+                {label}
+              </Button>
+            ))}
+          </div>
+        </div>
+        <div className={cn("text-xs", valid ? "text-muted-foreground" : "text-rose-600")}>
+          {valid
+            ? `${describeSendWindow({ startHour, endHour, days })} (${tz}). Right now the window is ${openNow ? "open" : "closed"}.`
+            : startHour >= endHour ? "The window must start before it ends." : "Pick at least one day."}
+        </div>
+      </div>
+    </Section>
+  );
+}
 
 
 const TABS = [
@@ -369,6 +448,8 @@ function GeneralTab({
           </div>
         </div>
       </Section>
+
+      <SendWindowSection settings={settings} save={save} canEdit={canEdit} />
 
       <Section
         title="AI Nightly Pipeline"
