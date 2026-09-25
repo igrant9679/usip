@@ -20,7 +20,7 @@ export const dealsRouter = router({
     .input(z.object({ limit: z.number().int().min(1).max(50).optional() }).optional())
     .mutation(async ({ ctx, input }) => {
       const res = await runDealAutopilotForWorkspace(ctx.workspace.id, "approval", input?.limit ?? 15);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "ai_analyze", entityType: "opportunity", entityId: 0, after: res });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: 0, after: { op: "ai_analyze", ...res } });
       return res;
     }),
 

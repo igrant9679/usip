@@ -102,7 +102,7 @@ export const conversationsRouter = router({
     .input(z.object({ limit: z.number().int().min(1).max(50).optional() }).optional())
     .mutation(async ({ ctx, input }) => {
       const res = await runConversationAutopilotForWorkspace(ctx.workspace.id, "approval", input?.limit ?? 20);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "ai_classify", entityType: "email_reply", entityId: 0, after: res });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "email_reply", entityId: 0, after: { op: "ai_classify", ...res } });
       return res;
     }),
 
@@ -124,7 +124,7 @@ export const conversationsRouter = router({
       }
     }
     const action = await applyReplyAction(ctx.workspace.id, reply, true);
-    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "apply_reply_action", entityType: "email_reply", entityId: input.id, after: { action } });
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "email_reply", entityId: input.id, after: { op: "apply_reply_action", action } });
     return { action };
   }),
 

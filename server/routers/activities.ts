@@ -141,7 +141,7 @@ export const tasksRouter = router({
       await db.update(tasks)
         .set({ status: "done", completedAt: new Date(), disposition: input.disposition ?? null, snoozedUntil: null } as never)
         .where(and(eq(tasks.id, input.id), eq(tasks.workspaceId, ctx.workspace.id)));
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "complete", entityType: "task", entityId: input.id, after: { disposition: input.disposition } });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "task", entityId: input.id, after: { op: "complete", disposition: input.disposition } });
       return { ok: true };
     }),
 
@@ -224,7 +224,7 @@ export const tasksRouter = router({
         source: "manual" as const,
       }));
       await db.insert(tasks).values(values as never);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "bulk_create", entityType: "task", entityId: 0, after: { created: values.length } });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "task", entityId: 0, after: { op: "bulk_create", created: values.length } });
       return { created: values.length };
     }),
 
@@ -269,7 +269,7 @@ export const tasksRouter = router({
         limit: input?.limit ?? 10,
         ownerUserId: ctx.user.id,
       });
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "ai_generate", entityType: "task", entityId: 0, after: res });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "task", entityId: 0, after: { op: "ai_generate", ...res } });
       return res;
     }),
 

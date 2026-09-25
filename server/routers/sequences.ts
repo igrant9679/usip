@@ -517,7 +517,7 @@ export const sequencesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.update(sequences).set({ isTemplate: true, visibility: "team" } as never)
       .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
-    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "publish_template", entityType: "sequence", entityId: input.id });
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "sequence", entityId: input.id, after: { op: "publish_template" } });
     return { ok: true };
   }),
 
@@ -558,7 +558,7 @@ export const sequencesRouter = router({
       sourceTemplateId: tpl.id,
     } as never);
     const id = Number((r as any)[0]?.insertId ?? 0);
-    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: me, action: "fork_template", entityType: "sequence", entityId: id, after: { sourceTemplateId: tpl.id } });
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: me, action: "create", entityType: "sequence", entityId: id, after: { op: "fork_template", sourceTemplateId: tpl.id } });
     return { id };
   }),
 
@@ -569,7 +569,7 @@ export const sequencesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.update(sequences).set({ assignedToUserId: input.userId } as never)
       .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
-    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "assign", entityType: "sequence", entityId: input.id, after: { assignedToUserId: input.userId } });
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "sequence", entityId: input.id, after: { op: "assign", assignedToUserId: input.userId } });
     return { ok: true };
   }),
 
