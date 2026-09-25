@@ -226,6 +226,13 @@ describe("every sender that goes out on its own waits for the window", () => {
     expect(admin).toContain("if (input.sendWindowDays !== undefined) patch.sendWindowDays = formatSendDays(input.sendWindowDays);");
   });
 
+  it("the Help Center says what waits, and that what a person clicks does not", () => {
+    const help = read("server/seedHelpContent.ts");
+    expect(help).toContain('slug: "send-window",');
+    expect(help).toContain("Anything **a person clicks** goes immediately, whatever the time: **Approve & send**, **Approve & send all**");
+    expect(help).toContain("So if you approve meeting proposals at 5:30 PM on a Friday, the invites go out then;");
+  });
+
   it("the migration and the Settings page", () => {
     const mig = read("server/_core/rawMigrations.ts");
     expect(mig).toContain("\"ALTER TABLE `workspace_settings` ADD COLUMN `sendWindowStartHour` int NOT NULL DEFAULT 6\"");

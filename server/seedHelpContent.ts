@@ -73,6 +73,97 @@ type ArticleSeed = {
 };
 
 export const ARTICLES: ArticleSeed[] = [
+  // Owner ask 2026-09-25: the send window, the meeting-invite lifecycle, and a
+  // summary of September's changes, written against the shipped behaviour.
+  {
+    slug: "send-window",
+    categorySlug: "settings-account",
+    title: "The send window",
+    summary: "When Velocity may send to prospects on its own, what waits for it, and what never does.",
+    readingTimeMinutes: 3,
+    tags: ["send window", "sending", "schedule", "settings", "timezone", "weekends"],
+    bodyMarkdown: `**The send window** is when Velocity may send to prospects **on its own**. It lives in **Settings → Workspace overview → Send window**, one per workspace, and uses the workspace time zone set just above it in **General**. The default is **6:00 AM–5:00 PM, Monday to Friday**. Choose the hours with **From** and **Until**, toggle the days, and **Save**; the card says in plain words what the window is and whether it is open right now. A change applies at once.
+
+**What waits for the window.** Everything Velocity sends without a person clicking a send button:
+- Revenue Engine campaign emails
+- sequence **AI auto-send**, and sequence **LinkedIn DM** steps
+- **Autonomous** meeting invites (Meeting Autopilot in Autonomous drafts and sends only inside the window)
+- **meeting reminders**
+- the reply Autopilot's **booking-link replies**, by email and on LinkedIn
+- **chat follow-ups** from a chat agent in Auto
+
+**Nothing is dropped.** Work that comes due outside the window stays queued and goes out at the first check inside it: Monday 6:00 AM for anything due over the weekend. A booking-link reply to someone who wrote in at night is marked pending and sent once the window opens; one still pending after a week is dropped, because the conversation has moved on by then. A reminder goes at the first hour inside the window that is still 1 to 24 hours before the meeting.
+
+**What does not wait.** Anything **a person clicks** goes immediately, whatever the time: **Approve & send**, **Approve & send all**, **Send now**, sending a draft yourself. So if you approve meeting proposals at 5:30 PM on a Friday, the invites go out then; the meeting times they offer are still between 9 AM and 4 PM, but the invitation lands in the prospect's inbox as soon as you approve. If you want an invite to arrive in business hours, approve it in business hours. Also not held: reading and classifying replies, unsubscribes and pausing a sequence when someone replies (those must never wait), internal reports and notifications, mailbox warmup (its own schedule), and LinkedIn invites and openers, which follow the working hours on **LinkedIn Limits**.
+
+**Good to know.** The window is judged in the **workspace's** time zone, not the prospect's, so a workspace left on UTC sends 6 AM–5 PM UTC (2 AM–1 PM in New York): set the time zone first. When the window opens after a weekend, queued campaign steps go out together, bounded by each campaign's and each mailbox's daily caps.`,
+  },
+  {
+    slug: "meeting-invites-and-responses",
+    categorySlug: "meetings-calls",
+    title: "Meeting invites: who sends them, the link, and when it counts as booked",
+    summary: "The proposal owner's calendar, Teams or your own link, the offered times, the checks at send time, and acceptance.",
+    readingTimeMinutes: 5,
+    tags: ["meetings", "invites", "teams", "calendar", "booked", "acceptance", "proposals"],
+    bodyMarkdown: `A meeting proposal becomes a **calendar invite** when you click **Approve & send** (or, with the Meeting Autopilot on **Autonomous**, as soon as it is drafted). This is what happens between the proposal and a booked meeting.
+
+**Who it sends from.** An invite goes from the **proposal owner's own calendar**. Each proposal card shows **Sends from** with the owner, a picker to change them, and whether their calendar can send: *Microsoft 365 calendar connected*, *calendar connected, no Teams links*, or *no calendar connected, so invites can't send yet*. **Reassign all…** in the proposals header moves every open proposal to another member at once (it sends nothing and changes no text). **New proposals go to** on the Autopilot strip (admins) makes one member the owner of every new proposal, from the autopilot, Find meetings with AI, Propose meeting and positive replies; leave it on *Each prospect's rep* for the default routing. Each member connects their **own** Outlook calendar in **Connected Accounts**.
+
+**The meeting link.** Every invite carries a **Microsoft Teams** link, created by the owner's Microsoft 365 calendar when the invite is sent; it shows on the meeting once sent. To use Zoom, Google Meet or any other link instead, open the proposal's **Edit** and fill in **Meeting link (optional)**: that link is used instead of Teams and added to the invite text. Clear it to go back to Teams. A calendar connected over CalDAV cannot create Teams meetings, so give those proposals a link.
+
+**The times it offers.** Up to three times, each starting between **9:00 AM and 4:00 PM** in the workspace time zone, on weekdays, at least a day ahead. They avoid the owner's live calendar and meetings already booked for them, and they are **spread out**: a time already offered by the owner's other proposals goes to the back of the queue, so a busy queue does not hand everyone the same slot. You can edit the times before approving; a time outside the window will not save. If the time zone changes after proposals were drafted, **Regenerate outdated** gives them fresh times.
+
+**What is checked when it sends.** Approve & send and Autonomous go through the same checks, and when one fails nothing is sent, the proposal stays in the queue, and a message says why:
+- **no email address** for the prospect: there is no one to invite (the card says so and cannot be approved);
+- **outside 9 AM–4 PM**: the offered times were drafted under another time zone; regenerate;
+- **already booked**: if the first offered time is taken on the owner's calendar, the next free offered time is used instead; a time you picked yourself is refused rather than moved;
+- **already invited**: this person already has an upcoming invite, even under a duplicate record;
+- **no calendar connected** for the owner.
+
+**After it is sent.** The meeting shows under **Upcoming** as **Awaiting response**. Velocity reads the prospect's answer from the owner's calendar every 15 minutes:
+- **Accepted**: the meeting is booked. It counts in **Booked** and in analytics, and only now is it credited to its Revenue Engine campaign (which ends that prospect's sequence and adds them to the CRM).
+- **Declined**: the meeting is cancelled, so no reminder goes to someone who said no.
+- **Tentative**: noted on the meeting; it is not booked yet.
+
+An invite nobody has answered is not a booking and gets no reminder. A time the prospect picked themselves through your **booking link** is booked straight away, because they chose it.
+
+**The send window does not hold Approve & send.** Clicking it sends the invite immediately, even in the evening (see "The send window"). Autonomous invites wait for the window.`,
+  },
+  {
+    slug: "whats-new-2026-09",
+    categorySlug: "getting-started",
+    title: "What's new in September 2026",
+    summary: "Everything that changed this month, in one place, with the article for each.",
+    readingTimeMinutes: 4,
+    tags: ["whats new", "release notes", "changes", "september"],
+    bodyMarkdown: `A summary of what changed in Velocity during September 2026, newest first. Each item names the article with the details.
+
+**Sending and meetings (late September)**
+- **Send window**: everything Velocity sends to prospects on its own waits for a per-workspace window, 6 AM–5 PM weekdays by default, in Settings → Workspace overview. What you click still sends at once. See "The send window".
+- **Meeting invites** carry a Teams link (or your own link per proposal), send from the proposal owner's calendar, can be reassigned in one click, and a workspace can choose who owns new proposals. See "Meeting invites: who sends them, the link, and when it counts as booked".
+- **Offered times** avoid the owner's live calendar and are spread across proposals; sending never double-books, never invites someone without an email, never books outside 9 AM–4 PM, and never invites the same person twice.
+- **A meeting counts as booked when the prospect accepts**, read back from the calendar every 15 minutes; reminders and Revenue Engine credit wait for that too.
+- **Meeting Autopilot** is Off, Approve or Autonomous; proposals can be edited, regenerated one at a time or all at once, and approved in bulk.
+- **Data Health** can merge every duplicate-People group shown in one confirmed click (**Merge all**), by shared email or by shared LinkedIn profile.
+- **The audit log** now records Approve & send, Propose meeting, Find meetings with AI, task completion and AI drafts, reply actions, deal analysis, and sequence template changes.
+
+**Prospecting and LinkedIn**
+- **Choose the sources for each run** on Find Prospects (a "Sources for this run" row) and Source search (a checkbox per vendor). See "Find Prospects: discovery" and "Source search: vendors, the waterfall and the budget ledger".
+- **LinkedIn people searches** pass the same activity limits as invites and messages; **LinkedIn Limits** is on the rail beside Social and names the LinkedIn profile each limit belongs to.
+- **Prospect source registry**: WarmySender, QuickEnrich and Apollo as pluggable sources with a budget ledger.
+- **A prospect without an email never enters a campaign queue**, and rejected people are never enriched.
+
+**Writing and campaigns**
+- **Every prospect-facing AI writer uses the workspace's own brand** (Settings → Branding): sequences, replies, meeting invites and more.
+- The Revenue Engine's **self-heal** restores a failed step once, spaced a campaign gap apart, instead of sending a burst.
+- Campaign mail carries the sender's name; campaigns can add existing people in bulk; the engine proposes new campaigns for people no campaign fits; approval screens have **Approve all**.
+
+**Workspace and settings**
+- **Every Settings section has a workspace switcher**, so you can edit another workspace without leaving the page. See "The Settings hub".
+- The old Settings page folded into the **Settings hub**; draft editors moved into the Emails drawer.
+- **Elsie**, the AI assistant, can look up, recommend and propose actions from any page, and renders formatted answers. See "Elsie, the in-app guide".
+- The **Operator's Manual** in the Help Center explains the whole product end to end.`,
+  },
   // Articles for what shipped in the 0130-0134 range. Written against the
   // measured behaviour of this workspace, not the intended behaviour.
   {
@@ -343,7 +434,7 @@ Every engine has the same three-way switch, and they all live on one screen — 
     tags: ["prospecting", "discovery", "icp"],
     pageKey: "find-prospects",
     tourName: "Find Prospects",
-    bodyMarkdown: `**Find Prospects** (sidebar → Prospect and enrich) runs multi-source discovery against your ICP. Pick **Person** or **Account** mode, fill the fields you care about (job title, seniority, industry, location) and add keywords for intent. Click **Run discovery** — results fan out across LinkedIn, web, and news, then get scored and de-duplicated automatically. Anything fully verified lands in **Verified**; partial matches land in **Needs Review** for you to clean up. Click any result row to open the full prospect. Skipped fields are ignored, so start broad and narrow if you get noise.`,
+    bodyMarkdown: `**Find Prospects** (sidebar → Prospect and enrich) runs multi-source discovery against your ICP. Pick **Person** or **Account** mode, fill the fields you care about (job title, seniority, industry, location) and add keywords for intent. The **Sources for this run** row picks which sources this run searches (Person: LinkedIn, Web, News, Apollo, QuickEnrich; Account: Google Business, Web, News, Apollo). A source switched off in Settings stays off, and at least one must be ticked. Click **Run discovery** — results fan out across the ticked sources, then get scored and de-duplicated automatically. Anything fully verified lands in **Verified**; partial matches land in **Needs Review** for you to clean up. Click any result row to open the full prospect. Skipped fields are ignored, so start broad and narrow if you get noise.`,
   },
   {
     slug: "prospect-source-registry",
@@ -359,7 +450,7 @@ Every engine has the same three-way switch, and they all live on one screen — 
 
 **The waterfall.** A search — from a campaign's discovery or from Data Enrichment → **Source search** — runs down your sources in the order set under Revenue Engine → Settings → *Prospect Sources & Checking Order*, and **stops once the batch target is met**. A later source is never called, or paid, for someone an earlier one already found. Sources without a key, without the filters your query needs, over budget, or paused after repeated failures are skipped with the reason shown. Dedupe against People and every campaign queue runs *before* any billable step, using email (never a masked one), LinkedIn URL, and name + company. One vendor failing degrades the run; it never fails it.
 
-**Source search page.** The filter panel is the union of every source's filters; the **source strip** shows, as you type, whether each connected source gives a *full match*, an *approximate match* (a filter it only keyword-matches) or *cannot honour* the query — hover for the reason. Set a batch target beside the combined remaining allowance; **Run search** previews for free (masked emails), results land with a source badge and a net-new flag. Select rows and **Promote**: the confirm dialog says exactly how many units the selection will spend before anything is acquired. Promoted people enter People through the same consolidation Find Prospects uses, with per-field provenance naming the vendor.
+**Source search page.** The filter panel is the union of every source's filters; each usable vendor in the **source strip** has a checkbox that chooses whether this run uses it (all of them by default; a source switched off in Settings stays off). The strip shows, as you type, whether each connected source gives a *full match*, an *approximate match* (a filter it only keyword-matches) or *cannot honour* the query — hover for the reason. Set a batch target beside the combined remaining allowance; **Run search** previews for free (masked emails), results land with a source badge and a net-new flag. Select rows and **Promote**: the confirm dialog says exactly how many units the selection will spend before anything is acquired. Promoted people enter People through the same consolidation Find Prospects uses, with per-field provenance naming the vendor.
 
 **Budget ledger.** Each vendor card shows today's and this billing month's spend against the limit, plus purchased credits. Holds are reserved before a vendor call and committed to what was actually charged, so two concurrent runs cannot both spend the last unit. WarmySender publishes no endpoint for its remaining *lead* allowance, so leads are tracked from what Velocity spends and a vendor refusal closes the day's row; verification allowance comes from their endpoint. QuickEnrich is uncapped by credits; its daily pull cap remains the brake.
 
@@ -649,7 +740,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "A public scheduling page that books straight into your calendar.",
     readingTimeMinutes: 3,
     tags: ["meetings", "booking", "calendar"],
-    bodyMarkdown: `Your **booking link** is a public page (velocity → /b/your-slug) where a prospect picks a time that books a **real calendar event** with you — no email ping-pong. Find and share it from **Meetings** (the booking card): copy the link, set your **availability** (working hours, days, timezone — slots respect them and daylight saving), and it's live.\n\nBookings create the calendar invite via your connected calendar, notify you in-app, and log the booker as an inbound lead with the meeting on their timeline. Double-booking is prevented against your existing events.\n\nTwo places it works automatically: the \`{{bookingLink}}\` merge field drops your link into any sequence email, and the **reply Autopilot** in Auto mode sends it when a prospect replies "happy to chat" (email or LinkedIn). Pair it with **meeting reminders** (sent automatically before the call) to cut no-shows.`,
+    bodyMarkdown: `Your **booking link** is a public page (velocity → /b/your-slug) where a prospect picks a time that books a **real calendar event** with you — no email ping-pong. Find and share it from **Meetings** (the booking card): copy the link, set your **availability** (working hours, days, timezone — slots respect them and daylight saving), and it's live.\n\nBookings create the calendar invite via your connected calendar, notify you in-app, and log the booker as an inbound lead with the meeting on their timeline. Double-booking is prevented against your existing events.\n\nTwo places it works automatically: the \`{{bookingLink}}\` merge field drops your link into any sequence email, and the **reply Autopilot** in Auto mode sends it when a prospect replies "happy to chat" (email or LinkedIn), inside the workspace's send window: someone who writes in at night gets it when the window opens. A time booked through your link counts as a booked meeting straight away, because the prospect chose it. Pair it with **meeting reminders** (sent automatically before the call) to cut no-shows.`,
   },
   {
     slug: "meeting-autopilot-reminders",
@@ -658,7 +749,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "AI proposes and books meetings; reminders and no-show rebounds run themselves.",
     readingTimeMinutes: 3,
     tags: ["meetings", "autopilot", "reminders", "no-show"],
-    bodyMarkdown: `The **Meeting Autopilot** (Autonomy Control Center, Off / Approve / Autonomous) turns positive replies into meetings: it proposes times between 9:00 and 16:00 in your workspace time zone with a drafted invite. In **Approve** you edit anything you want and **Approve & send** puts the event on your connected calendar with the prospect as attendee. In **Autonomous** each new invite is sent as soon as it is drafted. Either way an invite never double-books you, never goes out without the prospect's email, and counts as a booked meeting only once the prospect accepts.\n\nAround every booked meeting:\n\n- **Reminders** — each attendee gets an automatic reminder email in the day before the meeting, with join and reschedule links. Nothing to configure beyond a connected sending setup.\n- **Dispositions** — after the meeting, mark it completed/no-show on **Meetings**.\n- **No-show rebound** — marking a **no-show** auto-creates a high-priority *Re-book* follow-up task on the right record, assigned to you, so missed meetings never silently die.\n\nEach team member connects their **own** calendar (Outlook/Google) so invites come from the actual rep. Inbound self-booking is covered by your booking link (see "Self-serve booking links").`,
+    bodyMarkdown: `The **Meeting Autopilot** (Autonomy Control Center, Off / Approve / Autonomous) turns positive replies into meetings: it proposes times between 9:00 and 16:00 in your workspace time zone with a drafted invite. In **Approve** you edit anything you want and **Approve & send** puts the event on your connected calendar with the prospect as attendee. In **Autonomous** each new invite is sent as soon as it is drafted. Either way an invite never double-books you, never goes out without the prospect's email, and counts as a booked meeting only once the prospect accepts. Autonomous sends only inside the workspace's send window; **Approve & send** sends the moment you click it. Who an invite comes from, its Teams link, the times it offers and what is checked when it sends are in "Meeting invites: who sends them, the link, and when it counts as booked".\n\nAround every booked meeting:\n\n- **Reminders** — once the prospect has **accepted**, they get an automatic reminder email in the day before the meeting, with join and reschedule links, sent inside the send window. An invite nobody has answered gets no reminder. Nothing to configure beyond a connected sending setup.\n- **Dispositions** — after the meeting, mark it completed/no-show on **Meetings**.\n- **No-show rebound** — marking a **no-show** auto-creates a high-priority *Re-book* follow-up task on the right record, assigned to you, so missed meetings never silently die.\n\nEach team member connects their **own** calendar (Outlook/Google) so invites come from the actual rep. Inbound self-booking is covered by your booking link (see "Self-serve booking links").`,
   },
   {
     slug: "voice-agents",
@@ -688,7 +779,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     readingTimeMinutes: 3,
     tags: ["autopilot", "automation", "ai", "autonomy"],
     pageKey: "workflows",
-    bodyMarkdown: `Velocity's automation follows one convention everywhere: each feature has an **Autopilot** with three modes — **Off** (fully manual), **Approve** (AI drafts, you confirm), **Auto** (hands-off). All the switches live in the **Autonomy Center** (sidebar → Automation and analytics), and each surface also shows its own toggle.\n\nThe autopilots:\n- **Task** — drafts next-best-action tasks from record signals.\n- **Meeting** — proposes and (in Auto) books meetings from positive replies.\n- **Conversation** — classifies every inbound reply and acts per class; in Auto, a "willing to meet" reply gets your booking link instantly.\n- **Deal** — nudges stalled opportunities with suggested actions.\n- **Social** — sends LinkedIn invites, warms prospects, and opens conversations on accept.\n- **Job change** — creates re-engagement tasks when enrichment detects a company move.\n\nEverything defaults to **Off** — turn things on one at a time, run Approve mode until you trust the output, then go Auto. The goal: the machine works the funnel while you talk to humans.`,
+    bodyMarkdown: `Velocity's automation follows one convention everywhere: each feature has an **Autopilot** with three modes — **Off** (fully manual), **Approve** (AI drafts, you confirm), **Auto** (hands-off). All the switches live in the **Autonomy Center** (sidebar → Automation and analytics), and each surface also shows its own toggle.\n\nThe autopilots:\n- **Task** — drafts next-best-action tasks from record signals.\n- **Meeting** — proposes meetings with times and a drafted invite; in Approve you edit and approve each, in Autonomous each new invite is sent as soon as it is drafted (inside the send window).\n- **Conversation** — classifies every inbound reply and acts per class; in Auto, a "willing to meet" reply gets your booking link instantly.\n- **Deal** — nudges stalled opportunities with suggested actions.\n- **Social** — sends LinkedIn invites, warms prospects, and opens conversations on accept.\n- **Job change** — creates re-engagement tasks when enrichment detects a company move.\n\nEverything defaults to **Off** — turn things on one at a time, run Approve mode until you trust the output, then go Auto. The goal: the machine works the funnel while you talk to humans.`,
   },
   {
     slug: "autonomy-map",
@@ -752,7 +843,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Profile, appearance, mailboxes, voice agents, and workspace admin in one place.",
     readingTimeMinutes: 2,
     tags: ["settings", "profile", "account"],
-    bodyMarkdown: `All configuration lives in the **Settings hub** — open **Admin Settings** (bottom of the sidebar) → *All settings*. The old standalone Settings page is gone; every one of its tabs is now a hub section, and old \`/settings\` links land on the matching section automatically. The left rail groups everything:\n\n- **Personal settings** — your **Profile** (name, title, change email/password, multi-factor authentication, email settings), **Appearance** (theme mode + colour palette, personal email signature), and **Mailboxes** (link and configure sending accounts via the guided wizard).\n- **Workspace settings** (admins) — Workspace overview, Users & teams, Security, Notification policy, Integrations (incl. AI provider keys, verification policy, messaging webhooks), **Voice agents**, Data sources, Email delivery (SMTP + email identity), Branding, Proposals, Billing and credits, System activity, Tour builder, and the Danger zone.\n- **Data management** — custom fields, imports & exports, data enrichment, and the enrichment sweep dial.\n\nProfile changes save with the **Save** button top-right; appearance (your colour theme) syncs to your account so it follows you across browsers. Rows that point to a dedicated page (Team, Audit) open it directly — the search box at the top of the rail finds any setting fast.`,
+    bodyMarkdown: `All configuration lives in the **Settings hub** — open **Admin Settings** (bottom of the sidebar) → *All settings*. The old standalone Settings page is gone; every one of its tabs is now a hub section, and old \`/settings\` links land on the matching section automatically. The left rail groups everything:\n\n- **Personal settings** — your **Profile** (name, title, change email/password, multi-factor authentication, email settings), **Appearance** (theme mode + colour palette, personal email signature), and **Mailboxes** (link and configure sending accounts via the guided wizard).\n- **Workspace settings** (admins) — Workspace overview, Users & teams, Security, Notification policy, Integrations (incl. AI provider keys, verification policy, messaging webhooks), **Voice agents**, Data sources, Email delivery (SMTP + email identity), Branding, Proposals, Billing and credits, System activity, Tour builder, and the Danger zone.\n- **Data management** — custom fields, imports & exports, data enrichment, and the enrichment sweep dial.\n\nProfile changes save with the **Save** button top-right; appearance (your colour theme) syncs to your account so it follows you across browsers. Rows that point to a dedicated page (Team, Audit) open it directly — the search box at the top of the rail finds any setting fast. Every workspace section has a **workspace switcher** at the top of the rail, so an admin of several workspaces can change another workspace's settings without leaving the page; the section reloads for the workspace you pick. **Workspace overview** also holds the workspace time zone and the **send window** (see "The send window").`,
   },
   {
     slug: "mfa-security",
