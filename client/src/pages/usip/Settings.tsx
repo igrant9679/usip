@@ -43,6 +43,9 @@ function SendWindowSection({ settings, save, canEdit }: { settings: any; save: (
   const saved = normalizeSendWindow({ startHour: settings?.sendWindowStartHour, endHour: settings?.sendWindowEndHour, days: settings?.sendWindowDays });
   const dirty = startHour !== saved.startHour || endHour !== saved.endHour || days.join(",") !== parseSendDays(settings?.sendWindowDays).join(",");
   const hourLabel = (h: number) => (h === 24 ? "Midnight" : `${h % 12 === 0 ? 12 : h % 12}:00 ${h < 12 ? "AM" : "PM"}`);
+  // Pause all outbound (owner ask 2026-09-28): the window stays shut while on.
+  const pausedAt: string | null = settings?.outboundPausedAt ?? null;
+  const paused = !!pausedAt;
   const toggleDay = (d: number) => setDays((cur) => (cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d].sort((a, b) => a - b)));
   return (
     <Section
@@ -58,6 +61,18 @@ function SendWindowSection({ settings, save, canEdit }: { settings: any; save: (
       }
     >
       <div className="p-4 space-y-4">
+        <div className={cn("rounded-md border p-3 flex items-start gap-3", paused ? "border-rose-300 bg-rose-50 dark:bg-rose-950/30" : "border-border")}>
+          <Switch checked={paused} disabled={!canEdit} aria-label="Pause all outbound"
+            onCheckedChange={(v) => save({ outboundPaused: v })} />
+          <div className="min-w-0">
+            <div className={cn("text-sm font-medium", paused && "text-rose-700 dark:text-rose-300")}>Pause all outbound</div>
+            <div className="text-xs text-muted-foreground">
+              {paused
+                ? `Paused since ${new Date(pausedAt as string).toLocaleString()}. Nothing Velocity sends on its own goes out; it waits and goes once you switch this off (inside the window below). What a person sends is not affected.`
+                : "Stops everything Velocity sends on its own, in this workspace, until you switch it off. Nothing is dropped. What a person sends is not affected."}
+            </div>
+          </div>
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-md">
           <div className="space-y-1">
             <Label>From</Label>
@@ -91,7 +106,7 @@ function SendWindowSection({ settings, save, canEdit }: { settings: any; save: (
         </div>
         <div className={cn("text-xs", valid ? "text-muted-foreground" : "text-rose-600")}>
           {valid
-            ? `${describeSendWindow({ startHour, endHour, days })} (${tz}). Right now the window is ${openNow ? "open" : "closed"}.`
+            ? `${describeSendWindow({ startHour, endHour, days })} (${tz}). Right now the window is ${paused ? "closed: outbound is paused" : openNow ? "open" : "closed"}.`
             : startHour >= endHour ? "The window must start before it ends." : "Pick at least one day."}
         </div>
       </div>

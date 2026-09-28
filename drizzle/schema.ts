@@ -1733,6 +1733,9 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   sendWindowStartHour: int("sendWindowStartHour").default(6).notNull(),
   sendWindowEndHour: int("sendWindowEndHour").default(17).notNull(),
   sendWindowDays: varchar("sendWindowDays", { length: 20 }).default("1,2,3,4,5").notNull(),
+  // Pause all outbound (Migration 0192): while set, the send window stays
+  // closed, so nothing Velocity sends on its own goes out. NULL = not paused.
+  outboundPausedAt: timestamp("outboundPausedAt"),
   brandPrimary: varchar("brandPrimary", { length: 16 }).default("#14B89A").notNull(),
   brandAccent: varchar("brandAccent", { length: 16 }).default("#0F766E").notNull(),
   /** Per-workspace company profile (Migration 0125) — the seller's OWN company

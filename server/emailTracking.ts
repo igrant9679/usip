@@ -705,6 +705,11 @@ export function registerEmailTrackingRoutes(app: Express) {
             )
             .limit(1);
           if (alreadySent.length > 0) continue;
+          // An automatic email to the client: it waits for the workspace send
+          // window, and for a pause (2026-09-28). Nothing is logged, so the
+          // next run tries again.
+          const { inSendWindow } = await import("./services/sendWindow");
+          if (!(await inSendWindow(rp.workspaceId))) continue;
           // Build reminder email
           const expDate = new Date(rp.expiresAt!);
           const daysLeft = Math.ceil((expDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));

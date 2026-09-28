@@ -320,6 +320,9 @@ export const settingsRouter = router({
         sendWindowStartHour: z.number().int().min(0).max(23).optional(),
         sendWindowEndHour: z.number().int().min(1).max(24).optional(),
         sendWindowDays: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
+        // Pause all outbound (Migration 0192): stored as the moment it was
+        // paused, so the card can say since when.
+        outboundPaused: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -355,6 +358,10 @@ export const settingsRouter = router({
       }
       // Stored as "1,2,3,4,5" (JS weekdays, 0 = Sunday).
       if (input.sendWindowDays !== undefined) patch.sendWindowDays = formatSendDays(input.sendWindowDays);
+      if (input.outboundPaused !== undefined) {
+        delete patch.outboundPaused;
+        patch.outboundPausedAt = input.outboundPaused ? new Date() : null;
+      }
       if (Object.keys(patch).length === 0) return { ok: true };
       await db.update(workspaceSettings).set(patch).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
       // The middleware's policy cache is 60s; without this the Security tab

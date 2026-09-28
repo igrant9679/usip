@@ -84,13 +84,14 @@ export const ARTICLES: ArticleSeed[] = [
     tags: ["send window", "sending", "schedule", "settings", "timezone", "weekends"],
     bodyMarkdown: `**The send window** is when Velocity may send to prospects **on its own**. It lives in **Settings → Workspace overview → Send window**, one per workspace, and uses the workspace time zone set just above it in **General**. The default is **6:00 AM–5:00 PM, Monday to Friday**. Choose the hours with **From** and **Until**, toggle the days, and **Save**; the card says in plain words what the window is and whether it is open right now. A change applies at once.
 
-**What waits for the window.** Everything Velocity sends without a person clicking a send button:
+**Pause all outbound.** The switch at the top of the card stops everything Velocity sends on its own, in that workspace, until you switch it off: the window simply stays closed. Nothing is dropped; held work goes once you switch it off (inside the window). The card says since when it has been paused. It does not stop what a person sends.\n\n**What waits for the window.** Everything Velocity sends without a person clicking a send button:
 - Revenue Engine campaign emails
 - sequence **AI auto-send**, and sequence **LinkedIn DM** steps
 - **Autonomous** meeting invites (Meeting Autopilot in Autonomous drafts and sends only inside the window)
 - **meeting reminders**
 - the reply Autopilot's **booking-link replies**, by email and on LinkedIn
 - **chat follow-ups** from a chat agent in Auto
+- **proposal expiry reminders** to the client
 
 **Nothing is dropped.** Work that comes due outside the window stays queued and goes out at the first check inside it: Monday 6:00 AM for anything due over the weekend. A booking-link reply to someone who wrote in at night is marked pending and sent once the window opens; one still pending after a week is dropped, because the conversation has moved on by then. A reminder goes at the first hour inside the window that is still 1 to 24 hours before the meeting.
 

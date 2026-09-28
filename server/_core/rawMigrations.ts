@@ -4286,6 +4286,19 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0192: pause all outbound ──────────────────────────────────────────────
+  // Owner ask 2026-09-28: "pause all outbound emails across all workspaces",
+  // then "build the switch". While set, the send window reads as closed, so
+  // everything Velocity sends on its own waits; what a person clicks does not
+  // (owner: "dont worry about stopping the human sends").
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0192_outbound_pause.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `outboundPausedAt` timestamp NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

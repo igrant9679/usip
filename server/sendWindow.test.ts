@@ -116,7 +116,7 @@ beforeEach(() => {
 describe("inSendWindow", () => {
   it("reads the workspace's own window and zone", async () => {
     settingsRow = { timezone: NY, startHour: 9, endHour: 12, days: "3" };
-    expect(await getWorkspaceSendWindow(4)).toEqual({ timezone: NY, window: { startHour: 9, endHour: 12, days: [3] } });
+    expect(await getWorkspaceSendWindow(4)).toEqual({ timezone: NY, window: { startHour: 9, endHour: 12, days: [3] }, paused: false });
     expect(await inSendWindow(4, wedNY(10))).toBe(true);
     invalidateSendWindowCache(4);
     expect(await inSendWindow(4, wedNY(13))).toBe(false);
@@ -127,6 +127,15 @@ describe("inSendWindow", () => {
     expect(await inSendWindow(4, Date.UTC(2026, 8, 30, 3, 0))).toBe(false); // 3 AM UTC
     invalidateSendWindowCache(4);
     expect(await inSendWindow(4, Date.UTC(2026, 8, 30, 10, 0))).toBe(true);
+  });
+
+  it("Pause all outbound keeps the window shut, even mid-window; off reopens it", async () => {
+    settingsRow = { timezone: NY, startHour: 6, endHour: 17, days: "1,2,3,4,5", pausedAt: new Date() };
+    expect(await inSendWindow(4, wedNY(10))).toBe(false);
+    expect((await getWorkspaceSendWindow(4, wedNY(10))).paused).toBe(true);
+    invalidateSendWindowCache(4);
+    settingsRow = { timezone: NY, startHour: 6, endHour: 17, days: "1,2,3,4,5", pausedAt: null };
+    expect(await inSendWindow(4, wedNY(10))).toBe(true);
   });
 
   it("a saved change applies at once: Settings clears the cache", () => {
@@ -224,6 +233,22 @@ describe("every sender that goes out on its own waits for the window", () => {
     expect(admin).toContain("const end = input.sendWindowEndHour ?? current.sendWindowEndHour;");
     expect(admin).toContain('if (!(start < end)) {\n          throw new TRPCError({ code: "BAD_REQUEST", message: "The send window must start before it ends." });');
     expect(admin).toContain("if (input.sendWindowDays !== undefined) patch.sendWindowDays = formatSendDays(input.sendWindowDays);");
+  });
+
+  it("the pause switch: stored as when it was paused, cleared when switched off, on the card", () => {
+    const admin = read("server/routers/admin.ts");
+    expect(admin).toContain("outboundPaused: z.boolean().optional(),");
+    expect(admin).toContain("patch.outboundPausedAt = input.outboundPaused ? new Date() : null;");
+    expect(admin).toContain("delete patch.outboundPaused;");
+    const page = read("client/src/pages/usip/Settings.tsx");
+    expect(page).toContain('onCheckedChange={(v) => save({ outboundPaused: v })} />');
+    expect(read("server/_core/rawMigrations.ts")).toContain("\"ALTER TABLE `workspace_settings` ADD COLUMN `outboundPausedAt` timestamp NULL\"");
+  });
+
+  it("proposal expiry reminders to clients wait for the window (and the pause) too", () => {
+    const s = read("server/emailTracking.ts").replace(/\r\n/g, "\n");
+    expect(s).toContain("          if (alreadySent.length > 0) continue;\n          // An automatic email to the client: it waits for the workspace send");
+    expect(s).toContain("          if (!(await inSendWindow(rp.workspaceId))) continue;\n          // Build reminder email");
   });
 
   it("the Help Center says what waits, and that what a person clicks does not", () => {
