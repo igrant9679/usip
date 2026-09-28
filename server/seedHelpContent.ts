@@ -111,12 +111,13 @@ export const ARTICLES: ArticleSeed[] = [
 
 **The meeting link.** Every invite carries a **Microsoft Teams** link, created by the owner's Microsoft 365 calendar when the invite is sent; it shows on the meeting once sent. To use Zoom, Google Meet or any other link instead, open the proposal's **Edit** and fill in **Meeting link (optional)**: that link is used instead of Teams and added to the invite text. Clear it to go back to Teams. A calendar connected over CalDAV cannot create Teams meetings, so give those proposals a link.
 
-**The times it offers.** Up to three times, each starting between **9:00 AM and 4:00 PM** in the workspace time zone, on weekdays, at least a day ahead. They avoid the owner's live calendar and meetings already booked for them, and they are **spread out**: a time already offered by the owner's other proposals goes to the back of the queue, so a busy queue does not hand everyone the same slot. You can edit the times before approving; a time outside the window will not save. If the time zone changes after proposals were drafted, **Regenerate outdated** gives them fresh times.
+**The times it offers.** Up to three times, each starting between **9:00 AM and 4:00 PM** in the workspace time zone, on weekdays, at least a day ahead. They avoid the owner's live calendar and meetings already booked for them, and they are **spread out**: a time already offered by the owner's other proposals goes to the back of the queue, so a busy queue does not hand everyone the same slot. They are also **spread across days**: an owner gets at most **3 meetings a day**, so a day that already has 3 is never offered, and lighter days come first. You can edit the times before approving; a time outside the window will not save. If the time zone changes after proposals were drafted, **Regenerate outdated** gives them fresh times.
 
 **What is checked when it sends.** Approve & send and Autonomous go through the same checks, and when one fails nothing is sent, the proposal stays in the queue, and a message says why:
 - **no email address** for the prospect: there is no one to invite (the card says so and cannot be approved);
 - **outside 9 AM–4 PM**: the offered times were drafted under another time zone; regenerate;
 - **already booked**: if the first offered time is taken on the owner's calendar, the next free offered time is used instead; a time you picked yourself is refused rather than moved;
+- **day already full**: with no time picked (Autonomous, Approve & send all), an offered time on a day the owner already has 3 meetings is skipped; if every offered day is full, nothing is sent and regenerating gives it other days. A time you pick yourself on a card is honoured even on a busy day;
 - **already invited**: this person already has an upcoming invite, even under a duplicate record;
 - **no calendar connected** for the owner.
 

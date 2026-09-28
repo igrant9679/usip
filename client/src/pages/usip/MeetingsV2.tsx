@@ -147,6 +147,7 @@ export default function MeetingsV2() {
       else if (r.reason === "already_invited") toast.error("This person already has an upcoming invite or meeting (perhaps under a duplicate record). Nothing was sent.");
       else if (r.reason === "no_attendee_email") toast.error("This prospect has no email address, so there is no one to send the invite to. Nothing was sent.");
       else if (r.reason === "time_taken") toast.error("That time is already booked on the owner's calendar. Pick another offered time; nothing was sent.");
+      else if (r.reason === "days_full") toast.error("The owner already has 3 meetings on every day this proposal offers. Regenerate it for other days; nothing was sent.");
       else if (r.reason === "all_times_taken") toast.error("Every offered time is already booked on the owner's calendar. Regenerate the proposal for free times; nothing was sent.");
       else toast.error(`Invite not sent (${r.reason ?? "unknown"}) — the proposal was kept.`);
     },

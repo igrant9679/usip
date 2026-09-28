@@ -88,6 +88,22 @@ const ACTIVE_MEETING_STATUSES = liveMeetingStatuses();
 export const PROPOSAL_FIRST_START_HOUR = 9;
 export const PROPOSAL_LAST_START_HOUR = 16;
 
+/**
+ * At most this many live meetings per owner per day (owner ask 2026-09-28:
+ * "add the per-day spread"). Autonomous drafted and sent 8 CommunityForce
+ * invites in one run and every one landed on Thu Oct 8, 9 AM through 4 PM:
+ * each proposal was sent as soon as it was drafted, so its other offers
+ * stopped counting, and Oct 8 stayed the least-offered day for all eight.
+ * Drafting never offers a day already this full, and sending (with no time
+ * picked) skips one.
+ */
+export const MAX_MEETINGS_PER_OWNER_PER_DAY = 3;
+
+/** The calendar day ("YYYY-MM-DD") an instant falls on in `timezone`. */
+export function dayKeyIn(t: Date | string | number, timezone: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: safeTimezone(timezone) }).format(new Date(t));
+}
+
 export function computeSlots(
   busy: { startAt: Date | string | null; endAt: Date | string | null }[],
   count: number,
@@ -95,6 +111,12 @@ export function computeSlots(
   timezone: string,
   /** ISO start → how many of the owner's other open proposals offer it. */
   offered?: ReadonlyMap<string, number>,
+  /**
+   * The per-day spread: `load` weighs each day (offers plus booked meetings)
+   * so lighter days win among equally-offered slots; `full` days are never
+   * offered.
+   */
+  days?: { load?: ReadonlyMap<string, number>; full?: ReadonlySet<string> },
 ): string[] {
   const ranges = busy
     .filter((b) => b.startAt && b.endAt)
@@ -123,9 +145,11 @@ export function computeSlots(
   // the same three times, so approving them in bulk booked 33 prospects into
   // one slot. The sort is stable, so among equally-offered slots the order
   // above still decides, and with nothing offered yet this is the old pick.
+  const dayOf = (iso: string) => dayKeyIn(iso, zone);
   const ordered = [...preferred, ...rest]
-    .map((s, i) => ({ s, i, n: offered?.get(s) ?? 0 }))
-    .sort((a, b) => a.n - b.n || a.i - b.i)
+    .filter((s) => !days?.full?.has(dayOf(s)))
+    .map((s, i) => ({ s, i, n: offered?.get(s) ?? 0, d: days?.load?.get(dayOf(s)) ?? 0 }))
+    .sort((a, b) => a.n - b.n || a.d - b.d || a.i - b.i)
     .map((x) => x.s);
   const picked = ordered.slice(0, count);
   // A slot list must be chronological — the LLM is told to reference these in
@@ -333,6 +357,7 @@ async function draftProposalContent(workspaceId: number, target: MeetingTarget, 
   const ownerUserId = target.ownerUserId ?? null;
   let busy: { startAt: Date | string | null; endAt: Date | string | null }[] = [];
   let offered: Map<string, number> | undefined;
+  let booked: { startAt: Date; endAt: Date }[] = [];
   if (db && ownerUserId) {
     const from = new Date();
     const to = new Date(Date.now() + 14 * 86400000);
@@ -349,13 +374,23 @@ async function draftProposalContent(workspaceId: number, target: MeetingTarget, 
     const mine = await ownerCommitments(workspaceId, ownerUserId, opts.excludeMeetingId);
     busy = busy.concat(mine.booked);
     offered = mine.offered;
+    booked = mine.booked;
   }
   // The workspace's own timezone (workspace_settings.timezone, default "UTC").
   // Settings.tsx describes it as "used for scheduling, reporting, and activity
   // timestamps" and until now NOTHING read it — a saved setting enforced by
   // nothing, on the screen that promises it governs scheduling.
   const workspaceTz = await getWorkspaceTimezone(workspaceId);
-  const slots = computeSlots(busy, 3, durationMin, workspaceTz, offered);
+  // The per-day spread: a booked meeting weighs three offers, and a day with
+  // MAX_MEETINGS_PER_OWNER_PER_DAY booked is not offered at all.
+  const bookedPerDay = new Map<string, number>();
+  for (const b of booked) bookedPerDay.set(dayKeyIn(b.startAt, workspaceTz), (bookedPerDay.get(dayKeyIn(b.startAt, workspaceTz)) ?? 0) + 1);
+  const dayLoad = new Map<string, number>(bookedPerDay);
+  dayLoad.forEach((n, d) => dayLoad.set(d, n * 3));
+  offered?.forEach((n, iso) => { const d = dayKeyIn(iso, workspaceTz); dayLoad.set(d, (dayLoad.get(d) ?? 0) + n); });
+  const fullDays = new Set<string>();
+  bookedPerDay.forEach((n, d) => { if (n >= MAX_MEETINGS_PER_OWNER_PER_DAY) fullDays.add(d); });
+  const slots = computeSlots(busy, 3, durationMin, workspaceTz, offered, { load: dayLoad, full: fullDays });
   const name = target.name || "there";
   const firstName = target.firstName || name.split(" ")[0] || "there";
 
@@ -693,8 +728,22 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
     const candidates = chosenTime ? [start] : offerable.map((t) => new Date(t));
     const last = candidates[candidates.length - 1];
     const taken = await takenRanges(workspaceId, m.ownerUserId, acc, meetingId, candidates[0], new Date(last.getTime() + durMs));
-    const free = candidates.find((c) => !taken.some((r) => r.startAt.getTime() < c.getTime() + durMs && r.endAt.getTime() > c.getTime()));
-    if (!free) return { sent: false, scheduledAt: null, reason: chosenTime ? "time_taken" : "all_times_taken" };
+    // The per-day spread: with no time picked (Autonomous, Approve & send
+    // all), an offered time on a day the owner already has
+    // MAX_MEETINGS_PER_OWNER_PER_DAY live meetings is skipped. A time a
+    // person picked is theirs to choose.
+    let dayFull = (_c: Date) => false;
+    if (!chosenTime) {
+      const { booked } = await ownerCommitments(workspaceId, m.ownerUserId, meetingId);
+      const perDay = new Map<string, number>();
+      for (const b of booked) perDay.set(dayKeyIn(b.startAt, tz), (perDay.get(dayKeyIn(b.startAt, tz)) ?? 0) + 1);
+      dayFull = (c) => (perDay.get(dayKeyIn(c, tz)) ?? 0) >= MAX_MEETINGS_PER_OWNER_PER_DAY;
+    }
+    const free = candidates.find((c) => !dayFull(c) && !taken.some((r) => r.startAt.getTime() < c.getTime() + durMs && r.endAt.getTime() > c.getTime()));
+    if (!free) {
+      const reason = chosenTime ? "time_taken" : candidates.every(dayFull) ? "days_full" : "all_times_taken";
+      return { sent: false, scheduledAt: null, reason };
+    }
     start = free;
     end = new Date(free.getTime() + durMs);
   }
