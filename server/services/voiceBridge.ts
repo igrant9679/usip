@@ -18,11 +18,10 @@ import { tryDecryptSecret } from "../_core/crypto";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { logCallActivity } from "./voiceCrmLink";
 import { buildBrandContext } from "./brandContext";
+// Hard safety cap — hang up runaway calls (also caps vendor spend at $0.05/min).
+import { MAX_CALL_MS, hangupXaiCall } from "./voiceGuards";
 
 const XAI_REALTIME_WS = "wss://api.x.ai/v1/realtime";
-const XAI_API_BASE = "https://api.x.ai/v1";
-/** Hard safety cap — hang up runaway calls (also caps vendor spend at $0.05/min). */
-const MAX_CALL_MS = 30 * 60 * 1000;
 
 type BridgeOpts = {
   workspaceId: number;
@@ -123,6 +122,14 @@ export function answerInboundCall(opts: BridgeOpts): void {
       if (finalized) return;
       finalized = true;
       clearTimeout(capTimer);
+      /**
+       * Whatever ended our side, end xAI's too. Closing the socket does not
+       * end a SIP call, so a dropped socket used to leave the call running
+       * with the cap timer already cleared: unbounded minutes on the
+       * workspace's key, and a transcript nobody records. When the caller
+       * hung up first this is a harmless no-op.
+       */
+      void hangupXaiCall(apiKey, opts.xaiCallId);
       const digest = transcript.length ? transcript.join("\n") : null;
       await finalizeRow(opts.callRowId, {
         status,
@@ -143,13 +150,10 @@ export function answerInboundCall(opts: BridgeOpts): void {
     });
 
     const capTimer = setTimeout(() => {
-      // REST hangup is authoritative; closing the WS alone doesn't end the call.
-      void fetch(`${XAI_API_BASE}/realtime/calls/${encodeURIComponent(opts.xaiCallId)}/hangup`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}` },
-      }).catch(() => {});
-      try { sock.close(); } catch { /* noop */ }
+      // REST hangup is authoritative (finishOnce sends it); closing the WS
+      // alone doesn't end the call.
       void finishOnce("completed", "Call ended by 30-minute safety cap.");
+      try { sock.close(); } catch { /* noop */ }
     }, MAX_CALL_MS);
 
     sock.on("open", () => {

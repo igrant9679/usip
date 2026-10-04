@@ -312,6 +312,8 @@ function AgentRow({ a, canManage, onEdit }: { a: Agent; canManage: boolean; onEd
           <span className="truncate text-[13.5px] font-semibold">{a.name}</span>
           <span className="rounded-full bg-secondary px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground capitalize">{a.voice}</span>
           {a.hasWebhookSecret && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10.5px] font-medium text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">Webhook verified</span>}
+          {/* No secret, no calls (security audit 2026-10-04): unsigned webhooks are rejected. */}
+          {!a.hasWebhookSecret && a.phoneNumber && <span title="Calls to this number are rejected until you add the webhook signing secret xAI gave you." className="rounded-full bg-amber-100 px-2 py-0.5 text-[10.5px] font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">No signing secret: calls rejected</span>}
         </div>
         <div className="truncate text-[12px] text-muted-foreground">
           {isCallback ? `Call-back agent${a.owner?.name ? ` · answers for ${a.owner.name}` : ""}` : "Outreach agent"}
@@ -497,7 +499,7 @@ function AgentDialog({
                 placeholder={agent?.hasWebhookSecret ? "Saved — enter to replace" : "whsec_…"}
                 autoComplete="off"
               />
-              <p className="text-[11.5px] text-muted-foreground">Shown once by xAI when the number is registered.</p>
+              <p className="text-[11.5px] text-muted-foreground">Shown once by xAI when the number is registered. Required: calls Velocity cannot verify are rejected.</p>
             </div>
           </div>
 

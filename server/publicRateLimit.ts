@@ -137,9 +137,32 @@ export const scheduledTaskLimiter = rateLimit({
  * shape as the dead wiring swept out of this repo already. The call site moved
  * up with the routes, and `_core/index.test.ts` fails if it drifts back down.
  */
+/**
+ * The xAI voice webhook (`/api/voice/xai/webhook`).
+ *
+ * Unauthenticated by nature: every request is checked against every active
+ * agent's signing secret before it is turned away, so an unlimited caller
+ * gets that work done for free. One xAI delivery per incoming call; 120 a
+ * minute is far past any real call volume (security audit 2026-10-04).
+ */
+export const voiceWebhookLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKey,
+  handler: (_req: Request, res: Response) => {
+    res.status(429).json({ ok: false, error: "Too many webhook calls from this address." });
+  },
+  skip: () => process.env.NODE_ENV === "test",
+});
+
 export function registerPublicRateLimits(app: Express): void {
   app.use("/api/scheduled", (req: Request, res: Response, next: NextFunction) =>
     scheduledTaskLimiter(req, res, next),
+  );
+  app.use("/api/voice", (req: Request, res: Response, next: NextFunction) =>
+    voiceWebhookLimiter(req, res, next),
   );
   app.use("/api/trpc", (req: Request, res: Response, next: NextFunction) => {
     const path = req.path ?? "";

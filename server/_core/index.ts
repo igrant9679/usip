@@ -122,7 +122,7 @@ async function startServer() {
   // Before serveStatic's SPA catch-all, or /api/health would return index.html
   // — a 200 with the wrong body, which is the failure this endpoint exists to
   // rule out. Unaffected by registerPublicRateLimits (it covers only
-  // /api/scheduled and /api/trpc).
+  // /api/scheduled, /api/voice and /api/trpc).
   registerHealthRoute(app);
   registerPublicRateLimits(app);
   registerStorageProxy(app);
@@ -467,6 +467,17 @@ async function startServer() {
   };
   setTimeout(runInviteResponses, 3 * 60 * 1000); // first run 3 minutes after boot
   setInterval(runInviteResponses, 15 * 60 * 1000); // every 15 minutes
+
+  // Voice agent calls whose bridge was lost (a restart mid-call) keep running,
+  // and billing, inside xAI until hung up. This finds them past the per-call
+  // cap, hangs them up, and closes the row (security audit 2026-10-04).
+  const runStaleVoiceSweep = () => {
+    import("../services/voiceGuards")
+      .then((m) => m.sweepStaleVoiceCalls())
+      .catch((e) => console.error("[VoiceGuards] stale-call sweep failed:", e));
+  };
+  setTimeout(runStaleVoiceSweep, 2 * 60 * 1000); // first run 2 minutes after boot
+  setInterval(runStaleVoiceSweep, 5 * 60 * 1000); // every 5 minutes
 
   // Conversation Autopilot: classify inbound replies (email_replies) with the
   // 8-class taxonomy; in 'auto' mode also apply the per-class action (a positive
