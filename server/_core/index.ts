@@ -65,6 +65,7 @@ import { startInboundReplyPoller } from "../inboundReplyPoller";
 import { expireInvitations, sendExpiryWarningEmails } from "../inviteExpiry";
 import { registerUnipileWebhookRoutes } from "../unipileWebhook";
 import { registerVoiceWebhookRoutes } from "../voiceWebhook";
+import { attachPlivoStream, registerPlivoWebhookRoutes } from "../plivoWebhook";
 import { registerWebsiteTrackingRoutes } from "../websiteTracking";
 import { registerChatWidgetRoutes } from "../chatWidget";
 import { runChatFollowUps } from "../services/chatFollowUp";
@@ -137,6 +138,9 @@ async function startServer() {
   registerChatWidgetRoutes(app);
   registerUnipileWebhookRoutes(app);
   registerVoiceWebhookRoutes(app);
+  // Plivo: AI calls placed and answered through Velocity (owner 2026-10-04).
+  registerPlivoWebhookRoutes(app);
+  attachPlivoStream(server);
   registerUnsubscribeRoute(app);
   registerPasswordAuthRoutes(app);
   registerGraphOAuthRoutes(app);
@@ -478,6 +482,16 @@ async function startServer() {
   };
   setTimeout(runStaleVoiceSweep, 2 * 60 * 1000); // first run 2 minutes after boot
   setInterval(runStaleVoiceSweep, 5 * 60 * 1000); // every 5 minutes
+
+  // AI call dialer (owner ask 2026-10-04): places APPROVED calls only, in
+  // each person's calling hours, never while outbound is paused.
+  const runAiCalls = () => {
+    import("../services/aiCallDialer")
+      .then((m) => m.runAiCallDialer())
+      .catch((e) => console.error("[AiCallDialer] run failed:", e));
+  };
+  setTimeout(runAiCalls, 90 * 1000); // first run 90 seconds after boot
+  setInterval(runAiCalls, 60 * 1000); // every minute
 
   // Conversation Autopilot: classify inbound replies (email_replies) with the
   // 8-class taxonomy; in 'auto' mode also apply the per-class action (a positive

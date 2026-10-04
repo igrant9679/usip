@@ -754,7 +754,7 @@ export const ASSISTANT_TOOLS: Tool[] = [
     properties: { meetingIds: { type: "array", items: { type: "number" } }, chosenTime: { type: "string", description: "ISO time to book, when the user picked one (single meeting)" } },
     required: ["meetingIds"],
   }),
-  t("queue_calls", "PROPOSE creating a call task for each person (their phone shows on the task). Velocity cannot place outbound calls itself — the AI voice agents answer inbound call-backs only — so this queues the calls for a human. The user must confirm.", {
+  t("queue_calls", "PROPOSE creating a call task for each person (their phone shows on the task). This queues the calls for a human; AI calls are a separate, approval-gated flow (People → Queue AI call, approved on the Calls page) that this tool does not touch. The user must confirm.", {
     type: "object",
     properties: {
       prospectIds: { type: "array", items: { type: "number" } },

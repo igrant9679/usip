@@ -4299,6 +4299,70 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0193: AI calls through Plivo, approved before they dial ──────────────
+  // Owner ask 2026-10-04: outbound AI calls, "gated and not autonomous …
+  // approved, in batches and/or 1 by 1 … needs to book meetings", on
+  // Plivo with grok-voice-think-fast-2.0. Plivo credentials, the agent's
+  // Plivo number, the call-request queue, a do-not-call list, three call
+  // statuses a dialed call can end in, and the model pinned by name.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0193_ai_calls_plivo.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `plivoAuthId` varchar(64) NULL",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `plivoAuthTokenEnc` text NULL",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `plivoAppId` varchar(64) NULL",
+      "ALTER TABLE `voice_agents` ADD COLUMN `plivoNumber` varchar(32) NULL",
+      "ALTER TABLE `voice_agents` MODIFY COLUMN `model` varchar(64) NOT NULL DEFAULT 'grok-voice-think-fast-2.0'",
+      "UPDATE `voice_agents` SET `model` = 'grok-voice-think-fast-2.0' WHERE `model` = 'grok-voice-latest'",
+      "ALTER TABLE `voice_calls` MODIFY COLUMN `status` enum('queued','ringing','in_progress','completed','failed','no_answer','voicemail','busy','canceled') NOT NULL DEFAULT 'queued'",
+      "ALTER TABLE `voice_calls` ADD COLUMN `provider` varchar(16) NULL",
+      "ALTER TABLE `voice_calls` ADD COLUMN `plivoCallUuid` varchar(64) NULL",
+      "ALTER TABLE `voice_calls` ADD COLUMN `requestId` int NULL",
+      "ALTER TABLE `voice_calls` ADD COLUMN `meetingId` int NULL",
+      "ALTER TABLE `voice_calls` ADD COLUMN `result` varchar(24) NULL",
+      "CREATE INDEX `ix_vc_plivo` ON `voice_calls` (`plivoCallUuid`)",
+      "CREATE TABLE IF NOT EXISTS `voice_call_requests` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`agentId` INT NOT NULL, " +
+        "`prospectId` INT NOT NULL, " +
+        "`toNumber` VARCHAR(20) NOT NULL, " +
+        "`personName` VARCHAR(160) NULL, " +
+        "`company` VARCHAR(200) NULL, " +
+        "`email` VARCHAR(320) NULL, " +
+        "`timezone` VARCHAR(64) NOT NULL, " +
+        "`callNotes` TEXT NULL, " +
+        "`ownerUserId` INT NULL, " +
+        "`status` ENUM('draft','approved','dialing','done','rejected','skipped') NOT NULL DEFAULT 'draft', " +
+        "`statusReason` VARCHAR(240) NULL, " +
+        "`consentConfirmedByUserId` INT NULL, " +
+        "`consentConfirmedAt` TIMESTAMP NULL, " +
+        "`approvedByUserId` INT NULL, " +
+        "`approvedAt` TIMESTAMP NULL, " +
+        "`createdByUserId` INT NULL, " +
+        "`voiceCallId` INT NULL, " +
+        "`attempts` INT NOT NULL DEFAULT 0, " +
+        "`lastAttemptAt` TIMESTAMP NULL, " +
+        "`result` VARCHAR(24) NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "`updatedAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
+        "INDEX `ix_vcr_ws_status` (`workspaceId`, `status`), " +
+        "INDEX `ix_vcr_prospect` (`prospectId`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "CREATE TABLE IF NOT EXISTS `call_suppressions` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`phone` VARCHAR(20) NOT NULL, " +
+        "`reason` VARCHAR(32) NOT NULL, " +
+        "`prospectId` INT NULL, " +
+        "`createdByUserId` INT NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "UNIQUE INDEX `ux_cs_ws_phone` (`workspaceId`, `phone`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

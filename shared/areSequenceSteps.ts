@@ -32,8 +32,9 @@ export type AreStepChannel = (typeof ARE_STEP_CHANNELS)[number];
  * are_execution_queue channel enum and legacy rows written before 2026-09-20
  * carry sms/voice, so narrowing it would make the reader lie about what is on
  * disk. This second list is the SENDING vocabulary: there is no SMS gateway
- * anywhere in the repo, and the voice bridge only answers inbound calls
- * (services/voiceBridge.ts exports answerInboundCall and nothing else), so a
+ * anywhere in the repo, and campaigns never dial: since 2026-10-04 Velocity
+ * places AI calls, but only ones a manager approved one by one or in a batch
+ * on the Calls page (routers/aiCalls.ts), never from a campaign step. So a
  * step on either channel is minted, queued, and skipped forever.
  *
  * Deliberately two lists, never collapsed into one: the reader must keep
@@ -53,7 +54,7 @@ export function isSendableChannel(ch: unknown): boolean {
  */
 export const UNSENDABLE_CHANNEL_REASON: Record<string, string> = {
   sms: "No SMS gateway is connected — SMS steps are never sent.",
-  voice: "Outbound calling is not available (voice agents answer inbound call-backs only) — voice steps are never sent.",
+  voice: "Campaigns do not place calls: AI calls are queued from People and approved on the Calls page — voice steps are never sent.",
 };
 
 export function unsendableReason(ch: unknown): string | null {

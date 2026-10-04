@@ -28,9 +28,13 @@ import { encryptSecret, maskSecret, tryDecryptSecret } from "../_core/crypto";
 import { roleRank } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
+import { recordAudit } from "../audit";
+import { assignNumber, ensureApplication, getAccount, listNumbers, plivoCreds } from "../services/plivo";
 
 export const XAI_API_BASE = "https://api.x.ai/v1";
-export const DEFAULT_VOICE_MODEL = "grok-voice-latest";
+// Pinned by name (owner 2026-10-04: "Go with Think Fast 2.0"). grok-voice-latest
+// is an alias for it today, but xAI can move an alias; a pinned name cannot.
+export const DEFAULT_VOICE_MODEL = "grok-voice-think-fast-2.0";
 /** Documented built-in voices — fallback when no key is configured yet. */
 const BUILTIN_VOICES = ["eve", "ara", "rex", "sal", "leo"];
 
@@ -42,6 +46,12 @@ async function getXaiKey(workspaceId: number): Promise<string> {
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
   return tryDecryptSecret(row?.enc);
+}
+
+async function requireDb() {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
+  return db;
 }
 
 function isAdmin(role: string): boolean {
@@ -109,6 +119,106 @@ export const voiceAgentsRouter = router({
         await db.update(workspaceSettings).set(updates).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
       }
       return { ok: true };
+    }),
+
+  /* ── Plivo telephony (owner 2026-10-04) ──────────────────────────────── */
+
+  plivoStatus: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await requireDb();
+    const [row] = await db
+      .select({ authId: workspaceSettings.plivoAuthId, enc: workspaceSettings.plivoAuthTokenEnc, appId: workspaceSettings.plivoAppId })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
+      .limit(1);
+    const token = tryDecryptSecret(row?.enc);
+    return { configured: !!row?.authId && !!token, authId: row?.authId ?? null, tokenMasked: maskSecret(token), appConnected: !!row?.appId };
+  }),
+
+  savePlivo: adminWsProcedure
+    .input(z.object({ authId: z.string().max(64).optional(), authToken: z.string().max(200).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const existing = await db.select({ workspaceId: workspaceSettings.workspaceId }).from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id)).limit(1);
+      if (existing.length === 0) await db.insert(workspaceSettings).values({ workspaceId: ctx.workspace.id });
+      const updates: Record<string, string | null> = {};
+      if (input.authId !== undefined) {
+        const id = input.authId.trim();
+        if (id && !/^[A-Za-z0-9]{8,64}$/.test(id)) throw new TRPCError({ code: "BAD_REQUEST", message: "That does not look like a Plivo Auth ID." });
+        updates.plivoAuthId = id || null;
+        // A different account: the application belongs to the old one.
+        updates.plivoAppId = null;
+      }
+      if (input.authToken !== undefined) updates.plivoAuthTokenEnc = input.authToken.trim() ? encryptSecret(input.authToken.trim()) : null;
+      if (Object.keys(updates).length) {
+        await db.update(workspaceSettings).set(updates).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      }
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "plivo_connection", entityId: null, after: { authId: input.authId !== undefined, authToken: input.authToken !== undefined ? "changed" : "unchanged" } });
+      return { ok: true };
+    }),
+
+  testPlivo: adminWsProcedure.mutation(async ({ ctx }) => {
+    const creds = await plivoCreds(ctx.workspace.id);
+    if (!creds) throw new TRPCError({ code: "BAD_REQUEST", message: "Add the Plivo Auth ID and Auth Token first." });
+    try {
+      const acct = await getAccount(creds);
+      const numbers = await listNumbers(creds);
+      return { ok: true, accountName: acct.name ?? null, credits: acct.cash_credits ?? null, numbers: numbers.length };
+    } catch (e) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: e instanceof Error ? e.message : String(e) });
+    }
+  }),
+
+  plivoNumbers: adminWsProcedure.query(async ({ ctx }) => {
+    const creds = await plivoCreds(ctx.workspace.id);
+    if (!creds) return [];
+    try {
+      return (await listNumbers(creds)).filter((n) => n.voiceEnabled);
+    } catch {
+      return [];
+    }
+  }),
+
+  /**
+   * Give an agent a Plivo number: Velocity creates (or updates) the
+   * workspace's Plivo application, points the number at it, and records the
+   * number on the agent. Calls to it are answered by this agent; approved AI
+   * calls are placed from it. null takes the number off the agent.
+   */
+  connectPlivoNumber: adminWsProcedure
+    .input(z.object({ agentId: z.number().int(), number: z.string().max(32).nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const [agent] = await db.select().from(voiceAgents)
+        .where(and(eq(voiceAgents.id, input.agentId), eq(voiceAgents.workspaceId, ctx.workspace.id))).limit(1);
+      if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
+      if (input.number === null) {
+        await db.update(voiceAgents).set({ plivoNumber: null }).where(eq(voiceAgents.id, agent.id));
+        return { ok: true, number: null };
+      }
+      const creds = await plivoCreds(ctx.workspace.id);
+      if (!creds) throw new TRPCError({ code: "BAD_REQUEST", message: "Connect Plivo first." });
+      const want = input.number.replace(/\D/g, "");
+      try {
+        const owned = (await listNumbers(creds)).find((n) => n.number.replace(/\D/g, "") === want);
+        if (!owned) throw new TRPCError({ code: "BAD_REQUEST", message: "That number is not on this Plivo account." });
+        const [s] = await db.select({ appId: workspaceSettings.plivoAppId }).from(workspaceSettings)
+          .where(eq(workspaceSettings.workspaceId, ctx.workspace.id)).limit(1);
+        const appId = await ensureApplication(ctx.workspace.id, creds, s?.appId ?? null);
+        if (appId !== s?.appId) {
+          await db.update(workspaceSettings).set({ plivoAppId: appId }).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+        }
+        await assignNumber(creds, owned.number, appId);
+        // One agent per number: it would otherwise be unclear who answers.
+        await db.update(voiceAgents).set({ plivoNumber: null })
+          .where(and(eq(voiceAgents.workspaceId, ctx.workspace.id), eq(voiceAgents.plivoNumber, owned.number)));
+        await db.update(voiceAgents).set({ plivoNumber: owned.number }).where(eq(voiceAgents.id, agent.id));
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "voice_agent", entityId: agent.id, after: { plivoNumber: owned.number } });
+        return { ok: true, number: owned.number };
+      } catch (e) {
+        if (e instanceof TRPCError) throw e;
+        throw new TRPCError({ code: "BAD_REQUEST", message: e instanceof Error ? e.message : String(e) });
+      }
     }),
 
   /** Live key verification — GET /v1/tts/voices with the stored key. */

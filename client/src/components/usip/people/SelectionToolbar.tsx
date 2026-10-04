@@ -34,7 +34,7 @@ import { toast } from "sonner";
 import {
   X, Save, Mail, Send, Workflow as WorkflowIcon, ListPlus, Download, Sparkles, Upload,
   MoreHorizontal, Search, ChevronDown, Plus, Loader2, Activity, Building2, Copy, ListChecks,
-  CheckSquare, Tag, UserX, Trash2, ListX,
+  CheckSquare, Tag, UserX, Trash2, ListX, PhoneCall,
 } from "lucide-react";
 import { ResearchAiMenu } from "./ResearchAiMenu";
 import { WorkflowSelectionMenu } from "./CreateWorkflowMenu";
@@ -108,6 +108,8 @@ export function SelectionToolbar({
       } />
 
       <CreateTasksMenu selectedIds={selectedIds} />
+
+      <QueueAiCallMenu selectedIds={selectedIds} />
 
       <WorkflowSelectionMenu
         trigger={
@@ -195,6 +197,75 @@ export function SequenceMenu({ selectedIds, trigger }: { selectedIds: number[]; 
             ))
           )}
         </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/* ───────────────────────── Queue AI call (functional) ─────────────────── */
+
+const SKIP_LABEL: Record<string, string> = {
+  no_callable_number: "no North American phone number",
+  do_not_call: "on the do-not-call list",
+  already_queued: "already queued",
+  not_found: "not found",
+};
+
+/**
+ * Queue the selection for an outbound AI call (owner ask 2026-10-04). This
+ * only creates drafts on the Calls page; a manager approves them before
+ * anything dials.
+ */
+function QueueAiCallMenu({ selectedIds }: { selectedIds: number[] }) {
+  const n = selectedIds.length;
+  const [open, setOpen] = useState(false);
+  const [agentId, setAgentId] = useState<number | null>(null);
+  const [notes, setNotes] = useState("");
+  const agents = trpc.voiceAgents.list.useQuery(undefined, { enabled: open });
+  const callers = ((agents.data ?? []) as any[]).filter((a) => a.purpose === "outbound_outreach" && a.plivoNumber && a.status === "active");
+  const chosen = agentId ?? callers[0]?.id ?? null;
+  const queue = trpc.aiCalls.queue.useMutation({
+    onSuccess: (r) => {
+      const why = new Map<string, number>();
+      for (const s of r.skipped) why.set(s.reason, (why.get(s.reason) ?? 0) + 1);
+      const skipped = Array.from(why.entries()).map(([k, c]) => `${c} ${SKIP_LABEL[k] ?? k}`).join(", ");
+      toast.success(`${r.queued} queued for approval on the Calls page${skipped ? `. Skipped: ${skipped}` : ""}`);
+      setOpen(false); setNotes("");
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Could not queue calls"),
+  });
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm" className="gap-1.5">
+          <PhoneCall className="size-4" /> Queue AI call
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 p-3 space-y-2.5">
+        <div className="text-[13px] font-medium">AI call for {n} {n === 1 ? "person" : "people"}</div>
+        {agents.isLoading ? (
+          <div className="text-[12px] text-muted-foreground">Loading agents…</div>
+        ) : callers.length === 0 ? (
+          <div className="text-[12px] text-muted-foreground">
+            No outreach agent with a Plivo number yet. Set one up in Settings → Voice agents.
+          </div>
+        ) : (
+          <>
+            <select value={chosen ?? ""} onChange={(e) => setAgentId(Number(e.target.value))} className="h-8 w-full rounded-md border bg-background px-2 text-[13px]">
+              {callers.map((a) => <option key={a.id} value={a.id}>{a.name} · {a.plivoNumber}</option>)}
+            </select>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={1500} rows={3}
+              placeholder="Notes for the agent (optional), e.g. mention our October webinar"
+              className="w-full rounded-md border bg-background px-2 py-1.5 text-[13px] outline-none" />
+            <p className="text-[11.5px] text-muted-foreground">
+              Nothing dials yet: the calls wait on the Calls page for a manager's approval, then dial during each person's calling hours.
+            </p>
+            <Button size="sm" className="w-full" disabled={!chosen || queue.isPending}
+              onClick={() => chosen && queue.mutate({ prospectIds: selectedIds, agentId: chosen, ...(notes.trim() ? { callNotes: notes.trim() } : {}) })}>
+              {queue.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null} Queue {n} call{n === 1 ? "" : "s"} for approval
+            </Button>
+          </>
+        )}
       </PopoverContent>
     </Popover>
   );

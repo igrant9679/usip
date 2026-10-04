@@ -62,6 +62,7 @@ import { reoonRouter } from "./routers/reoon";
 import { quickenrichRouter } from "./routers/quickenrich";
 import { prospectSourcesRouter } from "./routers/prospectSources";
 import { voiceAgentsRouter } from "./routers/voiceAgents";
+import { aiCallsRouter } from "./routers/aiCalls";
 import { reportsRouter } from "./routers/reports";
 import { profileRouter } from "./routers/profile";
 import { prospectsRouter } from "./routers/prospects";
@@ -183,6 +184,7 @@ export const appRouter = router({
   quickenrich: quickenrichRouter,
   prospectSources: prospectSourcesRouter,
   voiceAgents: voiceAgentsRouter,
+  aiCalls: aiCallsRouter,
   reports: reportsRouter,
   profile: profileRouter,
   prospects: prospectsRouter,

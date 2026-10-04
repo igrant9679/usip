@@ -1840,6 +1840,13 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // (wss://api.x.ai/v1/realtime + SIP). Same AES-256-GCM BYOK pattern as above.
   xaiApiKeyEnc: text("xaiApiKeyEnc"),
   xaiVoiceModel: varchar("xaiVoiceModel", { length: 64 }), // default grok-voice-latest (in code)
+  // Plivo telephony (Migration 0193): places the AI agents' outbound calls
+  // and answers calls to their Plivo numbers; the audio streams through
+  // Velocity to xAI. Auth Token is AES-256-GCM like every BYOK key; the
+  // application id is the Plivo app Velocity creates to point numbers here.
+  plivoAuthId: varchar("plivoAuthId", { length: 64 }),
+  plivoAuthTokenEnc: text("plivoAuthTokenEnc"),
+  plivoAppId: varchar("plivoAppId", { length: 64 }),
   // ── Apollo.io prospect source (Migration 0124) ──
   // Same AES-256-GCM BYOK pattern as above. Used SEARCH-ONLY: Apollo's People
   // Search returns names/titles/company/domain and consumes ZERO credits, but
@@ -5762,10 +5769,15 @@ export const voiceAgents = mysqlTable(
       .default("outbound_outreach")
       .notNull(),
     voice: varchar("voice", { length: 40 }).default("eve").notNull(),
-    model: varchar("model", { length: 64 }).default("grok-voice-latest").notNull(),
+    // Pinned to Think Fast 2.0 (owner 2026-10-04); grok-voice-latest is an
+    // alias xAI can move. Migration 0193 moved existing agents over.
+    model: varchar("model", { length: 64 }).default("grok-voice-think-fast-2.0").notNull(),
     instructions: text("instructions"),
     /** E.164 number registered with xAI SIP (CreatePhoneNumberV2); null until provisioned. */
     phoneNumber: varchar("phoneNumber", { length: 32 }),
+    /** E.164 Plivo number (Migration 0193): outbound calls come from it, and
+     *  calls to it are answered by this agent through Velocity. */
+    plivoNumber: varchar("plivoNumber", { length: 32 }),
     /** Webhook signing secret returned once by xAI at number registration (AES-GCM enc). */
     sipWebhookSecretEnc: text("sipWebhookSecretEnc"),
     languageHint: varchar("languageHint", { length: 16 }),
@@ -5791,11 +5803,20 @@ export const voiceCalls = mysqlTable(
     fromNumber: varchar("fromNumber", { length: 32 }),
     /** xAI realtime call id (from realtime.call.incoming / outbound create). */
     xaiCallId: varchar("xaiCallId", { length: 128 }),
-    status: mysqlEnum("status", ["queued", "ringing", "in_progress", "completed", "failed", "no_answer"])
+    status: mysqlEnum("status", ["queued", "ringing", "in_progress", "completed", "failed", "no_answer", "voicemail", "busy", "canceled"])
       .default("queued")
       .notNull(),
     /** Post-call summary/transcript digest (filled by the bridge when available). */
     outcome: text("outcome"),
+    /** Migration 0193 — Plivo calls. `provider` null = the original xAI SIP line. */
+    provider: varchar("provider", { length: 16 }),
+    plivoCallUuid: varchar("plivoCallUuid", { length: 64 }),
+    /** The approved outbound request this call carried out. */
+    requestId: int("requestId"),
+    /** The meeting booked on this call, if any. */
+    meetingId: int("meetingId"),
+    /** What came of it: booked | not_interested | call_back | do_not_call | no_decision. */
+    result: varchar("result", { length: 24 }),
     /** CRM link, same shape as tasks: account|contact|lead|opportunity|prospect. */
     relatedType: varchar("relatedType", { length: 24 }),
     relatedId: int("relatedId"),
@@ -5810,9 +5831,80 @@ export const voiceCalls = mysqlTable(
     byWs: index("ix_vc_ws").on(t.workspaceId, t.createdAt),
     byAgent: index("ix_vc_agent").on(t.agentId),
     byXaiCall: index("ix_vc_xai").on(t.xaiCallId),
+    byPlivoCall: index("ix_vc_plivo").on(t.plivoCallUuid),
   }),
 );
 export type VoiceCall = typeof voiceCalls.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   AI call requests (Migration 0193)
+
+   Owner ask 2026-10-04: outbound AI calls "need to be gated and not
+   autonomous … approved, in batches and/or 1 by 1. This needs to book
+   meetings." A person queues people to call (a draft per person); an
+   approver approves them, one or many, confirming consent; the dialer places
+   approved calls inside the person's calling hours. Nothing dials without an
+   approval on the row.
+   ────────────────────────────────────────────────────────────────────────── */
+export const voiceCallRequests = mysqlTable(
+  "voice_call_requests",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    agentId: int("agentId").notNull(),
+    /** The person (People / prospects table). */
+    prospectId: int("prospectId").notNull(),
+    /** E.164, normalised when queued. */
+    toNumber: varchar("toNumber", { length: 20 }).notNull(),
+    personName: varchar("personName", { length: 160 }),
+    company: varchar("company", { length: 200 }),
+    email: varchar("email", { length: 320 }),
+    /** The person's zone (from their state), else the workspace's. Calling hours are in it. */
+    timezone: varchar("timezone", { length: 64 }).notNull(),
+    /** What the agent is told about this person: shown to, and editable by, the approver. */
+    callNotes: text("callNotes"),
+    /** Whose calendar a meeting books on. */
+    ownerUserId: int("ownerUserId"),
+    status: mysqlEnum("status", ["draft", "approved", "dialing", "done", "rejected", "skipped"]).default("draft").notNull(),
+    statusReason: varchar("statusReason", { length: 240 }),
+    consentConfirmedByUserId: int("consentConfirmedByUserId"),
+    consentConfirmedAt: timestamp("consentConfirmedAt"),
+    approvedByUserId: int("approvedByUserId"),
+    approvedAt: timestamp("approvedAt"),
+    createdByUserId: int("createdByUserId"),
+    voiceCallId: int("voiceCallId"),
+    attempts: int("attempts").default(0).notNull(),
+    lastAttemptAt: timestamp("lastAttemptAt"),
+    /** Copied from the call: booked | not_interested | call_back | do_not_call | no_decision | voicemail | no_answer | busy | failed. */
+    result: varchar("result", { length: 24 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byWsStatus: index("ix_vcr_ws_status").on(t.workspaceId, t.status),
+    byProspect: index("ix_vcr_prospect").on(t.prospectId),
+  }),
+);
+export type VoiceCallRequest = typeof voiceCallRequests.$inferSelect;
+
+/** Numbers that must never be called again (asked on a call, or added by hand). Migration 0193. */
+export const callSuppressions = mysqlTable(
+  "call_suppressions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    /** E.164. */
+    phone: varchar("phone", { length: 20 }).notNull(),
+    reason: varchar("reason", { length: 32 }).notNull(), // asked_on_call | manual
+    prospectId: int("prospectId"),
+    createdByUserId: int("createdByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("ux_cs_ws_phone").on(t.workspaceId, t.phone),
+  }),
+);
+export type CallSuppression = typeof callSuppressions.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
    Saved reports (Migration 0121) — the /reports builder's saved definitions.

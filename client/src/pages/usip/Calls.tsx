@@ -1,7 +1,8 @@
 /**
  * Calls — the Engage → "Calls" surface (/v2/calls).
  *
- * Velocity has no standalone dialer, but it does model calls: tasks can be
+ * AI calls (2026-10-04) are queued from People and approved here before they
+ * dial (AiCallQueue). Human calls are modelled as tasks: tasks can be
  * type `call`, and call outcomes are logged as activities on a record. This
  * page is the rep's call queue — the call-type tasks across the workspace —
  * tied to the existing `tasks.list` / `tasks.setStatus` endpoints. Calls are
@@ -10,6 +11,7 @@
 import { useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { AiCallQueue } from "@/components/usip/calls/AiCallQueue";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -100,8 +102,8 @@ function VoiceAgentsPanel({ accent }: { accent: string }) {
         <div className="rounded-xl border bg-card px-4 py-6 text-center shadow-sm">
           <div className="text-sm font-medium">No voice agents configured</div>
           <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
-            Grok voice agents answer prospect call-backs on a team member's behalf and will place automated
-            outreach calls. Set up the xAI connection and your first agent in Settings.
+            Grok voice agents make the AI calls you approve, answer calls to their numbers, and book meetings
+            on the call. Connect xAI and Plivo and create your first agent in Settings.
           </p>
           <Button size="sm" className="mt-3" onClick={() => setLocation("/v2/settings/voice-agents")}>
             Set up voice agents
@@ -270,6 +272,7 @@ export default function Calls() {
             {stat("Completed", done.length)}
           </div>
 
+          <AiCallQueue accent={accent} />
           <VoiceAgentsPanel accent={accent} />
 
           <section>

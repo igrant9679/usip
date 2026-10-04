@@ -124,17 +124,28 @@ export async function sweepStaleVoiceCalls(nowMs = Date.now()): Promise<number> 
   const db = await getDb();
   if (!db) return 0;
   const stale = await db
-    .select({ id: voiceCalls.id, workspaceId: voiceCalls.workspaceId, xaiCallId: voiceCalls.xaiCallId, outcome: voiceCalls.outcome })
+    .select({ id: voiceCalls.id, workspaceId: voiceCalls.workspaceId, xaiCallId: voiceCalls.xaiCallId, outcome: voiceCalls.outcome, provider: voiceCalls.provider, plivoCallUuid: voiceCalls.plivoCallUuid })
     .from(voiceCalls)
-    .where(and(inArray(voiceCalls.status, [...LIVE]), lt(voiceCalls.startedAt, new Date(nowMs - STALE_CALL_MS))))
+    // "queued" too: a Plivo call the dialer placed whose callbacks never came.
+    .where(and(inArray(voiceCalls.status, [...LIVE, "queued"]), lt(voiceCalls.startedAt, new Date(nowMs - STALE_CALL_MS))))
     .limit(100);
   for (const row of stale) {
-    if (row.xaiCallId) await hangupXaiCall(await workspaceXaiKey(row.workspaceId), row.xaiCallId);
+    if (row.provider === "plivo") {
+      const { plivoCreds, hangupCall } = await import("./plivo");
+      const creds = await plivoCreds(row.workspaceId);
+      if (creds) await hangupCall(creds, row.plivoCallUuid);
+    } else if (row.xaiCallId) {
+      await hangupXaiCall(await workspaceXaiKey(row.workspaceId), row.xaiCallId);
+    }
     const note = "Velocity lost track of this call (most likely a server restart mid-call); the safety sweep hung it up.";
     await db
       .update(voiceCalls)
       .set({ status: "failed", outcome: [row.outcome, note].filter(Boolean).join("\n\n").slice(0, 8000), endedAt: new Date(nowMs) })
       .where(eq(voiceCalls.id, row.id));
+    if (row.provider === "plivo") {
+      const { finishRequestForCall } = await import("./voiceRelay");
+      await finishRequestForCall(row.id).catch(() => {});
+    }
   }
   return stale.length;
 }

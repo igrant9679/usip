@@ -59,7 +59,9 @@ describe("isSendableChannel", () => {
 describe("the reason a channel cannot send is one sentence, shared with the help centre", () => {
   it("names the missing provider rather than saying 'not supported'", () => {
     expect(UNSENDABLE_CHANNEL_REASON.sms).toContain("No SMS gateway is connected");
-    expect(UNSENDABLE_CHANNEL_REASON.voice).toContain("Outbound calling is not available");
+    // Since 2026-10-04 Velocity does place AI calls, but only approved ones
+    // from the Calls page; a campaign step still never dials.
+    expect(UNSENDABLE_CHANNEL_REASON.voice).toContain("Campaigns do not place calls");
   });
 
   it("the help centre uses the same words", () => {

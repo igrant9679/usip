@@ -7,9 +7,11 @@
  * each member may create/edit their own call-back agent that answers on their
  * behalf), and a recent-calls readout from voice_calls.
  *
- * Honest boundaries surfaced in the UI: outbound dialing is NOT offered yet
- * (xAI hasn't published the outbound-call endpoint); inbound call-backs are
- * live end-to-end (webhook → answer bridge).
+ * Plivo (owner 2026-10-04): xAI cannot dial out, so outbound AI calls go
+ * through the workspace's Plivo account. The Plivo card holds its keys; an
+ * agent given a Plivo number places approved calls from it and answers calls
+ * to it. The xAI call-back webhook stays for numbers registered in xAI's own
+ * console.
  */
 import { useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
@@ -42,7 +44,8 @@ import { isAdminRole } from "@shared/roleRank";
 
 type Agent = Record<string, any>;
 
-const MODELS = ["grok-voice-latest", "grok-voice-think-fast-1.0"];
+// Think Fast 2.0 first (owner 2026-10-04); grok-voice-latest is an alias xAI can move.
+const MODELS = ["grok-voice-think-fast-2.0", "grok-voice-latest"];
 
 const CALL_STATUS_TONE: Record<string, string> = {
   completed: "text-emerald-600 dark:text-emerald-400",
@@ -95,9 +98,11 @@ export function VoiceAgentsSection() {
             model={settings.data?.model ?? MODELS[0]}
           />
 
+          <PlivoCard isAdmin={isAdmin} />
+
           <Card
-            title="Call-back webhook"
-            sub="Register your phone number in the xAI console (or via their API) with this webhook URL. When a prospect calls back, the matching agent below answers on the member's behalf."
+            title="xAI phone number (optional)"
+            sub="Only for a number registered in xAI's own console. Plivo numbers need none of this: connect them above and pick one on the agent."
           >
             <div className="flex items-center gap-2">
               <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-muted/60 px-3 py-2 text-[12.5px]">
@@ -121,7 +126,7 @@ export function VoiceAgentsSection() {
 
           <Card
             title="Agents"
-            sub="Outreach agents place automated calls (dialing activates once xAI publishes its outbound-call API). Call-back agents answer inbound calls on behalf of a team member."
+            sub="Outreach agents place AI calls from their Plivo number, each one approved by a manager first (queue people from People → Queue AI call). Call-back agents answer calls on behalf of a team member. Any agent with a Plivo number answers calls to it."
           >
             <div className="flex justify-end -mt-2">
               <Button size="sm" className="gap-1.5" onClick={() => setDialog({ open: true, agent: null })}>
@@ -135,8 +140,8 @@ export function VoiceAgentsSection() {
                 <AudioLines className="mx-auto size-8 text-muted-foreground/60" />
                 <div className="mt-2 text-[13.5px] font-semibold">No voice agents yet</div>
                 <p className="mx-auto mt-1 max-w-sm text-[12.5px] text-muted-foreground">
-                  Create an agent, register its phone number with the webhook above, and call-backs get
-                  answered automatically.
+                  Create an agent and give it a Plivo number. Outreach agents call the people you approve;
+                  any agent answers calls to its number.
                 </p>
               </div>
             ) : (
@@ -317,7 +322,9 @@ function AgentRow({ a, canManage, onEdit }: { a: Agent; canManage: boolean; onEd
         </div>
         <div className="truncate text-[12px] text-muted-foreground">
           {isCallback ? `Call-back agent${a.owner?.name ? ` · answers for ${a.owner.name}` : ""}` : "Outreach agent"}
-          {a.phoneNumber ? ` · ${a.phoneNumber}` : " · no number registered"}
+          {a.plivoNumber ? ` · ${a.plivoNumber} (Plivo)` : ""}
+          {a.phoneNumber ? ` · ${a.phoneNumber} (xAI)` : ""}
+          {!a.plivoNumber && !a.phoneNumber ? " · no number yet" : ""}
         </div>
       </div>
       <label className="flex shrink-0 items-center gap-1.5 text-[12px] text-muted-foreground" title={canManage ? undefined : "You can only manage your own call-back agent"}>
@@ -350,6 +357,78 @@ function AgentRow({ a, canManage, onEdit }: { a: Agent; canManage: boolean; onEd
   );
 }
 
+/* ───────────────────────── Plivo connection ───────────────────────────── */
+
+/**
+ * The workspace's Plivo account (owner 2026-10-04): it places the agents'
+ * approved AI calls and answers calls to their numbers. The owner pastes
+ * his own Auth ID and Auth Token; the token is stored encrypted.
+ */
+function PlivoCard({ isAdmin }: { isAdmin: boolean }) {
+  const utils = trpc.useUtils();
+  const status = trpc.voiceAgents.plivoStatus.useQuery();
+  const [authId, setAuthId] = useState("");
+  const [token, setToken] = useState("");
+  const refresh = () => {
+    void utils.voiceAgents.plivoStatus.invalidate();
+    void utils.voiceAgents.plivoNumbers.invalidate();
+  };
+  const save = trpc.voiceAgents.savePlivo.useMutation({
+    onSuccess: () => { toast.success("Plivo connection saved"); setAuthId(""); setToken(""); refresh(); },
+    onError: (e: any) => toast.error(e?.message ?? "Could not save"),
+  });
+  const test = trpc.voiceAgents.testPlivo.useMutation({
+    onSuccess: (r) => toast.success(`Connected to ${r.accountName ?? "Plivo"}: ${r.numbers} number${r.numbers === 1 ? "" : "s"}${r.credits ? `, $${r.credits} credit` : ""}`),
+    onError: (e: any) => toast.error(e?.message ?? "Plivo rejected the connection"),
+  });
+  const configured = !!status.data?.configured;
+  return (
+    <Card
+      title="Plivo connection"
+      sub="Plivo places your agents' AI calls and answers calls to their numbers. The Auth ID and Auth Token are on the overview page of your Plivo console. The token is stored encrypted."
+    >
+      <div className="flex items-center gap-2 text-[13px]">
+        {configured ? (
+          <><ShieldCheck className="size-4 text-emerald-600" /> Connected · Auth ID <code className="text-[12px]">{status.data?.authId}</code></>
+        ) : (
+          <span className="text-muted-foreground">Not connected</span>
+        )}
+      </div>
+      {isAdmin ? (
+        <>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Auth ID</Label>
+              <Input value={authId} onChange={(e) => setAuthId(e.target.value)} placeholder={status.data?.authId ?? "MA…"} autoComplete="off" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Auth Token</Label>
+              <Input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={configured ? "Saved: enter a new one to replace it" : "Auth Token"} autoComplete="off" />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" disabled={save.isPending || (!authId.trim() && !token.trim())}
+              onClick={() => save.mutate({ ...(authId.trim() ? { authId: authId.trim() } : {}), ...(token.trim() ? { authToken: token.trim() } : {}) })}>
+              Save
+            </Button>
+            <Button size="sm" variant="outline" disabled={!configured || test.isPending} onClick={() => test.mutate()}>
+              {test.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null} Test connection
+            </Button>
+            {configured && (
+              <Button size="sm" variant="outline" className="text-rose-600"
+                onClick={() => confirmAction({ title: "Disconnect Plivo?", description: "Approved AI calls stop dialing until it is connected again.", confirmLabel: "Disconnect" }, () => save.mutate({ authId: "", authToken: "" }))}>
+                Disconnect
+              </Button>
+            )}
+          </div>
+        </>
+      ) : (
+        <p className="text-[12px] text-muted-foreground">An admin connects Plivo.</p>
+      )}
+    </Card>
+  );
+}
+
 /* ───────────────────────── create / edit dialog ───────────────────────── */
 
 function AgentDialog({
@@ -371,6 +450,7 @@ function AgentDialog({
     model: agent?.model ?? defaultModel,
     instructions: agent?.instructions ?? "",
     phoneNumber: agent?.phoneNumber ?? "",
+    plivoNumber: (agent?.plivoNumber ?? "") as string,
     secret: "",
     languageHint: agent?.languageHint ?? "",
   }));
@@ -378,7 +458,10 @@ function AgentDialog({
 
   const create = trpc.voiceAgents.create.useMutation({ onError: (e: any) => toast.error(e?.message ?? "Could not create agent") });
   const update = trpc.voiceAgents.update.useMutation({ onError: (e: any) => toast.error(e?.message ?? "Could not save agent") });
-  const saving = create.isPending || update.isPending;
+  const connect = trpc.voiceAgents.connectPlivoNumber.useMutation({ onError: (e: any) => toast.error(e?.message ?? "Could not connect the number") });
+  const plivo = trpc.voiceAgents.plivoStatus.useQuery(undefined, { enabled: open });
+  const plivoNumbers = trpc.voiceAgents.plivoNumbers.useQuery(undefined, { enabled: open && isAdmin && !!plivo.data?.configured });
+  const saving = create.isPending || update.isPending || connect.isPending;
 
   const activeMembers = useMemo(
     () => team.filter((m) => !m.deactivatedAt && m.userId != null),
@@ -400,8 +483,18 @@ function AgentDialog({
       ...(f.secret.trim() ? { sipWebhookSecret: f.secret.trim() } : {}),
       languageHint: f.languageHint.trim() || null,
     };
+    let id: number | undefined = agent?.id;
     if (agent) await update.mutateAsync({ id: agent.id, ...payload });
-    else await create.mutateAsync({ ...payload, status: "active" });
+    else id = (await create.mutateAsync({ ...payload, status: "active" })).id;
+    // The Plivo number: Velocity points it at itself (Plivo application) and records it.
+    const wantPlivo = f.plivoNumber || null;
+    if (isAdmin && id && wantPlivo !== (agent?.plivoNumber ?? null)) {
+      try {
+        await connect.mutateAsync({ agentId: id, number: wantPlivo });
+      } catch {
+        return; // toasted; the agent itself is saved
+      }
+    }
     toast.success(agent ? "Agent saved" : "Agent created");
     onClose();
   };
@@ -474,21 +567,40 @@ function AgentDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label>Instructions <span className="font-normal text-muted-foreground">(optional — a professional receptionist script is used when empty)</span></Label>
+            <Label>Instructions <span className="font-normal text-muted-foreground">(optional: extra guidance. Who is calling, that it is an AI, and how to book are built in)</span></Label>
             <textarea
               value={f.instructions}
               onChange={(e) => set("instructions", e.target.value)}
               rows={4}
-              placeholder={"You are Ava, answering for Idris at Velocity. Greet the caller, find out what they need, take a detailed message with contact details…"}
+              placeholder={"e.g. Keep it brief and warm. If they ask what's new, mention our October webinar. Never discuss pricing."}
               className="w-full rounded-md border border-border bg-background px-3 py-2 text-[13px] outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
 
+          {isAdmin && (
+            <div className="space-y-1.5">
+              <Label>Plivo number</Label>
+              {!plivo.data?.configured ? (
+                <div className="rounded-md border border-dashed border-border px-3 py-2 text-[12.5px] text-muted-foreground">Connect Plivo above to pick a number.</div>
+              ) : (
+                <select value={f.plivoNumber} onChange={(e) => set("plivoNumber", e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
+                  <option value="">None</option>
+                  {Array.from(new Set([f.plivoNumber, ...((plivoNumbers.data ?? []) as { number: string }[]).map((n) => n.number)])).filter(Boolean).map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              )}
+              <p className="text-[11.5px] text-muted-foreground">
+                Outreach calls come from this number, and calls to it are answered by this agent. Velocity sets it up in Plivo when you save.
+              </p>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label>Phone number</Label>
+              <Label>xAI phone number <span className="font-normal text-muted-foreground">(optional)</span></Label>
               <Input value={f.phoneNumber} onChange={(e) => set("phoneNumber", e.target.value)} placeholder="+1 555 0100" />
-              <p className="text-[11.5px] text-muted-foreground">The number registered with xAI that reaches this agent.</p>
+              <p className="text-[11.5px] text-muted-foreground">Only for a number registered in xAI's console. Leave blank when using Plivo.</p>
             </div>
             <div className="space-y-1.5">
               <Label>Webhook signing secret</Label>
@@ -499,7 +611,7 @@ function AgentDialog({
                 placeholder={agent?.hasWebhookSecret ? "Saved — enter to replace" : "whsec_…"}
                 autoComplete="off"
               />
-              <p className="text-[11.5px] text-muted-foreground">Shown once by xAI when the number is registered. Required: calls Velocity cannot verify are rejected.</p>
+              <p className="text-[11.5px] text-muted-foreground">Only with an xAI phone number: shown once by xAI when it is registered. Required for it: calls Velocity cannot verify are rejected.</p>
             </div>
           </div>
 

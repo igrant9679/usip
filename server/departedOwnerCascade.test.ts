@@ -227,6 +227,20 @@ const SURFACES: Array<{
     gate: /const voiceOwnerUserId = await activeOwnerOrNull\(agent\.workspaceId, agent\.ownerUserId\);\s*if \(voiceOwnerUserId\) \{/,
   },
   {
+    what: "an AI call never names, or books on the calendar of, a member who has left",
+    file: "server/services/voiceRelay.ts",
+    start: "let ownerUserId: number | null = null;",
+    end: "let ownerName: string | null = null;",
+    gate: /for \(const cand of \[request\?\.ownerUserId, agent\.ownerUserId, await configuredProposalOwner\(wsId\)\]\) \{\s*ownerUserId = await activeOwnerOrNull\(wsId, cand \?\? null\);\s*if \(ownerUserId\) break;/,
+  },
+  {
+    what: "a call to an agent's Plivo number is filed under a member who still works here",
+    file: "server/plivoWebhook.ts",
+    start: "const match = await matchCallerToRecord(ws, from)",
+    end: "const ins = await db.insert(voiceCalls)",
+    gate: /const userId = await activeOwnerOrNull\(ws, agent\.ownerUserId\);/,
+  },
+  {
     what: "an inbound call-back reaches somebody who still works here",
     file: "server/voiceWebhook.ts",
     start: "const match = await matchCallerToRecord(",
@@ -369,7 +383,10 @@ describe("every session-less path that names a member gates on active membership
     // 2026-09-24: 32, with meetings.reassignProposals — an invite sends from
     // its owner's calendar, so a proposal must not move to a leaver.
     // Same day: 34, with the new-proposal owner setting (set, and applied).
-    expect(SURFACES.length).toBe(34);
+    // 2026-10-04: 36, with the Plivo AI calls — the agent names its owner out
+    // loud and books on their calendar (voiceRelay), and a call to an agent's
+    // Plivo number is filed under its member (plivoWebhook).
+    expect(SURFACES.length).toBe(36);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 

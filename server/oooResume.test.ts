@@ -283,7 +283,9 @@ describe("the sweep runs on the existing sequence tick", () => {
     // which touches only meetings, not the sequence tables.
     // 40 since 2026-10-04: the stale voice-call sweep (voiceGuards), which
     // touches only voice_calls.
-    expect(read("_core", "index.ts").split("setInterval(").length - 1).toBe(40);
+    // 41 since 2026-10-04 too: the AI call dialer (aiCallDialer), which
+    // touches only voice_call_requests and voice_calls.
+    expect(read("_core", "index.ts").split("setInterval(").length - 1).toBe(41);
   });
 });
 

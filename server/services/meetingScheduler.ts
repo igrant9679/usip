@@ -352,9 +352,27 @@ async function ownerCommitments(
  */
 async function draftProposalContent(workspaceId: number, target: MeetingTarget, opts: { excludeMeetingId?: number } = {}) {
   const db = await getDb();
+  const { slots, durationMin, timezone: workspaceTz } = await openSlotsForOwner(workspaceId, target.ownerUserId ?? null, 3, opts);
+  const name = target.name || "there";
+  return draftProposalText(db, workspaceId, target, slots, durationMin, workspaceTz, name);
+}
 
+/**
+ * The owner's next open times, exactly as a meeting proposal would offer
+ * them: their stored and live calendar, their open proposals and booked
+ * meetings, the 9:00–16:00 window and the per-day cap, all in the
+ * workspace's zone. Shared with the AI phone agent (2026-10-04), which
+ * offers these on the call, so a phone booking obeys every rule an emailed
+ * proposal does.
+ */
+export async function openSlotsForOwner(
+  workspaceId: number,
+  ownerUserId: number | null,
+  count = 3,
+  opts: { excludeMeetingId?: number } = {},
+): Promise<{ slots: string[]; durationMin: number; timezone: string }> {
+  const db = await getDb();
   const durationMin = 30;
-  const ownerUserId = target.ownerUserId ?? null;
   let busy: { startAt: Date | string | null; endAt: Date | string | null }[] = [];
   let offered: Map<string, number> | undefined;
   let booked: { startAt: Date; endAt: Date }[] = [];
@@ -390,8 +408,19 @@ async function draftProposalContent(workspaceId: number, target: MeetingTarget, 
   offered?.forEach((n, iso) => { const d = dayKeyIn(iso, workspaceTz); dayLoad.set(d, (dayLoad.get(d) ?? 0) + n); });
   const fullDays = new Set<string>();
   bookedPerDay.forEach((n, d) => { if (n >= MAX_MEETINGS_PER_OWNER_PER_DAY) fullDays.add(d); });
-  const slots = computeSlots(busy, 3, durationMin, workspaceTz, offered, { load: dayLoad, full: fullDays });
-  const name = target.name || "there";
+  const slots = computeSlots(busy, count, durationMin, workspaceTz, offered, { load: dayLoad, full: fullDays });
+  return { slots, durationMin, timezone: workspaceTz };
+}
+
+async function draftProposalText(
+  db: Awaited<ReturnType<typeof getDb>>,
+  workspaceId: number,
+  target: MeetingTarget,
+  slots: string[],
+  durationMin: number,
+  workspaceTz: string,
+  name: string,
+) {
   const firstName = target.firstName || name.split(" ")[0] || "there";
 
   // Who the SENDER is. Without this the model had no identity to represent,
