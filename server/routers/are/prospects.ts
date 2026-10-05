@@ -61,6 +61,7 @@ import { resolveVerifiedEmail } from "../../services/scraper";
 import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "../../services/quickenrich";
 import { getReoonKey, reoonStatusToUsip, reoonVerifySingle } from "../../services/reoon";
 import { buildBrandContext } from "../../services/brandContext";
+import { areKnowledgeQuery } from "../../services/knowledgeQueries";
 // The A/B metadata row must be keyed by the same step index + variant key the
 // execution queue uses, so both sides read one rule. See shared/variantKeys.ts.
 import { DEFAULT_STEP_GAP_DAYS, defaultDayForStep, stepIndexOf } from "@shared/areSequenceSteps";
@@ -740,9 +741,11 @@ async function personalizeForProspect(
   const subjectGuidance = (campaign.promptSubject ?? "").trim();
   const bodyGuidance = (campaign.promptBody ?? "").trim();
   const signature = (campaign.promptSignature ?? "").trim();
-  // The seller's own company + brand voice (migration 0125). "" when the
-  // workspace has no branding set or brand-voice applyToAI is off.
-  const brandBlock = await buildBrandContext(campaign.workspaceId);
+  // The seller's own company + brand voice (migration 0125), plus the
+  // knowledge-base passages that match this prospect (2026-10-05). "" when
+  // there is neither.
+  const knowledgeQuery = areKnowledgeQuery(prospect, intel, painSignals, primaryHook, [customInstructions, bodyGuidance]);
+  const brandBlock = await buildBrandContext(campaign.workspaceId, { query: knowledgeQuery });
   const systemContent =
     `You are an elite B2B sales copywriter. You will be given a campaign skeleton and a prospect dossier. Fill in subject+body for each step, keeping the structure, cadence, and CTA pattern from the skeleton. Every message must reference something real about the prospect. Never use generic openers ("I hope this finds you well", "I wanted to reach out").` +
     `\n\n${HUMAN_COPY_RULES}` +

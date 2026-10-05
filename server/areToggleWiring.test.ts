@@ -313,7 +313,9 @@ describe("ARE Settings points at the real brand voice instead of owning a second
   });
 
   it("the ARE sequence writer still builds its prompt from the real profile", () => {
-    expect(read("server/routers/are/prospects.ts")).toContain("buildBrandContext(campaign.workspaceId)");
+    // 2026-10-05: with the knowledge-base passages that match this prospect.
+    expect(read("server/routers/are/prospects.ts")).toContain("buildBrandContext(campaign.workspaceId, { query: knowledgeQuery })");
+    expect(read("server/routers/are/prospects.ts")).toContain("const knowledgeQuery = areKnowledgeQuery(prospect, intel, painSignals, primaryHook, [customInstructions, bodyGuidance]);");
     expect(read("server/services/brandContext.ts")).toMatch(/voice\.applyToAI === false/);
   });
 });

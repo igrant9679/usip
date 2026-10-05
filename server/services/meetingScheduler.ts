@@ -32,6 +32,7 @@ import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "./humanCopy";
 import { buildBrandContext } from "./brandContext";
+import { proposalKnowledgeQuery } from "./knowledgeQueries";
 import { createCalendarAdapter } from "../calendarAdapter";
 import { attributeMeetingBookingToAre } from "../routers/are/execution";
 // One slot generator + one timezone rule, shared with the booking link. See
@@ -431,7 +432,9 @@ async function draftProposalText(
   const wsRow = db ? (await db.select({ name: workspaces.name }).from(workspaces)
     .where(eq(workspaces.id, workspaceId)).limit(1))[0] : undefined;
   const senderCompany = wsRow?.name?.trim() || "our team";
-  const brandBlock = await buildBrandContext(workspaceId);
+  // With the knowledge-base passages that match who they are and, for a
+  // reply, what they asked (2026-10-05).
+  const brandBlock = await buildBrandContext(workspaceId, { query: proposalKnowledgeQuery(target) });
 
   const prompt = `You are an SDR at ${senderCompany}, booking an intro meeting with a prospect about ${senderCompany}'s own products and services. Represent ${senderCompany} only — never pitch, name, or allude to any software platform used to send or schedule this message. Draft a concise, friendly meeting proposal. Return JSON only.
 ${brandBlock ? `\n${brandBlock}\n` : ""}

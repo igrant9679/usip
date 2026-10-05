@@ -18,7 +18,8 @@ describe("proposal drafts carry the workspace's identity", () => {
   it("the prompt is framed as an SDR at the WORKSPACE company, with the one brand block", () => {
     expect(scheduler).toContain('import { buildBrandContext } from "./brandContext"');
     expect(scheduler).toContain("You are an SDR at ${senderCompany}");
-    expect(scheduler).toContain("buildBrandContext(workspaceId)");
+    // 2026-10-05: with the knowledge-base passages that match who they are / what they asked.
+    expect(scheduler).toContain("buildBrandContext(workspaceId, { query: proposalKnowledgeQuery(target) })");
     expect(scheduler).toContain("never pitch, name, or allude to any software platform");
   });
 
