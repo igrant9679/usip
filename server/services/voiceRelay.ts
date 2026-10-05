@@ -40,7 +40,7 @@ import { MAX_CALL_MS } from "./voiceGuards";
 import { buildCallInstructions, callTools, CALL_RESULTS, knowledgeToolResult, plausibleEmail, spokenTime, type CallResult } from "./voiceCallScript";
 import { hangupCall, plivoCreds } from "./plivo";
 import { hasKnowledge, searchKnowledge } from "./knowledgeSearch";
-import { buildPersonHistory } from "./personHistory";
+import { buildPersonHistory, personIdForRecord } from "./personHistory";
 import { suppressNumber } from "../routers/aiCalls";
 
 const XAI_REALTIME = "wss://api.x.ai/v1/realtime";
@@ -410,7 +410,9 @@ export async function loadCallContext(callRowId: number): Promise<CallContext | 
   // reaches the rest. History: what the team already knows about them.
   const brand = await buildBrandContext(wsId).catch(() => "");
   const canSearch = await hasKnowledge(wsId);
-  const history = prospectId ? await buildPersonHistory(wsId, prospectId) : null;
+  // A call-in matched to a contact or lead still finds the person behind it (2026-10-05).
+  const historyPersonId = prospectId ?? (await personIdForRecord(wsId, row.relatedType, row.relatedId));
+  const history = historyPersonId ? await buildPersonHistory(wsId, historyPersonId) : null;
   const instructions = buildCallInstructions({
     direction,
     agentName: agent.name,

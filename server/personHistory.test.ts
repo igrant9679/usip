@@ -26,12 +26,54 @@ const fakeDb: any = {
 };
 vi.mock("./db", () => ({ getDb: async () => fakeDb }));
 
-import { buildPersonHistory, HISTORY_MAX_CHARS } from "./services/personHistory";
+import { buildPersonHistory, HISTORY_MAX_CHARS, personIdForRecord } from "./services/personHistory";
+import { readFileSync } from "fs";
+import path from "path";
 
 beforeEach(() => {
   data.clear();
   throwOn = null;
   data.set(prospects, [{ linkedContactId: 31, accountId: 7 }]);
+});
+
+describe("personIdForRecord: the person behind a caller's CRM match", () => {
+  it("a person is themselves", async () => {
+    data.set(prospects, [{ id: 9 }]);
+    expect(await personIdForRecord(4, "prospect", 9)).toBe(9);
+  });
+  it("a contact made from a person resolves to that person", async () => {
+    data.set(contacts, [{ personProspectId: 9 }]);
+    expect(await personIdForRecord(4, "contact", 31)).toBe(9);
+  });
+  it("a contact without that link resolves through the person that links to it", async () => {
+    data.set(contacts, [{ personProspectId: null }]);
+    data.set(prospects, [{ id: 12 }]);
+    expect(await personIdForRecord(4, "contact", 31)).toBe(12);
+  });
+  it("a lead resolves to the person converted to it", async () => {
+    data.set(prospects, [{ id: 13 }]);
+    expect(await personIdForRecord(4, "lead", 55)).toBe(13);
+    // The fake ignores filters, so the column itself is pinned: a lead is the
+    // person whose linkedLeadId it is, never one whose linkedContactId shares the number.
+    const src = readFileSync(path.join(__dirname, "services", "personHistory.ts"), "utf8");
+    const lead = src.slice(src.indexOf('if (relatedType === "lead")'), src.indexOf("return null;\n  } catch"));
+    expect(lead).toContain("eq(prospects.workspaceId, workspaceId), eq(prospects.linkedLeadId, relatedId)");
+    const contact = src.slice(src.indexOf('if (relatedType === "contact")'), src.indexOf('if (relatedType === "lead")'));
+    expect(contact).toContain("eq(contacts.id, relatedId), eq(contacts.workspaceId, workspaceId)");
+    expect(contact).toContain("eq(prospects.workspaceId, workspaceId), eq(prospects.linkedContactId, relatedId)");
+  });
+  it("no match, no person", async () => {
+    data.set(prospects, []);
+    data.set(contacts, []);
+    expect(await personIdForRecord(4, "contact", 31)).toBeNull();
+    expect(await personIdForRecord(4, "account", 1)).toBeNull();
+    expect(await personIdForRecord(4, null, null)).toBeNull();
+  });
+  it("the Plivo agent's call-ins use it too", () => {
+    const relay = readFileSync(path.join(__dirname, "services", "voiceRelay.ts"), "utf8");
+    expect(relay).toContain("const historyPersonId = prospectId ?? (await personIdForRecord(wsId, row.relatedType, row.relatedId));");
+    expect(relay).toContain("const history = historyPersonId ? await buildPersonHistory(wsId, historyPersonId) : null;");
+  });
 });
 
 describe("buildPersonHistory", () => {

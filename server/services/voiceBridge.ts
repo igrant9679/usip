@@ -19,7 +19,8 @@ import { activeOwnerOrNull } from "../_core/activeMembers";
 import { logCallActivity } from "./voiceCrmLink";
 import { buildBrandContext } from "./brandContext";
 import { hasKnowledge, searchKnowledge } from "./knowledgeSearch";
-import { knowledgeSearchRule, knowledgeSearchTool, knowledgeToolResult } from "./voiceCallScript";
+import { historyBlock, knowledgeSearchRule, knowledgeSearchTool, knowledgeToolResult } from "./voiceCallScript";
+import { buildPersonHistory, personIdForRecord } from "./personHistory";
 import { ToolTurns } from "./voiceToolTurns";
 // Hard safety cap — hang up runaway calls (also caps vendor spend at $0.05/min).
 import { MAX_CALL_MS, hangupXaiCall } from "./voiceGuards";
@@ -120,6 +121,12 @@ export function answerInboundCall(opts: BridgeOpts): void {
     // Documents in the knowledge base: the agent may search them (2026-10-05).
     const canSearch = await hasKnowledge(agent.workspaceId);
 
+    // What the team already knows about the caller, when their number matched
+    // a contact, lead or person (2026-10-05). Fenced as information.
+    const [callRow] = await db.select({ relatedType: voiceCalls.relatedType, relatedId: voiceCalls.relatedId }).from(voiceCalls).where(eq(voiceCalls.id, opts.callRowId)).limit(1);
+    const personId = await personIdForRecord(agent.workspaceId, callRow?.relatedType, callRow?.relatedId);
+    const history = personId ? await buildPersonHistory(agent.workspaceId, personId) : "";
+
     const startedAtMs = Date.now();
     const transcript: string[] = [];
     let opened = false;
@@ -172,7 +179,7 @@ export function answerInboundCall(opts: BridgeOpts): void {
         voice: agent.voice || "eve",
         // The brand block carries the knowledge base's overview; with
         // documents, the agent can also search them mid-call (2026-10-05).
-        instructions: canSearch ? `${instructions}\n\n${knowledgeSearchRule(ownerName)}` : instructions,
+        instructions: [instructions, historyBlock(history), canSearch ? knowledgeSearchRule(ownerName) : ""].filter(Boolean).join("\n\n"),
         turn_detection: { type: "server_vad" },
         ...(canSearch ? { tools: [knowledgeSearchTool()] } : {}),
       };

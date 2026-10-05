@@ -46,6 +46,10 @@ const has = { value: true };
 const searchKnowledge = vi.fn(async () => [{ title: "Pricing", page: 2, content: "Enterprise: $2,400 a year." }]);
 vi.mock("./services/knowledgeSearch", () => ({ hasKnowledge: async () => has.value, searchKnowledge: (...a: any[]) => (searchKnowledge as any)(...a) }));
 
+const person = { value: null as number | null };
+const buildPersonHistory = vi.fn(async () => "They replied 2026-09-30 (interested): Send me pricing.");
+vi.mock("./services/personHistory", () => ({ personIdForRecord: async () => person.value, buildPersonHistory: (...a: any[]) => (buildPersonHistory as any)(...a) }));
+
 import { answerInboundCall } from "./services/voiceBridge";
 import { ToolTurns } from "./services/voiceToolTurns";
 
@@ -62,6 +66,8 @@ const emit = async (ws: any, evt: unknown) => { ws.emit("message", Buffer.from(J
 beforeEach(() => {
   sockets.length = 0;
   has.value = true;
+  person.value = null;
+  buildPersonHistory.mockClear();
   searchKnowledge.mockClear();
   vi.stubGlobal("fetch", vi.fn(async () => new Response("{}")));
 });
@@ -107,6 +113,29 @@ describe("the xAI SIP bridge and the knowledge base", () => {
     const update = ws.sent.find((m: any) => m.type === "session.update");
     expect(update.session.tools).toBeUndefined();
     expect(update.session.instructions).not.toContain("search_knowledge");
+    ws.emit("close");
+  });
+});
+
+describe("the xAI SIP bridge and the caller's history", () => {
+  it("a caller matched to someone: the agent is told what the team knows, fenced, before the search rule", async () => {
+    person.value = 9;
+    const ws = await connect();
+    const instr: string = ws.sent.find((m: any) => m.type === "session.update").session.instructions;
+    expect(buildPersonHistory).toHaveBeenCalledWith(5, 9);
+    const fence = instr.slice(instr.indexOf("<<HISTORY"), instr.indexOf("HISTORY>>") + 9);
+    expect(fence).toContain("They replied 2026-09-30 (interested): Send me pricing.");
+    expect(instr).toContain("do not recite it or read out their emails");
+    expect(instr.indexOf("BRAND BLOCK")).toBeLessThan(instr.indexOf("<<HISTORY"));
+    expect(instr.indexOf("HISTORY>>")).toBeLessThan(instr.indexOf("call search_knowledge"));
+    ws.emit("close");
+  });
+
+  it("an unmatched caller: no history is looked up or given", async () => {
+    const ws = await connect();
+    const instr: string = ws.sent.find((m: any) => m.type === "session.update").session.instructions;
+    expect(buildPersonHistory).not.toHaveBeenCalled();
+    expect(instr).not.toContain("HISTORY");
     ws.emit("close");
   });
 });

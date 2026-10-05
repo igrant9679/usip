@@ -46,6 +46,38 @@ export function phrases(v: unknown, max = 3): string[] {
     .slice(0, max);
 }
 
+/**
+ * The People record behind a CRM match (2026-10-05). A caller is matched to
+ * a contact, lead or person from their number; history is kept on the
+ * person, so a contact resolves through contacts.personProspectId (or the
+ * person that links to it), and a lead through the person converted to it.
+ * Null when there is none.
+ */
+export async function personIdForRecord(workspaceId: number, relatedType: string | null | undefined, relatedId: number | null | undefined): Promise<number | null> {
+  try {
+    if (!relatedType || !relatedId) return null;
+    const db = await getDb();
+    if (!db) return null;
+    if (relatedType === "prospect") {
+      const [p] = await db.select({ id: prospects.id }).from(prospects).where(and(eq(prospects.id, relatedId), eq(prospects.workspaceId, workspaceId))).limit(1);
+      return p?.id ?? null;
+    }
+    if (relatedType === "contact") {
+      const [c] = await db.select({ personProspectId: contacts.personProspectId }).from(contacts).where(and(eq(contacts.id, relatedId), eq(contacts.workspaceId, workspaceId))).limit(1);
+      if (c?.personProspectId) return c.personProspectId;
+      const [p] = await db.select({ id: prospects.id }).from(prospects).where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.linkedContactId, relatedId))).limit(1);
+      return p?.id ?? null;
+    }
+    if (relatedType === "lead") {
+      const [p] = await db.select({ id: prospects.id }).from(prospects).where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.linkedLeadId, relatedId))).limit(1);
+      return p?.id ?? null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function buildPersonHistory(workspaceId: number, prospectId: number): Promise<string> {
   try {
     const db = await getDb();
