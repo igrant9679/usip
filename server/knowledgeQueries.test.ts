@@ -4,7 +4,9 @@
  * person: here, that it finds the right passage.
  */
 import { describe, expect, it } from "vitest";
-import { areKnowledgeQuery, proposalKnowledgeQuery } from "./services/knowledgeQueries";
+import { readFileSync } from "fs";
+import path from "path";
+import { areKnowledgeQuery, chatKnowledgeQuery, proposalKnowledgeQuery } from "./services/knowledgeQueries";
 import { buildIndex, searchIndex } from "./services/knowledgeText";
 
 const index = buildIndex([
@@ -40,6 +42,41 @@ describe("areKnowledgeQuery", () => {
 
   it("is capped", () => {
     expect(areKnowledgeQuery({}, {}, [{ signal: "x".repeat(9000) }], "", []).length).toBe(6000);
+  });
+});
+
+describe("chatKnowledgeQuery", () => {
+  const at = "2026-10-05T12:00:00Z";
+  const convo = [
+    { role: "visitor", text: "Hi, do you handle fellowship programs?", at },
+    { role: "agent", text: "We do! Pricing and security details are on our site.", at },
+    { role: "visitor", text: "What does the enterprise plan cost?", at },
+  ];
+
+  it("is the visitor's recent messages and the page, never the agent's own words", () => {
+    const q = chatKnowledgeQuery(convo, "Page: Pricing");
+    expect(q).toBe("Hi, do you handle fellowship programs?\nWhat does the enterprise plan cost?\nPage: Pricing");
+    expect(q).not.toContain("security details");
+  });
+
+  it("finds the pricing page for a price question", () => {
+    expect(searchIndex(index, chatKnowledgeQuery(convo.slice(2)))[0].id).toBe(1);
+  });
+
+  it("a follow-up still finds the page the first question did", () => {
+    const followUp = [...convo, { role: "visitor", text: "and for five users?", at }];
+    expect(searchIndex(index, chatKnowledgeQuery(followUp))[0].id).toBe(1);
+  });
+
+  it("only the last three visitor messages count", () => {
+    const many = Array.from({ length: 6 }, (_, i) => ({ role: "visitor", text: `message ${i}`, at }));
+    expect(chatKnowledgeQuery(many).split("\n")).toEqual(["message 3", "message 4", "message 5"]);
+    expect(chatKnowledgeQuery(undefined)).toBe("");
+  });
+
+  it("the chat agent searches with it", () => {
+    const src = readFileSync(path.join(__dirname, "services", "chatAgent.ts"), "utf8");
+    expect(src).toContain("buildBrandContext(input.workspaceId, { query: chatKnowledgeQuery(input.messages, input.pageContext) })");
   });
 });
 

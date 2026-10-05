@@ -37,6 +37,18 @@ export function areKnowledgeQuery(
 }
 
 /**
+ * A website chat turn (owner ask 2026-10-05: "Give the chat agent the
+ * passages too"): the visitor's last three messages, so a follow-up ("and
+ * for five users?") still finds the page the first question did, plus the
+ * page they are on. The agent's own words are left out: it would be
+ * searching for what it already said.
+ */
+export function chatKnowledgeQuery(messages: { role: string; text?: string | null }[] | undefined, pageContext?: string | null): string {
+  const visitor = (messages ?? []).filter((m) => m.role === "visitor").slice(-3).map((m) => m.text);
+  return [...visitor, pageContext].map((s) => String(s ?? "").trim()).filter(Boolean).join("\n").slice(0, 4000);
+}
+
+/**
  * A meeting proposal: the descriptor (their title and industry, or the gist
  * of the reply that asked for the meeting) and their company.
  */

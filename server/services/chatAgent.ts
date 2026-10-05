@@ -21,6 +21,7 @@
  */
 import { invokeLLM } from "../_core/llm";
 import { buildBrandContext } from "./brandContext";
+import { chatKnowledgeQuery } from "./knowledgeQueries";
 
 export type ChatMode = "off" | "approval" | "auto";
 export type ChatRole = "visitor" | "agent";
@@ -385,7 +386,9 @@ export async function runChatTurn(input: ChatTurnInput): Promise<ChatTurn> {
 
   let brand = "";
   try {
-    brand = await buildBrandContext(input.workspaceId);
+    // With the knowledge-base passages that match what the visitor is asking
+    // (2026-10-05), alongside this agent's own facts below.
+    brand = await buildBrandContext(input.workspaceId, { query: chatKnowledgeQuery(input.messages, input.pageContext) });
   } catch {
     /* brand context is a nicety, not a requirement */
   }
