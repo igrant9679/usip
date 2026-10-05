@@ -45,6 +45,9 @@ const insertId = (res: unknown): number => Number((res as { insertId?: number }[
 
 /* ───────────────────────────── entry points ───────────────────────────── */
 
+/** Record-level actions a person takes on one record (the bulk action with one row selected counts). */
+export const PERSON_TRIGGERS = ["people_row_action", "open_profile_action", "full_profile_action", "people_bulk_action"] as const;
+
 export async function runForProspects(opts: {
   workspaceId: number;
   userId: number;
@@ -74,7 +77,11 @@ export async function runForProspects(opts: {
   }
 
   // Process asynchronously — the caller gets the job id immediately and polls.
-  void processJob({ ws, jobId, userId: opts.userId, isAdmin: opts.isAdmin, single: ids.length === 1, options: opts.options ?? {} })
+  // A person enriching ONE record themselves may do so while the account's
+  // LinkedIn activity is switched off (owner ask 2026-10-05); bulk and list
+  // enrichment, and the daily check, stay behind the switch.
+  const personInitiated = ids.length === 1 && (PERSON_TRIGGERS as readonly string[]).includes(opts.triggerType);
+  void processJob({ ws, jobId, userId: opts.userId, isAdmin: opts.isAdmin, single: ids.length === 1, personInitiated, options: opts.options ?? {} })
     .catch((e) => console.error(`[linkedinEnrich] job ${jobId} crashed:`, (e as Error).message));
 
   return { jobId, status: "queued", total: ids.length };
@@ -121,7 +128,7 @@ async function setItem(ws: number, itemId: number, set: Record<string, unknown>)
 }
 
 async function processJob(ctx: {
-  ws: number; jobId: number; userId: number; isAdmin: boolean; single: boolean; options: EnrichOptions;
+  ws: number; jobId: number; userId: number; isAdmin: boolean; single: boolean; personInitiated: boolean; options: EnrichOptions;
 }): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -166,8 +173,8 @@ async function processJob(ctx: {
 
       let usedStrategy = strategy;
       let retrieve = url
-        ? await retrieveLinkedInProfileByUrl({ workspaceId: ws, userId: ctx.userId, isAdmin: ctx.isAdmin, linkedinUrl: url })
-        : await retrieveByNameCompany({ workspaceId: ws, userId: ctx.userId, isAdmin: ctx.isAdmin, prospect: p as any });
+        ? await retrieveLinkedInProfileByUrl({ workspaceId: ws, userId: ctx.userId, isAdmin: ctx.isAdmin, linkedinUrl: url, personInitiated: ctx.personInitiated })
+        : await retrieveByNameCompany({ workspaceId: ws, userId: ctx.userId, isAdmin: ctx.isAdmin, prospect: p as any, personInitiated: ctx.personInitiated });
 
       // Dead/renamed slug (profile URL no longer resolves at the vendor):
       // fall back to the same compliant name+company search used for URL-less
@@ -175,7 +182,7 @@ async function processJob(ctx: {
       // needs_review, so the fallback can't silently mis-enrich. Never
       // triggered on rate limits — that would burn a second lookup for nothing.
       if ((!retrieve.ok || !retrieve.profile) && url && retrieve.status === "source_unavailable" && canUseNameCompanyLookup(p as any)) {
-        const fallback = await retrieveByNameCompany({ workspaceId: ws, userId: ctx.userId, isAdmin: ctx.isAdmin, prospect: p as any });
+        const fallback = await retrieveByNameCompany({ workspaceId: ws, userId: ctx.userId, isAdmin: ctx.isAdmin, prospect: p as any, personInitiated: ctx.personInitiated });
         if (fallback.ok && fallback.profile) {
           retrieve = fallback;
           usedStrategy = "unipile_name_company_lookup";

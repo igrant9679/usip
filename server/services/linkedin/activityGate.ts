@@ -157,6 +157,8 @@ export interface GateInput {
   unipileAccountId: string;
   kind: LinkedInActionKind;
   now?: Date;
+  /** A person asked for this one action (2026-10-05): may run while the account is switched off; limits still apply. */
+  personInitiated?: boolean;
 }
 
 /**
@@ -173,7 +175,7 @@ export async function checkLinkedInAction(input: GateInput): Promise<ActionVerdi
       getUsage(input.unipileAccountId, now),
       accountAgeDays(input.unipileAccountId, now),
     ]);
-    return evaluateLinkedInAction({ policy, usage, kind: input.kind, now, accountAgeDays: ageDays });
+    return evaluateLinkedInAction({ policy, usage, kind: input.kind, now, accountAgeDays: ageDays, personInitiated: input.personInitiated });
   } catch (e) {
     console.error("[LinkedInGate] check failed, allowing:", (e as Error)?.message ?? e);
     return {
@@ -209,6 +211,7 @@ export async function pickAccountForAction(input: {
   candidates: string[];
   kind: LinkedInActionKind;
   now?: Date;
+  personInitiated?: boolean;
 }): Promise<{ unipileAccountId: string | null; verdict: ActionVerdict | null }> {
   let first: ActionVerdict | null = null;
   for (const unipileAccountId of input.candidates) {
@@ -217,6 +220,7 @@ export async function pickAccountForAction(input: {
       unipileAccountId,
       kind: input.kind,
       now: input.now,
+      personInitiated: input.personInitiated,
     });
     if (verdict.allowed) return { unipileAccountId, verdict };
     if (!first) first = verdict;

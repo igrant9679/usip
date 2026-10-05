@@ -5838,6 +5838,12 @@ export const voiceCalls = mysqlTable(
     meetingId: int("meetingId"),
     /** What came of it: booked | not_interested | call_back | do_not_call | no_decision. */
     result: varchar("result", { length: 24 }),
+    /**
+     * A test call (Migration 0197, owner ask 2026-10-05: "a way to Test a
+     * call any time"): who asked for it. The agent treats them as the
+     * person called (their name and email), so nothing reaches a prospect.
+     */
+    testedByUserId: int("testedByUserId"),
     /** CRM link, same shape as tasks: account|contact|lead|opportunity|prospect. */
     relatedType: varchar("relatedType", { length: 24 }),
     relatedId: int("relatedId"),

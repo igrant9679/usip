@@ -4438,6 +4438,19 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0197: test calls ──────────────────────────────────────────────────────
+  // Owner ask 2026-10-05: "Can you give me a way to 'Test' a call any time".
+  // An admin can have an outreach agent call a number right away, outside
+  // calling hours too. The row records who asked; the agent treats them as the
+  // person called, so a test can never invite or mention a prospect.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0197_voice_test_calls.sql",
+    statements: [
+      "ALTER TABLE `voice_calls` ADD COLUMN `testedByUserId` int NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

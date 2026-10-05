@@ -132,7 +132,8 @@ function PolicyEditor({
         <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400">
           <AlertTriangle className="size-3.5 mt-0.5 shrink-0" />
           Paused means every automated LinkedIn action is refused — invites, messages, profile lookups, people searches
-          (including the Revenue Engine's LinkedIn discovery) and enrichment.
+          (including the Revenue Engine's LinkedIn discovery) and bulk enrichment.
+          A person enriching a single record still can, within the hours and limits below.
           It does not mean unlimited.
         </div>
       )}

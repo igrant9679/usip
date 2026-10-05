@@ -55,6 +55,8 @@ export async function retrieveLinkedInProfileByUrl(opts: {
   isAdmin: boolean;
   linkedinUrl: string;
   requestedAccountId?: string;
+  /** A person enriching one record (2026-10-05): allowed while LinkedIn activity is switched off. */
+  personInitiated?: boolean;
 }): Promise<RetrieveOutcome> {
   const res = await lookupProfile(opts);
   if (res.ok && res.profile) {
@@ -91,6 +93,7 @@ export async function retrieveByNameCompany(opts: {
     firstName?: string | null; lastName?: string | null; title?: string | null;
     company?: string | null; city?: string | null; state?: string | null; country?: string | null;
   };
+  personInitiated?: boolean;
 }): Promise<RetrieveOutcome> {
   const p = opts.prospect;
   const keywords = [
@@ -104,6 +107,7 @@ export async function retrieveByNameCompany(opts: {
   }
   const res = await searchLinkedInProfiles({
     workspaceId: opts.workspaceId, userId: opts.userId, isAdmin: opts.isAdmin, keywords, limit: 3, source: "enrichment",
+    personInitiated: opts.personInitiated,
   });
   if (!res.ok) {
     // A policy refusal (paused, capped, paced, outside hours) reached no

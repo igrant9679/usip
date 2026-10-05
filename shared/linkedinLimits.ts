@@ -267,6 +267,13 @@ export function evaluateLinkedInAction(input: {
   now: Date;
   /** Days since the account was connected. Null when unknown. */
   accountAgeDays: number | null;
+  /**
+   * A person asked for this one action themselves: enriching a single
+   * record (owner ask 2026-10-05). It may run while the account's LinkedIn
+   * activity is switched off, which is there to stop AUTOMATED activity;
+   * hours, spacing and every cap below still apply.
+   */
+  personInitiated?: boolean;
 }): ActionVerdict {
   const { policy, usage, kind, now } = input;
   const factor = warmupFactor(input.accountAgeDays, policy.warmupDays);
@@ -282,7 +289,7 @@ export function evaluateLinkedInAction(input: {
   const block = (reason: BlockReason, message: string, retryAfterMs: number | null = null): ActionVerdict =>
     ({ allowed: false, reason, message, retryAfterMs, effectiveCaps });
 
-  if (!policy.enabled) {
+  if (!policy.enabled && !input.personInitiated) {
     return block("disabled", "LinkedIn activity is paused for this account.");
   }
 

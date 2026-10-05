@@ -15,7 +15,7 @@
  * Nothing here dials. A draft is inert until a person approves it.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   callSuppressions,
@@ -24,16 +24,23 @@ import {
   voiceAgents,
   voiceCallRequests,
   voiceCalls,
+  workspaces,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
-import { managerProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../_core/workspace";
 import { rankOf, ROLE_RANK } from "@shared/roleRank";
 import { callableNumber, timezoneForRegion } from "@shared/callingHours";
 import { recordAudit } from "../audit";
 import { configuredProposalOwner } from "../services/meetingScheduler";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { cleanNotes } from "../services/voiceCallScript";
+import { placeCall, plivoCreds, plivoUrls } from "../services/plivo";
+import { admitInboundCall } from "../services/voiceGuards";
+import { OUTBOUND_TIME_LIMIT_SEC } from "../services/aiCallDialer";
+
+/** Test calls per workspace in any 24 hours. */
+export const MAX_TEST_CALLS_PER_DAY = 10;
 
 async function requireDb() {
   const db = await getDb();
@@ -227,6 +234,66 @@ export const aiCallsRouter = router({
       }
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "ai_call_request", entityId: null, after: { rejected: allowed } });
       return { rejected: allowed.length, notAllowed: ids.length - allowed.length };
+    }),
+
+  /**
+   * Test call (owner ask 2026-10-05: "a way to 'Test' a call any time"): an
+   * outreach agent calls a number right away, outside calling hours and
+   * without the approval queue. Admins only, 10 a day per workspace, never to
+   * a do-not-call number, and through the same spend limits as real calls.
+   * The agent treats the tester as the person called (their name and email),
+   * so a booking invites them and nothing about a prospect is used.
+   */
+  testCall: adminWsProcedure
+    .input(z.object({ agentId: z.number().int(), toNumber: z.string().max(40) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const wsId = ctx.workspace.id;
+      const [agent] = await db.select().from(voiceAgents)
+        .where(and(eq(voiceAgents.id, input.agentId), eq(voiceAgents.workspaceId, wsId))).limit(1);
+      if (!agent || agent.purpose !== "outbound_outreach" || !agent.plivoNumber) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an outreach agent with a Plivo number." });
+      }
+      if (agent.status !== "active") throw new TRPCError({ code: "BAD_REQUEST", message: `${agent.name} is paused.` });
+      const to = callableNumber(input.toNumber);
+      if (!to) throw new TRPCError({ code: "BAD_REQUEST", message: "Enter a North American phone number." });
+      const [dnc] = await db.select({ id: callSuppressions.id }).from(callSuppressions)
+        .where(and(eq(callSuppressions.workspaceId, wsId), eq(callSuppressions.phone, to))).limit(1);
+      if (dnc) throw new TRPCError({ code: "BAD_REQUEST", message: "That number is on the do-not-call list." });
+      const [{ n } = { n: 0 }] = await db.select({ n: sql<number>`count(*)` }).from(voiceCalls)
+        .where(and(eq(voiceCalls.workspaceId, wsId), isNotNull(voiceCalls.testedByUserId), gte(voiceCalls.startedAt, new Date(Date.now() - 24 * 60 * 60 * 1000))));
+      if (Number(n) >= MAX_TEST_CALLS_PER_DAY) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: `That's ${MAX_TEST_CALLS_PER_DAY} test calls in the last 24 hours; try again later.` });
+      }
+      const admission = await admitInboundCall(wsId, null);
+      if (!admission.ok) throw new TRPCError({ code: "BAD_REQUEST", message: admission.reason.replace(/^Not answered: /, "") });
+      const creds = await plivoCreds(wsId);
+      if (!creds) throw new TRPCError({ code: "BAD_REQUEST", message: "Connect Plivo first (Settings → Voice agents)." });
+
+      const ins = await db.insert(voiceCalls).values({
+        workspaceId: wsId,
+        agentId: agent.id,
+        direction: "outbound",
+        provider: "plivo",
+        toNumber: to,
+        fromNumber: agent.plivoNumber,
+        status: "queued",
+        userId: ctx.user.id,
+        testedByUserId: ctx.user.id,
+        startedAt: new Date(),
+      });
+      const rowId = Number((ins as any)[0]?.insertId ?? (ins as any)?.insertId ?? 0);
+      const [ws] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, wsId)).limit(1);
+      const urls = plivoUrls(wsId, rowId);
+      try {
+        await placeCall(creds, { from: agent.plivoNumber, to, answerUrl: urls.answer, hangupUrl: urls.hangup, timeLimit: OUTBOUND_TIME_LIMIT_SEC, callerName: ws?.name ?? undefined });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        await db.update(voiceCalls).set({ status: "failed", outcome: msg.slice(0, 500), endedAt: new Date(), durationSec: 0 }).where(eq(voiceCalls.id, rowId));
+        throw new TRPCError({ code: "BAD_REQUEST", message: msg });
+      }
+      await recordAudit({ workspaceId: wsId, actorUserId: ctx.user.id, action: "create", entityType: "ai_test_call", entityId: rowId, after: { agentId: agent.id, to } });
+      return { callId: rowId, to };
     }),
 
   /* ── do-not-call list ───────────────────────────────────────────────── */

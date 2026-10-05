@@ -391,6 +391,8 @@ export const linkedinEnrichmentRouter = router({
       const retrieve = await retrieveLinkedInProfileByUrl({
         workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin: isAdminRole(ctx.member.role),
         linkedinUrl: enr.linkedinProfileUrl, requestedAccountId: enr.linkedinSourceAccountId ?? undefined,
+        // A manager refreshing one record (2026-10-05): allowed while LinkedIn activity is off.
+        personInitiated: true,
       });
       if (!retrieve.ok || !retrieve.profile) {
         throw new TRPCError({ code: "BAD_GATEWAY", message: retrieve.message });
@@ -447,8 +449,8 @@ export const linkedinEnrichmentRouter = router({
       }
 
       const retrieve = url
-        ? await retrieveLinkedInProfileByUrl({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin, linkedinUrl: url })
-        : await retrieveByNameCompany({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin, prospect: p as never });
+        ? await retrieveLinkedInProfileByUrl({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin, linkedinUrl: url, personInitiated: true })
+        : await retrieveByNameCompany({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin, prospect: p as never, personInitiated: true });
       if (!retrieve.ok || !retrieve.profile) {
         throw new TRPCError({ code: "BAD_GATEWAY", message: retrieve.message });
       }

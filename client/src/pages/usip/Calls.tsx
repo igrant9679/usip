@@ -164,6 +164,7 @@ function VoiceAgentsPanel({ accent }: { accent: string }) {
                     <span className="min-w-0 flex-1 truncate text-sm">
                       <span className="font-medium">{c.agentName}</span>
                       <span className="text-muted-foreground"> · {formatPhone(c.fromNumber) || "unknown"} → {formatPhone(c.toNumber) || "—"}</span>
+                      {c.testedByUserId ? <span className="ml-1.5 rounded bg-secondary px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">Test</span> : null}
                     </span>
                     <span className={cn("shrink-0 text-[12px] font-medium capitalize", VOICE_STATUS_TONE[c.status] ?? "text-muted-foreground")}>
                       {String(c.status).replace("_", " ")}

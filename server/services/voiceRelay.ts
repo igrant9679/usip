@@ -386,7 +386,12 @@ export async function loadCallContext(callRowId: number): Promise<CallContext | 
   // The person: from the request (outbound), or matched from the caller's number (inbound).
   let prospectId: number | null = null;
   let person: { name: string | null; title: string | null; company: string | null; email: string | null; tz: string | null } = { name: null, title: null, company: null, email: null, tz: null };
-  if (request) {
+  if (row.testedByUserId) {
+    // A test call (2026-10-05): the person on the line is the tester, so a
+    // booking invites them and no prospect's details or history are used.
+    const [u] = await db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, row.testedByUserId)).limit(1);
+    person = { name: u?.name ?? null, title: null, company: null, email: u?.email ?? null, tz: null };
+  } else if (request) {
     prospectId = request.prospectId;
     const [p] = await db.select({ title: prospects.title, state: prospects.state, country: prospects.country }).from(prospects)
       .where(and(eq(prospects.id, request.prospectId), eq(prospects.workspaceId, wsId))).limit(1);

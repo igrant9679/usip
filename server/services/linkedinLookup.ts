@@ -243,6 +243,8 @@ export async function lookupProfile(opts: {
   linkedinUrl: string;
   /** Explicit account to route through. Admins only; reps ignore this. */
   requestedAccountId?: string;
+  /** A person enriching one record (2026-10-05): allowed while LinkedIn activity is switched off. */
+  personInitiated?: boolean;
 }): Promise<LookupResult> {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -305,6 +307,7 @@ export async function lookupProfile(opts: {
     workspaceId: opts.workspaceId,
     unipileAccountId: chosen.unipileAccountId,
     kind: "lookup",
+    personInitiated: opts.personInitiated,
   });
   if (!gate.allowed) {
     await db.insert(linkedinLookupLog).values({
@@ -484,6 +487,8 @@ export async function searchLinkedInProfiles(opts: {
   requestedAccountId?: string;
   /** What triggered it, for the activity ledger: finder | scraper | discovery | reconcile | enrichment. */
   source?: string;
+  /** A person enriching one record (2026-10-05): allowed while LinkedIn activity is switched off. */
+  personInitiated?: boolean;
 }): Promise<SearchResult> {
   const keywords = opts.keywords.trim();
   if (keywords.length < 2) {
@@ -530,7 +535,7 @@ export async function searchLinkedInProfiles(opts: {
    * vendor and is reported with its reason, never as "no results".
    */
   const candidates = chosen ? [chosen.unipileAccountId] : pool.map((a) => a.unipileAccountId);
-  const pick = await pickAccountForAction({ workspaceId: opts.workspaceId, candidates, kind: "search" });
+  const pick = await pickAccountForAction({ workspaceId: opts.workspaceId, candidates, kind: "search", personInitiated: opts.personInitiated });
   if (!pick.unipileAccountId) {
     return {
       ok: false,

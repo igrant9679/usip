@@ -36,6 +36,7 @@ import {
   Pencil,
   PhoneIncoming,
   PhoneOutgoing,
+  PhoneCall,
   Plus,
   ShieldCheck,
   Trash2,
@@ -172,6 +173,7 @@ export function VoiceAgentsSection() {
                     <span className="min-w-0 flex-1 truncate">
                       <span className="font-medium">{c.agentName}</span>
                       <span className="text-muted-foreground"> · {formatPhone(c.fromNumber) || "unknown"} → {formatPhone(c.toNumber) || "—"}</span>
+                      {c.testedByUserId ? <span className="ml-1.5 rounded bg-secondary px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">Test</span> : null}
                     </span>
                     <span className={cn("shrink-0 text-[12px] font-medium capitalize", CALL_STATUS_TONE[c.status] ?? "text-muted-foreground")}>
                       {String(c.status).replace("_", " ")}
@@ -310,6 +312,9 @@ function AgentRow({ a, canManage, onEdit }: { a: Agent; canManage: boolean; onEd
     onError: (e: any) => toast.error(e?.message ?? "Could not delete"),
   });
   const isCallback = a.purpose === "callback_receptionist";
+  const me = trpc.profile.getMe.useQuery();
+  const isAdminAgent = isAdminRole(me.data?.role);
+  const [testing, setTesting] = useState(false);
   return (
     <div className="flex items-center gap-3 px-3.5 py-3">
       <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg", isCallback ? "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300" : "bg-secondary text-muted-foreground")}>
@@ -330,6 +335,12 @@ function AgentRow({ a, canManage, onEdit }: { a: Agent; canManage: boolean; onEd
           {!a.plivoNumber && !a.phoneNumber ? " · no number yet" : ""}
         </div>
       </div>
+      {isAdminAgent && !isCallback && a.plivoNumber && a.status === "active" && (
+        <Button variant="outline" size="sm" className="h-7 gap-1.5 shrink-0" onClick={() => setTesting(true)}>
+          <PhoneCall className="size-3.5" /> Test call
+        </Button>
+      )}
+      <TestCallDialog open={testing} agent={a} onClose={() => setTesting(false)} />
       <label className="flex shrink-0 items-center gap-1.5 text-[12px] text-muted-foreground" title={canManage ? undefined : "You can only manage your own call-back agent"}>
         <Switch
           checked={a.status === "active"}
@@ -429,6 +440,57 @@ function PlivoCard({ isAdmin }: { isAdmin: boolean }) {
         <p className="text-[12px] text-muted-foreground">An admin connects Plivo.</p>
       )}
     </Card>
+  );
+}
+
+/* ───────────────────────── Test call ──────────────────────────────────── */
+
+const TEST_NUMBER_KEY = "usip:voiceTestNumber";
+
+/**
+ * Have an outreach agent call you now (owner ask 2026-10-05: "a way to
+ * 'Test' a call any time"): outside calling hours, no approval queue. The
+ * agent treats you as the person called, so a booking invites you.
+ */
+function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent; onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const [number, setNumber] = useState(() => {
+    try { return localStorage.getItem(TEST_NUMBER_KEY) ?? ""; } catch { return ""; }
+  });
+  const call = trpc.aiCalls.testCall.useMutation({
+    onSuccess: (r) => {
+      try { localStorage.setItem(TEST_NUMBER_KEY, number.trim()); } catch { /* per-browser convenience only */ }
+      toast.success(`Calling ${formatPhone(r.to)} now from ${formatPhone(agent.plivoNumber)}`);
+      void utils.voiceAgents.listCalls.invalidate();
+      onClose();
+    },
+    onError: (e: any) => toast.error(e?.message ?? "The test call could not be placed"),
+  });
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Test call from {agent.name}</DialogTitle>
+          <DialogDescription>
+            The agent calls this number right away, even outside calling hours, from {formatPhone(agent.plivoNumber)}. It treats you as the person
+            it is calling (your name and email), so if you agree to a meeting it books on the owner's calendar and invites you.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1.5">
+          <Label>Your phone number</Label>
+          <Input value={number} onChange={(e) => setNumber(e.target.value)} placeholder="+1 571 555 0100" autoFocus />
+          <p className="text-[11.5px] text-muted-foreground">
+            Only call your own phone. On Plivo's free trial, the number must be verified in Plivo first. Up to 10 test calls a day.
+          </p>
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" size="sm" onClick={onClose} disabled={call.isPending}>Cancel</Button>
+          <Button size="sm" className="gap-1.5" disabled={!number.trim() || call.isPending} onClick={() => call.mutate({ agentId: agent.id, toNumber: number.trim() })}>
+            {call.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <PhoneCall className="size-3.5" />} Call me now
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
