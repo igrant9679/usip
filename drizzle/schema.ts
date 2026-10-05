@@ -1847,6 +1847,10 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   plivoAuthId: varchar("plivoAuthId", { length: 64 }),
   plivoAuthTokenEnc: text("plivoAuthTokenEnc"),
   plivoAppId: varchar("plivoAppId", { length: 64 }),
+  // AI calls' own switch (Migration 0196, owner ask 2026-10-05): while set,
+  // approved AI calls wait instead of dialing. Separate from outboundPausedAt
+  // (automated email), because every AI call is already approved by a person.
+  aiCallsPausedAt: timestamp("aiCallsPausedAt"),
   // Knowledge base (Migration 0194): the short overview every AI prompt and
   // every call gets; drafted from the documents by AI, editable by an admin.
   knowledgeSummary: text("knowledgeSummary"),

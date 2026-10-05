@@ -126,13 +126,37 @@ export const voiceAgentsRouter = router({
   plivoStatus: workspaceProcedure.query(async ({ ctx }) => {
     const db = await requireDb();
     const [row] = await db
-      .select({ authId: workspaceSettings.plivoAuthId, enc: workspaceSettings.plivoAuthTokenEnc, appId: workspaceSettings.plivoAppId })
+      .select({ authId: workspaceSettings.plivoAuthId, enc: workspaceSettings.plivoAuthTokenEnc, appId: workspaceSettings.plivoAppId, aiCallsPausedAt: workspaceSettings.aiCallsPausedAt })
       .from(workspaceSettings)
       .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
       .limit(1);
     const token = tryDecryptSecret(row?.enc);
-    return { configured: !!row?.authId && !!token, authId: row?.authId ?? null, tokenMasked: maskSecret(token), appConnected: !!row?.appId };
+    return {
+      configured: !!row?.authId && !!token,
+      authId: row?.authId ?? null,
+      tokenMasked: maskSecret(token),
+      appConnected: !!row?.appId,
+      aiCallsPausedAt: row?.aiCallsPausedAt ?? null,
+    };
   }),
+
+  /**
+   * AI calls' own switch (owner ask 2026-10-05): while paused, approved calls
+   * wait instead of dialing. Calls to an agent's number are still answered.
+   * Separate from Pause all outbound, which holds automated email.
+   */
+  setAiCallsPaused: adminWsProcedure
+    .input(z.object({ paused: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const existing = await db.select({ w: workspaceSettings.workspaceId }).from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id)).limit(1);
+      if (!existing.length) await db.insert(workspaceSettings).values({ workspaceId: ctx.workspace.id });
+      await db.update(workspaceSettings).set({ aiCallsPausedAt: input.paused ? new Date() : null })
+        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "ai_calls_switch", entityId: null, after: { paused: input.paused } });
+      return { ok: true, paused: input.paused };
+    }),
 
   savePlivo: adminWsProcedure
     .input(z.object({ authId: z.string().max(64).optional(), authToken: z.string().max(200).optional() }))

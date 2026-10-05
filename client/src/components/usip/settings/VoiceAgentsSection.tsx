@@ -41,6 +41,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { isAdminRole } from "@shared/roleRank";
+import { formatPhone } from "@shared/phoneFormat";
 
 type Agent = Record<string, any>;
 
@@ -99,6 +100,8 @@ export function VoiceAgentsSection() {
           />
 
           <PlivoCard isAdmin={isAdmin} />
+
+          <AiCallsSwitchCard isAdmin={isAdmin} />
 
           <Card
             title="xAI phone number (optional)"
@@ -168,7 +171,7 @@ export function VoiceAgentsSection() {
                       : <PhoneOutgoing className="size-4 shrink-0 text-muted-foreground" />}
                     <span className="min-w-0 flex-1 truncate">
                       <span className="font-medium">{c.agentName}</span>
-                      <span className="text-muted-foreground"> · {c.fromNumber ?? "unknown"} → {c.toNumber ?? "—"}</span>
+                      <span className="text-muted-foreground"> · {formatPhone(c.fromNumber) || "unknown"} → {formatPhone(c.toNumber) || "—"}</span>
                     </span>
                     <span className={cn("shrink-0 text-[12px] font-medium capitalize", CALL_STATUS_TONE[c.status] ?? "text-muted-foreground")}>
                       {String(c.status).replace("_", " ")}
@@ -322,8 +325,8 @@ function AgentRow({ a, canManage, onEdit }: { a: Agent; canManage: boolean; onEd
         </div>
         <div className="truncate text-[12px] text-muted-foreground">
           {isCallback ? `Call-back agent${a.owner?.name ? ` · answers for ${a.owner.name}` : ""}` : "Outreach agent"}
-          {a.plivoNumber ? ` · ${a.plivoNumber} (Plivo)` : ""}
-          {a.phoneNumber ? ` · ${a.phoneNumber} (xAI)` : ""}
+          {a.plivoNumber ? ` · ${formatPhone(a.plivoNumber)} (Plivo)` : ""}
+          {a.phoneNumber ? ` · ${formatPhone(a.phoneNumber)} (xAI)` : ""}
           {!a.plivoNumber && !a.phoneNumber ? " · no number yet" : ""}
         </div>
       </div>
@@ -425,6 +428,42 @@ function PlivoCard({ isAdmin }: { isAdmin: boolean }) {
       ) : (
         <p className="text-[12px] text-muted-foreground">An admin connects Plivo.</p>
       )}
+    </Card>
+  );
+}
+
+/* ───────────────────────── AI calls switch ────────────────────────────── */
+
+/**
+ * AI calls' own on/off (owner ask 2026-10-05). Off: approved calls wait
+ * instead of dialing; calls to an agent's number are still answered. It is
+ * not Pause all outbound, which holds automated email: every AI call was
+ * already approved by a person.
+ */
+function AiCallsSwitchCard({ isAdmin }: { isAdmin: boolean }) {
+  const utils = trpc.useUtils();
+  const status = trpc.voiceAgents.plivoStatus.useQuery();
+  const set = trpc.voiceAgents.setAiCallsPaused.useMutation({
+    onSuccess: (r) => { toast.success(r.paused ? "AI calls paused" : "AI calls on"); void utils.voiceAgents.plivoStatus.invalidate(); },
+    onError: (e: any) => toast.error(e?.message ?? "Could not change it"),
+  });
+  const pausedAt = status.data?.aiCallsPausedAt ?? null;
+  const on = !pausedAt;
+  return (
+    <Card title="AI calls" sub="Whether approved AI calls dial. Calls to an agent's number are always answered. This is separate from Pause all outbound (Settings → Send window), which holds automated email.">
+      <label className={cn("flex items-start gap-3 rounded-md border p-3", on ? "border-border" : "border-amber-300 bg-amber-50 dark:bg-amber-950/30")}>
+        <Switch checked={on} disabled={!isAdmin || set.isPending || status.isLoading} aria-label="AI calls on"
+          onCheckedChange={(v) => set.mutate({ paused: !v })} />
+        <span className="min-w-0">
+          <span className={cn("block text-sm font-medium", !on && "text-amber-800 dark:text-amber-300")}>{on ? "AI calls are on" : "AI calls are paused"}</span>
+          <span className="block text-xs text-muted-foreground">
+            {on
+              ? "Approved calls dial during each person's calling hours (9 AM–5 PM weekdays, their time)."
+              : `Paused since ${new Date(pausedAt as Date | string).toLocaleString()}. Approved calls wait and dial once this is back on.`}
+            {!isAdmin ? " An admin changes this." : ""}
+          </span>
+        </span>
+      </label>
     </Card>
   );
 }
@@ -586,7 +625,7 @@ function AgentDialog({
                 <select value={f.plivoNumber} onChange={(e) => set("plivoNumber", e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
                   <option value="">None</option>
                   {Array.from(new Set([f.plivoNumber, ...((plivoNumbers.data ?? []) as { number: string }[]).map((n) => n.number)])).filter(Boolean).map((n) => (
-                    <option key={n} value={n}>{n}</option>
+                    <option key={n} value={n}>{formatPhone(n)}</option>
                   ))}
                 </select>
               )}

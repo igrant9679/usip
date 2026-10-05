@@ -4425,6 +4425,19 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0196: AI calls get their own on/off switch ──────────────────────────
+  // Owner ask 2026-10-05: "Add the AI calls switch". Approved AI calls stop
+  // following Pause all outbound (which holds automated email) and follow
+  // this instead: every call is already approved by a person, and the owner
+  // wants to test calls while a workspace's email stays held.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0196_ai_calls_switch.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `aiCallsPausedAt` timestamp NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

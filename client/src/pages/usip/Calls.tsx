@@ -12,6 +12,7 @@ import { useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { AiCallQueue } from "@/components/usip/calls/AiCallQueue";
+import { formatPhone } from "@shared/phoneFormat";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -131,7 +132,7 @@ function VoiceAgentsPanel({ accent }: { accent: string }) {
                     {a.purpose === "callback_receptionist"
                       ? `Answers for ${a.owner?.name ?? "member"}`
                       : "Outreach"}
-                    {a.phoneNumber ? ` · ${a.phoneNumber}` : ""}
+                    {a.plivoNumber ? ` · ${formatPhone(a.plivoNumber)}` : a.phoneNumber ? ` · ${formatPhone(a.phoneNumber)}` : ""}
                   </div>
                 </div>
               </div>
@@ -162,7 +163,7 @@ function VoiceAgentsPanel({ accent }: { accent: string }) {
                       : <PhoneOutgoing className="size-4 shrink-0 text-muted-foreground" />}
                     <span className="min-w-0 flex-1 truncate text-sm">
                       <span className="font-medium">{c.agentName}</span>
-                      <span className="text-muted-foreground"> · {c.fromNumber ?? "unknown"} → {c.toNumber ?? "—"}</span>
+                      <span className="text-muted-foreground"> · {formatPhone(c.fromNumber) || "unknown"} → {formatPhone(c.toNumber) || "—"}</span>
                     </span>
                     <span className={cn("shrink-0 text-[12px] font-medium capitalize", VOICE_STATUS_TONE[c.status] ?? "text-muted-foreground")}>
                       {String(c.status).replace("_", " ")}

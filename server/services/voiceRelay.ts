@@ -32,6 +32,7 @@ import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { timezoneForRegion } from "@shared/callingHours";
+import { formatPhone } from "@shared/phoneFormat";
 import { buildBrandContext } from "./brandContext";
 import { configuredProposalOwner, openSlotsForOwner, sendMeetingInvite } from "./meetingScheduler";
 import { getWorkspaceTimezone } from "./workspaceTimezone";
@@ -566,7 +567,7 @@ export async function finalizeRelayedCall(
   await logCallActivity(ctx.callRowId, ctx.agentName).catch((e) => console.error("[VoiceRelay] activity log failed:", e));
   const notifyUserId = ctx.ownerUserId ?? (await workspaceNotifyUserId(ctx.workspaceId));
   if (notifyUserId) {
-    const who = ctx.personName || ctx.otherNumber || "a caller";
+    const who = ctx.personName || formatPhone(ctx.otherNumber) || "a caller";
     await db.insert(notifications).values({
       workspaceId: ctx.workspaceId,
       userId: notifyUserId,

@@ -22,6 +22,7 @@ import { getDb } from "./db";
 import { appBaseUrl } from "./appUrl";
 import { activeOwnerOrNull } from "./_core/activeMembers";
 import { checkStreamToken, hangupXml, nonceIsFresh, plivoCreds, streamXml, verifyV3 } from "./services/plivo";
+import { toE164 } from "@shared/phoneFormat";
 import { admitInboundCall } from "./services/voiceGuards";
 import { matchCallerToRecord } from "./services/voiceCrmLink";
 import { finishRequestForCall, startRelay } from "./services/voiceRelay";
@@ -73,7 +74,8 @@ export function registerPlivoWebhookRoutes(app: Express): void {
 
       // Someone rang an agent's Plivo number.
       const to = digits(b.To);
-      const from = String(b.From ?? "").slice(0, 32) || null;
+      // Stored as +E.164 (Plivo sends "15714798700"); shown with formatPhone.
+      const from = toE164(String(b.From ?? ""))?.slice(0, 32) ?? null;
       const agents = await db.select().from(voiceAgents).where(and(eq(voiceAgents.workspaceId, ws), eq(voiceAgents.status, "active")));
       const agent = agents.find((a) => a.plivoNumber && digits(a.plivoNumber) === to) ?? null;
       if (!agent) { sendXml(res, hangupXml()); return; }

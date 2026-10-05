@@ -30,6 +30,7 @@ import { activeOwnerOrNull, workspaceNotifyUserId } from "./_core/activeMembers"
 import { answerInboundCall } from "./services/voiceBridge";
 import { matchCallerToRecord } from "./services/voiceCrmLink";
 import { admitInboundCall, hangupXaiCall, workspaceXaiKey } from "./services/voiceGuards";
+import { formatPhone, toE164 } from "@shared/phoneFormat";
 
 /** svix's tolerance: a signed timestamp older or newer than this is a replay. */
 export const WEBHOOK_TOLERANCE_SEC = 5 * 60;
@@ -166,7 +167,7 @@ export function registerVoiceWebhookRoutes(app: Express): void {
         workspaceId: agent.workspaceId,
         agentId: agent.id,
         direction: "inbound",
-        fromNumber: from?.slice(0, 32) ?? null,
+        fromNumber: toE164(from)?.slice(0, 32) ?? null,
         toNumber: (to ?? agent.phoneNumber)?.slice(0, 32) ?? null,
         xaiCallId: callId,
         status: admission.ok ? "ringing" : "failed",
@@ -200,7 +201,7 @@ export function registerVoiceWebhookRoutes(app: Express): void {
           workspaceId: agent.workspaceId,
           userId: callNotifyUserId,
           kind: "system",
-          title: `Call-back${match ? ` from ${match.name}` : from ? ` from ${from}` : ""}${admission.ok ? "" : " (not answered)"}`,
+          title: `Call-back${match ? ` from ${match.name}` : from ? ` from ${formatPhone(from)}` : ""}${admission.ok ? "" : " (not answered)"}`,
           body: admission.ok
             ? `Your voice agent "${agent.name}" answered an inbound call${match ? ` from ${match.name} (${match.relatedType})` : ""}.`
             : `Your voice agent "${agent.name}" did not answer an inbound call${match ? ` from ${match.name} (${match.relatedType})` : ""}. ${admission.reason}`,

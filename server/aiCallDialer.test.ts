@@ -3,7 +3,7 @@
  * Plivo webhook answers only requests Plivo signed.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { callSuppressions, voiceAgents, voiceCallRequests, voiceCalls, workspaces } from "../drizzle/schema";
+import { callSuppressions, voiceAgents, voiceCallRequests, voiceCalls, workspaceSettings, workspaces } from "../drizzle/schema";
 
 type Row = Record<string, any>;
 const state = {
@@ -24,6 +24,7 @@ const fakeDb: any = {
         if (table === voiceCallRequests) return state.approved;
         if (table === voiceAgents) return state.agents;
         if (table === workspaces) return [{ name: "CommunityForce" }];
+        if (table === workspaceSettings) return [{ aiCallsPausedAt: aiPaused.value ? new Date() : null }];
         if (table === callSuppressions) return state.dnc;
         if (table === voiceCalls) return cols && "n" in cols ? [{ n: state.callsToday }] : state.callRow ? [state.callRow] : [];
         return [];
@@ -53,7 +54,10 @@ const fakeDb: any = {
 };
 
 vi.mock("./db", () => ({ getDb: async () => fakeDb }));
+// Pause all outbound (email) — the dialer no longer reads it (2026-10-05).
 const paused = { value: false };
+// AI calls' own switch.
+const aiPaused = { value: false };
 vi.mock("./services/sendWindow", () => ({ getWorkspaceSendWindow: async () => ({ timezone: "America/New_York", window: {}, paused: paused.value }) }));
 const admission = { value: { ok: true } as any };
 vi.mock("./services/voiceGuards", async (orig) => ({ ...(await orig<any>()), admitInboundCall: async () => admission.value }));
@@ -84,6 +88,7 @@ beforeEach(() => {
   state.inserts = [];
   state.claimOk = true;
   paused.value = false;
+  aiPaused.value = false;
   admission.value = { ok: true };
   creds.value = { authId: "MAXXXXXXXXXXXXXXXXXX", authToken: "tok" };
   placeCall.mockReset();
@@ -115,11 +120,17 @@ describe("the dialer", () => {
     expect(await dialWorkspace(fakeDb, 4, Date.parse("2026-10-06T16:00:00Z"))).toBe(1); // 9 AM Pacific
   });
 
-  it("dials nothing while outbound is paused", async () => {
-    paused.value = true;
+  it("dials nothing while AI calls are paused", async () => {
+    aiPaused.value = true;
     expect(await dialWorkspace(fakeDb, 4, OPEN)).toBe(0);
     expect(placeCall).not.toHaveBeenCalled();
     expect(reqUpdates()).toEqual([{ statusReason: WAIT.paused }]);
+  });
+
+  it("still dials while Pause all outbound holds email: calls have their own switch", async () => {
+    paused.value = true;
+    expect(await dialWorkspace(fakeDb, 4, OPEN)).toBe(1);
+    expect(placeCall).toHaveBeenCalledTimes(1);
   });
 
   it("dials nothing without a Plivo connection", async () => {
@@ -262,5 +273,16 @@ describe("the Plivo webhook", () => {
     const out = await post("/api/voice/plivo/hangup", "ws=4&call=900", { CallUUID: "u", CallStatus: "completed", Machine: "true", Duration: "6" });
     expect(out.status).toBe(200);
     expect(state.updates.find((u) => u.table === voiceCalls)?.set).toMatchObject({ status: "voicemail", durationSec: 6 });
+  });
+});
+
+describe("the AI calls switch", () => {
+  it("is an admin's to flip, stores when it was paused, and is audited", async () => {
+    const { readFileSync } = await import("fs");
+    const src = readFileSync(new URL("./routers/voiceAgents.ts", import.meta.url), "utf8");
+    const m = src.slice(src.indexOf("setAiCallsPaused: adminWsProcedure"), src.indexOf("  /** Live key verification"));
+    expect(m).toContain("setAiCallsPaused: adminWsProcedure");
+    expect(m).toContain("set({ aiCallsPausedAt: input.paused ? new Date() : null })");
+    expect(m).toContain('entityType: "ai_calls_switch"');
   });
 });

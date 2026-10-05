@@ -40,6 +40,7 @@ import { ResearchAiMenu } from "./ResearchAiMenu";
 import { WorkflowSelectionMenu } from "./CreateWorkflowMenu";
 import { useEnrichJob } from "./LinkedInEnrichment";
 import { confirmAction } from "@/components/usip/Common";
+import { formatPhone } from "@shared/phoneFormat";
 
 const CSV_COLS: Array<{ key: string; label: string }> = [
   { key: "firstName", label: "First name" }, { key: "lastName", label: "Last name" },
@@ -252,7 +253,7 @@ function QueueAiCallMenu({ selectedIds }: { selectedIds: number[] }) {
         ) : (
           <>
             <select value={chosen ?? ""} onChange={(e) => setAgentId(Number(e.target.value))} className="h-8 w-full rounded-md border bg-background px-2 text-[13px]">
-              {callers.map((a) => <option key={a.id} value={a.id}>{a.name} · {a.plivoNumber}</option>)}
+              {callers.map((a) => <option key={a.id} value={a.id}>{a.name} · {formatPhone(a.plivoNumber)}</option>)}
             </select>
             <textarea value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={1500} rows={3}
               placeholder="Notes for the agent (optional), e.g. mention our October webinar"

@@ -4,7 +4,9 @@
  * Owner ask 2026-10-04: outbound AI calls "gated and not autonomous". A row
  * reaches this file only after a manager approved it (routers/aiCalls.ts,
  * consent confirmed). Even then it dials only when:
- *   - outbound is not paused for the workspace (Settings → Send window);
+ *   - AI calls are not paused for the workspace (Settings → Voice agents;
+ *     their own switch since 2026-10-05, separate from Pause all outbound,
+ *     which holds automated email);
  *   - it is 9 AM–5 PM on a weekday in the PERSON's time zone;
  *   - the number is not on the do-not-call list;
  *   - the agent is active and has a Plivo number;
@@ -17,10 +19,9 @@
  * Velocity is gone.
  */
 import { and, eq, gte, inArray, sql } from "drizzle-orm";
-import { callSuppressions, voiceAgents, voiceCallRequests, voiceCalls, workspaces } from "../../drizzle/schema";
+import { callSuppressions, voiceAgents, voiceCallRequests, voiceCalls, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { isWithinCallingHours } from "@shared/callingHours";
-import { getWorkspaceSendWindow } from "./sendWindow";
 import { admitInboundCall } from "./voiceGuards";
 import { PlivoError, placeCall, plivoCreds, plivoUrls } from "./plivo";
 
@@ -32,7 +33,7 @@ export const MAX_CALLS_PER_NUMBER_PER_DAY = 100;
 export const OUTBOUND_TIME_LIMIT_SEC = 20 * 60;
 
 export const WAIT = {
-  paused: "Waiting: outbound is paused for this workspace (Settings → Send window).",
+  paused: "Waiting: AI calls are paused for this workspace (Settings → Voice agents).",
   noPlivo: "Waiting: Plivo is not connected (Settings → Voice agents).",
   hours: "Waiting for calling hours: 9 AM–5 PM weekdays, their time.",
   agent: "Waiting: the agent is paused or has no Plivo number.",
@@ -68,8 +69,11 @@ export async function dialWorkspace(db: Db, ws: number, nowMs: number): Promise<
     .limit(50);
   if (!approved.length) return 0;
 
-  const { paused } = await getWorkspaceSendWindow(ws, nowMs);
-  if (paused) {
+  // AI calls' own switch (2026-10-05), not Pause all outbound: every call
+  // here was approved by a person, and email can stay held while calls run.
+  const [settings] = await db.select({ aiCallsPausedAt: workspaceSettings.aiCallsPausedAt }).from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, ws)).limit(1);
+  if (settings?.aiCallsPausedAt) {
     for (const r of approved) await waitWith(db, r.id, r.statusReason, WAIT.paused);
     return 0;
   }

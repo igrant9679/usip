@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { Bot, CalendarCheck, Check, Clock, PhoneCall, X } from "lucide-react";
 import { rankOf, ROLE_RANK } from "@shared/roleRank";
 import { isWithinCallingHours } from "@shared/callingHours";
+import { formatPhone } from "@shared/phoneFormat";
 
 type Tab = "draft" | "approved" | "done";
 
@@ -49,6 +50,8 @@ export function AiCallQueue({ accent }: { accent: string }) {
   const canApprove = rankOf((me.data as any)?.role ?? "rep") >= ROLE_RANK.manager;
   const [tab, setTab] = useState<Tab>("draft");
   const list = trpc.aiCalls.list.useQuery({ status: "all" }, { refetchInterval: 30_000 });
+  // AI calls' own switch (2026-10-05).
+  const aiCallsPaused = !!trpc.voiceAgents.plivoStatus.useQuery().data?.aiCallsPausedAt;
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [consentFor, setConsentFor] = useState<number[] | null>(null);
   const [consentTicked, setConsentTicked] = useState(false);
@@ -113,6 +116,11 @@ export function AiCallQueue({ accent }: { accent: string }) {
         )}
       </div>
 
+      {aiCallsPaused && (
+        <div className="mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          AI calls are paused for this workspace: approved calls wait instead of dialing. Switch them back on in Settings → Voice agents.
+        </div>
+      )}
       {tab === "draft" && !canApprove && byTab.draft.length > 0 && (
         <p className="mb-2 text-[12px] text-muted-foreground">A manager or admin approves these before they dial.</p>
       )}
@@ -149,7 +157,7 @@ export function AiCallQueue({ accent }: { accent: string }) {
                     )}
                     <td className="px-3 py-2">
                       <Link href={`/prospects/${r.prospectId}`} className="font-medium hover:underline">{r.personName}</Link>
-                      <div className="text-[11px] text-muted-foreground">{[r.company, r.toNumber].filter(Boolean).join(" · ")}</div>
+                      <div className="text-[11px] text-muted-foreground">{[r.company, formatPhone(r.toNumber)].filter(Boolean).join(" · ")}</div>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <div className="flex items-center gap-1">
@@ -200,7 +208,7 @@ export function AiCallQueue({ accent }: { accent: string }) {
           <DialogHeader>
             <DialogTitle>Approve {consentFor?.length ?? 0} AI call{consentFor?.length === 1 ? "" : "s"}</DialogTitle>
             <DialogDescription>
-              Each call dials during the person's calling hours (9 AM–5 PM weekdays, their time), never while outbound is paused.
+              Each call dials during the person's calling hours (9 AM–5 PM weekdays, their time), never while AI calls are paused (Settings → Voice agents).
               The agent says it is an AI and that the call is transcribed, offers times from the owner's calendar, and books the meeting if they agree.
             </DialogDescription>
           </DialogHeader>

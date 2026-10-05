@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { ColorAvatar } from "@/components/usip/ColorAvatar";
 import { trpc } from "@/lib/trpc";
+import { formatPhone } from "@shared/phoneFormat";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -382,7 +383,7 @@ function VoiceCallsChannel({ accent }: { accent: string }) {
                     {c.direction === "inbound" ? <PhoneIncoming className="size-4" /> : <PhoneOutgoing className="size-4" />}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium truncate">{c.fromNumber ?? "Unknown caller"}</div>
+                    <div className="text-sm font-medium truncate">{formatPhone(c.fromNumber) || "Unknown caller"}</div>
                     <div className="text-[12px] text-muted-foreground truncate">
                       {c.agentName} · {c.direction === "inbound" ? "inbound call-back" : "outbound"}
                       {c.durationSec != null ? ` · ${Math.floor(c.durationSec / 60)}:${String(c.durationSec % 60).padStart(2, "0")}` : ""}
