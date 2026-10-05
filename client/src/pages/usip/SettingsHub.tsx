@@ -41,6 +41,7 @@ import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { MailboxesSection } from "@/components/usip/settings/MailboxesSection";
 import { VoiceAgentsSection } from "@/components/usip/settings/VoiceAgentsSection";
+import { KnowledgeSection } from "@/components/usip/settings/KnowledgeSection";
 import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
 import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
@@ -79,6 +80,7 @@ import {
   Smartphone,
   Phone,
   AudioLines,
+  BookOpen,
   Monitor,
   FileText,
   Zap,
@@ -123,6 +125,7 @@ const GROUPS: HubGroup[] = [
       { id: "notification-policy", label: "Notification policy", icon: Bell, internal: true },
       { id: "integrations", label: "Integrations", icon: Plug, internal: true },
       { id: "voice-agents", label: "Voice agents", icon: AudioLines, internal: true },
+      { id: "knowledge", label: "Knowledge base", icon: BookOpen, internal: true },
       { id: "data-sources", label: "Data sources", icon: Database, internal: true },
       { id: "email-delivery", label: "Email delivery", icon: Send, internal: true },
       { id: "branding", label: "Branding", icon: Palette, internal: true },
@@ -258,6 +261,7 @@ export default function SettingsHub() {
         {section === "profile" && <ProfileSection />}
         {section === "mailboxes" && <MailboxesSection />}
         {section === "voice-agents" && <VoiceAgentsSection />}
+        {section === "knowledge" && <KnowledgeSection />}
         {section === "branding" && <BrandingSection />}
         {section === "social-accounts" && <SocialAccountsSection />}
         {section === "data-sources" && (

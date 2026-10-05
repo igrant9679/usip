@@ -70,7 +70,11 @@ export const emailAssistRouter = router({
       // generic assistant, not an error.
       let brandBlock = "";
       try {
-        brandBlock = await buildBrandContext(ctx.workspace.id);
+        // What the email is about asks the knowledge base for matching
+        // product facts (2026-10-05), e.g. pricing for a pricing question.
+        brandBlock = await buildBrandContext(ctx.workspace.id, {
+          query: [input.instruction, input.subject, input.text].filter(Boolean).join("\n").slice(0, 6000),
+        });
       } catch {
         /* brand context is optional */
       }

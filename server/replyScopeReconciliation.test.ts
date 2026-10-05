@@ -56,6 +56,7 @@ describe("every reply surface uses the shared scope", () => {
     ["replyClassifier sweep", ["services", "replyClassifier.ts"], 1],
     ["leadScoring engagement", ["routers", "leadScoring.ts"], 1],
     ["performanceMetrics attribution", ["services", "performanceMetrics.ts"], 1],
+    ["personHistory call context", ["services", "personHistory.ts"], 1],
   ];
   for (const [label, segs, min] of surfaces) {
     it(`${label} calls genuineReplyScope()`, () => {

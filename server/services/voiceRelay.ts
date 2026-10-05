@@ -39,6 +39,8 @@ import { logCallActivity, matchCallerToRecord } from "./voiceCrmLink";
 import { MAX_CALL_MS } from "./voiceGuards";
 import { buildCallInstructions, callTools, CALL_RESULTS, plausibleEmail, spokenTime, type CallResult } from "./voiceCallScript";
 import { hangupCall, plivoCreds } from "./plivo";
+import { hasKnowledge, searchKnowledge } from "./knowledgeSearch";
+import { buildPersonHistory } from "./personHistory";
 import { suppressNumber } from "../routers/aiCalls";
 
 const XAI_REALTIME = "wss://api.x.ai/v1/realtime";
@@ -84,6 +86,7 @@ export type SessionDeps = {
   findTimes(ctx: CallContext): Promise<{ option: string; iso: string; spoken: string }[]>;
   book(ctx: CallContext, iso: string, email: string, meetingId: number | null): Promise<{ ok: boolean; meetingId: number | null; reason?: string }>;
   doNotCall(ctx: CallContext): Promise<void>;
+  searchKnowledge(ctx: CallContext, query: string): Promise<{ title: string; page: number | null; content: string }[]>;
   hangup(ctx: CallContext): Promise<void>;
   finalize(ctx: CallContext, f: { transcript: string[]; result: CallResult | null; note: string | null; meetingId: number | null; answered: boolean }): Promise<void>;
   setTimeout(fn: () => void, ms: number): unknown;
@@ -278,6 +281,14 @@ export class CallSession {
         this.transcript.push(`[Booked: ${pick.spoken}, invite to ${email}]`);
         return { ok: true, booked: pick.spoken, invite_sent_to: email, say: "The invite is on its way; they need to accept it in their calendar." };
       }
+      case "search_knowledge": {
+        const q = String(args.query ?? "").trim().slice(0, 300);
+        if (!q) return { passages: [], note: "Say what you are looking for." };
+        const found = await this.deps.searchKnowledge(this.ctx, q);
+        if (!found.length) return { passages: [], note: "Nothing in the documents on that. Say the team will follow up with the answer." };
+        // Short: the agent reads these mid-conversation.
+        return { passages: found.slice(0, 3).map((f) => ({ source: `${f.title}${f.page ? `, p. ${f.page}` : ""}`, text: f.content.slice(0, 900) })) };
+      }
       case "mark_do_not_call":
         await this.deps.doNotCall(this.ctx);
         this.result = "do_not_call";
@@ -398,7 +409,11 @@ export async function loadCallContext(callRowId: number): Promise<CallContext | 
     }
   }
 
+  // The brand block carries the knowledge base's overview; the search tool
+  // reaches the rest. History: what the team already knows about them.
   const brand = await buildBrandContext(wsId).catch(() => "");
+  const canSearch = await hasKnowledge(wsId);
+  const history = prospectId ? await buildPersonHistory(wsId, prospectId) : null;
   const instructions = buildCallInstructions({
     direction,
     agentName: agent.name,
@@ -409,6 +424,8 @@ export async function loadCallContext(callRowId: number): Promise<CallContext | 
     callNotes: request?.callNotes ?? null,
     person: person.name || person.company ? person : null,
     canBook,
+    canSearch,
+    history,
   });
 
   return {
@@ -420,7 +437,7 @@ export async function loadCallContext(callRowId: number): Promise<CallContext | 
     model: agent.model || DEFAULT_CALL_MODEL,
     apiKey,
     instructions,
-    tools: callTools(canBook),
+    tools: callTools(canBook, canSearch),
     canBook,
     ownerUserId,
     ownerName,
@@ -488,6 +505,10 @@ export const realDeps: SessionDeps = {
 
   async doNotCall(ctx) {
     if (ctx.otherNumber) await suppressNumber(ctx.workspaceId, ctx.otherNumber, "asked_on_call", ctx.prospectId, null);
+  },
+
+  async searchKnowledge(ctx, query) {
+    return searchKnowledge(ctx.workspaceId, query, 3);
   },
 
   async hangup(ctx) {

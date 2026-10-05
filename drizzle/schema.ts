@@ -1847,6 +1847,10 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   plivoAuthId: varchar("plivoAuthId", { length: 64 }),
   plivoAuthTokenEnc: text("plivoAuthTokenEnc"),
   plivoAppId: varchar("plivoAppId", { length: 64 }),
+  // Knowledge base (Migration 0194): the short overview every AI prompt and
+  // every call gets; drafted from the documents by AI, editable by an admin.
+  knowledgeSummary: text("knowledgeSummary"),
+  knowledgeSummaryUpdatedAt: timestamp("knowledgeSummaryUpdatedAt"),
   // ── Apollo.io prospect source (Migration 0124) ──
   // Same AES-256-GCM BYOK pattern as above. Used SEARCH-ONLY: Apollo's People
   // Search returns names/titles/company/domain and consumes ZERO credits, but
@@ -5886,6 +5890,59 @@ export const voiceCallRequests = mysqlTable(
   }),
 );
 export type VoiceCallRequest = typeof voiceCallRequests.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Knowledge base (Migration 0194)
+
+   Owner ask 2026-10-05: "attach pdfs to provide full product/service/
+   pricing/etc. knowledge to the agent and to inform the AI generated outputs
+   (emails, etc.) in general". One per workspace: documents (PDF, text, a web
+   page) become plain-text chunks; services/knowledgeBase.ts ranks them for a
+   question or a writer's prompt and hands the best to the model.
+   ────────────────────────────────────────────────────────────────────────── */
+export const knowledgeDocuments = mysqlTable(
+  "knowledge_documents",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    title: varchar("title", { length: 200 }).notNull(),
+    sourceType: mysqlEnum("sourceType", ["pdf", "text", "url"]).notNull(),
+    /** The page a `url` document was read from. */
+    sourceUrl: text("sourceUrl"),
+    /** Where the original file is kept (storage key), when it is kept. */
+    storageKey: varchar("storageKey", { length: 500 }),
+    mimeType: varchar("mimeType", { length: 100 }),
+    sizeBytes: int("sizeBytes"),
+    pageCount: int("pageCount"),
+    charCount: int("charCount"),
+    chunkCount: int("chunkCount"),
+    status: mysqlEnum("status", ["processing", "ready", "failed"]).default("processing").notNull(),
+    error: varchar("error", { length: 500 }),
+    /** Off = kept but not used by any AI. */
+    enabled: boolean("enabled").default(true).notNull(),
+    uploadedByUserId: int("uploadedByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({ byWs: index("ix_kd_ws").on(t.workspaceId) }),
+);
+export type KnowledgeDocument = typeof knowledgeDocuments.$inferSelect;
+
+export const knowledgeChunks = mysqlTable(
+  "knowledge_chunks",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    documentId: int("documentId").notNull(),
+    ordinal: int("ordinal").notNull(),
+    page: int("page"),
+    content: text("content").notNull(),
+  },
+  (t) => ({
+    byWsDoc: index("ix_kc_ws_doc").on(t.workspaceId, t.documentId),
+  }),
+);
+export type KnowledgeChunk = typeof knowledgeChunks.$inferSelect;
 
 /** Numbers that must never be called again (asked on a call, or added by hand). Migration 0193. */
 export const callSuppressions = mysqlTable(

@@ -4363,6 +4363,49 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0194: the workspace knowledge base ───────────────────────────────────
+  // Owner ask 2026-10-05: PDFs (and web pages) giving full product/service/
+  // pricing knowledge to the voice agent and to every AI writer. Documents,
+  // their text chunks (ranked in process with BM25, so no FULLTEXT index is
+  // needed), and the editable overview on workspace_settings.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0194_knowledge_base.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `knowledge_documents` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`title` VARCHAR(200) NOT NULL, " +
+        "`sourceType` ENUM('pdf','text','url') NOT NULL, " +
+        "`sourceUrl` TEXT NULL, " +
+        "`storageKey` VARCHAR(500) NULL, " +
+        "`mimeType` VARCHAR(100) NULL, " +
+        "`sizeBytes` INT NULL, " +
+        "`pageCount` INT NULL, " +
+        "`charCount` INT NULL, " +
+        "`chunkCount` INT NULL, " +
+        "`status` ENUM('processing','ready','failed') NOT NULL DEFAULT 'processing', " +
+        "`error` VARCHAR(500) NULL, " +
+        "`enabled` BOOLEAN NOT NULL DEFAULT TRUE, " +
+        "`uploadedByUserId` INT NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "`updatedAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
+        "INDEX `ix_kd_ws` (`workspaceId`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "CREATE TABLE IF NOT EXISTS `knowledge_chunks` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`documentId` INT NOT NULL, " +
+        "`ordinal` INT NOT NULL, " +
+        "`page` INT NULL, " +
+        "`content` TEXT NOT NULL, " +
+        "INDEX `ix_kc_ws_doc` (`workspaceId`, `documentId`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `knowledgeSummary` text NULL",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `knowledgeSummaryUpdatedAt` timestamp NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

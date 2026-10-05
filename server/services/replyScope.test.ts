@@ -42,6 +42,8 @@ describe("email_replies scope in autonomous engines", () => {
   const ENGINES = [
     "server/services/replyClassifier.ts",
     "server/routers/leadScoring.ts",
+    // The AI phone agent's view of a person's replies (2026-10-05).
+    "server/services/personHistory.ts",
   ];
 
   for (const file of ENGINES) {
@@ -111,12 +113,17 @@ describe("email_replies scope in autonomous engines", () => {
       ).toEqual([]);
     });
 
-    it(`${file} imports isNotNull, which a bundler would not catch`, () => {
+    it(`${file} imports the scope it uses, which a bundler would not catch`, () => {
       // A missing import is a free identifier to esbuild: it compiles, ships,
       // and throws on the first call. This happened three times on 2026-07-29,
-      // including in the leadScoring fix above.
+      // including in the leadScoring fix above. Whichever form a file scopes
+      // with (the literal or the shared helper, 2026-10-05), its import must be there.
       const src = readFileSync(file, "utf8");
-      expect(src).toMatch(/import\s*\{[^}]*\bisNotNull\b[^}]*\}\s*from\s*"drizzle-orm"/);
+      const usesLiteral = src.includes("isNotNull(emailReplies.draftId)");
+      const usesHelper = src.includes("genuineReplyScope()");
+      expect(usesLiteral || usesHelper, `${file} scopes no read`).toBe(true);
+      if (usesLiteral) expect(src).toMatch(/import\s*\{[^}]*\bisNotNull\b[^}]*\}\s*from\s*"drizzle-orm"/);
+      if (usesHelper) expect(src).toMatch(/import\s*\{[^}]*\bgenuineReplyScope\b[^}]*\}\s*from\s*"[^"]*replyScope"/);
     });
   }
 });

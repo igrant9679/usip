@@ -50,6 +50,7 @@ function harness(c: CallContext = ctx(), depOver: Partial<SessionDeps> = {}) {
     ]),
     book: vi.fn(async () => ({ ok: true, meetingId: 501 })),
     doNotCall: vi.fn(async () => {}),
+    searchKnowledge: vi.fn(async () => [{ title: "Pricing.pdf", page: 2, content: "Enterprise: $2,400 a year." }]),
     hangup: vi.fn(async () => {}),
     finalize: vi.fn(async () => {}),
     setTimeout: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t; },
@@ -190,6 +191,17 @@ describe("booking", () => {
     // The retry reuses the same meeting row.
     await toolCall(h, "book_meeting", { option: "B", email: "dana@acme.com" }, "fc3");
     expect((h.deps.book as any).mock.calls[1][3]).toBe(501);
+  });
+
+  it("searches the knowledge base and hands back short, sourced passages", async () => {
+    const out = await toolCall(h, "search_knowledge", { query: "enterprise price" });
+    expect(h.deps.searchKnowledge).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 4 }), "enterprise price");
+    expect(out).toEqual({ passages: [{ source: "Pricing.pdf, p. 2", text: "Enterprise: $2,400 a year." }] });
+    (h.deps.searchKnowledge as any).mockResolvedValueOnce([]);
+    const none = await toolCall(h, "search_knowledge", { query: "warranty on hardware" }, "fc2");
+    expect(none.note).toContain("the team will follow up");
+    const empty = await toolCall(h, "search_knowledge", { query: "  " }, "fc3");
+    expect(empty.passages).toEqual([]);
   });
 
   it("cannot book when the owner has no calendar", async () => {

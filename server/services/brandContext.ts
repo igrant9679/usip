@@ -15,14 +15,21 @@
  *                                              website, keywords, topics (migr 0125)
  *   - brand_voice_profiles                   → tone, vocabulary, avoidWords, applyToAI
  *
- * The brand_voice_profiles.applyToAI flag (default true) is the master gate:
- * when a workspace turns it OFF, this returns "" and no branding is injected.
+ *   - the knowledge base (2026-10-05)       → workspace_settings.knowledgeSummary,
+ *                                              plus passages matching opts.query
+ *
+ * The brand_voice_profiles.applyToAI flag (default true) is the master gate
+ * for branding: when a workspace turns it OFF, no company or voice block is
+ * injected. Product knowledge is facts, not voice, so it still comes along
+ * (each document has its own on/off in Settings → Knowledge base).
  * Returns "" (never throws) whenever there's nothing useful to add, so callers
  * can inject unconditionally: `system += brand ? \`\n\n${brand}\` : ""`.
  */
 import { eq } from "drizzle-orm";
 import { getDb } from "../db";
 import { workspaces, workspaceSettings, brandVoiceProfiles } from "../../drizzle/schema";
+import { formatKnowledge } from "./knowledgeText";
+import { searchKnowledge } from "./knowledgeSearch";
 
 const asList = (v: unknown, max = 20): string[] =>
   Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean).slice(0, max) : [];
@@ -36,7 +43,14 @@ export async function withSendersBrand<M extends { role: string; content: unknow
   workspaceId: number,
   messages: M[],
 ): Promise<M[]> {
-  return appendSendersBrand(messages, await buildBrandContext(workspaceId).catch(() => ""));
+  // The prompt itself is the question put to the knowledge base (2026-10-05):
+  // whatever the writer is about, the passages that match it come along.
+  const query = messages
+    .filter((m) => m.role !== "system" && typeof m.content === "string")
+    .map((m) => m.content as string)
+    .join("\n")
+    .slice(0, 8000);
+  return appendSendersBrand(messages, await buildBrandContext(workspaceId, query ? { query } : {}).catch(() => ""));
 }
 
 /** The pure half of withSendersBrand, so the placement rule is tested directly. */
@@ -49,7 +63,17 @@ export function appendSendersBrand<M extends { role: string; content: unknown }>
   return out;
 }
 
-export async function buildBrandContext(workspaceId: number): Promise<string> {
+/**
+ * The knowledge base's part of the block (owner ask 2026-10-05): the
+ * workspace's overview, plus, when the caller says what it is writing about,
+ * the passages from its documents that match. "" when there is neither.
+ */
+async function knowledgeBlock(workspaceId: number, summary: string | null | undefined, query: string | undefined): Promise<string> {
+  const found = query ? await searchKnowledge(workspaceId, query, 3) : [];
+  return formatKnowledge(summary, found, 6000);
+}
+
+export async function buildBrandContext(workspaceId: number, opts: { query?: string } = {}): Promise<string> {
   const db = await getDb();
   if (!db) return "";
 
@@ -59,8 +83,13 @@ export async function buildBrandContext(workspaceId: number): Promise<string> {
     db.select().from(brandVoiceProfiles).where(eq(brandVoiceProfiles.workspaceId, workspaceId)),
   ]);
 
-  // Master gate: an explicit applyToAI=false opts the whole workspace out.
-  if (voice && voice.applyToAI === false) return "";
+  // Product knowledge is facts, not voice: it is not behind applyToAI, and
+  // each document has its own on/off in Settings → Knowledge base.
+  const knowledge = await knowledgeBlock(workspaceId, (s as { knowledgeSummary?: string | null } | undefined)?.knowledgeSummary, opts.query).catch(() => "");
+
+  // Master gate: an explicit applyToAI=false opts the workspace out of the
+  // brand voice and company block.
+  if (voice && voice.applyToAI === false) return knowledge;
 
   const name = (ws?.name ?? "").trim();
   const description = (s?.companyDescription ?? "").trim();
@@ -87,7 +116,7 @@ export async function buildBrandContext(workspaceId: number): Promise<string> {
   if (vocab.length) voiceLines.push(`- Prefer these words/phrases where natural: ${vocab.join(", ")}`);
   if (avoid.length) voiceLines.push(`- Never use these words/phrases: ${avoid.join(", ")}`);
 
-  if (companyLines.length === 0 && voiceLines.length === 0) return "";
+  if (companyLines.length === 0 && voiceLines.length === 0) return knowledge;
 
   const parts: string[] = [];
   if (companyLines.length) {
@@ -100,5 +129,6 @@ export async function buildBrandContext(workspaceId: number): Promise<string> {
   if (voiceLines.length) {
     parts.push(`## Brand voice (apply to all copy)\n${voiceLines.join("\n")}`);
   }
+  if (knowledge) parts.push(knowledge);
   return parts.join("\n\n");
 }

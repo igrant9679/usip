@@ -63,6 +63,7 @@ import { quickenrichRouter } from "./routers/quickenrich";
 import { prospectSourcesRouter } from "./routers/prospectSources";
 import { voiceAgentsRouter } from "./routers/voiceAgents";
 import { aiCallsRouter } from "./routers/aiCalls";
+import { knowledgeBaseRouter } from "./routers/knowledgeBase";
 import { reportsRouter } from "./routers/reports";
 import { profileRouter } from "./routers/profile";
 import { prospectsRouter } from "./routers/prospects";
@@ -185,6 +186,7 @@ export const appRouter = router({
   prospectSources: prospectSourcesRouter,
   voiceAgents: voiceAgentsRouter,
   aiCalls: aiCallsRouter,
+  knowledgeBase: knowledgeBaseRouter,
   reports: reportsRouter,
   profile: profileRouter,
   prospects: prospectsRouter,
