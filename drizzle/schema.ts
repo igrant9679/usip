@@ -2225,6 +2225,19 @@ export const chatSessions = mysqlTable(
     pageUrl: varchar("pageUrl", { length: 1000 }),
     pageTitle: varchar("pageTitle", { length: 300 }),
     referrer: varchar("referrer", { length: 1000 }),
+    // ── Proving who they are (Migration 0195) ──
+    // A visitor's identity is whatever they type, so a matched visitor's
+    // history is only given to the agent once they prove the address: a
+    // 6-digit code is emailed to it and typed back (services/chatIdentity.ts).
+    /** The address proven, and when. History only while it equals visitorEmail. */
+    verifiedEmail: varchar("verifiedEmail", { length: 320 }),
+    verifiedAt: timestamp("verifiedAt"),
+    /** HMAC of the code outstanding, never the code itself. */
+    verifyCodeHash: varchar("verifyCodeHash", { length: 128 }),
+    verifyCodeExpiresAt: timestamp("verifyCodeExpiresAt"),
+    verifyCodeSentAt: timestamp("verifyCodeSentAt"),
+    verifyCodesSent: int("verifyCodesSent").default(0).notNull(),
+    verifyAttempts: int("verifyAttempts").default(0).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

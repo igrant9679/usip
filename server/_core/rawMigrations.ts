@@ -4406,6 +4406,25 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0195: website chat visitors prove their email before history ─────────
+  // Owner ask 2026-10-05: "Give the chat agent the visitor's history too",
+  // with "safe now, full after code": a visitor is whoever they type, so the
+  // agent gets a matched person's history only after a code emailed to that
+  // address is typed back. The code is stored as an HMAC, never in clear.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0195_chat_visitor_verification.sql",
+    statements: [
+      "ALTER TABLE `chat_sessions` ADD COLUMN `verifiedEmail` varchar(320) NULL",
+      "ALTER TABLE `chat_sessions` ADD COLUMN `verifiedAt` timestamp NULL",
+      "ALTER TABLE `chat_sessions` ADD COLUMN `verifyCodeHash` varchar(128) NULL",
+      "ALTER TABLE `chat_sessions` ADD COLUMN `verifyCodeExpiresAt` timestamp NULL",
+      "ALTER TABLE `chat_sessions` ADD COLUMN `verifyCodeSentAt` timestamp NULL",
+      "ALTER TABLE `chat_sessions` ADD COLUMN `verifyCodesSent` int NOT NULL DEFAULT 0",
+      "ALTER TABLE `chat_sessions` ADD COLUMN `verifyAttempts` int NOT NULL DEFAULT 0",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

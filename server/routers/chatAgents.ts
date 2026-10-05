@@ -26,18 +26,22 @@ import { adminWsProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, isActiveMember } from "../_core/activeMembers";
 import { getDb } from "../db";
 import {
-  activities, bookingLinks, chatAgentKnowledge, chatAgents, chatSessions, enrollments, leads, notifications, tasks,
+  activities, bookingLinks, chatAgentKnowledge, chatAgents, chatSessions, enrollments, leads, notifications, tasks, workspaces,
 } from "../../drizzle/schema";
 import { bookSlotForLink, openSlotsForLink } from "./bookingLinks";
 import {
-  decideOffer, emailAskCount, handoffLine, handoffReasonFor, mergeVisitor, runChatTurn, wantsHuman,
+  decideOffer, emailAskCount, emailInText, handoffLine, handoffReasonFor, mergeVisitor, runChatTurn, wantsHuman,
   type ChatMessage, type HandoffReason, type VisitorFacts,
 } from "../services/chatAgent";
 import { formatKnowledge, selectKnowledge } from "../services/chatKnowledge";
+import { checkCode, resolveChatIdentity, sendCode } from "../services/chatIdentity";
 import { appUrl } from "../appUrl";
 import { describePageContext } from "../services/chatPageContext";
 import { getChatFunnelStats } from "../services/performanceMetrics";
 import { slugify } from "@shared/slugify";
+
+/** When a verification code cannot go out (limits, or no mailbox): never leave them waiting for it. */
+export const CODE_NOT_SENT = "I wasn't able to send a verification code just now, so I can't look up your details here. Someone from the team will follow up with you by email.";
 
 /** How many slots the widget offers. A short list converts; a wall of times doesn't. */
 const SLOTS_SHOWN = 6;
@@ -506,6 +510,26 @@ export const chatAgentsRouter = router({
         knowledge = formatKnowledge(selectKnowledge(rows, input.message));
       } catch { /* knowledge is an improvement, never a prerequisite */ }
 
+      /**
+       * Who they are (owner ask 2026-10-05: "safe now, full after code"). A
+       * code in this message is checked first, by us, not by the model; then
+       * the email they gave is matched to the CRM. The agent gets a matched
+       * person's history only once that address is proven.
+       */
+      const typedEmail = known.email ?? emailInText(input.message);
+      const check = checkCode({
+        token: session.token,
+        visitorEmail: session.visitorEmail ?? typedEmail,
+        verifyCodeHash: session.verifyCodeHash,
+        verifyCodeExpiresAt: session.verifyCodeExpiresAt,
+        verifyAttempts: session.verifyAttempts,
+      }, input.message);
+      if (check.result) {
+        await db.update(chatSessions).set(check.patch as never).where(eq(chatSessions.id, session.id));
+        session = { ...session, ...check.patch } as typeof session;
+      }
+      const identity = await resolveChatIdentity(agent.workspaceId, session, typedEmail).catch(() => ({ status: "unknown" as const }));
+
       const turn = await runChatTurn({
         workspaceId: agent.workspaceId,
         displayName: agent.displayName,
@@ -521,6 +545,8 @@ export const chatAgentsRouter = router({
           pageTitle: session.pageTitle ?? input.pageTitle ?? null,
           referrer: session.referrer ?? input.referrer ?? null,
         }),
+        identity,
+        codeResult: check.result,
       });
 
       const visitor = mergeVisitor(known, turn.extracted);
@@ -609,6 +635,24 @@ export const chatAgentsRouter = router({
             slots = [];
           }
         }
+      }
+
+      /**
+       * The visitor agreed to be verified: email the code, from the
+       * workspace's own mailbox, only to a matched and unverified address,
+       * within the per-chat and per-address limits. The model's word is
+       * advice; if no code can go out, the reply says so rather than leaving
+       * them waiting for an email that is not coming.
+       */
+      if (turn.sendCode && identity.status === "matched" && visitor.email) {
+        let sent = false;
+        if (identity.canSendCode) {
+          const [ws] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, agent.workspaceId)).limit(1);
+          const res = await sendCode(agent.workspaceId, session, visitor.email, { companyName: ws?.name ?? "", agentName: agent.displayName });
+          sent = res.ok;
+          if (!res.ok) console.error("[chatAgents] verification code not sent:", res.reason);
+        }
+        if (!sent) reply = `${reply}\n\n${CODE_NOT_SENT}`;
       }
 
       const qualified = turn.score >= agent.qualifyThreshold;
