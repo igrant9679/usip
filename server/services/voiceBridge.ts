@@ -18,6 +18,9 @@ import { tryDecryptSecret } from "../_core/crypto";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { logCallActivity } from "./voiceCrmLink";
 import { buildBrandContext } from "./brandContext";
+import { hasKnowledge, searchKnowledge } from "./knowledgeSearch";
+import { knowledgeSearchRule, knowledgeSearchTool, knowledgeToolResult } from "./voiceCallScript";
+import { ToolTurns } from "./voiceToolTurns";
 // Hard safety cap — hang up runaway calls (also caps vendor spend at $0.05/min).
 import { MAX_CALL_MS, hangupXaiCall } from "./voiceGuards";
 
@@ -114,6 +117,9 @@ export function answerInboundCall(opts: BridgeOpts): void {
     // 2026-09-24: every AI communication informed by the workspace's messaging).
     const brand = await buildBrandContext(agent.workspaceId).catch(() => "");
 
+    // Documents in the knowledge base: the agent may search them (2026-10-05).
+    const canSearch = await hasKnowledge(agent.workspaceId);
+
     const startedAtMs = Date.now();
     const transcript: string[] = [];
     let opened = false;
@@ -121,6 +127,7 @@ export function answerInboundCall(opts: BridgeOpts): void {
     const finishOnce = async (status: "completed" | "failed", note?: string) => {
       if (finalized) return;
       finalized = true;
+      turns.stop();
       clearTimeout(capTimer);
       /**
        * Whatever ended our side, end xAI's too. Closing the socket does not
@@ -148,6 +155,8 @@ export function answerInboundCall(opts: BridgeOpts): void {
     const sock = new WebSocket(`${XAI_REALTIME_WS}?call_id=${encodeURIComponent(opts.xaiCallId)}`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
+    // Function calls (the knowledge search) answered on this socket.
+    const turns = new ToolTurns((e) => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(e)); });
 
     const capTimer = setTimeout(() => {
       // REST hangup is authoritative (finishOnce sends it); closing the WS
@@ -158,10 +167,14 @@ export function answerInboundCall(opts: BridgeOpts): void {
 
     sock.on("open", () => {
       opened = true;
+      const instructions = [agent.instructions?.trim() || defaultInstructions(agent.name, ownerName), brand].filter(Boolean).join("\n\n");
       const session: Record<string, unknown> = {
         voice: agent.voice || "eve",
-        instructions: [agent.instructions?.trim() || defaultInstructions(agent.name, ownerName), brand].filter(Boolean).join("\n\n"),
+        // The brand block carries the knowledge base's overview; with
+        // documents, the agent can also search them mid-call (2026-10-05).
+        instructions: canSearch ? `${instructions}\n\n${knowledgeSearchRule(ownerName)}` : instructions,
         turn_detection: { type: "server_vad" },
+        ...(canSearch ? { tools: [knowledgeSearchTool()] } : {}),
       };
       if (agent.languageHint) {
         session.audio = { input: { transcription: { language_hint: agent.languageHint } } };
@@ -174,6 +187,18 @@ export function answerInboundCall(opts: BridgeOpts): void {
     sock.on("message", (buf: WebSocket.RawData) => {
       try {
         const evt = JSON.parse(buf.toString());
+        turns.onEvent(String(evt?.type ?? ""));
+        // The knowledge-base search (the only tool on this line).
+        if (evt?.type === "response.function_call_arguments.done") {
+          const name = String(evt.name ?? "");
+          let query = "";
+          try { query = String(JSON.parse(String(evt.arguments ?? "{}"))?.query ?? "").trim().slice(0, 300); } catch { /* malformed: empty query */ }
+          void turns.run(String(evt.call_id ?? ""), async () =>
+            name === "search_knowledge"
+              ? knowledgeToolResult(query, query ? await searchKnowledge(agent.workspaceId, query, 3) : [])
+              : { ok: false, error: `Unknown tool ${name}` },
+          );
+        }
         if (evt?.type === "session.created") {
           void (async () => {
             const dbi = await getDb();

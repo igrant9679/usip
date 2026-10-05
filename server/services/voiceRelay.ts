@@ -37,7 +37,7 @@ import { configuredProposalOwner, openSlotsForOwner, sendMeetingInvite } from ".
 import { getWorkspaceTimezone } from "./workspaceTimezone";
 import { logCallActivity, matchCallerToRecord } from "./voiceCrmLink";
 import { MAX_CALL_MS } from "./voiceGuards";
-import { buildCallInstructions, callTools, CALL_RESULTS, plausibleEmail, spokenTime, type CallResult } from "./voiceCallScript";
+import { buildCallInstructions, callTools, CALL_RESULTS, knowledgeToolResult, plausibleEmail, spokenTime, type CallResult } from "./voiceCallScript";
 import { hangupCall, plivoCreds } from "./plivo";
 import { hasKnowledge, searchKnowledge } from "./knowledgeSearch";
 import { buildPersonHistory } from "./personHistory";
@@ -283,11 +283,8 @@ export class CallSession {
       }
       case "search_knowledge": {
         const q = String(args.query ?? "").trim().slice(0, 300);
-        if (!q) return { passages: [], note: "Say what you are looking for." };
-        const found = await this.deps.searchKnowledge(this.ctx, q);
-        if (!found.length) return { passages: [], note: "Nothing in the documents on that. Say the team will follow up with the answer." };
         // Short: the agent reads these mid-conversation.
-        return { passages: found.slice(0, 3).map((f) => ({ source: `${f.title}${f.page ? `, p. ${f.page}` : ""}`, text: f.content.slice(0, 900) })) };
+        return knowledgeToolResult(q, q ? await this.deps.searchKnowledge(this.ctx, q) : []);
       }
       case "mark_do_not_call":
         await this.deps.doNotCall(this.ctx);

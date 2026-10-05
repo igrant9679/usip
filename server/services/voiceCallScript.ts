@@ -106,14 +106,7 @@ export function buildCallInstructions(s: ScriptInput): string {
     `Do not make commitments on price, contracts or anything you were not told; say ${owner || "the team"} will follow up.`,
     `Always say goodbye before calling end_call.`,
   ];
-  if (s.canSearch) {
-    rules.splice(
-      rules.length - 2,
-      0,
-      `For a specific question about our products, services, pricing or policies, say "one moment" and call search_knowledge with the question. ` +
-        `Answer only from what it returns or the product knowledge below; if it finds nothing, say ${owner || "the team"} will follow up with the answer.`,
-    );
-  }
+  if (s.canSearch) rules.splice(rules.length - 2, 0, knowledgeSearchRule(owner || null));
 
   const person = s.person ?? null;
   const facts = person
@@ -153,21 +146,42 @@ export function buildCallInstructions(s: ScriptInput): string {
   return parts.join("\n\n");
 }
 
+/* ── The knowledge-base search, shared by the Plivo relay and the xAI SIP bridge ── */
+
+/** The search tool (xAI's flat function shape). */
+export function knowledgeSearchTool(): Record<string, unknown> {
+  return {
+    type: "function",
+    name: "search_knowledge",
+    description: "Search the company's own documents (products, services, pricing, policies) for the answer to a question.",
+    parameters: {
+      type: "object",
+      properties: { query: { type: "string", description: "The question, in a few words, e.g. 'enterprise plan price'." } },
+      required: ["query"],
+    },
+  };
+}
+
+/** The one instruction that goes with the tool. */
+export function knowledgeSearchRule(ownerName: string | null): string {
+  const who = ownerName ? cleanFact(ownerName, 80) : "the team";
+  return (
+    `For a specific question about our products, services, pricing or policies, say "one moment" and call search_knowledge with the question. ` +
+    `Answer only from what it returns or the product knowledge you were given; if it finds nothing, say ${who} will follow up with the answer.`
+  );
+}
+
+/** What the agent hears back: at most three short passages, each with its source. */
+export function knowledgeToolResult(query: string, found: { title: string; page: number | null; content: string }[]): Record<string, unknown> {
+  if (!query.trim()) return { passages: [], note: "Say what you are looking for." };
+  if (!found.length) return { passages: [], note: "Nothing in the documents on that. Say the team will follow up with the answer." };
+  return { passages: found.slice(0, 3).map((f) => ({ source: `${f.title}${f.page ? `, p. ${f.page}` : ""}`, text: f.content.slice(0, 900) })) };
+}
+
 /** The function tools the agent gets. Booking tools only when it can book; search only when there are documents. */
 export function callTools(canBook: boolean, canSearch = false): Record<string, unknown>[] {
   const tools: Record<string, unknown>[] = [];
-  if (canSearch) {
-    tools.push({
-      type: "function",
-      name: "search_knowledge",
-      description: "Search the company's own documents (products, services, pricing, policies) for the answer to a question.",
-      parameters: {
-        type: "object",
-        properties: { query: { type: "string", description: "The question, in a few words, e.g. 'enterprise plan price'." } },
-        required: ["query"],
-      },
-    });
-  }
+  if (canSearch) tools.push(knowledgeSearchTool());
   if (canBook) {
     tools.push(
       {
