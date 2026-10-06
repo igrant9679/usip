@@ -20,6 +20,8 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { proposeMeetingForProspect, regenerateMeetingProposal, regenerateProposalsNotSince, regenerateStaleProposals, runMeetingAutopilotForWorkspace, sendMeetingInvite, startsInProposalWindow } from "../services/meetingScheduler";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { assertOutboundNotPaused } from "../services/outboundPause";
+import { cancelSentInvites } from "../services/cancelInvites";
 import { MEETING_STATUSES, remindableMeetingStatuses } from "@shared/meetingStatus";
 
 // Was a fourth hand-written copy of the enum, for this router's z.enum(). The
@@ -337,6 +339,7 @@ export const meetingsRouter = router({
   approveAndSend: repProcedure
     .input(z.object({ id: z.number(), chosenTime: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
+      await assertOutboundNotPaused(ctx.workspace.id);
       const res = await sendMeetingInvite(ctx.workspace.id, input.id, input.chosenTime);
       // "update" + book: true, as Approve & send all records it. The action
       // column is a database enum; "book" was rejected there and swallowed,
@@ -354,6 +357,7 @@ export const meetingsRouter = router({
    * audited exactly like a single approve.
    */
   approveAllProposed: repProcedure.mutation(async ({ ctx }) => {
+    await assertOutboundNotPaused(ctx.workspace.id);
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const rows = await db.select({ id: meetings.id }).from(meetings)
@@ -478,6 +482,22 @@ export const meetingsRouter = router({
     const reboundTaskId = await createMeetingReboundTask(db, ctx.workspace.id, m, "cancelled");
     return { ok: true, reboundTaskId };
   }),
+
+  /**
+   * Cancel invites that went out, for real (owner ask 2026-10-06: "Cancel all
+   * 9" after a bulk Approve & send all while outbound was paused). Unlike
+   * removeBookings, this DOES delete the event on the owner's calendar, which
+   * is what sends each attendee a cancellation; the owner chose that. Marks
+   * each meeting cancelled, drops Velocity's copy of the event, and creates
+   * no rebound task (a cleanup, not a prospect cancelling). Dry run by
+   * default; admins only; audited per meeting.
+   */
+  cancelSentInvites: adminWsProcedure
+    .input(z.object({ ids: z.array(z.number().int()).min(1).max(100), dryRun: z.boolean().default(true) }))
+    .mutation(async ({ ctx, input }) => {
+      const results = await cancelSentInvites(ctx.workspace.id, input.ids, { dryRun: input.dryRun, actorUserId: ctx.user.id });
+      return { dryRun: input.dryRun, results };
+    }),
 
   /**
    * Take booked meetings out of Velocity (owner ask 2026-09-24, after a bulk
