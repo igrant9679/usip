@@ -814,10 +814,13 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
           >
             {mobileOpen ? <X className="size-4" /> : <Menu className="size-4" />}
           </button>
-          {/* Workspace switcher */}
+          {/* Workspace switcher. A Popover (2026-10-06): the hand-rolled menu
+              closed only on a route change, and switching workspace keeps the
+              route, so it stayed open; it also ignored outside clicks and Esc. */}
           <div className="relative min-w-0 max-w-[55vw] md:max-w-none">
+            <Popover open={wsOpen} onOpenChange={setWsOpen}>
+            <PopoverTrigger asChild>
             <button
-              onClick={() => setWsOpen((v) => !v)}
               className="flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-secondary text-sm min-w-0 max-w-full"
               disabled={isLoading || !current}
             >
@@ -829,12 +832,12 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
               <span className="font-medium truncate">{current?.name ?? "Loading…"}</span>
               <ChevronsUpDown className="size-3.5 text-muted-foreground shrink-0" />
             </button>
-            {wsOpen && (
-              <div className="absolute top-full mt-1 left-0 w-64 bg-popover border rounded-md shadow-lg p-1 z-40">
+            </PopoverTrigger>
+              <PopoverContent align="start" sideOffset={4} className="w-64 p-1 shadow-lg">
                 {workspaces.map((w) => (
                   <button
                     key={w.id}
-                    onClick={() => switchTo(w.id)}
+                    onClick={() => { setWsOpen(false); if (current?.id !== w.id) switchTo(w.id); }}
                     className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm hover:bg-secondary"
                   >
                     {current?.id === w.id ? <Check className="size-3.5 text-primary" /> : <span className="size-3.5" />}
@@ -862,8 +865,8 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                     </button>
                   </>
                 )}
-              </div>
-            )}
+              </PopoverContent>
+            </Popover>
             <NewWorkspaceDialog open={newWsOpen} onOpenChange={setNewWsOpen} onCreated={(id) => switchTo(id)} />
           </div>
 

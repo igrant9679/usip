@@ -5,6 +5,7 @@
  * explicit set of members you add/remove by hand. People lists hold prospects,
  * Companies lists hold accounts. Powers /v2/lists and /v2/lists/:id.
  */
+import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { z } from "zod";
@@ -43,7 +44,7 @@ export const recordListsRouter = router({
 
   create: workspaceProcedure
     .input(z.object({
-      name: z.string().min(1).max(200),
+      name: z.string().trim().min(1, "Give the list a name").max(200),
       entityType: z.enum(["people", "companies"]).default("people"),
       description: z.string().optional(),
     }))
@@ -58,6 +59,27 @@ export const recordListsRouter = router({
         createdByUserId: ctx.user.id,
       });
       return { id: Number((res as any).insertId) };
+    }),
+
+  /** Rename a list, or change its description (owner ask 2026-10-06: there was no way to rename one). */
+  update: workspaceProcedure
+    .input(z.object({
+      id: z.number(),
+      name: z.string().trim().min(1, "Give the list a name").max(200).optional(),
+      description: z.string().trim().max(1000).nullable().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
+      const patch: { name?: string; description?: string | null; updatedAt: Date } = { updatedAt: new Date() };
+      if (input.name !== undefined) patch.name = input.name;
+      if (input.description !== undefined) patch.description = input.description || null;
+      const [res] = await db.update(recordLists).set(patch)
+        .where(and(eq(recordLists.id, input.id), eq(recordLists.workspaceId, ctx.workspace.id)));
+      if (Number((res as { affectedRows?: number })?.affectedRows ?? 1) === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "That list is not in this workspace." });
+      }
+      return { ok: true };
     }),
 
   delete: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {

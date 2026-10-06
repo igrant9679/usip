@@ -21,6 +21,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AddToMenu } from "@/components/usip/AddToMenu";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
@@ -343,6 +344,10 @@ export function AddToListMenu({ selectedIds, trigger }: { selectedIds: number[];
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<(typeof LIST_TABS)[number]["id"]>("all");
   const [picked, setPicked] = useState<number | null>(null);
+  // Naming a new list (2026-10-06): it used to be created silently, named
+  // after the search text or "New list".
+  const [naming, setNaming] = useState(false);
+  const [newName, setNewName] = useState("");
   const utils = trpc.useUtils();
 
   const listsQ = trpc.recordLists.list.useQuery(undefined, { enabled: open });
@@ -366,11 +371,6 @@ export function AddToListMenu({ selectedIds, trigger }: { selectedIds: number[];
     onError: (e: any) => toast.error(e.message),
   });
   const createList = trpc.recordLists.create.useMutation({
-    onSuccess: (r: any) => {
-      utils.recordLists.list.invalidate();
-      setPicked(r.id);
-      toast.success("List created");
-    },
     onError: (e: any) => toast.error(e.message),
   });
 
@@ -378,13 +378,24 @@ export function AddToListMenu({ selectedIds, trigger }: { selectedIds: number[];
     if (picked == null) return;
     addMembers.mutate({ listId: picked, recordType: "prospect", recordIds: selectedIds });
   };
-  const doCreate = () => {
-    const name = q.trim() || "New list";
-    createList.mutate({ name, entityType: "people" });
+  const startNaming = () => { setNewName(q.trim()); setNaming(true); };
+  // Create the named list and add the selection to it in one step.
+  const doCreate = async () => {
+    const name = newName.trim();
+    if (!name) return;
+    try {
+      const r = await createList.mutateAsync({ name, entityType: "people" });
+      await addMembers.mutateAsync({ listId: r.id, recordType: "prospect", recordIds: selectedIds });
+      setNaming(false);
+      setNewName("");
+    } catch {
+      /* toasted by the mutation */
+    }
   };
+  const busy = createList.isPending || addMembers.isPending;
 
   return (
-    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setPicked(null); setQ(""); } }}>
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setPicked(null); setQ(""); setNaming(false); setNewName(""); } }}>
       <PopoverTrigger asChild>
         {trigger ?? (
           <Button variant="ghost" size="sm" className="gap-1.5">
@@ -436,14 +447,34 @@ export function AddToListMenu({ selectedIds, trigger }: { selectedIds: number[];
             ))
           )}
         </div>
-        <div className="border-t p-2 flex items-center justify-between">
-          <Button variant="outline" size="sm" onClick={doCreate} disabled={createList.isPending}>
-            {createList.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />} Create new list
-          </Button>
-          <Button size="sm" onClick={doAdd} disabled={picked == null || addMembers.isPending}>
-            {addMembers.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null} Add to list
-          </Button>
-        </div>
+        {naming ? (
+          <div className="border-t p-2 space-y-2">
+            <Input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Name the new list"
+              maxLength={200}
+              autoFocus
+              className="h-8 text-[13px]"
+              onKeyDown={(e) => { if (e.key === "Enter") void doCreate(); if (e.key === "Escape") { e.stopPropagation(); setNaming(false); } }}
+            />
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setNaming(false)} disabled={busy}>Cancel</Button>
+              <Button size="sm" onClick={() => void doCreate()} disabled={!newName.trim() || busy}>
+                {busy ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null} Create and add {selectedIds.length}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="border-t p-2 flex items-center justify-between">
+            <Button variant="outline" size="sm" onClick={startNaming} disabled={busy}>
+              <Plus className="size-3.5" /> Create new list
+            </Button>
+            <Button size="sm" onClick={doAdd} disabled={picked == null || addMembers.isPending}>
+              {addMembers.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : null} Add to list
+            </Button>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   );

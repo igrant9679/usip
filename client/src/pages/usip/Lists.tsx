@@ -47,6 +47,7 @@ import {
   MoreHorizontal,
   Trash2,
   ExternalLink,
+  Pencil,
   X,
 } from "lucide-react";
 
@@ -72,7 +73,7 @@ function fmtWhen(d?: string | Date | null): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
-function ListRow({ l, accent, onOpen, onDelete }: { l: RecordList; accent: string; onOpen: () => void; onDelete: () => void }) {
+function ListRow({ l, accent, onOpen, onRename, onDelete }: { l: RecordList; accent: string; onOpen: () => void; onRename: () => void; onDelete: () => void }) {
   const Icon = l.entityType === "companies" ? Building2 : ListChecks;
   return (
     <div className="group/row flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40 cursor-pointer" onClick={onOpen}>
@@ -92,6 +93,7 @@ function ListRow({ l, accent, onOpen, onDelete }: { l: RecordList; accent: strin
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem onClick={onOpen}><ExternalLink className="size-4 mr-2" /> Open list</DropdownMenuItem>
+            <DropdownMenuItem onClick={onRename}><Pencil className="size-4 mr-2" /> Rename</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={onDelete} className="text-destructive focus:text-destructive"><Trash2 className="size-4 mr-2" /> Delete list</DropdownMenuItem>
           </DropdownMenuContent>
@@ -146,6 +148,19 @@ export default function Lists() {
     onError: (e) => toast.error(e.message),
   });
   const deleteMut = trpc.recordLists.delete.useMutation({ onSuccess: () => utils.recordLists.list.invalidate(), onError: (e) => toast.error(e.message) });
+  // Rename (owner ask 2026-10-06: there was no way to rename a list).
+  const [renaming, setRenaming] = useState<RecordList | null>(null);
+  const [renameTo, setRenameTo] = useState("");
+  const renameMut = trpc.recordLists.update.useMutation({
+    onSuccess: () => { utils.recordLists.list.invalidate(); utils.recordLists.get.invalidate(); setRenaming(null); toast.success("List renamed"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const openRename = (l: RecordList) => { setRenaming(l); setRenameTo(l.name); };
+  const rename = () => {
+    if (!renaming || !renameTo.trim()) return;
+    if (renameTo.trim() === renaming.name) { setRenaming(null); return; }
+    renameMut.mutate({ id: renaming.id, name: renameTo.trim() });
+  };
 
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("modified");
@@ -227,7 +242,7 @@ export default function Lists() {
             ) : peopleLists.length === 0 ? (
               <SectionEmpty object="People" hasQuery={!!search} onReset={() => setSearch("")} onCreate={() => openCreate("People")} />
             ) : (
-              peopleLists.map((l) => <ListRow key={l.id} l={l} accent={accent} onOpen={() => setLocation(`/v2/lists/${l.id}`)} onDelete={() => del(l)} />)
+              peopleLists.map((l) => <ListRow key={l.id} l={l} accent={accent} onOpen={() => setLocation(`/v2/lists/${l.id}`)} onRename={() => openRename(l)} onDelete={() => del(l)} />)
             )}
           </Section>
 
@@ -237,7 +252,7 @@ export default function Lists() {
             ) : companyLists.length === 0 ? (
               <SectionEmpty object="Companies" hasQuery={!!search} onReset={() => setSearch("")} onCreate={() => openCreate("Companies")} />
             ) : (
-              companyLists.map((l) => <ListRow key={l.id} l={l} accent={accent} onOpen={() => setLocation(`/v2/lists/${l.id}`)} onDelete={() => del(l)} />)
+              companyLists.map((l) => <ListRow key={l.id} l={l} accent={accent} onOpen={() => setLocation(`/v2/lists/${l.id}`)} onRename={() => openRename(l)} onDelete={() => del(l)} />)
             )}
           </Section>
         </div>
@@ -281,6 +296,22 @@ export default function Lists() {
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
             <Button onClick={create} disabled={!newName.trim() || createMut.isPending} style={{ backgroundColor: accent }}>
               {createMut.isPending ? "Creating…" : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!renaming} onOpenChange={(o) => { if (!o) setRenaming(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Rename list</DialogTitle></DialogHeader>
+          <div className="py-1">
+            <div className="text-[13px] font-medium mb-1.5">List name</div>
+            <Input value={renameTo} onChange={(e) => setRenameTo(e.target.value)} maxLength={200} autoFocus onKeyDown={(e) => { if (e.key === "Enter") rename(); }} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenaming(null)}>Cancel</Button>
+            <Button onClick={rename} disabled={!renameTo.trim() || renameMut.isPending} style={{ backgroundColor: accent }}>
+              {renameMut.isPending ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>

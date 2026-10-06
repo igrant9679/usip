@@ -59,6 +59,8 @@ import {
   Mail,
   Loader2,
   UserPlus,
+  Pencil,
+  Check,
 } from "lucide-react";
 
 function fmtMoney(n: number) {
@@ -88,6 +90,20 @@ export default function ListDetail() {
     onSuccess: () => { utils.recordLists.members.invalidate({ id }); utils.recordLists.list.invalidate(); setAddOpen(false); setPicked(new Set()); },
     onError: (e) => toast.error(e.message),
   });
+
+  // Rename in place (owner ask 2026-10-06: there was no way to rename a list).
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const renameMut = trpc.recordLists.update.useMutation({
+    onSuccess: () => { utils.recordLists.get.invalidate({ id }); utils.recordLists.list.invalidate(); setEditingName(false); toast.success("List renamed"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const saveName = () => {
+    const name = nameDraft.trim();
+    if (!list || !name) return;
+    if (name === list.name) { setEditingName(false); return; }
+    renameMut.mutate({ id: list.id, name });
+  };
 
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
@@ -145,7 +161,32 @@ export default function ListDetail() {
             <span className="text-foreground truncate max-w-[240px]">{list?.name ?? "…"}</span>
           </div>
           <div className="flex items-center gap-2">
-            <h1 className="text-[16px] font-semibold tracking-tight truncate max-w-[280px]">{list?.name ?? "Loading…"}</h1>
+            {editingName ? (
+              <div className="flex items-center gap-1">
+                <Input
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  maxLength={200}
+                  autoFocus
+                  aria-label="List name"
+                  className="h-7 w-64 text-[14px] font-semibold"
+                  onKeyDown={(e) => { if (e.key === "Enter") saveName(); if (e.key === "Escape") setEditingName(false); }}
+                />
+                <Button size="icon-sm" variant="ghost" aria-label="Save name" disabled={!nameDraft.trim() || renameMut.isPending} onClick={saveName}>
+                  {renameMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+                </Button>
+                <Button size="icon-sm" variant="ghost" aria-label="Cancel rename" onClick={() => setEditingName(false)}><X className="size-3.5" /></Button>
+              </div>
+            ) : (
+              <>
+                <h1 className="text-[16px] font-semibold tracking-tight truncate max-w-[280px]">{list?.name ?? "Loading…"}</h1>
+                {list && (
+                  <Button size="icon-sm" variant="ghost" aria-label="Rename list" title="Rename list" onClick={() => { setNameDraft(list.name); setEditingName(true); }}>
+                    <Pencil className="size-3.5 text-muted-foreground" />
+                  </Button>
+                )}
+              </>
+            )}
             {list && (
               <Badge variant="secondary" className="gap-1 text-[10px]">
                 {isCompanies ? <Building2 className="size-3" /> : <Users className="size-3" />} {isCompanies ? "Companies" : "People"}
