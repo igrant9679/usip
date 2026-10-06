@@ -27,6 +27,15 @@ vi.mock("./calendarAdapter", async (importActual) => ({
   ...(await importActual<typeof import("./calendarAdapter")>()),
   createCalendarAdapter: () => ({ listEvents: async () => [], createEvent: (...a: unknown[]) => h.createEvent(...a) }),
 }));
+// No event until accepted (2026-10-06): an un-agreed proposal is emailed
+// with its free offered times; nothing goes on the calendar until a pick.
+const emailed = vi.hoisted(() => ({ calls: [] as any[] }));
+vi.mock("./services/meetingProposalEmail", async (importActual) => ({
+  ...(await importActual<typeof import("./services/meetingProposalEmail")>()),
+  sendProposalEmail: async (input: any) => { emailed.calls.push(input); return { ok: true, fromEmail: "owner@example.org", messageId: "m1" }; },
+}));
+beforeEach(() => { emailed.calls.length = 0; });
+const emailedTimes = (i = 0) => (emailed.calls[i]?.times ?? []).map((t: Date) => t.toISOString());
 vi.mock("./routers/are/execution", async (importActual) => ({
   ...(await importActual<typeof import("./routers/are/execution")>()),
   attributeMeetingBookingToAre: async () => {},
@@ -63,7 +72,7 @@ function makeDb() {
   return {
     select: (fields?: Record<string, unknown>) => builder(fields),
     insert: (t: unknown) => ({ values(v: any) { if (t === meetings) inserted.push(v); return Promise.resolve([{ insertId: 100 + inserted.length - 1 }]); } }),
-    update: () => { const b: any = { set() { return b; }, where() { return Promise.resolve([]); } }; return b; },
+    update: () => { const b: any = { set() { return b; }, where() { return Promise.resolve([{ affectedRows: 1 }]); } }; return b; },
   };
 }
 
@@ -77,9 +86,10 @@ describe("Autonomous", () => {
   it("sends each proposal it drafts, through the one send path", async () => {
     const res = await runMeetingAutopilotForWorkspace(4, 2, 5721, { send: true });
     expect(res).toEqual({ proposed: 2, sent: 2, skipped: 0 });
-    expect(h.createEvent).toHaveBeenCalledTimes(2);
-    // Each invite goes to the prospect it was drafted for.
-    expect(h.createEvent.mock.calls.map((c) => c[1].attendees[0].email)).toEqual(["ada@example.org", "bo@example.org"]);
+    // Emailed, not booked (2026-10-06): nothing on the calendar until a pick.
+    expect(h.createEvent).not.toHaveBeenCalled();
+    // Each email goes to the prospect it was drafted for.
+    expect(emailed.calls.map((c) => c.meeting.contactEmail)).toEqual(["ada@example.org", "bo@example.org"]);
   });
 
   it("Approve drafts the same proposals and sends none", async () => {
@@ -95,7 +105,7 @@ describe("one person, one proposal", () => {
     const res = await runMeetingAutopilotForWorkspace(4, 3, 5721, { send: true });
     dupProspects = false;
     expect(res).toMatchObject({ proposed: 1, skipped: 1 });
-    expect(h.createEvent).toHaveBeenCalledTimes(1);
+    expect(emailed.calls).toHaveLength(1);
   });
 });
 

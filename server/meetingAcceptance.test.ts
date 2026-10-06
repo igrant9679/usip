@@ -24,6 +24,15 @@ vi.mock("./calendarAdapter", async (importActual) => ({
     ...(acc.unipileAccountId ? { getEvent: (...a: unknown[]) => h.getEvent(...a) } : {}),
   }),
 }));
+// No event until accepted (2026-10-06): an un-agreed proposal is emailed
+// with its free offered times; nothing goes on the calendar until a pick.
+const emailed = vi.hoisted(() => ({ calls: [] as any[] }));
+vi.mock("./services/meetingProposalEmail", async (importActual) => ({
+  ...(await importActual<typeof import("./services/meetingProposalEmail")>()),
+  sendProposalEmail: async (input: any) => { emailed.calls.push(input); return { ok: true, fromEmail: "owner@example.org", messageId: "m1" }; },
+}));
+beforeEach(() => { emailed.calls.length = 0; });
+const emailedTimes = (i = 0) => (emailed.calls[i]?.times ?? []).map((t: Date) => t.toISOString());
 vi.mock("./routers/are/execution", async (importActual) => ({
   ...(await importActual<typeof import("./routers/are/execution")>()),
   attributeMeetingBookingToAre: (...a: unknown[]) => h.attribute(...a),
@@ -61,7 +70,7 @@ function makeDb() {
   return {
     select: (fields?: Record<string, unknown>) => builder(fields),
     insert: () => ({ values() { return Promise.resolve([{ insertId: 7 }]); } }),
-    update: () => { const u: any = {}; const b: any = { set(v: any) { u.set = v; return b; }, where(c: unknown) { u.where = c; w.updates.push(u); return Promise.resolve([]); } }; return b; },
+    update: () => { const u: any = {}; const b: any = { set(v: any) { u.set = v; return b; }, where(c: unknown) { u.where = c; w.updates.push(u); return Promise.resolve([{ affectedRows: 1 }]); } }; return b; },
   };
 }
 
@@ -159,11 +168,16 @@ describe("sending an invite is not a booking", () => {
   const future = new Date(Math.ceil((Date.now() + 3 * 86_400_000) / 86_400_000) * 86_400_000 + 14 * 3_600_000).toISOString();
   const proposal = () => ({ id: 9, workspaceId: 4, ownerUserId: 5721, status: "proposed", proposedTimes: [future], scheduledAt: null, durationMin: 30, contactEmail: "ada@example.org", contactName: "Ada", title: "Intro", inviteMessage: "Hi", meetingUrl: null });
 
-  it("an offered time: `invited`, awaiting an answer, and no ARE signal", async () => {
+  it("an offered time: emailed, `invited` with no time yet, nothing on the calendar, and no ARE signal", async () => {
     w.meeting = proposal();
-    expect((await sendMeetingInvite(4, 9)).sent).toBe(true);
+    const res = await sendMeetingInvite(4, 9);
+    expect(res.sent).toBe(true);
+    expect(res.scheduledAt).toBeNull();
     const set = w.updates.find((u) => u.set.inviteSent)?.set;
     expect(set).toMatchObject({ status: "invited", attendeeResponse: "none", attendeeRespondedAt: null });
+    expect(set.scheduledAt).toBeUndefined();
+    expect(set.proposalSentAt).toBeInstanceOf(Date);
+    expect(h.createEvent).not.toHaveBeenCalled();
     expect(h.attribute).not.toHaveBeenCalled();
   });
 

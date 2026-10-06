@@ -50,7 +50,8 @@ describe("expired meeting proposals cannot be booked (report #1)", () => {
     // sendMeetingInvite is what the autonomous scheduler calls too.
     const client = read("client/src/pages/usip/MeetingsV2.tsx");
     // 2026-09-24: extended with noEmail (no attendee, no invite).
-    expect(client).toContain("disabled={pending || expired || !chosen || noEmail}");
+    // 2026-10-06: no time to choose on the card any more (every free time is emailed).
+    expect(client).toContain("disabled={pending || expired || noEmail}");
     expect(client).toMatch(/const future = times\.filter/);
   });
 });

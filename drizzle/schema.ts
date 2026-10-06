@@ -549,6 +549,11 @@ export const meetings = mysqlTable(
     // calendar (Migration 0190): none | accepted | tentative | declined.
     attendeeResponse: varchar("attendeeResponse", { length: 16 }),
     attendeeRespondedAt: timestamp("attendeeRespondedAt"),
+    // No event until accepted (Migration 0200, owner ask 2026-10-06): an
+    // un-agreed proposal is emailed with its times as links to /m/:token;
+    // the calendar event is created only when the prospect confirms one.
+    proposalToken: varchar("proposalToken", { length: 64 }),
+    proposalSentAt: timestamp("proposalSentAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -556,6 +561,7 @@ export const meetings = mysqlTable(
     byStatus: index("ix_meeting_status").on(t.workspaceId, t.status),
     byOwner: index("ix_meeting_owner").on(t.workspaceId, t.ownerUserId),
     byRel: index("ix_meeting_rel").on(t.relatedType, t.relatedId),
+    byProposalToken: uniqueIndex("ux_meetings_proposal_token").on(t.proposalToken),
   }),
 );
 export type Meeting = typeof meetings.$inferSelect;

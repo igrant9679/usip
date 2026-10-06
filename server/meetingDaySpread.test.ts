@@ -15,6 +15,15 @@ vi.mock("./calendarAdapter", async (importActual) => ({
   ...(await importActual<typeof import("./calendarAdapter")>()),
   createCalendarAdapter: () => ({ listEvents: async () => [], createEvent: (...a: unknown[]) => h.createEvent(...a) }),
 }));
+// No event until accepted (2026-10-06): an un-agreed proposal is emailed
+// with its free offered times; nothing goes on the calendar until a pick.
+const emailed = vi.hoisted(() => ({ calls: [] as any[] }));
+vi.mock("./services/meetingProposalEmail", async (importActual) => ({
+  ...(await importActual<typeof import("./services/meetingProposalEmail")>()),
+  sendProposalEmail: async (input: any) => { emailed.calls.push(input); return { ok: true, fromEmail: "owner@example.org", messageId: "m1" }; },
+}));
+beforeEach(() => { emailed.calls.length = 0; });
+const emailedTimes = (i = 0) => (emailed.calls[i]?.times ?? []).map((t: Date) => t.toISOString());
 vi.mock("./routers/are/execution", async (importActual) => ({ ...(await importActual<typeof import("./routers/are/execution")>()), attributeMeetingBookingToAre: async () => {} }));
 
 import { MAX_MEETINGS_PER_OWNER_PER_DAY, computeSlots, createMeetingProposal, dayKeyIn, sendMeetingInvite, __resetLiveBusyCacheForTests } from "./services/meetingScheduler";
@@ -95,7 +104,7 @@ function makeDb() {
   return {
     select: (fields?: Record<string, unknown>) => b(fields),
     insert: (t: unknown) => ({ values(v: any) { if (t === meetings) inserts.push(v); return Promise.resolve([{ insertId: 9 }]); } }),
-    update: () => { const q: any = { set() { return q; }, where() { return Promise.resolve([]); } }; return q; },
+    update: () => { const q: any = { set() { return q; }, where() { return Promise.resolve([{ affectedRows: 1 }]); } }; return q; },
   };
 }
 
@@ -117,14 +126,15 @@ beforeEach(() => {
 });
 
 describe("sending skips a full day", () => {
-  it("the first offered day already has 3: the next offered day is booked", async () => {
+  it("the first offered day already has 3: that time is left out of the email", async () => {
     others = [onDay(T[0], 10, 1), onDay(T[0], 11, 2), onDay(T[0], 12, 3)];
-    expect(await sendMeetingInvite(4, 9)).toEqual({ sent: true, scheduledAt: T[1] });
+    expect(await sendMeetingInvite(4, 9)).toEqual({ sent: true, scheduledAt: null, offered: [T[1], T[2]] });
+    expect(emailedTimes()).toEqual([T[1], T[2]]);
   });
 
   it("two on that day is not full", async () => {
     others = [onDay(T[0], 10, 1), onDay(T[0], 11, 2)];
-    expect(await sendMeetingInvite(4, 9)).toEqual({ sent: true, scheduledAt: T[0] });
+    expect(await sendMeetingInvite(4, 9)).toEqual({ sent: true, scheduledAt: null, offered: T });
   });
 
   it("every offered day full: nothing sent, and it says so", async () => {
@@ -135,7 +145,7 @@ describe("sending skips a full day", () => {
 
   it("a time a person picked is theirs, even on a busy day", async () => {
     others = [onDay(T[0], 10, 1), onDay(T[0], 11, 2), onDay(T[0], 12, 3)];
-    expect(await sendMeetingInvite(4, 9, T[0])).toEqual({ sent: true, scheduledAt: T[0] });
+    expect(await sendMeetingInvite(4, 9, T[0])).toEqual({ sent: true, scheduledAt: null, offered: [T[0]] });
   });
 });
 

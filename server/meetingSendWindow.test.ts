@@ -22,6 +22,15 @@ vi.mock("./calendarAdapter", async (importActual) => ({
   ...(await importActual<typeof import("./calendarAdapter")>()),
   createCalendarAdapter: () => ({ listEvents: async () => [], createEvent: (...a: unknown[]) => h.createEvent(...a) }),
 }));
+// No event until accepted (2026-10-06): an un-agreed proposal is emailed
+// with its free offered times; nothing goes on the calendar until a pick.
+const emailed = vi.hoisted(() => ({ calls: [] as any[] }));
+vi.mock("./services/meetingProposalEmail", async (importActual) => ({
+  ...(await importActual<typeof import("./services/meetingProposalEmail")>()),
+  sendProposalEmail: async (input: any) => { emailed.calls.push(input); return { ok: true, fromEmail: "owner@example.org", messageId: "m1" }; },
+}));
+beforeEach(() => { emailed.calls.length = 0; });
+const emailedTimes = (i = 0) => (emailed.calls[i]?.times ?? []).map((t: Date) => t.toISOString());
 vi.mock("./routers/are/execution", async (importActual) => ({
   ...(await importActual<typeof import("./routers/are/execution")>()),
   attributeMeetingBookingToAre: async () => {},
@@ -63,7 +72,7 @@ function makeDb() {
   return {
     select: (fields?: unknown) => builder(fields),
     insert: () => ({ values() { return Promise.resolve([{ insertId: 1 }]); } }),
-    update: (t: unknown) => { const u: any = { table: t }; const b: any = { set(v: any) { u.set = v; return b; }, where() { w.updates.push(u); return Promise.resolve([]); } }; return b; },
+    update: (t: unknown) => { const u: any = { table: t }; const b: any = { set(v: any) { u.set = v; return b; }, where() { w.updates.push(u); return Promise.resolve([{ affectedRows: 1 }]); } }; return b; },
   };
 }
 
@@ -109,9 +118,10 @@ describe("sending", () => {
     expect(w.updates).toEqual([]);
   });
 
-  it("with an in-window offer too, that one is booked instead", async () => {
+  it("with an in-window offer too, only that one is offered", async () => {
     w.meeting.proposedTimes = [SIX_AM_ET, ELEVEN_AM_ET];
-    expect(await sendMeetingInvite(2, 9)).toEqual({ sent: true, scheduledAt: ELEVEN_AM_ET });
+    expect(await sendMeetingInvite(2, 9)).toEqual({ sent: true, scheduledAt: null, offered: [ELEVEN_AM_ET] });
+    expect(emailedTimes()).toEqual([ELEVEN_AM_ET]);
   });
 
   it("an out-of-window time picked by the approver is refused", async () => {

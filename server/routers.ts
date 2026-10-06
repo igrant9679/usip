@@ -45,6 +45,7 @@ import { conversationsRouter } from "./routers/conversations";
 import { dealsRouter } from "./routers/deals";
 import { formsRouter } from "./routers/forms";
 import { bookingLinksRouter } from "./routers/bookingLinks";
+import { meetingPicksRouter } from "./routers/meetingPicks";
 import { landingPagesRouter } from "./routers/landingPages";
 import { chatAgentsRouter } from "./routers/chatAgents";
 import { websiteVisitorsRouter } from "./routers/websiteVisitors";
@@ -105,6 +106,8 @@ export const appRouter = router({
   deals: dealsRouter,
   forms: formsRouter,
   bookingLinks: bookingLinksRouter,
+  // The public page a proposal email's time links open (2026-10-06).
+  meetingPicks: meetingPicksRouter,
   landingPages: landingPagesRouter,
   chatAgents: chatAgentsRouter,
   websiteVisitors: websiteVisitorsRouter,

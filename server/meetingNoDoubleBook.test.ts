@@ -34,6 +34,15 @@ vi.mock("./calendarAdapter", async (importActual) => ({
     createEvent: (...a: unknown[]) => h.createEvent(...a),
   }),
 }));
+// No event until accepted (2026-10-06): an un-agreed proposal is emailed
+// with its free offered times; nothing goes on the calendar until a pick.
+const emailed = vi.hoisted(() => ({ calls: [] as any[] }));
+vi.mock("./services/meetingProposalEmail", async (importActual) => ({
+  ...(await importActual<typeof import("./services/meetingProposalEmail")>()),
+  sendProposalEmail: async (input: any) => { emailed.calls.push(input); return { ok: true, fromEmail: "owner@example.org", messageId: "m1" }; },
+}));
+beforeEach(() => { emailed.calls.length = 0; });
+const emailedTimes = (i = 0) => (emailed.calls[i]?.times ?? []).map((t: Date) => t.toISOString());
 vi.mock("./routers/are/execution", async (importActual) => ({
   ...(await importActual<typeof import("./routers/are/execution")>()),
   attributeMeetingBookingToAre: async () => {},
@@ -98,7 +107,7 @@ function makeDb() {
     }),
     update: () => {
       const u: any = {};
-      const b: any = { set(v: any) { u.set = v; return b; }, where() { w.updates.push(u); return Promise.resolve([]); } };
+      const b: any = { set(v: any) { u.set = v; return b; }, where() { w.updates.push(u); return Promise.resolve([{ affectedRows: 1 }]); } };
       return b;
     },
   };
@@ -126,18 +135,20 @@ beforeEach(() => {
 });
 
 describe("2. sending never books a taken slot", () => {
-  it("the earliest time is booked in Velocity already: the next offered time is booked instead", async () => {
+  it("the earliest time is booked in Velocity already: it is left out of the email, the free ones are offered", async () => {
     w.others = [booked(1, T[0])];
     const res = await sendMeetingInvite(4, 9);
-    expect(res).toEqual({ sent: true, scheduledAt: T[1] });
-    expect(createdAt()).toBe(T[1]);
-    expect(w.updates[0].set.scheduledAt.toISOString()).toBe(T[1]);
+    expect(res).toEqual({ sent: true, scheduledAt: null, offered: [T[1], T[2]] });
+    expect(emailedTimes()).toEqual([T[1], T[2]]);
+    // No event until accepted: nothing on the calendar yet.
+    expect(h.createEvent).not.toHaveBeenCalled();
+    expect(createdAt()).toBeUndefined();
   });
 
   it("the live calendar is busy too: it moves past that as well", async () => {
     w.others = [booked(1, T[0])];
     h.listEvents.mockResolvedValue([{ externalId: "x", title: "Board call", startAt: new Date(Date.parse(T[1]) - 15 * 60000), endAt: new Date(Date.parse(T[1]) + 15 * 60000) }]);
-    expect(await sendMeetingInvite(4, 9)).toEqual({ sent: true, scheduledAt: T[2] });
+    expect(await sendMeetingInvite(4, 9)).toEqual({ sent: true, scheduledAt: null, offered: [T[2]] });
   });
 
   it("every offered time taken: nothing is sent, and it says why", async () => {
@@ -163,13 +174,13 @@ describe("2. sending never books a taken slot", () => {
   it("a live calendar failure still leaves Velocity's bookings to decide", async () => {
     w.others = [booked(1, T[0])];
     h.listEvents.mockRejectedValue(new Error("Unipile 503"));
-    expect(await sendMeetingInvite(4, 9)).toEqual({ sent: true, scheduledAt: T[1] });
+    expect(await sendMeetingInvite(4, 9)).toEqual({ sent: true, scheduledAt: null, offered: [T[1], T[2]] });
   });
 
   it("a meeting ending as the next begins is not a clash", async () => {
     // 30-minute booking at T0 - 30min ends exactly at T0.
     w.others = [booked(1, new Date(Date.parse(T[0]) - 30 * 60000).toISOString())];
-    expect(await sendMeetingInvite(4, 9)).toEqual({ sent: true, scheduledAt: T[0] });
+    expect(await sendMeetingInvite(4, 9)).toEqual({ sent: true, scheduledAt: null, offered: T });
   });
 
   it("one live invite per person: a second one to the same address is refused", async () => {
@@ -180,11 +191,14 @@ describe("2. sending never books a taken slot", () => {
   });
 
   it("after a booking, the next draft reads the calendar again rather than a stale cache", async () => {
+    // A booking is an agreed time since 2026-10-06 (an offered one is emailed).
+    w.meeting = { ...w.meeting, scheduledAt: new Date(T[0]) };
     const target = { ownerUserId: KHAJA, relatedType: "prospect", relatedId: 7, name: "Bo Prospect", source: "ai" as const };
     await createMeetingProposal(4, target);            // live read 1 (cached)
-    await sendMeetingInvite(4, 9);                     // live read 2 (fresh check), then books
-    await createMeetingProposal(4, target);            // live read 3: the cache was dropped
-    expect(h.listEvents).toHaveBeenCalledTimes(3);
+    await sendMeetingInvite(4, 9);                     // books the agreed time, drops the cache
+    await createMeetingProposal(4, target);            // live read 2: the cache was dropped
+    expect(h.createEvent).toHaveBeenCalledTimes(1);
+    expect(h.listEvents).toHaveBeenCalledTimes(2);
   });
 });
 

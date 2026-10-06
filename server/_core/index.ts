@@ -49,7 +49,7 @@ import { runAreEngine } from "../areEngine";
 import { runTaskAutopilotAllWorkspaces } from "../services/taskAutopilot";
 import { runCampaignRoutingAllWorkspaces } from "../services/campaignRouter";
 import { runCampaignProposalsAllWorkspaces } from "../services/campaignProposals";
-import { runMeetingAutopilotAllWorkspaces } from "../services/meetingScheduler";
+import { expireUnpickedProposals, runMeetingAutopilotAllWorkspaces } from "../services/meetingScheduler";
 import { sendDueMeetingReminders } from "../services/meetingReminders";
 import { syncInviteResponses } from "../services/meetingResponses";
 import { runConversationAutopilotAllWorkspaces } from "../services/replyClassifier";
@@ -467,6 +467,10 @@ async function startServer() {
   const runInviteResponses = () => {
     syncInviteResponses().catch((e) =>
       console.error("[MeetingResponses] cron run failed:", e)
+    );
+    // Emailed proposals whose times all passed without a pick (2026-10-06).
+    expireUnpickedProposals().catch((e) =>
+      console.error("[MeetingScheduler] expiring unpicked proposals failed:", e)
     );
   };
   setTimeout(runInviteResponses, 3 * 60 * 1000); // first run 3 minutes after boot

@@ -6,10 +6,12 @@
  *     calendar (busy events in calendarEvents), asks the workspace LLM (shared
  *     invokeLLM) to draft a title + invite message, and stores a `meetings` row
  *     in status 'proposed'.
- *   • sendMeetingInvite — books it: if the owner has a connected calendar account
- *     it creates a real provider event (invite sent to the attendee) by reusing
- *     the existing createCalendarAdapter; otherwise it records the meeting locally
- *     and flags inviteSent=false (never falsely claims an invite went out).
+ *   • sendMeetingInvite — sends it. A time the prospect has not agreed is
+ *     EMAILED from the owner's mailbox with each offered time as a link
+ *     (2026-10-06, "No event until accepted"); the calendar event is made only
+ *     when they confirm one (confirmProposalPick). An agreed time (a booking
+ *     link, a pick, a phone call) becomes a real provider event at once.
+ *     Without a connected calendar nothing is sent (never claims it was).
  *   • runMeetingAutopilotAllWorkspaces — cron: for each workspace whose
  *     meetingAutopilotMode != 'off', propose meetings for the best-fit prospects
  *     that don't have one yet (respecting the daily cap); in 'auto' it also
@@ -27,7 +29,7 @@
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { inSendWindow } from "./sendWindow";
 import { and, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
-import { calendarAccounts, calendarEvents, contacts, leads, meetings, prospects, workspaceMembers, workspaceSettings, workspaces } from "../../drizzle/schema";
+import { activities, calendarAccounts, calendarEvents, contacts, leads, meetings, notifications, prospects, users, workspaceMembers, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "./humanCopy";
@@ -333,7 +335,9 @@ async function ownerCommitments(
     if (r.scheduledAt) {
       const s = new Date(r.scheduledAt);
       booked.push({ startAt: s, endAt: new Date(s.getTime() + (r.durationMin ?? 30) * 60000) });
-    } else if (r.status === "proposed") {
+    } else if (r.status === "proposed" || r.status === "invited") {
+      // An emailed proposal waiting for a pick (no scheduledAt yet) is still
+      // an offer of these times: new proposals are spread away from them.
       for (const t of Array.isArray(r.proposedTimes) ? (r.proposedTimes as string[]) : []) {
         const ms = Date.parse(t);
         if (!Number.isFinite(ms)) continue;
@@ -674,7 +678,12 @@ export async function proposeMeetingForProspect(
   });
 }
 
-export interface SendInviteResult { sent: boolean; scheduledAt: string | null; reason?: string }
+/**
+ * `sent` with `scheduledAt` set: a calendar invite for an agreed time.
+ * `sent` with `offered`: the proposal was emailed with those times, and
+ * nothing is on the calendar until the prospect confirms one.
+ */
+export interface SendInviteResult { sent: boolean; scheduledAt: string | null; reason?: string; offered?: string[] }
 
 /** Book a proposed meeting: send a real calendar invite if a calendar is connected, else record locally. */
 export async function sendMeetingInvite(workspaceId: number, meetingId: number, chosenTime?: string): Promise<SendInviteResult> {
@@ -694,7 +703,8 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
     ne(meetings.id, meetingId),
     sql`lower(${meetings.contactEmail}) = ${m.contactEmail.trim().toLowerCase()}`,
     inArray(meetings.status, remindableMeetingStatuses()),
-    gte(meetings.scheduledAt, new Date()),
+    // An upcoming meeting, or times emailed and still waiting for their pick.
+    or(gte(meetings.scheduledAt, new Date()), and(isNull(meetings.scheduledAt), isNotNull(meetings.proposalSentAt))),
   )).limit(1);
   if (already) return { sent: false, scheduledAt: null, reason: "already_invited" };
 
@@ -749,6 +759,8 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
 
   // Owner's connected calendar (if any) → send a real provider invite.
   let acc: any = null;
+  // The free offered times, for an emailed proposal.
+  let offered: Date[] = [];
   if (m.ownerUserId) {
     const rows = await db.select().from(calendarAccounts)
       .where(and(eq(calendarAccounts.workspaceId, workspaceId), eq(calendarAccounts.userId, m.ownerUserId)));
@@ -779,13 +791,29 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
       for (const b of booked) perDay.set(dayKeyIn(b.startAt, tz), (perDay.get(dayKeyIn(b.startAt, tz)) ?? 0) + 1);
       dayFull = (c) => (perDay.get(dayKeyIn(c, tz)) ?? 0) >= MAX_MEETINGS_PER_OWNER_PER_DAY;
     }
-    const free = candidates.find((c) => !dayFull(c) && !taken.some((r) => r.startAt.getTime() < c.getTime() + durMs && r.endAt.getTime() > c.getTime()));
+    offered = candidates.filter((c) => !dayFull(c) && !taken.some((r) => r.startAt.getTime() < c.getTime() + durMs && r.endAt.getTime() > c.getTime()));
+    const free = offered[0];
     if (!free) {
       const reason = chosenTime ? "time_taken" : candidates.every(dayFull) ? "days_full" : "all_times_taken";
       return { sent: false, scheduledAt: null, reason };
     }
     start = free;
     end = new Date(free.getTime() + durMs);
+  }
+
+  /**
+   * No event until accepted (owner, 2026-10-06: "why are you still booking
+   * meetings on my calendar for meetings that haven't been accepted yet").
+   * A time the prospect has not agreed is not booked: the proposal is
+   * emailed with every free offered time as a link, and the calendar event
+   * is made when they confirm one (confirmProposalPick, which comes back
+   * here with scheduledAt set). The owner's calendar is still required: it
+   * is where the confirmed meeting goes, and what the times are checked
+   * against.
+   */
+  if (!m.scheduledAt) {
+    if (!acc || !m.ownerUserId) return { sent: false, scheduledAt: null, reason: "no_calendar_connected" };
+    return emailProposal(workspaceId, m, offered, tz, acc.id);
   }
 
   if (acc) {
@@ -825,12 +853,10 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
       const calEventId = Number((ins as any)[0]?.insertId ?? 0) || null;
       /**
        * An invite is not a booking (owner ask 2026-09-24: "Count bookings
-       * only when the prospect accepts"). A time WE offered is `invited`
-       * until the attendee accepts on the calendar (meetingResponses reads
-       * the answer back and books it then); counting it at send stopped 22
-       * CommunityForce prospects' sequences for meetings nobody had agreed
-       * to. A time the prospect already picked (scheduledAt, a booking link)
-       * is agreed, so it is booked now.
+       * only when the prospect accepts"). Since 2026-10-06 only an agreed
+       * time reaches this point (an un-agreed one is emailed above), so this
+       * is booked now. Invites sent before then stay `invited` until the
+       * attendee answers on the calendar (meetingResponses reads it back).
        */
       const agreed = !!m.scheduledAt;
       await db.update(meetings).set({
@@ -863,6 +889,227 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
    * reschedule, where a human asserts the agreement themselves.
    */
   return { sent: false, scheduledAt: null, reason: acc ? "provider_error" : "no_calendar_connected" };
+}
+
+const affectedRows = (r: unknown): number =>
+  Number(((Array.isArray(r) ? r[0] : r) as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
+
+/**
+ * Email an un-agreed proposal with its free times as links (see the comment
+ * in sendMeetingInvite). One email per proposal: the row is claimed with its
+ * token first, so a double click or two runs at once send it once; a failed
+ * send releases the claim so it can be tried again.
+ */
+async function emailProposal(
+  workspaceId: number,
+  m: typeof meetings.$inferSelect,
+  offered: Date[],
+  timezone: string,
+  calendarAccountId: number,
+): Promise<SendInviteResult> {
+  const db = await getDb();
+  if (!db) return { sent: false, scheduledAt: null, reason: "no_db" };
+  const { newProposalToken, sendProposalEmail } = await import("./meetingProposalEmail");
+  const token = newProposalToken();
+  const claimed = await db.update(meetings).set({ proposalToken: token } as never).where(and(
+    eq(meetings.id, m.id), eq(meetings.workspaceId, workspaceId),
+    eq(meetings.status, "proposed"), isNull(meetings.proposalToken),
+  ));
+  if (affectedRows(claimed) !== 1) return { sent: false, scheduledAt: null, reason: "already_sent" };
+  const res = await sendProposalEmail({
+    workspaceId,
+    meeting: {
+      id: m.id, title: m.title, inviteMessage: m.inviteMessage, contactEmail: m.contactEmail!.trim(),
+      contactName: m.contactName, ownerUserId: m.ownerUserId, relatedType: m.relatedType, relatedId: m.relatedId,
+    },
+    times: offered,
+    timezone,
+    token,
+  });
+  if (!res.ok) {
+    await db.update(meetings).set({ proposalToken: null } as never)
+      .where(and(eq(meetings.id, m.id), eq(meetings.workspaceId, workspaceId), eq(meetings.proposalToken, token)));
+    console.log(`[MeetingScheduler] proposal ${m.id} not emailed (${res.reason}${res.detail ? `: ${res.detail}` : ""})`);
+    return { sent: false, scheduledAt: null, reason: res.reason };
+  }
+  const times = offered.map((t) => t.toISOString());
+  await db.update(meetings).set({
+    status: "invited", inviteSent: true, proposalSentAt: new Date(), proposedTimes: times,
+    attendeeResponse: "none", attendeeRespondedAt: null, calendarAccountId,
+  } as never).where(and(eq(meetings.id, m.id), eq(meetings.workspaceId, workspaceId)));
+  return { sent: true, scheduledAt: null, offered: times };
+}
+
+/* ── the prospect's pick (/m/:token) ──────────────────────────────────── */
+
+export type PickState = "open" | "confirmed" | "expired" | "closed";
+
+export interface ProposalPickView {
+  title: string;
+  ownerName: string;
+  company: string;
+  durationMin: number;
+  timezone: string;
+  state: PickState;
+  times: { iso: string; available: boolean }[];
+  scheduledAt: string | null;
+  meetingUrl: string | null;
+}
+
+async function meetingByToken(token: string) {
+  const db = await getDb();
+  if (!db || !token || token.length > 64) return null;
+  const [m] = await db.select().from(meetings).where(eq(meetings.proposalToken, token)).limit(1);
+  return m ?? null;
+}
+
+/** Which offered times are still free for the owner: not taken, not on a full day. */
+async function freeOfferedTimes(m: typeof meetings.$inferSelect, timezone: string, nowMs: number): Promise<Set<string>> {
+  const durMs = (m.durationMin ?? 30) * 60000;
+  const future = (Array.isArray(m.proposedTimes) ? (m.proposedTimes as string[]) : [])
+    .map((t) => new Date(t))
+    .filter((d) => Number.isFinite(d.getTime()) && d.getTime() > nowMs)
+    .sort((a, b) => a.getTime() - b.getTime());
+  if (!future.length || !m.ownerUserId) return new Set();
+  const db = await getDb();
+  if (!db) return new Set();
+  const [acc] = await db.select().from(calendarAccounts)
+    .where(and(eq(calendarAccounts.workspaceId, m.workspaceId), eq(calendarAccounts.userId, m.ownerUserId))).limit(1);
+  if (!acc) return new Set();
+  const taken = await takenRanges(m.workspaceId, m.ownerUserId, acc, m.id, future[0], new Date(future[future.length - 1].getTime() + durMs));
+  const { booked } = await ownerCommitments(m.workspaceId, m.ownerUserId, m.id);
+  const perDay = new Map<string, number>();
+  for (const b of booked) perDay.set(dayKeyIn(b.startAt, timezone), (perDay.get(dayKeyIn(b.startAt, timezone)) ?? 0) + 1);
+  return new Set(future
+    .filter((c) => (perDay.get(dayKeyIn(c, timezone)) ?? 0) < MAX_MEETINGS_PER_OWNER_PER_DAY)
+    .filter((c) => !taken.some((r) => r.startAt.getTime() < c.getTime() + durMs && r.endAt.getTime() > c.getTime()))
+    .map((c) => c.toISOString()));
+}
+
+/** What the pick page shows. Null for a token that matches nothing. */
+export async function proposalForPick(token: string, nowMs = Date.now()): Promise<ProposalPickView | null> {
+  const m = await meetingByToken(token);
+  if (!m) return null;
+  const db = await getDb();
+  if (!db) return null;
+  const timezone = await getWorkspaceTimezone(m.workspaceId);
+  const [owner] = m.ownerUserId ? await db.select({ name: users.name }).from(users).where(eq(users.id, m.ownerUserId)).limit(1) : [];
+  const [ws] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, m.workspaceId)).limit(1);
+  const times = Array.isArray(m.proposedTimes) ? (m.proposedTimes as string[]) : [];
+  const confirmed = (m.status === "scheduled" || m.status === "rescheduled") && !!m.scheduledAt;
+  const open = m.status === "invited" && !m.scheduledAt;
+  const free = open ? await freeOfferedTimes(m, timezone, nowMs) : new Set<string>();
+  const state: PickState = confirmed ? "confirmed" : !open ? "closed" : times.some((t) => Date.parse(t) > nowMs) ? "open" : "expired";
+  return {
+    title: m.title,
+    ownerName: owner?.name || "Your host",
+    company: ws?.name ?? "",
+    durationMin: m.durationMin ?? 30,
+    timezone,
+    state,
+    times: times.map((t) => ({ iso: new Date(t).toISOString(), available: free.has(new Date(t).toISOString()) })),
+    scheduledAt: confirmed ? new Date(m.scheduledAt!).toISOString() : null,
+    meetingUrl: confirmed ? m.meetingUrl ?? null : null,
+  };
+}
+
+export type PickResult =
+  | { ok: true; scheduledAt: string; meetingUrl: string | null; already?: boolean }
+  | { ok: false; reason: "not_found" | "not_offered" | "time_passed" | "time_taken" | "closed" | "booking_failed" };
+
+/**
+ * The prospect confirms one of the emailed times: checked again (taken, or a
+ * day already holding MAX_MEETINGS_PER_OWNER_PER_DAY), claimed, then booked
+ * through sendMeetingInvite as an agreed time, which makes the calendar
+ * event, marks it scheduled and accepted, and credits the ARE campaign.
+ * Only from the page's Confirm button (a POST), never from opening a link.
+ */
+export async function confirmProposalPick(token: string, timeIso: string, nowMs = Date.now()): Promise<PickResult> {
+  const m = await meetingByToken(token);
+  if (!m) return { ok: false, reason: "not_found" };
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "booking_failed" };
+  const want = Date.parse(timeIso);
+  if ((m.status === "scheduled" || m.status === "rescheduled") && m.scheduledAt) {
+    // A second click, or the other tab: the same time is fine, another is not.
+    return new Date(m.scheduledAt).getTime() === want
+      ? { ok: true, scheduledAt: new Date(m.scheduledAt).toISOString(), meetingUrl: m.meetingUrl ?? null, already: true }
+      : { ok: false, reason: "closed" };
+  }
+  if (m.status !== "invited" || m.scheduledAt) return { ok: false, reason: "closed" };
+  const offered = (Array.isArray(m.proposedTimes) ? (m.proposedTimes as string[]) : []).map((t) => Date.parse(t));
+  if (!Number.isFinite(want) || !offered.includes(want)) return { ok: false, reason: "not_offered" };
+  if (want <= nowMs) return { ok: false, reason: "time_passed" };
+  const timezone = await getWorkspaceTimezone(m.workspaceId);
+  const iso = new Date(want).toISOString();
+  if (!(await freeOfferedTimes(m, timezone, nowMs)).has(iso)) return { ok: false, reason: "time_taken" };
+
+  // Claim the time: one confirmation wins.
+  const claimed = await db.update(meetings).set({ scheduledAt: new Date(want) } as never).where(and(
+    eq(meetings.id, m.id), eq(meetings.workspaceId, m.workspaceId), eq(meetings.status, "invited"), isNull(meetings.scheduledAt),
+  ));
+  if (affectedRows(claimed) !== 1) return { ok: false, reason: "closed" };
+  const res = await sendMeetingInvite(m.workspaceId, m.id);
+  if (!res.sent) {
+    // Nothing reached the calendar: release the claim so they can try again.
+    await db.update(meetings).set({ scheduledAt: null } as never).where(and(
+      eq(meetings.id, m.id), eq(meetings.workspaceId, m.workspaceId), eq(meetings.status, "invited"),
+    ));
+    console.error(`[MeetingScheduler] pick for meeting ${m.id} not booked (${res.reason ?? "unknown"})`);
+    return { ok: false, reason: "booking_failed" };
+  }
+  const [after] = await db.select({ meetingUrl: meetings.meetingUrl }).from(meetings).where(eq(meetings.id, m.id)).limit(1);
+  const when = formatInZone(new Date(want), timezone);
+  const who = m.contactName || m.contactEmail || "The prospect";
+  if (m.ownerUserId) {
+    try {
+      await db.insert(notifications).values({
+        workspaceId: m.workspaceId,
+        userId: m.ownerUserId,
+        kind: "system",
+        title: `Meeting confirmed: ${who}`.slice(0, 240),
+        body: `${who} picked ${when} for "${m.title}". It is on your calendar, and they have the invite.`,
+      } as never);
+    } catch (e) {
+      console.error("[MeetingScheduler] pick notification failed:", e instanceof Error ? e.message : e);
+    }
+  }
+  if (m.relatedType && m.relatedId) {
+    try {
+      await db.insert(activities).values({
+        workspaceId: m.workspaceId, type: "meeting", relatedType: m.relatedType, relatedId: m.relatedId,
+        subject: `Meeting confirmed: ${m.title}`.slice(0, 240),
+        body: `${who} picked ${when} from the emailed times.`,
+        actorUserId: null, occurredAt: new Date(),
+      } as never);
+    } catch (e) {
+      console.error("[MeetingScheduler] pick activity failed:", e instanceof Error ? e.message : e);
+    }
+  }
+  return { ok: true, scheduledAt: new Date(want).toISOString(), meetingUrl: after?.meetingUrl ?? null };
+}
+
+/**
+ * Emailed proposals whose every offered time has passed without a pick are
+ * closed, so the prospect is no longer "already invited" and can be offered
+ * new times. Runs with the invite-response check, every 15 minutes.
+ */
+export async function expireUnpickedProposals(nowMs = Date.now()): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db.select({ id: meetings.id, workspaceId: meetings.workspaceId, proposedTimes: meetings.proposedTimes })
+    .from(meetings)
+    .where(and(eq(meetings.status, "invited"), isNull(meetings.scheduledAt), isNotNull(meetings.proposalSentAt)))
+    .limit(500);
+  let closed = 0;
+  for (const r of rows) {
+    const times = Array.isArray(r.proposedTimes) ? (r.proposedTimes as string[]) : [];
+    if (times.some((t) => Date.parse(t) > nowMs)) continue;
+    const res = await db.update(meetings).set({ status: "cancelled", disposition: "no_time_picked" } as never)
+      .where(and(eq(meetings.id, r.id), eq(meetings.workspaceId, r.workspaceId), eq(meetings.status, "invited"), isNull(meetings.scheduledAt)));
+    if (affectedRows(res) === 1) closed++;
+  }
+  return closed;
 }
 
 function startOfUtcDay(): Date {

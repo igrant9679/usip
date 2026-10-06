@@ -66,6 +66,7 @@ import SavedRedirect from "@/pages/usip/SavedRedirect";
 import FormsV2 from "@/pages/usip/FormsV2";
 import PublicForm from "@/pages/PublicForm";
 import BookingPage from "@/pages/BookingPage";
+import MeetingPickPage from "@/pages/MeetingPickPage";
 import LandingPage from "@/pages/LandingPage";
 import ResetPassword from "@/pages/ResetPassword";
 import LandingPages from "@/pages/usip/LandingPages";
@@ -540,6 +541,8 @@ function Router() {
       <Route path="/v2/forms"><AuthGate><FormsV2 /></AuthGate></Route>
       <Route path="/f/:publicId"><PublicForm /></Route>
       <Route path="/b/:slug"><BookingPage /></Route>
+      {/* A proposal email's time links (2026-10-06): public, books only on Confirm. */}
+      <Route path="/m/:token"><MeetingPickPage /></Route>
       <Route path="/l/:slug"><LandingPage /></Route>
       {/* PUBLIC by necessity — the visitor cannot sign in, that is why they
           are here. No AuthGate. */}

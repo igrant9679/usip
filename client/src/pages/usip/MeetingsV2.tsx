@@ -12,7 +12,7 @@
  * calendar the invite is a real provider event; otherwise the meeting is
  * recorded locally and flagged "not sent" (never a false "booked").
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { forbiddenMessage } from "@/lib/forbidden";
 import { Link } from "wouter";
 import { toast } from "sonner";
@@ -72,6 +72,8 @@ type Meeting = {
   /** The attendee's answer, read back from the owner's calendar. */
   attendeeResponse?: string | null;
   disposition?: string | null;
+  /** When the proposal's times were emailed (2026-10-06); null scheduledAt until they pick one. */
+  proposalSentAt?: string | Date | null;
   createdAt?: string | Date | null;
 };
 
@@ -140,7 +142,15 @@ export default function MeetingsV2() {
       // kept and the user is told exactly why nothing was sent. (The old
       // message claimed "Meeting booked" with no invite sent — the phantom-
       // booking fiction removed in migration 0175.)
-      if (r.sent) toast.success(`Invite sent for ${fmtDateTime(r.scheduledAt)}`);
+      // No event until accepted (2026-10-06): the times are emailed; the
+      // calendar event is made when the prospect confirms one.
+      if (r.sent && r.offered) toast.success(`${r.offered.length} time${r.offered.length === 1 ? "" : "s"} emailed. Nothing goes on the calendar until they pick one.`);
+      else if (r.sent) toast.success(`Invite sent for ${fmtDateTime(r.scheduledAt)}`);
+      else if (r.reason === "no_mailbox") toast.error("No mailbox to send from: connect the owner's mailbox (Connected accounts) or add a workspace sending account. Nothing was sent.");
+      else if (r.reason === "suppressed") toast.error("This person has unsubscribed or is on the suppression list. Nothing was sent.");
+      else if (r.reason === "send_limit") toast.error("The mailbox has reached its sending limit for now. Nothing was sent; try again later.");
+      else if (r.reason === "send_failed") toast.error("The mailbox could not send the email. Nothing was sent; the proposal was kept.");
+      else if (r.reason === "already_sent") toast.error("This proposal's times were already emailed.");
       else if (r.reason === "no_calendar_connected") toast.error("No calendar connected — the invite was not sent and the proposal was kept. Connect a calendar in Settings, or record an agreed meeting manually.");
       else if (r.reason === "provider_error") toast.error("The calendar provider rejected the invite — nothing was sent; the proposal was kept.");
       else if (r.reason === "all_times_expired") toast.error("Every proposed time has passed — regenerate the proposal to offer new times.");
@@ -159,7 +169,7 @@ export default function MeetingsV2() {
       invalidateAll();
       const skippedTotal = Object.values(r.skipped).reduce((a, b) => a + b, 0);
       const why = Object.entries(r.skipped).map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`).join(", ");
-      if (r.sent > 0 && skippedTotal === 0) toast.success(`${r.sent} invite${r.sent === 1 ? "" : "s"} sent`);
+      if (r.sent > 0 && skippedTotal === 0) toast.success(`${r.sent} proposal${r.sent === 1 ? "" : "s"} emailed with their times`);
       else if (r.sent > 0) toast.warning(`${r.sent} sent, ${skippedTotal} not sent (${why}) — those proposals were kept`);
       else toast.error(`Nothing sent (${why || "no proposals"}) — the proposals were kept`);
     },
@@ -372,7 +382,7 @@ export default function MeetingsV2() {
                 <h2 className="text-sm font-semibold flex items-center gap-2"><Sparkles className="size-4" style={{ color: "#7c3aed" }} /> AI meeting proposals ({proposals.length})</h2>
                 <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={approveAllProposed.isPending || approveSend.isPending}
                   title={`Approve and send all ${proposals.length} proposal${proposals.length === 1 ? "" : "s"}?`}
-                  description="Each proposal books its earliest offered time that is still free on the owner's calendar, and the calendar invite is emailed to the prospect now. Proposals whose times have all passed or are all booked are skipped and kept for you to regenerate."
+                  description="Each prospect is emailed their proposal now, with every offered time that is still free on the owner's calendar as a link. Nothing goes on the calendar until they confirm a time. Proposals whose times have all passed or are all booked are skipped and kept for you to regenerate."
                   confirmLabel="Approve & send all" onConfirm={() => approveAllProposed.mutate()}>
                   <Send className="size-3.5" /> Approve & send all ({proposals.length})
                 </ConfirmButton>
@@ -487,7 +497,13 @@ export default function MeetingsV2() {
                       <div className="text-sm font-medium truncate flex items-center gap-1.5">
                         {m.title}
                         {m.inviteSent === false && <span title="No calendar connected — invite not sent" className="inline-flex items-center"><MailWarning className="size-3 text-amber-500" /></span>}
-                        {m.status === "invited" && (
+                        {m.status === "invited" && !m.scheduledAt && (
+                          <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                            title="Their times were emailed. Nothing is on the calendar until they pick one; it then books itself and counts.">
+                            Times sent: waiting for their pick
+                          </span>
+                        )}
+                        {m.status === "invited" && !!m.scheduledAt && (
                           <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
                             title="Not a booking yet: it counts once the prospect accepts the invite. Checked on the owner's calendar every 15 minutes.">
                             {m.attendeeResponse === "tentative" ? "Tentative" : "Awaiting response"}
@@ -500,13 +516,16 @@ export default function MeetingsV2() {
                       <ContactLine m={m} />
                     </div>
                     {m.meetingUrl && <a href={m.meetingUrl} target="_blank" rel="noreferrer"><Button variant="outline" size="sm" className="h-7 gap-1"><Video className="size-3.5" /> Join</Button></a>}
-                    <div className="shrink-0 text-[11px] w-40 text-right tabular-nums text-muted-foreground">{fmtDateTime(m.scheduledAt)}</div>
+                    <div className="shrink-0 text-[11px] w-40 text-right tabular-nums text-muted-foreground"
+                      title={!m.scheduledAt && m.proposedTimes?.length ? `Offered: ${(m.proposedTimes ?? []).map((t) => fmtDateTime(t)).join(", ")}` : undefined}>
+                      {m.scheduledAt ? fmtDateTime(m.scheduledAt) : m.proposedTimes?.length ? `${m.proposedTimes.length} time${m.proposedTimes.length === 1 ? "" : "s"} offered` : fmtDateTime(m.scheduledAt)}
+                    </div>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="size-7 shrink-0"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-44">
-                        <DropdownMenuItem onClick={() => complete.mutate({ id: m.id })}><Check className="size-3.5 mr-2" /> Mark completed</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => complete.mutate({ id: m.id, disposition: "no_show" })}>Mark no-show</DropdownMenuItem>
-                        <DropdownMenuSeparator />
+                        {m.scheduledAt && <DropdownMenuItem onClick={() => complete.mutate({ id: m.id })}><Check className="size-3.5 mr-2" /> Mark completed</DropdownMenuItem>}
+                        {m.scheduledAt && <DropdownMenuItem onClick={() => complete.mutate({ id: m.id, disposition: "no_show" })}>Mark no-show</DropdownMenuItem>}
+                        {m.scheduledAt && <DropdownMenuSeparator />}
                         <DropdownMenuItem onClick={() => cancel.mutate({ id: m.id })} className="text-rose-600"><X className="size-3.5 mr-2" /> Cancel</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -595,11 +614,8 @@ function ProposalCard({
   const isPast = (t: string) => { const ms = new Date(t).getTime(); return Number.isFinite(ms) && ms <= Date.now(); };
   const future = times.filter((t) => !isPast(t));
   const expired = times.length > 0 && future.length === 0;
-  const [chosen, setChosen] = useState<string | undefined>(future[0]);
-  // Times change under the card after an edit or a regeneration: re-pick the
-  // earliest future one rather than keep a slot the proposal no longer offers.
-  const timesKey = times.join("|");
-  useEffect(() => { setChosen(future[0]); }, [timesKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // No event until accepted (2026-10-06): Approve emails every offered time
+  // that is still free, and the prospect picks; there is no time to choose here.
   return (
     <div className="rounded-xl border bg-card p-3 shadow-sm" style={{ borderColor: "#7c3aed40" }}>
       <div className="flex items-start gap-3">
@@ -616,17 +632,14 @@ function ProposalCard({
           {m.aiReasoning && <div className="text-[11px] text-muted-foreground mt-1">{m.aiReasoning}</div>}
           {times.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 mt-2">
-              <span className="text-[11px] text-muted-foreground mr-0.5">Proposed:</span>
+              <span className="text-[11px] text-muted-foreground mr-0.5">Offers:</span>
               {times.map((t) => {
                 const past = isPast(t);
                 return (
-                  <button key={t} onClick={() => !past && setChosen(t)} disabled={past}
-                    title={past ? "This time has already passed" : undefined}
-                    className={cn("rounded-full border px-2 py-0.5 text-[11px] transition-colors",
-                      past ? "opacity-40 line-through cursor-not-allowed" : chosen === t ? "text-white border-transparent" : "hover:bg-muted")}
-                    style={chosen === t && !past ? { backgroundColor: "#7c3aed" } : undefined}>
+                  <span key={t} title={past ? "This time has already passed" : "Emailed as a link; they pick one"}
+                    className={cn("rounded-full border px-2 py-0.5 text-[11px]", past && "opacity-40 line-through")}>
                     {fmtDateTime(t)}
-                  </button>
+                  </span>
                 );
               })}
             </div>
@@ -718,9 +731,9 @@ function ProposalCard({
           <Button size="sm" variant="outline" className="h-7" disabled={pending || editPending}
             title="Edit the title, invite text or offered times before approving"
             onClick={() => (editing ? setEditing(false) : startEdit())}>{editing ? "Close" : "Edit"}</Button>
-          <Button size="sm" className="h-7 gap-1" disabled={pending || expired || !chosen || noEmail}
-            title={noEmail ? "This prospect has no email address, so there is no one to send the invite to" : expired ? "Every proposed time has passed — regenerate this proposal" : undefined}
-            onClick={() => onApprove(chosen)}><Send className="size-3.5" /> Approve &amp; send</Button>
+          <Button size="sm" className="h-7 gap-1" disabled={pending || expired || noEmail}
+            title={noEmail ? "This prospect has no email address, so there is no one to send the invite to" : expired ? "Every proposed time has passed — regenerate this proposal" : "Email them the offered times. Nothing goes on the calendar until they pick one."}
+            onClick={() => onApprove()}><Send className="size-3.5" /> Approve &amp; send</Button>
           <Button size="icon" variant="ghost" className="size-7 text-muted-foreground" title="Dismiss" onClick={onDismiss}><X className="size-4" /></Button>
         </div>
       </div>

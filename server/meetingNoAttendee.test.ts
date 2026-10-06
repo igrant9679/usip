@@ -123,7 +123,7 @@ describe("sending needs someone to send to", () => {
 
   it("the card says so and cannot be approved", () => {
     const page = readFileSync("client/src/pages/usip/MeetingsV2.tsx", "utf8");
-    expect(page).toContain("disabled={pending || expired || !chosen || noEmail}");
+    expect(page).toContain("disabled={pending || expired || noEmail}");
     expect(page).toContain("No email address for this prospect, so an invite can't be sent.");
   });
 });

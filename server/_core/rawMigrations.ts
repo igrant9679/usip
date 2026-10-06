@@ -4480,6 +4480,19 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // No event until accepted (owner ask 2026-10-06, "why are you still
+  // booking meetings on my calendar for meetings that haven't been accepted
+  // yet"): proposals are emailed with one-click times; the calendar event is
+  // made only when the prospect confirms one at /m/:token.
+  {
+    name: "0200_meeting_proposal_links.sql",
+    statements: [
+      "ALTER TABLE `meetings` ADD COLUMN `proposalToken` varchar(64) NULL",
+      "ALTER TABLE `meetings` ADD COLUMN `proposalSentAt` timestamp NULL",
+      "CREATE UNIQUE INDEX `ux_meetings_proposal_token` ON `meetings` (`proposalToken`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
