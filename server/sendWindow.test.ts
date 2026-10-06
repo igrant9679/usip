@@ -206,9 +206,15 @@ describe("every sender that goes out on its own waits for the window", () => {
     expect(s).toContain("const windowOpen = await inSendWindow(wsId);");
     expect(s).toContain("const due = !windowOpen ? [] : await db");
   });
-  it("sequence auto-send and the sequence LinkedIn DM step", () => {
+  it("sequence auto-send and the sequence LinkedIn DM and invite steps", () => {
     expect(read("server/routers/sequences.ts")).toContain("if (!(await inSendWindow(ws.workspaceId))) continue;");
-    expect(read("server/sequenceEngine.ts")).toContain('if (step.type === "linkedin_dm" && !(await inSendWindow(enrollment.workspaceId))) {');
+    // Invites waited only for the LinkedIn limits until 2026-10-06.
+    expect(read("server/sequenceEngine.ts")).toContain('if ((step.type === "linkedin_dm" || step.type === "linkedin_invite") && !(await inSendWindow(enrollment.workspaceId))) {');
+  });
+  it("Social Autopilot in Autonomous: invites, likes and openers (2026-10-06)", () => {
+    const s = read("server/services/socialAutopilot.ts");
+    expect(s).toContain('if (mode === "auto" && (await autoSendHold(workspaceId))) return out;');
+    expect(s).toContain("const hold = await autoSendHold(workspaceId);");
   });
   it("Autonomous meeting invites, and meeting reminders", () => {
     expect(read("server/services/meetingScheduler.ts")).toContain('if (ws.meetingAutopilotMode === "auto" && !(await inSendWindow(ws.workspaceId))) continue;');

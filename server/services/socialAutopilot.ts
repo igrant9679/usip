@@ -14,7 +14,9 @@
  * Governed by workspace_settings.socialAutopilotMode:
  *   off      — do nothing (default)
  *   approval — draft the opener into a task for the rep to review + send
- *   auto     — send the opener immediately (subject to the daily cap)
+ *   auto     — send the opener immediately (subject to the daily cap),
+ *              inside the send window and never while outbound is paused
+ *              (autoSendHold, 2026-10-06; held openers become tasks)
  *
  * Per-user identity: the opener is sent from the REP'S OWN connected account
  * (the one that received the acceptance), never a shared/system identity.
@@ -38,6 +40,23 @@ import { invokeLLM } from "../_core/llm";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "./humanCopy";
 import { listUserPosts, reactToPost, sendLinkedInInvitation, sendMessage } from "../lib/unipile";
 import { utcDayStart } from "@shared/timeWindows";
+import { inSendWindow } from "./sendWindow";
+import { isOutboundPaused, OUTBOUND_PAUSED_MESSAGE } from "./outboundPause";
+
+/**
+ * Why Velocity may not message prospects on its own here right now, or null
+ * when it may. Auto mode sends openers, invites and likes with no person
+ * involved, so it waits like every other automated sender: never while
+ * Pause all outbound is on, and only inside the workspace send window
+ * (it ignored both until 2026-10-06).
+ */
+async function autoSendHold(workspaceId: number): Promise<{ label: string; message: string } | null> {
+  if (await isOutboundPaused(workspaceId)) return { label: "held: outbound is paused", message: OUTBOUND_PAUSED_MESSAGE };
+  if (!(await inSendWindow(workspaceId))) {
+    return { label: "held: outside the send window", message: "Outside the workspace send window (Settings → Workspace overview → Send window)." };
+  }
+  return null;
+}
 
 interface NewRelationPayload {
   account_id?: string;
@@ -192,6 +211,28 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
       source: "ai",
     } as never);
     return "approval_task";
+  }
+
+  // Paused or outside the send window: nothing goes to LinkedIn. The accept
+  // is kept as a task for the rep, as when the limits below hold it.
+  const hold = await autoSendHold(workspaceId);
+  if (hold) {
+    await db.insert(tasks).values({
+      workspaceId,
+      title: `Send LinkedIn opener to ${name} (${hold.label})`,
+      description: `${opener}
+
+— Held automatically: ${hold.message}`,
+      type: "social_touch",
+      priority: "normal",
+      status: "open",
+      dueAt: new Date(Date.now() + 86400000),
+      ownerUserId,
+      relatedType: linkedContactId ? "contact" : null,
+      relatedId: linkedContactId,
+      source: "ai",
+    } as never);
+    return "held_task";
   }
 
   /**
@@ -370,6 +411,10 @@ export async function runSocialAutopilotInvitesForWorkspace(
     .limit(1);
   const mode = ws?.mode ?? "off";
   if (mode === "off") return out;
+  // Auto mode invites (and likes posts) on its own: not while paused or
+  // outside the send window; the next hourly run picks up. Approval mode
+  // only drafts tasks, so it carries on.
+  if (mode === "auto" && (await autoSendHold(workspaceId))) return out;
 
   const cap = Math.min(ws?.cap ?? INVITE_HARD_CAP, INVITE_HARD_CAP);
   // UTC — LinkedIn sends are the account-risk path; the window must not move

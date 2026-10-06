@@ -356,9 +356,11 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
         continue;
       }
 
-      // A LinkedIn DM goes out the moment its step runs, with no gate of its
-      // own: it waits for the workspace send window (owner ask 2026-09-25, see @shared/sendWindow).
-      if (step.type === "linkedin_dm" && !(await inSendWindow(enrollment.workspaceId))) {
+      // A LinkedIn DM or invite goes out the moment its step runs, with no gate
+      // of its own: it waits for the workspace send window (owner ask 2026-09-25,
+      // see @shared/sendWindow), which stays shut while outbound is paused.
+      // Invites waited only for the LinkedIn limits until 2026-10-06.
+      if ((step.type === "linkedin_dm" || step.type === "linkedin_invite") && !(await inSendWindow(enrollment.workspaceId))) {
         continue; // outside the workspace send window — try next tick
       }
 
