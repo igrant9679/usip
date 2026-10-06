@@ -504,7 +504,7 @@ export async function loadCallContext(callRowId: number): Promise<CallContext | 
 export const realDeps: SessionDeps = {
   async findTimes(ctx) {
     if (!ctx.ownerUserId) return [];
-    const { slots } = await openSlotsForOwner(ctx.workspaceId, ctx.ownerUserId, 3);
+    const { slots } = await openSlotsForOwner(ctx.workspaceId, ctx.ownerUserId, 3, { soonest: true });
     return slots.map((iso, i) => ({ option: String.fromCharCode(65 + i), iso, spoken: spokenTime(iso, ctx.personTz) }));
   },
 

@@ -370,7 +370,13 @@ export async function openSlotsForOwner(
   workspaceId: number,
   ownerUserId: number | null,
   count = 3,
-  opts: { excludeMeetingId?: number } = {},
+  /**
+   * soonest (2026-10-06): a person on the phone wants the next open times,
+   * not the least-offered ones. The spread that keeps a busy email queue
+   * off one slot pushed a call's offers two weeks out, all on one day.
+   * Full days and busy time still count.
+   */
+  opts: { excludeMeetingId?: number; soonest?: boolean } = {},
 ): Promise<{ slots: string[]; durationMin: number; timezone: string }> {
   const db = await getDb();
   const durationMin = 30;
@@ -409,7 +415,9 @@ export async function openSlotsForOwner(
   offered?.forEach((n, iso) => { const d = dayKeyIn(iso, workspaceTz); dayLoad.set(d, (dayLoad.get(d) ?? 0) + n); });
   const fullDays = new Set<string>();
   bookedPerDay.forEach((n, d) => { if (n >= MAX_MEETINGS_PER_OWNER_PER_DAY) fullDays.add(d); });
-  const slots = computeSlots(busy, count, durationMin, workspaceTz, offered, { load: dayLoad, full: fullDays });
+  const slots = opts.soonest
+    ? computeSlots(busy, count, durationMin, workspaceTz, undefined, { full: fullDays })
+    : computeSlots(busy, count, durationMin, workspaceTz, offered, { load: dayLoad, full: fullDays });
   return { slots, durationMin, timezone: workspaceTz };
 }
 

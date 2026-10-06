@@ -127,3 +127,30 @@ describe("testing as a real person, safely", () => {
     expect(r).toContain("testAsProspectId: input.asProspectId ?? null,");
   });
 });
+
+describe("after the first real call (2026-10-06)", () => {
+  it("never invents facts about our company or people", () => {
+    const s = buildCallInstructions({ direction: "outbound", agentName: "Ava", ownerName: "Idris Grant", companyName: "LSI Media", canBook: true });
+    expect(s).toContain("Describe our company, our people and what we offer ONLY with the facts you were given");
+    expect(s).toContain("Never invent a job title, a type of customer, a result or a number");
+  });
+
+  it("on the phone, offers the soonest open times, not the least-offered ones", async () => {
+    const { computeSlots } = await import("./services/meetingScheduler");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-06T13:30:00Z")); // Tue 9:30 AM Eastern
+    try {
+      const soonest = computeSlots([], 3, 30, "America/New_York");
+      // Busy email queue: the early slots are already offered many times over.
+      const offered = new Map(soonest.map((iso) => [iso, 9] as [string, number]));
+      const spread = computeSlots([], 3, 30, "America/New_York", offered);
+      expect(soonest.every((t) => new Date(t).getTime() - Date.now() < 3 * 86_400_000)).toBe(true);
+      expect(spread.some((t) => soonest.includes(t))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+    const sched = read("services", "meetingScheduler.ts");
+    expect(sched).toContain("? computeSlots(busy, count, durationMin, workspaceTz, undefined, { full: fullDays })");
+    expect(read("services", "voiceRelay.ts")).toContain("openSlotsForOwner(ctx.workspaceId, ctx.ownerUserId, 3, { soonest: true })");
+  });
+});

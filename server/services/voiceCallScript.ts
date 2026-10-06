@@ -138,6 +138,9 @@ export function buildCallInstructions(s: ScriptInput): string {
     `If they would like a call back another time, ask when, and call end_call with result "call_back" and the time in the note.`,
     `After a successful booking, thank them and call end_call with result "booked".`,
     `Do not make commitments on price, contracts or anything you were not told; say ${owner || "the team"} will follow up.`,
+    // Seen on a real call, 2026-10-06: "Idris is our VP of Revenue Operations, and we help mid-market
+    // SaaS companies…", none of it in the company facts.
+    `Describe our company, our people and what we offer ONLY with the facts you were given (the company facts and product knowledge). Never invent a job title, a type of customer, a result or a number; if you don't know, say ${owner || "the team"} can cover it.`,
     `Always say goodbye before calling end_call.`,
   ];
   if (s.canSearch) rules.splice(rules.length - 2, 0, knowledgeSearchRule(owner || null));
