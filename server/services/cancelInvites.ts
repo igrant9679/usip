@@ -45,7 +45,12 @@ export async function cancelSentInvites(workspaceId: number, ids: number[], opts
         await createCalendarAdapter(acc as never).deleteEvent(acc.calendarId ?? "primary", ev.externalId);
         calendar = "deleted on the calendar (attendee notified)";
       } catch (e) {
-        calendar = `calendar delete failed: ${String((e as Error)?.message ?? e).slice(0, 160)}`;
+        // Keep the END of the message: provider errors put the long URL first and the reason last.
+        const msg = String((e as Error)?.message ?? e);
+        // Already gone (deleted by hand in Outlook): that is the outcome wanted.
+        calendar = /\b404\b|not[ _]found|does not exist/i.test(msg)
+          ? "already removed from the calendar"
+          : `calendar delete failed: ${msg.length > 220 ? `…${msg.slice(-220)}` : msg}`;
       }
     }
     // A failed delete leaves the meeting as it was, so it can be retried: the event is still on the calendar.

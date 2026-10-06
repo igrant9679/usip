@@ -99,3 +99,17 @@ describe("while paused, a person cannot send invites either", () => {
     expect(all.indexOf("await assertOutboundNotPaused(ctx.workspace.id);")).toBeLessThan(all.indexOf("sendMeetingInvite("));
   });
 });
+
+describe("an event already deleted by hand", () => {
+  it("counts as removed: the meeting is marked cancelled", async () => {
+    deleteEvent.mockRejectedValueOnce(new Error("Unipile DELETE /calendars/AAMk.../events/AAMk... failed: 404 Not Found"));
+    const r = await cancelSentInvites(2, [596], { dryRun: false, actorUserId: 2 });
+    expect(r[0].outcome).toBe("already removed from the calendar");
+    expect(updates).toEqual([{ status: "cancelled", calendarEventId: null }]);
+  });
+  it("a long provider error keeps its reason (the end), not just the URL", async () => {
+    deleteEvent.mockRejectedValueOnce(new Error(`Unipile DELETE /calendars/${"A".repeat(300)} failed: 500 Internal`));
+    const r = await cancelSentInvites(2, [596], { dryRun: false, actorUserId: 2 });
+    expect(r[0].outcome).toMatch(/failed: 500 Internal$/);
+  });
+});
