@@ -260,7 +260,9 @@ describe("every sender that goes out on its own waits for the window", () => {
   it("the Help Center says what waits, and that what a person clicks does not", () => {
     const help = read("server/seedHelpContent.ts");
     expect(help).toContain('slug: "send-window",');
-    expect(help).toContain("Anything **a person clicks** goes immediately, whatever the time: **Approve & send**, **Approve & send all**");
+    // 2026-10-06: except while outbound is paused ("Block everything").
+    expect(help).toContain("Unless outbound is paused, anything **a person clicks** goes immediately, whatever the time: **Approve & send**, **Approve & send all**");
+    expect(help).toContain("**While paused, what a person clicks is held too.**");
     expect(help).toContain("So if you approve meeting proposals at 5:30 PM on a Friday, the invites go out then;");
   });
 

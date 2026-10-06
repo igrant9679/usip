@@ -37,6 +37,7 @@ import {
   repProcedure,
   workspaceProcedure,
 } from "../_core/workspace";
+import { assertOutboundNotPaused } from "../services/outboundPause";
 
 // ── Section keys ─────────────────────────────────────────────────────────────
 export const SECTION_KEYS = [
@@ -596,6 +597,8 @@ export const proposalsRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+      await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
       const proposal = await getProposalOrThrow(db, input.id, ctx.workspace.id);
@@ -1430,6 +1433,8 @@ Reason: ${input.reason}`,
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+      await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
       const proposal = await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
       const newDate = new Date(input.newExpiresAt);
@@ -1501,6 +1506,8 @@ ${proposal.shareToken ? `<p><a href="${appUrl(`/p/${proposal.shareToken}`)}">Vie
       note: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }): Promise<{ approved: number; failed: Array<{ proposalId: number; detail: string }> }> => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+      await assertOutboundNotPaused(ctx.workspace.id);
       const { appRouter } = await import("../routers");
       const caller = appRouter.createCaller(ctx as never);
       let approved = 0;
@@ -1527,6 +1534,8 @@ ${proposal.shareToken ? `<p><a href="${appUrl(`/p/${proposal.shareToken}`)}">Vie
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+      await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
       const proposal = await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
       // Log activity

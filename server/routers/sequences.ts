@@ -37,6 +37,7 @@ import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../services/humanCopy";
 import { renderMergeFields, resolveBookingUrl, scrubForSend } from "../mergeVars";
+import { assertOutboundNotPaused } from "../services/outboundPause";
 
 /** One escaper for the whole codebase — @shared/escapeHtml. The comment here
  *  used to read "duplicated from crm.ts — separate router", and duplication is
@@ -2292,6 +2293,8 @@ ${HUMAN_COPY_RULES}${brandBlock ? `\n\n${brandBlock}` : ""}`,
    * contact or lead email. Sender resolution mirrors crm.sendAdHocEmail.
    */
   send: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+    await assertOutboundNotPaused(ctx.workspace.id);
     return deliverEmailDraft({
       workspaceId: ctx.workspace.id,
       userId: ctx.user.id,

@@ -68,8 +68,8 @@ function SendWindowSection({ settings, save, canEdit }: { settings: any; save: (
             <div className={cn("text-sm font-medium", paused && "text-rose-700 dark:text-rose-300")}>Pause all outbound</div>
             <div className="text-xs text-muted-foreground">
               {paused
-                ? `Paused since ${new Date(pausedAt as string).toLocaleString()}. Nothing Velocity sends on its own goes out; it waits and goes once you switch this off (inside the window below). What a person sends is not affected.`
-                : "Stops everything Velocity sends on its own, in this workspace, until you switch it off. Nothing is dropped. What a person sends is not affected."}
+                ? `Paused since ${new Date(pausedAt as string).toLocaleString()}. Nothing goes to prospects: what Velocity sends on its own waits and goes once you switch this off (inside the window below), and what a person sends is refused. Mail to your own team, and AI calls (their own switch), still go.`
+                : "Stops everything that goes to prospects in this workspace until you switch it off: what Velocity sends on its own waits (nothing is dropped), and what a person sends is refused. Mail to your own team, and AI calls (their own switch), still go."}
             </div>
           </div>
         </div>

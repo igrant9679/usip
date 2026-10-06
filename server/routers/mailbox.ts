@@ -27,6 +27,7 @@ import { assertSendAllowed } from "../sendLimits";
 import { escapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../services/humanCopy";
+import { assertOutboundNotPausedFor } from "../services/outboundPause";
 
 /**
  * Append the rep's email signature to outbound HTML / text if it isn't
@@ -298,6 +299,8 @@ export const mailboxRouter = router({
       })).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything"). Team-only mail still goes.
+      await assertOutboundNotPausedFor(ctx.workspace.id, [input.to, input.cc, input.bcc]);
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       await assertMailboxWriteOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
@@ -341,6 +344,8 @@ export const mailboxRouter = router({
       })).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything"). Team-only mail still goes.
+      await assertOutboundNotPausedFor(ctx.workspace.id, [input.to, input.cc]);
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       await assertMailboxWriteOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);

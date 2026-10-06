@@ -35,6 +35,7 @@ import { areExecutionQueue } from "../../drizzle/schema";
 import { applyAccountSendDefaults } from "../services/sending/accountDefaults";
 import { isEmailSuppressed } from "./emailSuppressions";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
+import { assertOutboundNotPaused } from "../services/outboundPause";
 
 /* ─── AES-256-GCM helpers ─────────────────────────────────────────────── */
 export function getEncKey(): Buffer {
@@ -205,6 +206,8 @@ export const smtpConfigRouter = router({
   sendDraft: workspaceProcedure
     .input(z.object({ draftId: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+      await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
@@ -328,6 +331,8 @@ export const smtpConfigRouter = router({
   sendBulkApproved: adminWsProcedure
     .input(z.object({ draftIds: z.array(z.number().int()).max(200).optional() }))
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+      await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 

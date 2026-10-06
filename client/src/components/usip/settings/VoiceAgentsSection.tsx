@@ -573,7 +573,7 @@ function AiCallsSwitchCard({ isAdmin }: { isAdmin: boolean }) {
   const pausedAt = status.data?.aiCallsPausedAt ?? null;
   const on = !pausedAt;
   return (
-    <Card title="AI calls" sub="Whether approved AI calls dial. Calls to an agent's number are always answered. This is separate from Pause all outbound (Settings → Send window), which holds automated email.">
+    <Card title="AI calls" sub="Whether approved AI calls dial. Calls to an agent's number are always answered. This is separate from Pause all outbound (Settings → Send window), which holds email, LinkedIn and invites.">
       <label className={cn("flex items-start gap-3 rounded-md border p-3", on ? "border-border" : "border-amber-300 bg-amber-50 dark:bg-amber-950/30")}>
         <Switch checked={on} disabled={!isAdmin || set.isPending || status.isLoading} aria-label="AI calls on"
           onCheckedChange={(v) => set.mutate({ paused: !v })} />

@@ -128,7 +128,8 @@ export default function MeetingsV2() {
       if (r.proposed === 0) toast.info(r.skipped > 0 ? "Top prospects already have meetings proposed" : "No best-fit prospects to schedule yet");
       // Autonomous sends what it finds; Approve leaves it for review.
       else if (r.send) toast.success(`AI proposed ${r.proposed} meeting${r.proposed === 1 ? "" : "s"} and sent ${r.sent} invite${r.sent === 1 ? "" : "s"}${r.sent < r.proposed ? ` (${r.proposed - r.sent} kept for review: see each card)` : ""}`);
-      else toast.success(`AI proposed ${r.proposed} meeting${r.proposed === 1 ? "" : "s"} to review`);
+      // Paused (2026-10-06): Autonomous drafts instead of sending.
+      else toast.success(`AI proposed ${r.proposed} meeting${r.proposed === 1 ? "" : "s"} to review${r.paused ? ". Nothing was sent: outbound is paused" : ""}`);
     },
     onError: (e) => toast.error(e.message),
   });

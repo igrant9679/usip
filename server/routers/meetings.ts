@@ -20,7 +20,7 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { proposeMeetingForProspect, regenerateMeetingProposal, regenerateProposalsNotSince, regenerateStaleProposals, runMeetingAutopilotForWorkspace, sendMeetingInvite, startsInProposalWindow } from "../services/meetingScheduler";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
-import { assertOutboundNotPaused } from "../services/outboundPause";
+import { assertOutboundNotPaused, isOutboundPaused } from "../services/outboundPause";
 import { cancelSentInvites } from "../services/cancelInvites";
 import { MEETING_STATUSES, remindableMeetingStatuses } from "@shared/meetingStatus";
 
@@ -161,7 +161,8 @@ export const meetingsRouter = router({
    * On-demand: propose meetings for the best-fit prospects. Every find is a
    * reviewable proposal: meeting proposals are approval-only (owner ask
    * 2026-09-24, which replaced the 2026-08-26 ask that made this button send
-   * in 'auto'). Nothing here sends.
+   * in 'auto'). In Autonomous it does send what it finds, except while
+   * outbound is paused: then it drafts proposals for approval (2026-10-06).
    */
   generateProposals: repProcedure
     .input(z.object({ limit: z.number().int().min(1).max(20).optional() }).optional())
@@ -172,10 +173,12 @@ export const meetingsRouter = router({
       const db = await getDb();
       const [s] = db ? await db.select({ mode: workspaceSettings.meetingAutopilotMode })
         .from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id)).limit(1) : [];
-      const send = s?.mode === "auto";
+      // Paused: draft for approval instead of sending (owner, 2026-10-06: "Block everything").
+      const paused = await isOutboundPaused(ctx.workspace.id);
+      const send = s?.mode === "auto" && !paused;
       const res = await runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id, { send });
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "meeting", entityId: 0, after: { ...res, send, findMeetings: true } });
-      return { ...res, send };
+      return { ...res, send, paused };
     }),
 
   /**

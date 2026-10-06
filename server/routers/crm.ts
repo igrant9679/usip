@@ -61,6 +61,7 @@ import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { renderMergeFields, resolveBookingUrl, scrubForSend } from "../mergeVars";
 import { normalizedAccountFields } from "../services/company/normalize";
 import { ACTIVE_ENROLLMENT_STATUSES } from "../services/crossEngineEnrollment";
+import { assertOutboundNotPaused } from "../services/outboundPause";
 
 /** The ONE public origin — see server/appUrl.ts. */
 const getAppBaseUrl = publicAppOrigin;
@@ -594,6 +595,8 @@ export const contactsRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+      await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
@@ -1335,6 +1338,8 @@ export const leadsRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+      await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 

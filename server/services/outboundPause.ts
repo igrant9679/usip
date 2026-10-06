@@ -10,9 +10,22 @@
  *
  * Not held: a prospect's own action (picking a time on a booking page), a
  * meeting a prospect agrees to on an AI call (they asked for it in the
- * moment), and mail to your own team.
+ * moment), mail or a calendar invite that goes only to your own team
+ * (assertOutboundNotPausedFor), cancelling a meeting, a post on your own
+ * LinkedIn feed (addressed to no one), and AI calls (their own switch).
+ *
+ * Where it is asked, before anything is written or sent: meeting Approve &
+ * send (one and all); emails from a record, the mailbox (new, reply,
+ * forward), an approved draft (one, or all), a proposal to its client and
+ * the extension decisions mailed to the client; chat follow-up and Social
+ * Autopilot invite tasks (one and all); LinkedIn messages, invites,
+ * comments and reactions; calendar events with outside attendees; and the
+ * Find meetings button, which in Autonomous drafts instead of sending.
  */
 import { TRPCError } from "@trpc/server";
+import { and, eq, isNull } from "drizzle-orm";
+import { users, workspaceMembers } from "../../drizzle/schema";
+import { getDb } from "../db";
 import { getWorkspaceSendWindow } from "./sendWindow";
 
 export const OUTBOUND_PAUSED_MESSAGE =
@@ -32,4 +45,41 @@ export async function assertOutboundNotPaused(workspaceId: number): Promise<void
   if (await isOutboundPaused(workspaceId)) {
     throw new TRPCError({ code: "PRECONDITION_FAILED", message: OUTBOUND_PAUSED_MESSAGE });
   }
+}
+
+/** The active team's addresses (login and notification), lower-cased. */
+export async function teamEmails(workspaceId: number): Promise<Set<string>> {
+  const db = await getDb();
+  if (!db) return new Set();
+  const rows = await db
+    .select({ email: users.email, notifEmail: workspaceMembers.notifEmail })
+    .from(workspaceMembers)
+    .innerJoin(users, eq(users.id, workspaceMembers.userId))
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), isNull(workspaceMembers.deactivatedAt)));
+  const out = new Set<string>();
+  for (const r of rows) for (const e of [r.email, r.notifEmail]) if (e) out.add(e.trim().toLowerCase());
+  return out;
+}
+
+/** Bare addresses from "Name <a@b.com>, c@d.com"-style lists, lower-cased. */
+export function recipientAddresses(list: Array<string | null | undefined>): string[] {
+  const out: string[] = [];
+  for (const item of list) {
+    for (const m of String(item ?? "").match(/[^\s<>,;"']+@[^\s<>,;"']+/g) ?? []) out.push(m.toLowerCase());
+  }
+  return out;
+}
+
+/**
+ * assertOutboundNotPaused for a send with known recipients: mail or an
+ * invite that reaches only the workspace's own team still goes while
+ * paused; one outside address and it is refused. No recipients, nothing sent.
+ */
+export async function assertOutboundNotPausedFor(workspaceId: number, recipients: Array<string | null | undefined>): Promise<void> {
+  if (!(await isOutboundPaused(workspaceId))) return;
+  const addresses = recipientAddresses(recipients);
+  if (!addresses.length) return;
+  const team = await teamEmails(workspaceId);
+  if (addresses.every((a) => team.has(a))) return;
+  throw new TRPCError({ code: "PRECONDITION_FAILED", message: OUTBOUND_PAUSED_MESSAGE });
 }

@@ -11,6 +11,7 @@ import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/wor
 import { generateTasksForWorkspace } from "../services/taskAutopilot";
 import { endOfZonedDay } from "@shared/availability";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { assertOutboundNotPaused } from "../services/outboundPause";
 
 const TASK_TYPES = ["call", "email", "meeting", "linkedin", "todo", "follow_up", "social_touch", "manual_email", "meeting_prep", "crm_update", "generic_action"] as const;
 
@@ -154,6 +155,8 @@ export const tasksRouter = router({
     return listApprovalTasks(ctx.workspace.id);
   }),
   sendChatFollowUp: repProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+    await assertOutboundNotPaused(ctx.workspace.id);
     const { sendChatFollowUpTask } = await import("../services/approvalTasks");
     const r = await sendChatFollowUpTask(ctx.workspace.id, input.id, ctx.user.id);
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "task", entityId: input.id, after: { approveAndSend: "chat_follow_up", ...r } });
@@ -161,12 +164,16 @@ export const tasksRouter = router({
     return r;
   }),
   sendAllChatFollowUps: repProcedure.mutation(async ({ ctx }) => {
+    // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+    await assertOutboundNotPaused(ctx.workspace.id);
     const { sendAllApprovalTasks } = await import("../services/approvalTasks");
     const r = await sendAllApprovalTasks(ctx.workspace.id, "chat_follow_up", ctx.user.id);
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "task", entityId: 0, after: { approveAndSendAll: "chat_follow_up", ...r } });
     return r;
   }),
   sendSocialInvite: repProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+    await assertOutboundNotPaused(ctx.workspace.id);
     const { sendSocialInviteTask } = await import("../services/approvalTasks");
     const r = await sendSocialInviteTask(ctx.workspace.id, input.id, ctx.user.id);
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "task", entityId: input.id, after: { approveAndSend: "social_invite", ...r } });
@@ -174,6 +181,8 @@ export const tasksRouter = router({
     return r;
   }),
   sendAllSocialInvites: repProcedure.mutation(async ({ ctx }) => {
+    // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+    await assertOutboundNotPaused(ctx.workspace.id);
     const { sendAllApprovalTasks } = await import("../services/approvalTasks");
     const r = await sendAllApprovalTasks(ctx.workspace.id, "social_invite", ctx.user.id);
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "task", entityId: 0, after: { approveAndSendAll: "social_invite", ...r } });

@@ -53,7 +53,8 @@ describe("the engine sends only in Autonomous, and only what it just drafted", (
 
   it("the Find button honours the workspace's mode", () => {
     const ep = between(router, "generateProposals: repProcedure", "updateProposal: repProcedure");
-    expect(ep).toContain('const send = s?.mode === "auto";');
+    // Paused (2026-10-06, "Block everything"): Autonomous drafts instead of sending.
+    expect(ep).toContain('const send = s?.mode === "auto" && !paused;');
     expect(ep).toContain("runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id, { send })");
   });
 

@@ -104,7 +104,9 @@ export const ALLOWED_GROUPS: Record<string, { group: string; description: string
  * Sends and messages: the outbound gate. Deletes and wipes: a human's click.
  * Secrets and credentials: never a chat argument.
  */
-export const DENY_LEAF = /(send|dispatch|message|reply(?!Class)|delete|remove|purge|wipe|destroy|reset|password|invite|apiKey|secret|token|credential|transfer|archiveWorkspace|acceptByToken|submit$|book$|byToken|import)/i;
+// (approve|deny)Extension (2026-10-06): each emails the client its decision, a
+// send the name does not say; like proposals.sendToClient, it stays a human's.
+export const DENY_LEAF = /(send|dispatch|message|reply(?!Class)|delete|remove|purge|wipe|destroy|reset|password|invite|apiKey|secret|token|credential|transfer|archiveWorkspace|acceptByToken|submit$|book$|byToken|import|approveExtension|denyExtension)/i;
 /** Whole paths that are read-only public surfaces or otherwise out of scope. */
 export const DENY_PATH = /^(helpCenter\.(upsert|create|update|delete|generate)|chatAgents\.(getPublic|sessionByToken)|landingPages\.(getBySlug)|forms\.getByPublicId|bookingLinks\.getPublic|are\.execution\.(pause|resume))/;
 
@@ -125,6 +127,8 @@ export const SEND_ALLOWLIST: Record<string, string> = {
   "smtpConfig.sendBulkApproved": "SENDS EMAIL NOW: send every approved draft (or the given draftIds, max 200), one per second.",
   "meetings.approveAndSend": "SENDS EMAIL NOW: approve one proposed meeting and email the calendar invite (chosenTime optional — earliest future slot by default).",
   "meetings.approveAllProposed": "SENDS EMAIL NOW: approve and send every pending meeting proposal (expired ones are skipped and reported).",
+  // 2026-10-06: in Autonomous this button sends what it finds; the card must say so.
+  "meetings.generateProposals": "SENDS EMAIL NOW when Meeting Autopilot is Autonomous: find best-fit prospects and propose meetings; in Autonomous (and with outbound not paused) each invite goes out at once, otherwise the proposals wait for approval.",
   "tasks.sendChatFollowUp": "SENDS EMAIL NOW: approve one chat follow-up task and email the suggested follow-up to the visitor.",
   "tasks.sendAllChatFollowUps": "SENDS EMAIL NOW: approve and send every pending chat follow-up (max 50).",
   "tasks.sendSocialInvite": "SENDS A LINKEDIN INVITE NOW: approve one Social Autopilot invite task (within LinkedIn limits).",

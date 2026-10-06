@@ -12,6 +12,7 @@ import { eq, and, gte, lte, desc } from "drizzle-orm";
 import { createCalendarAdapter } from "../calendarAdapter";
 import { encryptField } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
+import { assertOutboundNotPausedFor } from "../services/outboundPause";
 
 function resolveTargetUser(
   ctx: { user: { id: number }; member: { role: string } },
@@ -30,6 +31,17 @@ async function getCalendarAccount(id: number, workspaceId: number) {
   const [acc] = await db.select().from(calendarAccounts).where(and(eq(calendarAccounts.id, id), eq(calendarAccounts.workspaceId, workspaceId)));
   if (!acc) throw new TRPCError({ code: "NOT_FOUND", message: "Calendar account not found" });
   return acc;
+}
+
+/** The stored attendees' addresses of a cached event, for the pause check on an update. */
+async function storedAttendeeEmails(workspaceId: number, dbId: number | undefined): Promise<string[]> {
+  if (!dbId) return [];
+  const db = await getDb();
+  if (!db) return [];
+  const [ev] = await db.select({ attendees: calendarEvents.attendees }).from(calendarEvents)
+    .where(and(eq(calendarEvents.id, dbId), eq(calendarEvents.workspaceId, workspaceId))).limit(1);
+  const list = Array.isArray(ev?.attendees) ? (ev!.attendees as Array<{ email?: string } | string>) : [];
+  return list.map((a) => (typeof a === "string" ? a : a?.email ?? "")).filter(Boolean);
 }
 
 export const calendarRouter = router({
@@ -190,6 +202,8 @@ export const calendarRouter = router({
       relatedId: z.number().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything"). Team-only mail still goes.
+      await assertOutboundNotPausedFor(ctx.workspace.id, (input.attendees ?? []).map((a) => a.email));
       const acc = await getCalendarAccount(input.accountId, ctx.workspace.id);
       const adapter = createCalendarAdapter(acc);
       const result = await adapter.createEvent(input.calendarId, {
@@ -243,6 +257,11 @@ export const calendarRouter = router({
       relatedId: z.number().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything"). Team-only mail still goes.
+      // An update notifies the event's attendees: the new list, or the stored one when unchanged.
+      await assertOutboundNotPausedFor(ctx.workspace.id, input.attendees
+        ? input.attendees.map((a) => a.email)
+        : await storedAttendeeEmails(ctx.workspace.id, input.dbId));
       const acc = await getCalendarAccount(input.accountId, ctx.workspace.id);
       const adapter = createCalendarAdapter(acc);
       const result = await adapter.updateEvent(input.calendarId, input.externalId, {

@@ -41,6 +41,7 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { stripNameCredentials } from "../services/enrichment/personName";
 import { genuineSocialReplyScope } from "../services/replyScope";
+import { assertOutboundNotPaused } from "../services/outboundPause";
 
 // ─── Provider metadata ────────────────────────────────────────────────────────
 
@@ -309,6 +310,8 @@ export const unipileRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+      await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
       // Verify account ownership
       const [account] = await db
@@ -383,6 +386,8 @@ export const unipileRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+      await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
       // Verify account ownership — scoped to the CURRENT workspace
       // (2026-09-20): this proc could previously send from an account the
@@ -977,6 +982,8 @@ export const unipileRouter = router({
   reactToPost: workspaceProcedure
     .input(z.object({ socialId: z.string().min(1), reactionType: z.string().default("like"), unipileAccountId: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+      await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
@@ -988,6 +995,8 @@ export const unipileRouter = router({
   commentOnPost: workspaceProcedure
     .input(z.object({ socialId: z.string().min(1), text: z.string().min(1).max(1200), unipileAccountId: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
+      // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
+      await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
