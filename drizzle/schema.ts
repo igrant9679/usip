@@ -5799,6 +5799,9 @@ export const voiceAgents = mysqlTable(
     /** E.164 Plivo number (Migration 0193): outbound calls come from it, and
      *  calls to it are answered by this agent through Velocity. */
     plivoNumber: varchar("plivoNumber", { length: 32 }),
+    /** Questions an outreach agent works into the conversation, one at a time
+     *  (Migration 0198, owner ask 2026-10-06: "more interrogative"). */
+    discoveryQuestions: json("discoveryQuestions"),
     /** Webhook signing secret returned once by xAI at number registration (AES-GCM enc). */
     sipWebhookSecretEnc: text("sipWebhookSecretEnc"),
     languageHint: varchar("languageHint", { length: 16 }),
@@ -5844,6 +5847,9 @@ export const voiceCalls = mysqlTable(
      * person called (their name and email), so nothing reaches a prospect.
      */
     testedByUserId: int("testedByUserId"),
+    /** A test call playing this person (Migration 0198): their company, role,
+     *  research and history, but the tester's phone and email. */
+    testAsProspectId: int("testAsProspectId"),
     /** CRM link, same shape as tasks: account|contact|lead|opportunity|prospect. */
     relatedType: varchar("relatedType", { length: 24 }),
     relatedId: int("relatedId"),

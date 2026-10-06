@@ -70,7 +70,11 @@ const agentInput = z.object({
   sipWebhookSecret: z.string().max(200).nullable().optional(),
   languageHint: z.string().max(16).nullable().optional(),
   status: z.enum(["active", "paused"]).default("active"),
+  /** Questions an outreach agent works into the call, one at a time (2026-10-06). */
+  discoveryQuestions: z.array(z.string().max(200)).max(8).optional(),
 });
+
+const cleanQuestions = (qs: string[] | undefined) => (qs ?? []).map((q) => q.trim()).filter(Boolean).slice(0, 8);
 
 /** Non-admins may only manage their own callback agent. Throws otherwise. */
 function assertCanManage(role: string, userId: number, agent: { purpose: string; ownerUserId: number | null }) {
@@ -332,6 +336,7 @@ export const voiceAgentsRouter = router({
       sipWebhookSecretEnc: input.sipWebhookSecret ? encryptSecret(input.sipWebhookSecret) : null,
       languageHint: input.languageHint?.trim() || null,
       status: input.status,
+      discoveryQuestions: cleanQuestions(input.discoveryQuestions),
     });
     return { id: Number((r as unknown as { insertId?: number })?.insertId ?? 0) };
   }),
@@ -372,6 +377,7 @@ export const voiceAgentsRouter = router({
       }
       if (input.languageHint !== undefined) patch.languageHint = input.languageHint?.trim() || null;
       if (input.status !== undefined) patch.status = input.status;
+      if (input.discoveryQuestions !== undefined) patch.discoveryQuestions = cleanQuestions(input.discoveryQuestions);
       if (Object.keys(patch).length > 0) {
         await db.update(voiceAgents).set(patch).where(eq(voiceAgents.id, agent.id));
       }

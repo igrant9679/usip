@@ -457,6 +457,14 @@ function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent;
   const [number, setNumber] = useState(() => {
     try { return localStorage.getItem(TEST_NUMBER_KEY) ?? ""; } catch { return ""; }
   });
+  // Play a person (2026-10-06): their research and history, your phone and email.
+  const [personQuery, setPersonQuery] = useState("");
+  const [asPerson, setAsPerson] = useState<{ id: number; name: string; company: string | null } | null>(null);
+  const people = trpc.prospects.list.useQuery(
+    { page: 1, perPage: 10, search: personQuery.trim() } as any,
+    { enabled: open && !asPerson && personQuery.trim().length >= 2 },
+  );
+  const peopleRows = (((people.data as any)?.data ?? []) as any[]);
   const call = trpc.aiCalls.testCall.useMutation({
     onSuccess: (r) => {
       try { localStorage.setItem(TEST_NUMBER_KEY, number.trim()); } catch { /* per-browser convenience only */ }
@@ -483,9 +491,36 @@ function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent;
             Only call your own phone. On Plivo's free trial, the number must be verified in Plivo first. Up to 10 test calls a day.
           </p>
         </div>
+        <div className="space-y-1.5">
+          <Label>Play the part of <span className="font-normal text-muted-foreground">(optional)</span></Label>
+          {asPerson ? (
+            <div className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-[13px]">
+              <span>{asPerson.name}{asPerson.company ? ` · ${asPerson.company}` : ""}</span>
+              <button type="button" className="text-[12px] text-muted-foreground hover:text-foreground" onClick={() => setAsPerson(null)}>Change</button>
+            </div>
+          ) : (
+            <>
+              <Input value={personQuery} onChange={(e) => setPersonQuery(e.target.value)} placeholder="Search People by name or company" />
+              {peopleRows.length > 0 && (
+                <div className="max-h-40 overflow-y-auto rounded-md border border-border">
+                  {peopleRows.map((p) => (
+                    <button key={p.id} type="button" className="block w-full px-3 py-1.5 text-left text-[13px] hover:bg-muted"
+                      onClick={() => { setAsPerson({ id: p.id, name: `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() || `#${p.id}`, company: p.company ?? null }); setPersonQuery(""); }}>
+                      {`${p.firstName ?? ""} ${p.lastName ?? ""}`.trim()}<span className="text-muted-foreground">{p.title ? ` · ${p.title}` : ""}{p.company ? ` · ${p.company}` : ""}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+          <p className="text-[11.5px] text-muted-foreground">
+            The agent uses that person's name, role, company, research and history, so you hear the real reason for calling and questions.
+            It still rings your phone, invites your email, and writes nothing to their record.
+          </p>
+        </div>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" size="sm" onClick={onClose} disabled={call.isPending}>Cancel</Button>
-          <Button size="sm" className="gap-1.5" disabled={!number.trim() || call.isPending} onClick={() => call.mutate({ agentId: agent.id, toNumber: number.trim() })}>
+          <Button size="sm" className="gap-1.5" disabled={!number.trim() || call.isPending} onClick={() => call.mutate({ agentId: agent.id, toNumber: number.trim(), ...(asPerson ? { asProspectId: asPerson.id } : {}) })}>
             {call.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <PhoneCall className="size-3.5" />} Call me now
           </Button>
         </div>
@@ -554,6 +589,8 @@ function AgentDialog({
     plivoNumber: (agent?.plivoNumber ?? "") as string,
     secret: "",
     languageHint: agent?.languageHint ?? "",
+    // One per line (2026-10-06).
+    discoveryQuestions: (Array.isArray(agent?.discoveryQuestions) ? agent.discoveryQuestions : []).join("\n") as string,
   }));
   const set = (k: string, v: unknown) => setF((p) => ({ ...p, [k]: v }));
 
@@ -583,6 +620,7 @@ function AgentDialog({
       phoneNumber: f.phoneNumber.trim() || null,
       ...(f.secret.trim() ? { sipWebhookSecret: f.secret.trim() } : {}),
       languageHint: f.languageHint.trim() || null,
+      discoveryQuestions: f.discoveryQuestions.split("\n").map((q: string) => q.trim()).filter(Boolean).slice(0, 8),
     };
     let id: number | undefined = agent?.id;
     if (agent) await update.mutateAsync({ id: agent.id, ...payload });
@@ -715,6 +753,23 @@ function AgentDialog({
               <p className="text-[11.5px] text-muted-foreground">Only with an xAI phone number: shown once by xAI when it is registered. Required for it: calls Velocity cannot verify are rejected.</p>
             </div>
           </div>
+
+          {f.purpose === "outbound_outreach" && (
+            <div className="space-y-1.5">
+              <Label>Discovery questions <span className="font-normal text-muted-foreground">(optional, one per line, up to 8)</span></Label>
+              <textarea
+                value={f.discoveryQuestions}
+                onChange={(e) => set("discoveryQuestions", e.target.value)}
+                rows={4}
+                placeholder={"How do you run your scholarship applications today?\nWhat takes your team the most time in review season?\nWhat would you change about it if you could?"}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-[13px] outline-none focus:ring-2 focus:ring-ring"
+              />
+              <p className="text-[11.5px] text-muted-foreground">
+                The agent gives a reason for calling that is about them, asks two to four open questions one at a time (working these in when they fit),
+                connects what they say to what you offer, and only then suggests a meeting.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-1.5 sm:w-1/2">
             <Label>Language hint <span className="font-normal text-muted-foreground">(optional)</span></Label>

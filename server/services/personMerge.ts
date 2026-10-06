@@ -236,6 +236,8 @@ export const PERSON_REF_TABLES: PersonRefTable[] = [
   // so does their do-not-call entry (unique per number, not per person).
   { key: "voiceCallRequests.prospectId", table: voiceCallRequests, column: voiceCallRequests.prospectId, field: "prospectId", wsColumn: voiceCallRequests.workspaceId, idColumn: voiceCallRequests.id },
   { key: "callSuppressions.prospectId", table: callSuppressions, column: callSuppressions.prospectId, field: "prospectId", wsColumn: callSuppressions.workspaceId, idColumn: callSuppressions.id },
+  // A test call that played this person (2026-10-06).
+  { key: "voiceCalls.testAsProspectId", table: voiceCalls, column: voiceCalls.testAsProspectId, field: "testAsProspectId", wsColumn: voiceCalls.workspaceId, idColumn: voiceCalls.id },
 ];
 
 /* ── The POLYMORPHIC references — a type column plus an untyped id ─────────── */

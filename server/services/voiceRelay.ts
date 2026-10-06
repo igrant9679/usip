@@ -38,7 +38,7 @@ import { configuredProposalOwner, openSlotsForOwner, sendMeetingInvite } from ".
 import { getWorkspaceTimezone } from "./workspaceTimezone";
 import { logCallActivity, matchCallerToRecord } from "./voiceCrmLink";
 import { MAX_CALL_MS } from "./voiceGuards";
-import { buildCallInstructions, callTools, CALL_RESULTS, knowledgeToolResult, plausibleEmail, spokenTime, type CallResult } from "./voiceCallScript";
+import { buildCallInstructions, callTools, CALL_RESULTS, knowledgeToolResult, plausibleEmail, spokenTime, VOICE_REASONING, type CallResult } from "./voiceCallScript";
 import { hangupCall, plivoCreds } from "./plivo";
 import { hasKnowledge, searchKnowledge } from "./knowledgeSearch";
 import { buildPersonHistory, personIdForRecord } from "./personHistory";
@@ -80,6 +80,8 @@ export type CallContext = {
   personTz: string;
   requestId: number | null;
   plivoCallUuid: string | null;
+  /** A test call (2026-10-05): nothing is written to anyone's record or the do-not-call list. */
+  isTest: boolean;
 };
 
 /** What the session needs from the outside world. Real implementations below; tests pass fakes. */
@@ -89,8 +91,9 @@ export type SessionDeps = {
   doNotCall(ctx: CallContext): Promise<void>;
   searchKnowledge(ctx: CallContext, query: string): Promise<{ title: string; page: number | null; content: string }[]>;
   hangup(ctx: CallContext): Promise<void>;
-  finalize(ctx: CallContext, f: { transcript: string[]; result: CallResult | null; note: string | null; meetingId: number | null; answered: boolean }): Promise<void>;
+  finalize(ctx: CallContext, f: { transcript: string[]; result: CallResult | null; note: string | null; meetingId: number | null; answered: boolean; timing?: string | null }): Promise<void>;
   setTimeout(fn: () => void, ms: number): unknown;
+  now(): number;
   clearTimeout(t: unknown): void;
 };
 
@@ -105,6 +108,19 @@ const BOOK_FAIL: Record<string, string> = {
   no_calendar_connected: "The calendar is not connected, so you cannot book. Say the team will email times.",
   provider_error: "The calendar did not respond. Apologise and say the team will email the invite shortly.",
 };
+
+/**
+ * How long the person waited for each reply (owner report 2026-10-06: "long
+ * pauses 1-4 seconds"), from the moment they stopped talking to the first of
+ * the agent's audio, for the call log. Null with nothing measured.
+ */
+export function responseTimeSummary(ms: number[]): string | null {
+  const v = ms.filter((n) => Number.isFinite(n) && n >= 0).sort((a, b) => a - b);
+  if (!v.length) return null;
+  const median = v[Math.floor((v.length - 1) / 2)];
+  const sec = (n: number) => `${(n / 1000).toFixed(1)} s`;
+  return `Response times: typically ${sec(median)}, slowest ${sec(v[v.length - 1])}, over ${v.length} repl${v.length === 1 ? "y" : "ies"}.`;
+}
 
 export class CallSession {
   private streamId: string | null = null;
@@ -123,6 +139,9 @@ export class CallSession {
   private responseDone = false;
   private outputsSent = false;
   private timers: unknown[] = [];
+  /** When the person stopped talking, until the agent's voice starts: how long they waited. */
+  private waitingSince: number | null = null;
+  private latencies: number[] = [];
 
   constructor(private ctx: CallContext, private plivo: Sock, private xai: Sock, private deps: SessionDeps) {
     this.timers.push(deps.setTimeout(() => this.hangupNow("Call ended by the 30-minute safety cap."), MAX_CALL_MS));
@@ -140,6 +159,7 @@ export class CallSession {
           output: { format: { type: "audio/pcmu" } },
         },
         turn_detection: { type: "server_vad" },
+        reasoning: VOICE_REASONING,
         tools: this.ctx.tools,
       },
     }));
@@ -188,6 +208,9 @@ export class CallSession {
         }
         return;
       }
+      case "input_audio_buffer.speech_stopped":
+        this.waitingSince = this.deps.now();
+        return;
       case "input_audio_buffer.speech_started":
         this.speechSeen = true;
         // Barge-in: stop whatever the agent was saying.
@@ -195,6 +218,10 @@ export class CallSession {
         return;
       case "response.output_audio.delta":
       case "response.audio.delta": {
+        if (this.waitingSince != null) {
+          this.latencies.push(this.deps.now() - this.waitingSince);
+          this.waitingSince = null;
+        }
         const delta = typeof e.delta === "string" ? e.delta : "";
         for (let i = 0; i < delta.length; i += PLAY_CHUNK) {
           this.plivo.send(JSON.stringify({
@@ -332,6 +359,7 @@ export class CallSession {
       note: this.note,
       meetingId: this.meetingId,
       answered: this.answered,
+      timing: responseTimeSummary(this.latencies),
     });
   }
 
@@ -386,11 +414,22 @@ export async function loadCallContext(callRowId: number): Promise<CallContext | 
   // The person: from the request (outbound), or matched from the caller's number (inbound).
   let prospectId: number | null = null;
   let person: { name: string | null; title: string | null; company: string | null; email: string | null; tz: string | null } = { name: null, title: null, company: null, email: null, tz: null };
+  let historyFor: number | null = null;
   if (row.testedByUserId) {
     // A test call (2026-10-05): the person on the line is the tester, so a
-    // booking invites them and no prospect's details or history are used.
+    // booking invites them. Playing a chosen person (2026-10-06), the agent
+    // gets that person's name, role, company, research and history, but the
+    // email stays the tester's and prospectId stays null: no meeting, note
+    // or do-not-call entry ever lands on the real person.
     const [u] = await db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, row.testedByUserId)).limit(1);
     person = { name: u?.name ?? null, title: null, company: null, email: u?.email ?? null, tz: null };
+    if (row.testAsProspectId) {
+      const [p] = await db.select().from(prospects).where(and(eq(prospects.id, row.testAsProspectId), eq(prospects.workspaceId, wsId))).limit(1);
+      if (p) {
+        person = { name: `${p.firstName} ${p.lastName}`.trim() || person.name, title: p.title, company: p.company, email: u?.email ?? null, tz: timezoneForRegion(p.state, p.country) };
+        historyFor = p.id;
+      }
+    }
   } else if (request) {
     prospectId = request.prospectId;
     const [p] = await db.select({ title: prospects.title, state: prospects.state, country: prospects.country }).from(prospects)
@@ -417,7 +456,7 @@ export async function loadCallContext(callRowId: number): Promise<CallContext | 
   const brand = await buildBrandContext(wsId).catch(() => "");
   const canSearch = await hasKnowledge(wsId);
   // A call-in matched to a contact or lead still finds the person behind it (2026-10-05).
-  const historyPersonId = prospectId ?? (await personIdForRecord(wsId, row.relatedType, row.relatedId));
+  const historyPersonId = row.testedByUserId ? historyFor : prospectId ?? (await personIdForRecord(wsId, row.relatedType, row.relatedId));
   const history = historyPersonId ? await buildPersonHistory(wsId, historyPersonId) : null;
   const instructions = buildCallInstructions({
     direction,
@@ -431,6 +470,7 @@ export async function loadCallContext(callRowId: number): Promise<CallContext | 
     canBook,
     canSearch,
     history,
+    discoveryQuestions: Array.isArray(agent.discoveryQuestions) ? (agent.discoveryQuestions as unknown[]).map(String) : null,
   });
 
   return {
@@ -455,6 +495,7 @@ export async function loadCallContext(callRowId: number): Promise<CallContext | 
     personTz: person.tz ?? wsTz,
     requestId: request?.id ?? null,
     plivoCallUuid: row.plivoCallUuid,
+    isTest: !!row.testedByUserId,
   };
 }
 
@@ -494,7 +535,8 @@ export const realDeps: SessionDeps = {
         relatedId: ctx.prospectId,
         contactName: name,
         company: ctx.personCompany,
-        title: `${ctx.companyName} <> ${ctx.personCompany || name} intro`.slice(0, 200),
+        // A test call's meeting is real (it is on the owner's calendar), so it says it is a test.
+        title: `${ctx.isTest ? "[Test] " : ""}${ctx.companyName} <> ${ctx.personCompany || name} intro`.slice(0, 200),
         status: "proposed",
         durationMin: 30,
         source: "ai",
@@ -509,6 +551,7 @@ export const realDeps: SessionDeps = {
   },
 
   async doNotCall(ctx) {
+    if (ctx.isTest) return; // a test: nobody is added to the do-not-call list
     if (ctx.otherNumber) await suppressNumber(ctx.workspaceId, ctx.otherNumber, "asked_on_call", ctx.prospectId, null);
   },
 
@@ -528,6 +571,7 @@ export const realDeps: SessionDeps = {
   },
 
   setTimeout: (fn, ms) => setTimeout(fn, ms),
+  now: () => Date.now(),
   clearTimeout: (t) => clearTimeout(t as NodeJS.Timeout),
 };
 
@@ -543,7 +587,7 @@ const RESULT_TITLE: Record<string, string> = {
 /** Write what happened onto the call row, the request, the timeline, and tell the owner. */
 export async function finalizeRelayedCall(
   ctx: CallContext,
-  f: { transcript: string[]; result: CallResult | null; note: string | null; meetingId: number | null; answered: boolean },
+  f: { transcript: string[]; result: CallResult | null; note: string | null; meetingId: number | null; answered: boolean; timing?: string | null },
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -554,6 +598,7 @@ export async function finalizeRelayedCall(
   const outcome = [
     f.result ? `Result: ${RESULT_TITLE[f.result] ?? f.result}` : null,
     f.note,
+    f.timing,
     f.transcript.length ? f.transcript.join("\n") : null,
   ].filter(Boolean).join("\n\n") || null;
   // The hangup callback may already have set voicemail/no_answer/busy: keep it.
@@ -577,7 +622,7 @@ export async function finalizeRelayedCall(
       workspaceId: ctx.workspaceId,
       userId: notifyUserId,
       kind: "system",
-      title: `AI call ${ctx.direction === "outbound" ? "to" : "from"} ${who}: ${RESULT_TITLE[f.result ?? "no_decision"] ?? "finished"}`,
+      title: `${ctx.isTest ? "Test call: " : ""}AI call ${ctx.direction === "outbound" ? "to" : "from"} ${who}: ${RESULT_TITLE[f.result ?? "no_decision"] ?? "finished"}`,
       body: f.result === "booked"
         ? `${ctx.agentName} booked a meeting with ${who}. The invite is out; it counts once they accept.`
         : `${ctx.agentName} finished a call with ${who}.${f.note ? ` Note: ${f.note}` : ""}`,

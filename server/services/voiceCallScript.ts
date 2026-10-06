@@ -23,6 +23,15 @@
  */
 
 export const CALL_RESULTS = ["booked", "not_interested", "call_back", "wrong_person", "do_not_call", "no_decision"] as const;
+
+/**
+ * No "thinking" pass before each reply (owner report 2026-10-06: "long
+ * pauses 1-4 seconds in responses"). xAI's realtime sessions reason at
+ * effort "high" unless told otherwise, and its docs give "none" as the
+ * lower-latency setting. A phone conversation needs the quick answer; the
+ * tools (times, booking, knowledge search) do the heavy lifting.
+ */
+export const VOICE_REASONING = { effort: "none" } as const;
 export type CallResult = (typeof CALL_RESULTS)[number];
 
 /** Clean one CRM value for the prompt: one line, printable, capped. */
@@ -72,6 +81,8 @@ export type ScriptInput = {
   canSearch?: boolean;
   /** What the team already knows about the person (personHistory.ts), already cleaned. */
   history?: string | null;
+  /** The agent's discovery questions (Settings), worked in one at a time. */
+  discoveryQuestions?: string[] | null;
 };
 
 export function buildCallInstructions(s: ScriptInput): string {
@@ -84,16 +95,39 @@ export function buildCallInstructions(s: ScriptInput): string {
     s.direction === "outbound"
       ? `You are ${agent}, an AI assistant placing a phone call on behalf of ${forWhom}. ` +
         `Your FIRST sentence, once the person answers, must say your name, that you are an AI assistant calling for ${forWhom}, ` +
-        `and that the call is transcribed. Then ask whether now is a good moment for a quick question.`
+        `and that the call is transcribed. Then give your reason for calling (step 1 below) and ask whether they have a couple of minutes.`
       : `You are ${agent}, an AI assistant answering calls for ${forWhom}. ` +
         `Greet the caller, say you are an AI assistant for ${forWhom} and that the call is transcribed, and ask how you can help.`;
 
-  const goal = s.canBook
-    ? `Your goal is to book a 30-minute intro meeting with ${owner || "the team"}. ` +
-      `Call find_meeting_times to get the open times; offer two or three of them by their spoken description; never suggest a time that tool did not give you. ` +
+  const booking = s.canBook
+    ? `To book: call find_meeting_times to get the open times; offer two or three of them by their spoken description; never suggest a time that tool did not give you. ` +
       `When the person picks one, confirm the email address the invite should go to: read the one on file back to them, or if they give a new one, spell it back letter by letter. ` +
       `Then call book_meeting with that option's letter and the email. Tell them the calendar invite is on its way and that they need to accept it.`
     : `${owner || "The team"} has no calendar connected, so you cannot book. Find out whether they would like a meeting and a good time to reach them, and say ${owner || "someone"} will follow up.`;
+
+  /**
+   * A consultative call, not a booking script (owner ask 2026-10-06: "more
+   * interrogative and reference ... why the company called them and
+   * relevance of the services/products to their benefits"): a reason for
+   * calling that is about THEM, discovery questions one at a time, then what
+   * it means for them, and only then the meeting.
+   */
+  const questions = (s.discoveryQuestions ?? []).map((q) => cleanFact(q, 200)).filter(Boolean).slice(0, 8);
+  const goal =
+    s.direction === "outbound"
+      ? [
+          `How the call goes:`,
+          `1. Reason for calling: in one sentence, say why you are calling THEM, tying something specific to them (the notes from your team, what your team knows about them, or their role, company and industry) to what we do. ` +
+            `Never invent a reason or a fact about them; if you know nothing specific, say you work with teams like theirs on what we do, in a phrase.`,
+          `2. Discovery: ask open questions, one at a time, to understand their situation: how they handle it today, what gets in the way, what that costs them, what they would change. ` +
+            (questions.length ? `Work in these questions, in your own words, when they fit:\n${questions.map((q, i) => `   ${i + 1}. ${q}`).join("\n")}\n   ` : "") +
+            `Listen, acknowledge what they said in a few words, and ask a follow-up when an answer opens a door. Ask two to four questions before you suggest a meeting, unless they ask to meet sooner.`,
+          `3. Relevance: connect what they told you to one or two specific outcomes our products or services deliver (from the product knowledge${s.canSearch ? "; use search_knowledge for specifics" : ""}). ` +
+            `Talk about what it means for them, not features. Never claim a result, figure or client you were not given.`,
+          `4. Next step: when they have described a need or shown interest, suggest a 30-minute meeting with ${owner || "the team"} to go deeper. ${booking}`,
+          `If they are busy, offer to call back at a better time. Do not push past a clear no.`,
+        ].join("\n")
+      : `If they would like to talk further, offer a 30-minute meeting with ${owner || "the team"}. ${booking}`;
 
   const rules = [
     `Never claim or imply that you are human.`,

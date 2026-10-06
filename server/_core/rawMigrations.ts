@@ -4451,6 +4451,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0198: a consultative phone agent, and testing it as a real person ────
+  // Owner ask 2026-10-06: the agent should be "more interrogative and
+  // reference ... why the company called them and relevance of the
+  // services/products to their benefits". Agents get discovery questions; a
+  // test call can play a People record (their research and history, the
+  // tester's phone and email) so that behaviour can be heard before it is
+  // used on a prospect.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0198_voice_discovery.sql",
+    statements: [
+      "ALTER TABLE `voice_agents` ADD COLUMN `discoveryQuestions` json NULL",
+      "ALTER TABLE `voice_calls` ADD COLUMN `testAsProspectId` int NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

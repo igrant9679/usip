@@ -245,10 +245,20 @@ export const aiCallsRouter = router({
    * so a booking invites them and nothing about a prospect is used.
    */
   testCall: adminWsProcedure
-    .input(z.object({ agentId: z.number().int(), toNumber: z.string().max(40) }))
+    .input(z.object({
+      agentId: z.number().int(),
+      toNumber: z.string().max(40),
+      /** Play this person (2026-10-06): their role, company, research and history; your phone and email. */
+      asProspectId: z.number().int().positive().optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       const wsId = ctx.workspace.id;
+      if (input.asProspectId) {
+        const [p] = await db.select({ id: prospects.id }).from(prospects)
+          .where(and(eq(prospects.id, input.asProspectId), eq(prospects.workspaceId, wsId))).limit(1);
+        if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "That person is not in this workspace." });
+      }
       const [agent] = await db.select().from(voiceAgents)
         .where(and(eq(voiceAgents.id, input.agentId), eq(voiceAgents.workspaceId, wsId))).limit(1);
       if (!agent || agent.purpose !== "outbound_outreach" || !agent.plivoNumber) {
@@ -280,6 +290,7 @@ export const aiCallsRouter = router({
         status: "queued",
         userId: ctx.user.id,
         testedByUserId: ctx.user.id,
+        testAsProspectId: input.asProspectId ?? null,
         startedAt: new Date(),
       });
       const rowId = Number((ins as any)[0]?.insertId ?? (ins as any)?.insertId ?? 0);
@@ -292,7 +303,7 @@ export const aiCallsRouter = router({
         await db.update(voiceCalls).set({ status: "failed", outcome: msg.slice(0, 500), endedAt: new Date(), durationSec: 0 }).where(eq(voiceCalls.id, rowId));
         throw new TRPCError({ code: "BAD_REQUEST", message: msg });
       }
-      await recordAudit({ workspaceId: wsId, actorUserId: ctx.user.id, action: "create", entityType: "ai_test_call", entityId: rowId, after: { agentId: agent.id, to } });
+      await recordAudit({ workspaceId: wsId, actorUserId: ctx.user.id, action: "create", entityType: "ai_test_call", entityId: rowId, after: { agentId: agent.id, to, asProspectId: input.asProspectId ?? null } });
       return { callId: rowId, to };
     }),
 

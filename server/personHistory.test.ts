@@ -71,7 +71,8 @@ describe("personIdForRecord: the person behind a caller's CRM match", () => {
   });
   it("the Plivo agent's call-ins use it too", () => {
     const relay = readFileSync(path.join(__dirname, "services", "voiceRelay.ts"), "utf8");
-    expect(relay).toContain("const historyPersonId = prospectId ?? (await personIdForRecord(wsId, row.relatedType, row.relatedId));");
+    // 2026-10-06: a test call uses the person it plays (historyFor), never the call row.
+    expect(relay).toContain("const historyPersonId = row.testedByUserId ? historyFor : prospectId ?? (await personIdForRecord(wsId, row.relatedType, row.relatedId));");
     expect(relay).toContain("const history = historyPersonId ? await buildPersonHistory(wsId, historyPersonId) : null;");
   });
 });

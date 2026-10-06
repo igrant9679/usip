@@ -34,10 +34,12 @@ const ctx = (over: Partial<CallContext> = {}): CallContext => ({
   personTz: "America/Chicago",
   requestId: 3,
   plivoCallUuid: "uuid-1",
+  isTest: false,
   ...over,
 });
 
 type Timer = { fn: () => void; ms: number; cleared: boolean };
+const clock = { t: 1_000_000 };
 
 function harness(c: CallContext = ctx(), depOver: Partial<SessionDeps> = {}) {
   const plivoOut: any[] = [];
@@ -54,6 +56,7 @@ function harness(c: CallContext = ctx(), depOver: Partial<SessionDeps> = {}) {
     hangup: vi.fn(async () => {}),
     finalize: vi.fn(async () => {}),
     setTimeout: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t; },
+    now: () => clock.t,
     clearTimeout: (t) => { (t as Timer).cleared = true; },
     ...depOver,
   };
@@ -80,7 +83,7 @@ async function toolCall(h: ReturnType<typeof harness>, name: string, args: unkno
 }
 
 describe("session setup and audio", () => {
-  it("configures G.711 μ-law both ways, server VAD and the tools", () => {
+  it("configures G.711 μ-law both ways, server VAD, no thinking pass, and the tools", () => {
     const h = harness();
     h.s.onXaiOpen();
     expect(h.xaiOut[0]).toEqual({
@@ -90,6 +93,8 @@ describe("session setup and audio", () => {
         instructions: "INSTR",
         audio: { input: { format: { type: "audio/pcmu" } }, output: { format: { type: "audio/pcmu" } } },
         turn_detection: { type: "server_vad" },
+        // No thinking pass before each reply (owner report 2026-10-06: long pauses).
+        reasoning: { effort: "none" },
         tools: [{ type: "function", name: "end_call" }],
       },
     });

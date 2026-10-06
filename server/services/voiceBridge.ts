@@ -19,7 +19,7 @@ import { activeOwnerOrNull } from "../_core/activeMembers";
 import { logCallActivity } from "./voiceCrmLink";
 import { buildBrandContext } from "./brandContext";
 import { hasKnowledge, searchKnowledge } from "./knowledgeSearch";
-import { historyBlock, knowledgeSearchRule, knowledgeSearchTool, knowledgeToolResult } from "./voiceCallScript";
+import { historyBlock, knowledgeSearchRule, knowledgeSearchTool, knowledgeToolResult, VOICE_REASONING } from "./voiceCallScript";
 import { buildPersonHistory, personIdForRecord } from "./personHistory";
 import { ToolTurns } from "./voiceToolTurns";
 // Hard safety cap — hang up runaway calls (also caps vendor spend at $0.05/min).
@@ -181,6 +181,7 @@ export function answerInboundCall(opts: BridgeOpts): void {
         // documents, the agent can also search them mid-call (2026-10-05).
         instructions: [instructions, historyBlock(history), canSearch ? knowledgeSearchRule(ownerName) : ""].filter(Boolean).join("\n\n"),
         turn_detection: { type: "server_vad" },
+        reasoning: VOICE_REASONING,
         ...(canSearch ? { tools: [knowledgeSearchTool()] } : {}),
       };
       if (agent.languageHint) {
