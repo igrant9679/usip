@@ -26,6 +26,7 @@ import { toE164 } from "@shared/phoneFormat";
 import { admitInboundCall } from "./services/voiceGuards";
 import { matchCallerToRecord } from "./services/voiceCrmLink";
 import { finishRequestForCall, startRelay } from "./services/voiceRelay";
+import { agentNumberMatching } from "@shared/voiceCapacity";
 
 const digits = (s: unknown) => String(s ?? "").replace(/\D/g, "");
 
@@ -77,7 +78,8 @@ export function registerPlivoWebhookRoutes(app: Express): void {
       // Stored as +E.164 (Plivo sends "15714798700"); shown with formatPhone.
       const from = toE164(String(b.From ?? ""))?.slice(0, 32) ?? null;
       const agents = await db.select().from(voiceAgents).where(and(eq(voiceAgents.workspaceId, ws), eq(voiceAgents.status, "active")));
-      const agent = agents.find((a) => a.plivoNumber && digits(a.plivoNumber) === to) ?? null;
+      // Any of the agent's numbers (several per agent since 2026-10-06).
+      const agent = agents.find((a) => agentNumberMatching(a, to)) ?? null;
       if (!agent) { sendXml(res, hangupXml()); return; }
 
       // Plivo retries an answer it thinks failed: one row per call.
@@ -97,7 +99,7 @@ export function registerPlivoWebhookRoutes(app: Express): void {
         provider: "plivo",
         plivoCallUuid: callUuid || null,
         fromNumber: from,
-        toNumber: agent.plivoNumber,
+        toNumber: agentNumberMatching(agent, to) ?? agent.plivoNumber,
         status: admission.ok ? "ringing" : "failed",
         outcome: admission.ok ? null : admission.reason,
         relatedType: match?.relatedType ?? null,

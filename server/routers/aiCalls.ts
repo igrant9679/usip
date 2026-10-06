@@ -38,6 +38,7 @@ import { cleanNotes } from "../services/voiceCallScript";
 import { placeCall, plivoCreds, plivoUrls } from "../services/plivo";
 import { admitInboundCall } from "../services/voiceGuards";
 import { OUTBOUND_TIME_LIMIT_SEC } from "../services/aiCallDialer";
+import { agentNumberMatching } from "@shared/voiceCapacity";
 
 /** Test calls per workspace in any 24 hours. */
 export const MAX_TEST_CALLS_PER_DAY = 10;
@@ -250,6 +251,8 @@ export const aiCallsRouter = router({
       toNumber: z.string().max(40),
       /** Play this person (2026-10-06): their role, company, research and history; your phone and email. */
       asProspectId: z.number().int().positive().optional(),
+      /** One of the agent's numbers (several since 2026-10-06); its main number when omitted. */
+      fromNumber: z.string().max(32).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
@@ -265,6 +268,8 @@ export const aiCallsRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an outreach agent with a Plivo number." });
       }
       if (agent.status !== "active") throw new TRPCError({ code: "BAD_REQUEST", message: `${agent.name} is paused.` });
+      const from = input.fromNumber ? agentNumberMatching(agent, input.fromNumber) : agent.plivoNumber;
+      if (!from) throw new TRPCError({ code: "BAD_REQUEST", message: `That number is not one of ${agent.name}'s.` });
       const to = callableNumber(input.toNumber);
       if (!to) throw new TRPCError({ code: "BAD_REQUEST", message: "Enter a North American phone number." });
       const [dnc] = await db.select({ id: callSuppressions.id }).from(callSuppressions)
@@ -286,7 +291,7 @@ export const aiCallsRouter = router({
         direction: "outbound",
         provider: "plivo",
         toNumber: to,
-        fromNumber: agent.plivoNumber,
+        fromNumber: from,
         status: "queued",
         userId: ctx.user.id,
         testedByUserId: ctx.user.id,
@@ -297,14 +302,14 @@ export const aiCallsRouter = router({
       const [ws] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, wsId)).limit(1);
       const urls = plivoUrls(wsId, rowId);
       try {
-        await placeCall(creds, { from: agent.plivoNumber, to, answerUrl: urls.answer, hangupUrl: urls.hangup, timeLimit: OUTBOUND_TIME_LIMIT_SEC, callerName: ws?.name ?? undefined });
+        await placeCall(creds, { from, to, answerUrl: urls.answer, hangupUrl: urls.hangup, timeLimit: OUTBOUND_TIME_LIMIT_SEC, callerName: ws?.name ?? undefined });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         await db.update(voiceCalls).set({ status: "failed", outcome: msg.slice(0, 500), endedAt: new Date(), durationSec: 0 }).where(eq(voiceCalls.id, rowId));
         throw new TRPCError({ code: "BAD_REQUEST", message: msg });
       }
-      await recordAudit({ workspaceId: wsId, actorUserId: ctx.user.id, action: "create", entityType: "ai_test_call", entityId: rowId, after: { agentId: agent.id, to, asProspectId: input.asProspectId ?? null } });
-      return { callId: rowId, to };
+      await recordAudit({ workspaceId: wsId, actorUserId: ctx.user.id, action: "create", entityType: "ai_test_call", entityId: rowId, after: { agentId: agent.id, to, from, asProspectId: input.asProspectId ?? null } });
+      return { callId: rowId, to, from };
     }),
 
   /* ── do-not-call list ───────────────────────────────────────────────── */

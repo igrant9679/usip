@@ -20,7 +20,7 @@
  * "team members receive call backs; the agent answers on their behalf".
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
 import { users, voiceAgents, voiceCalls, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -30,6 +30,16 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { recordAudit } from "../audit";
 import { assignNumber, ensureApplication, getAccount, listNumbers, plivoCreds } from "../services/plivo";
+import {
+  agentNumbers,
+  clampVoiceLimits,
+  DEFAULT_VOICE_LIMITS,
+  MAX_CALLS_PER_NUMBER_PER_DAY,
+  MAX_NUMBERS_PER_AGENT,
+  numberFields,
+  VOICE_LIMIT_CEILINGS,
+} from "@shared/voiceCapacity";
+import { formatPhone } from "@shared/phoneFormat";
 
 export const XAI_API_BASE = "https://api.x.ai/v1";
 // Pinned by name (owner 2026-10-04: "Go with Think Fast 2.0"). grok-voice-latest
@@ -130,7 +140,15 @@ export const voiceAgentsRouter = router({
   plivoStatus: workspaceProcedure.query(async ({ ctx }) => {
     const db = await requireDb();
     const [row] = await db
-      .select({ authId: workspaceSettings.plivoAuthId, enc: workspaceSettings.plivoAuthTokenEnc, appId: workspaceSettings.plivoAppId, aiCallsPausedAt: workspaceSettings.aiCallsPausedAt })
+      .select({
+        authId: workspaceSettings.plivoAuthId,
+        enc: workspaceSettings.plivoAuthTokenEnc,
+        appId: workspaceSettings.plivoAppId,
+        aiCallsPausedAt: workspaceSettings.aiCallsPausedAt,
+        maxConcurrent: workspaceSettings.aiCallsMaxConcurrent,
+        dialsPerMinute: workspaceSettings.aiCallsDialsPerMinute,
+        dailyMinutes: workspaceSettings.aiCallsDailyMinutes,
+      })
       .from(workspaceSettings)
       .where(eq(workspaceSettings.workspaceId, ctx.workspace.id))
       .limit(1);
@@ -141,8 +159,43 @@ export const voiceAgentsRouter = router({
       tokenMasked: maskSecret(token),
       appConnected: !!row?.appId,
       aiCallsPausedAt: row?.aiCallsPausedAt ?? null,
+      // Calling capacity (2026-10-06).
+      limits: clampVoiceLimits(row),
+      defaults: DEFAULT_VOICE_LIMITS,
+      ceilings: VOICE_LIMIT_CEILINGS,
+      perNumberPerDay: MAX_CALLS_PER_NUMBER_PER_DAY,
     };
   }),
+
+  /**
+   * Calling capacity (owner ask 2026-10-06: "make more outbound calls from a
+   * particular workspace"): calls at once, new calls a minute, agent minutes
+   * a day. Admins only, never past the ceilings, and audited: these limits
+   * are what keeps a mistake from running up the xAI and Plivo bills.
+   */
+  setAiCallLimits: adminWsProcedure
+    .input(z.object({
+      maxConcurrent: z.number().int().min(1).max(VOICE_LIMIT_CEILINGS.maxConcurrent),
+      dialsPerMinute: z.number().int().min(1).max(VOICE_LIMIT_CEILINGS.dialsPerMinute),
+      dailyMinutes: z.number().int().min(1).max(VOICE_LIMIT_CEILINGS.dailyMinutes),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const [before] = await db.select({
+        maxConcurrent: workspaceSettings.aiCallsMaxConcurrent,
+        dialsPerMinute: workspaceSettings.aiCallsDialsPerMinute,
+        dailyMinutes: workspaceSettings.aiCallsDailyMinutes,
+      }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id)).limit(1);
+      if (!before) await db.insert(workspaceSettings).values({ workspaceId: ctx.workspace.id });
+      const limits = clampVoiceLimits(input);
+      await db.update(workspaceSettings).set({
+        aiCallsMaxConcurrent: limits.maxConcurrent,
+        aiCallsDialsPerMinute: limits.dialsPerMinute,
+        aiCallsDailyMinutes: limits.dailyMinutes,
+      }).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "ai_call_limits", entityId: null, before: clampVoiceLimits(before), after: limits });
+      return { ok: true, limits };
+    }),
 
   /**
    * AI calls' own switch (owner ask 2026-10-05): while paused, approved calls
@@ -208,41 +261,58 @@ export const voiceAgentsRouter = router({
   }),
 
   /**
-   * Give an agent a Plivo number: Velocity creates (or updates) the
-   * workspace's Plivo application, points the number at it, and records the
-   * number on the agent. Calls to it are answered by this agent; approved AI
-   * calls are placed from it. null takes the number off the agent.
+   * The agent's Plivo numbers, main number first (several per agent since
+   * 2026-10-06, so a workspace can make more calls: each number places up to
+   * MAX_CALLS_PER_NUMBER_PER_DAY). Velocity points each new number at the
+   * workspace's Plivo application and takes it off any other agent: one agent
+   * answers each number. An empty list takes them all off this agent.
    */
-  connectPlivoNumber: adminWsProcedure
-    .input(z.object({ agentId: z.number().int(), number: z.string().max(32).nullable() }))
+  setPlivoNumbers: adminWsProcedure
+    .input(z.object({ agentId: z.number().int(), numbers: z.array(z.string().max(32)).max(MAX_NUMBERS_PER_AGENT) }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       const [agent] = await db.select().from(voiceAgents)
         .where(and(eq(voiceAgents.id, input.agentId), eq(voiceAgents.workspaceId, ctx.workspace.id))).limit(1);
       if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
-      if (input.number === null) {
-        await db.update(voiceAgents).set({ plivoNumber: null }).where(eq(voiceAgents.id, agent.id));
-        return { ok: true, number: null };
+      const before = agentNumbers(agent);
+      const want = agentNumbers({ plivoExtraNumbers: input.numbers });
+      if (!want.length) {
+        await db.update(voiceAgents).set(numberFields([])).where(eq(voiceAgents.id, agent.id));
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "voice_agent", entityId: agent.id, before: { plivoNumbers: before }, after: { plivoNumbers: [] } });
+        return { ok: true, numbers: [] as string[] };
       }
       const creds = await plivoCreds(ctx.workspace.id);
       if (!creds) throw new TRPCError({ code: "BAD_REQUEST", message: "Connect Plivo first." });
-      const want = input.number.replace(/\D/g, "");
+      const digitsOf = (n: string) => n.replace(/\D/g, "");
       try {
-        const owned = (await listNumbers(creds)).find((n) => n.number.replace(/\D/g, "") === want);
-        if (!owned) throw new TRPCError({ code: "BAD_REQUEST", message: "That number is not on this Plivo account." });
+        const owned = new Map((await listNumbers(creds)).map((n) => [digitsOf(n.number), n.number]));
+        const numbers = want.map((n) => {
+          const o = owned.get(digitsOf(n));
+          if (!o) throw new TRPCError({ code: "BAD_REQUEST", message: `${formatPhone(n)} is not on this Plivo account.` });
+          return o;
+        });
         const [s] = await db.select({ appId: workspaceSettings.plivoAppId }).from(workspaceSettings)
           .where(eq(workspaceSettings.workspaceId, ctx.workspace.id)).limit(1);
         const appId = await ensureApplication(ctx.workspace.id, creds, s?.appId ?? null);
         if (appId !== s?.appId) {
           await db.update(workspaceSettings).set({ plivoAppId: appId }).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
         }
-        await assignNumber(creds, owned.number, appId);
+        const had = new Set(before.map(digitsOf));
+        for (const n of numbers) if (!had.has(digitsOf(n))) await assignNumber(creds, n, appId);
         // One agent per number: it would otherwise be unclear who answers.
-        await db.update(voiceAgents).set({ plivoNumber: null })
-          .where(and(eq(voiceAgents.workspaceId, ctx.workspace.id), eq(voiceAgents.plivoNumber, owned.number)));
-        await db.update(voiceAgents).set({ plivoNumber: owned.number }).where(eq(voiceAgents.id, agent.id));
-        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "voice_agent", entityId: agent.id, after: { plivoNumber: owned.number } });
-        return { ok: true, number: owned.number };
+        const taking = new Set(numbers.map(digitsOf));
+        const others = await db.select().from(voiceAgents)
+          .where(and(eq(voiceAgents.workspaceId, ctx.workspace.id), ne(voiceAgents.id, agent.id)));
+        for (const o of others) {
+          const theirs = agentNumbers(o);
+          const kept = theirs.filter((n) => !taking.has(digitsOf(n)));
+          if (kept.length !== theirs.length) {
+            await db.update(voiceAgents).set(numberFields(kept)).where(and(eq(voiceAgents.id, o.id), eq(voiceAgents.workspaceId, ctx.workspace.id)));
+          }
+        }
+        await db.update(voiceAgents).set(numberFields(numbers)).where(eq(voiceAgents.id, agent.id));
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "voice_agent", entityId: agent.id, before: { plivoNumbers: before }, after: { plivoNumbers: numbers } });
+        return { ok: true, numbers };
       } catch (e) {
         if (e instanceof TRPCError) throw e;
         throw new TRPCError({ code: "BAD_REQUEST", message: e instanceof Error ? e.message : String(e) });

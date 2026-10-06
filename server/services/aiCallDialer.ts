@@ -11,24 +11,30 @@
  *   - the number is not on the do-not-call list;
  *   - the agent is active and has a Plivo number;
  *   - the spend limits allow another call (voiceGuards: calls at once,
- *     minutes per day), the number has not made its calls for the day, and
- *     at most two calls start per workspace per minute.
+ *     minutes per day), one of the agent's numbers has calls left for the
+ *     day, and the workspace has not started its calls for this minute.
  * Otherwise the row stays approved, with the reason it is waiting.
+ *
+ * More calls (2026-10-06): an agent may hold several numbers, and each call
+ * goes out from the best one (shared/voiceCapacity.ts pickFromNumber: the
+ * number this person was last called from, else a local one, else the
+ * least used). The workspace limits are an admin's, up to fixed ceilings.
  *
  * Every call carries a carrier-side time limit, so Plivo ends it even if
  * Velocity is gone.
  */
-import { and, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { callSuppressions, voiceAgents, voiceCallRequests, voiceCalls, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { isWithinCallingHours } from "@shared/callingHours";
 import { admitInboundCall } from "./voiceGuards";
+import { agentNumbers, clampVoiceLimits, DEFAULT_VOICE_LIMITS, MAX_CALLS_PER_NUMBER_PER_DAY, pickFromNumber } from "@shared/voiceCapacity";
 import { PlivoError, placeCall, plivoCreds, plivoUrls } from "./plivo";
 
-/** New calls started per workspace per run (runs every minute). */
-export const MAX_DIALS_PER_MINUTE_PER_WORKSPACE = 2;
+/** New calls started per workspace per run (runs every minute), unless an admin changed it. */
+export const MAX_DIALS_PER_MINUTE_PER_WORKSPACE = DEFAULT_VOICE_LIMITS.dialsPerMinute;
 /** Calls one Plivo number places in 24 hours: carriers flag busy new numbers as spam. */
-export const MAX_CALLS_PER_NUMBER_PER_DAY = 100;
+export { MAX_CALLS_PER_NUMBER_PER_DAY };
 /** Plivo hangs up at this point (seconds from answer), whatever happens to Velocity. */
 export const OUTBOUND_TIME_LIMIT_SEC = 20 * 60;
 
@@ -37,7 +43,7 @@ export const WAIT = {
   noPlivo: "Waiting: Plivo is not connected (Settings → Voice agents).",
   hours: "Waiting for calling hours: 9 AM–5 PM weekdays, their time.",
   agent: "Waiting: the agent is paused or has no Plivo number.",
-  numberDay: `Waiting: this number has placed its ${MAX_CALLS_PER_NUMBER_PER_DAY} calls for today.`,
+  numberDay: `Waiting: the agent's numbers have each placed their ${MAX_CALLS_PER_NUMBER_PER_DAY} calls for today. Add a number to the agent to make more.`,
 } as const;
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -71,7 +77,12 @@ export async function dialWorkspace(db: Db, ws: number, nowMs: number): Promise<
 
   // AI calls' own switch (2026-10-05), not Pause all outbound: every call
   // here was approved by a person, and email can stay held while calls run.
-  const [settings] = await db.select({ aiCallsPausedAt: workspaceSettings.aiCallsPausedAt }).from(workspaceSettings)
+  const [settings] = await db.select({
+    aiCallsPausedAt: workspaceSettings.aiCallsPausedAt,
+    maxConcurrent: workspaceSettings.aiCallsMaxConcurrent,
+    dialsPerMinute: workspaceSettings.aiCallsDialsPerMinute,
+    dailyMinutes: workspaceSettings.aiCallsDailyMinutes,
+  }).from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, ws)).limit(1);
   if (settings?.aiCallsPausedAt) {
     for (const r of approved) await waitWith(db, r.id, r.statusReason, WAIT.paused);
@@ -87,10 +98,23 @@ export async function dialWorkspace(db: Db, ws: number, nowMs: number): Promise<
   const agents = await db.select().from(voiceAgents).where(and(eq(voiceAgents.workspaceId, ws), inArray(voiceAgents.id, agentIds)));
   const agentById = new Map(agents.map((a) => [a.id, a]));
   const [wsRow] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, ws)).limit(1);
+  const limits = clampVoiceLimits(settings);
+
+  // Calls each number placed in the last 24 hours, kept up to date as this run dials.
+  const usedToday: Record<string, number> = {};
+  const usage = await db.select({ fromNumber: voiceCalls.fromNumber, n: sql<number>`count(*)` }).from(voiceCalls).where(and(
+    eq(voiceCalls.workspaceId, ws),
+    eq(voiceCalls.direction, "outbound"),
+    gte(voiceCalls.startedAt, new Date(nowMs - 24 * 60 * 60 * 1000)),
+  )).groupBy(voiceCalls.fromNumber);
+  for (const u of usage) {
+    const d = String(u.fromNumber ?? "").replace(/\D/g, "");
+    if (d) usedToday[d] = (usedToday[d] ?? 0) + Number(u.n);
+  }
 
   let dialed = 0;
   for (const r of approved) {
-    if (dialed >= MAX_DIALS_PER_MINUTE_PER_WORKSPACE) break;
+    if (dialed >= limits.dialsPerMinute) break;
     if (!isWithinCallingHours(nowMs, r.timezone)) { await waitWith(db, r.id, r.statusReason, WAIT.hours); continue; }
 
     const [dnc] = await db.select({ id: callSuppressions.id }).from(callSuppressions)
@@ -102,20 +126,21 @@ export async function dialWorkspace(db: Db, ws: number, nowMs: number): Promise<
     }
 
     const agent = agentById.get(r.agentId);
-    if (!agent || agent.status !== "active" || agent.purpose !== "outbound_outreach" || !agent.plivoNumber) {
+    const numbers = agentNumbers(agent);
+    if (!agent || agent.status !== "active" || agent.purpose !== "outbound_outreach" || !numbers.length) {
       await waitWith(db, r.id, r.statusReason, WAIT.agent);
       continue;
     }
 
-    const [{ n } = { n: 0 }] = await db.select({ n: sql<number>`count(*)` }).from(voiceCalls).where(and(
+    const [last] = await db.select({ lastFrom: voiceCalls.fromNumber }).from(voiceCalls).where(and(
       eq(voiceCalls.workspaceId, ws),
       eq(voiceCalls.direction, "outbound"),
-      eq(voiceCalls.fromNumber, agent.plivoNumber),
-      gte(voiceCalls.startedAt, new Date(nowMs - 24 * 60 * 60 * 1000)),
-    ));
-    if (Number(n) >= MAX_CALLS_PER_NUMBER_PER_DAY) { await waitWith(db, r.id, r.statusReason, WAIT.numberDay); continue; }
+      eq(voiceCalls.toNumber, r.toNumber),
+    )).orderBy(desc(voiceCalls.startedAt)).limit(1);
+    const from = pickFromNumber({ numbers, to: r.toNumber, lastFrom: last?.lastFrom ?? null, usedToday });
+    if (!from) { await waitWith(db, r.id, r.statusReason, WAIT.numberDay); continue; }
 
-    const admission = await admitInboundCall(ws, null, nowMs);
+    const admission = await admitInboundCall(ws, null, nowMs, limits);
     if (!admission.ok) {
       await waitWith(db, r.id, r.statusReason, `Waiting: ${admission.reason.replace(/^Not answered: /, "")}`);
       break;
@@ -133,7 +158,7 @@ export async function dialWorkspace(db: Db, ws: number, nowMs: number): Promise<
       direction: "outbound",
       provider: "plivo",
       toNumber: r.toNumber,
-      fromNumber: agent.plivoNumber,
+      fromNumber: from,
       status: "queued",
       requestId: r.id,
       relatedType: "prospect",
@@ -142,11 +167,13 @@ export async function dialWorkspace(db: Db, ws: number, nowMs: number): Promise<
       startedAt: new Date(nowMs),
     });
     const rowId = Number((ins as any)[0]?.insertId ?? (ins as any)?.insertId ?? 0);
+    const fromDigits = from.replace(/\D/g, "");
+    usedToday[fromDigits] = (usedToday[fromDigits] ?? 0) + 1;
     await db.update(voiceCallRequests).set({ voiceCallId: rowId || null }).where(eq(voiceCallRequests.id, r.id));
     const urls = plivoUrls(ws, rowId);
     try {
       await placeCall(creds, {
-        from: agent.plivoNumber,
+        from,
         to: r.toNumber,
         answerUrl: urls.answer,
         hangupUrl: urls.hangup,

@@ -13,6 +13,7 @@ import { Link, useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { AiCallQueue } from "@/components/usip/calls/AiCallQueue";
 import { formatPhone } from "@shared/phoneFormat";
+import { agentNumbers } from "@shared/voiceCapacity";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -132,7 +133,7 @@ function VoiceAgentsPanel({ accent }: { accent: string }) {
                     {a.purpose === "callback_receptionist"
                       ? `Answers for ${a.owner?.name ?? "member"}`
                       : "Outreach"}
-                    {a.plivoNumber ? ` · ${formatPhone(a.plivoNumber)}` : a.phoneNumber ? ` · ${formatPhone(a.phoneNumber)}` : ""}
+                    {a.plivoNumber ? ` · ${formatPhone(a.plivoNumber)}${agentNumbers(a).length > 1 ? ` + ${agentNumbers(a).length - 1} more` : ""}` : a.phoneNumber ? ` · ${formatPhone(a.phoneNumber)}` : ""}
                   </div>
                 </div>
               </div>

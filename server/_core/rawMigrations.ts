@@ -4467,6 +4467,19 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Calling capacity (owner ask 2026-10-06: "multiple numbers/agents so
+  // that I can make more outbound calls"): an agent's other Plivo numbers,
+  // and the workspace's adjustable AI-call limits (null = default).
+  {
+    name: "0199_voice_capacity.sql",
+    statements: [
+      "ALTER TABLE `voice_agents` ADD COLUMN `plivoExtraNumbers` json NULL",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `aiCallsMaxConcurrent` int NULL",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `aiCallsDialsPerMinute` int NULL",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `aiCallsDailyMinutes` int NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

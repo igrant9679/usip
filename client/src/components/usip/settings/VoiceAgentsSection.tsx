@@ -40,9 +40,18 @@ import {
   Plus,
   ShieldCheck,
   Trash2,
+  X,
 } from "lucide-react";
 import { isAdminRole } from "@shared/roleRank";
 import { formatPhone } from "@shared/phoneFormat";
+import {
+  agentNumbers,
+  DEFAULT_VOICE_LIMITS,
+  MAX_CALLS_PER_NUMBER_PER_DAY,
+  MAX_NUMBERS_PER_AGENT,
+  VOICE_LIMIT_CEILINGS,
+  type VoiceLimits,
+} from "@shared/voiceCapacity";
 
 type Agent = Record<string, any>;
 
@@ -104,6 +113,8 @@ export function VoiceAgentsSection() {
 
           <AiCallsSwitchCard isAdmin={isAdmin} />
 
+          <CallingCapacityCard isAdmin={isAdmin} agents={(agents.data as Agent[] | undefined) ?? []} />
+
           <Card
             title="xAI phone number (optional)"
             sub="Only for a number registered in xAI's own console. Plivo numbers need none of this: connect them above and pick one on the agent."
@@ -130,7 +141,7 @@ export function VoiceAgentsSection() {
 
           <Card
             title="Agents"
-            sub="Outreach agents place AI calls from their Plivo number, each one approved by a manager first (queue people from People → Queue AI call). Call-back agents answer calls on behalf of a team member. Any agent with a Plivo number answers calls to it."
+            sub="Outreach agents place AI calls from their Plivo numbers, each one approved by a manager first (queue people from People → Queue AI call). Call-back agents answer calls on behalf of a team member. Any agent answers calls to its numbers."
           >
             <div className="flex justify-end -mt-2">
               <Button size="sm" className="gap-1.5" onClick={() => setDialog({ open: true, agent: null })}>
@@ -315,6 +326,7 @@ function AgentRow({ a, canManage, onEdit }: { a: Agent; canManage: boolean; onEd
   const me = trpc.profile.getMe.useQuery();
   const isAdminAgent = isAdminRole(me.data?.role);
   const [testing, setTesting] = useState(false);
+  const numbers = agentNumbers(a);
   return (
     <div className="flex items-center gap-3 px-3.5 py-3">
       <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg", isCallback ? "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300" : "bg-secondary text-muted-foreground")}>
@@ -330,9 +342,9 @@ function AgentRow({ a, canManage, onEdit }: { a: Agent; canManage: boolean; onEd
         </div>
         <div className="truncate text-[12px] text-muted-foreground">
           {isCallback ? `Call-back agent${a.owner?.name ? ` · answers for ${a.owner.name}` : ""}` : "Outreach agent"}
-          {a.plivoNumber ? ` · ${formatPhone(a.plivoNumber)} (Plivo)` : ""}
+          {numbers.length ? ` · ${formatPhone(numbers[0])}${numbers.length > 1 ? ` + ${numbers.length - 1} more` : ""} (Plivo)` : ""}
           {a.phoneNumber ? ` · ${formatPhone(a.phoneNumber)} (xAI)` : ""}
-          {!a.plivoNumber && !a.phoneNumber ? " · no number yet" : ""}
+          {!numbers.length && !a.phoneNumber ? " · no number yet" : ""}
         </div>
       </div>
       {isAdminAgent && !isCallback && a.plivoNumber && a.status === "active" && (
@@ -465,10 +477,15 @@ function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent;
     { enabled: open && !asPerson && personQuery.trim().length >= 2 },
   );
   const peopleRows = (((people.data as any)?.data ?? []) as any[]);
+  // Which of the agent's numbers rings you (several per agent since 2026-10-06).
+  const numbers = agentNumbers(agent);
+  const [picked, setFrom] = useState<string>(numbers[0] ?? "");
+  // The agent's numbers can change while this stays mounted: fall back to the main one.
+  const from = numbers.includes(picked) ? picked : (numbers[0] ?? "");
   const call = trpc.aiCalls.testCall.useMutation({
     onSuccess: (r) => {
       try { localStorage.setItem(TEST_NUMBER_KEY, number.trim()); } catch { /* per-browser convenience only */ }
-      toast.success(`Calling ${formatPhone(r.to)} now from ${formatPhone(agent.plivoNumber)}`);
+      toast.success(`Calling ${formatPhone(r.to)} now from ${formatPhone(r.from)}`);
       void utils.voiceAgents.listCalls.invalidate();
       onClose();
     },
@@ -480,7 +497,7 @@ function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent;
         <DialogHeader>
           <DialogTitle>Test call from {agent.name}</DialogTitle>
           <DialogDescription>
-            The agent calls this number right away, even outside calling hours, from {formatPhone(agent.plivoNumber)}. It treats you as the person
+            The agent calls this number right away, even outside calling hours, from {formatPhone(from)}. It treats you as the person
             it is calling (your name and email), so if you agree to a meeting it books on the owner's calendar and invites you.
           </DialogDescription>
         </DialogHeader>
@@ -491,6 +508,15 @@ function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent;
             Only call your own phone. On Plivo's free trial, the number must be verified in Plivo first. Up to 10 test calls a day.
           </p>
         </div>
+        {numbers.length > 1 && (
+          <div className="space-y-1.5">
+            <Label>Call from</Label>
+            <select value={from} onChange={(e) => setFrom(e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
+              {numbers.map((n, i) => <option key={n} value={n}>{formatPhone(n)}{i === 0 ? " (main)" : ""}</option>)}
+            </select>
+            <p className="text-[11.5px] text-muted-foreground">Try each number to hear how it shows on your phone.</p>
+          </div>
+        )}
         <div className="space-y-1.5">
           <Label>Play the part of <span className="font-normal text-muted-foreground">(optional)</span></Label>
           {asPerson ? (
@@ -520,7 +546,7 @@ function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent;
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" size="sm" onClick={onClose} disabled={call.isPending}>Cancel</Button>
-          <Button size="sm" className="gap-1.5" disabled={!number.trim() || call.isPending} onClick={() => call.mutate({ agentId: agent.id, toNumber: number.trim(), ...(asPerson ? { asProspectId: asPerson.id } : {}) })}>
+          <Button size="sm" className="gap-1.5" disabled={!number.trim() || call.isPending} onClick={() => call.mutate({ agentId: agent.id, toNumber: number.trim(), ...(from ? { fromNumber: from } : {}), ...(asPerson ? { asProspectId: asPerson.id } : {}) })}>
             {call.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <PhoneCall className="size-3.5" />} Call me now
           </Button>
         </div>
@@ -565,6 +591,81 @@ function AiCallsSwitchCard({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
+/* ───────────────────────── calling capacity ───────────────────────────── */
+
+const LIMIT_FIELDS: { key: keyof VoiceLimits; label: string; hint: string }[] = [
+  { key: "maxConcurrent", label: "Calls at once", hint: "In and out, across all agents" },
+  { key: "dialsPerMinute", label: "New calls a minute", hint: "How fast approved calls start" },
+  { key: "dailyMinutes", label: "Agent minutes a day", hint: "Any 24 hours, in and out" },
+];
+/** xAI's published voice rate (checked 2026-10-04); Plivo's per-minute rate comes on top. */
+const XAI_DOLLARS_PER_MINUTE = 0.08;
+
+/**
+ * How many AI calls the workspace can make (owner ask 2026-10-06: "make more
+ * outbound calls from a particular workspace"). More numbers raise the calls
+ * a day; these limits set how fast and how much, up to fixed ceilings.
+ */
+function CallingCapacityCard({ isAdmin, agents }: { isAdmin: boolean; agents: Agent[] }) {
+  const utils = trpc.useUtils();
+  const status = trpc.voiceAgents.plivoStatus.useQuery();
+  const saved = (status.data?.limits ?? DEFAULT_VOICE_LIMITS) as VoiceLimits;
+  const [draft, setDraft] = useState<Partial<Record<keyof VoiceLimits, string>>>({});
+  const value = (k: keyof VoiceLimits) => draft[k] ?? String(saved[k]);
+  const parsed = Object.fromEntries(LIMIT_FIELDS.map(({ key }) => [key, Number(value(key))])) as VoiceLimits;
+  const invalid = LIMIT_FIELDS.some(({ key }) => !Number.isInteger(parsed[key]) || parsed[key] < 1 || parsed[key] > VOICE_LIMIT_CEILINGS[key]);
+  const dirty = LIMIT_FIELDS.some(({ key }) => parsed[key] !== saved[key]);
+  const save = trpc.voiceAgents.setAiCallLimits.useMutation({
+    onSuccess: () => { toast.success("Calling capacity saved"); setDraft({}); void utils.voiceAgents.plivoStatus.invalidate(); },
+    onError: (e: any) => toast.error(e?.message ?? "Could not save"),
+  });
+  const outreachNumbers = agents
+    .filter((a) => a.purpose === "outbound_outreach" && a.status === "active")
+    .reduce((sum, a) => sum + agentNumbers(a).length, 0);
+  const shown = invalid ? saved : parsed;
+  return (
+    <Card
+      title="Calling capacity"
+      sub={`How many AI calls this workspace can make. Each number places up to ${MAX_CALLS_PER_NUMBER_PER_DAY} calls a day, so more numbers on your outreach agents means more calls. These limits cap how fast and how much, so a mistake cannot run up the bill.`}
+    >
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {LIMIT_FIELDS.map(({ key, label, hint }) => (
+          <div key={key} className="space-y-1.5">
+            <Label>{label}</Label>
+            <Input
+              type="number"
+              min={1}
+              max={VOICE_LIMIT_CEILINGS[key]}
+              value={value(key)}
+              disabled={!isAdmin}
+              onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+            />
+            <p className="text-[11.5px] text-muted-foreground">{hint}. Up to {VOICE_LIMIT_CEILINGS[key]}; default {DEFAULT_VOICE_LIMITS[key]}.</p>
+          </div>
+        ))}
+      </div>
+      <p className="text-[12px] text-muted-foreground">
+        {outreachNumbers === 0
+          ? "No active outreach agent has a number yet."
+          : `${outreachNumbers} number${outreachNumbers === 1 ? "" : "s"} on active outreach agents: up to ${outreachNumbers * MAX_CALLS_PER_NUMBER_PER_DAY} calls a day.`}{" "}
+        {shown.dailyMinutes} agent minutes a day is at most about ${Math.round(shown.dailyMinutes * XAI_DOLLARS_PER_MINUTE)} of xAI time, plus Plivo's per-minute rate.
+        Plivo's own account limits apply too (on its free trial, calls only go to verified numbers).
+      </p>
+      {isAdmin ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" disabled={!dirty || invalid || save.isPending} onClick={() => save.mutate(parsed)} className="gap-1.5">
+            {save.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} Save
+          </Button>
+          {dirty && <Button size="sm" variant="outline" onClick={() => setDraft({})} disabled={save.isPending}>Cancel</Button>}
+          {invalid && <span className="text-[12px] text-rose-600">Each limit is a whole number from 1 up to its maximum.</span>}
+        </div>
+      ) : (
+        <p className="text-[12px] text-muted-foreground">An admin changes these.</p>
+      )}
+    </Card>
+  );
+}
+
 /* ───────────────────────── create / edit dialog ───────────────────────── */
 
 function AgentDialog({
@@ -586,7 +687,8 @@ function AgentDialog({
     model: agent?.model ?? defaultModel,
     instructions: agent?.instructions ?? "",
     phoneNumber: agent?.phoneNumber ?? "",
-    plivoNumber: (agent?.plivoNumber ?? "") as string,
+    // Main number first (several per agent since 2026-10-06).
+    plivoNumbers: agentNumbers(agent) as string[],
     secret: "",
     languageHint: agent?.languageHint ?? "",
     // One per line (2026-10-06).
@@ -596,10 +698,26 @@ function AgentDialog({
 
   const create = trpc.voiceAgents.create.useMutation({ onError: (e: any) => toast.error(e?.message ?? "Could not create agent") });
   const update = trpc.voiceAgents.update.useMutation({ onError: (e: any) => toast.error(e?.message ?? "Could not save agent") });
-  const connect = trpc.voiceAgents.connectPlivoNumber.useMutation({ onError: (e: any) => toast.error(e?.message ?? "Could not connect the number") });
+  const setNumbers = trpc.voiceAgents.setPlivoNumbers.useMutation({ onError: (e: any) => toast.error(e?.message ?? "Could not connect the numbers") });
   const plivo = trpc.voiceAgents.plivoStatus.useQuery(undefined, { enabled: open });
   const plivoNumbers = trpc.voiceAgents.plivoNumbers.useQuery(undefined, { enabled: open && isAdmin && !!plivo.data?.configured });
-  const saving = create.isPending || update.isPending || connect.isPending;
+  const allAgents = trpc.voiceAgents.list.useQuery(undefined, { enabled: open && isAdmin });
+  const saving = create.isPending || update.isPending || setNumbers.isPending;
+
+  // Which agent holds each number now: adding it here moves it.
+  const holder = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const o of (allAgents.data ?? []) as Agent[]) {
+      if (o.id === agent?.id) continue;
+      for (const n of agentNumbers(o)) m.set(n.replace(/\D/g, ""), o.name);
+    }
+    return m;
+  }, [allAgents.data, agent?.id]);
+  const mine = new Set(f.plivoNumbers.map((n) => n.replace(/\D/g, "")));
+  const available = ((plivoNumbers.data ?? []) as { number: string }[]).filter((n) => !mine.has(n.number.replace(/\D/g, "")));
+  const addNumber = (n: string) => { if (n && f.plivoNumbers.length < MAX_NUMBERS_PER_AGENT) set("plivoNumbers", [...f.plivoNumbers, n]); };
+  const removeNumber = (n: string) => set("plivoNumbers", f.plivoNumbers.filter((x) => x !== n));
+  const makeMain = (n: string) => set("plivoNumbers", [n, ...f.plivoNumbers.filter((x) => x !== n)]);
 
   const activeMembers = useMemo(
     () => team.filter((m) => !m.deactivatedAt && m.userId != null),
@@ -625,11 +743,10 @@ function AgentDialog({
     let id: number | undefined = agent?.id;
     if (agent) await update.mutateAsync({ id: agent.id, ...payload });
     else id = (await create.mutateAsync({ ...payload, status: "active" })).id;
-    // The Plivo number: Velocity points it at itself (Plivo application) and records it.
-    const wantPlivo = f.plivoNumber || null;
-    if (isAdmin && id && wantPlivo !== (agent?.plivoNumber ?? null)) {
+    // The Plivo numbers: Velocity points each new one at itself (Plivo application) and records them.
+    if (isAdmin && id && f.plivoNumbers.join(",") !== agentNumbers(agent).join(",")) {
       try {
-        await connect.mutateAsync({ agentId: id, number: wantPlivo });
+        await setNumbers.mutateAsync({ agentId: id, numbers: f.plivoNumbers });
       } catch {
         return; // toasted; the agent itself is saved
       }
@@ -718,19 +835,46 @@ function AgentDialog({
 
           {isAdmin && (
             <div className="space-y-1.5">
-              <Label>Plivo number</Label>
+              <Label>Plivo numbers</Label>
               {!plivo.data?.configured ? (
                 <div className="rounded-md border border-dashed border-border px-3 py-2 text-[12.5px] text-muted-foreground">Connect Plivo above to pick a number.</div>
               ) : (
-                <select value={f.plivoNumber} onChange={(e) => set("plivoNumber", e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
-                  <option value="">None</option>
-                  {Array.from(new Set([f.plivoNumber, ...((plivoNumbers.data ?? []) as { number: string }[]).map((n) => n.number)])).filter(Boolean).map((n) => (
-                    <option key={n} value={n}>{formatPhone(n)}</option>
-                  ))}
-                </select>
+                <div className="space-y-2">
+                  {f.plivoNumbers.length > 0 && (
+                    <div className="divide-y divide-border/60 rounded-md border border-border">
+                      {f.plivoNumbers.map((n, i) => (
+                        <div key={n} className="flex items-center gap-2 px-3 py-1.5 text-[13px]">
+                          <span className="min-w-0 flex-1 tabular-nums">{formatPhone(n)}</span>
+                          {i === 0 ? (
+                            <span className="rounded-full bg-secondary px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground">Main</span>
+                          ) : (
+                            <button type="button" onClick={() => makeMain(n)} className="text-[12px] text-muted-foreground hover:text-foreground">Make main</button>
+                          )}
+                          <button type="button" onClick={() => removeNumber(n)} aria-label={`Remove ${formatPhone(n)}`} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-rose-600">
+                            <X className="size-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {f.plivoNumbers.length < MAX_NUMBERS_PER_AGENT && (
+                    <select value="" onChange={(e) => addNumber(e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
+                      <option value="">
+                        {plivoNumbers.isLoading ? "Loading your Plivo numbers…" : available.length === 0 ? "No other numbers on your Plivo account" : f.plivoNumbers.length ? "Add another number…" : "Add a number…"}
+                      </option>
+                      {available.map((n) => {
+                        const on = holder.get(n.number.replace(/\D/g, ""));
+                        return <option key={n.number} value={n.number}>{formatPhone(n.number)}{on ? ` (moves from ${on})` : ""}</option>;
+                      })}
+                    </select>
+                  )}
+                </div>
               )}
               <p className="text-[11.5px] text-muted-foreground">
-                Outreach calls come from this number, and calls to it are answered by this agent. Velocity sets it up in Plivo when you save.
+                Calls to any of these numbers are answered by this agent. Outreach calls take turns across them: a person called before
+                gets the same number again, otherwise one with their area code, otherwise the least used. Each number places up to{" "}
+                {MAX_CALLS_PER_NUMBER_PER_DAY} calls a day, so add numbers to make more calls. Buy numbers in your Plivo console;
+                Velocity sets them up when you save.
               </p>
             </div>
           )}

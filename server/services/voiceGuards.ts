@@ -8,28 +8,37 @@
  * does not end a SIP call; only POST /realtime/calls/{id}/hangup does). Nothing
  * limited how many calls ran at once, or how often one number could ring.
  *
- * The limits here are deliberately plain constants: generous for a person
- * calling back, tight for a robo-dialer or a replayed webhook.
+ * The limits are generous for a person calling back, tight for a
+ * robo-dialer or a replayed webhook. Since 2026-10-06 an admin may raise the
+ * workspace limits (Settings → Voice agents → Calling capacity), never past
+ * the ceilings in shared/voiceCapacity.ts; the constants below are the defaults.
  */
 import { and, eq, gte, inArray, lt } from "drizzle-orm";
 import { voiceCalls, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
+import { clampVoiceLimits, DEFAULT_VOICE_LIMITS, type VoiceLimits } from "@shared/voiceCapacity";
 
 const XAI_API_BASE = "https://api.x.ai/v1";
 
 /** Hard cap on one call; the bridge hangs up at this point. */
 export const MAX_CALL_MS = 30 * 60 * 1000;
-/** Calls one workspace's agents may hold at the same time. */
-export const MAX_CONCURRENT_CALLS_PER_WORKSPACE = 3;
+/** Calls one workspace's agents may hold at the same time (default). */
+export const MAX_CONCURRENT_CALLS_PER_WORKSPACE = DEFAULT_VOICE_LIMITS.maxConcurrent;
 /** Calls from one number, per workspace, in an hour, before we stop answering it. */
 export const MAX_CALLS_PER_CALLER_PER_HOUR = 5;
-/** Agent minutes per workspace in any rolling 24 hours. */
-export const MAX_AGENT_MINUTES_PER_DAY = 240;
+/** Agent minutes per workspace in any rolling 24 hours (default). */
+export const MAX_AGENT_MINUTES_PER_DAY = DEFAULT_VOICE_LIMITS.dailyMinutes;
 /** A row still ringing/in progress after this lost its bridge (restart mid-call). */
 export const STALE_CALL_MS = MAX_CALL_MS + 5 * 60 * 1000;
 
 const LIVE = ["ringing", "in_progress"] as const;
+/**
+ * A call the dialer placed that Plivo has not reported on yet. It counts
+ * toward calls at once, so a dialer starting several calls in one minute
+ * cannot pass the limit; after this long without news it no longer does.
+ */
+export const QUEUED_COUNTS_MS = 2 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
@@ -51,7 +60,7 @@ const digits = (s: string | null | undefined) => String(s ?? "").replace(/\D/g, 
  * (plus one call length, so a call still running from yesterday counts).
  * Pure, so the limits are tested without a database.
  */
-export function decideAdmission(rows: AdmissionRow[], from: string | null, nowMs = Date.now()): Admission {
+export function decideAdmission(rows: AdmissionRow[], from: string | null, nowMs = Date.now(), limits: VoiceLimits = DEFAULT_VOICE_LIMITS): Admission {
   let usedSec = 0;
   let live = 0;
   let fromCaller = 0;
@@ -60,17 +69,17 @@ export function decideAdmission(rows: AdmissionRow[], from: string | null, nowMs
     const started = r.startedAt ? new Date(r.startedAt).getTime() : NaN;
     if (!Number.isFinite(started)) continue;
     const isLive = (LIVE as readonly string[]).includes(r.status) && nowMs - started < MAX_CALL_MS;
-    if (isLive) live++;
+    if (isLive || (r.status === "queued" && nowMs - started < QUEUED_COUNTS_MS)) live++;
     if (nowMs - started < DAY_MS) {
       usedSec += r.durationSec ?? (isLive ? Math.max(0, (nowMs - started) / 1000) : 0);
     }
     if (caller && nowMs - started < HOUR_MS && digits(r.fromNumber) === caller) fromCaller++;
   }
-  if (usedSec >= MAX_AGENT_MINUTES_PER_DAY * 60) {
-    return { ok: false, code: "daily_budget", reason: `Not answered: this workspace's agents have used their ${MAX_AGENT_MINUTES_PER_DAY} minutes for the last 24 hours.` };
+  if (usedSec >= limits.dailyMinutes * 60) {
+    return { ok: false, code: "daily_budget", reason: `Not answered: this workspace's agents have used their ${limits.dailyMinutes} minutes for the last 24 hours.` };
   }
-  if (live >= MAX_CONCURRENT_CALLS_PER_WORKSPACE) {
-    return { ok: false, code: "concurrency", reason: `Not answered: ${live} agent calls were already in progress (limit ${MAX_CONCURRENT_CALLS_PER_WORKSPACE}).` };
+  if (live >= limits.maxConcurrent) {
+    return { ok: false, code: "concurrency", reason: `Not answered: ${live} agent calls were already in progress (limit ${limits.maxConcurrent}).` };
   }
   if (fromCaller >= MAX_CALLS_PER_CALLER_PER_HOUR) {
     return { ok: false, code: "repeat_caller", reason: `Not answered: this number had already called ${fromCaller} times in the last hour.` };
@@ -78,10 +87,27 @@ export function decideAdmission(rows: AdmissionRow[], from: string | null, nowMs
   return { ok: true };
 }
 
-/** Reads the workspace's recent calls and decides. */
-export async function admitInboundCall(workspaceId: number, from: string | null, nowMs = Date.now()): Promise<Admission> {
+/** The workspace's AI-call limits: an admin's settings, clamped to the ceilings. */
+export async function workspaceVoiceLimits(workspaceId: number): Promise<VoiceLimits> {
+  const db = await getDb();
+  if (!db) return DEFAULT_VOICE_LIMITS;
+  const [row] = await db
+    .select({
+      maxConcurrent: workspaceSettings.aiCallsMaxConcurrent,
+      dialsPerMinute: workspaceSettings.aiCallsDialsPerMinute,
+      dailyMinutes: workspaceSettings.aiCallsDailyMinutes,
+    })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId))
+    .limit(1);
+  return clampVoiceLimits(row);
+}
+
+/** Reads the workspace's recent calls and limits, and decides. */
+export async function admitInboundCall(workspaceId: number, from: string | null, nowMs = Date.now(), limits?: VoiceLimits): Promise<Admission> {
   const db = await getDb();
   if (!db) return { ok: false, code: "concurrency", reason: "Not answered: database unavailable." };
+  const effective = limits ?? (await workspaceVoiceLimits(workspaceId));
   const rows = await db
     .select({
       status: voiceCalls.status,
@@ -91,7 +117,7 @@ export async function admitInboundCall(workspaceId: number, from: string | null,
     })
     .from(voiceCalls)
     .where(and(eq(voiceCalls.workspaceId, workspaceId), gte(voiceCalls.startedAt, new Date(nowMs - DAY_MS - MAX_CALL_MS))));
-  return decideAdmission(rows, from, nowMs);
+  return decideAdmission(rows, from, nowMs, effective);
 }
 
 /** Ends a call inside xAI. Best effort: ending an already-ended call is harmless. */

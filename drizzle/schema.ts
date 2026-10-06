@@ -1851,6 +1851,11 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // approved AI calls wait instead of dialing. Separate from outboundPausedAt
   // (automated email), because every AI call is already approved by a person.
   aiCallsPausedAt: timestamp("aiCallsPausedAt"),
+  // Calling capacity (Migration 0199, 2026-10-06): an admin's limits for AI
+  // calls; null = the default. Clamped to the ceilings in shared/voiceCapacity.ts.
+  aiCallsMaxConcurrent: int("aiCallsMaxConcurrent"),
+  aiCallsDialsPerMinute: int("aiCallsDialsPerMinute"),
+  aiCallsDailyMinutes: int("aiCallsDailyMinutes"),
   // Knowledge base (Migration 0194): the short overview every AI prompt and
   // every call gets; drafted from the documents by AI, editable by an admin.
   knowledgeSummary: text("knowledgeSummary"),
@@ -5799,6 +5804,9 @@ export const voiceAgents = mysqlTable(
     /** E.164 Plivo number (Migration 0193): outbound calls come from it, and
      *  calls to it are answered by this agent through Velocity. */
     plivoNumber: varchar("plivoNumber", { length: 32 }),
+    /** The agent's other Plivo numbers (Migration 0199, 2026-10-06): calls
+     *  are shared across all of them; see shared/voiceCapacity.ts. */
+    plivoExtraNumbers: json("plivoExtraNumbers"),
     /** Questions an outreach agent works into the conversation, one at a time
      *  (Migration 0198, owner ask 2026-10-06: "more interrogative"). */
     discoveryQuestions: json("discoveryQuestions"),

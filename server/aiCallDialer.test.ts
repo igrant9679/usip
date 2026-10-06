@@ -10,7 +10,11 @@ const state = {
   approved: [] as Row[],
   agents: [] as Row[],
   dnc: [] as Row[],
-  callsToday: 0,
+  /** Calls each number placed in the last 24 hours. */
+  usage: {} as Record<string, number>,
+  /** The number this person was last called from. */
+  lastFrom: null as string | null,
+  limits: {} as Row,
   callRow: null as Row | null,
   updates: [] as { table: unknown; set: Row }[],
   inserts: [] as { table: unknown; v: Row }[],
@@ -24,14 +28,19 @@ const fakeDb: any = {
         if (table === voiceCallRequests) return state.approved;
         if (table === voiceAgents) return state.agents;
         if (table === workspaces) return [{ name: "CommunityForce" }];
-        if (table === workspaceSettings) return [{ aiCallsPausedAt: aiPaused.value ? new Date() : null }];
+        if (table === workspaceSettings) return [{ aiCallsPausedAt: aiPaused.value ? new Date() : null, ...state.limits }];
         if (table === callSuppressions) return state.dnc;
-        if (table === voiceCalls) return cols && "n" in cols ? [{ n: state.callsToday }] : state.callRow ? [state.callRow] : [];
+        if (table === voiceCalls) {
+          if (cols && "n" in cols) return Object.entries(state.usage).map(([fromNumber, n]) => ({ fromNumber, n }));
+          if (cols && "lastFrom" in cols) return state.lastFrom ? [{ lastFrom: state.lastFrom }] : [];
+          return state.callRow ? [state.callRow] : [];
+        }
         return [];
       };
       const q: any = {
         where: () => q,
         orderBy: () => q,
+        groupBy: () => q,
         limit: () => Promise.resolve(rows()),
         then: (res: any, rej: any) => Promise.resolve(rows()).then(res, rej),
       };
@@ -60,13 +69,15 @@ const paused = { value: false };
 const aiPaused = { value: false };
 vi.mock("./services/sendWindow", () => ({ getWorkspaceSendWindow: async () => ({ timezone: "America/New_York", window: {}, paused: paused.value }) }));
 const admission = { value: { ok: true } as any };
-vi.mock("./services/voiceGuards", async (orig) => ({ ...(await orig<any>()), admitInboundCall: async () => admission.value }));
+const admissionLimits: unknown[] = [];
+vi.mock("./services/voiceGuards", async (orig) => ({ ...(await orig<any>()), admitInboundCall: async (_ws: number, _from: string | null, _now: number, limits: unknown) => { admissionLimits.push(limits); return admission.value; } }));
 const placeCall = vi.fn(async () => ({ requestUuid: "req-1" }));
 const creds = { value: { authId: "MAXXXXXXXXXXXXXXXXXX", authToken: "tok" } as any };
 vi.mock("./services/plivo", async (orig) => ({ ...(await orig<any>()), placeCall: (...a: any[]) => (placeCall as any)(...a), plivoCreds: async () => creds.value }));
 
 import { dialWorkspace, MAX_DIALS_PER_MINUTE_PER_WORKSPACE, OUTBOUND_TIME_LIMIT_SEC, WAIT } from "./services/aiCallDialer";
 import { PlivoError } from "./services/plivo";
+import { VOICE_LIMIT_CEILINGS } from "@shared/voiceCapacity";
 
 // Tuesday 2026-10-06 11:00 Eastern.
 const OPEN = Date.parse("2026-10-06T15:00:00Z");
@@ -82,7 +93,10 @@ beforeEach(() => {
   state.approved = [req(1)];
   state.agents = [agent];
   state.dnc = [];
-  state.callsToday = 0;
+  state.usage = {};
+  state.lastFrom = null;
+  state.limits = {};
+  admissionLimits.length = 0;
   state.callRow = null;
   state.updates = [];
   state.inserts = [];
@@ -159,7 +173,7 @@ describe("the dialer", () => {
   });
 
   it("stops at the number's daily cap", async () => {
-    state.callsToday = 100;
+    state.usage = { "+17037971086": 100 };
     expect(await dialWorkspace(fakeDb, 4, OPEN)).toBe(0);
     expect(reqUpdates()).toEqual([{ statusReason: WAIT.numberDay }]);
   });
@@ -191,6 +205,60 @@ describe("the dialer", () => {
     state.approved = [req(1, { statusReason: WAIT.hours })];
     await dialWorkspace(fakeDb, 4, CLOSED);
     expect(reqUpdates()).toEqual([]);
+  });
+});
+
+describe("several numbers per agent (owner ask 2026-10-06: more outbound calls)", () => {
+  const pool: Row = { ...agent, plivoExtraNumbers: ["+12025550111", "+14155550122"] };
+  const fromOf = (i = 0) => (placeCall.mock.calls[i] as any[])[1].from;
+
+  it("calls from a number with the person's area code", async () => {
+    state.agents = [pool];
+    await dialWorkspace(fakeDb, 4, OPEN); // to +14155550101
+    expect(fromOf()).toBe("+14155550122");
+    expect(state.inserts.find((i) => i.table === voiceCalls)!.v.fromNumber).toBe("+14155550122");
+  });
+
+  it("calls someone again from the number they were called from before", async () => {
+    state.agents = [pool];
+    state.lastFrom = "+12025550111";
+    await dialWorkspace(fakeDb, 4, OPEN);
+    expect(fromOf()).toBe("+12025550111");
+  });
+
+  it("otherwise takes the least-used number, counting the calls this run places", async () => {
+    state.agents = [pool];
+    state.approved = [req(1, { toNumber: "+13125550101" }), req(2, { toNumber: "+13125550102" })];
+    state.usage = { "+17037971086": 5, "+12025550111": 6, "+14155550122": 5 };
+    await dialWorkspace(fakeDb, 4, OPEN);
+    expect([fromOf(0), fromOf(1)]).toEqual(["+17037971086", "+14155550122"]);
+  });
+
+  it("moves to the agent's next number when one has placed its calls for the day", async () => {
+    state.agents = [pool];
+    state.usage = { "+14155550122": 100 };
+    await dialWorkspace(fakeDb, 4, OPEN);
+    expect(fromOf()).toBe("+17037971086");
+  });
+
+  it("waits only when every number has placed its calls", async () => {
+    state.agents = [pool];
+    state.usage = { "+17037971086": 100, "+12025550111": 100, "+14155550122": 100 };
+    expect(await dialWorkspace(fakeDb, 4, OPEN)).toBe(0);
+    expect(reqUpdates()).toEqual([{ statusReason: WAIT.numberDay }]);
+  });
+
+  it("an admin's higher limit starts more calls a minute, and the limits reach the spend check", async () => {
+    state.limits = { dialsPerMinute: 4, maxConcurrent: 6, dailyMinutes: 600 };
+    state.approved = [req(1), req(2), req(3), req(4), req(5)];
+    expect(await dialWorkspace(fakeDb, 4, OPEN)).toBe(4);
+    expect(admissionLimits[0]).toEqual({ maxConcurrent: 6, dialsPerMinute: 4, dailyMinutes: 600 });
+  });
+
+  it("a limit stored past its ceiling is held at the ceiling", async () => {
+    state.limits = { dialsPerMinute: 500 };
+    state.approved = Array.from({ length: 15 }, (_, i) => req(i + 1));
+    expect(await dialWorkspace(fakeDb, 4, OPEN)).toBe(VOICE_LIMIT_CEILINGS.dialsPerMinute);
   });
 });
 
@@ -266,6 +334,13 @@ describe("the Plivo webhook", () => {
     state.agents = [agent];
     const out = await post("/api/voice/plivo/answer", "ws=4", { CallUUID: "u", To: "+12025550199", From: "+14155550100", Direction: "inbound" });
     expect(out.body).toContain("<Hangup/>");
+  });
+
+  it("answers a call to any of an agent's numbers, recording which one was rung", async () => {
+    state.agents = [{ ...agent, plivoExtraNumbers: ["+12025550111"] }];
+    const out = await post("/api/voice/plivo/answer", "ws=4", { CallUUID: "u-in", To: "12025550111", From: "14155550100", Direction: "inbound" });
+    expect(out.body).toContain("<Stream");
+    expect(state.inserts.find((i) => i.table === voiceCalls)?.v).toMatchObject({ direction: "inbound", agentId: 1, toNumber: "+12025550111" });
   });
 
   it("records voicemail from the hangup callback", async () => {
