@@ -102,7 +102,7 @@ export function buildCallInstructions(s: ScriptInput): string {
   const booking = s.canBook
     ? `To book: call find_meeting_times to get the open times; offer two or three of them by their spoken description; never suggest a time that tool did not give you. ` +
       `When the person picks one, confirm the email address the invite should go to: read the one on file back to them, or if they give a new one, spell it back letter by letter. ` +
-      `Then call book_meeting with that option's letter and the email. Tell them the calendar invite is on its way and that they need to accept it.`
+      `Then call book_meeting with that option's letter and the email. Tell them you have emailed them a link to confirm that time: once they open it and press Confirm, the calendar invite follows. Nothing goes on the calendar until they confirm.`
     : `${owner || "The team"} has no calendar connected, so you cannot book. Find out whether they would like a meeting and a good time to reach them, and say ${owner || "someone"} will follow up.`;
 
   /**
@@ -136,7 +136,7 @@ export function buildCallInstructions(s: ScriptInput): string {
     `If they ask not to be called again, apologise, call mark_do_not_call, confirm they will not be called again, and call end_call with result "do_not_call".`,
     `If you have reached the wrong person, apologise and call end_call with result "wrong_person".`,
     `If they would like a call back another time, ask when, and call end_call with result "call_back" and the time in the note.`,
-    `After a successful booking, thank them and call end_call with result "booked".`,
+    `After book_meeting succeeds, thank them and call end_call with result "booked".`,
     `Do not make commitments on price, contracts or anything you were not told; say ${owner || "the team"} will follow up.`,
     // Seen on a real call, 2026-10-06: "Idris is our VP of Revenue Operations, and we help mid-market
     // SaaS companies…", none of it in the company facts.
@@ -239,12 +239,13 @@ export function callTools(canBook: boolean, canSearch = false): Record<string, u
       {
         type: "function",
         name: "book_meeting",
-        description: "Book the time the person chose and send them the calendar invite.",
+        // No event until accepted (2026-10-06): the time is confirmed by the person, by email.
+        description: "Email the person a link to confirm the time they chose. The meeting is booked, and the calendar invite sent, only when they press Confirm.",
         parameters: {
           type: "object",
           properties: {
             option: { type: "string", description: "The letter of the chosen time, from find_meeting_times." },
-            email: { type: "string", description: "The email address the person confirmed for the invite." },
+            email: { type: "string", description: "The email address the person confirmed, for the confirmation link." },
           },
           required: ["option", "email"],
         },

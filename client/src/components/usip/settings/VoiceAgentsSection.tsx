@@ -498,7 +498,7 @@ function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent;
           <DialogTitle>Test call from {agent.name}</DialogTitle>
           <DialogDescription>
             The agent calls this number right away, even outside calling hours, from {formatPhone(from)}. It treats you as the person
-            it is calling (your name and email), so if you agree to a meeting it books on the owner's calendar and invites you.
+            it is calling (your name and email), so if you agree to a meeting it emails you a link to confirm the time; confirming books it on the owner's calendar and invites you.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-1.5">

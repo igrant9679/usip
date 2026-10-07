@@ -24,7 +24,8 @@ import { formatPhone } from "@shared/phoneFormat";
 type Tab = "draft" | "approved" | "done";
 
 const RESULT_LABEL: Record<string, string> = {
-  booked: "Meeting booked",
+  // Agreed on the call; it is booked when they confirm the emailed link (2026-10-06).
+  booked: "Meeting agreed",
   not_interested: "Not interested",
   call_back: "Call back later",
   wrong_person: "Wrong person",

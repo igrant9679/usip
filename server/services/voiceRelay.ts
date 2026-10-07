@@ -13,7 +13,7 @@
  * wires it to the real sockets.
  */
 import WebSocket from "ws";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import {
   calendarAccounts,
   contacts,
@@ -107,6 +107,12 @@ const BOOK_FAIL: Record<string, string> = {
   no_attendee_email: "No email address to send the invite to. Ask for one and spell it back.",
   no_calendar_connected: "The calendar is not connected, so you cannot book. Say the team will email times.",
   provider_error: "The calendar did not respond. Apologise and say the team will email the invite shortly.",
+  // The confirmation email (2026-10-06: phone bookings wait for it too).
+  no_mailbox: "There is no mailbox to send the confirmation from. Apologise and say the team will email the invite shortly.",
+  suppressed: "That address has unsubscribed from our emails. Ask whether there is another address, or say the team will follow up.",
+  send_limit: "The confirmation email cannot go out right now. Apologise and say the team will email it shortly.",
+  send_failed: "The confirmation email did not send. Apologise and say the team will email it shortly.",
+  already_confirmed: "They have already confirmed a time from the email. Tell them it is booked.",
 };
 
 /**
@@ -301,13 +307,19 @@ export class CallSession {
         if (!email) return { ok: false, error: "That email address is not complete. Ask them to spell it, and read it back." };
         const r = await this.deps.book(this.ctx, pick.iso, email, this.meetingId);
         if (r.meetingId) this.meetingId = r.meetingId;
+        if (r.reason === "already_confirmed") {
+          // They confirmed the first link while still on the call: that is the booking.
+          this.result = "booked";
+          return { ok: false, error: BOOK_FAIL.already_confirmed };
+        }
         if (!r.ok) {
           if (r.reason === "time_taken" || r.reason === "days_full") this.options = this.options.filter((o) => o !== pick);
           return { ok: false, error: BOOK_FAIL[r.reason ?? ""] ?? BOOK_FAIL.provider_error };
         }
         this.result = "booked";
-        this.transcript.push(`[Booked: ${pick.spoken}, invite to ${email}]`);
-        return { ok: true, booked: pick.spoken, invite_sent_to: email, say: "The invite is on its way; they need to accept it in their calendar." };
+        // Not on the calendar yet: they confirm it from the email (2026-10-06).
+        this.transcript.push(`[Agreed: ${pick.spoken}; a link to confirm it was emailed to ${email}]`);
+        return { ok: true, agreed: pick.spoken, confirmation_sent_to: email, say: "I've emailed you a link to confirm that time. Once you press Confirm, the calendar invite follows." };
       }
       case "search_knowledge": {
         const q = String(args.query ?? "").trim().slice(0, 300);
@@ -510,10 +522,11 @@ export const realDeps: SessionDeps = {
 
   /**
    * One meeting row per call: a proposal with the agreed time, then the same
-   * sendMeetingInvite every invite goes through (calendar check, per-day cap,
-   * one live invite per person). It stays `invited` until they accept in
-   * their calendar: owner rule 2026-09-24, "Count bookings only when the
-   * prospect accepts".
+   * sendMeetingInvite every proposal goes through (calendar check, one live
+   * invite per person). The time is emailed to them as a link to confirm
+   * (owner ask 2026-10-06: "make phone bookings wait for email confirmation
+   * too"): nothing goes on the calendar, and nothing counts, until they press
+   * Confirm. A second pick on the same call replaces the first email's link.
    */
   async book(ctx, iso, email, meetingId) {
     const db = await getDb();
@@ -523,10 +536,17 @@ export const realDeps: SessionDeps = {
     const fields = {
       contactEmail: email,
       proposedTimes: [iso],
-      inviteMessage: `Thanks for taking the call. Here is the invite for the time we agreed: ${spokenTime(iso, ctx.personTz)}.`,
+      inviteMessage: `Thanks for taking the call. Please confirm the time we agreed: ${spokenTime(iso, ctx.personTz)}.`,
     };
     if (id) {
-      await db.update(meetings).set(fields as never).where(and(eq(meetings.id, id), eq(meetings.workspaceId, ctx.workspaceId)));
+      const [cur] = await db.select({ scheduledAt: meetings.scheduledAt }).from(meetings)
+        .where(and(eq(meetings.id, id), eq(meetings.workspaceId, ctx.workspaceId))).limit(1);
+      // They confirmed from the email while still on the call: it is booked.
+      if (cur?.scheduledAt) return { ok: false, meetingId: id, reason: "already_confirmed" };
+      // A new pick on the same call: back to a proposal, so a fresh link goes out
+      // and the first one stops working.
+      await db.update(meetings).set({ ...fields, status: "proposed", proposalToken: null, proposalSentAt: null, inviteSent: false } as never)
+        .where(and(eq(meetings.id, id), eq(meetings.workspaceId, ctx.workspaceId), isNull(meetings.scheduledAt)));
     } else {
       const ins = await db.insert(meetings).values({
         workspaceId: ctx.workspaceId,
@@ -535,7 +555,7 @@ export const realDeps: SessionDeps = {
         relatedId: ctx.prospectId,
         contactName: name,
         company: ctx.personCompany,
-        // A test call's meeting is real (it is on the owner's calendar), so it says it is a test.
+        // A test call's meeting is real (once confirmed it is on the owner's calendar), so it says it is a test.
         title: `${ctx.isTest ? "[Test] " : ""}${ctx.companyName} <> ${ctx.personCompany || name} intro`.slice(0, 200),
         status: "proposed",
         durationMin: 30,
@@ -576,7 +596,7 @@ export const realDeps: SessionDeps = {
 };
 
 const RESULT_TITLE: Record<string, string> = {
-  booked: "meeting booked",
+  booked: "meeting agreed, link to confirm emailed",
   not_interested: "not interested",
   call_back: "asked for a call back",
   wrong_person: "wrong person",
@@ -624,7 +644,7 @@ export async function finalizeRelayedCall(
       kind: "system",
       title: `${ctx.isTest ? "Test call: " : ""}AI call ${ctx.direction === "outbound" ? "to" : "from"} ${who}: ${RESULT_TITLE[f.result ?? "no_decision"] ?? "finished"}`,
       body: f.result === "booked"
-        ? `${ctx.agentName} booked a meeting with ${who}. The invite is out; it counts once they accept.`
+        ? `${ctx.agentName} agreed a time with ${who} and emailed them a link to confirm it. It goes on your calendar, and counts, once they confirm.`
         : `${ctx.agentName} finished a call with ${who}.${f.note ? ` Note: ${f.note}` : ""}`,
       relatedType: "voice_call",
       relatedId: ctx.callRowId,

@@ -114,6 +114,12 @@ export function proposalEmailBodies(input: {
 }): { html: string; text: string } {
   const message = (input.inviteMessage ?? "").trim();
   const labels = input.times.map((t) => formatInZone(t, input.timezone));
+  // One time (agreed on a call): confirm it. Several: pick one.
+  const one = labels.length === 1;
+  const ask = one ? "Confirm this time:" : "Pick a time that works for you:";
+  const after = one
+    ? "The link opens a page to confirm it, and the calendar invite follows. If it no longer works, just reply to this email."
+    : "Each link opens a page to confirm that time, and the calendar invite follows. If none of these work, just reply to this email.";
   const buttons = labels
     .map((label, i) => `<a href="${escapeHtml(proposalPickUrl(input.token, i))}" style="display:inline-block;margin:0 8px 8px 0;padding:9px 14px;border:1px solid #c9ccd4;border-radius:8px;color:#111827;text-decoration:none;font-weight:600">${escapeHtml(label)}</a>`)
     .join("");
@@ -122,16 +128,16 @@ export function proposalEmailBodies(input: {
     : "";
   const html =
     (message ? paragraphsHtml(message) : "") +
-    `<p style="margin:18px 0 10px;font-weight:600">Pick a time that works for you:</p>` +
+    `<p style="margin:18px 0 10px;font-weight:600">${ask}</p>` +
     `<div>${buttons}</div>` +
-    `<p style="margin:6px 0 0;color:#6b7280;font-size:13px">Each link opens a page to confirm that time, and the calendar invite follows. If none of these work, just reply to this email.</p>` +
+    `<p style="margin:6px 0 0;color:#6b7280;font-size:13px">${after}</p>` +
     sigHtml +
     `<p style="margin:32px 0 0;color:#9ca3af;font-size:11px;text-align:center;line-height:1.5">Don't want these emails? <a href="${escapeHtml(input.unsubscribeUrl)}" style="color:#9ca3af;text-decoration:underline">Unsubscribe</a></p>`;
   const text =
     (message ? `${message}\n\n` : "") +
-    `Pick a time that works for you:\n` +
+    `${ask}\n` +
     labels.map((label, i) => `- ${label}: ${proposalPickUrl(input.token, i)}`).join("\n") +
-    `\n\nEach link opens a page to confirm that time, and the calendar invite follows. If none of these work, just reply to this email.` +
+    `\n\n${after}` +
     (input.signature ? `\n\n${input.signature}` : "") +
     `\n\n—\nUnsubscribe: ${input.unsubscribeUrl}`;
   return { html, text };

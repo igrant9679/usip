@@ -181,9 +181,11 @@ describe("booking", () => {
     expect(h.deps.book).not.toHaveBeenCalled();
   });
 
-  it("books the chosen offered time for the confirmed email", async () => {
+  it("books the chosen offered time for the confirmed email: a link to confirm it is emailed", async () => {
     const out = await toolCall(h, "book_meeting", { option: "b", email: "Dana@Acme.com" });
-    expect(out).toMatchObject({ ok: true, booked: "Thursday, October 8 at 2:00 PM CDT", invite_sent_to: "dana@acme.com" });
+    // 2026-10-06: phone bookings wait for the person to confirm by email too.
+    expect(out).toMatchObject({ ok: true, agreed: "Thursday, October 8 at 2:00 PM CDT", confirmation_sent_to: "dana@acme.com" });
+    expect(out.say).toContain("emailed you a link to confirm");
     expect(h.deps.book).toHaveBeenCalledWith(expect.objectContaining({ callRowId: 77 }), "2026-10-08T19:00:00Z", "dana@acme.com", null);
   });
 
@@ -261,6 +263,17 @@ describe("ending the call", () => {
     b.fire(8000);
     await new Promise((r) => setTimeout(r, 0));
     expect((b.deps.finalize as any).mock.calls[0][1]).toMatchObject({ result: "booked", meetingId: 501 });
+
+    // Confirmed from the email while still on the call (2026-10-06): that is the booking.
+    const c = harness();
+    await ready(c);
+    (c.deps.book as any).mockResolvedValueOnce({ ok: false, meetingId: 501, reason: "already_confirmed" });
+    const out = await toolCall(c, "book_meeting", { option: "B", email: "dana@acme.com" }, "f1");
+    expect(out.error).toContain("already confirmed a time from the email");
+    await toolCall(c, "end_call", { result: "no_decision" }, "f2");
+    c.fire(8000);
+    await new Promise((r) => setTimeout(r, 0));
+    expect((c.deps.finalize as any).mock.calls[0][1]).toMatchObject({ result: "booked", meetingId: 501 });
   });
 
   it("an unknown end_call result is recorded as no decision", async () => {
