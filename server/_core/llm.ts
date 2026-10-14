@@ -371,6 +371,36 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
 // Anthropic
 // ---------------------------------------------------------------------------
 
+/** Models seen refusing a forced tool choice in this process; their calls go straight to "auto". */
+const MODELS_REFUSING_FORCED_TOOL = new Set<string>();
+
+export function __resetForcedToolMemoryForTests(): void {
+  MODELS_REFUSING_FORCED_TOOL.clear();
+}
+
+/** The 400 a model gives when it does not accept tool_choice "tool" / "any". */
+export function refusesForcedToolChoice(err: unknown): boolean {
+  const status = (err as { status?: number } | null)?.status;
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return status === 400 && /tool_choice/i.test(msg) && /not supported for this model/i.test(msg);
+}
+
+/** The JSON object in a text reply (fenced or bare), re-serialised; null when there is none. */
+export function jsonFromText(text: string): string | null {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1];
+  const candidates = [fenced, text, text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)];
+  for (const c of candidates) {
+    if (!c || !c.trim()) continue;
+    try {
+      const v = JSON.parse(c.trim());
+      if (v && typeof v === "object" && !Array.isArray(v)) return JSON.stringify(v);
+    } catch {
+      // try the next form
+    }
+  }
+  return null;
+}
+
 async function invokeViaAnthropic(
   params: InvokeParams,
   creds: ResolvedCreds
@@ -501,23 +531,53 @@ async function invokeViaAnthropic(
   const requestedMaxTokens =
     maxTokens ?? max_tokens ?? (useStructuredTool ? 8192 : 4096);
 
-  const response = await client.messages.create({
-    model: model ?? creds.anthropicModel,
-    max_tokens: requestedMaxTokens,
-    ...(typeof temperature === "number" ? { temperature } : {}),
-    ...(systemPrompt ? { system: systemPrompt } : {}),
-    messages: conversationMessages,
-    ...(effectiveTools ? { tools: effectiveTools } : {}),
-    ...(effectiveToolChoice ? { tool_choice: effectiveToolChoice } : {}),
-  });
+  // Some models refuse a FORCED tool choice: Claude Opus 5.5 answers
+  // tool_choice "tool" or "any" with a 400 (found live 2026-10-14, Research
+  // engine). Forcing is still tried first, since it is the stronger guarantee
+  // where it works; on that refusal the same request goes again with the tool
+  // offered ("auto") and the system prompt saying to call it, and the model is
+  // remembered so its later calls skip the refused attempt.
+  const resolvedModel = model ?? creds.anthropicModel;
+  const forced = effectiveToolChoice?.type === "tool" || effectiveToolChoice?.type === "any";
+  const callInstruction = !forced
+    ? ""
+    : effectiveToolChoice?.type === "tool"
+      ? `Respond by calling the ${effectiveToolChoice.name} tool exactly once with the complete result. Do not answer in text.`
+      : "Respond by calling one of the tools.";
+  const send = (auto: boolean) =>
+    client.messages.create({
+      model: resolvedModel,
+      max_tokens: requestedMaxTokens,
+      ...(typeof temperature === "number" ? { temperature } : {}),
+      ...(auto
+        ? { system: [systemPrompt, callInstruction].filter(Boolean).join("\n\n") }
+        : systemPrompt ? { system: systemPrompt } : {}),
+      messages: conversationMessages,
+      ...(effectiveTools ? { tools: effectiveTools } : {}),
+      ...(effectiveToolChoice ? { tool_choice: auto ? ({ type: "auto" } as Anthropic.ToolChoiceAuto) : effectiveToolChoice } : {}),
+    });
+  let response: Anthropic.Message;
+  if (forced && MODELS_REFUSING_FORCED_TOOL.has(resolvedModel)) {
+    response = await send(true);
+  } else {
+    try {
+      response = await send(false);
+    } catch (err) {
+      if (!forced || !refusesForcedToolChoice(err)) throw err;
+      MODELS_REFUSING_FORCED_TOOL.add(resolvedModel);
+      response = await send(true);
+    }
+  }
 
   const textBlocks = response.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map(b => b.text)
     .join("");
 
-  // When we forced the structured-output tool, the tool_use input IS the
+  // When we asked for the structured-output tool, the tool_use input IS the
   // result — surface it as the message content so callers can JSON.parse it.
+  // A model that was only OFFERED the tool may answer with the JSON in text
+  // instead; that is passed on as the JSON alone.
   const structuredBlock = response.content.find(
     (b): b is Anthropic.ToolUseBlock =>
       b.type === "tool_use" && b.name === STRUCTURED_TOOL_NAME,
@@ -525,7 +585,9 @@ async function invokeViaAnthropic(
   const textContent =
     useStructuredTool && structuredBlock
       ? JSON.stringify(structuredBlock.input)
-      : textBlocks;
+      : useStructuredTool
+        ? (jsonFromText(textBlocks) ?? textBlocks)
+        : textBlocks;
 
   const toolCalls: ToolCall[] = response.content
     .filter(
