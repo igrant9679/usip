@@ -20,6 +20,7 @@ import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
+import { icpLabels, icpWeighted, type IcpListKind } from "@shared/icpShape";
 import {
   AlertTriangle,
   Brain,
@@ -44,27 +45,10 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
-function parseJsonArray(v: unknown): string[] {
-  if (!v) return [];
-  if (Array.isArray(v)) return v.map(String);
-  try {
-    const p = JSON.parse(v as string);
-    return Array.isArray(p) ? p.map(String) : [];
-  } catch {
-    return [];
-  }
-}
-
-function parseJsonArrayOfObj<T>(v: unknown): T[] {
-  if (!v) return [];
-  if (Array.isArray(v)) return v as T[];
-  try {
-    const p = JSON.parse(v as string);
-    return Array.isArray(p) ? (p as T[]) : [];
-  } catch {
-    return [];
-  }
-}
+// ICP lists are stored as weighted objects ({title, weight, …}); read them
+// through the shared reader (2026-10-14: converting each item with String()
+// showed "[object Object]" chips here, and the Override dialog saved them back).
+const listOf = (v: unknown, kind: IcpListKind): string[] => icpLabels(v, kind);
 
 /* ─── Confidence badge ───────────────────────────────────────────────────── */
 function ConfidenceBadge({ score }: { score: number }) {
@@ -205,19 +189,19 @@ function OverrideDialog({
 }) {
   const utils = trpc.useUtils();
   const [industries, setIndustries] = useState(
-    parseJsonArray(icp?.targetIndustries).join(", ")
+    listOf(icp?.targetIndustries, "industry").join(", ")
   );
   const [titles, setTitles] = useState(
-    parseJsonArray(icp?.targetTitles).join(", ")
+    listOf(icp?.targetTitles, "title").join(", ")
   );
   const [geos, setGeos] = useState(
-    parseJsonArray(icp?.targetGeographies).join(", ")
+    listOf(icp?.targetGeographies, "geography").join("\n")
   );
   const [tech, setTech] = useState(
-    parseJsonArray(icp?.targetTechStack).join(", ")
+    listOf(icp?.targetTechStack, "technology").join(", ")
   );
   const [antiPatterns, setAntiPatterns] = useState(
-    parseJsonArray(icp?.antiPatterns).join(", ")
+    listOf(icp?.antiPatterns, "antiPattern").join(", ")
   );
   const [sizeMin, setSizeMin] = useState(String(icp?.targetCompanySizeMin ?? ""));
   const [sizeMax, setSizeMax] = useState(String(icp?.targetCompanySizeMax ?? ""));
@@ -231,9 +215,9 @@ function OverrideDialog({
     onError: (e) => toast.error(e.message),
   });
 
-  function toArray(s: string) {
+  function toArray(s: string, sep: string | RegExp = ",") {
     return s
-      .split(",")
+      .split(sep)
       .map((x) => x.trim())
       .filter(Boolean);
   }
@@ -242,7 +226,7 @@ function OverrideDialog({
     override.mutate({
       targetIndustries: toArray(industries),
       targetTitles: toArray(titles),
-      targetGeographies: toArray(geos),
+      targetGeographies: toArray(geos, /\n/),
       targetTechStack: toArray(tech),
       antiPatterns: toArray(antiPatterns),
       targetCompanySizeMin: sizeMin ? parseInt(sizeMin) : undefined,
@@ -258,8 +242,9 @@ function OverrideDialog({
             <Pencil className="size-4 text-primary" /> Override ICP Profile
           </DialogTitle>
           <p className="text-sm text-muted-foreground">
-            Manually adjust any ICP dimension. Comma-separate multiple values. The AI will
-            incorporate these overrides in the next enrichment cycle.
+            Manually adjust any ICP dimension. Comma-separate multiple values (geographies: one per line).
+            Values you keep keep their weight from the AI. The AI will incorporate these overrides in the
+            next enrichment cycle.
           </p>
         </DialogHeader>
 
@@ -283,12 +268,12 @@ function OverrideDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs font-medium">Target Geographies</Label>
-            <Input
+            <Label className="text-xs font-medium">Target Geographies <span className="font-normal text-muted-foreground">(one per line)</span></Label>
+            <Textarea
               value={geos}
               onChange={(e) => setGeos(e.target.value)}
-              placeholder="e.g. United States, United Kingdom, Germany"
-              className="text-sm"
+              placeholder={"e.g.\nUnited States\nKentucky, United States\nGermany"}
+              className="text-sm resize-none h-20"
             />
           </div>
           <div className="space-y-1.5">
@@ -397,12 +382,12 @@ function ConfidenceTrend({ history }: { history: Array<{ version: number; confid
 
 /* ─── Version diff view ──────────────────────────────────────────────────── */
 function VersionDiff({ a, b }: { a: any; b: any }) {
-  const fields: Array<{ label: string; key: string }> = [
-    { label: "Industries", key: "targetIndustries" },
-    { label: "Titles", key: "targetTitles" },
-    { label: "Geographies", key: "targetGeographies" },
-    { label: "Tech Stack", key: "targetTechStack" },
-    { label: "Anti-Patterns", key: "antiPatterns" },
+  const fields: Array<{ label: string; key: string; kind: IcpListKind }> = [
+    { label: "Industries", key: "targetIndustries", kind: "industry" },
+    { label: "Titles", key: "targetTitles", kind: "title" },
+    { label: "Geographies", key: "targetGeographies", kind: "geography" },
+    { label: "Tech Stack", key: "targetTechStack", kind: "technology" },
+    { label: "Anti-Patterns", key: "antiPatterns", kind: "antiPattern" },
   ];
   return (
     <div className="rounded-xl border bg-card overflow-hidden">
@@ -410,9 +395,9 @@ function VersionDiff({ a, b }: { a: any; b: any }) {
         <div className="px-3 py-2 bg-muted/30 text-xs font-semibold text-muted-foreground">v{a.version} (older)</div>
         <div className="px-3 py-2 bg-primary/5 text-xs font-semibold text-primary">v{b.version} (newer)</div>
       </div>
-      {fields.map(({ label, key }) => {
-        const aItems = parseJsonArray(a[key]);
-        const bItems = parseJsonArray(b[key]);
+      {fields.map(({ label, key, kind }) => {
+        const aItems = listOf(a[key], kind);
+        const bItems = listOf(b[key], kind);
         const added = bItems.filter(x => !aItems.includes(x));
         const removed = aItems.filter(x => !bItems.includes(x));
         const unchanged = aItems.filter(x => bItems.includes(x));
@@ -450,8 +435,8 @@ function VersionDiff({ a, b }: { a: any; b: any }) {
 function VersionRow({ v, isActive, onRestore, isRestoring }: { v: any; isActive: boolean; onRestore?: () => void; isRestoring?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const rationale = v.rationale ?? v.icpRationale ?? v.aiRationale ?? "";
-  const buyingTriggers = parseJsonArray(v.buyingTriggers);
-  const industries = parseJsonArray(v.targetIndustries);
+  const signals = listOf(v.topConversionSignals, "signal");
+  const industries = listOf(v.targetIndustries, "industry");
 
   return (
     <div
@@ -514,10 +499,10 @@ function VersionRow({ v, isActive, onRestore, isRestoring }: { v: any; isActive:
               <TagCloud items={industries} color="#60A5FA" />
             </div>
           )}
-          {buyingTriggers.length > 0 && (
+          {signals.length > 0 && (
             <div>
-              <div className="text-xs font-medium text-muted-foreground mb-1.5">Buying Triggers</div>
-              <BulletList items={buyingTriggers} color="#F59E0B" />
+              <div className="text-xs font-medium text-muted-foreground mb-1.5">Conversion signals</div>
+              <BulletList items={signals} color="#F59E0B" />
             </div>
           )}
           {!isActive && onRestore && (
@@ -568,25 +553,17 @@ export default function AREIcpAgent() {
   });
 
   /* parse ICP fields */
-  const industries = parseJsonArray(icp?.targetIndustries);
-  const titles = parseJsonArray(icp?.targetTitles);
-  const geos = parseJsonArray(icp?.targetGeographies);
-  const techStack = parseJsonArray(icp?.targetTechStack);
-  const antiPatterns = parseJsonArray(icp?.antiPatterns);
-  // `buyingTriggers` and `painPoints` are not columns on icpProfiles — they're
-  // either embedded in topConversionSignals (a JSON blob) or planned/legacy
-  // fields. Cast through unknown so the parser tolerates absence; if the AI
-  // ever populates them via a future migration the same code keeps working.
-  const buyingTriggers = parseJsonArrayOfObj<{ trigger: string; weight: number }>(
-    (icp as { buyingTriggers?: unknown } | null | undefined)?.buyingTriggers
-  );
-  const painPoints = parseJsonArrayOfObj<{
-    pain: string;
-    evidence: string;
-    frequency: number;
-  }>((icp as { painPoints?: unknown } | null | undefined)?.painPoints);
-
-  const maxWeight = buyingTriggers.reduce((m, t) => Math.max(m, t.weight ?? 0), 0) || 1;
+  const industries = listOf(icp?.targetIndustries, "industry");
+  const titles = listOf(icp?.targetTitles, "title");
+  const geos = listOf(icp?.targetGeographies, "geography");
+  const techStack = listOf(icp?.targetTechStack, "technology");
+  const antiPatterns = listOf(icp?.antiPatterns, "antiPattern");
+  // What went with won deals, as the AI scored it (topConversionSignals:
+  // [{signal, correlation_score}]). This page used to read buying-trigger
+  // and pain-point lists, columns icp_profiles has never had, so both panels
+  // were always empty (2026-10-14).
+  const signals = icpWeighted(icp?.topConversionSignals, "signal");
+  const maxWeight = signals.reduce((m, t) => Math.max(m, t.weight ?? 0), 0) || 1;
 
   return (
     <Shell title="ICP Agent">
@@ -738,75 +715,38 @@ export default function AREIcpAgent() {
               </div>
             </section>
 
-            {/* ── Buying triggers ── */}
-            {buyingTriggers.length > 0 && (
+            {/* ── Conversion signals ── */}
+            {signals.length > 0 && (
               <section>
                 <div className="flex items-center gap-2 mb-4">
                   <Zap className="size-4 text-amber-500" />
-                  <h2 className="text-sm font-semibold">Buying Triggers</h2>
+                  <h2 className="text-sm font-semibold">Conversion signals</h2>
                   <span className="text-xs text-muted-foreground">
-                    — events that indicate purchase readiness
+                    — what went with won deals, as the AI scored it
                   </span>
                 </div>
                 <Card className="bg-card border">
                   <CardContent className="pt-4 pb-4 space-y-3">
-                    {buyingTriggers.map((t, i) => (
+                    {signals.map((t, i) => (
                       <div key={i} className="space-y-1">
                         <div className="flex items-center justify-between text-sm">
-                          <span className="font-medium">{t.trigger}</span>
-                          <span className="text-xs text-muted-foreground tabular-nums">
-                            {t.weight ?? 0}/10
-                          </span>
+                          <span className="font-medium">{t.label}</span>
+                          {t.weight != null && (
+                            <span className="text-xs text-muted-foreground tabular-nums">{t.weight}</span>
+                          )}
                         </div>
-                        <div className="h-2 rounded-full bg-muted overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-amber-400 transition-all"
-                            style={{ width: `${((t.weight ?? 0) / maxWeight) * 100}%` }}
-                          />
-                        </div>
+                        {t.weight != null && (
+                          <div className="h-2 rounded-full bg-muted overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-amber-400 transition-all"
+                              style={{ width: `${Math.max(0, (t.weight / maxWeight) * 100)}%` }}
+                            />
+                          </div>
+                        )}
                       </div>
                     ))}
                   </CardContent>
                 </Card>
-              </section>
-            )}
-
-            {/* ── Pain points ── */}
-            {painPoints.length > 0 && (
-              <section>
-                <div className="flex items-center gap-2 mb-4">
-                  <Target className="size-4 text-red-500" />
-                  <h2 className="text-sm font-semibold">Pain Points</h2>
-                  <span className="text-xs text-muted-foreground">
-                    — recurring problems in won deals
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {painPoints.map((p, i) => (
-                    <Card key={i} className="bg-card border">
-                      <CardContent className="pt-4 pb-4">
-                        <div className="flex items-start justify-between gap-2 mb-1.5">
-                          <span className="text-sm font-medium">{p.pain}</span>
-                          <div className="flex items-center gap-0.5 shrink-0">
-                            {Array.from({ length: 5 }).map((_, j) => (
-                              <div
-                                key={j}
-                                className={`size-1.5 rounded-full ${
-                                  j < (p.frequency ?? 0) ? "bg-red-500" : "bg-muted"
-                                }`}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                        {p.evidence && (
-                          <p className="text-xs text-muted-foreground leading-relaxed">
-                            {p.evidence}
-                          </p>
-                        )}
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
               </section>
             )}
           </>

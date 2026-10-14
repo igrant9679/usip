@@ -257,7 +257,10 @@ export function buildQuickenrichFilters(targeting: {
   const codes = new Set<string>();
   const unmappedGeos: string[] = [];
   for (const g of clean(targeting.geos, 12)) {
-    const code = COUNTRY_CODES[g.toLowerCase()];
+    // "Kentucky, United States" (the inferred ICP's {region, country}): the
+    // country after the comma, since QuickEnrich filters by country only.
+    const comma = g.lastIndexOf(",");
+    const code = COUNTRY_CODES[g.toLowerCase()] ?? (comma > 0 ? COUNTRY_CODES[g.slice(comma + 1).trim().toLowerCase()] : undefined);
     if (code) codes.add(code);
     else unmappedGeos.push(g);
   }

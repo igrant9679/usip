@@ -162,15 +162,40 @@ export async function seedDemoExtras(workspaceId: number, ownerUserId: number, o
     await db.insert(personas).values({ workspaceId, ...p, isPreset: false, createdByUserId: ownerUserId } as never);
   }
   counts.personas = 4;
+  // The shape runIcpInference really writes (weighted objects). Plain strings
+  // here hid the ICP list bug in every demo until 2026-10-14.
   await db.insert(icpProfiles).values({
     workspaceId, version: 3, generatedAt: daysAgo(6),
-    targetIndustries: ["SaaS", "Fintech", "Data/Analytics", "Nonprofit"], targetCompanySizeMin: 100, targetCompanySizeMax: 2500,
+    targetIndustries: [
+      { industry: "SaaS", weight: 0.9, examples: ["Northwind Cloud"] }, { industry: "Fintech", weight: 0.7, examples: [] },
+      { industry: "Data/Analytics", weight: 0.5, examples: [] }, { industry: "Nonprofit", weight: 0.3, examples: [] },
+    ],
+    targetCompanySizeMin: 100, targetCompanySizeMax: 2500,
     targetRevenueMin: "10000000.00", targetRevenueMax: "500000000.00",
-    targetTitles: ["VP Revenue Operations", "Chief Revenue Officer", "Director of Sales", "Head of Marketing"],
-    targetGeographies: ["United States", "Canada", "United Kingdom"], targetTechStack: ["Salesforce", "HubSpot", "Outreach", "Gong"],
-    antiPatterns: ["Agencies under 20 people", "Companies with no sales team", "Government procurement-only buyers"],
+    targetTitles: [
+      { title: "VP Revenue Operations", seniority: "VP", role: "Revenue Operations", weight: 0.9 },
+      { title: "Chief Revenue Officer", seniority: "C-level", role: "Sales", weight: 0.8 },
+      { title: "Director of Sales", seniority: "Director", role: "Sales", weight: 0.6 },
+      { title: "Head of Marketing", seniority: "Head", role: "Marketing", weight: 0.4 },
+    ],
+    targetGeographies: [
+      { country: "United States", region: "", weight: 0.8 }, { country: "Canada", region: "", weight: 0.4 },
+      { country: "United Kingdom", region: "", weight: 0.3 },
+    ],
+    targetTechStack: [
+      { technology: "Salesforce", signal_type: "CRM", weight: 0.8 }, { technology: "HubSpot", signal_type: "CRM", weight: 0.6 },
+      { technology: "Outreach", signal_type: "Sales engagement", weight: 0.4 }, { technology: "Gong", signal_type: "Conversation intelligence", weight: 0.3 },
+    ],
+    antiPatterns: [
+      { dimension: "Company size", value: "Agencies under 20 people", reason: "No deal under 20 employees closed" },
+      { dimension: "Team", value: "Companies with no sales team", reason: "Nobody to own the rollout" },
+      { dimension: "Buying process", value: "Government procurement-only buyers", reason: "Cycles ran past 9 months" },
+    ],
     avgDealValue: "42500.00", avgSalesCycleDays: 47,
-    topConversionSignals: ["Replied within 48h", "Attended a demo", "Hired a RevOps leader in the last 90 days"],
+    topConversionSignals: [
+      { signal: "Replied within 48h", correlation_score: 0.7 }, { signal: "Attended a demo", correlation_score: 0.6 },
+      { signal: "Hired a RevOps leader in the last 90 days", correlation_score: 0.5 },
+    ],
     confidenceScore: 82, sampleWonDeals: 9,
     aiRationale: "Nine of the last eleven won deals were midmarket SaaS or fintech companies with a dedicated RevOps function and a Salesforce or HubSpot CRM. Losses cluster in sub-50-person companies without a sales team.",
     isActive: true,

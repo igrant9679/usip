@@ -11,6 +11,7 @@
  * neither an ICP nor any override targeting.
  */
 import type { icpProfiles } from "../../../drizzle/schema";
+import { icpLabels } from "@shared/icpShape";
 
 export type IcpProfileRow = typeof icpProfiles.$inferSelect;
 
@@ -44,14 +45,19 @@ export function buildEffectiveIcp(
   } as IcpProfileRow;
 }
 
-/** The shape the deterministic scorer wants, derived from an effective ICP + overrides. */
+/**
+ * The shape the deterministic scorer wants, derived from an effective ICP +
+ * overrides. The lists are campaign strings or the inferred ICP's weighted
+ * objects; `icpLabels` reads both (2026-10-14: `map(String)` turned the
+ * objects into "[object Object]", so the scorer and the campaign router never
+ * matched a title when a campaign fell back to the workspace ICP).
+ */
 export function scoringTargetsOf(icp: IcpProfileRow | null, icpOverrides: unknown): { titles: string[]; industries: string[]; geos: string[]; keywords: string[] } {
   const ov = (icpOverrides ?? {}) as IcpOverrides;
-  const arr = (v: unknown): string[] => (Array.isArray(v) ? v.map(String).filter(Boolean) : []);
   return {
-    titles: arr(icp?.targetTitles),
-    industries: arr(icp?.targetIndustries),
-    geos: arr(icp?.targetGeographies),
-    keywords: arr(ov.keywords),
+    titles: icpLabels(icp?.targetTitles, "title"),
+    industries: icpLabels(icp?.targetIndustries, "industry"),
+    geos: icpLabels(icp?.targetGeographies, "geography"),
+    keywords: icpLabels(ov.keywords, "signal"),
   };
 }

@@ -69,6 +69,7 @@ import { DEFAULT_STEP_GAP_DAYS, defaultDayForStep, stepIndexOf } from "@shared/a
 // verbatim, and the sendable-channel vocabulary is a different concern anyway.
 import { ARE_SENDABLE_CHANNELS, isSendableChannel } from "@shared/areSequenceSteps";
 import { cleanScrapedField } from "@shared/fieldHygiene";
+import { icpPromptList, icpWeighted } from "@shared/icpShape";
 import { MAX_TIMELINE_DAY_OFFSET, MAX_TIMELINE_STEPS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { sequenceMaxTokens, stepCountForTemplate } from "@shared/areSequenceTemplates";
 import { DEFAULT_VARIANT_KEY, normalizeVariantKey } from "@shared/variantKeys";
@@ -99,11 +100,12 @@ async function scoreIcpMatch(
 - Geography: ${prospect.geography ?? "Unknown"}
 
 ## ICP
-- Target Industries: ${JSON.stringify(icp.targetIndustries)}
-- Target Company Size: ${icp.targetCompanySizeMin}–${icp.targetCompanySizeMax} employees
-- Target Titles: ${JSON.stringify(icp.targetTitles)}
-- Target Geographies: ${JSON.stringify(icp.targetGeographies)}
-- Anti-patterns: ${JSON.stringify(icp.antiPatterns)}
+- Target Industries: ${icpPromptList(icp.targetIndustries, "industry") || "any"}
+- Target Company Size: ${icp.targetCompanySizeMin ?? "any"}–${icp.targetCompanySizeMax ?? "any"} employees
+- Target Titles: ${icpPromptList(icp.targetTitles, "title") || "any"}
+- Target Geographies: ${icpPromptList(icp.targetGeographies, "geography") || "any"}
+- Anti-patterns: ${icpWeighted(icp.antiPatterns, "antiPattern").map((w) => (w.detail ? `${w.label} (${w.detail})` : w.label)).join("; ") || "none"}
+(Weights in brackets: how strongly each value went with won deals.)
 
 Score each dimension 0-20 and provide a total score 0-100.
 `,

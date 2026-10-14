@@ -97,6 +97,7 @@ import {
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
 import { isSuppressed as isSuppressedSitewide, makeUnsubscribeUrl, unsubscribeHeaders } from "./unsubscribe";
 import { escapeHtml } from "@shared/escapeHtml";
+import { icpLabels } from "@shared/icpShape";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { inSendWindow } from "./services/sendWindow";
 import { cleanScrapedField } from "@shared/fieldHygiene";
@@ -1887,22 +1888,27 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
       ),
     )
     .limit(1);
-  const titles =
-    (overrides.targetTitles && overrides.targetTitles.length > 0
-      ? overrides.targetTitles
-      : (icp?.targetTitles as string[] | null) ?? []) as string[];
-  const industries =
-    (overrides.targetIndustries && overrides.targetIndustries.length > 0
-      ? overrides.targetIndustries
-      : (icp?.targetIndustries as string[] | null) ?? []) as string[];
-  const geos =
-    (overrides.targetGeographies && overrides.targetGeographies.length > 0
-      ? overrides.targetGeographies
-      : (icp?.targetGeographies as string[] | null) ?? []) as string[];
+  // The inferred ICP stores weighted objects ({title, weight, …}); read every
+  // list through the shared normalizer (2026-10-14: this fallback used to
+  // cast them `as string[]`, and buildQuerySlices crashed on `.trim()`).
+  const titles = overrides.targetTitles && overrides.targetTitles.length > 0
+    ? icpLabels(overrides.targetTitles, "title")
+    : icpLabels(icp?.targetTitles, "title");
+  const industries = overrides.targetIndustries && overrides.targetIndustries.length > 0
+    ? icpLabels(overrides.targetIndustries, "industry")
+    : icpLabels(icp?.targetIndustries, "industry");
+  const geos = overrides.targetGeographies && overrides.targetGeographies.length > 0
+    ? icpLabels(overrides.targetGeographies, "geography")
+    : icpLabels(icp?.targetGeographies, "geography");
   const keywords = overrides.keywords ?? [];
+  // Company size: the campaign's, else the ICP's (as buildEffectiveIcp does).
+  const size = {
+    employeeMin: overrides.employeeMin ?? icp?.targetCompanySizeMin ?? undefined,
+    employeeMax: overrides.employeeMax ?? icp?.targetCompanySizeMax ?? undefined,
+  };
   const sizeHint =
-    overrides.employeeMin || overrides.employeeMax
-      ? `${overrides.employeeMin ?? 1}-${overrides.employeeMax ?? "5000+"} employees`
+    size.employeeMin || size.employeeMax
+      ? `${size.employeeMin ?? 1}-${size.employeeMax ?? "5000+"} employees`
       : "";
 
   // ── Query slice fan-out ───────────────────────────────────────────
@@ -2079,7 +2085,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
         raw,
       })),
     apollo: () =>
-      discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides }).then((raw) => ({
+      discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size }).then((raw) => ({
         sourceType: "apollo" as const,
         query,
         raw,
@@ -2232,7 +2238,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
  *
  * Returns [] when there's not enough targeting to form a single slice.
  */
-function buildQuerySlices(args: {
+export function buildQuerySlices(args: {
   titles: string[];
   industries: string[];
   geos: string[];

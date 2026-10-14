@@ -5,6 +5,7 @@
  * persist. Pure functions.
  */
 import { emptyCriteria, type SearchCriteria } from "@shared/prospectSources";
+import { icpLabels } from "@shared/icpShape";
 import type { ProspectRecord } from "./types";
 
 /** Country names → ISO codes the vendors filter on. Unmapped geos stay as
@@ -28,20 +29,36 @@ const US_STATES = new Set([
   "prince edward island",
 ]);
 
-export function criteriaFromTargeting(t: { titles?: string[]; industries?: string[]; geos?: string[]; keywords?: string[] }): SearchCriteria {
+export function criteriaFromTargeting(t: { titles?: unknown; industries?: unknown; geos?: unknown; keywords?: unknown }): SearchCriteria {
   const c = emptyCriteria();
-  const clean = (xs?: string[]) => (xs ?? []).map((x) => String(x ?? "").trim()).filter(Boolean);
-  c.jobTitles = clean(t.titles);
-  c.industries = clean(t.industries);
-  c.keywords = clean(t.keywords);
-  const geos = clean(t.geos);
+  // Labels through the shared ICP reader: campaign strings and the inferred
+  // ICP's weighted objects alike (2026-10-14: `String(x)` sent vendors
+  // "[object Object]" as a job title).
+  c.jobTitles = icpLabels(t.titles, "title");
+  c.industries = icpLabels(t.industries, "industry");
+  c.keywords = icpLabels(t.keywords, "signal");
+  const addCountry = (code: string) => { if (c.countries.indexOf(code) === -1) c.countries.push(code); };
+  const addPlace = (g: string) => {
+    if (US_STATES.has(g.toLowerCase())) { c.stateProvinces.push(g); return; }
+    c.cities.push(g);
+  };
+  const geos = icpLabels(t.geos, "geography");
   for (let i = 0; i < geos.length; i++) {
     const g = geos[i];
     const code = COUNTRY_CODES[g.toLowerCase()];
-    if (code) { if (c.countries.indexOf(code) === -1) c.countries.push(code); continue; }
-    if (/^[A-Za-z]{2}$/.test(g)) { if (c.countries.indexOf(g.toUpperCase()) === -1) c.countries.push(g.toUpperCase()); continue; }
-    if (US_STATES.has(g.toLowerCase())) { c.stateProvinces.push(g); continue; }
-    c.cities.push(g);
+    if (code) { addCountry(code); continue; }
+    if (/^[A-Za-z]{2}$/.test(g)) { addCountry(g.toUpperCase()); continue; }
+    // "Kentucky, United States": the inferred ICP's {region, country}. Only a
+    // country NAME after the comma counts ("Austin, TX" stays a city).
+    const comma = g.lastIndexOf(",");
+    const tailCode = comma > 0 ? COUNTRY_CODES[g.slice(comma + 1).trim().toLowerCase()] : undefined;
+    if (tailCode) {
+      addCountry(tailCode);
+      const region = g.slice(0, comma).trim();
+      if (region) addPlace(region);
+      continue;
+    }
+    addPlace(g);
   }
   // A US state or city with no country is still a US/CA query for the
   // vendors whose coverage is US/CA; leave countries empty so global

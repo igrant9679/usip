@@ -29,6 +29,10 @@ import { closedStageKeys, lostStageKeys, wonStageKeys } from "../../_core/stageS
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
+import { icpStoredFromLabels } from "@shared/icpShape";
+
+/** An edited ICP list: plain labels, as the Override dialog sends them. */
+const icpLabelList = z.array(z.string().trim().min(1).max(120)).max(50);
 
 /* ─── ICP Inference Engine ───────────────────────────────────────────────── */
 
@@ -544,19 +548,25 @@ export const icpRouter = router({
     return { success: true };
   }),
 
-  /** Manually override specific ICP fields */
+  /**
+   * Manually override specific ICP fields. The lists come in as plain labels
+   * and are stored in the inferred shape (2026-10-14: this took z.any(), and
+   * the ICP page saved its "[object Object]" chips back as strings, leaving
+   * rows of mixed objects and junk). A label already in the profile keeps its
+   * stored entry and weight; a new one gets no weight.
+   */
   override: workspaceProcedure
     .input(
       z.object({
-        targetIndustries: z.any().optional(),
+        targetIndustries: icpLabelList.optional(),
         targetCompanySizeMin: z.number().optional(),
         targetCompanySizeMax: z.number().optional(),
         targetRevenueMin: z.number().optional(),
         targetRevenueMax: z.number().optional(),
-        targetTitles: z.any().optional(),
-        targetGeographies: z.any().optional(),
-        targetTechStack: z.any().optional(),
-        antiPatterns: z.any().optional(),
+        targetTitles: icpLabelList.optional(),
+        targetGeographies: icpLabelList.optional(),
+        targetTechStack: icpLabelList.optional(),
+        antiPatterns: icpLabelList.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -570,15 +580,15 @@ export const icpRouter = router({
       if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "No active ICP. Run regenerate first." });
 
       const updates: Partial<typeof icpProfiles.$inferInsert> = {};
-      if (input.targetIndustries !== undefined) updates.targetIndustries = input.targetIndustries;
+      if (input.targetIndustries !== undefined) updates.targetIndustries = icpStoredFromLabels(input.targetIndustries, current.targetIndustries, "industry");
       if (input.targetCompanySizeMin !== undefined) updates.targetCompanySizeMin = input.targetCompanySizeMin;
       if (input.targetCompanySizeMax !== undefined) updates.targetCompanySizeMax = input.targetCompanySizeMax;
       if (input.targetRevenueMin !== undefined) updates.targetRevenueMin = String(input.targetRevenueMin);
       if (input.targetRevenueMax !== undefined) updates.targetRevenueMax = String(input.targetRevenueMax);
-      if (input.targetTitles !== undefined) updates.targetTitles = input.targetTitles;
-      if (input.targetGeographies !== undefined) updates.targetGeographies = input.targetGeographies;
-      if (input.targetTechStack !== undefined) updates.targetTechStack = input.targetTechStack;
-      if (input.antiPatterns !== undefined) updates.antiPatterns = input.antiPatterns;
+      if (input.targetTitles !== undefined) updates.targetTitles = icpStoredFromLabels(input.targetTitles, current.targetTitles, "title");
+      if (input.targetGeographies !== undefined) updates.targetGeographies = icpStoredFromLabels(input.targetGeographies, current.targetGeographies, "geography");
+      if (input.targetTechStack !== undefined) updates.targetTechStack = icpStoredFromLabels(input.targetTechStack, current.targetTechStack, "technology");
+      if (input.antiPatterns !== undefined) updates.antiPatterns = icpStoredFromLabels(input.antiPatterns, current.antiPatterns, "antiPattern");
 
       await db.update(icpProfiles).set(updates).where(eq(icpProfiles.id, current.id));
       return { success: true };
