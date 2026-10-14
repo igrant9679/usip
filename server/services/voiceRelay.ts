@@ -34,6 +34,8 @@ import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers
 import { timezoneForRegion } from "@shared/callingHours";
 import { formatPhone } from "@shared/phoneFormat";
 import { buildBrandContext } from "./brandContext";
+import { researchContextFor } from "./research/context";
+import { refFromRelated, researchUseFor } from "./research/recipient";
 import { configuredProposalOwner, openSlotsForOwner, sendMeetingInvite } from "./meetingScheduler";
 import { getWorkspaceTimezone } from "./workspaceTimezone";
 import { logCallActivity, matchCallerToRecord } from "./voiceCrmLink";
@@ -466,6 +468,9 @@ export async function loadCallContext(callRowId: number): Promise<CallContext | 
   // The brand block carries the knowledge base's overview; the search tool
   // reaches the rest. History: what the team already knows about them.
   const brand = await buildBrandContext(wsId).catch(() => "");
+  // The person's market (Research phase 3): a short spoken brief, by their record or title.
+  const researchUse = await researchUseFor(wsId, "voice", refFromRelated(row.relatedType, row.relatedId));
+  const research = (await researchContextFor(wsId, { ...researchUse, prospectTitle: researchUse.prospectTitle ?? person.title ?? null })).block;
   const canSearch = await hasKnowledge(wsId);
   // A call-in matched to a contact or lead still finds the person behind it (2026-10-05).
   const historyPersonId = row.testedByUserId ? historyFor : prospectId ?? (await personIdForRecord(wsId, row.relatedType, row.relatedId));
@@ -476,6 +481,7 @@ export async function loadCallContext(callRowId: number): Promise<CallContext | 
     ownerName,
     companyName,
     brand,
+    research,
     agentInstructions: agent.instructions,
     callNotes: request?.callNotes ?? null,
     person: person.name || person.company ? person : null,

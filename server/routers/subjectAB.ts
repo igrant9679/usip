@@ -9,6 +9,7 @@ import { z } from "zod";
 import { emailDrafts, subjectVariants } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
+import { researchUseFor } from "../services/research/recipient";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 
@@ -82,6 +83,7 @@ export const subjectABRouter = router({
       try {
         const out = await invokeLLM({
           sendersBrand: true,
+          research: await researchUseFor(ctx.workspace.id, "outreach", { contactId: draft.toContactId, leadId: draft.toLeadId, prospectId: draft.toProspectId }),
           messages: [
             {
               role: "system",

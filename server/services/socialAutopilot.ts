@@ -94,6 +94,7 @@ ${HUMAN_COPY_RULES}`;
     const res = await invokeLLM({
       sendersBrand: true,
       workspaceId,
+      research: { surface: "outreach", prospectTitle: who.title ?? null },
       messages: [{ role: "user", content: prompt }],
       maxTokens: 200,
     } as never);
@@ -362,7 +363,7 @@ export async function generateInviteNote(
   const prompt = `Write a LinkedIn connection-request note to ${firstName}${ctx ? ` (${ctx})` : ""}.
 Rules: under 180 characters, warm and specific, no pitch, no "I hope this finds you well", no emojis/links, and NEVER an em dash. Return ONLY the note text.`;
   try {
-    const res = await invokeLLM({ sendersBrand: true, workspaceId, messages: [{ role: "user", content: prompt }], maxTokens: 120 } as never);
+    const res = await invokeLLM({ sendersBrand: true, workspaceId, research: { surface: "outreach", prospectTitle: who.title ?? null }, messages: [{ role: "user", content: prompt }], maxTokens: 120 } as never);
     const txt = (res as any)?.choices?.[0]?.message?.content;
     if (typeof txt === "string" && txt.trim()) return humanizeAiCopy(txt.trim().replace(/^["']|["']$/g, "")).slice(0, 195);
   } catch (err) {

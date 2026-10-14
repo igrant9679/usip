@@ -50,6 +50,7 @@ import {
 import { checkPermission, getDb } from "../../db";
 import { parseLlmJson } from "./llmJson";
 import { invokeLLM, isRetryableLLMError } from "../../_core/llm";
+import { checkAvoidRules, holdReason } from "../../services/research/avoidCheck";
 import { router } from "../../_core/trpc";
 import { adminWsProcedure, isAdminRole, requireMinRole, workspaceProcedure } from "../../_core/workspace";
 import { recordAudit } from "../../audit";
@@ -201,6 +202,7 @@ export async function runEnrichAgent(
     // Run deep enrichment via LLM
     const enrichResult = await invokeLLM({
       workspaceId,
+      research: { surface: "research", campaignId: prospect.campaignId, prospectTitle: prospect.title, industry: prospect.industry },
       messages: [
         {
           role: "system",
@@ -616,6 +618,7 @@ export async function generateCampaignTemplate(
   const result = await invokeLLM({
     sendersBrand: true,
     workspaceId: campaign.workspaceId,
+    research: { surface: "outreach", campaignId: campaign.id },
     messages: [
       { role: "system", content: systemContent },
       { role: "user", content: userContent },
@@ -768,6 +771,7 @@ async function personalizeForProspect(
 
   const result = await invokeLLM({
     workspaceId: campaign.workspaceId,
+    research: { surface: "outreach", campaignId: campaign.id, prospectTitle: prospect.title, industry: prospect.industry },
     messages: [
       { role: "system", content: systemContent },
       { role: "user", content: userContent },
@@ -1062,6 +1066,8 @@ export async function runSequenceAgent(
         sequenceQualityScore: null,
         sequenceQualityBreakdown: { fixed: true, note: "Fixed-copy campaign: identical steps for every prospect; no quality pass" },
         sequenceRewriteCount: 0,
+        // A person wrote this copy; the research avoid-rule hold is for AI copy.
+        copyHoldReason: null,
       };
       await db.update(prospectIntelligence).set(fixedPatch as never)
         .where(eq(prospectIntelligence.prospectQueueId, prospectId));
@@ -1100,12 +1106,27 @@ export async function runSequenceAgent(
     await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.eval",
       `Quality: ${quality.score}/40`, { prospectId, score: quality.score, breakdown: quality.breakdown });
 
-    // Save sequence + quality flag.
+    // (4) The research's avoid rules (phase 3). A break holds the sequence:
+    // enrollment skips it until a person releases or regenerates it. Runs
+    // only when the matched research has avoid rules; a check that cannot run
+    // holds nothing and says so.
+    const avoid = await checkAvoidRules(workspaceId, { campaignId, prospectTitle: prospect.title, industry: prospect.industry }, steps);
+    const copyHoldReason = holdReason(avoid.violations) || null;
+    if (avoid.error) {
+      await emitSeqLog(db, workspaceId, campaignId, "warn", "sequence.avoid",
+        `Could not check ${prospect.firstName} ${prospect.lastName}'s copy against your research's avoid rules: ${avoid.error.slice(0, 200)}`, { prospectId });
+    } else if (copyHoldReason) {
+      await emitSeqLog(db, workspaceId, campaignId, "warn", "sequence.avoid",
+        `Held ${prospect.firstName} ${prospect.lastName}'s sequence for review. ${copyHoldReason}`, { prospectId, violations: avoid.violations });
+    }
+
+    // Save sequence + quality flag (and the hold, cleared when the new copy is clean).
     await db.update(prospectIntelligence).set({
       generatedSequence: steps,
       sequenceQualityScore: quality.score,
-      sequenceQualityBreakdown: { ...quality.breakdown, feedback: quality.feedback },
+      sequenceQualityBreakdown: { ...quality.breakdown, feedback: quality.feedback, ...(avoid.violations.length ? { avoidViolations: avoid.violations } : {}) },
       sequenceRewriteCount: 0,
+      copyHoldReason,
     }).where(eq(prospectIntelligence.prospectQueueId, prospectId));
 
     // Refresh A/B Variants — opener-only (variant A, the only one that exists).
@@ -1626,6 +1647,7 @@ export const prospectsRouter = router({
           generatedSequence: prospectIntelligence.generatedSequence,
           cadenceDayOffsets: prospectIntelligence.cadenceDayOffsets,
           sequenceQualityScore: prospectIntelligence.sequenceQualityScore,
+          copyHoldReason: prospectIntelligence.copyHoldReason,
           sequenceQualityBreakdown: prospectIntelligence.sequenceQualityBreakdown,
         })
         .from(prospectQueue)
@@ -1695,6 +1717,32 @@ export const prospectsRouter = router({
    * the matching stepIndex, so the next dispatcher tick sends the EDITED
    * content instead of the stale enrollment-time snapshot.
    */
+  /**
+   * Releases a sequence held for breaking one of the research's avoid rules
+   * (Research phase 3): a person has read it and is letting it go out as it
+   * is, or after editing it. The next engine tick enrolls it. Audited, with
+   * the reason that was held.
+   */
+  releaseCopyHold: workspaceProcedure
+    .input(z.object({ prospectId: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [intel] = await db
+        .select({ id: prospectIntelligence.id, reason: prospectIntelligence.copyHoldReason })
+        .from(prospectIntelligence)
+        .where(and(eq(prospectIntelligence.prospectQueueId, input.prospectId), eq(prospectIntelligence.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!intel) throw new TRPCError({ code: "NOT_FOUND", message: "No intelligence record for this prospect" });
+      if (!intel.reason) return { released: false };
+      await db
+        .update(prospectIntelligence)
+        .set({ copyHoldReason: null })
+        .where(and(eq(prospectIntelligence.id, intel.id), eq(prospectIntelligence.workspaceId, ctx.workspace.id)));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_prospect", entityId: input.prospectId, before: { copyHoldReason: intel.reason }, after: { copyHoldReason: null, released: true } });
+      return { released: true };
+    }),
+
   editSequenceStep: workspaceProcedure
     .input(z.object({
       prospectId: z.number(),

@@ -154,6 +154,8 @@ export async function handleReferralReply(
       try {
         const res = await invokeLLM({
           workspaceId,
+          // The referred person's title, as the referrer gave it.
+          research: { surface: "outreach", prospectTitle: extracted.title ?? null },
           max_tokens: 350,
           messages: [
             {

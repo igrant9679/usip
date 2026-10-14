@@ -33,6 +33,8 @@ import {
 import { sendLinkedInInvitation, sendMessage } from "./lib/unipile";
 import { getDb } from "./db";
 import { invokeLLM } from "./_core/llm";
+import type { ResearchUse } from "./services/research/context";
+import { researchUseFor } from "./services/research/recipient";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "./services/humanCopy";
 import { isSuppressed } from "./unsubscribe";
 
@@ -148,6 +150,7 @@ function normalizeSteps(raw: unknown): Step[] {
 async function generateDynamicEmail(
   step: Step,
   workspaceId: number,
+  research?: ResearchUse,
 ): Promise<{ subject: string; body: string } | null> {
   const tone = step.aiTone ?? "professional";
   const length = step.aiLength ?? "medium";
@@ -163,6 +166,7 @@ async function generateDynamicEmail(
     const out = await invokeLLM({
       sendersBrand: true,
       workspaceId,
+      research,
       maxTokens: 700,
       temperature: 0.7,
       messages: [
@@ -477,7 +481,11 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           // AI-dynamic steps carry no static copy by design — the canvas
           // deliberately hides subject/body for them. Generate now.
           if (step.emailMode === "dynamic" && variants.length === 0) {
-            const generated = await generateDynamicEmail(step, enrollment.workspaceId);
+            const generated = await generateDynamicEmail(
+              step,
+              enrollment.workspaceId,
+              await researchUseFor(enrollment.workspaceId, "outreach", { contactId: enrollment.contactId, leadId: enrollment.leadId, prospectId: enrollment.prospectId }),
+            );
             if (generated) {
               draftSubject = generated.subject;
               draftBody = generated.body;

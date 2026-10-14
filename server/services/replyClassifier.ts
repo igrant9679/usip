@@ -21,6 +21,7 @@ import { emailReplies, emailSuppressions, enrollments, tasks, unipileAccounts, u
 import { inSendWindow } from "./sendWindow";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
+import { refFromRelated, researchUseFor } from "./research/recipient";
 import { humanizeAiCopy } from "./humanCopy";
 import { createMeetingProposal } from "./meetingScheduler";
 import { sendWorkspaceEmail } from "../emailDelivery";
@@ -94,6 +95,13 @@ Return: {
   try {
     const res = await invokeLLM({
       sendersBrand: true,
+      research: await researchUseFor(workspaceId, "reply", {
+        prospectQueueId: reply.prospectQueueId ?? null,
+        prospectId: reply.prospectId ?? null,
+        contactId: reply.contactId ?? null,
+        leadId: reply.leadId ?? null,
+        accountId: reply.accountId ?? null,
+      }),
       messages: [{ role: "user", content: prompt }],
       // outputSchema forces valid JSON for Anthropic (see taskAutopilot note).
       outputSchema: {

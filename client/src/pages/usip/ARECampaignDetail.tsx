@@ -58,6 +58,7 @@ import { AddExistingProspectsDialog } from "@/components/usip/are/AddExistingPro
 import { ActiveSequenceTimeline } from "@/components/usip/are/ActiveSequenceTimeline";
 import { AreMessageDialog } from "@/components/usip/are/AreMessageDialog";
 import { IntelligenceDossier } from "@/components/usip/are/IntelligenceDossier";
+import { CampaignResearchCard } from "@/components/usip/are/CampaignResearchCard";
 import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
 import {
@@ -1156,6 +1157,18 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
     <div className="space-y-3">
       {/* Which is which: this tab vs the Sequences page vs campaigns (owner ask 2026-09-04). */}
       <OutreachExplainer current="campaign-sequences-tab" />
+      {/* Research for this campaign (Research phase 3): which sector and persona the writers use. */}
+      <details className="rounded-lg border bg-card">
+        <summary className="cursor-pointer px-3 py-2 text-xs font-medium flex items-center gap-2 hover:bg-muted/40">
+          <Sparkles className="size-3.5 text-sky-500" /> Research for this campaign
+          <span className="text-muted-foreground font-normal ml-auto">
+            {campaign?.researchSectorId != null || campaign?.personaId != null ? "set" : "match by job title"}
+          </span>
+        </summary>
+        <div className="p-3 border-t">
+          <CampaignResearchCard campaignId={campaignId} campaign={campaign} />
+        </div>
+      </details>
       {/* Email prompt editor — collapsed by default, saves ~280px of vertical space. */}
       <details className="rounded-lg border bg-card">
         <summary className="cursor-pointer px-3 py-2 text-xs font-medium flex items-center gap-2 hover:bg-muted/40">
@@ -1239,6 +1252,11 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
                   <div className="font-medium truncate">{nm} <span className="text-muted-foreground font-normal">· {r.title ?? "—"}</span></div>
                   <div className="text-[10px] text-muted-foreground truncate">{r.companyName ?? "—"}{r.email ? ` · ${r.email}` : ""}</div>
                 </div>
+                {r.copyHoldReason && (
+                  <span className="text-[10px] shrink-0 rounded px-1.5 py-0.5 bg-amber-500/15 text-amber-700 dark:text-amber-300" title={r.copyHoldReason}>
+                    Held: avoid rule
+                  </span>
+                )}
                 {/* Step counter (only if there's a sequence) */}
                 {hasSeq ? (
                   <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{steps.length} step{steps.length === 1 ? "" : "s"}</span>
@@ -1346,6 +1364,10 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
 /** Right-side drawer: full sequence detail + inline step edit. */
 function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; campaignGapDays: number; onClose: () => void; refetch: () => void }) {
   const editStep = trpc.are.prospects.editSequenceStep.useMutation();
+  const releaseHold = trpc.are.prospects.releaseCopyHold.useMutation({
+    onError: (e) => toast.error(e.message),
+    onSuccess: async () => { toast.success("Released — it enrolls on the next engine run"); await refetch(); },
+  });
   const [editing, setEditing] = useState<{ arrayIndex: number; subject: string; body: string } | null>(null);
   const steps = (row.generatedSequence ?? []) as any[];
   // The timing that will actually be USED: the prospect's override (0170) or
@@ -1390,6 +1412,18 @@ function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; 
         </SheetDescription>
       </SheetHeader>
       <div className="py-4 space-y-3">
+        {row.copyHoldReason && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs space-y-2">
+            <div className="font-medium">Held for review</div>
+            <div className="break-words">{row.copyHoldReason}</div>
+            <div className="text-muted-foreground">
+              This sequence will not be enrolled until someone releases it. Edit the step below and release it, or regenerate the sequence (the new copy is checked again).
+            </div>
+            <Button size="sm" variant="outline" disabled={releaseHold.isPending} onClick={() => releaseHold.mutate({ prospectId: row.prospectId })}>
+              Release as it is now
+            </Button>
+          </div>
+        )}
         {steps.length === 0 ? (
           <div className="text-sm text-muted-foreground italic text-center py-6">No sequence generated yet.</div>
         ) : (

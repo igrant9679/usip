@@ -3865,6 +3865,9 @@ export const areCampaigns = mysqlTable(
     autonomyMode: mysqlEnum("autonomyMode", ["full", "batch_approval", "review_release"]).default("batch_approval").notNull(),
     icpProfileId: int("icpProfileId"),  // FK to icp_profiles; null = use latest active
     icpOverrides: json("icpOverrides"), // partial ICP overrides for this campaign
+    /** Research (migration 0203): the sector and persona whose research the AI writers use for this campaign. */
+    researchSectorId: int("researchSectorId"),
+    personaId: int("personaId"),
     // Sourcing
     prospectSources: json("prospectSources"), // ['internal','google_business','linkedin','web','news','apollo','zoominfo','clay','ai_research']
     targetProspectCount: int("targetProspectCount").default(100).notNull(),
@@ -4038,6 +4041,8 @@ export const prospectIntelligence = mysqlTable(
     sequenceQualityScore: int("sequenceQualityScore"), // 0-40 (sum of 4 dimensions × 10)
     sequenceQualityBreakdown: json("sequenceQualityBreakdown"), // {specificity, clarity, brevity, cta}
     sequenceRewriteCount: int("sequenceRewriteCount").default(0).notNull(),
+    /** Research avoid-rule hold (migration 0203): set when the generated copy breaks one; enrollment skips the prospect until a person releases or regenerates. */
+    copyHoldReason: varchar("copyHoldReason", { length: 500 }),
     enhancedHook: text("enhancedHook"),           // AI-rewritten hook after signal enhancement
     signalEnhancedAt: timestamp("signalEnhancedAt"), // when the hook was last enhanced
     generatedAt: timestamp("generatedAt").defaultNow().notNull(),

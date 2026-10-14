@@ -71,6 +71,7 @@ import {
   sequences, tasks, workflowRules, workflowRuns, workspaceSettings,
 } from "../../drizzle/schema";
 import { invokeLLM } from "../_core/llm";
+import { refFromRelated, researchUseFor } from "./research/recipient";
 import { RECORD_FIELDS } from "@shared/workflowTriggers";
 
 /**
@@ -311,6 +312,7 @@ async function runAction(
           const out = await invokeLLM({
             sendersBrand: true,
             workspaceId: ws,
+            research: await researchUseFor(ws, "outreach", refFromRelated(entity, ctx.relatedId)),
             maxTokens: 700,
             temperature: 0.7,
             messages: [

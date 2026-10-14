@@ -112,6 +112,7 @@ export const opportunityIntelligenceRouter = router({
       let result: any = {};
       try {
         const out = await invokeLLM({
+          research: { surface: "research", industry: account?.industry ?? null, prospectTitle: (oppContacts[0] as { title?: string | null } | undefined)?.title ?? null },
           messages: [
             {
               role: "system",

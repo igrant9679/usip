@@ -298,6 +298,11 @@ export async function* streamLLM(params: StreamParams): AsyncGenerator<string> {
     const { withSendersBrand } = await import("../services/brandContext");
     params = { ...params, messages: await withSendersBrand(params.workspaceId, params.messages) };
   }
+  // Same contract as invokeLLM's research (see InvokeParams).
+  if (params.research && params.workspaceId) {
+    const { withResearch } = await import("../services/research/context");
+    params = { ...params, messages: await withResearch(params.workspaceId, params.research, params.messages) };
+  }
   const creds = await loadCreds(params.workspaceId);
   const provider = resolveProvider(params.provider, creds);
   const signal = params.signal ?? new AbortController().signal;

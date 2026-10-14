@@ -96,6 +96,17 @@ export type InvokeParams = {
    * calls (scoring, research, classification, summaries for the rep).
    */
   sendersBrand?: boolean;
+  /**
+   * THE PROSPECT'S MARKET: append the workspace's own research on the market
+   * this writing is for (services/research/context, Research phase 3, owner
+   * 2026-10-14). Say what the writer knows — the ARE campaign, the persona,
+   * the prospect's title, the account's industry — and what it writes (the
+   * surface); the composer picks the sector and persona and sizes the block.
+   * Nothing matches, or the workspace has no research: nothing is added and
+   * the writer behaves as before. Every writer either sets this or is listed
+   * with a reason in server/researchCoverage.test.ts.
+   */
+  research?: import("../services/research/context").ResearchUse;
 };
 
 type ResolvedCreds = {
@@ -1072,6 +1083,10 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   if (params.sendersBrand && workspaceId) {
     const { withSendersBrand } = await import("../services/brandContext");
     params = { ...params, messages: await withSendersBrand(workspaceId, params.messages) };
+  }
+  if (params.research && workspaceId) {
+    const { withResearch } = await import("../services/research/context");
+    params = { ...params, messages: await withResearch(workspaceId, params.research, params.messages) };
   }
 
   // Both ceilings are checked BEFORE the provider call and before a

@@ -96,6 +96,7 @@ Write the brief in markdown format with these sections:
 Keep each section to 2-3 sentences. Be specific, actionable, and sales-focused.`;
 
       const result = await invokeLLM({
+        research: { surface: "research", industry: account.industry, prospectTitle: accountContacts[0]?.title ?? null },
         messages: [
           {
             role: "system",

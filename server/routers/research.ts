@@ -20,7 +20,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gt, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { personas, researchJobs, researchMarkets, researchRevisions, researchSectors, users, workspaceSettings } from "../../drizzle/schema";
+import { areCampaigns, personas, researchJobs, researchMarkets, researchRevisions, researchSectors, users, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
@@ -485,6 +485,10 @@ export const researchRouter = router({
           .set({ sectorId: null })
           .where(and(eq(personas.workspaceId, ctx.workspace.id), inArray(personas.sectorId, sectorIds)));
         await db
+          .update(areCampaigns)
+          .set({ researchSectorId: null })
+          .where(and(eq(areCampaigns.workspaceId, ctx.workspace.id), inArray(areCampaigns.researchSectorId, sectorIds)));
+        await db
           .delete(researchRevisions)
           .where(and(eq(researchRevisions.workspaceId, ctx.workspace.id), eq(researchRevisions.entityType, "sector"), inArray(researchRevisions.entityId, sectorIds)));
         await db
@@ -572,6 +576,10 @@ export const researchRouter = router({
         .update(personas)
         .set({ sectorId: null })
         .where(and(eq(personas.workspaceId, ctx.workspace.id), eq(personas.sectorId, row.id)));
+      await db
+        .update(areCampaigns)
+        .set({ researchSectorId: null })
+        .where(and(eq(areCampaigns.workspaceId, ctx.workspace.id), eq(areCampaigns.researchSectorId, row.id)));
       await db
         .delete(researchRevisions)
         .where(and(eq(researchRevisions.workspaceId, ctx.workspace.id), eq(researchRevisions.entityType, "sector"), eq(researchRevisions.entityId, row.id)));

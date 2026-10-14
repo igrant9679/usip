@@ -236,7 +236,7 @@ super_admin (everything, including creating and transferring workspaces) → adm
 
 ## Lists, segments, personas, ICP, brand voice
 
-Lists are hand-picked and static. Segments are rule-based and stay current. Personas describe the buyers (who to find, what they care about, pains, objections, angle) and set a new campaign's targeting; they live under Research, optionally in a sector. The ICP profile is regenerated from won deals and engagement on the workspace's ICP Re-inference Schedule (ARE Settings) — daily by default, and Manual Only turns the automatic pass off — and drives discovery targeting. Brand voice (tone, vocabulary, avoid-words, from-name) is read by every AI-written email and chat reply.`,
+Lists are hand-picked and static. Segments are rule-based and stay current. Personas describe the buyers (who to find, what they care about, pains, objections, angle) set a new campaign's targeting, and are read by the AI writers; they live under Research, optionally in a sector. The ICP profile is regenerated from won deals and engagement on the workspace's ICP Re-inference Schedule (ARE Settings) — daily by default, and Manual Only turns the automatic pass off — and drives discovery targeting. Brand voice (tone, vocabulary, avoid-words, from-name) is read by every AI-written email and chat reply.`,
   },
   {
     slug: "om-revenue-engine-lifecycle",

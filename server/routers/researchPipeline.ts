@@ -26,6 +26,7 @@ import {
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
+import type { ResearchUse } from "../services/research/context";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 
@@ -83,11 +84,12 @@ async function getRecipientContext(
   return { personName, personTitle, personEmail, companyName, companyIndustry, companySize, companyRevenue };
 }
 
-async function llmJson<T>(messages: any[], schema: any, fallback: T, opts?: { sendersBrand?: boolean }): Promise<T> {
+async function llmJson<T>(messages: any[], schema: any, fallback: T, opts?: { sendersBrand?: boolean }, research?: ResearchUse): Promise<T> {
   try {
     const out = await invokeLLM({
       messages,
       sendersBrand: opts?.sendersBrand,
+      research,
       response_format: {
         type: "json_schema",
         json_schema: { name: "output", strict: true, schema },
@@ -163,6 +165,8 @@ export const researchPipelineRouter = router({
         leadId: input.leadId,
         accountId: input.accountId,
       });
+      // The prospect's market research, by their title and industry.
+      const marketFor = (surface: "research" | "outreach"): ResearchUse => ({ surface, prospectTitle: recipient.personTitle || null, industry: recipient.companyIndustry || null });
 
       try {
         /* ── Stage 1: Prospect research ── */
@@ -186,6 +190,8 @@ export const researchPipelineRouter = router({
             additionalProperties: false,
           },
           { personSummary: "", companySummary: "", likelyPainPoints: [], relevantContext: "" },
+          undefined,
+          marketFor("research"),
         );
         await db.update(researchPipelines).set({ stage1_prospect: stage1, currentStage: 2 }).where(eq(researchPipelines.id, pipelineId));
 
@@ -216,6 +222,8 @@ export const researchPipelineRouter = router({
             additionalProperties: false,
           },
           { signals: [], bestTimingRationale: "" },
+          undefined,
+          marketFor("research"),
         );
         await db.update(researchPipelines).set({ stage2_signals: stage2, currentStage: 3 }).where(eq(researchPipelines.id, pipelineId));
 
@@ -245,6 +253,8 @@ export const researchPipelineRouter = router({
             additionalProperties: false,
           },
           { angles: [] },
+          undefined,
+          marketFor("research"),
         );
         await db.update(researchPipelines).set({ stage3_angles: stage3, currentStage: 4 }).where(eq(researchPipelines.id, pipelineId));
 
@@ -281,6 +291,7 @@ export const researchPipelineRouter = router({
           { variants: [] },
           // Stage 4 writes the emails a prospect receives; stages 1-3 are research.
           { sendersBrand: true },
+          marketFor("outreach"),
         );
         await db.update(researchPipelines).set({ stage4_draft: stage4, currentStage: 5 }).where(eq(researchPipelines.id, pipelineId));
 

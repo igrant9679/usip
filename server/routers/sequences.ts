@@ -8,6 +8,7 @@ import { recordAudit } from "../audit";
 import { checkPermission, getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
+import { researchUseFor } from "../services/research/recipient";
 import { buildBrandContext } from "../services/brandContext";
 import { isSuppressed, makeUnsubscribeUrl, unsubscribeHeaders } from "../unsubscribe";
 import { bumpCampaignCounter } from "../campaignCounters";
@@ -2170,6 +2171,7 @@ export const emailDraftsRouter = router({
       let body = "";
       try {
         const out = await invokeLLM({
+          research: await researchUseFor(ctx.workspace.id, "outreach", { contactId: input.toContactId, leadId: input.toLeadId }),
           messages: [
             {
               role: "system",

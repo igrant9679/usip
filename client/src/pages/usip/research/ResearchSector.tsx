@@ -163,7 +163,7 @@ export default function ResearchSector() {
       </PageHeader>
 
       <div className="p-4 md:p-6 space-y-4 w-full max-w-5xl">
-        <Section title="Overview" description="Once the AI writers read research, they will use a sector only when it is Researched or Verified.">
+        <Section title="Overview" description="The AI writers use a sector only when it is Researched or Verified.">
           <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem_10rem]">
             <div className="space-y-2">
               <Label>Name</Label>
@@ -296,7 +296,7 @@ export default function ResearchSector() {
           <TagInput label="Never target" hint="Short words. A title, company name or industry containing one is off target." value={t.exclude} disabled={ro} onChange={(v) => setT({ exclude: v })} placeholder="student, intern, vendor…" />
         </Section>
 
-        <Section title="Messaging" description="How to talk to this sector. Coming next: every AI writer reads this, and copy is checked against the avoid rules.">
+        <Section title="Messaging" description="How to talk to this sector. Every AI writer reads this, and new sequences that break an avoid rule are held for review.">
           <LinesInput label="Lead with" hint="One per line." value={m.leadWith} disabled={ro} onChange={(v) => setM({ leadWith: v })} rows={3} />
           <LinesInput label="Avoid" hint="Things never to say or claim. One per line." value={m.avoid} disabled={ro} onChange={(v) => setM({ avoid: v })} rows={3} />
           <TagInput label="Vocabulary" hint="Words this sector uses." value={m.vocabulary} disabled={ro} onChange={(v) => setM({ vocabulary: v })} />

@@ -65,6 +65,8 @@ export type ScriptInput = {
   companyName: string;
   /** Workspace brand block (buildBrandContext), already formatted. */
   brand?: string;
+  /** The person's market, from the workspace's Research (short "voice" block: persona, words, never-say; no statistics). */
+  research?: string;
   /** The agent's own custom instructions (Settings). */
   agentInstructions?: string | null;
   /** Approver-visible notes for this call. */
@@ -174,6 +176,7 @@ export function buildCallInstructions(s: ScriptInput): string {
   const custom = cleanNotes(s.agentInstructions, 4000);
   if (custom) parts.push(`Additional guidance from your team (it never overrides the rules above or the opening disclosure):\n${custom}`);
   if (s.brand?.trim()) parts.push(s.brand.trim());
+  if (s.research?.trim()) parts.push(s.research.trim());
   return parts.join("\n\n");
 }
 

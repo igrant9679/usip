@@ -16,6 +16,7 @@ import {
   leads,
 } from "../../drizzle/schema";
 import { invokeLLM } from "../_core/llm";
+import { researchUseFor } from "../services/research/recipient";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../services/humanCopy";
 
 /* ─── Helpers ─────────────────────────────────────────────────────────── */
@@ -99,7 +100,10 @@ export async function runPipelineForContact(
     const fullName = `${firstName} ${lastName}`.trim();
 
     // Stage 1 — Org Research
+    const marketResearch = { surface: "research" as const, prospectTitle: title, industry };
     const orgResearchRes = await invokeLLM({
+      workspaceId,
+      research: marketResearch,
       messages: [
         {
           role: "system",
@@ -124,6 +128,8 @@ Summarize: (1) what the company does, (2) recent news or growth signals, (3) lik
 
     // Stage 2 — Contact Research
     const contactResearchRes = await invokeLLM({
+      workspaceId,
+      research: marketResearch,
       messages: [
         {
           role: "system",
@@ -149,6 +155,8 @@ Summarize: (1) their likely role and decision-making authority, (2) professional
 
     // Stage 3 — Fit Analysis (structured JSON)
     const fitAnalysisRes = await invokeLLM({
+      workspaceId,
+      research: marketResearch,
       messages: [
         {
           role: "system",
@@ -228,6 +236,7 @@ Return JSON with these exact fields:
       const draftRes = await invokeLLM({
         workspaceId,
         sendersBrand: true,
+        research: { surface: "outreach", prospectTitle: title, industry },
         messages: [
           {
             role: "system",
@@ -577,6 +586,7 @@ export const aiPipelineRouter = router({
 
       const regenRes = await invokeLLM({
         sendersBrand: true,
+        research: await researchUseFor(ctx.workspace.id, "outreach", { contactId: draft.toContactId, leadId: draft.toLeadId, prospectId: draft.toProspectId }),
         messages: [
           {
             role: "system",

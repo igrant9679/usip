@@ -32,6 +32,7 @@ import { and, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "
 import { activities, calendarAccounts, calendarEvents, contacts, leads, meetings, notifications, prospects, users, workspaceMembers, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
+import { refFromRelated, researchUseFor } from "./research/recipient";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "./humanCopy";
 import { buildBrandContext } from "./brandContext";
 import { proposalKnowledgeQuery } from "./knowledgeQueries";
@@ -469,6 +470,7 @@ ${HUMAN_COPY_RULES}`;
   let confidence = 60;
   try {
     const res = await invokeLLM({
+      research: await researchUseFor(workspaceId, "outreach", refFromRelated(target.relatedType, target.relatedId)),
       messages: [{ role: "user", content: prompt }],
       // outputSchema forces valid JSON for Anthropic (see taskAutopilot note).
       outputSchema: {

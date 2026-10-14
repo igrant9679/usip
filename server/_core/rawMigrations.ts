@@ -4622,6 +4622,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0203: Research, phase 3 — which research a campaign uses ─────────────
+  // Owner, 2026-10-14 ("start phase 3"): every AI writer gets the research for
+  // the prospect's market; a campaign names its sector and persona so its
+  // writers do not have to guess from job titles.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0203_campaign_research.sql",
+    statements: [
+      "ALTER TABLE `are_campaigns` ADD COLUMN `researchSectorId` int NULL",
+      "ALTER TABLE `are_campaigns` ADD COLUMN `personaId` int NULL",
+      "ALTER TABLE `prospect_intelligence` ADD COLUMN `copyHoldReason` varchar(500) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

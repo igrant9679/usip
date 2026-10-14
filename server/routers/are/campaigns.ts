@@ -7,7 +7,17 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { areCampaigns, campaignRoutingSuggestions, personas, prospectIntelligence, prospectQueue, prospects, sequences, workspaceSettings } from "../../../drizzle/schema";
+import { areCampaigns, campaignRoutingSuggestions, personas, prospectIntelligence, prospectQueue, prospects, researchSectors, sequences, workspaceSettings } from "../../../drizzle/schema";
+
+/** A caller-chosen research sector must be this workspace's. */
+async function assertResearchSectorInWorkspace(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, sectorId: number, workspaceId: number) {
+  const [row] = await db
+    .select({ id: researchSectors.id })
+    .from(researchSectors)
+    .where(and(eq(researchSectors.id, sectorId), eq(researchSectors.workspaceId, workspaceId)))
+    .limit(1);
+  if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Research sector not found" });
+}
 import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
@@ -79,6 +89,8 @@ export const campaignsRouter = router({
          * icpOverrides keys win.
          */
         personaId: z.number().optional(),
+        /** Research (phase 3): the sector whose research this campaign's AI writers use. Defaults to the persona's sector. */
+        researchSectorId: z.number().int().nullable().optional(),
         /**
          * Per-campaign targeting that overrides the workspace ICP for this
          * campaign's discovery. The wizard fills this with
@@ -128,6 +140,14 @@ export const campaignsRouter = router({
 
       // Resolve persona → seed icpOverrides if a personaId was supplied.
       let icpOverrides: any = input.icpOverrides;
+      // Research (phase 3): the campaign remembers its persona and sector so
+      // its writers use that research instead of guessing from job titles.
+      let personaIdKept: number | null = null;
+      let researchSectorId: number | null = null;
+      if (input.researchSectorId != null) {
+        await assertResearchSectorInWorkspace(db, input.researchSectorId, ctx.workspace.id);
+        researchSectorId = input.researchSectorId;
+      }
       if (input.personaId) {
         const [p] = await db
           .select()
@@ -135,6 +155,8 @@ export const campaignsRouter = router({
           .where(and(eq(personas.id, input.personaId), eq(personas.workspaceId, ctx.workspace.id)))
           .limit(1);
         if (p) {
+          personaIdKept = p.id;
+          researchSectorId ??= p.sectorId ?? null;
           icpOverrides = {
             targetTitles: p.targetTitles ?? [],
             targetIndustries: p.targetIndustries ?? [],
@@ -178,6 +200,8 @@ export const campaignsRouter = router({
           goalType: input.goalType,
           autoApproveThreshold: input.autoApproveThreshold ?? null,
           signalToOpportunityEnabled: input.signalToOpportunityEnabled,
+          personaId: personaIdKept,
+          researchSectorId,
           ownerUserId: ctx.user.id,
           ...(input.launch ? { status: "active" as const, startedAt: new Date() } : {}),
         })
@@ -533,6 +557,9 @@ export const campaignsRouter = router({
         autoApproveThreshold: z.number().min(0).max(100).nullable().optional(),
         minConfidence: z.number().int().min(0).max(100).nullable().optional(),
         signalToOpportunityEnabled: z.boolean().optional(),
+        /** Research (phase 3): which sector and persona the AI writers use; null clears. */
+        researchSectorId: z.number().int().nullable().optional(),
+        personaId: z.number().int().nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -559,6 +586,21 @@ export const campaignsRouter = router({
       // bust the column could be changed and never read again — generateCampaign-
       // Template's force=true branch has no caller.
       let bustTemplate = false;
+      // The skeleton is written with the campaign's research, so a new sector
+      // or persona means a new skeleton.
+      if (rest.researchSectorId !== undefined) {
+        if (rest.researchSectorId != null) await assertResearchSectorInWorkspace(db, rest.researchSectorId, ctx.workspace.id);
+        updates.researchSectorId = rest.researchSectorId ?? null;
+        bustTemplate = true;
+      }
+      if (rest.personaId !== undefined) {
+        if (rest.personaId != null) {
+          const [p] = await db.select({ id: personas.id }).from(personas).where(and(eq(personas.id, rest.personaId), eq(personas.workspaceId, ctx.workspace.id))).limit(1);
+          if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Persona not found" });
+        }
+        updates.personaId = rest.personaId ?? null;
+        bustTemplate = true;
+      }
       if (rest.sequenceTemplate !== undefined) {
         updates.sequenceTemplate = rest.sequenceTemplate;
         bustTemplate = true;

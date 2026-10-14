@@ -151,6 +151,7 @@ Keep each section to 2-3 sentences. Be specific, actionable, and sales-focused.`
             { role: "user", content: prompt },
           ],
           workspaceId,
+          research: { surface: "research", industry: account.industry, prospectTitle: accountContacts[0]?.title ?? null },
           signal: abort.signal,
         })) {
           if (res.writableEnded) break;

@@ -640,6 +640,10 @@ async function enrollApprovedForCampaignUnlocked(
           // JSON_LENGTH the second.
           sql`(JSON_TYPE(${prospectIntelligence.generatedSequence}) = 'ARRAY'
                AND JSON_LENGTH(${prospectIntelligence.generatedSequence}) > 0)`,
+          // Research phase 3: copy that breaks one of the research's avoid
+          // rules waits for a person to release or regenerate it, in every
+          // autonomy mode, since no mode has anyone read the copy first.
+          isNull(prospectIntelligence.copyHoldReason),
         ),
       )
       // Oldest approved first. Anything but an arbitrary page.
@@ -669,6 +673,25 @@ async function enrollApprovedForCampaignUnlocked(
         ),
       );
     const unusableCount = Number(unusable?.n ?? 0);
+
+    // Held for an avoid rule, and SAID so — same trade as the counters here.
+    const [held] = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(prospectQueue)
+      .innerJoin(prospectIntelligence, eq(prospectIntelligence.prospectQueueId, prospectQueue.id))
+      .where(
+        and(
+          eq(prospectQueue.campaignId, campId),
+          eq(prospectQueue.workspaceId, wsId),
+          eq(prospectQueue.sequenceStatus, "approved"),
+          isNotNull(prospectIntelligence.copyHoldReason),
+        ),
+      );
+    const heldCount = Number(held?.n ?? 0);
+    if (heldCount > 0) {
+      await emitLog(wsId, campId, "enroll", "warn",
+        `${heldCount} approved prospect${heldCount === 1 ? "'s sequence breaks" : "s' sequences break"} an avoid rule from your research and ${heldCount === 1 ? "is" : "are"} waiting for review — open the prospect to release or regenerate.`);
+    }
     if (unusableCount > 0) {
       await emitLog(wsId, campId, "enroll", "warn",
         `${unusableCount} approved prospect${unusableCount === 1 ? " has" : "s have"} a generated sequence with no usable steps — not enrolled. Regenerate the sequence for these prospects.`);
