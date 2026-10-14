@@ -271,7 +271,7 @@ export const MARKET_DRAFT_SCHEMA = O({
 });
 
 const DRAFT_SYSTEM = [
-  "Turn the research brief into the structured record: reply with the JSON object only.",
+  "Turn the research brief into the structured record.",
   "Use only what the brief says. Copy figures exactly as written. For each figure, put the URL the brief gives for it.",
   "Only use URLs from the brief or the numbered source list. Leave a field empty when the brief does not support it.",
   "Job titles: clean titles as they appear on LinkedIn. Industries: LinkedIn industry names. Never-target words: short single words or short phrases.",
@@ -418,34 +418,25 @@ function addUsage(t: Totals, model: ResearchModelId, u: ResearchUsage): void {
 const totalsRow = (t: Totals) => ({ ...t, costUsd: t.costUsd.toFixed(4) });
 
 /**
- * The draft schema in the form structured outputs accept: every object closed
- * (`additionalProperties: false`) with every property required, and no
- * `minimum` / `maximum` (unsupported). Required-everything is deliberate: the
- * API counts optional properties against a small budget, and "leave it empty"
- * is how the prompt asks for unknowns anyway.
+ * How the draft is asked for, learned on the first two live runs (2026-10-14):
+ *   - a FORCED tool call is refused by Opus 5.5 ("tool_choice: type tool and
+ *     any are not supported for this model");
+ *   - a structured output (output_config.format) of the sector schema is
+ *     refused as "The compiled grammar is too large".
+ * So the record tool is offered with tool_choice "auto" and the prompt tells
+ * the model to call it. A non-strict tool compiles no grammar, and the shared
+ * cleaners check every field anyway. A model that answers in JSON text
+ * instead is read too.
  */
-export function strictSchema(node: unknown): unknown {
-  if (Array.isArray(node)) return node.map(strictSchema);
-  if (!node || typeof node !== "object") return node;
-  const o: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-    if (k === "minimum" || k === "maximum") continue;
-    o[k] = strictSchema(v);
-  }
-  if (o.type === "object" && o.properties && typeof o.properties === "object") {
-    o.additionalProperties = false;
-    o.required = Object.keys(o.properties as Record<string, unknown>);
-  }
-  return o;
-}
-
-/** The JSON a structured-output response carries in its text. */
-export function parseDraftJson(res: Pick<Anthropic.Message, "content" | "stop_reason">): Record<string, unknown> {
+export function draftInputOf(res: Pick<Anthropic.Message, "content" | "stop_reason">, toolName: string): Record<string, unknown> {
   if (res.stop_reason === "refusal") throw new Error("The model declined to write the draft. Try again with a narrower focus.");
+  const call = res.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === toolName);
+  if (call && call.input && typeof call.input === "object" && !Array.isArray(call.input)) return call.input as Record<string, unknown>;
   if (res.stop_reason === "max_tokens") throw new Error("The draft was longer than the model could write in one go. Use Draft again, or narrow the focus.");
   const text = res.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("");
+  const body = text.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1] ?? text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
   try {
-    const parsed = JSON.parse(text);
+    const parsed = JSON.parse(body);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
   } catch {
     // fall through
@@ -512,7 +503,8 @@ export async function runResearchJob(id: number, signal: AbortSignal): Promise<v
         const res = await runAnthropicServerTools({
           workspaceId: job.workspaceId,
           signal,
-          onBlock: (b) => { const l = progressLine(b); if (l) note(l); },
+          // Dynamic filtering can report one search twice; show it once.
+          onBlock: (b) => { const l = progressLine(b); if (l && progress[progress.length - 1]?.line !== l) note(l); },
           params: {
             model,
             max_tokens: BRIEF_MAX_TOKENS,
@@ -555,21 +547,25 @@ export async function runResearchJob(id: number, signal: AbortSignal): Promise<v
     if (signal.aborted) throw signal.reason ?? new Error("cancelled");
     note("Writing the draft");
     const sourceList = dedupeSources(seen).map((s, i) => `[${i + 1}] ${s.title} — ${s.url}`).join("\n");
+    const toolName = job.kind === "market" ? "record_market" : "record_sector";
     const res2 = await runAnthropicServerTools({
       workspaceId: job.workspaceId,
       signal,
       params: {
         model,
         max_tokens: DRAFT_MAX_TOKENS,
-        system: DRAFT_SYSTEM,
+        system: `${DRAFT_SYSTEM}\nCall the ${toolName} tool exactly once with the whole record. Do not answer in text.`,
         messages: [{ role: "user", content: `Research brief:\n\n${brief}\n\nSources the research searched or read:\n${sourceList || "(none)"}` }],
-        // Structured outputs, not a forced tool call: Opus 5.5 refuses
-        // tool_choice "tool" (found on the first live run, 2026-10-14).
-        output_config: { format: { type: "json_schema", schema: strictSchema(job.kind === "market" ? MARKET_DRAFT_SCHEMA : SECTOR_DRAFT_SCHEMA) as Record<string, unknown> } },
+        tools: [{
+          name: toolName,
+          description: job.kind === "market" ? "Record the market research." : "Record the sector research.",
+          input_schema: (job.kind === "market" ? MARKET_DRAFT_SCHEMA : SECTOR_DRAFT_SCHEMA) as Anthropic.Tool["input_schema"],
+        }],
+        tool_choice: { type: "auto" },
       },
     });
     addUsage(totals, model, res2.usage);
-    const input = parseDraftJson(res2);
+    const input = draftInputOf(res2, toolName);
 
     const { draft, dropped } = finishDraft({ kind: job.kind, name: job.subject, input, seen, cited, today });
     const linkDrops = dropped.filter((d) => d.startsWith("link ")).length;

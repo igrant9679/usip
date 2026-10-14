@@ -47,11 +47,9 @@ vi.mock("./services/research/engine", async (importActual) => ({
 import { appRouter } from "./routers";
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import {
-  SECTOR_DRAFT_SCHEMA,
+  draftInputOf,
   finishDraft,
   friendlyError,
-  parseDraftJson,
-  strictSchema,
   keepSeenLinks,
   linkKey,
   progressLine,
@@ -190,27 +188,14 @@ describe("accepting parts", () => {
   });
 });
 
-describe("structured output", () => {
-  it("closes every object, requires every property and drops min/max", () => {
-    const s = strictSchema({ type: "object", properties: { a: { type: ["integer", "null"], minimum: 1, maximum: 5 }, b: { type: "array", items: { type: "object", properties: { c: { type: "string" } } } } } }) as any;
-    expect(s).toEqual({
-      type: "object",
-      properties: { a: { type: ["integer", "null"] }, b: { type: "array", items: { type: "object", properties: { c: { type: "string" } }, additionalProperties: false, required: ["c"] } } },
-      additionalProperties: false,
-      required: ["a", "b"],
-    });
-  });
-
-  it("stays inside the API's union-type budget (16)", () => {
-    const count = (n: any): number => !n || typeof n !== "object" ? 0 : (Array.isArray(n.type) ? 1 : 0) + Object.values(n).reduce((a: number, v) => a + count(v), 0);
-    expect(count(strictSchema(SECTOR_DRAFT_SCHEMA))).toBeLessThanOrEqual(16);
-  });
-
-  it("reads the JSON, and says what to do when there is none", () => {
-    expect(parseDraftJson({ content: [{ type: "text", text: '{"a":1}' }] as any, stop_reason: "end_turn" })).toEqual({ a: 1 });
-    expect(() => parseDraftJson({ content: [] as any, stop_reason: "refusal" })).toThrow(/declined/);
-    expect(() => parseDraftJson({ content: [] as any, stop_reason: "max_tokens" })).toThrow(/longer than/);
-    expect(() => parseDraftJson({ content: [{ type: "text", text: "[1]" }] as any, stop_reason: "end_turn" })).toThrow(/not a draft/);
+describe("reading the draft", () => {
+  it("takes the record tool's input, else JSON in the text, and says what to do when there is neither", () => {
+    expect(draftInputOf({ content: [{ type: "tool_use", id: "t", name: "record_sector", input: { a: 1 } }] as any, stop_reason: "tool_use" }, "record_sector")).toEqual({ a: 1 });
+    expect(draftInputOf({ content: [{ type: "tool_use", id: "t", name: "other", input: { a: 1 } }, { type: "text", text: 'Here: {"b":2}' }] as any, stop_reason: "end_turn" }, "record_sector")).toEqual({ b: 2 });
+    expect(draftInputOf({ content: [{ type: "text", text: "```json\n{\"c\":3}\n```" }] as any, stop_reason: "end_turn" }, "record_sector")).toEqual({ c: 3 });
+    expect(() => draftInputOf({ content: [] as any, stop_reason: "refusal" }, "record_sector")).toThrow(/declined/);
+    expect(() => draftInputOf({ content: [{ type: "text", text: "{cut" }] as any, stop_reason: "max_tokens" }, "record_sector")).toThrow(/longer than/);
+    expect(() => draftInputOf({ content: [{ type: "text", text: "no draft here" }] as any, stop_reason: "end_turn" }, "record_sector")).toThrow(/not a draft/);
   });
 });
 
@@ -260,10 +245,9 @@ const DRAFT_INPUT = {
   },
   personas: [{ name: "Director of Federal Programs", titles: ["Director of Federal Programs"], cares: "Compliance", pains: ["Audits"], objections: ["Time"], angle: "Trail" }],
 };
-// Structured outputs: the draft arrives as JSON in a text block.
 const DRAFT = {
-  content: [{ type: "text", text: JSON.stringify(DRAFT_INPUT) }],
-  stop_reason: "end_turn",
+  content: [{ type: "tool_use", id: "t1", name: "record_sector", input: DRAFT_INPUT }],
+  stop_reason: "tool_use",
   usage: { input_tokens: 3000, output_tokens: 1500 },
 };
 
@@ -304,16 +288,14 @@ describe("a research run", () => {
     expect(second.params.container).toBe("cont_1");
     expect(second.params.tools[0].max_uses).toBe(11);
     // The draft call sees the brief and the pages, and is forced to the tool.
-    // Opus 5.5 refuses a forced tool call (first live run, 2026-10-14): the
-    // draft is a structured output with a strict schema instead.
-    expect(third.params.tool_choice).toBeUndefined();
-    expect(third.params.tools).toBeUndefined();
-    const schema = third.params.output_config.format.schema;
-    expect(third.params.output_config.format.type).toBe("json_schema");
-    expect(schema.additionalProperties).toBe(false);
-    expect(schema.required).toContain("personas");
-    expect(schema.properties.personas.items.additionalProperties).toBe(false);
-    expect(JSON.stringify(schema)).not.toMatch(/"(minimum|maximum)"/);
+    // Opus 5.5 refuses a forced tool call, and the sector schema is too big
+    // for a structured output's grammar (both found live, 2026-10-14): the
+    // record tool is offered with "auto" and the prompt says to call it.
+    expect(third.params.tool_choice).toEqual({ type: "auto" });
+    expect(third.params.output_config).toBeUndefined();
+    expect(third.params.tools.map((t: any) => t.name)).toEqual(["record_sector"]);
+    expect(third.params.tools[0].input_schema.properties.personas).toBeDefined();
+    expect(third.params.system).toContain("Call the record_sector tool exactly once");
     expect(third.params.messages[0].content).toContain("[1] Fast Facts — https://nces.ed.gov/fast");
     // The research turns are cached, so a continuation re-reads at the cache rate.
     expect(first.params.cache_control).toEqual({ type: "ephemeral" });
@@ -341,7 +323,7 @@ describe("a research run", () => {
     job = h.db.rowsOf("research_jobs")[0];
     expect(job.status).toBe("done");
     expect(h.calls).toHaveLength(1);
-    expect(h.calls[0].params.output_config).toBeDefined();
+    expect(h.calls[0].params.tool_choice).toEqual({ type: "auto" });
     expect(job.searches).toBe(1);
     expect([job.inputTokens, job.outputTokens]).toEqual([1000 + 5000 + 3000 + 3000, 100 + 2000 + 10 + 1500]);
     expect(Number(job.costUsd)).toBeCloseTo(spent + (3000 * 4 + 1500 * 20) / 1e6, 4);
