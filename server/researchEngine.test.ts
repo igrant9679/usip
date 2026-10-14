@@ -47,8 +47,11 @@ vi.mock("./services/research/engine", async (importActual) => ({
 import { appRouter } from "./routers";
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import {
+  SECTOR_DRAFT_SCHEMA,
   finishDraft,
   friendlyError,
+  parseDraftJson,
+  strictSchema,
   keepSeenLinks,
   linkKey,
   progressLine,
@@ -187,6 +190,30 @@ describe("accepting parts", () => {
   });
 });
 
+describe("structured output", () => {
+  it("closes every object, requires every property and drops min/max", () => {
+    const s = strictSchema({ type: "object", properties: { a: { type: ["integer", "null"], minimum: 1, maximum: 5 }, b: { type: "array", items: { type: "object", properties: { c: { type: "string" } } } } } }) as any;
+    expect(s).toEqual({
+      type: "object",
+      properties: { a: { type: ["integer", "null"] }, b: { type: "array", items: { type: "object", properties: { c: { type: "string" } }, additionalProperties: false, required: ["c"] } } },
+      additionalProperties: false,
+      required: ["a", "b"],
+    });
+  });
+
+  it("stays inside the API's union-type budget (16)", () => {
+    const count = (n: any): number => !n || typeof n !== "object" ? 0 : (Array.isArray(n.type) ? 1 : 0) + Object.values(n).reduce((a: number, v) => a + count(v), 0);
+    expect(count(strictSchema(SECTOR_DRAFT_SCHEMA))).toBeLessThanOrEqual(16);
+  });
+
+  it("reads the JSON, and says what to do when there is none", () => {
+    expect(parseDraftJson({ content: [{ type: "text", text: '{"a":1}' }] as any, stop_reason: "end_turn" })).toEqual({ a: 1 });
+    expect(() => parseDraftJson({ content: [] as any, stop_reason: "refusal" })).toThrow(/declined/);
+    expect(() => parseDraftJson({ content: [] as any, stop_reason: "max_tokens" })).toThrow(/longer than/);
+    expect(() => parseDraftJson({ content: [{ type: "text", text: "[1]" }] as any, stop_reason: "end_turn" })).toThrow(/not a draft/);
+  });
+});
+
 describe("error messages a person can act on", () => {
   it("names the fix", () => {
     expect(friendlyError(Object.assign(new Error("x"), { status: 401 }))).toMatch(/key was refused/);
@@ -225,19 +252,18 @@ const RESEARCH_2 = {
   stop_reason: "end_turn",
   usage: { input_tokens: 5000, output_tokens: 2000, server_tool_use: { web_search_requests: 0, web_fetch_requests: 1 } },
 };
+const DRAFT_INPUT = {
+  summary: "Public school districts",
+  targeting: { titles: ["Superintendent"], exclude: ["student"] },
+  facts: {
+    marketSize: [{ value: "13,000", label: "districts", source: "http://ed.gov/title-i/" }, { value: "$50B", label: "spend", source: "https://made.up/report" }],
+  },
+  personas: [{ name: "Director of Federal Programs", titles: ["Director of Federal Programs"], cares: "Compliance", pains: ["Audits"], objections: ["Time"], angle: "Trail" }],
+};
+// Structured outputs: the draft arrives as JSON in a text block.
 const DRAFT = {
-  content: [{
-    type: "tool_use", id: "t1", name: "record_sector",
-    input: {
-      summary: "Public school districts",
-      targeting: { titles: ["Superintendent"], exclude: ["student"] },
-      facts: {
-        marketSize: [{ value: "13,000", label: "districts", source: "http://ed.gov/title-i/" }, { value: "$50B", label: "spend", source: "https://made.up/report" }],
-      },
-      personas: [{ name: "Director of Federal Programs", titles: ["Director of Federal Programs"], cares: "Compliance", pains: ["Audits"], objections: ["Time"], angle: "Trail" }],
-    },
-  }],
-  stop_reason: "tool_use",
+  content: [{ type: "text", text: JSON.stringify(DRAFT_INPUT) }],
+  stop_reason: "end_turn",
   usage: { input_tokens: 3000, output_tokens: 1500 },
 };
 
@@ -278,9 +304,59 @@ describe("a research run", () => {
     expect(second.params.container).toBe("cont_1");
     expect(second.params.tools[0].max_uses).toBe(11);
     // The draft call sees the brief and the pages, and is forced to the tool.
-    expect(third.params.tool_choice).toEqual({ type: "tool", name: "record_sector" });
+    // Opus 5.5 refuses a forced tool call (first live run, 2026-10-14): the
+    // draft is a structured output with a strict schema instead.
+    expect(third.params.tool_choice).toBeUndefined();
+    expect(third.params.tools).toBeUndefined();
+    const schema = third.params.output_config.format.schema;
+    expect(third.params.output_config.format.type).toBe("json_schema");
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toContain("personas");
+    expect(schema.properties.personas.items.additionalProperties).toBe(false);
+    expect(JSON.stringify(schema)).not.toMatch(/"(minimum|maximum)"/);
     expect(third.params.messages[0].content).toContain("[1] Fast Facts — https://nces.ed.gov/fast");
-    expect(third.params.tools[0].input_schema.properties.personas).toBeDefined();
+    // The research turns are cached, so a continuation re-reads at the cache rate.
+    expect(first.params.cache_control).toEqual({ type: "ephemeral" });
+    expect(second.params.cache_control).toEqual({ type: "ephemeral" });
+    expect(third.params.cache_control).toBeUndefined();
+  });
+
+  it("a drafting failure keeps the paid-for research, and Draft again drafts from it without searching", async () => {
+    seedSectorJob();
+    h.script = [RESEARCH_1, RESEARCH_2, { content: [{ type: "text", text: "not json" }], stop_reason: "end_turn", usage: { input_tokens: 3000, output_tokens: 10 } }];
+    await runResearchJob(1, new AbortController().signal);
+    let job = h.db.rowsOf("research_jobs")[0];
+    expect(job.status).toBe("failed");
+    expect(job.error).toMatch(/not a draft/);
+    expect(job.brief).toContain("13,000 districts");
+    expect(job.sources.map((x: any) => x.url)).toEqual(["https://nces.ed.gov/fast", "https://www.ed.gov/title-i"]);
+    const spent = Number(job.costUsd);
+
+    await caller(2).research.runs.redraft({ id: 1 });
+    expect(h.enqueued).toEqual([1]);
+    expect(job.status).toBe("queued");
+    h.calls = [];
+    h.script = [DRAFT];
+    await runResearchJob(1, new AbortController().signal);
+    job = h.db.rowsOf("research_jobs")[0];
+    expect(job.status).toBe("done");
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0].params.output_config).toBeDefined();
+    expect(job.searches).toBe(1);
+    expect([job.inputTokens, job.outputTokens]).toEqual([1000 + 5000 + 3000 + 3000, 100 + 2000 + 10 + 1500]);
+    expect(Number(job.costUsd)).toBeCloseTo(spent + (3000 * 4 + 1500 * 20) / 1e6, 4);
+    expect(job.draft.content.facts.marketSize).toEqual([{ value: "13,000", label: "districts", source: "http://ed.gov/title-i/" }]);
+    expect(job.progress.map((p: any) => p.line)).toEqual(expect.arrayContaining(["Drafting again from the saved research"]));
+  });
+
+  it("only a run that failed after its research can draft again, in its own workspace", async () => {
+    seedSectorJob({ status: "failed", brief: "" });
+    await expect(caller(2).research.runs.redraft({ id: 1 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    h.db.rowsOf("research_jobs")[0].brief = "Something found";
+    await expect(caller(4).research.runs.redraft({ id: 1 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(caller(8).research.runs.redraft({ id: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    h.db.rowsOf("research_jobs")[0].status = "done";
+    await expect(caller(2).research.runs.redraft({ id: 1 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
   it("a refused key fails the run with the fix in words, keeping what it spent", async () => {

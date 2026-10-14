@@ -271,7 +271,7 @@ export const MARKET_DRAFT_SCHEMA = O({
 });
 
 const DRAFT_SYSTEM = [
-  "Turn the research brief into the structured record by calling the tool once.",
+  "Turn the research brief into the structured record: reply with the JSON object only.",
   "Use only what the brief says. Copy figures exactly as written. For each figure, put the URL the brief gives for it.",
   "Only use URLs from the brief or the numbered source list. Leave a field empty when the brief does not support it.",
   "Job titles: clean titles as they appear on LinkedIn. Industries: LinkedIn industry names. Never-target words: short single words or short phrases.",
@@ -417,6 +417,47 @@ function addUsage(t: Totals, model: ResearchModelId, u: ResearchUsage): void {
 
 const totalsRow = (t: Totals) => ({ ...t, costUsd: t.costUsd.toFixed(4) });
 
+/**
+ * The draft schema in the form structured outputs accept: every object closed
+ * (`additionalProperties: false`) with every property required, and no
+ * `minimum` / `maximum` (unsupported). Required-everything is deliberate: the
+ * API counts optional properties against a small budget, and "leave it empty"
+ * is how the prompt asks for unknowns anyway.
+ */
+export function strictSchema(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(strictSchema);
+  if (!node || typeof node !== "object") return node;
+  const o: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+    if (k === "minimum" || k === "maximum") continue;
+    o[k] = strictSchema(v);
+  }
+  if (o.type === "object" && o.properties && typeof o.properties === "object") {
+    o.additionalProperties = false;
+    o.required = Object.keys(o.properties as Record<string, unknown>);
+  }
+  return o;
+}
+
+/** The JSON a structured-output response carries in its text. */
+export function parseDraftJson(res: Pick<Anthropic.Message, "content" | "stop_reason">): Record<string, unknown> {
+  if (res.stop_reason === "refusal") throw new Error("The model declined to write the draft. Try again with a narrower focus.");
+  if (res.stop_reason === "max_tokens") throw new Error("The draft was longer than the model could write in one go. Use Draft again, or narrow the focus.");
+  const text = res.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("");
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    // fall through
+  }
+  throw new Error("The draft step returned something that is not a draft. Use Draft again.");
+}
+
+/**
+ * Runs one job. A job that already holds a brief (its drafting failed, and a
+ * person asked to draft again) skips the research and drafts from what was
+ * paid for; its tokens, cost and progress carry on from where they were.
+ */
 export async function runResearchJob(id: number, signal: AbortSignal): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -424,8 +465,16 @@ export async function runResearchJob(id: number, signal: AbortSignal): Promise<v
   if (!job || job.status !== "queued") return;
 
   const model = researchModelOf(job.model);
-  const totals: Totals = { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, searches: 0, fetches: 0, costUsd: 0 };
-  const progress: { at: string; line: string }[] = [];
+  const totals: Totals = {
+    inputTokens: job.inputTokens ?? 0,
+    outputTokens: job.outputTokens ?? 0,
+    cacheWriteTokens: job.cacheWriteTokens ?? 0,
+    cacheReadTokens: job.cacheReadTokens ?? 0,
+    searches: job.searches ?? 0,
+    fetches: job.fetches ?? 0,
+    costUsd: Number(job.costUsd ?? 0) || 0,
+  };
+  const progress: { at: string; line: string }[] = Array.isArray(job.progress) ? [...(job.progress as { at: string; line: string }[])] : [];
   const save = (patch: Partial<typeof researchJobs.$inferInsert>) =>
     db
       .update(researchJobs)
@@ -438,61 +487,74 @@ export async function runResearchJob(id: number, signal: AbortSignal): Promise<v
 
   await db
     .update(researchJobs)
-    .set({ status: "running", startedAt: new Date() })
+    .set({ status: "running", startedAt: new Date(), error: null })
     .where(and(eq(researchJobs.id, id), eq(researchJobs.workspaceId, job.workspaceId), eq(researchJobs.status, "queued")));
   try {
     const today = new Date().toISOString().slice(0, 10);
-    const ctx = await loadContext(db, job);
-    note(job.kind === "market" ? `Researching the market "${job.subject}"` : `Researching the sector "${job.subject}"`);
-
-    // Pass 1: the web-researched brief.
-    const system = researchSystemPrompt(await sellerProfile(job.workspaceId, `${ctx.marketName} ${job.subject}`), today);
-    const user = job.kind === "market"
-      ? marketBriefPrompt({ market: job.subject, focus: job.focus ?? "", current: ctx.currentMarket })
-      : sectorBriefPrompt({ market: ctx.marketName, marketOverview: ctx.marketOverview, sector: job.subject, focus: job.focus ?? "", current: ctx.currentSector });
-    const messages: Anthropic.MessageParam[] = [{ role: "user", content: user }];
-    const seen: SourceLink[] = [];
+    let brief = job.brief ?? "";
+    let seen: SourceLink[] = Array.isArray(job.sources) ? (job.sources as SourceLink[]) : [];
     const cited: string[] = [];
-    let brief = "";
-    let container: string | undefined;
-    for (let turn = 0; turn <= MAX_CONTINUATIONS; turn++) {
-      if (signal.aborted) throw signal.reason ?? new Error("cancelled");
-      const res = await runAnthropicServerTools({
-        workspaceId: job.workspaceId,
-        signal,
-        onBlock: (b) => { const l = progressLine(b); if (l) note(l); },
-        params: {
-          model,
-          max_tokens: BRIEF_MAX_TOKENS,
-          system,
-          messages,
-          ...(container ? { container } : {}),
-          tools: [
-            { type: WEB_SEARCH_TOOL, name: "web_search", max_uses: Math.max(1, MAX_SEARCHES - totals.searches) },
-            { type: WEB_FETCH_TOOL, name: "web_fetch", max_uses: Math.max(1, MAX_FETCHES - totals.fetches), max_content_tokens: FETCH_MAX_CONTENT_TOKENS },
-          ],
-        },
-      });
-      addUsage(totals, model, res.usage);
-      const r = readBlocks(res.content);
-      seen.push(...r.sources);
-      cited.push(...r.cited);
-      brief += r.text;
-      container = (res as { container?: { id?: string } | null }).container?.id ?? container;
-      await save({});
-      if (res.stop_reason !== "pause_turn") {
-        if (res.stop_reason === "max_tokens") note("The brief reached its length limit; drafting from what it has.");
-        break;
+
+    if (!brief.trim()) {
+      // Pass 1: the web-researched brief.
+      const ctx = await loadContext(db, job);
+      note(job.kind === "market" ? `Researching the market "${job.subject}"` : `Researching the sector "${job.subject}"`);
+      const system = researchSystemPrompt(await sellerProfile(job.workspaceId, `${ctx.marketName} ${job.subject}`), today);
+      const user = job.kind === "market"
+        ? marketBriefPrompt({ market: job.subject, focus: job.focus ?? "", current: ctx.currentMarket })
+        : sectorBriefPrompt({ market: ctx.marketName, marketOverview: ctx.marketOverview, sector: job.subject, focus: job.focus ?? "", current: ctx.currentSector });
+      const messages: Anthropic.MessageParam[] = [{ role: "user", content: user }];
+      seen = [];
+      let container: string | undefined;
+      for (let turn = 0; turn <= MAX_CONTINUATIONS; turn++) {
+        if (signal.aborted) throw signal.reason ?? new Error("cancelled");
+        if (turn > 0) note(`Continuing the research (part ${turn + 1})`);
+        const res = await runAnthropicServerTools({
+          workspaceId: job.workspaceId,
+          signal,
+          onBlock: (b) => { const l = progressLine(b); if (l) note(l); },
+          params: {
+            model,
+            max_tokens: BRIEF_MAX_TOKENS,
+            system,
+            messages,
+            // A paused turn is sent back whole; caching makes the repeat a cache
+            // read (Opus 5.5: $0.20 instead of $4 per million tokens). The first
+            // live run, uncached, spent 760k input tokens across its parts.
+            cache_control: { type: "ephemeral" },
+            ...(container ? { container } : {}),
+            tools: [
+              { type: WEB_SEARCH_TOOL, name: "web_search", max_uses: Math.max(1, MAX_SEARCHES - totals.searches) },
+              { type: WEB_FETCH_TOOL, name: "web_fetch", max_uses: Math.max(1, MAX_FETCHES - totals.fetches), max_content_tokens: FETCH_MAX_CONTENT_TOKENS },
+            ],
+          },
+        });
+        addUsage(totals, model, res.usage);
+        const r = readBlocks(res.content);
+        seen.push(...r.sources);
+        cited.push(...r.cited);
+        brief += r.text;
+        container = (res as { container?: { id?: string } | null }).container?.id ?? container;
+        await save({});
+        if (res.stop_reason !== "pause_turn") {
+          if (res.stop_reason === "max_tokens") note("The brief reached its length limit; drafting from what it has.");
+          break;
+        }
+        messages.push({ role: "assistant", content: res.content as unknown as Anthropic.ContentBlockParam[] });
       }
-      messages.push({ role: "assistant", content: res.content as unknown as Anthropic.ContentBlockParam[] });
+      if (!brief.trim()) throw new Error("The research came back empty. Try again, or add a focus to the request.");
+      // Kept the moment it exists: if drafting fails, Draft again starts here
+      // instead of paying for the research twice.
+      seen = dedupeSources(seen).slice(0, 200);
+      await save({ brief, sources: seen });
+    } else {
+      note("Drafting again from the saved research");
     }
-    if (!brief.trim()) throw new Error("The research came back empty. Try again, or add a focus to the request.");
 
     // Pass 2: the structured draft, from the brief alone.
     if (signal.aborted) throw signal.reason ?? new Error("cancelled");
     note("Writing the draft");
     const sourceList = dedupeSources(seen).map((s, i) => `[${i + 1}] ${s.title} — ${s.url}`).join("\n");
-    const toolName = job.kind === "market" ? "record_market" : "record_sector";
     const res2 = await runAnthropicServerTools({
       workspaceId: job.workspaceId,
       signal,
@@ -501,22 +563,18 @@ export async function runResearchJob(id: number, signal: AbortSignal): Promise<v
         max_tokens: DRAFT_MAX_TOKENS,
         system: DRAFT_SYSTEM,
         messages: [{ role: "user", content: `Research brief:\n\n${brief}\n\nSources the research searched or read:\n${sourceList || "(none)"}` }],
-        tools: [{
-          name: toolName,
-          description: job.kind === "market" ? "Record the market research." : "Record the sector research.",
-          input_schema: (job.kind === "market" ? MARKET_DRAFT_SCHEMA : SECTOR_DRAFT_SCHEMA) as Anthropic.Tool["input_schema"],
-        }],
-        tool_choice: { type: "tool", name: toolName },
+        // Structured outputs, not a forced tool call: Opus 5.5 refuses
+        // tool_choice "tool" (found on the first live run, 2026-10-14).
+        output_config: { format: { type: "json_schema", schema: strictSchema(job.kind === "market" ? MARKET_DRAFT_SCHEMA : SECTOR_DRAFT_SCHEMA) as Record<string, unknown> } },
       },
     });
     addUsage(totals, model, res2.usage);
-    const call = res2.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === toolName);
-    if (!call) throw new Error("The draft step returned nothing to review. Try again.");
+    const input = parseDraftJson(res2);
 
-    const { draft, dropped } = finishDraft({ kind: job.kind, name: job.subject, input: (call.input ?? {}) as Record<string, unknown>, seen, cited, today });
+    const { draft, dropped } = finishDraft({ kind: job.kind, name: job.subject, input, seen, cited, today });
     const linkDrops = dropped.filter((d) => d.startsWith("link ")).length;
     note(linkDrops ? `Draft ready. Removed ${linkDrops} ${linkDrops === 1 ? "link" : "links"} the research never opened.` : "Draft ready for review");
-    await save({ status: "done", brief, sources: dedupeSources(seen).slice(0, 200), draft, dropped, finishedAt: new Date() });
+    await save({ status: "done", draft, dropped, error: null, finishedAt: new Date() });
   } catch (e) {
     const cancelled = signal.aborted && !(signal.reason instanceof Error && signal.reason.message === "timeout");
     if (cancelled) note("Stopped");

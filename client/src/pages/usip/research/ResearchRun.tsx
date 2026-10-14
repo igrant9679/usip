@@ -67,6 +67,7 @@ export default function ResearchRun() {
   }, [draft]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cancel = trpc.research.runs.cancel.useMutation({ onError: (e) => toast.error(e.message), onSuccess: () => q.refetch() });
+  const redraft = trpc.research.runs.redraft.useMutation({ onError: (e) => toast.error(e.message), onSuccess: () => { toast.success("Drafting again"); q.refetch(); } });
   const discard = trpc.research.runs.discard.useMutation({ onError: (e) => toast.error(e.message), onSuccess: () => { toast.success("Draft discarded"); q.refetch(); } });
   const accept = trpc.research.runs.accept.useMutation({
     onError: (e) => toast.error(e.message),
@@ -128,7 +129,15 @@ export default function ResearchRun() {
         </Card>
 
         {run.status === "failed" && (
-          <Card><CardContent className="pt-5 text-sm text-destructive">{run.error ?? "The run failed."}</CardContent></Card>
+          <Card><CardContent className="pt-5 text-sm space-y-3">
+            <div className="text-destructive">{run.error ?? "The run failed."}</div>
+            {run.brief && canEdit && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button size="sm" disabled={redraft.isPending} onClick={() => redraft.mutate({ id })}>Draft again from this research</Button>
+                <span className="text-xs text-muted-foreground">The research is saved, so only the drafting step runs again.</span>
+              </div>
+            )}
+          </CardContent></Card>
         )}
 
         {(working || !reviewable) && progress.length > 0 && (

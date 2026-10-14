@@ -965,6 +965,28 @@ export const researchRouter = router({
         return { resultType, resultId };
       }),
 
+    /**
+     * Drafts again from a failed run's saved research, without searching or
+     * reading anything again: only the drafting step is paid for twice.
+     */
+    redraft: managerProcedure.input(z.object({ id: Id })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const job = await loadJob(db, ctx.workspace.id, input.id);
+      if (job.status !== "failed" || !(job.brief ?? "").trim()) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Only a run that failed after its research can draft again" });
+      }
+      if (!(await workspaceAnthropicKey(ctx.workspace.id))) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Research runs on this workspace's own Anthropic key. An admin can add one in Settings → Integrations → AI provider keys." });
+      }
+      await db
+        .update(researchJobs)
+        .set({ status: "queued", error: null, finishedAt: null })
+        .where(and(eq(researchJobs.id, job.id), eq(researchJobs.workspaceId, ctx.workspace.id), eq(researchJobs.status, "failed")));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "research_run", entityId: job.id, after: { redraft: true } });
+      enqueueResearchJob(job.id);
+      return { success: true };
+    }),
+
     /** Sets a finished draft aside without saving any of it. */
     discard: managerProcedure.input(z.object({ id: Id })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
