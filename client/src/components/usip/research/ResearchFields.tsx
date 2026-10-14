@@ -198,21 +198,27 @@ export function RowsEditor<T extends Record<string, string>>({ label, hint, fiel
 
 const fmt = (d: string | Date) => new Date(d).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
+/** Any part of a market or sector as plain lines, for history and review. */
+export function readableText(v: unknown): string {
+  if (v == null || v === "") return "";
+  if (Array.isArray(v)) {
+    return v
+      .map((x) => (x && typeof x === "object" ? Object.values(x as Record<string, unknown>).filter((y) => y != null && y !== "").map(String).join(" · ") : String(x)))
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (typeof v === "object") {
+    return Object.entries(v as Record<string, unknown>)
+      .map(([k, x]) => { const s = readableText(x); return s ? `${k}: ${s.replace(/\n/g, "; ")}` : ""; })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return String(v);
+}
+
 /** A saved version as readable text, part by part. */
 function VersionView({ data }: { data: Record<string, unknown> }) {
-  const line = (v: unknown): string => {
-    if (v == null || v === "") return "";
-    if (Array.isArray(v)) {
-      return v.map((x) => (x && typeof x === "object" ? Object.values(x as Record<string, unknown>).filter(Boolean).join(" · ") : String(x))).filter(Boolean).join("\n");
-    }
-    if (typeof v === "object") {
-      return Object.entries(v as Record<string, unknown>)
-        .map(([k, x]) => { const s = line(x); return s ? `${k}: ${s.replace(/\n/g, "; ")}` : ""; })
-        .filter(Boolean)
-        .join("\n");
-    }
-    return String(v);
-  };
+  const line = readableText;
   const parts = Object.keys(RESEARCH_PART_LABEL).filter((k) => k in data).map((k) => [k, line(data[k])] as const).filter(([, s]) => s);
   return (
     <dl className="space-y-2 text-xs">

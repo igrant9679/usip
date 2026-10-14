@@ -18,18 +18,33 @@
  *     CONFLICT rather than silently overwriting their work.
  */
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { personas, researchMarkets, researchRevisions, researchSectors, users } from "../../drizzle/schema";
+import { personas, researchJobs, researchMarkets, researchRevisions, researchSectors, users, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../_core/workspace";
+import { workspaceAnthropicKey } from "../_core/llm";
+import { cancelResearchJob, enqueueResearchJob, failOrphanedJobs, type ResearchDraft } from "../services/research/engine";
+import {
+  DEFAULT_RESEARCH_DAILY_RUNS,
+  MAX_RESEARCH_DAILY_RUNS,
+  RESEARCH_MODELS,
+  isResearchModel,
+  researchModelOf,
+} from "@shared/researchModels";
 import {
   changedParts,
   cleanMarketContent,
   cleanSectorContent,
+  emptyMarketContent,
+  emptySectorContent,
+  mergeMarketParts,
+  mergeSectorParts,
+  MARKET_RUN_PARTS,
   RESEARCH_STATUSES,
+  SECTOR_RUN_PARTS,
   type MarketContent,
   type SectorContent,
 } from "@shared/researchShape";
@@ -246,6 +261,116 @@ export async function saveSector(
   return { id: args.id, revision, changed, dropped };
 }
 
+/* ── Creating (by hand and from AI research) ────────────────────────────── */
+
+type Source = "manual" | "ai" | "downstream";
+
+export async function insertMarket(
+  db: Db,
+  args: { workspaceId: number; userId: number | null; content: unknown; source?: Source; sourceRef?: string | null; note?: string },
+): Promise<{ id: number; dropped: string[] }> {
+  const { content, dropped } = cleanMarketContent(args.content);
+  if (!content.name) throw new TRPCError({ code: "BAD_REQUEST", message: "Give the market a name" });
+  const siblings = await db
+    .select({ name: researchMarkets.name })
+    .from(researchMarkets)
+    .where(eq(researchMarkets.workspaceId, args.workspaceId));
+  if (siblings.some((s) => sameName(s.name, content.name))) {
+    throw new TRPCError({ code: "CONFLICT", message: `There is already a market called "${content.name}"` });
+  }
+  const [row] = await db
+    .insert(researchMarkets)
+    .values({
+      workspaceId: args.workspaceId,
+      ...marketColumns(content),
+      source: args.source ?? "manual",
+      sourceRef: args.sourceRef ?? null,
+      revision: 1,
+      createdByUserId: args.userId,
+      updatedByUserId: args.userId,
+    })
+    .$returningId();
+  await writeRevision(db, { workspaceId: args.workspaceId, entityType: "market", entityId: row.id, revision: 1, data: content, changed: [], note: args.note ?? "Created", userId: args.userId });
+  return { id: row.id, dropped };
+}
+
+export async function insertSector(
+  db: Db,
+  args: { workspaceId: number; userId: number | null; marketId: number; content: unknown; source?: Source; sourceRef?: string | null; note?: string },
+): Promise<{ id: number; dropped: string[] }> {
+  const market = await loadMarket(db, args.workspaceId, args.marketId);
+  const { content, dropped } = cleanSectorContent(args.content);
+  if (!content.name) throw new TRPCError({ code: "BAD_REQUEST", message: "Give the sector a name" });
+  const siblings = await db
+    .select({ name: researchSectors.name })
+    .from(researchSectors)
+    .where(and(eq(researchSectors.workspaceId, args.workspaceId), eq(researchSectors.marketId, market.id)));
+  if (siblings.some((s) => sameName(s.name, content.name))) {
+    throw new TRPCError({ code: "CONFLICT", message: `This market already has a sector called "${content.name}"` });
+  }
+  const [row] = await db
+    .insert(researchSectors)
+    .values({
+      workspaceId: args.workspaceId,
+      marketId: market.id,
+      ...sectorColumns(content),
+      source: args.source ?? "manual",
+      sourceRef: args.sourceRef ?? null,
+      revision: 1,
+      createdByUserId: args.userId,
+      updatedByUserId: args.userId,
+    })
+    .$returningId();
+  await writeRevision(db, { workspaceId: args.workspaceId, entityType: "sector", entityId: row.id, revision: 1, data: content, changed: [], note: args.note ?? "Created", userId: args.userId });
+  return { id: row.id, dropped };
+}
+
+/* ── AI research runs: limits ───────────────────────────────────────────── */
+
+export const RUN_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+async function researchSettingsOf(db: Db, workspaceId: number) {
+  const [row] = await db
+    .select({ model: workspaceSettings.researchModel, dailyRuns: workspaceSettings.researchDailyRuns })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId))
+    .limit(1);
+  const daily = row?.dailyRuns;
+  return {
+    model: researchModelOf(row?.model),
+    dailyRuns: daily != null && daily >= 1 ? Math.min(MAX_RESEARCH_DAILY_RUNS, daily) : DEFAULT_RESEARCH_DAILY_RUNS,
+  };
+}
+
+/**
+ * The runs that count against a person's daily number: everything started in
+ * the last 24 hours except a run that failed before spending anything (a
+ * refused key, say), which should not cost them a turn.
+ */
+async function runsCounted(db: Db, workspaceId: number, userId: number) {
+  return db
+    .select({ id: researchJobs.id, createdAt: researchJobs.createdAt })
+    .from(researchJobs)
+    .where(and(
+      eq(researchJobs.workspaceId, workspaceId),
+      eq(researchJobs.userId, userId),
+      gt(researchJobs.createdAt, new Date(Date.now() - RUN_WINDOW_MS)),
+      or(ne(researchJobs.status, "failed"), gt(researchJobs.costUsd, "0")),
+    ))
+    .orderBy(asc(researchJobs.createdAt));
+}
+
+/** Who may see a run's draft and act on it: anyone in its workspace reads; managers act. */
+async function loadJob(db: Db, workspaceId: number, id: number) {
+  const [row] = await db
+    .select()
+    .from(researchJobs)
+    .where(and(eq(researchJobs.id, id), eq(researchJobs.workspaceId, workspaceId)))
+    .limit(1);
+  if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Research run not found" });
+  return row;
+}
+
 /* ── Inputs ─────────────────────────────────────────────────────────────── */
 
 /**
@@ -330,29 +455,9 @@ export const researchRouter = router({
 
     create: managerProcedure.input(z.object({ content: Content })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
-      const { content, dropped } = cleanMarketContent(input.content);
-      if (!content.name) throw new TRPCError({ code: "BAD_REQUEST", message: "Give the market a name" });
-      const siblings = await db
-        .select({ name: researchMarkets.name })
-        .from(researchMarkets)
-        .where(eq(researchMarkets.workspaceId, ctx.workspace.id));
-      if (siblings.some((s) => sameName(s.name, content.name))) {
-        throw new TRPCError({ code: "CONFLICT", message: `There is already a market called "${content.name}"` });
-      }
-      const [row] = await db
-        .insert(researchMarkets)
-        .values({
-          workspaceId: ctx.workspace.id,
-          ...marketColumns(content),
-          source: "manual",
-          revision: 1,
-          createdByUserId: ctx.user.id,
-          updatedByUserId: ctx.user.id,
-        })
-        .$returningId();
-      await writeRevision(db, { workspaceId: ctx.workspace.id, entityType: "market", entityId: row.id, revision: 1, data: content, changed: [], note: "Created", userId: ctx.user.id });
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "research_market", entityId: row.id, after: { name: content.name } });
-      return { id: row.id, revision: 1, dropped };
+      const r = await insertMarket(db, { workspaceId: ctx.workspace.id, userId: ctx.user.id, content: input.content });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "research_market", entityId: r.id, after: { name: cleanMarketContent(input.content).content.name } });
+      return { id: r.id, revision: 1, dropped: r.dropped };
     }),
 
     update: managerProcedure
@@ -443,31 +548,9 @@ export const researchRouter = router({
       .input(z.object({ marketId: Id, content: Content }))
       .mutation(async ({ ctx, input }) => {
         const db = await requireDb();
-        const market = await loadMarket(db, ctx.workspace.id, input.marketId);
-        const { content, dropped } = cleanSectorContent(input.content);
-        if (!content.name) throw new TRPCError({ code: "BAD_REQUEST", message: "Give the sector a name" });
-        const siblings = await db
-          .select({ name: researchSectors.name })
-          .from(researchSectors)
-          .where(and(eq(researchSectors.workspaceId, ctx.workspace.id), eq(researchSectors.marketId, market.id)));
-        if (siblings.some((s) => sameName(s.name, content.name))) {
-          throw new TRPCError({ code: "CONFLICT", message: `This market already has a sector called "${content.name}"` });
-        }
-        const [row] = await db
-          .insert(researchSectors)
-          .values({
-            workspaceId: ctx.workspace.id,
-            marketId: market.id,
-            ...sectorColumns(content),
-            source: "manual",
-            revision: 1,
-            createdByUserId: ctx.user.id,
-            updatedByUserId: ctx.user.id,
-          })
-          .$returningId();
-        await writeRevision(db, { workspaceId: ctx.workspace.id, entityType: "sector", entityId: row.id, revision: 1, data: content, changed: [], note: "Created", userId: ctx.user.id });
-        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "research_sector", entityId: row.id, after: { name: content.name, marketId: market.id } });
-        return { id: row.id, revision: 1, dropped };
+        const r = await insertSector(db, { workspaceId: ctx.workspace.id, userId: ctx.user.id, marketId: input.marketId, content: input.content });
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "research_sector", entityId: r.id, after: { name: cleanSectorContent(input.content).content.name, marketId: input.marketId } });
+        return { id: r.id, revision: 1, dropped: r.dropped };
       }),
 
     update: managerProcedure
@@ -590,5 +673,308 @@ export const researchRouter = router({
         });
         return r;
       }),
+  }),
+
+  /* ── AI research (phase 2) ──────────────────────────────────────────── */
+
+  settings: router({
+    /** The research model and daily runs, and whether this workspace can run research at all. */
+    get: workspaceProcedure.query(async ({ ctx }) => {
+      const db = await requireDb();
+      const st = await researchSettingsOf(db, ctx.workspace.id);
+      return {
+        ...st,
+        hasKey: !!(await workspaceAnthropicKey(ctx.workspace.id)),
+        models: Object.entries(RESEARCH_MODELS).map(([id, m]) => ({ id, label: m.label, note: m.note, input: m.price.input, output: m.price.output })),
+      };
+    }),
+
+    set: adminWsProcedure
+      .input(z.object({ model: z.string(), dailyRuns: z.number().int().min(1).max(MAX_RESEARCH_DAILY_RUNS) }))
+      .mutation(async ({ ctx, input }) => {
+        if (!isResearchModel(input.model)) throw new TRPCError({ code: "BAD_REQUEST", message: "Pick one of the listed models" });
+        const db = await requireDb();
+        const [existing] = await db.select({ ws: workspaceSettings.workspaceId }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id)).limit(1);
+        if (existing) {
+          await db.update(workspaceSettings).set({ researchModel: input.model, researchDailyRuns: input.dailyRuns }).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+        } else {
+          await db.insert(workspaceSettings).values({ workspaceId: ctx.workspace.id, researchModel: input.model, researchDailyRuns: input.dailyRuns });
+        }
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "research_settings", entityId: null, after: input });
+        return { success: true };
+      }),
+  }),
+
+  runs: router({
+    /**
+     * Starts a run: research a new market, refresh a market, research a new
+     * sector in a market, or refresh a sector. Writes a draft only; nothing
+     * changes until a person saves parts of it.
+     */
+    start: managerProcedure
+      .input(z.object({
+        kind: z.enum(["market", "sector"]),
+        marketId: Id.optional(),
+        sectorId: Id.optional(),
+        subject: z.string().trim().max(160).optional(),
+        focus: z.string().trim().max(2000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await requireDb();
+        const ws = ctx.workspace.id;
+        let marketId: number | null = null;
+        let sectorId: number | null = null;
+        let subject = "";
+        if (input.kind === "sector" && input.sectorId) {
+          const sector = await loadSector(db, ws, input.sectorId);
+          sectorId = sector.id;
+          marketId = sector.marketId;
+          subject = sector.name;
+        } else if (input.kind === "sector") {
+          if (!input.marketId) throw new TRPCError({ code: "BAD_REQUEST", message: "Pick the market the sector belongs to" });
+          const market = await loadMarket(db, ws, input.marketId);
+          marketId = market.id;
+          subject = (input.subject ?? "").trim();
+          if (!subject) throw new TRPCError({ code: "BAD_REQUEST", message: "Name the sector to research" });
+          const siblings = await db.select({ name: researchSectors.name }).from(researchSectors).where(and(eq(researchSectors.workspaceId, ws), eq(researchSectors.marketId, market.id)));
+          if (siblings.some((x) => sameName(x.name, subject))) {
+            throw new TRPCError({ code: "CONFLICT", message: `This market already has a sector called "${subject}". Open it and use Refresh instead.` });
+          }
+        } else if (input.marketId) {
+          const market = await loadMarket(db, ws, input.marketId);
+          marketId = market.id;
+          subject = market.name;
+        } else {
+          subject = (input.subject ?? "").trim();
+          if (!subject) throw new TRPCError({ code: "BAD_REQUEST", message: "Name the market to research" });
+          const siblings = await db.select({ name: researchMarkets.name }).from(researchMarkets).where(eq(researchMarkets.workspaceId, ws));
+          if (siblings.some((x) => sameName(x.name, subject))) {
+            throw new TRPCError({ code: "CONFLICT", message: `There is already a market called "${subject}". Open it and use Refresh instead.` });
+          }
+        }
+
+        if (!(await workspaceAnthropicKey(ws))) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Research runs on this workspace's own Anthropic key. An admin can add one in Settings → Integrations → AI provider keys." });
+        }
+        await failOrphanedJobs(db, ws);
+        const [busy] = await db
+          .select({ id: researchJobs.id })
+          .from(researchJobs)
+          .where(and(eq(researchJobs.workspaceId, ws), eq(researchJobs.userId, ctx.user.id), inArray(researchJobs.status, ["queued", "running"])))
+          .limit(1);
+        if (busy) throw new TRPCError({ code: "CONFLICT", message: "You already have a research run going. Wait for it to finish, or stop it, first." });
+        const st = await researchSettingsOf(db, ws);
+        const counted = await runsCounted(db, ws, ctx.user.id);
+        if (counted.length >= st.dailyRuns) {
+          const free = new Date(new Date(counted[0].createdAt).getTime() + RUN_WINDOW_MS);
+          throw new TRPCError({
+            code: "TOO_MANY_REQUESTS",
+            message: `You have used your ${st.dailyRuns} research runs for the last 24 hours. The next one frees up at ${free.toISOString()}.`,
+          });
+        }
+
+        const [row] = await db
+          .insert(researchJobs)
+          .values({
+            workspaceId: ws,
+            userId: ctx.user.id,
+            kind: input.kind,
+            marketId,
+            sectorId,
+            subject,
+            focus: input.focus?.trim() || null,
+            status: "queued",
+            model: st.model,
+          })
+          .$returningId();
+        await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "create", entityType: "research_run", entityId: row.id, after: { kind: input.kind, subject, marketId, sectorId, model: st.model } });
+        enqueueResearchJob(row.id);
+        return { id: row.id };
+      }),
+
+    /** Recent runs in the workspace, and where the caller stands against the daily number. */
+    list: workspaceProcedure.input(z.object({ limit: z.number().int().min(1).max(50).default(15) }).optional()).query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      await failOrphanedJobs(db, ctx.workspace.id);
+      const rows = await db
+        .select({
+          id: researchJobs.id,
+          kind: researchJobs.kind,
+          subject: researchJobs.subject,
+          status: researchJobs.status,
+          outcome: researchJobs.outcome,
+          model: researchJobs.model,
+          costUsd: researchJobs.costUsd,
+          searches: researchJobs.searches,
+          userId: researchJobs.userId,
+          marketId: researchJobs.marketId,
+          sectorId: researchJobs.sectorId,
+          createdAt: researchJobs.createdAt,
+          finishedAt: researchJobs.finishedAt,
+        })
+        .from(researchJobs)
+        .where(eq(researchJobs.workspaceId, ctx.workspace.id))
+        .orderBy(desc(researchJobs.createdAt))
+        .limit(input?.limit ?? 15);
+      const ids = Array.from(new Set(rows.map((r) => r.userId)));
+      const names = ids.length ? await db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(inArray(users.id, ids)) : [];
+      const nmap = new Map(names.map((u) => [u.id, u.name || u.email || "Someone"]));
+      const st = await researchSettingsOf(db, ctx.workspace.id);
+      const counted = await runsCounted(db, ctx.workspace.id, ctx.user.id);
+      return {
+        runs: rows.map((r) => ({ ...r, byName: nmap.get(r.userId) ?? "A former member", mine: r.userId === ctx.user.id })),
+        usedToday: counted.length,
+        dailyRuns: st.dailyRuns,
+        nextFreeAt: counted.length >= st.dailyRuns ? new Date(new Date(counted[0].createdAt).getTime() + RUN_WINDOW_MS) : null,
+      };
+    }),
+
+    /** One run: its progress while it works, and its draft (with what it would change) when it is done. */
+    get: workspaceProcedure.input(z.object({ id: Id })).query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      await failOrphanedJobs(db, ctx.workspace.id);
+      const job = await loadJob(db, ctx.workspace.id, input.id);
+      let current: { revision: number; content: unknown } | null = null;
+      let marketName: string | null = null;
+      if (job.marketId != null) {
+        const [m] = await db.select().from(researchMarkets).where(and(eq(researchMarkets.id, job.marketId), eq(researchMarkets.workspaceId, ctx.workspace.id))).limit(1);
+        if (m) {
+          marketName = m.name;
+          if (job.kind === "market") current = { revision: m.revision, content: marketContentOf(m) };
+        }
+      }
+      if (job.kind === "sector" && job.sectorId != null) {
+        const [x] = await db.select().from(researchSectors).where(and(eq(researchSectors.id, job.sectorId), eq(researchSectors.workspaceId, ctx.workspace.id))).limit(1);
+        if (x) current = { revision: x.revision, content: sectorContentOf(x) };
+      }
+      return {
+        ...job,
+        progress: Array.isArray(job.progress) ? (job.progress as { at: string; line: string }[]) : [],
+        sources: Array.isArray(job.sources) ? (job.sources as { title: string; url: string }[]) : [],
+        dropped: Array.isArray(job.dropped) ? (job.dropped as string[]) : [],
+        draft: (job.draft ?? null) as ResearchDraft | null,
+        current,
+        marketName,
+        mine: job.userId === ctx.user.id,
+      };
+    }),
+
+    /** Stops a queued or running run. Its owner or an admin. What it spent stays recorded. */
+    cancel: managerProcedure.input(z.object({ id: Id })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const job = await loadJob(db, ctx.workspace.id, input.id);
+      if (job.userId !== ctx.user.id && ctx.member.role !== "admin" && ctx.member.role !== "super_admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only the person who started a run, or an admin, can stop it" });
+      }
+      if (job.status !== "queued" && job.status !== "running") return { success: true, status: job.status };
+      cancelResearchJob(job.id);
+      await db
+        .update(researchJobs)
+        .set({ status: "cancelled", finishedAt: new Date() })
+        .where(and(eq(researchJobs.id, job.id), eq(researchJobs.workspaceId, ctx.workspace.id), inArray(researchJobs.status, ["queued", "running"])));
+      return { success: true, status: "cancelled" as const };
+    }),
+
+    /**
+     * Saves the parts of a finished draft a person chose, as a version of the
+     * market or sector ("AI research, run N"), creating it when the run was
+     * for a new one; and the personas they ticked, in the sector. A refresh
+     * names the revision the person reviewed against, so a save made since is
+     * not overwritten.
+     */
+    accept: managerProcedure
+      .input(z.object({
+        id: Id,
+        parts: z.array(z.string()).max(20),
+        personas: z.array(z.number().int().min(0).max(20)).max(20).default([]),
+        expectedRevision: Revision.optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await requireDb();
+        const ws = ctx.workspace.id;
+        const job = await loadJob(db, ws, input.id);
+        if (job.status !== "done" || !job.draft) throw new TRPCError({ code: "BAD_REQUEST", message: "This run has no finished draft to save" });
+        if (job.outcome) throw new TRPCError({ code: "CONFLICT", message: job.outcome === "accepted" ? "This draft was already saved" : "This draft was discarded" });
+        const draft = job.draft as ResearchDraft;
+        const note = `AI research (run ${job.id})`;
+        const ref = `research-run:${job.id}`;
+        let resultType: "market" | "sector" = draft.kind;
+        let resultId: number;
+        const allowed: readonly string[] = draft.kind === "market" ? MARKET_RUN_PARTS : SECTOR_RUN_PARTS;
+        const parts = input.parts.filter((x) => allowed.includes(x));
+        if (parts.length === 0 && input.personas.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Tick at least one part to save" });
+
+        if (draft.kind === "market") {
+          const proposed = cleanMarketContent(draft.content).content;
+          if (job.marketId != null) {
+            const cur = await loadMarket(db, ws, job.marketId);
+            if (input.expectedRevision == null) throw new TRPCError({ code: "BAD_REQUEST", message: "Reload the run and try again" });
+            const merged = mergeMarketParts(marketContentOf(cur), proposed, parts);
+            await saveMarket(db, { workspaceId: ws, userId: ctx.user.id, id: cur.id, expectedRevision: input.expectedRevision, content: merged, note });
+            resultId = cur.id;
+          } else {
+            const merged = mergeMarketParts(emptyMarketContent(job.subject), proposed, parts);
+            resultId = (await insertMarket(db, { workspaceId: ws, userId: ctx.user.id, content: merged, source: "ai", sourceRef: ref, note: `Created from ${note}` })).id;
+          }
+        } else {
+          const proposed = cleanSectorContent(draft.content).content;
+          if (job.sectorId != null) {
+            const cur = await loadSector(db, ws, job.sectorId);
+            if (input.expectedRevision == null) throw new TRPCError({ code: "BAD_REQUEST", message: "Reload the run and try again" });
+            const merged = mergeSectorParts(sectorContentOf(cur), proposed, parts);
+            if (parts.length) await saveSector(db, { workspaceId: ws, userId: ctx.user.id, id: cur.id, expectedRevision: input.expectedRevision, content: merged, note });
+            resultId = cur.id;
+          } else {
+            if (job.marketId == null) throw new TRPCError({ code: "BAD_REQUEST", message: "This run has no market" });
+            const merged = mergeSectorParts(emptySectorContent(job.subject), proposed, parts);
+            resultId = (await insertSector(db, { workspaceId: ws, userId: ctx.user.id, marketId: job.marketId, content: merged, source: "ai", sourceRef: ref, note: `Created from ${note}` })).id;
+          }
+          // The ticked personas, in this sector, starting from its targeting.
+          const existing = await db.select({ name: personas.name }).from(personas).where(and(eq(personas.workspaceId, ws), eq(personas.sectorId, resultId)));
+          const taken = new Set(existing.map((p) => p.name.trim().toLowerCase()));
+          for (const i of Array.from(new Set(input.personas))) {
+            const p = draft.personas[i];
+            if (!p || taken.has(p.name.trim().toLowerCase())) continue;
+            taken.add(p.name.trim().toLowerCase());
+            await db.insert(personas).values({
+              workspaceId: ws,
+              name: p.name.slice(0, 120),
+              targetTitles: p.titles,
+              targetIndustries: proposed.targeting.industries,
+              targetGeographies: proposed.targeting.geographies,
+              keywords: proposed.targeting.keywords,
+              employeeMin: proposed.targeting.employeeMin,
+              employeeMax: proposed.targeting.employeeMax,
+              sectorId: resultId,
+              cares: p.cares || null,
+              pains: p.pains,
+              objections: p.objections,
+              angle: p.angle || null,
+              source: "ai",
+              sourceRef: ref,
+              createdByUserId: ctx.user.id,
+            });
+          }
+        }
+
+        await db
+          .update(researchJobs)
+          .set({ outcome: "accepted", reviewedByUserId: ctx.user.id, reviewedAt: new Date(), resultType, resultId })
+          .where(and(eq(researchJobs.id, job.id), eq(researchJobs.workspaceId, ws)));
+        await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "update", entityType: "research_run", entityId: job.id, after: { accepted: parts, personas: input.personas, resultType, resultId } });
+        return { resultType, resultId };
+      }),
+
+    /** Sets a finished draft aside without saving any of it. */
+    discard: managerProcedure.input(z.object({ id: Id })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const job = await loadJob(db, ctx.workspace.id, input.id);
+      if (job.outcome) return { success: true };
+      await db
+        .update(researchJobs)
+        .set({ outcome: "discarded", reviewedByUserId: ctx.user.id, reviewedAt: new Date() })
+        .where(and(eq(researchJobs.id, job.id), eq(researchJobs.workspaceId, ctx.workspace.id)));
+      return { success: true };
+    }),
   }),
 });

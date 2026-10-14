@@ -16,7 +16,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Plus, Telescope, Trash2, Users } from "lucide-react";
+import { Plus, Sparkles, Telescope, Trash2, Users } from "lucide-react";
+import { StartRunDialog, type RunTarget } from "@/components/usip/research/ResearchRuns";
 import { confirmAction } from "@/components/usip/Common";
 import {
   Crumbs, HistoryButton, LinesInput, RowsEditor, SaveBar, Section, StatusBadge,
@@ -59,6 +60,7 @@ export default function ResearchMarket() {
     onSuccess: (r) => { reportDropped(r.dropped); setSectorOpen(false); navigate(`/research/sectors/${r.id}`); },
   });
   const openSector = (name = "") => { setSectorName(name); setSectorShort(""); setSectorOpen(true); };
+  const [runTarget, setRunTarget] = useState<RunTarget | null>(null);
 
   if (q.error) {
     return (
@@ -96,6 +98,11 @@ export default function ResearchMarket() {
       <PageHeader icon={<Telescope className="size-5" />} title={market.content.name} description={market.content.tagline || "A market you sell into."}>
         <StatusBadge status={market.content.status} />
         {market.source !== "manual" && <Badge variant="outline" className="text-[10px]">{market.source === "ai" ? "AI research" : "Downstream"}</Badge>}
+        {canEdit && (
+          <Button variant="outline" size="sm" onClick={() => setRunTarget({ kind: "market", marketId: id, name: market.content.name })}>
+            <Sparkles className="size-4 mr-1" /> Refresh with AI
+          </Button>
+        )}
         <HistoryButton entityType="market" entityId={id} currentRevision={market.revision} dirty={draft.dirty} onRestored={() => q.refetch()} />
         {canDelete && (
           <Button variant="outline" size="sm" onClick={remove} disabled={del.isPending}>
@@ -108,7 +115,14 @@ export default function ResearchMarket() {
         <Section
           title="Sectors"
           description="Groups of organizations in this market that buy alike. Each has its own targeting, messaging, personas and sources."
-          actions={canEdit ? <Button size="sm" onClick={() => openSector()}><Plus className="size-4 mr-1" /> New sector</Button> : undefined}
+          actions={canEdit ? (
+            <div className="flex gap-2 flex-wrap justify-end">
+              <Button size="sm" variant="outline" onClick={() => setRunTarget({ kind: "sector", marketId: id, marketName: market.content.name })}>
+                <Sparkles className="size-4 mr-1" /> Research a sector with AI
+              </Button>
+              <Button size="sm" onClick={() => openSector()}><Plus className="size-4 mr-1" /> New sector</Button>
+            </div>
+          ) : undefined}
         >
           {sectors.length === 0 ? (
             <p className="text-sm text-muted-foreground">No sectors yet.{canEdit ? " Add the first one to start researching who buys." : ""}</p>
@@ -140,11 +154,12 @@ export default function ResearchMarket() {
           )}
           {suggestions.length > 0 && (
             <div className="space-y-1.5">
-              <div className="text-xs text-muted-foreground">Suggested next:</div>
+              <div className="text-xs text-muted-foreground">Suggested next (research one with AI):</div>
               <div className="flex flex-wrap gap-1.5">
                 {suggestions.map((s) => (
-                  <Button key={s.name} size="sm" variant="outline" className="h-7 text-xs" title={s.why || undefined} disabled={!canEdit} onClick={() => openSector(s.name)}>
-                    <Plus className="size-3 mr-1" /> {s.name}
+                  <Button key={s.name} size="sm" variant="outline" className="h-7 text-xs" title={s.why || undefined} disabled={!canEdit}
+                    onClick={() => setRunTarget({ kind: "sector", marketId: id, marketName: market.content.name, subject: s.name })}>
+                    <Sparkles className="size-3 mr-1" /> {s.name}
                   </Button>
                 ))}
               </div>
@@ -241,6 +256,8 @@ export default function ResearchMarket() {
         onDiscard={draft.discard}
         onSave={() => save.mutate({ id, expectedRevision: draft.baseRevision, content: c as unknown as Record<string, unknown> })}
       />
+
+      {runTarget && <StartRunDialog target={runTarget} open={!!runTarget} onOpenChange={(v) => { if (!v) setRunTarget(null); }} />}
 
       <Dialog open={sectorOpen} onOpenChange={setSectorOpen}>
         <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-md">

@@ -12,9 +12,6 @@
 import { readFileSync } from "fs";
 import path from "path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MySqlDialect } from "drizzle-orm/mysql-core";
-import { Column, getTableColumns, getTableName, is, SQL } from "drizzle-orm";
-import { workspaceMembers, workspaces } from "../drizzle/schema";
 import type { TrpcContext } from "./_core/context";
 import {
   changedParts,
@@ -33,202 +30,14 @@ vi.mock("./db", async (importActual) => ({
 
 import { appRouter } from "./routers";
 import { REVISIONS_KEPT, saveSector } from "./routers/research";
+import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 
 const read = (rel: string) => readFileSync(path.join(__dirname, "..", rel), "utf8").replace(/\r\n/g, "\n");
 
-/* ── A tiny database that runs the SQL drizzle renders ──────────────────── */
-
-type Row = Record<string, any>;
-const dialect = new MySqlDialect();
-const render = (x: unknown) => dialect.sqlToQuery(x as SQL);
+/* ── The in-memory database (server/__fakes__/sqlFakeDb.ts) ─────────────── */
 
 function makeDb(roles: Record<number, string>) {
-  const tables = new Map<string, Row[]>();
-  const seq = new Map<string, number>();
-  const rowsOf = (name: string) => {
-    if (!tables.has(name)) tables.set(name, []);
-    return tables.get(name)!;
-  };
-  /** Row → {"table.column": value} so qualified SQL can be evaluated. */
-  const qualify = (table: any, row: Row): Row => {
-    const n = getTableName(table);
-    const out: Row = {};
-    for (const [k, col] of Object.entries(getTableColumns(table))) out[`${n}.${(col as Column).name}`] = row[k];
-    return out;
-  };
-  const lookup = (ctx: Row, ref: string) => {
-    const q = ref.match(/^`(\w+)`\.`(\w+)`$/);
-    if (q) return ctx[`${q[1]}.${q[2]}`];
-    const u = ref.match(/^`(\w+)`$/);
-    if (u) {
-      const key = Object.keys(ctx).find((k) => k.endsWith(`.${u[1]}`));
-      if (key) return ctx[key];
-    }
-    throw new Error(`fake db: cannot read ${ref}`);
-  };
-  const same = (a: unknown, b: unknown) => a === b || (a != null && b != null && String(a) === String(b));
-  /** Evaluates an AND of simple comparisons, the only shape this router writes. */
-  const matches = (cond: unknown, ctx: Row): boolean => {
-    if (!cond) return true;
-    const { sql, params } = render(cond);
-    let s = sql.trim();
-    while (s.startsWith("(") && s.endsWith(")")) s = s.slice(1, -1).trim();
-    let pi = 0;
-    for (const clause of s.split(" and ").map((c) => c.trim())) {
-      let m: RegExpMatchArray | null;
-      if ((m = clause.match(/^(`\w+`(?:\.`\w+`)?) = \?$/))) { if (!same(lookup(ctx, m[1]), params[pi++])) return false; continue; }
-      if ((m = clause.match(/^(`\w+`(?:\.`\w+`)?) = (`\w+`(?:\.`\w+`)?)$/))) { if (!same(lookup(ctx, m[1]), lookup(ctx, m[2]))) return false; continue; }
-      if ((m = clause.match(/^(`\w+`(?:\.`\w+`)?) < \?$/))) { if (!(Number(lookup(ctx, m[1])) < Number(params[pi++]))) return false; continue; }
-      if ((m = clause.match(/^(`\w+`(?:\.`\w+`)?) is null$/))) { if (lookup(ctx, m[1]) != null) return false; continue; }
-      if ((m = clause.match(/^(`\w+`(?:\.`\w+`)?) in \(([?, ]+)\)$/))) {
-        const n = (m[2].match(/\?/g) ?? []).length;
-        const set = params.slice(pi, pi + n);
-        pi += n;
-        if (!set.some((p) => same(p, lookup(ctx, m![1])))) return false;
-        continue;
-      }
-      throw new Error(`fake db: unsupported clause "${clause}"`);
-    }
-    return true;
-  };
-
-  const select = (projection?: Record<string, unknown>) => {
-    const st: { table?: any; join?: { table: any; on: unknown }; where?: unknown; group?: Column[]; order: unknown[]; limit?: number } = { order: [] };
-    const run = (): Row[] => {
-      const name = getTableName(st.table);
-      // The workspace middleware's membership lookup.
-      if (st.table === workspaceMembers) {
-        const role = roles[h.wsId];
-        if (!role) return [];
-        if (projection && "ws" in projection) {
-          return [{
-            ws: { id: h.wsId, name: `WS ${h.wsId}`, ownerUserId: 1, archivedAt: null },
-            mb: { id: 1, userId: 1, workspaceId: h.wsId, role, deactivatedAt: null, lastActiveAt: new Date() },
-          }];
-        }
-        return [{ id: 1 }];
-      }
-      let ctxs = rowsOf(name).map((r) => ({ row: r, q: qualify(st.table, r) }));
-      if (st.join) {
-        const other = rowsOf(getTableName(st.join.table));
-        ctxs = ctxs.flatMap((c) => other.map((o) => ({ row: c.row, q: { ...c.q, ...qualify(st.join!.table, o) } })).filter((x) => matches(st.join!.on, x.q)));
-      }
-      ctxs = ctxs.filter((c) => matches(st.where, c.q));
-      for (const o of st.order.slice().reverse()) {
-        const m = render(o).sql.match(/^(`\w+`\.`\w+`) (asc|desc)$/);
-        if (!m) continue;
-        ctxs.sort((a, b) => {
-          const x = lookup(a.q, m[1]), y = lookup(b.q, m[1]);
-          const d = x < y ? -1 : x > y ? 1 : 0;
-          return m[2] === "desc" ? -d : d;
-        });
-      }
-      const pick = (q: Row, v: unknown) => (is(v, Column) ? q[`${getTableName((v as any).table)}.${(v as Column).name}`] : undefined);
-      let out: Row[];
-      if (st.group) {
-        const groups = new Map<string, Row[]>();
-        for (const c of ctxs) {
-          const key = JSON.stringify(st.group.map((g) => pick(c.q, g)));
-          if (!groups.has(key)) groups.set(key, []);
-          groups.get(key)!.push(c.q);
-        }
-        out = Array.from(groups.values()).map((qs) => {
-          const r: Row = {};
-          for (const [k, v] of Object.entries(projection ?? {})) r[k] = is(v, SQL) ? qs.length : pick(qs[0], v);
-          return r;
-        });
-      } else if (projection) {
-        out = ctxs.map((c) => {
-          const r: Row = {};
-          for (const [k, v] of Object.entries(projection)) r[k] = pick(c.q, v);
-          return r;
-        });
-      } else {
-        out = ctxs.map((c) => ({ ...c.row }));
-      }
-      return st.limit != null ? out.slice(0, st.limit) : out;
-    };
-    const b: any = {
-      from(t: unknown) { st.table = t; return b; },
-      innerJoin(t: unknown, on: unknown) { st.join = { table: t, on }; return b; },
-      where(c: unknown) { st.where = c; return b; },
-      groupBy(...cols: Column[]) { st.group = cols; return b; },
-      orderBy(...o: unknown[]) { st.order = o; return b; },
-      limit(n: number) { st.limit = n; return b; },
-      then(res: (v: unknown) => void, rej: (e: unknown) => void) { try { res(run()); } catch (e) { rej(e); } },
-    };
-    return b;
-  };
-
-  const insert = (table: any) => {
-    const name = getTableName(table);
-    let inserted: Row[] = [];
-    const doInsert = (values: Row | Row[]) => {
-      inserted = (Array.isArray(values) ? values : [values]).map((v) => {
-        const id = (seq.get(name) ?? 0) + 1;
-        seq.set(name, id);
-        const row: Row = {};
-        for (const k of Object.keys(getTableColumns(table))) row[k] = null;
-        Object.assign(row, { createdAt: new Date(), updatedAt: new Date(), savedAt: new Date() }, v, { id });
-        rowsOf(name).push(row);
-        return row;
-      });
-    };
-    const chain: any = {
-      values(v: Row | Row[]) { doInsert(v); return chain; },
-      $returningId() { return Promise.resolve(inserted.map((r) => ({ id: r.id }))); },
-      then(res: (v: unknown) => void) { res([{ affectedRows: inserted.length, insertId: inserted[0]?.id }]); },
-    };
-    return chain;
-  };
-
-  const update = (table: any) => {
-    const name = getTableName(table);
-    let values: Row = {};
-    const chain: any = {
-      set(v: Row) { values = v; return chain; },
-      where(cond: unknown) {
-        return {
-          then(res: (v: unknown) => void, rej: (e: unknown) => void) {
-            try {
-              h.beforeUpdate?.(name);
-              let n = 0;
-              for (const r of rowsOf(name)) {
-                if (!matches(cond, qualify(table, r))) continue;
-                for (const [k, v] of Object.entries(values)) {
-                  if (is(v, SQL)) {
-                    const m = render(v).sql.match(/`(\w+)` \+ (\d+)$/);
-                    if (!m) throw new Error(`fake db: unsupported SET ${render(v).sql}`);
-                    r[k] = Number(r[m[1]]) + Number(m[2]);
-                  } else r[k] = v;
-                }
-                r.updatedAt = new Date();
-                n++;
-              }
-              res([{ affectedRows: n }]);
-            } catch (e) { rej(e); }
-          },
-        };
-      },
-    };
-    return chain;
-  };
-
-  const del = (table: any) => ({
-    where(cond: unknown) {
-      return {
-        then(res: (v: unknown) => void) {
-          const name = getTableName(table);
-          const before = rowsOf(name);
-          const keep = before.filter((r) => !matches(cond, qualify(table, r)));
-          tables.set(name, keep);
-          res([{ affectedRows: before.length - keep.length }]);
-        },
-      };
-    },
-  });
-
-  return { select, insert, update, delete: del, tables, rowsOf };
+  return makeSqlFakeDb({ roles, wsId: () => h.wsId, beforeUpdate: (t) => h.beforeUpdate?.(t) });
 }
 
 function caller(wsId: number) {

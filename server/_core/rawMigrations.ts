@@ -4573,6 +4573,55 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0202: Research, phase 2 — AI research runs ──────────────────────────
+  // Owner, 2026-10-14 ("start phase 2"): a run researches a market or sector
+  // on the web with the workspace's own Anthropic key and writes a draft that
+  // a person reviews. Admins choose the model and the runs per person per day.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0202_research_jobs.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `research_jobs` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`userId` INT NOT NULL, " +
+        "`kind` ENUM('market','sector') NOT NULL, " +
+        "`marketId` INT NULL, " +
+        "`sectorId` INT NULL, " +
+        "`subject` VARCHAR(160) NOT NULL, " +
+        "`focus` TEXT NULL, " +
+        "`status` ENUM('queued','running','done','failed','cancelled') NOT NULL DEFAULT 'queued', " +
+        "`model` VARCHAR(64) NOT NULL, " +
+        "`progress` JSON NULL, " +
+        "`brief` MEDIUMTEXT NULL, " +
+        "`sources` JSON NULL, " +
+        "`draft` JSON NULL, " +
+        "`dropped` JSON NULL, " +
+        "`inputTokens` INT NOT NULL DEFAULT 0, " +
+        "`outputTokens` INT NOT NULL DEFAULT 0, " +
+        "`cacheWriteTokens` INT NOT NULL DEFAULT 0, " +
+        "`cacheReadTokens` INT NOT NULL DEFAULT 0, " +
+        "`searches` INT NOT NULL DEFAULT 0, " +
+        "`fetches` INT NOT NULL DEFAULT 0, " +
+        "`costUsd` DECIMAL(10,4) NOT NULL DEFAULT 0, " +
+        "`error` VARCHAR(500) NULL, " +
+        "`startedAt` TIMESTAMP NULL, " +
+        "`finishedAt` TIMESTAMP NULL, " +
+        "`outcome` ENUM('accepted','discarded') NULL, " +
+        "`reviewedByUserId` INT NULL, " +
+        "`reviewedAt` TIMESTAMP NULL, " +
+        "`resultType` ENUM('market','sector') NULL, " +
+        "`resultId` INT NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "`updatedAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
+        "INDEX `ix_rj_ws_user` (`workspaceId`, `userId`, `createdAt`), " +
+        "INDEX `ix_rj_ws` (`workspaceId`, `createdAt`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `researchModel` varchar(64) NULL",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `researchDailyRuns` int NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

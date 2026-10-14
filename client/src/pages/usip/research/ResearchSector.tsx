@@ -20,7 +20,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Link2, Pencil, Plus, Telescope, Trash2, Unlink } from "lucide-react";
+import { Link2, Pencil, Plus, Sparkles, Telescope, Trash2, Unlink } from "lucide-react";
+import { StartRunDialog } from "@/components/usip/research/ResearchRuns";
 import { confirmAction } from "@/components/usip/Common";
 import {
   Crumbs, HistoryButton, LinesInput, RowsEditor, SaveBar, Section, StatusBadge, TagInput,
@@ -71,6 +72,7 @@ export default function ResearchSector() {
   const [pForm, setPForm] = useState<PersonaForm>(EMPTY_PERSONA);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkId, setLinkId] = useState<string>("");
+  const [runOpen, setRunOpen] = useState(false);
   const afterPersona = async () => { await Promise.all([q.refetch(), allPersonas.refetch()]); };
   const createPersona = trpc.personas.create.useMutation({
     onError: (e) => toast.error(e.message),
@@ -147,6 +149,11 @@ export default function ResearchSector() {
       <PageHeader icon={<Telescope className="size-5" />} title={sector.content.name} description={sector.content.tagline || `A sector of ${market.name}.`}>
         <StatusBadge status={sector.content.status} />
         {sector.source !== "manual" && <Badge variant="outline" className="text-[10px]">{sector.source === "ai" ? "AI research" : "Downstream"}</Badge>}
+        {canEdit && (
+          <Button variant="outline" size="sm" onClick={() => setRunOpen(true)}>
+            <Sparkles className="size-4 mr-1" /> Refresh with AI
+          </Button>
+        )}
         <HistoryButton entityType="sector" entityId={id} currentRevision={sector.revision} dirty={draft.dirty} onRestored={() => q.refetch()} />
         {canDelete && (
           <Button variant="outline" size="sm" onClick={remove} disabled={del.isPending}>
@@ -369,6 +376,8 @@ export default function ResearchSector() {
         onDiscard={draft.discard}
         onSave={() => save.mutate({ id, expectedRevision: draft.baseRevision, content: c as unknown as Record<string, unknown> })}
       />
+
+      <StartRunDialog target={{ kind: "sector", sectorId: id, name: sector.content.name }} open={runOpen} onOpenChange={setRunOpen} />
 
       <Dialog open={pOpen} onOpenChange={setPOpen}>
         <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl max-h-[90vh] overflow-y-auto">

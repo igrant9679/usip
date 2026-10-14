@@ -352,3 +352,78 @@ export function cleanPersonaResearch(input: unknown): Cleaned<PersonaResearch> {
     dropped: d,
   };
 }
+
+/* ── Accepting an AI research draft, part by part ───────────────────────── */
+
+/** The parts of a sector draft a person can take or leave. Status is never one: a person sets it. */
+export const SECTOR_RUN_PARTS = ["summary", "scores", "buyers", "targeting", "messaging", "facts", "openQuestions", "sources"] as const;
+export const MARKET_RUN_PARTS = ["overview", "suggestedSectors", "glossary", "competitors", "openQuestions", "sources"] as const;
+export type SectorRunPart = (typeof SECTOR_RUN_PARTS)[number];
+export type MarketRunPart = (typeof MARKET_RUN_PARTS)[number];
+
+export const RUN_PART_LABEL: Record<string, string> = {
+  summary: "Summary and tagline",
+  overview: "Overview and tagline",
+  scores: "Scores",
+  buyers: "Buyers and pains",
+  targeting: "Targeting",
+  messaging: "Messaging",
+  facts: "Market facts",
+  suggestedSectors: "Suggested sectors",
+  glossary: "Glossary",
+  competitors: "Competitors",
+  openQuestions: "Open questions",
+  sources: "Sources (added to the ones you have)",
+};
+
+/** Sources from both, the current ones first, each link once. */
+function unionSources(a: ResearchSourceLink[], b: ResearchSourceLink[]): ResearchSourceLink[] {
+  const seen = new Set<string>();
+  const out: ResearchSourceLink[] = [];
+  for (const s of [...a, ...b]) {
+    const k = s.url.trim().toLowerCase();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
+/**
+ * The sector after taking the chosen parts of a draft. Every taken part
+ * replaces the current one (the run was asked to check and correct it),
+ * except sources, which are added to. Name and status stay the person's.
+ */
+export function mergeSectorParts(current: SectorContent, draft: SectorContent, parts: readonly string[]): SectorContent {
+  const take = new Set(parts.filter((p) => (SECTOR_RUN_PARTS as readonly string[]).includes(p)));
+  const next: SectorContent = { ...current };
+  if (take.has("summary")) {
+    next.tagline = draft.tagline || current.tagline;
+    next.summary = draft.summary || current.summary;
+    next.shortName = current.shortName || draft.shortName;
+  }
+  if (take.has("scores")) next.scores = draft.scores;
+  if (take.has("buyers")) next.buyers = draft.buyers;
+  if (take.has("targeting")) next.targeting = draft.targeting;
+  if (take.has("messaging")) next.messaging = draft.messaging;
+  if (take.has("facts")) next.facts = draft.facts;
+  if (take.has("openQuestions")) next.openQuestions = draft.openQuestions;
+  if (take.has("sources")) next.sources = unionSources(current.sources, draft.sources);
+  if (take.size > 0 && draft.asOf) next.asOf = draft.asOf;
+  return next;
+}
+
+export function mergeMarketParts(current: MarketContent, draft: MarketContent, parts: readonly string[]): MarketContent {
+  const take = new Set(parts.filter((p) => (MARKET_RUN_PARTS as readonly string[]).includes(p)));
+  const next: MarketContent = { ...current };
+  if (take.has("overview")) {
+    next.tagline = draft.tagline || current.tagline;
+    next.overview = draft.overview;
+  }
+  if (take.has("suggestedSectors")) next.suggestedSectors = draft.suggestedSectors;
+  if (take.has("glossary")) next.glossary = draft.glossary;
+  if (take.has("competitors")) next.competitors = draft.competitors;
+  if (take.has("openQuestions")) next.openQuestions = draft.openQuestions;
+  if (take.has("sources")) next.sources = unionSources(current.sources, draft.sources);
+  return next;
+}

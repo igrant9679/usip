@@ -6,6 +6,7 @@ import {
   index,
   int,
   json,
+  mediumtext,
   mysqlEnum,
   mysqlTable,
   primaryKey,
@@ -1824,6 +1825,9 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
    *  workspaces off mid-campaign on deploy. Enforced in _core/llm.ts against
    *  usage_counters.llmTokens for the current UTC month. */
   llmMonthlyTokenCap: int("llmMonthlyTokenCap"),
+  /** Research engine (migration 0202): the model runs use (null = Claude Opus 5.5) and runs per person per day (null = 10). Admins set both. */
+  researchModel: varchar("researchModel", { length: 64 }),
+  researchDailyRuns: int("researchDailyRuns"),
   // AI auto-send toggle (Migration 0050)
   aiAutoSendEnabled: boolean("aiAutoSendEnabled").default(false).notNull(),
   aiAutoSendScoreMin: int("aiAutoSendScoreMin").default(70).notNull(),
@@ -6324,3 +6328,60 @@ export const researchRevisions = mysqlTable(
   (t) => ({ byEntity: index("ix_rr_entity").on(t.workspaceId, t.entityType, t.entityId, t.revision) }),
 );
 export type ResearchRevision = typeof researchRevisions.$inferSelect;
+
+/**
+ * One AI research run (migration 0202): a market or sector researched on the
+ * web with the workspace's own Anthropic key. The run writes a DRAFT here and
+ * nothing else; a person reviews it and saves the parts they want into the
+ * market or sector (owner plan 2026-10-14: research informs, a person decides).
+ */
+export const researchJobs = mysqlTable(
+  "research_jobs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    kind: mysqlEnum("kind", ["market", "sector"]).notNull(),
+    /** For a sector run, its market; for a market refresh, the market. */
+    marketId: int("marketId"),
+    /** For a sector refresh, the sector; null when researching a new one. */
+    sectorId: int("sectorId"),
+    subject: varchar("subject", { length: 160 }).notNull(),
+    focus: text("focus"),
+    status: mysqlEnum("status", ["queued", "running", "done", "failed", "cancelled"]).default("queued").notNull(),
+    model: varchar("model", { length: 64 }).notNull(),
+    /** [{at, line}] — what the run has done so far, for the page to show. */
+    progress: json("progress"),
+    /** The web-researched brief, with source links. */
+    brief: mediumtext("brief"),
+    /** [{title, url}] every page the run searched or read. */
+    sources: json("sources"),
+    /** {content, personas?} — the cleaned draft for review. */
+    draft: json("draft"),
+    /** What the cleaning removed: personal data, links the research never opened. */
+    dropped: json("dropped"),
+    inputTokens: int("inputTokens").default(0).notNull(),
+    outputTokens: int("outputTokens").default(0).notNull(),
+    cacheWriteTokens: int("cacheWriteTokens").default(0).notNull(),
+    cacheReadTokens: int("cacheReadTokens").default(0).notNull(),
+    searches: int("searches").default(0).notNull(),
+    fetches: int("fetches").default(0).notNull(),
+    costUsd: decimal("costUsd", { precision: 10, scale: 4 }).default("0").notNull(),
+    error: varchar("error", { length: 500 }),
+    startedAt: timestamp("startedAt"),
+    finishedAt: timestamp("finishedAt"),
+    outcome: mysqlEnum("outcome", ["accepted", "discarded"]),
+    reviewedByUserId: int("reviewedByUserId"),
+    reviewedAt: timestamp("reviewedAt"),
+    /** What a save created or updated. */
+    resultType: mysqlEnum("resultType", ["market", "sector"]),
+    resultId: int("resultId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byUser: index("ix_rj_ws_user").on(t.workspaceId, t.userId, t.createdAt),
+    byWs: index("ix_rj_ws").on(t.workspaceId, t.createdAt),
+  }),
+);
+export type ResearchJob = typeof researchJobs.$inferSelect;

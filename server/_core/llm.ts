@@ -1046,3 +1046,59 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   await recordLlmTokens(workspaceId, result.usage?.total_tokens ?? 0);
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// Research engine: Anthropic server tools (web search, web fetch)
+// ---------------------------------------------------------------------------
+
+/**
+ * The workspace's OWN Anthropic key, or "" — never the server's.
+ *
+ * Research runs bill the workspace that asked (owner plan 2026-10-14), so,
+ * unlike loadCreds, this does not fall back to ANTHROPIC_API_KEY: a workspace
+ * without a key is told to add one rather than quietly spending the platform's.
+ */
+export async function workspaceAnthropicKey(workspaceId: number): Promise<string> {
+  const db = await getDb();
+  if (!db) return "";
+  const [row] = await db
+    .select({ enc: workspaceSettings.anthropicApiKeyEnc })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId))
+    .limit(1);
+  return tryDecryptSecret(row?.enc);
+}
+
+/**
+ * One Messages API request with server tools, streamed so the caller sees each
+ * search and page read as it finishes (`onBlock`). For the Research engine
+ * (services/research/engine.ts), which needs what invokeLLM hides: the raw
+ * content blocks, the server-tool usage and `pause_turn`.
+ *
+ * Same ceilings and meter as invokeLLM: the monthly budget is checked first,
+ * and the tokens are recorded. It does NOT take an invokeLLM concurrency slot:
+ * a research request can run for minutes, and the app shares two slots; the
+ * engine bounds its own concurrency instead.
+ */
+export async function runAnthropicServerTools(args: {
+  workspaceId: number;
+  params: Anthropic.MessageCreateParamsNonStreaming;
+  onBlock?: (block: Anthropic.ContentBlock) => void;
+  signal?: AbortSignal;
+}): Promise<Anthropic.Message> {
+  await checkMonthlyCap(args.workspaceId, Date.now());
+  const apiKey = await workspaceAnthropicKey(args.workspaceId);
+  if (!apiKey) {
+    throw new Error("Research runs on this workspace's own Anthropic key. An admin can add one in Settings → Integrations → AI provider keys.");
+  }
+  const client = new Anthropic({ apiKey, maxRetries: 2, timeout: 15 * 60_000 });
+  const stream = client.messages.stream(args.params, { signal: args.signal });
+  if (args.onBlock) stream.on("contentBlock", args.onBlock);
+  const message = await stream.finalMessage();
+  const u = message.usage;
+  await recordLlmTokens(
+    args.workspaceId,
+    (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0),
+  );
+  return message;
+}

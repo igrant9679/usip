@@ -17,7 +17,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Plus, Telescope } from "lucide-react";
+import { Plus, Sparkles, Telescope } from "lucide-react";
+import { RecentRuns, ResearchSettingsButton, StartRunDialog } from "@/components/usip/research/ResearchRuns";
 import { ResearchSubNav, StatusBadge, reportDropped, useResearchRoles } from "@/components/usip/research/ResearchFields";
 
 export default function ResearchHome() {
@@ -25,6 +26,7 @@ export default function ResearchHome() {
   const { canEdit } = useResearchRoles();
   const markets = trpc.research.markets.list.useQuery();
   const [open, setOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
   const [name, setName] = useState("");
   const [tagline, setTagline] = useState("");
   const create = trpc.research.markets.create.useMutation({
@@ -49,6 +51,12 @@ export default function ResearchHome() {
         pageKey="research"
         description="The markets you sell into and the sectors inside them: who buys, what they need, and how to talk to them."
       >
+        <ResearchSettingsButton />
+        {canEdit && (
+          <Button variant="outline" onClick={() => setAiOpen(true)}>
+            <Sparkles className="size-4 mr-1" /> Research a market with AI
+          </Button>
+        )}
         {canEdit && (
           <Button onClick={() => { setName(""); setTagline(""); setOpen(true); }}>
             <Plus className="size-4 mr-1" /> New market
@@ -68,8 +76,13 @@ export default function ResearchHome() {
             <EmptyState
               icon={Telescope}
               title="No markets yet"
-              description="A market is an industry or area you sell into, like K-12 education or regional hospitals. Inside it, add the sectors that buy alike, with their targeting, messaging and sources. Only this workspace can see its research."
-              action={canEdit ? <Button onClick={() => setOpen(true)}><Plus className="size-4 mr-1" /> New market</Button> : undefined}
+              description="A market is an industry or area you sell into, like K-12 education or regional hospitals. Inside it, add the sectors that buy alike, with their targeting, messaging and sources. Build it by hand, or let AI research it on the web and review what it finds. Only this workspace can see its research."
+              action={canEdit ? (
+                <div className="flex gap-2 justify-center flex-wrap">
+                  <Button variant="outline" onClick={() => setAiOpen(true)}><Sparkles className="size-4 mr-1" /> Research a market with AI</Button>
+                  <Button onClick={() => setOpen(true)}><Plus className="size-4 mr-1" /> New market</Button>
+                </div>
+              ) : undefined}
             />
           </CardContent>
         </Card>
@@ -96,7 +109,10 @@ export default function ResearchHome() {
           ))}
         </div>
       )}
+      <div className="mt-4"><RecentRuns /></div>
       </div>
+
+      <StartRunDialog target={{ kind: "market" }} open={aiOpen} onOpenChange={setAiOpen} />
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-md">

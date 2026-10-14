@@ -89,6 +89,7 @@ import Personas from "@/pages/usip/Personas";
 import ResearchHome from "@/pages/usip/research/ResearchHome";
 import ResearchMarket from "@/pages/usip/research/ResearchMarket";
 import ResearchSector from "@/pages/usip/research/ResearchSector";
+import ResearchRun from "@/pages/usip/research/ResearchRun";
 import PromptTemplates from "@/pages/usip/PromptTemplates";
 import ImportContacts from "@/pages/usip/ImportContacts";
 import DataHealth from "@/pages/usip/DataHealth";
@@ -490,6 +491,7 @@ function Router() {
       <Route path="/research"><AuthGate><ResearchHome /></AuthGate></Route>
       <Route path="/research/markets/:id"><AuthGate><ResearchMarket /></AuthGate></Route>
       <Route path="/research/sectors/:id"><AuthGate><ResearchSector /></AuthGate></Route>
+      <Route path="/research/runs/:id"><AuthGate><ResearchRun /></AuthGate></Route>
       <Route path="/prompt-templates"><AuthGate><PromptTemplates /></AuthGate></Route>
       <Route path="/import"><AuthGate><ImportContacts /></AuthGate></Route>
       <Route path="/connected-accounts"><AuthGate><ConnectedAccounts /></AuthGate></Route>
