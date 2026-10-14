@@ -8,7 +8,8 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { personaCategories, personas } from "../../drizzle/schema";
+import { personaCategories, personas, researchSectors } from "../../drizzle/schema";
+import { cleanPersonaResearch } from "@shared/researchShape";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
@@ -23,7 +24,36 @@ const PersonaInput = z.object({
   employeeMax: z.number().int().min(1).nullable().optional(),
   keywords: z.array(z.string()).default([]),
   categoryId: z.number().int().nullable().optional(),
+  // Research (migration 0201): the sector this buyer belongs to and what the
+  // AI writers will need about them. Cleaned by the shared research shape,
+  // which also drops anything that looks like a personal email or phone.
+  sectorId: z.number().int().nullable().optional(),
+  cares: z.string().max(4000).optional(),
+  pains: z.array(z.string().max(1000)).max(60).optional(),
+  objections: z.array(z.string().max(1000)).max(60).optional(),
+  angle: z.string().max(4000).optional(),
 });
+
+/** The research fields present in an input, cleaned; absent ones stay absent. */
+function researchFields(input: { cares?: string; pains?: string[]; objections?: string[]; angle?: string }) {
+  const { content } = cleanPersonaResearch(input);
+  const out: Partial<typeof personas.$inferInsert> = {};
+  if (input.cares !== undefined) out.cares = content.cares || null;
+  if (input.pains !== undefined) out.pains = content.pains;
+  if (input.objections !== undefined) out.objections = content.objections;
+  if (input.angle !== undefined) out.angle = content.angle || null;
+  return out;
+}
+
+/** A caller-chosen sector must be this workspace's. */
+async function assertSectorInWorkspace(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, sectorId: number, workspaceId: number) {
+  const [row] = await db
+    .select({ id: researchSectors.id })
+    .from(researchSectors)
+    .where(and(eq(researchSectors.id, sectorId), eq(researchSectors.workspaceId, workspaceId)))
+    .limit(1);
+  if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Sector not found" });
+}
 
 /** Caller-controlled categoryId is hostile until proven workspace-owned. */
 async function assertCategoryInWorkspace(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, categoryId: number, workspaceId: number) {
@@ -131,9 +161,12 @@ export const personasRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       if (input.categoryId != null) await assertCategoryInWorkspace(db, input.categoryId, ctx.workspace.id);
+      if (input.sectorId != null) await assertSectorInWorkspace(db, input.sectorId, ctx.workspace.id);
       const [row] = await db
         .insert(personas)
         .values({
+          ...researchFields(input),
+          sectorId: input.sectorId ?? null,
           workspaceId: ctx.workspace.id,
           name: input.name,
           description: input.description,
@@ -207,6 +240,11 @@ export const personasRouter = router({
         if (rest.categoryId != null) await assertCategoryInWorkspace(db, rest.categoryId, ctx.workspace.id);
         updates.categoryId = rest.categoryId ?? null;
       }
+      if (rest.sectorId !== undefined) {
+        if (rest.sectorId != null) await assertSectorInWorkspace(db, rest.sectorId, ctx.workspace.id);
+        updates.sectorId = rest.sectorId ?? null;
+      }
+      Object.assign(updates, researchFields(rest));
       await db
         .update(personas)
         .set(updates)

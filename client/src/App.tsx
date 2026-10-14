@@ -86,6 +86,9 @@ import EmailBuilder from "@/pages/usip/EmailBuilder";
 import Snippets from "@/pages/usip/Snippets";
 import BrandVoice from "@/pages/usip/BrandVoice";
 import Personas from "@/pages/usip/Personas";
+import ResearchHome from "@/pages/usip/research/ResearchHome";
+import ResearchMarket from "@/pages/usip/research/ResearchMarket";
+import ResearchSector from "@/pages/usip/research/ResearchSector";
 import PromptTemplates from "@/pages/usip/PromptTemplates";
 import ImportContacts from "@/pages/usip/ImportContacts";
 import DataHealth from "@/pages/usip/DataHealth";
@@ -483,6 +486,10 @@ function Router() {
       <Route path="/snippets"><AuthGate><Snippets /></AuthGate></Route>
       <Route path="/brand-voice"><AuthGate><BrandVoice /></AuthGate></Route>
       <Route path="/personas"><AuthGate><Personas /></AuthGate></Route>
+      {/* Research (phase 1, 2026-10-14): markets, then sectors. */}
+      <Route path="/research"><AuthGate><ResearchHome /></AuthGate></Route>
+      <Route path="/research/markets/:id"><AuthGate><ResearchMarket /></AuthGate></Route>
+      <Route path="/research/sectors/:id"><AuthGate><ResearchSector /></AuthGate></Route>
       <Route path="/prompt-templates"><AuthGate><PromptTemplates /></AuthGate></Route>
       <Route path="/import"><AuthGate><ImportContacts /></AuthGate></Route>
       <Route path="/connected-accounts"><AuthGate><ConnectedAccounts /></AuthGate></Route>

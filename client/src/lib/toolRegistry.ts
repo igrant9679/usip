@@ -29,7 +29,7 @@ import {
   LayoutDashboard, LayoutTemplate, Linkedin, ListChecks, Mail, MailOpen, MailWarning, Megaphone,
   MessageSquare, Mic2, Network, Package, PenLine, Phone, PieChart, Plug,
   Radar, Search, Send, Settings, Share2, ShieldCheck, Sparkles, Target,
-  TrendingUp, Upload, Users, Workflow, Wrench,
+  Telescope, TrendingUp, Upload, Users, Workflow, Wrench,
 } from "lucide-react";
 
 export type ToolGroup =
@@ -92,6 +92,15 @@ export const TOOLS: Tool[] = [
     description: "Every Off / Approve / Auto dial in one place.", keywords: ["autopilot", "autonomy"] },
 
   /* ── Prospecting — find people, fill in what's missing, capture inbound ── */
+  // Research (owner plan 2026-10-14): the markets and sectors a workspace
+  // sells into. It absorbs Personas and the ICP page, which moved here from
+  // Configuration and sit on its Markets / Personas / ICP strip.
+  { href: "/research", label: "Research", icon: Telescope, group: "Prospecting", primary: true,
+    description: "The markets and sectors you sell into: who buys, what they need, how to talk to them.", keywords: ["markets", "sectors", "industries", "icp", "personas", "targeting"] },
+  { href: "/personas", label: "Personas", icon: Users, group: "Prospecting",
+    description: "The buyers you write to — a tab of Research.", keywords: ["ai", "buyers", "research"] },
+  { href: "/are/icp", label: "ICP Agent", icon: Target, group: "Prospecting",
+    description: "Your ideal customer profile, learned from won and lost deals — a tab of Research.", keywords: ["ai", "targeting", "research"] },
   { href: "/v2/data-enrichment", label: "Data Enrichment", icon: Database, group: "Prospecting", primary: true,
     description: "Fill in missing emails, titles, and companies.", keywords: ["quickenrich", "linkedin", "prospect"] },
   { href: "/v2/data-enrichment?tab=find-prospects", label: "Find Prospects", icon: Radar, group: "Prospecting",
@@ -278,10 +287,6 @@ export const TOOLS: Tool[] = [
   // How the AI writes and decides — configuration, not a daily surface.
   { href: "/brand-voice", label: "Brand Voice", icon: Mic2, group: "Configuration",
     description: "Teach the AI how your company sounds.", keywords: ["ai"] },
-  { href: "/personas", label: "Personas", icon: Users, group: "Configuration",
-    description: "Buyer personas the AI writes toward.", keywords: ["ai"] },
-  { href: "/are/icp", label: "ICP Agent", icon: Target, group: "Configuration",
-    description: "Define and refine your ideal customer profile.", keywords: ["ai", "targeting"] },
   { href: "/prompt-templates", label: "Prompt Templates", icon: FileText, group: "Configuration",
     description: "Versioned prompts behind the AI generators.", keywords: ["ai"] },
   { href: "/workflows", label: "Workflow Rules", icon: GitFork, group: "Configuration",

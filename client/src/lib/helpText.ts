@@ -111,7 +111,8 @@ export const NAV_HELP: Record<string, HelpEntry> = {
 
   // ── Automation and analytics ──
   "/brand-voice": { body: "How the AI should sound when it writes as you. Every AI-written email and chat reply reads from this." },
-  "/personas": { body: "The types of buyer you sell to. Used to tailor messaging and to score fit." },
+  "/personas": { body: "The buyers you sell to: who to find, and what they care about, their pains, objections and the angle that works. A tab of Research." },
+  "/research": { body: "The markets you sell into and the sectors inside them: who buys, their pains, targeting, messaging and sources. Only this workspace sees its research.", article: "research-markets-sectors" },
   "/workflows": { body: "If-this-then-that rules over CRM events — e.g. when a lead comes in from the web form, assign it. Record rules are scoped to leads, contacts or opportunities, and the conditions offered are the fields that event carries.", article: "workflow-rules" },
   "/lead-scoring": { body: "The rules that decide a lead's 0-100 score, so the best ones surface first.", article: "understanding-scores-badges" },
   "/lead-routing": { body: "Who a new lead gets assigned to, and on what basis." },

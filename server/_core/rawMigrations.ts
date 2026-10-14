@@ -4493,6 +4493,86 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0201: Research, phase 1 — markets, sectors, versions, richer personas ─
+  // Owner plan 2026-10-14 ("start phase 1"): each workspace researches any
+  // number of markets and the sectors inside them, by hand for now; every save
+  // is kept as a version. Personas gain the sector they belong to and what the
+  // AI writers will need about them (cares, pains, objections, angle).
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0201_research_foundation.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `research_markets` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`name` VARCHAR(160) NOT NULL, " +
+        "`tagline` VARCHAR(300) NULL, " +
+        "`overview` JSON NULL, " +
+        "`openQuestions` JSON NULL, " +
+        "`suggestedSectors` JSON NULL, " +
+        "`glossary` JSON NULL, " +
+        "`competitors` JSON NULL, " +
+        "`sources` JSON NULL, " +
+        "`status` ENUM('draft','researched','verified') NOT NULL DEFAULT 'draft', " +
+        "`source` ENUM('manual','ai','downstream') NOT NULL DEFAULT 'manual', " +
+        "`sourceRef` VARCHAR(300) NULL, " +
+        "`revision` INT NOT NULL DEFAULT 1, " +
+        "`createdByUserId` INT NULL, " +
+        "`updatedByUserId` INT NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "`updatedAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
+        "INDEX `ix_rm_ws` (`workspaceId`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "CREATE TABLE IF NOT EXISTS `research_sectors` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`marketId` INT NOT NULL, " +
+        "`name` VARCHAR(160) NOT NULL, " +
+        "`shortName` VARCHAR(60) NULL, " +
+        "`tagline` VARCHAR(300) NULL, " +
+        "`summary` TEXT NULL, " +
+        "`status` ENUM('draft','researched','verified') NOT NULL DEFAULT 'draft', " +
+        "`asOf` DATE NULL, " +
+        "`scores` JSON NULL, " +
+        "`buyers` JSON NULL, " +
+        "`targeting` JSON NULL, " +
+        "`messaging` JSON NULL, " +
+        "`facts` JSON NULL, " +
+        "`openQuestions` JSON NULL, " +
+        "`sources` JSON NULL, " +
+        "`source` ENUM('manual','ai','downstream') NOT NULL DEFAULT 'manual', " +
+        "`sourceRef` VARCHAR(300) NULL, " +
+        "`revision` INT NOT NULL DEFAULT 1, " +
+        "`createdByUserId` INT NULL, " +
+        "`updatedByUserId` INT NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "`updatedAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
+        "INDEX `ix_rs_ws_market` (`workspaceId`, `marketId`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "CREATE TABLE IF NOT EXISTS `research_revisions` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`entityType` ENUM('market','sector') NOT NULL, " +
+        "`entityId` INT NOT NULL, " +
+        "`revision` INT NOT NULL, " +
+        "`data` JSON NOT NULL, " +
+        "`changed` JSON NULL, " +
+        "`note` VARCHAR(200) NULL, " +
+        "`savedByUserId` INT NULL, " +
+        "`savedAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "INDEX `ix_rr_entity` (`workspaceId`, `entityType`, `entityId`, `revision`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "ALTER TABLE `personas` ADD COLUMN `sectorId` int NULL",
+      "ALTER TABLE `personas` ADD COLUMN `cares` text NULL",
+      "ALTER TABLE `personas` ADD COLUMN `pains` json NULL",
+      "ALTER TABLE `personas` ADD COLUMN `objections` json NULL",
+      "ALTER TABLE `personas` ADD COLUMN `angle` text NULL",
+      "ALTER TABLE `personas` ADD COLUMN `source` enum('manual','ai','downstream') NOT NULL DEFAULT 'manual'",
+      "ALTER TABLE `personas` ADD COLUMN `sourceRef` varchar(300) NULL",
+      "CREATE INDEX `ix_personas_sector` ON `personas` (`workspaceId`, `sectorId`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

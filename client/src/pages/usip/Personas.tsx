@@ -3,6 +3,11 @@
  * + Location + Keywords) that can be applied to ARE campaigns, sequences,
  * and prospect search.
  *
+ * Since the Research module (2026-10-14) a persona can belong to a researched
+ * sector and carries what the AI writers need about the buyer: what they care
+ * about, pains, objections and the angle that works. The form is shared with
+ * the sector page (components/usip/research/PersonaFormFields).
+ *
  * Personas are grouped into user-defined categories: each category renders
  * as its own collapsible section that can be renamed, deleted (personas
  * fall back to Uncategorized), and reordered. Collapse state is local UI
@@ -10,6 +15,7 @@
  * server) so it follows the user across devices.
  */
 import { useState, type ReactNode } from "react";
+import { Link } from "wouter";
 import { Shell, PageHeader, QueryError, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -19,70 +25,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Users, Plus, Pencil, Trash2, Sparkles, ChevronDown, ArrowUp, ArrowDown, FolderPlus } from "lucide-react";
+import { Users, Plus, Pencil, Trash2, Sparkles, ChevronDown, ArrowUp, ArrowDown, FolderPlus, Telescope } from "lucide-react";
 import { confirmAction } from "@/components/usip/Common";
-
-interface PersonaForm {
-  name: string;
-  description: string;
-  targetTitles: string[];
-  targetIndustries: string[];
-  targetGeographies: string[];
-  employeeMin: number | null;
-  employeeMax: number | null;
-  keywords: string[];
-  categoryId: number | null;
-}
-
-const EMPTY: PersonaForm = {
-  name: "",
-  description: "",
-  targetTitles: [],
-  targetIndustries: [],
-  targetGeographies: [],
-  employeeMin: null,
-  employeeMax: null,
-  keywords: [],
-  categoryId: null,
-};
+import { ResearchSubNav } from "@/components/usip/research/ResearchFields";
+import { EMPTY_PERSONA, PersonaFormFields, personaFormFrom, personaPayload, type PersonaForm } from "@/components/usip/research/PersonaFormFields";
+import { icpLabels } from "@shared/icpShape";
 
 /** Per-section collapse map, keyed "cat:<id>" / "uncat". UI-only state. */
 const SECTIONS_LS_KEY = "velocity_personas_sections_collapsed";
 function loadCollapsedSections(): Record<string, boolean> {
   try { return JSON.parse(localStorage.getItem(SECTIONS_LS_KEY) ?? "{}") ?? {}; } catch { return {}; }
-}
-
-function TagInput({ label, value, onChange, placeholder }: { label: string; value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
-  const [text, setText] = useState("");
-  const add = () => {
-    const t = text.trim();
-    if (t && !value.includes(t)) onChange([...value, t]);
-    setText("");
-  };
-  return (
-    <div className="space-y-2">
-      <Label>{label}</Label>
-      <div className="flex flex-wrap gap-1.5 min-h-[28px]">
-        {value.map((v) => (
-          <Badge key={v} variant="secondary" className="text-xs gap-1">
-            {v}
-            <button onClick={() => onChange(value.filter((x) => x !== v))} className="ml-0.5 hover:opacity-70">×</button>
-          </Badge>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <Input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
-          placeholder={placeholder}
-        />
-        <Button type="button" variant="outline" size="sm" onClick={add}>Add</Button>
-      </div>
-    </div>
-  );
 }
 
 /** Collapsible section card — header toggles, action buttons stay outside
@@ -122,6 +75,8 @@ export default function Personas() {
   const { data: list = [], isLoading, error, refetch } = trpc.personas.list.useQuery();
   const { data: presets = [] } = trpc.personas.listPresets.useQuery();
   const { data: cats = [], refetch: refetchCats } = trpc.personas.listCategories.useQuery();
+  const { data: sectorOptions = [] } = trpc.research.sectors.options.useQuery();
+  const sectorName = new Map(sectorOptions.map((x) => [x.id, x.name]));
   const create = trpc.personas.create.useMutation();
   const update = trpc.personas.update.useMutation();
   const del = trpc.personas.delete.useMutation();
@@ -133,7 +88,7 @@ export default function Personas() {
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState<PersonaForm>(EMPTY);
+  const [form, setForm] = useState<PersonaForm>(EMPTY_PERSONA);
 
   // Category create/rename dialog
   const [catDialogOpen, setCatDialogOpen] = useState(false);
@@ -161,22 +116,12 @@ export default function Personas() {
   };
 
   const startCreate = (categoryId: number | null = null) => {
-    setForm({ ...EMPTY, categoryId });
+    setForm({ ...EMPTY_PERSONA, categoryId });
     setEditingId(null);
     setOpen(true);
   };
   const startEdit = (p: any) => {
-    setForm({
-      name: p.name,
-      description: p.description ?? "",
-      targetTitles: (p.targetTitles as string[]) ?? [],
-      targetIndustries: (p.targetIndustries as string[]) ?? [],
-      targetGeographies: (p.targetGeographies as string[]) ?? [],
-      employeeMin: p.employeeMin ?? null,
-      employeeMax: p.employeeMax ?? null,
-      keywords: (p.keywords as string[]) ?? [],
-      categoryId: p.categoryId ?? null,
-    });
+    setForm(personaFormFrom(p));
     setEditingId(p.id);
     setOpen(true);
   };
@@ -185,10 +130,10 @@ export default function Personas() {
     if (!form.name.trim()) { toast.error("Name is required"); return; }
     try {
       if (editingId) {
-        await update.mutateAsync({ id: editingId, ...form });
+        await update.mutateAsync({ id: editingId, ...personaPayload(form) });
         toast.success("Persona updated");
       } else {
-        await create.mutateAsync(form);
+        await create.mutateAsync(personaPayload(form));
         toast.success("Persona created");
       }
       setOpen(false);
@@ -287,10 +232,17 @@ export default function Personas() {
         <div className="font-medium text-sm">{p.name}</div>
         {p.description && <div className="text-xs text-muted-foreground">{p.description}</div>}
         <div className="flex flex-wrap gap-1 mt-1.5">
-          {((p.targetTitles as string[]) ?? []).slice(0, 4).map((t) => (
+          {p.sectorId != null && sectorName.has(p.sectorId) && (
+            <Link href={`/research/sectors/${p.sectorId}`}>
+              <Badge variant="outline" className="text-[10px] gap-1 cursor-pointer hover:bg-accent">
+                <Telescope className="size-3" /> {sectorName.get(p.sectorId)}
+              </Badge>
+            </Link>
+          )}
+          {icpLabels(p.targetTitles, "title").slice(0, 4).map((t) => (
             <Badge key={"t-" + t} variant="secondary" className="text-[10px]">{t}</Badge>
           ))}
-          {((p.targetIndustries as string[]) ?? []).slice(0, 3).map((t) => (
+          {icpLabels(p.targetIndustries, "industry").slice(0, 3).map((t) => (
             <Badge key={"i-" + t} variant="outline" className="text-[10px]">{t}</Badge>
           ))}
           {(p.employeeMin || p.employeeMax) && (
@@ -325,7 +277,7 @@ export default function Personas() {
       <PageHeader
         icon={<Users className="size-5" />}
         title="Personas"
-        description="Reusable targeting templates you can apply to any campaign, sequence, or prospect search."
+        description="The buyers you sell to: who to find, what they care about, and what they push back on."
       >
         <Button variant="outline" onClick={startCreateCategory}>
           <FolderPlus className="size-4 mr-1" /> New category
@@ -334,6 +286,7 @@ export default function Personas() {
           <Plus className="size-4 mr-1" /> New persona
         </Button>
       </PageHeader>
+      <ResearchSubNav />
 
       {/* Preset library */}
       <Card className="mb-4 shrink-0">
@@ -436,45 +389,7 @@ export default function Personas() {
           <DialogHeader>
             <DialogTitle>{editingId ? "Edit persona" : "New persona"}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Name</Label>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. SaaS RevOps Leaders" />
-            </div>
-            <div className="space-y-2">
-              <Label>Category</Label>
-              <Select
-                value={form.categoryId != null ? String(form.categoryId) : "none"}
-                onValueChange={(v) => setForm({ ...form, categoryId: v === "none" ? null : Number(v) })}
-              >
-                <SelectTrigger><SelectValue placeholder="Uncategorized" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Uncategorized</SelectItem>
-                  {cats.map((c: any) => (
-                    <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Description</Label>
-              <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2} />
-            </div>
-            <TagInput label="Job Titles" value={form.targetTitles} onChange={(v) => setForm({ ...form, targetTitles: v })} placeholder="VP of Sales…" />
-            <TagInput label="Industries" value={form.targetIndustries} onChange={(v) => setForm({ ...form, targetIndustries: v })} placeholder="SaaS, Fintech…" />
-            <TagInput label="Locations" value={form.targetGeographies} onChange={(v) => setForm({ ...form, targetGeographies: v })} placeholder="United States, UK…" />
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Min employees</Label>
-                <Input type="number" value={form.employeeMin ?? ""} onChange={(e) => setForm({ ...form, employeeMin: e.target.value ? Number(e.target.value) : null })} />
-              </div>
-              <div className="space-y-2">
-                <Label>Max employees</Label>
-                <Input type="number" value={form.employeeMax ?? ""} onChange={(e) => setForm({ ...form, employeeMax: e.target.value ? Number(e.target.value) : null })} />
-              </div>
-            </div>
-            <TagInput label="Keywords" value={form.keywords} onChange={(v) => setForm({ ...form, keywords: v })} placeholder="revenue ops, salesforce…" />
-          </div>
+          <PersonaFormFields form={form} setForm={setForm} categories={cats} sectors={sectorOptions} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
             <Button onClick={save} disabled={create.isPending || update.isPending}>

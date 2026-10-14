@@ -4177,12 +4177,24 @@ export const personas = mysqlTable(
     keywords: json("keywords"),
     isPreset: boolean("isPreset").default(false).notNull(),
     categoryId: int("categoryId"),
+    /** The Research sector this buyer belongs to (migration 0201); null = none. */
+    sectorId: int("sectorId"),
+    /** What they care about, in a sentence or two. */
+    cares: text("cares"),
+    pains: json("pains"),
+    objections: json("objections"),
+    /** The angle that works with them. */
+    angle: text("angle"),
+    source: mysqlEnum("source", ["manual", "ai", "downstream"]).default("manual").notNull(),
+    /** Where an imported persona came from (a Downstream ref), for re-import. */
+    sourceRef: varchar("sourceRef", { length: 300 }),
     createdByUserId: int("createdByUserId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   (t) => ({
     byWs: index("ix_personas_ws").on(t.workspaceId),
+    bySector: index("ix_personas_sector").on(t.workspaceId, t.sectorId),
   }),
 );
 export type Persona = typeof personas.$inferSelect;
@@ -6214,3 +6226,101 @@ export const onenoteLinks = mysqlTable(
   }),
 );
 export type OnenoteLink = typeof onenoteLinks.$inferSelect;
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Research — markets and the sectors inside them (migration 0201). Owner plan
+   2026-10-14: each workspace researches any number of industries; the research
+   drives targeting, the Revenue Engine and the AI writers. The content shape
+   and its cleaning rules live in shared/researchShape.ts. Nothing here is ever
+   shared between workspaces.
+   ────────────────────────────────────────────────────────────────────────── */
+export const researchMarkets = mysqlTable(
+  "research_markets",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    tagline: varchar("tagline", { length: 300 }),
+    /** {headline, lede} */
+    overview: json("overview"),
+    openQuestions: json("openQuestions"),
+    /** [{name, why}] — sectors worth researching next. */
+    suggestedSectors: json("suggestedSectors"),
+    /** [{term, definition, source}] */
+    glossary: json("glossary"),
+    /** [{name, category, positioning, pricing, url}] */
+    competitors: json("competitors"),
+    /** [{title, url}] */
+    sources: json("sources"),
+    status: mysqlEnum("status", ["draft", "researched", "verified"]).default("draft").notNull(),
+    source: mysqlEnum("source", ["manual", "ai", "downstream"]).default("manual").notNull(),
+    sourceRef: varchar("sourceRef", { length: 300 }),
+    /** Bumped on every save; a save names the revision it started from. */
+    revision: int("revision").default(1).notNull(),
+    createdByUserId: int("createdByUserId"),
+    updatedByUserId: int("updatedByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({ byWs: index("ix_rm_ws").on(t.workspaceId) }),
+);
+export type ResearchMarket = typeof researchMarkets.$inferSelect;
+
+export const researchSectors = mysqlTable(
+  "research_sectors",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    marketId: int("marketId").notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    shortName: varchar("shortName", { length: 60 }),
+    tagline: varchar("tagline", { length: 300 }),
+    summary: text("summary"),
+    status: mysqlEnum("status", ["draft", "researched", "verified"]).default("draft").notNull(),
+    /** The date the research describes. */
+    asOf: date("asOf", { mode: "string" }),
+    /** {reach, money, pain, fit, access}, each 1–5 or null */
+    scores: json("scores"),
+    /** {roles, painPoints} */
+    buyers: json("buyers"),
+    /** {titles, industries, geographies, keywords, employeeMin, employeeMax, organizationTypes, exclude} */
+    targeting: json("targeting"),
+    /** {leadWith, avoid, vocabulary, sampleOpening} */
+    messaging: json("messaging"),
+    /** {marketSize, moneyFlow, programs, buying, obligations, helpers, policyWatch} */
+    facts: json("facts"),
+    openQuestions: json("openQuestions"),
+    sources: json("sources"),
+    source: mysqlEnum("source", ["manual", "ai", "downstream"]).default("manual").notNull(),
+    sourceRef: varchar("sourceRef", { length: 300 }),
+    revision: int("revision").default(1).notNull(),
+    createdByUserId: int("createdByUserId"),
+    updatedByUserId: int("updatedByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({ byMarket: index("ix_rs_ws_market").on(t.workspaceId, t.marketId) }),
+);
+export type ResearchSector = typeof researchSectors.$inferSelect;
+
+/** Every saved version of a market or sector: who saved it, when, and what changed. */
+export const researchRevisions = mysqlTable(
+  "research_revisions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    entityType: mysqlEnum("entityType", ["market", "sector"]).notNull(),
+    entityId: int("entityId").notNull(),
+    revision: int("revision").notNull(),
+    /** The full content as saved (MarketContent or SectorContent). */
+    data: json("data").notNull(),
+    /** Top-level parts that differ from the version before. */
+    changed: json("changed"),
+    /** "Created", "Edited", "Restored version 3", later "AI research" or "Downstream import". */
+    note: varchar("note", { length: 200 }),
+    savedByUserId: int("savedByUserId"),
+    savedAt: timestamp("savedAt").defaultNow().notNull(),
+  },
+  (t) => ({ byEntity: index("ix_rr_entity").on(t.workspaceId, t.entityType, t.entityId, t.revision) }),
+);
+export type ResearchRevision = typeof researchRevisions.$inferSelect;

@@ -10,6 +10,7 @@
  *   6. Version history timeline — previous ICP versions with expandable diff
  */
 import { Shell, PageHeader, StatCard, EmptyState } from "@/components/usip/Shell";
+import { ResearchSubNav } from "@/components/usip/research/ResearchFields";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -600,6 +601,7 @@ export default function AREIcpAgent() {
           {regenerate.isPending ? "Regenerating…" : "Regenerate ICP"}
         </Button>
       </PageHeader>
+      <ResearchSubNav />
 
       <div className="p-4 md:p-6 space-y-8 max-w-6xl mx-auto">
         {isLoading ? (

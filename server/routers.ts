@@ -74,6 +74,7 @@ import { urlScraperRouter } from "./routers/urlScraper";
 import { linkedinFinderRouter } from "./routers/linkedinFinder";
 import { linkedinEnrichmentRouter } from "./routers/linkedinEnrichment";
 import { personasRouter } from "./routers/personas";
+import { researchRouter } from "./routers/research";
 import { discoveryRouter } from "./routers/discovery";
 import { scoringRouter } from "./routers/scoring";
 import { companiesRouter } from "./routers/companies";
@@ -199,6 +200,7 @@ export const appRouter = router({
   linkedinFinder: linkedinFinderRouter,
   linkedinEnrichment: linkedinEnrichmentRouter,
   personas: personasRouter,
+  research: researchRouter,
   discovery: discoveryRouter,
 });
 
