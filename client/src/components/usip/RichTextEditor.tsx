@@ -62,7 +62,18 @@ interface RichTextEditorProps {
   /** Render the AI assistant button (default true). */
   ai?: boolean;
   /** Optional context passed to the assistant. */
-  aiContext?: { subject?: string; recipientName?: string; recipientCompany?: string };
+  aiContext?: {
+    subject?: string;
+    recipientName?: string;
+    recipientCompany?: string;
+    /** Who the email is for, when known: the assistant then uses their market research. */
+    contactId?: number;
+    leadId?: number;
+    prospectId?: number;
+    prospectQueueId?: number;
+    emailDraftId?: number;
+    recipientEmail?: string;
+  };
 }
 
 // ── Toolbar button ──────────────────────────────────────────────────────────

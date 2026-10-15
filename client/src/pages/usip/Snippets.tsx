@@ -4,6 +4,7 @@
 import { useState } from "react";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
+import { ResearchSectorPicker, useRememberedSector } from "@/components/usip/research/ResearchSectorPicker";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -57,6 +58,8 @@ export default function SnippetsPage() {
   const [form, setForm] = useState<SnippetForm>(DEFAULT_FORM);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  // The research sector AI Generate writes for (remembered in this browser).
+  const [sectorId, setSectorId] = useRememberedSector("snippets");
 
   const { data: snippets, isLoading } = trpc.snippets.list.useQuery({
     category: filterCategory === "all" ? undefined : filterCategory,
@@ -152,7 +155,7 @@ export default function SnippetsPage() {
   const handleGenerate = () => {
     if (!form.category) return;
     setIsGenerating(true);
-    generateMutation.mutate({ category: form.category, tone: "professional" });
+    generateMutation.mutate({ category: form.category, tone: "professional", sectorId });
   };
 
   const filtered = snippets ?? [];
@@ -308,6 +311,7 @@ export default function SnippetsPage() {
                   AI Generate
                 </Button>
               </div>
+              <ResearchSectorPicker compact value={sectorId} onChange={setSectorId} />
               <RichTextEditor
                 value={form.bodyPlain}
                 onChange={(html) => setForm((f) => ({ ...f, bodyPlain: html }))}

@@ -16,6 +16,7 @@ import { and, eq } from "drizzle-orm";
 import { proposals, workspaces } from "../drizzle/schema";
 import { resolveStreamAuth } from "./_core/streamHelpers";
 import { streamLLM } from "./_core/llmStream";
+import { researchUseForProposal } from "./services/research/recipient";
 
 // Keep in sync with SECTION_LABELS in routers/proposals.ts. Local copy avoids
 // importing from the tRPC router file (which would pull in the whole router).
@@ -94,6 +95,8 @@ export function registerProposalsStreamRoutes(app: Express) {
         .where(eq(workspaces.id, workspaceId))
         .limit(1);
       const { system, user } = buildPrompt(sectionKey, ctx, ws?.name ?? "our company");
+      // The client's market research, through the proposal's contact, account or client email.
+      const research = await researchUseForProposal(workspaceId, proposalId);
 
       // ── SSE setup ───────────────────────────────────────────────────────
       res.status(200);
@@ -123,6 +126,7 @@ export function registerProposalsStreamRoutes(app: Express) {
             { role: "system", content: system },
             { role: "user", content: user },
           ],
+          research,
           workspaceId,
           signal: abort.signal,
         })) {

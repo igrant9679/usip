@@ -28,6 +28,7 @@ import { createEmailAdapter } from "../emailAdapter";
 import { getDb } from "../db";
 import { appUrl } from "../appUrl";
 import { invokeLLM } from "../_core/llm";
+import { researchUseForProposal } from "../services/research/recipient";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
 import { canonicalWonStageKey } from "../_core/stageSemantics";
 import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
@@ -906,6 +907,8 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
+        // The client's market research, through the proposal's contact, account or client email.
+        research: await researchUseForProposal(ctx.workspace.id, input.proposalId),
       });
       const content =
         (response as any)?.choices?.[0]?.message?.content ?? "Content generation failed.";

@@ -90,7 +90,7 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
               )}
             </div>
             <Input placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
-            <RichTextEditor placeholder="Body…" value={body} onChange={setBody} minHeight="160px" compact aiContext={{ subject }} />
+            <RichTextEditor placeholder="Body…" value={body} onChange={setBody} minHeight="160px" compact aiContext={{ subject, leadId: leadIds.length === 1 ? leadIds[0] : undefined }} />
             <div className="flex gap-2 justify-end">
               <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
               <Button onClick={() => send.mutate({ leadIds, subject, body })} disabled={!subject || isEmptyEmailBody(body) || send.isPending}>

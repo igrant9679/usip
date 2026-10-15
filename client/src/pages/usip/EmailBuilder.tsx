@@ -8,6 +8,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { useRoute, useLocation, Link } from "wouter";
 import { Shell, PageHeader, SubNav } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { ResearchSectorPicker, rememberSector, useRememberedSector } from "@/components/usip/research/ResearchSectorPicker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -542,16 +543,17 @@ function AIGenerateDialog({
 }: {
   open: boolean;
   onClose: () => void;
-  onGenerated: (subject: string, blocks: any[]) => void;
+  onGenerated: (subject: string, blocks: any[], sectorId: number | undefined) => void;
 }) {
   const [prompt, setPrompt] = useState("");
+  const [sectorId, setSectorId] = useState<number | undefined>(undefined);
   const [tone, setTone] = useState<"concise" | "warm" | "formal" | "punchy" | "storytelling">("concise");
   const [includeHeader, setIncludeHeader] = useState(true);
   const [includeCta, setIncludeCta] = useState(true);
 
   const generate = trpc.emailTemplates.generateTemplate.useMutation({
     onSuccess: (data) => {
-      onGenerated(data.subject, data.blocks);
+      onGenerated(data.subject, data.blocks, sectorId);
       toast.success("Template generated! Review and edit as needed.");
       onClose();
     },
@@ -600,6 +602,7 @@ function AIGenerateDialog({
               </div>
             </div>
           </div>
+          <ResearchSectorPicker value={sectorId} onChange={setSectorId} />
           <p className="text-xs text-muted-foreground">
             Merge variables <code>{"{{firstName}}"}</code>, <code>{"{{company}}"}</code>, <code>{"{{senderName}}"}</code> will be inserted automatically where appropriate.
           </p>
@@ -607,7 +610,7 @@ function AIGenerateDialog({
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button
-            onClick={() => generate.mutate({ prompt, tone, includeHeader, includeCta })}
+            onClick={() => generate.mutate({ prompt, tone, includeHeader, includeCta, sectorId })}
             disabled={generate.isPending || prompt.trim().length < 5}
           >
             {generate.isPending ? "Generating…" : <><Sparkles size={14} className="mr-1" /> Generate</>}
@@ -662,10 +665,10 @@ function TemplateList({ onOpen }: { onOpen: (id: number) => void }) {
       <AIGenerateDialog
         open={showAIGenerate}
         onClose={() => setShowAIGenerate(false)}
-        onGenerated={(subject, blocks) => {
+        onGenerated={(subject, blocks, sectorId) => {
           createMutation.mutate(
             { name: "AI Generated Template", subject, designData: blocks },
-            { onSuccess: (data) => { utils.emailTemplates.list.invalidate(); onOpen(data.id); } }
+            { onSuccess: (data) => { rememberSector(`template:${data.id}`, sectorId); utils.emailTemplates.list.invalidate(); onOpen(data.id); } }
           );
         }}
       />     <ScrollArea className="flex-1">
@@ -1031,6 +1034,10 @@ function Builder({ templateId }: { templateId: number }) {
   // happening live.
   const [rewriting, setRewriting] = useState(false);
   const rewriteAbortRef = useRef<AbortController | null>(null);
+  // The research sector this template is written for (remembered per template, this browser).
+  const [sectorId, setSectorId] = useRememberedSector(`template:${templateId}`);
+  const sectorRef = useRef(sectorId);
+  sectorRef.current = sectorId;
 
   const streamRewrite = useCallback(
     async (
@@ -1058,7 +1065,7 @@ function Builder({ templateId }: { templateId: number }) {
           },
           credentials: "include",
           signal: controller.signal,
-          body: JSON.stringify({ content, instruction }),
+          body: JSON.stringify({ content, instruction, sectorId: sectorRef.current }),
         });
 
         if (!res.ok || !res.body) {
@@ -1391,7 +1398,7 @@ function Builder({ templateId }: { templateId: number }) {
                         .replace(/\s+/g, " ")
                         .trim()
                         .slice(0, 2000);
-                      suggestSubjectsMutation.mutate({ bodyText, currentSubject: subject || undefined, count: 5 });
+                      suggestSubjectsMutation.mutate({ bodyText, currentSubject: subject || undefined, count: 5, sectorId });
                     }
                     setShowSubjectSuggestions(!showSubjectSuggestions);
                   }}
@@ -1418,7 +1425,7 @@ function Builder({ templateId }: { templateId: number }) {
                       .replace(/\s+/g, " ")
                       .trim()
                       .slice(0, 2000);
-                    suggestSubjectsMutation.mutate({ bodyText, currentSubject: subject || undefined, count: 5 });
+                    suggestSubjectsMutation.mutate({ bodyText, currentSubject: subject || undefined, count: 5, sectorId });
                   }}>
                     <RefreshCw size={11} />
                   </Button>
@@ -1456,6 +1463,7 @@ function Builder({ templateId }: { templateId: number }) {
               </PopoverContent>
             </Popover>
           )}
+          {!isReadOnly && <ResearchSectorPicker compact value={sectorId} onChange={setSectorId} />}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           {/* Multi-select mode controls */}

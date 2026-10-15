@@ -190,6 +190,9 @@ function SnoozePopover({ accountId, thread, onSnoozed }: {
 
 // ─── Compose / Reply / Forward Dialog ─────────────────────────────────────────
 
+/** The first address in a To field ("Ana <ana@x.org>, bo@y.com" → "ana@x.org"), for the AI's research lookup. */
+const firstEmail = (to: string) => to.match(/[^\s<>,;"]+@[^\s<>,;"]+/)?.[0];
+
 function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () => void }) {
   const [to, setTo] = useState(state.to);
   const [subject, setSubject] = useState(state.subject);
@@ -299,6 +302,7 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
           bodyText: state.originalMessage.bodyText,
           date: state.originalMessage.date ? new Date(state.originalMessage.date).toISOString() : undefined,
         },
+        toEmail: firstEmail(state.to),
       });
     }
     return () => { aiAbortRef.current?.abort(); };
@@ -351,6 +355,7 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
           subject: state.originalMessage.subject,
           bodyText: state.originalMessage.bodyText,
         },
+        toEmail: firstEmail(to),
       });
     }
   }
@@ -449,6 +454,7 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
               minHeight="220px"
               maxHeight="500px"
               compact
+              aiContext={{ subject, recipientEmail: firstEmail(to) }}
             />
             {aiLoading && (
               <div className="absolute top-2 right-2 flex items-center gap-1.5 text-xs text-muted-foreground bg-background/90 px-2 py-1 rounded-md border z-10">

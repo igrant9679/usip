@@ -18,24 +18,10 @@ const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8").r
 const passesResearch = (args: string) => /\bresearch\b\s*[:,}]/.test(args);
 
 const INTERNAL = "Internal: classifies, scores, extracts or summarises for the rep; it does not write for or about a prospect's market.";
-const TEMPLATES = "Email Builder writes templates for many recipients: no prospect, persona or campaign is in scope. Follow-up: a 'write for this sector' choice.";
-const MAILBOX = "Personal mailbox: the recipient is known only by email address, so matching research needs a CRM lookup by address. Follow-up.";
-const PROPOSALS = "Client proposals for an existing deal: only the proposal and client name are in scope. Follow-up: the account's sector.";
 const ANON = "Website visitors are anonymous: no title or record to match, and the chat agent's own knowledge covers the product.";
 
 const EXCLUDED: Record<string, string> = {
-  "server/_core/streamHelpers.ts::runSSEStream": MAILBOX + " (Its only callers are the mailbox draft-reply and draft-forward streams.)",
-  "server/routers/mailbox.ts::aiDraftReply": MAILBOX,
-  "server/routers/mailbox.ts::aiDraftForward": MAILBOX,
-  "server/emailBuilderStreamRoute.ts::/api/email-builder/rewrite/stream": TEMPLATES,
-  "server/routers/emailBuilder.ts::generate": TEMPLATES,
-  "server/routers/emailBuilder.ts::generateTemplate": TEMPLATES,
-  "server/routers/emailBuilder.ts::rewriteBlock": TEMPLATES,
-  "server/routers/emailBuilder.ts::suggestSubjects": TEMPLATES,
-  "server/routers/emailAssist.ts::assist": "Free-form composer: the recipient is a typed name and company, with no record to match. Follow-up.",
   "server/llmStreamRoute.ts::/api/llm/stream": "Generic passthrough with no client callers; a caller can pass research in its own body.",
-  "server/proposalsStreamRoute.ts::/api/proposals/:id/section/:key/stream": PROPOSALS,
-  "server/routers/proposals.ts::generateSectionContent": PROPOSALS,
   "server/services/chatAgent.ts::runChatTurn": ANON,
   "server/services/chatFollowUp.ts::draftFollowUp": ANON,
   "server/routers/cs.ts::generateQbrPrep": "QBR prep for existing customers, not research on a prospect's market.",
@@ -102,6 +88,22 @@ const WIRED = [
   "server/services/workflowEngine.ts::send_email_draft",
   "server/routers/are/prospects.ts::scoreIcpMatch",
   "server/routers/leadScoring.ts::fetchAiFit",
+  // The four writers left after phase 3 (owner, 2026-10-15: "wire research into the remaining four writers").
+  // Mailbox: the other party by email address (researchUseForRecipient + threadCounterparty).
+  "server/_core/streamHelpers.ts::runSSEStream",
+  "server/routers/mailbox.ts::aiDraftReply",
+  "server/routers/mailbox.ts::aiDraftForward",
+  // Email Builder and snippets: the sector the writer picks ("Write for").
+  "server/emailBuilderStreamRoute.ts::/api/email-builder/rewrite/stream",
+  "server/routers/emailBuilder.ts::generate",
+  "server/routers/emailBuilder.ts::generateTemplate",
+  "server/routers/emailBuilder.ts::rewriteBlock",
+  "server/routers/emailBuilder.ts::suggestSubjects",
+  // The editor assistant: the recipient the editor knows (record, draft or To address).
+  "server/routers/emailAssist.ts::assist",
+  // Proposals: the client through the proposal's contact, account or client email.
+  "server/proposalsStreamRoute.ts::/api/proposals/:id/section/:key/stream",
+  "server/routers/proposals.ts::generateSectionContent",
 ];
 
 describe("every AI writer is wired to research, or excluded with a reason", () => {

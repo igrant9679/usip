@@ -1486,7 +1486,7 @@ function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; 
                   onChange={(html) => setEditing((prev) => (prev ? { ...prev, body: html } : prev))}
                   minHeight="220px"
                   compact
-                  aiContext={{ subject: editing.subject }}
+                  aiContext={{ subject: editing.subject, prospectQueueId: row.prospectId }}
                 />
               </div>
             </div>

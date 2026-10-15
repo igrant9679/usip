@@ -3,7 +3,7 @@
  *
  *   POST /api/email-builder/rewrite/stream
  *     Headers: x-workspace-id (required)
- *     Body: { content: string, instruction: "rewrite"|"shorten"|"lengthen"|"make_formal"|"make_casual", tone?: string }
+ *     Body: { content: string, instruction: "rewrite"|"shorten"|"lengthen"|"make_formal"|"make_casual", tone?: string, sectorId?: number }
  *     Returns: text/event-stream — same shape as /api/llm/stream
  *
  * Mirrors the prompt-building logic of `emailTemplates.rewriteBlock` in
@@ -41,7 +41,7 @@ export function registerEmailBuilderStreamRoutes(app: Express) {
       const { workspaceId } = auth;
 
       // ── Validate body ───────────────────────────────────────────────────
-      const body = (req.body ?? {}) as { content?: unknown; instruction?: unknown; tone?: unknown };
+      const body = (req.body ?? {}) as { content?: unknown; instruction?: unknown; tone?: unknown; sectorId?: unknown };
       if (typeof body.content !== "string" || body.content.length === 0) {
         res.status(400).json({ error: "content (string) is required" });
         return;
@@ -51,6 +51,8 @@ export function registerEmailBuilderStreamRoutes(app: Express) {
         return;
       }
       const tone = typeof body.tone === "string" ? body.tone : undefined;
+      // The sector the template is written for, when the writer picked one (only this workspace's are matched).
+      const sectorId = Number.isInteger(body.sectorId) && (body.sectorId as number) > 0 ? (body.sectorId as number) : undefined;
 
       const systemPrompt = `You are an expert email copywriter. ${tone ? `Write in a ${tone} tone.` : ""} Return only the rewritten content with no extra commentary.
 
@@ -85,6 +87,7 @@ ${HUMAN_COPY_RULES}`;
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
           ],
+          research: sectorId ? { surface: "outreach", sectorId } : undefined,
           workspaceId,
           signal: abort.signal,
         })) {

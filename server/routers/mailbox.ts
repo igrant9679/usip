@@ -23,6 +23,7 @@ import { sendingAccounts, unipileAccounts, users, workspaceSettings, emailReplie
 import { eq, and, isNotNull } from "drizzle-orm";
 import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
+import { researchUseForRecipient, threadCounterparty } from "../services/research/recipient";
 import { assertSendAllowed } from "../sendLimits";
 import { escapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
@@ -491,6 +492,8 @@ ${HUMAN_COPY_RULES}`,
           },
           { role: "user", content: `Email thread:\n\n${threadSummary}` },
         ],
+        // The other party's market research, when their address is a record here.
+        research: await researchUseForRecipient(ctx.workspace.id, "reply", {}, [threadCounterparty(input.messages, senderEmail)]),
       });
       const body = humanizeAiCopy((res as any)?.choices?.[0]?.message?.content ?? "");
       return { body };
@@ -508,6 +511,8 @@ ${HUMAN_COPY_RULES}`,
         date: z.string().optional(),
       }),
       senderName: z.string().optional(),
+      /** Whom it is being forwarded to, when the To field is filled. */
+      toEmail: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
@@ -527,6 +532,8 @@ ${HUMAN_COPY_RULES}`,
             content: `Original email from ${msg.fromName || msg.fromEmail} <${msg.fromEmail}>:\nSubject: ${msg.subject}\n\n${msg.bodyText?.slice(0, 800) ?? ""}`,
           },
         ],
+        // The research on whoever it goes to, else on whoever wrote it.
+        research: await researchUseForRecipient(ctx.workspace.id, "reply", {}, [input.toEmail, msg.fromEmail]),
       });
       const body = humanizeAiCopy((res as any)?.choices?.[0]?.message?.content ?? "");
       return { body };

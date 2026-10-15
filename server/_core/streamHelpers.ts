@@ -42,6 +42,8 @@ export type BuildMessagesResult = {
   messages: Message[];
   /** Prospect-facing copy: append the sender's brand (InvokeParams.sendersBrand). */
   sendersBrand?: boolean;
+  /** The recipient's market research (InvokeParams.research). */
+  research?: import("../services/research/context").ResearchUse;
   provider?: ProviderName;
   model?: string;
   temperature?: number;
@@ -196,6 +198,7 @@ export async function runSSEStream(
   try {
     for await (const delta of streamLLM({
       ...built,
+      research: built.research,
       workspaceId,
       signal: abort.signal,
     })) {

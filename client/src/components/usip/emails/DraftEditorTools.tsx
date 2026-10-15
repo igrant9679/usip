@@ -373,7 +373,7 @@ function AiDraftTools({ draft, onChanged }: { draft: any; onChanged: () => void 
       {editMode ? (
         <div className="space-y-2">
           <Input value={subject} onChange={(e) => setSubject(e.target.value)} className="text-sm font-medium" placeholder="Subject line" />
-          <RichTextEditor value={body} onChange={setBody} minHeight="140px" compact aiContext={{ subject }} />
+          <RichTextEditor value={body} onChange={setBody} minHeight="140px" compact aiContext={{ subject, emailDraftId: draft.id }} />
           <div className="flex items-center gap-2">
             <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
               onClick={() => approve.mutate({ draftId: draft.id, subject, body })} disabled={approve.isPending}>

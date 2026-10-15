@@ -462,7 +462,7 @@ function SendEmailModal({
                 onChange={setBody}
                 minHeight="180px"
                 compact
-                aiContext={{ subject }}
+                aiContext={{ subject, contactId: contactIds.length === 1 ? contactIds[0] : undefined }}
               />
             </div>
             <div className="flex gap-2 justify-end">

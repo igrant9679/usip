@@ -23,9 +23,18 @@ import {
 } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { invokeLLM } from "../_core/llm";
+import type { ResearchUse } from "../services/research/context";
 import { HUMAN_COPY_RULES } from "../services/humanCopy";
 import { buildBrandContext } from "../services/brandContext";
 import { rankOf } from "../_core/workspace";
+
+/**
+ * Templates and snippets go to many recipients, so no one prospect's research
+ * applies; the writer picks the sector they are writing for (optional).
+ */
+const SectorChoice = z.number().int().positive().optional();
+export const sectorResearch = (sectorId: number | undefined): ResearchUse | undefined =>
+  sectorId ? { surface: "outreach", sectorId } : undefined;
 
 /** manager+ see/edit all shared assets; reps are limited to team-visible + their own. */
 function isManagerPlus(role: string): boolean {
@@ -428,6 +437,7 @@ export const emailTemplatesRouter = router({
         content: z.string(),
         instruction: z.enum(["rewrite", "shorten", "lengthen", "make_formal", "make_casual"]),
         tone: z.string().optional(),
+        sectorId: SectorChoice,
       }),
     )
     .mutation(async ({ input }) => {
@@ -452,6 +462,7 @@ ${HUMAN_COPY_RULES}`,
           },
           { role: "user", content: `${prompt}\n\n---\n${input.content}` },
         ],
+        research: sectorResearch(input.sectorId),
       });
       const rewritten = (res as any).choices?.[0]?.message?.content ?? input.content;
       return { content: rewritten };
@@ -465,6 +476,7 @@ ${HUMAN_COPY_RULES}`,
         tone: z.enum(["concise", "warm", "formal", "punchy", "storytelling"]).default("concise"),
         includeHeader: z.boolean().default(true),
         includeCta: z.boolean().default(true),
+        sectorId: SectorChoice,
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -511,6 +523,7 @@ Rules:
         },
         max_tokens: 1500,
         workspaceId: ctx.workspace.id,
+        research: sectorResearch(input.sectorId),
       });
       const raw = (res as any).choices?.[0]?.message?.content ?? "{}";
       let parsed: { subject?: string; blocks?: any[] };
@@ -536,6 +549,7 @@ Rules:
         bodyText: z.string().max(4000),
         currentSubject: z.string().optional(),
         count: z.number().min(1).max(8).default(5),
+        sectorId: SectorChoice,
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -556,6 +570,7 @@ Email body:
 ${input.bodyText.slice(0, 3000)}`,
           },
         ],
+        research: sectorResearch(input.sectorId),
         // outputSchema forces valid JSON on Anthropic (was prose → empty fallback).
         outputSchema: {
           name: "subject_suggestions",
@@ -741,6 +756,7 @@ export const snippetsRouter = router({
         category: z.enum(SNIPPET_CATEGORIES),
         context: z.string().optional(),
         tone: z.string().default("professional"),
+        sectorId: SectorChoice,
       }),
     )
     .mutation(async ({ input }) => {
@@ -766,6 +782,7 @@ export const snippetsRouter = router({
             content: `Write ${desc} for a B2B sales email.${input.context ? ` Context: ${input.context}` : ""}`,
           },
         ],
+        research: sectorResearch(input.sectorId),
       });
       const content = (res as any).choices?.[0]?.message?.content ?? "";
       return { content };

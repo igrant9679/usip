@@ -6,7 +6,7 @@
  *     Returns: text/event-stream
  *
  *   POST /api/mailbox/draft-forward/stream
- *     Body: { accountId, originalMessage: {fromEmail, fromName?, subject, bodyText, date?}, senderName? }
+ *     Body: { accountId, originalMessage: {fromEmail, fromName?, subject, bodyText, date?}, senderName?, toEmail? }
  *     Returns: text/event-stream
  *
  * Mirrors the prompt-building logic of `mailbox.aiDraftReply` /
@@ -19,6 +19,7 @@ import { HUMAN_COPY_RULES } from "./services/humanCopy";
 import { and, eq } from "drizzle-orm";
 import { sendingAccounts } from "../drizzle/schema";
 import { runSSEStream } from "./_core/streamHelpers";
+import { researchUseForRecipient, threadCounterparty } from "./services/research/recipient";
 
 type Msg = {
   fromEmail: string;
@@ -113,6 +114,8 @@ ${HUMAN_COPY_RULES}`,
             { role: "user", content: `Email thread:\n\n${threadSummary}` },
           ],
           sendersBrand: true,
+          // The other party's market research, when their address is a record here.
+          research: await researchUseForRecipient(workspaceId, "reply", {}, [threadCounterparty(messages, senderEmail)]),
         };
       },
     }),
@@ -153,6 +156,8 @@ ${HUMAN_COPY_RULES}`,
             { role: "user", content: `Email to forward:\n\n${threadSummary}` },
           ],
           sendersBrand: true,
+          // The research on whoever it goes to (body.toEmail, when the To field is filled), else on whoever wrote it.
+          research: await researchUseForRecipient(workspaceId, "reply", {}, [asStr(body.toEmail), original.fromEmail]),
         };
       },
     }),

@@ -1239,7 +1239,7 @@ function LeadEmailTab({
       </div>
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-muted-foreground">Body</label>
-        <RichTextEditor placeholder="Email body…" value={body} onChange={onBodyChange} minHeight="200px" compact aiContext={{ subject }} />
+        <RichTextEditor placeholder="Email body…" value={body} onChange={onBodyChange} minHeight="200px" compact aiContext={{ subject, leadId }} />
       </div>
       <Button
         className="w-full"
@@ -1332,7 +1332,7 @@ function ContactEmailTab({
       </div>
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-muted-foreground">Body</label>
-        <RichTextEditor placeholder="Email body…" value={body} onChange={onBodyChange} minHeight="200px" compact aiContext={{ subject }} />
+        <RichTextEditor placeholder="Email body…" value={body} onChange={onBodyChange} minHeight="200px" compact aiContext={{ subject, contactId }} />
       </div>
       <Button
         className="w-full"

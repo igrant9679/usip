@@ -17,8 +17,17 @@
  *  - {{merge}} tags must survive verbatim — they resolve at send time, and a
  *    "helpful" rewrite that inlines "Hi John" freezes one recipient's name
  *    into a template used for hundreds.
+ *  - When the editor knows who the email is for (a contact, lead, person,
+ *    campaign prospect, draft, or a To address), the assistant gets that
+ *    recipient's market research (Research module). Nothing known, or no
+ *    research matches: the assistant behaves exactly as before.
  */
 import { z } from "zod";
+import { and, eq } from "drizzle-orm";
+import { emailDrafts } from "../../drizzle/schema";
+import { getDb } from "../db";
+import type { ResearchUse } from "../services/research/context";
+import { researchUseForRecipient, type RecipientRef } from "../services/research/recipient";
 import { repProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { invokeLLM } from "../_core/llm";
@@ -44,6 +53,34 @@ const ASSIST_ACTIONS = {
 
 export type AssistAction = keyof typeof ASSIST_ACTIONS;
 
+const RecordId = z.number().int().positive().optional();
+
+/** The recipient's research: the records the editor named, the draft's recipient, then the To address. */
+async function assistResearch(
+  workspaceId: number,
+  i: { contactId?: number; leadId?: number; prospectId?: number; prospectQueueId?: number; emailDraftId?: number; recipientEmail?: string },
+): Promise<ResearchUse> {
+  const ref: RecipientRef = { contactId: i.contactId, leadId: i.leadId, prospectId: i.prospectId, prospectQueueId: i.prospectQueueId };
+  const emails: (string | null | undefined)[] = [i.recipientEmail];
+  if (i.emailDraftId) {
+    const db = await getDb();
+    const [d] = db
+      ? await db
+          .select({ contactId: emailDrafts.toContactId, leadId: emailDrafts.toLeadId, prospectId: emailDrafts.toProspectId, toEmail: emailDrafts.toEmail })
+          .from(emailDrafts)
+          .where(and(eq(emailDrafts.id, i.emailDraftId), eq(emailDrafts.workspaceId, workspaceId)))
+          .limit(1)
+      : [];
+    if (d) {
+      ref.contactId ??= d.contactId;
+      ref.leadId ??= d.leadId;
+      ref.prospectId ??= d.prospectId;
+      emails.push(d.toEmail);
+    }
+  }
+  return researchUseForRecipient(workspaceId, "outreach", ref, emails);
+}
+
 export const emailAssistRouter = router({
   assist: repProcedure
     .input(
@@ -59,6 +96,13 @@ export const emailAssistRouter = router({
         subject: z.string().max(500).optional(),
         recipientName: z.string().max(200).optional(),
         recipientCompany: z.string().max(200).optional(),
+        /** Who it is for, when the editor knows: their market research sharpens the copy. */
+        contactId: RecordId,
+        leadId: RecordId,
+        prospectId: RecordId,
+        prospectQueueId: RecordId,
+        emailDraftId: RecordId,
+        recipientEmail: z.string().max(320).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -125,6 +169,7 @@ ${brandBlock ? `\nBrand voice:\n${brandBlock}` : ""}`,
         },
         max_tokens: 2000,
         workspaceId: ctx.workspace.id,
+        research: await assistResearch(ctx.workspace.id, input),
       });
 
       const raw = (res as { choices?: Array<{ message?: { content?: string } }> }).choices?.[0]?.message?.content ?? "";
