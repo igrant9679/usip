@@ -34,7 +34,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { __clearResearchContextCache, formatResearchBlock, researchContextFor, titleMatchLength } from "./services/research/context";
 import { researchUseFor } from "./services/research/recipient";
-import { checkAvoidRules, holdReason } from "./services/research/avoidCheck";
+import { checkBrief, holdReason } from "./services/research/avoidCheck";
 import { invokeLLM } from "./_core/llm";
 import { appRouter } from "./routers";
 import { cleanSectorContent } from "@shared/researchShape";
@@ -82,7 +82,7 @@ beforeEach(() => {
 describe("which research applies", () => {
   it("a workspace without research gets nothing, so its writers behave exactly as before", async () => {
     const c = await researchContextFor(2, { surface: "outreach", prospectTitle: "County Administrator" });
-    expect(c).toEqual({ block: "", sectorId: null, personaId: null, matchedBy: null, avoid: [] });
+    expect(c).toEqual({ block: "", sectorId: null, personaId: null, matchedBy: null, avoid: [], pains: [], leadWith: [] });
   });
 
   it("the campaign's sector wins; then its persona; then the prospect's title; then the industry", async () => {
@@ -180,14 +180,14 @@ describe("the avoid-rule check", () => {
   const steps = [{ subject: "Compliance made easy", body: "Our overlay makes your county fully compliant overnight.", channel: "email" }];
 
   it("costs nothing when the matched research has no avoid rules", async () => {
-    expect(await checkAvoidRules(2, { prospectTitle: "Plumber" }, steps)).toEqual({ checked: false, rules: 0, violations: [] });
+    expect(await checkBrief(2, { prospectTitle: "Plumber" }, steps)).toMatchObject({ checked: false, rules: 0, violations: [], pains: [], leads: [] });
     expect(h.calls).toHaveLength(0);
   });
 
   it("asks the model which rules the copy breaks, and says which in the hold", async () => {
     seed(h.db);
     h.reply = () => ({ id: "m", model: "m", content: [{ type: "tool_use", id: "t", name: "respond_with_structured_output", input: { violations: [{ rule: "Don't promise that an overlay makes a county compliant.", quote: "Our overlay makes your county fully compliant" }] } }], stop_reason: "tool_use", usage: { input_tokens: 1, output_tokens: 1 } });
-    const r = await checkAvoidRules(2, { campaignId: 7 }, steps);
+    const r = await checkBrief(2, { campaignId: 7 }, steps);
     expect(r).toMatchObject({ checked: true, rules: 1 });
     expect(r.violations).toHaveLength(1);
     expect(h.calls[0].messages[0].content).toContain("1. Don't promise that an overlay makes a county compliant.");
@@ -199,7 +199,7 @@ describe("the avoid-rule check", () => {
   it("a judge that fails holds nothing and reports why", async () => {
     seed(h.db);
     h.reply = () => { throw Object.assign(new Error("overloaded"), { status: 529 }); };
-    const r = await checkAvoidRules(2, { campaignId: 7 }, steps);
+    const r = await checkBrief(2, { campaignId: 7 }, steps);
     expect(r.checked).toBe(false);
     expect(r.violations).toEqual([]);
     expect(r.error).toBeTruthy();
@@ -210,7 +210,7 @@ describe("the avoid-rule check", () => {
     expect(engine).toContain("isNull(prospectIntelligence.copyHoldReason),");
     expect(engine).toContain("an avoid rule from your research and");
     const agent = read("server/routers/are/prospects.ts");
-    expect(agent).toContain("const avoid = await checkAvoidRules(workspaceId, { campaignId, prospectTitle: prospect.title, industry: prospect.industry }, steps);");
+    expect(agent).toContain("const brief = await checkBrief(workspaceId, { campaignId, prospectTitle: prospect.title, industry: prospect.industry }, steps);");
     expect(agent).toMatch(/sequenceRewriteCount: 0,\n\s+copyHoldReason,\n/);
 
     h.db.rowsOf("prospect_intelligence").push({ id: 1, prospectQueueId: 5, workspaceId: 2, copyHoldReason: "Breaks your research's avoid rule" });

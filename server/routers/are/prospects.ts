@@ -50,7 +50,8 @@ import {
 import { checkPermission, getDb } from "../../db";
 import { parseLlmJson } from "./llmJson";
 import { invokeLLM, isRetryableLLMError } from "../../_core/llm";
-import { checkAvoidRules, holdReason } from "../../services/research/avoidCheck";
+import { checkBrief, holdReason } from "../../services/research/avoidCheck";
+import { researchMatchFor, researchUseColumns } from "../../services/research/results";
 import { campaignNeverTarget } from "../../services/research/neverTarget";
 import { neverTargetHit } from "@shared/researchTargeting";
 import { downstreamAccountFor } from "../../services/research/downstreamAccounts";
@@ -1093,6 +1094,8 @@ export async function runSequenceAgent(
         sequenceRewriteCount: 0,
         // A person wrote this copy; the research avoid-rule hold is for AI copy.
         copyHoldReason: null,
+        // Results still count who it went to (phase 6); there is no check to tag pains.
+        ...researchUseColumns(await researchMatchFor(workspaceId, { campaignId, prospectTitle: prospect.title, industry: prospect.industry }), null, { hookType: "fixed", steps }),
       };
       await db.update(prospectIntelligence).set(fixedPatch as never)
         .where(eq(prospectIntelligence.prospectQueueId, prospectId));
@@ -1131,27 +1134,29 @@ export async function runSequenceAgent(
     await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.eval",
       `Quality: ${quality.score}/40`, { prospectId, score: quality.score, breakdown: quality.breakdown });
 
-    // (4) The research's avoid rules (phase 3). A break holds the sequence:
-    // enrollment skips it until a person releases or regenerates it. Runs
-    // only when the matched research has avoid rules; a check that cannot run
-    // holds nothing and says so.
-    const avoid = await checkAvoidRules(workspaceId, { campaignId, prospectTitle: prospect.title, industry: prospect.industry }, steps);
-    const copyHoldReason = holdReason(avoid.violations) || null;
-    if (avoid.error) {
+    // (4) The brief check (phase 3): the research's avoid rules. A break holds
+    // the sequence: enrollment skips it until a person releases or regenerates
+    // it. The same call tags the pains and lead-with points the copy uses, which
+    // results count (phase 6). Runs only when the matched research has any of
+    // them; a check that cannot run holds nothing and says so.
+    const brief = await checkBrief(workspaceId, { campaignId, prospectTitle: prospect.title, industry: prospect.industry }, steps);
+    const copyHoldReason = holdReason(brief.violations) || null;
+    if (brief.error) {
       await emitSeqLog(db, workspaceId, campaignId, "warn", "sequence.avoid",
-        `Could not check ${prospect.firstName} ${prospect.lastName}'s copy against your research's avoid rules: ${avoid.error.slice(0, 200)}`, { prospectId });
+        `Could not check ${prospect.firstName} ${prospect.lastName}'s copy against your research's avoid rules: ${brief.error.slice(0, 200)}`, { prospectId });
     } else if (copyHoldReason) {
       await emitSeqLog(db, workspaceId, campaignId, "warn", "sequence.avoid",
-        `Held ${prospect.firstName} ${prospect.lastName}'s sequence for review. ${copyHoldReason}`, { prospectId, violations: avoid.violations });
+        `Held ${prospect.firstName} ${prospect.lastName}'s sequence for review. ${copyHoldReason}`, { prospectId, violations: brief.violations });
     }
 
     // Save sequence + quality flag (and the hold, cleared when the new copy is clean).
     await db.update(prospectIntelligence).set({
       generatedSequence: steps,
       sequenceQualityScore: quality.score,
-      sequenceQualityBreakdown: { ...quality.breakdown, feedback: quality.feedback, ...(avoid.violations.length ? { avoidViolations: avoid.violations } : {}) },
+      sequenceQualityBreakdown: { ...quality.breakdown, feedback: quality.feedback, ...(brief.violations.length ? { avoidViolations: brief.violations } : {}) },
       sequenceRewriteCount: 0,
       copyHoldReason,
+      ...researchUseColumns(brief, brief, { hookType: primaryHookOf(intel).hookType, steps }),
     }).where(eq(prospectIntelligence.prospectQueueId, prospectId));
 
     // Refresh A/B Variants — opener-only (variant A, the only one that exists).

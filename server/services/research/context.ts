@@ -51,9 +51,13 @@ export type ResearchContext = {
   matchedBy: "sector" | "campaign" | "persona" | "title" | "industry" | null;
   /** The sector's avoid rules plus the persona's objections are NOT rules; only avoid rules. */
   avoid: string[];
+  /** The pains the writer was given (the sector's, then the persona's), for the brief check to tag (phase 6). */
+  pains: string[];
+  /** The sector's lead-with points, likewise. */
+  leadWith: string[];
 };
 
-const EMPTY: ResearchContext = { block: "", sectorId: null, personaId: null, matchedBy: null, avoid: [] };
+const EMPTY: ResearchContext = { block: "", sectorId: null, personaId: null, matchedBy: null, avoid: [], pains: [], leadWith: [] };
 
 /* ── What a workspace has (cached briefly: writers run per prospect) ──── */
 
@@ -258,7 +262,19 @@ export async function researchContextFor(workspaceId: number, use: ResearchUse):
     const sector = sectorId != null ? snap.sectors.get(sectorId) ?? null : null;
     if (!sector && !persona) return EMPTY;
     const block = formatResearchBlock({ surface: use.surface, marketName: sector?.marketName ?? "", sector: sector?.content ?? null, persona });
-    return { block, sectorId: sector?.id ?? null, personaId: persona?.id ?? null, matchedBy, avoid: sector?.content.messaging.avoid ?? [] };
+    const pains: string[] = [];
+    for (const p of [...(sector?.content.buyers.painPoints ?? []), ...(persona?.pains ?? [])]) {
+      if (!pains.some((x) => x.toLowerCase() === p.toLowerCase())) pains.push(p);
+    }
+    return {
+      block,
+      sectorId: sector?.id ?? null,
+      personaId: persona?.id ?? null,
+      matchedBy,
+      avoid: sector?.content.messaging.avoid ?? [],
+      pains,
+      leadWith: sector?.content.messaging.leadWith ?? [],
+    };
   } catch (e) {
     // Research makes copy better; its absence must never stop a writer.
     console.warn("[research] context failed:", e instanceof Error ? e.message : e);

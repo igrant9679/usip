@@ -30,6 +30,7 @@ import { cancelResearchJob, enqueueResearchJob, failOrphanedJobs, type ResearchD
 import { ICP_FALLBACKS, workspaceIcpFallback } from "../services/research/targetingPrior";
 import { commitDownstream, previewDownstream } from "../services/research/downstreamImport";
 import { __clearResearchContextCache } from "../services/research/context";
+import { personaResultSummaries, researchResults } from "../services/research/results";
 import { cleanLinkSettings, type DownstreamMarketExtras } from "@shared/downstreamMap";
 import {
   insertMarket,
@@ -771,6 +772,23 @@ export const researchRouter = router({
         .where(and(eq(researchJobs.id, job.id), eq(researchJobs.workspaceId, ctx.workspace.id)));
       return { success: true };
     }),
+  }),
+
+  /* ── Results (phase 6) ──────────────────────────────────────────────── */
+
+  // What happened to the prospects whose copy a sector or persona shaped:
+  // contacted, replies, meetings, the brief check, and which pains, lead-with
+  // points, hooks and opening lines got replies. Read by everyone, like the
+  // research itself.
+  results: router({
+    sector: workspaceProcedure
+      .input(z.object({ id: Id }))
+      .query(({ ctx, input }) => researchResults(ctx.workspace.id, { sectorId: input.id })),
+    persona: workspaceProcedure
+      .input(z.object({ id: Id }))
+      .query(({ ctx, input }) => researchResults(ctx.workspace.id, { personaId: input.id })),
+    /** Contacted, replied and meetings per persona, for the persona lists. */
+    personas: workspaceProcedure.query(({ ctx }) => personaResultSummaries(ctx.workspace.id)),
   }),
 
   /* ── Downstream imports (phase 5) ───────────────────────────────────── */

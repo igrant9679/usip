@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import { Link2, Pencil, Plus, Sparkles, Telescope, Trash2, Unlink } from "lucide-react";
 import { StartRunDialog } from "@/components/usip/research/ResearchRuns";
 import { CreateCampaignFromSector } from "@/components/usip/research/CreateCampaignFromSector";
+import { PersonaResultsBadge, SectorResults, usePersonaResultSummaries } from "@/components/usip/research/ResearchResults";
 import { confirmAction } from "@/components/usip/Common";
 import {
   Crumbs, HistoryButton, LinesInput, RowsEditor, SaveBar, Section, StatusBadge, TagInput,
@@ -48,6 +49,7 @@ export default function ResearchSector() {
   const [, navigate] = useLocation();
   const { canEdit, canDelete } = useResearchRoles();
   const q = trpc.research.sectors.get.useQuery({ id }, { enabled: Number.isFinite(id) && id > 0 });
+  const personaResults = usePersonaResultSummaries();
   const sector = q.data?.sector;
   const draft = useResearchDraft<SectorContent>(sector?.content, sector?.revision);
   const c = draft.value;
@@ -223,6 +225,8 @@ export default function ResearchSector() {
           </div>
         </Section>
 
+        <SectorResults sectorId={id} />
+
         <Section title="Buyers and pains" description="The roles that buy or sign off, and the problems they have.">
           <TagInput label="Buyer roles" value={c.buyers.roles} disabled={ro} onChange={(v) => draft.patch({ buyers: { ...c.buyers, roles: v } })} placeholder="Finance director, Program manager…" />
           <LinesInput label="Pain points" hint="One per line." value={c.buyers.painPoints} disabled={ro} onChange={(v) => draft.patch({ buyers: { ...c.buyers, painPoints: v } })} rows={4} />
@@ -259,6 +263,7 @@ export default function ResearchSector() {
                         {pf.targetTitles.slice(0, 4).map((x) => <Badge key={"t" + x} variant="secondary" className="text-[10px]">{x}</Badge>)}
                         {pf.pains.length > 0 && <Badge variant="outline" className="text-[10px]">{pf.pains.length} {pf.pains.length === 1 ? "pain" : "pains"}</Badge>}
                         {pf.objections.length > 0 && <Badge variant="outline" className="text-[10px]">{pf.objections.length} {pf.objections.length === 1 ? "objection" : "objections"}</Badge>}
+                        <PersonaResultsBadge personaId={p.id} name={p.name} tally={personaResults[p.id]} />
                       </div>
                     </div>
                     {canEdit && (

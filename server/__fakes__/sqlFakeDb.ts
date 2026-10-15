@@ -81,6 +81,7 @@ export function makeSqlFakeDb(opts: {
     if ((m = clause.match(new RegExp(`^${REF} < \\?$`)))) return cmp(lookup(ctx, m[1]), params[pi.i++]) < 0;
     if ((m = clause.match(new RegExp(`^${REF} > \\?$`)))) return cmp(lookup(ctx, m[1]), params[pi.i++]) > 0;
     if ((m = clause.match(new RegExp(`^${REF} is null$`)))) return lookup(ctx, m[1]) == null;
+    if ((m = clause.match(new RegExp(`^${REF} is not null$`)))) return lookup(ctx, m[1]) != null;
     if ((m = clause.match(new RegExp(`^${REF} in \\(([?, ]+)\\)$`)))) {
       const n = (m[2].match(/\?/g) ?? []).length;
       const set = params.slice(pi.i, pi.i + n);

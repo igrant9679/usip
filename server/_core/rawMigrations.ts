@@ -4694,6 +4694,21 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0206: Research, phase 6 — learning from results ──────────────────────
+  // Which research each prospect's copy was written from (sector, persona,
+  // pains, lead-with points, hook, opener, brief check), so the sector and
+  // persona pages can show what gets replies.
+  {
+    name: "0206_research_results.sql",
+    statements: [
+      "ALTER TABLE `prospect_intelligence` ADD COLUMN `researchSectorId` int NULL",
+      "ALTER TABLE `prospect_intelligence` ADD COLUMN `researchPersonaId` int NULL",
+      "ALTER TABLE `prospect_intelligence` ADD COLUMN `researchUse` json NULL",
+      "CREATE INDEX `ix_pi_rsector` ON `prospect_intelligence` (`workspaceId`, `researchSectorId`)",
+      "CREATE INDEX `ix_pi_rpersona` ON `prospect_intelligence` (`workspaceId`, `researchPersonaId`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

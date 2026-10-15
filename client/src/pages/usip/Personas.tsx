@@ -27,6 +27,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Users, Plus, Pencil, Trash2, Sparkles, ChevronDown, ArrowUp, ArrowDown, FolderPlus, Telescope } from "lucide-react";
+import { PersonaResultsBadge, usePersonaResultSummaries } from "@/components/usip/research/ResearchResults";
 import { confirmAction } from "@/components/usip/Common";
 import { ResearchSubNav } from "@/components/usip/research/ResearchFields";
 import { EMPTY_PERSONA, PersonaFormFields, personaFormFrom, personaPayload, type PersonaForm } from "@/components/usip/research/PersonaFormFields";
@@ -76,6 +77,7 @@ export default function Personas() {
   const { data: presets = [] } = trpc.personas.listPresets.useQuery();
   const { data: cats = [], refetch: refetchCats } = trpc.personas.listCategories.useQuery();
   const { data: sectorOptions = [] } = trpc.research.sectors.options.useQuery();
+  const personaResults = usePersonaResultSummaries();
   const sectorName = new Map(sectorOptions.map((x) => [x.id, x.name]));
   const create = trpc.personas.create.useMutation();
   const update = trpc.personas.update.useMutation();
@@ -250,6 +252,7 @@ export default function Personas() {
               {p.employeeMin ?? 0}–{p.employeeMax ?? "∞"} emp
             </Badge>
           )}
+          <PersonaResultsBadge personaId={p.id} name={p.name} tally={personaResults[p.id]} />
         </div>
       </div>
       <div className="flex gap-1 shrink-0">

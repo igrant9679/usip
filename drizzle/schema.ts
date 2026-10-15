@@ -4045,6 +4045,11 @@ export const prospectIntelligence = mysqlTable(
     sequenceRewriteCount: int("sequenceRewriteCount").default(0).notNull(),
     /** Research avoid-rule hold (migration 0203): set when the generated copy breaks one; enrollment skips the prospect until a person releases or regenerates. */
     copyHoldReason: varchar("copyHoldReason", { length: 500 }),
+    /** Research phase 6 (migration 0206): the research this prospect's copy was written from, for results. */
+    researchSectorId: int("researchSectorId"),
+    researchPersonaId: int("researchPersonaId"),
+    /** @shared/researchResults ResearchUseRecord: pains, lead-with points, hook, opener, brief check. */
+    researchUse: json("researchUse"),
     enhancedHook: text("enhancedHook"),           // AI-rewritten hook after signal enhancement
     signalEnhancedAt: timestamp("signalEnhancedAt"), // when the hook was last enhanced
     generatedAt: timestamp("generatedAt").defaultNow().notNull(),
@@ -4053,6 +4058,8 @@ export const prospectIntelligence = mysqlTable(
   (t) => ({
     byProspect: index("ix_pi_prospect").on(t.prospectQueueId),
     byWs: index("ix_pi_ws").on(t.workspaceId),
+    byResearchSector: index("ix_pi_rsector").on(t.workspaceId, t.researchSectorId),
+    byResearchPersona: index("ix_pi_rpersona").on(t.workspaceId, t.researchPersonaId),
   }),
 );
 export type ProspectIntelligence = typeof prospectIntelligence.$inferSelect;
