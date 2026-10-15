@@ -16,7 +16,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Plus, Sparkles, Telescope, Trash2, Users } from "lucide-react";
+import { FileBarChart, Plus, Sparkles, Telescope, Trash2, Users } from "lucide-react";
 import { RunsForRecord, StartRunDialog, type RunTarget } from "@/components/usip/research/ResearchRuns";
 import { MarketExtras } from "@/components/usip/research/MarketExtras";
 import { confirmAction } from "@/components/usip/Common";
@@ -99,6 +99,7 @@ export default function ResearchMarket() {
       <PageHeader icon={<Telescope className="size-5" />} title={market.content.name} description={market.content.tagline || "A market you sell into."}>
         <StatusBadge status={market.content.status} />
         {market.source !== "manual" && <Badge variant="outline" className="text-[10px]">{market.source === "ai" ? "AI research" : "Downstream"}</Badge>}
+        <Link href={`/research/markets/${id}/report`}><Button size="sm"><FileBarChart className="size-4 mr-1" /> Reports</Button></Link>
         {canEdit && (
           <Button variant="outline" size="sm" onClick={() => setRunTarget({ kind: "market", marketId: id, name: market.content.name })}>
             <Sparkles className="size-4 mr-1" /> Refresh with AI

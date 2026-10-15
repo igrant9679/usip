@@ -20,7 +20,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Link2, Pencil, Plus, Sparkles, Telescope, Trash2, Unlink } from "lucide-react";
+import { FileBarChart, Link2, Pencil, Plus, Sparkles, Telescope, Trash2, Unlink } from "lucide-react";
 import { RunsForRecord, StartRunDialog } from "@/components/usip/research/ResearchRuns";
 import { CreateCampaignFromSector } from "@/components/usip/research/CreateCampaignFromSector";
 import { PersonaResultsBadge, SectorResults, usePersonaResultSummaries } from "@/components/usip/research/ResearchResults";
@@ -152,6 +152,7 @@ export default function ResearchSector() {
       <PageHeader icon={<Telescope className="size-5" />} title={sector.content.name} description={sector.content.tagline || `A sector of ${market.name}.`}>
         <StatusBadge status={sector.content.status} />
         {sector.source !== "manual" && <Badge variant="outline" className="text-[10px]">{sector.source === "ai" ? "AI research" : "Downstream"}</Badge>}
+        <Link href={`/research/sectors/${id}/report`}><Button variant="outline" size="sm"><FileBarChart className="size-4 mr-1" /> Report</Button></Link>
         {canEdit && <CreateCampaignFromSector sectorId={id} sector={sector.content} personas={personas} />}
         {canEdit && (
           <Button variant="outline" size="sm" onClick={() => setRunOpen(true)}>

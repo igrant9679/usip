@@ -291,3 +291,23 @@ export async function personaResultSummaries(workspaceId: number): Promise<Recor
   }
   return out;
 }
+
+/** Written, contacted, replied and meetings for each of these sectors, for the market's results report. */
+export async function sectorTallies(workspaceId: number, sectorIds: number[]): Promise<Record<number, Tally>> {
+  const db = await getDb();
+  if (!db || !sectorIds.length) return {};
+  const rows = await db
+    .select({ pq: prospectIntelligence.prospectQueueId, sectorId: prospectIntelligence.researchSectorId })
+    .from(prospectIntelligence)
+    .where(and(eq(prospectIntelligence.workspaceId, workspaceId), inArray(prospectIntelligence.researchSectorId, sectorIds)))
+    .orderBy(desc(prospectIntelligence.id))
+    .limit(MAX_PROSPECTS);
+  const outcomes = await outcomesFor(db, workspaceId, rows.map((r) => r.pq));
+  const out: Record<number, Tally> = {};
+  for (const r of rows) {
+    const id = r.sectorId!;
+    out[id] ??= emptyTally();
+    add(out[id], outcomes.get(r.pq)!);
+  }
+  return out;
+}

@@ -30,7 +30,7 @@ import { cancelResearchJob, enqueueResearchJob, failOrphanedJobs, type ResearchD
 import { ICP_FALLBACKS, workspaceIcpFallback } from "../services/research/targetingPrior";
 import { commitDownstream, previewDownstream } from "../services/research/downstreamImport";
 import { __clearResearchContextCache } from "../services/research/context";
-import { personaResultSummaries, researchResults } from "../services/research/results";
+import { personaResultSummaries, researchResults, sectorTallies } from "../services/research/results";
 import { cleanLinkSettings, type DownstreamMarketExtras } from "@shared/downstreamMap";
 import { isAdminRole } from "@shared/roleRank";
 import {
@@ -58,6 +58,7 @@ import {
 import {
   changedParts,
   cleanMarketContent,
+  cleanPersonaResearch,
   cleanSectorContent,
   emptyMarketContent,
   emptySectorContent,
@@ -838,6 +839,61 @@ export const researchRouter = router({
         .set({ outcome: "discarded", reviewedByUserId: ctx.user.id, reviewedAt: new Date() })
         .where(and(eq(researchJobs.id, job.id), eq(researchJobs.workspaceId, ctx.workspace.id)));
       return { success: true };
+    }),
+  }),
+
+  /* ── Reports (owner, 2026-10-15) ─────────────────────────────────────── */
+
+  // Read-only report views over a market's research, like Downstream's pages:
+  // everything one market holds in one call, the report sections compute the
+  // rest (@shared/researchReports). Read by everyone, like the research itself.
+  reports: router({
+    market: workspaceProcedure.input(z.object({ id: Id })).query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const ws = ctx.workspace.id;
+      const row = await loadMarket(db, ws, input.id);
+      const sectorRows = await db
+        .select()
+        .from(researchSectors)
+        .where(and(eq(researchSectors.workspaceId, ws), eq(researchSectors.marketId, row.id)))
+        .orderBy(asc(researchSectors.name));
+      const sectorIds = sectorRows.map((s) => s.id);
+      const personaRows = sectorIds.length
+        ? await db
+            .select({ id: personas.id, name: personas.name, sectorId: personas.sectorId, cares: personas.cares, pains: personas.pains, objections: personas.objections, angle: personas.angle })
+            .from(personas)
+            .where(and(eq(personas.workspaceId, ws), inArray(personas.sectorId, sectorIds)))
+            .orderBy(asc(personas.name))
+        : [];
+      // The market's runs (refreshes and its sectors' runs name it; the run
+      // that created it names it as its result), removed ones included.
+      const runCols = {
+        id: researchJobs.id, kind: researchJobs.kind, subject: researchJobs.subject, status: researchJobs.status,
+        outcome: researchJobs.outcome, createdAt: researchJobs.createdAt, costUsd: researchJobs.costUsd,
+        searches: researchJobs.searches, fetches: researchJobs.fetches, brief: researchJobs.brief,
+        sectorId: researchJobs.sectorId, resultId: researchJobs.resultId, removedAt: researchJobs.removedAt, userId: researchJobs.userId,
+      };
+      const [inMarket, created] = await Promise.all([
+        db.select(runCols).from(researchJobs).where(and(eq(researchJobs.workspaceId, ws), eq(researchJobs.marketId, row.id))).orderBy(desc(researchJobs.createdAt)).limit(100),
+        db.select(runCols).from(researchJobs).where(and(eq(researchJobs.workspaceId, ws), eq(researchJobs.kind, "market"), eq(researchJobs.resultId, row.id))).limit(20),
+      ]);
+      const runs = Array.from(new Map([...inMarket, ...created].map((r) => [r.id, r])).values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      const userIds = Array.from(new Set(runs.map((r) => r.userId)));
+      const names = userIds.length ? await db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(inArray(users.id, userIds)) : [];
+      const nmap = new Map(names.map((u) => [u.id, u.name || u.email || "Someone"]));
+      return {
+        market: { id: row.id, source: row.source, updatedAt: row.updatedAt, content: marketContentOf(row), extras: (row.extras ?? null) as DownstreamMarketExtras | null },
+        sectors: sectorRows.map((s) => ({ id: s.id, source: s.source, updatedAt: s.updatedAt, content: sectorContentOf(s) })),
+        personas: personaRows.map((p) => ({ id: p.id, name: p.name, sectorId: p.sectorId, ...cleanPersonaResearch(p).content })),
+        runs: runs.map(({ userId, ...r }) => ({ ...r, byName: nmap.get(userId) ?? "A former member" })),
+      };
+    }),
+    /** Written, contacted, replied and meetings per sector of the market (phase 6 results). */
+    results: workspaceProcedure.input(z.object({ marketId: Id })).query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const row = await loadMarket(db, ctx.workspace.id, input.marketId);
+      const ids = await db.select({ id: researchSectors.id }).from(researchSectors).where(and(eq(researchSectors.workspaceId, ctx.workspace.id), eq(researchSectors.marketId, row.id)));
+      return sectorTallies(ctx.workspace.id, ids.map((s) => s.id));
     }),
   }),
 

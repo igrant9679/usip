@@ -90,6 +90,8 @@ import ResearchHome from "@/pages/usip/research/ResearchHome";
 import ResearchMarket from "@/pages/usip/research/ResearchMarket";
 import ResearchSector from "@/pages/usip/research/ResearchSector";
 import ResearchRun from "@/pages/usip/research/ResearchRun";
+import ResearchReport from "@/pages/usip/research/ResearchReport";
+import ResearchSectorReport from "@/pages/usip/research/ResearchSectorReport";
 import PromptTemplates from "@/pages/usip/PromptTemplates";
 import ImportContacts from "@/pages/usip/ImportContacts";
 import DataHealth from "@/pages/usip/DataHealth";
@@ -489,6 +491,9 @@ function Router() {
       <Route path="/personas"><AuthGate><Personas /></AuthGate></Route>
       {/* Research (phase 1, 2026-10-14): markets, then sectors. */}
       <Route path="/research"><AuthGate><ResearchHome /></AuthGate></Route>
+      <Route path="/research/markets/:id/report/:section"><AuthGate><ResearchReport /></AuthGate></Route>
+      <Route path="/research/markets/:id/report"><AuthGate><ResearchReport /></AuthGate></Route>
+      <Route path="/research/sectors/:id/report"><AuthGate><ResearchSectorReport /></AuthGate></Route>
       <Route path="/research/markets/:id"><AuthGate><ResearchMarket /></AuthGate></Route>
       <Route path="/research/sectors/:id"><AuthGate><ResearchSector /></AuthGate></Route>
       <Route path="/research/runs/:id"><AuthGate><ResearchRun /></AuthGate></Route>

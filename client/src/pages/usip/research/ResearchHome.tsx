@@ -90,11 +90,11 @@ export default function ResearchHome() {
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {rows.map((m) => (
-            <Link key={m.id} href={`/research/markets/${m.id}`}>
-              <Card className="h-full cursor-pointer transition hover:bg-accent/40">
+            // The title is the card's link, stretched over it; Reports sits above it.
+            <Card key={m.id} className="relative h-full transition hover:bg-accent/40">
                 <CardContent className="pt-5 space-y-2">
                   <div className="flex items-start gap-2">
-                    <div className="font-medium text-sm flex-1 min-w-0 break-words">{m.name}</div>
+                    <Link href={`/research/markets/${m.id}`} className="font-medium text-sm flex-1 min-w-0 break-words after:absolute after:inset-0">{m.name}</Link>
                     <StatusBadge status={m.status} />
                   </div>
                   {m.tagline && <p className="text-xs text-muted-foreground line-clamp-2">{m.tagline}</p>}
@@ -103,10 +103,12 @@ export default function ResearchHome() {
                       ? "No sectors yet"
                       : `${m.sectorCount} ${m.sectorCount === 1 ? "sector" : "sectors"}: ${m.sectorsByStatus.verified} verified, ${m.sectorsByStatus.researched} researched, ${m.sectorsByStatus.draft} draft`}
                   </div>
-                  <div className="text-[11px] text-muted-foreground">Updated {new Date(m.updatedAt).toLocaleDateString()}</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-muted-foreground">Updated {new Date(m.updatedAt).toLocaleDateString()}</span>
+                    <Link href={`/research/markets/${m.id}/report`} className="relative z-10 text-xs underline underline-offset-2">Reports</Link>
+                  </div>
                 </CardContent>
-              </Card>
-            </Link>
+            </Card>
           ))}
         </div>
       )}
