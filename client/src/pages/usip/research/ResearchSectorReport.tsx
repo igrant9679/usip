@@ -51,7 +51,8 @@ export default function ResearchSectorReport() {
             <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
               {f.marketSize.filter((m) => m.value).map((m, i) => (
                 <div key={i} className="rounded-md border p-3">
-                  <div className="text-lg font-semibold">{m.value}</div>
+                  {/* A short figure reads as a headline number; a long one (a breakdown) as text. */}
+                  <div className={m.value.length > 24 ? "text-sm font-medium leading-snug" : "text-lg font-semibold"}>{m.value}</div>
                   <div className="text-xs text-muted-foreground">{m.source ? <Ext url={m.source}>{m.label}</Ext> : m.label}</div>
                 </div>
               ))}
