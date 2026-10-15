@@ -59,6 +59,7 @@ import { ActiveSequenceTimeline } from "@/components/usip/are/ActiveSequenceTime
 import { AreMessageDialog } from "@/components/usip/are/AreMessageDialog";
 import { IntelligenceDossier } from "@/components/usip/are/IntelligenceDossier";
 import { CampaignResearchCard } from "@/components/usip/are/CampaignResearchCard";
+import { CampaignTargetingCard } from "@/components/usip/are/CampaignTargetingCard";
 import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
 import {
@@ -3244,6 +3245,9 @@ export default function ARECampaignDetail() {
                   )}
                 </CardContent>
               </Card>
+
+              {/* Targeting: who discovery looks for */}
+              {campaign && <CampaignTargetingCard campaign={campaign} />}
 
               {/* Prospect sources */}
               <Card className="bg-card border">
