@@ -11,6 +11,7 @@
  */
 import { Shell, PageHeader, StatCard, EmptyState } from "@/components/usip/Shell";
 import { ResearchSubNav } from "@/components/usip/research/ResearchFields";
+import { IcpFallbackCard } from "@/components/usip/research/IcpFallbackCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -604,6 +605,7 @@ export default function AREIcpAgent() {
       <ResearchSubNav />
 
       <div className="p-4 md:p-6 space-y-8 max-w-6xl mx-auto">
+        <IcpFallbackCard />
         {isLoading ? (
           <div className="flex items-center gap-2 text-muted-foreground py-24 justify-center">
             <Loader2 className="size-5 animate-spin" /> Loading ICP profile…

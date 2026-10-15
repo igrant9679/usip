@@ -98,6 +98,9 @@ import { appBaseUrl as publicAppOrigin } from "./appUrl";
 import { isSuppressed as isSuppressedSitewide, makeUnsubscribeUrl, unsubscribeHeaders } from "./unsubscribe";
 import { escapeHtml } from "@shared/escapeHtml";
 import { icpLabels } from "@shared/icpShape";
+import { dropNeverTarget, neverTargetHit, neverTargetReason } from "@shared/researchTargeting";
+import { campaignNeverTarget } from "./services/research/neverTarget";
+import { pickFallback, researchTargeting, workspaceIcpFallback } from "./services/research/targetingPrior";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { inSendWindow } from "./services/sendWindow";
 import { cleanScrapedField } from "@shared/fieldHygiene";
@@ -1029,7 +1032,23 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     // hundred people, and a hundred rows in the Inbox is how a channel gets
     // muted permanently. One digest per campaign per tick, below.
     let autoApprovedThisTick = 0;
+    // Research phase 4: a never-target word in the title, company name or
+    // industry rejects the prospect in every autonomy mode, before the score
+    // is looked at, with the word named on the Rejections tab. Covers people
+    // who entered without discovery (pushed, imported, routed).
+    const screenNeverTarget = await campaignNeverTarget(campaign);
+    let neverTargeted = 0;
     for (const p of enriched) {
+      const offTarget = neverTargetHit(screenNeverTarget, { title: p.title, company: p.companyName, industry: p.industry });
+      if (offTarget) {
+        await db
+          .update(prospectQueue)
+          .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionReason: neverTargetReason(offTarget) })
+          .where(and(eq(prospectQueue.id, p.id), eq(prospectQueue.workspaceId, wsId)));
+        result.rejected++;
+        neverTargeted++;
+        continue;
+      }
       const score = p.icpMatchScore ?? 0;
       if (mode === "full") {
         // Fully autonomous — the threshold IS the approve/reject line.
@@ -1087,7 +1106,8 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     }
     if (enriched.length > 0) {
       await emitLog(wsId, campId, "screen", "info",
-        `Screened ${enriched.length} (mode=${mode}, threshold=${threshold})`);
+        `Screened ${enriched.length} (mode=${mode}, threshold=${threshold})` +
+          (neverTargeted ? `; ${neverTargeted} rejected for a never-target word` : ""));
     }
     // "Prospect auto-approved" on ARE Settings named an event this engine had
     // never once emitted (2026-09-20). Only full autonomy reaches here, which
@@ -1914,20 +1934,26 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // The inferred ICP stores weighted objects ({title, weight, …}); read every
   // list through the shared normalizer (2026-10-14: this fallback used to
   // cast them `as string[]`, and buildQuerySlices crashed on `.trim()`).
+  // Research phase 4: a field the campaign leaves blank falls back to the
+  // learned ICP (as before), the researched sectors, or both — the
+  // workspace's ICP fallback setting (ICP page).
+  const fallback = await workspaceIcpFallback(campaign.workspaceId);
+  const researched = fallback === "inferred" ? null : await researchTargeting(campaign.workspaceId);
   const titles = overrides.targetTitles && overrides.targetTitles.length > 0
     ? icpLabels(overrides.targetTitles, "title")
-    : icpLabels(icp?.targetTitles, "title");
+    : pickFallback(fallback, icpLabels(icp?.targetTitles, "title"), researched?.titles);
   const industries = overrides.targetIndustries && overrides.targetIndustries.length > 0
     ? icpLabels(overrides.targetIndustries, "industry")
-    : icpLabels(icp?.targetIndustries, "industry");
+    : pickFallback(fallback, icpLabels(icp?.targetIndustries, "industry"), researched?.industries);
   const geos = overrides.targetGeographies && overrides.targetGeographies.length > 0
     ? icpLabels(overrides.targetGeographies, "geography")
-    : icpLabels(icp?.targetGeographies, "geography");
-  const keywords = overrides.keywords ?? [];
-  // Company size: the campaign's, else the ICP's (as buildEffectiveIcp does).
+    : pickFallback(fallback, icpLabels(icp?.targetGeographies, "geography"), researched?.geographies);
+  const keywords = overrides.keywords && overrides.keywords.length > 0 ? overrides.keywords : (researched?.keywords ?? []);
+  // Company size: the campaign's, else the research's (when it is the
+  // fallback), else the ICP's (as buildEffectiveIcp does).
   const size = {
-    employeeMin: overrides.employeeMin ?? icp?.targetCompanySizeMin ?? undefined,
-    employeeMax: overrides.employeeMax ?? icp?.targetCompanySizeMax ?? undefined,
+    employeeMin: overrides.employeeMin ?? (fallback === "research" ? researched?.employeeMin ?? undefined : undefined) ?? icp?.targetCompanySizeMin ?? undefined,
+    employeeMax: overrides.employeeMax ?? (fallback === "research" ? researched?.employeeMax ?? undefined : undefined) ?? icp?.targetCompanySizeMax ?? undefined,
   };
   const sizeHint =
     size.employeeMin || size.employeeMax
@@ -1963,7 +1989,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     (overrides.keywords?.length ?? 0) > 0;
   if (!hasOwnTargeting) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
-      `Campaign has no targeting of its own — discovery is using the workspace ICP profile instead (titles: ${titles.slice(0, 3).join(", ") || "—"}; industries: ${industries.slice(0, 3).join(", ") || "—"}). If that's not this campaign's audience, add Targeting to the campaign or apply a Persona.`);
+      `Campaign has no targeting of its own — discovery is using ${researched && fallback === "research" ? "your researched sectors" : researched && fallback === "merged" ? "the workspace ICP profile and your researched sectors" : "the workspace ICP profile"} instead (titles: ${titles.slice(0, 3).join(", ") || "—"}; industries: ${industries.slice(0, 3).join(", ") || "—"}). If that's not this campaign's audience, add Targeting to the campaign or apply a Persona.`);
   }
 
   // Merge with persisted state so we know which slice to run next. The same
@@ -2049,6 +2075,9 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     }
   }
   let excludedOtherCampaign = 0;
+  // Research phase 4: never-target words rule people out before they are queued.
+  const neverTarget = await campaignNeverTarget(campaign);
+  const neverTargetDropped: { name: string; reason: string }[] = [];
 
   type SourceType =
     | "google_business"
@@ -2185,11 +2214,18 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
       for (const k of keys) claimed.set(k, campaign.id);
       return true;
     });
+    const { kept, dropped } = dropNeverTarget(unique, neverTarget);
+    for (const d of dropped) {
+      neverTargetDropped.push({
+        name: [d.row.firstName, d.row.lastName].filter(Boolean).join(" ") || String(d.row.companyName ?? "someone"),
+        reason: neverTargetReason(d.hit),
+      });
+    }
     // Validate + score before queueing. Drop rows with no anchor at all
     // (neither a company domain nor a title — nothing to enrich or verify),
     // attach a deterministic ICP-match score, and rank highest-fit first so
     // the enrichment/enroll picks at the top of the queue are the best ones.
-    const scored = unique
+    const scored = kept
       .filter((p) => String(p.companyDomain ?? "").trim() !== "" || String(p.title ?? "").trim() !== "")
       .map((p) => ({ ...p, icpMatchScore: scoreIcpMatch(p, { titles, industries, geos, keywords }) }))
       .sort((a, b) => (b.icpMatchScore as number) - (a.icpMatchScore as number));
@@ -2207,6 +2243,12 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   if (excludedOtherCampaign > 0) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
       `${excludedOtherCampaign} prospect${excludedOtherCampaign === 1 ? "" : "s"} excluded — already active in another campaign in this workspace (one campaign per prospect).`);
+  }
+  if (neverTargetDropped.length > 0) {
+    const examples = neverTargetDropped.slice(0, 3).map((d) => `${d.name} (${d.reason})`).join("; ");
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
+      `${neverTargetDropped.length} found ${neverTargetDropped.length === 1 ? "person was" : "people were"} not queued: never-target words from the campaign's targeting. For example: ${examples}.`,
+      { neverTarget: neverTargetDropped.slice(0, 50) });
   }
 
   // Persist slice rotation state — bump lastSearchedAt + lastNewCount

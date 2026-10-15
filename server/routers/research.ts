@@ -27,6 +27,7 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../_core/workspace";
 import { workspaceAnthropicKey } from "../_core/llm";
 import { cancelResearchJob, enqueueResearchJob, failOrphanedJobs, type ResearchDraft } from "../services/research/engine";
+import { ICP_FALLBACKS, workspaceIcpFallback } from "../services/research/targetingPrior";
 import {
   DEFAULT_RESEARCH_DAILY_RUNS,
   MAX_RESEARCH_DAILY_RUNS,
@@ -692,6 +693,7 @@ export const researchRouter = router({
       const st = await researchSettingsOf(db, ctx.workspace.id);
       return {
         ...st,
+        icpFallback: await workspaceIcpFallback(ctx.workspace.id),
         hasKey: !!(await workspaceAnthropicKey(ctx.workspace.id)),
         models: Object.entries(RESEARCH_MODELS).map(([id, m]) => ({ id, label: m.label, note: m.note, input: m.price.input, output: m.price.output })),
       };
@@ -707,6 +709,25 @@ export const researchRouter = router({
           await db.update(workspaceSettings).set({ researchModel: input.model, researchDailyRuns: input.dailyRuns }).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
         } else {
           await db.insert(workspaceSettings).values({ workspaceId: ctx.workspace.id, researchModel: input.model, researchDailyRuns: input.dailyRuns });
+        }
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "research_settings", entityId: null, after: input });
+        return { success: true };
+      }),
+
+    /**
+     * What discovery uses when a campaign has no targeting of its own (phase
+     * 4): the learned ICP (the default, and how it always worked), the
+     * researched sectors, or both. Admins.
+     */
+    setIcpFallback: adminWsProcedure
+      .input(z.object({ icpFallback: z.enum(ICP_FALLBACKS) }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await requireDb();
+        const [existing] = await db.select({ ws: workspaceSettings.workspaceId }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id)).limit(1);
+        if (existing) {
+          await db.update(workspaceSettings).set({ icpFallback: input.icpFallback }).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+        } else {
+          await db.insert(workspaceSettings).values({ workspaceId: ctx.workspace.id, icpFallback: input.icpFallback });
         }
         await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "research_settings", entityId: null, after: input });
         return { success: true };

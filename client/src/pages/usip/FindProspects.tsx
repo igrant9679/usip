@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { foldRedirectUrl } from "./dataEnrichmentTabs";
+import { StartFromSector } from "@/components/usip/research/StartFromSector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -522,7 +523,8 @@ export function FindProspectsPanel() {
                 <TabsTrigger value="person" className="gap-1.5"><User className="size-3.5" /> Person</TabsTrigger>
                 <TabsTrigger value="account" className="gap-1.5"><Building2 className="size-3.5" /> Account</TabsTrigger>
               </TabsList>
-              <TabsContent value="person" className="mt-4">
+              <TabsContent value="person" className="mt-4 space-y-3">
+                <StartFromSector onApply={(f) => setPersonForm({ ...personForm, ...f })} />
                 <PersonForm value={personForm} onChange={setPersonForm} />
               </TabsContent>
               <TabsContent value="account" className="mt-4">

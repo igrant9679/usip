@@ -4636,6 +4636,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0204: Research, phase 4 — the ICP fallback ───────────────────────────
+  // Owner, 2026-10-14 ("start phase 4"): when a campaign has no targeting of
+  // its own, discovery can fall back to the learned ICP (as before), to the
+  // researched sectors, or to both.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0204_icp_fallback.sql",
+    statements: [
+      "ALTER TABLE `workspace_settings` ADD COLUMN `icpFallback` varchar(16) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

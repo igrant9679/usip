@@ -1828,6 +1828,8 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   /** Research engine (migration 0202): the model runs use (null = Claude Opus 5.5) and runs per person per day (null = 10). Admins set both. */
   researchModel: varchar("researchModel", { length: 64 }),
   researchDailyRuns: int("researchDailyRuns"),
+  /** What discovery uses when a campaign has no targeting of its own (migration 0204): "inferred" (the learned ICP, default), "research" (researched sectors) or "merged". */
+  icpFallback: varchar("icpFallback", { length: 16 }),
   // AI auto-send toggle (Migration 0050)
   aiAutoSendEnabled: boolean("aiAutoSendEnabled").default(false).notNull(),
   aiAutoSendScoreMin: int("aiAutoSendScoreMin").default(70).notNull(),

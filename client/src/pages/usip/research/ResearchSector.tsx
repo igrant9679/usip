@@ -22,6 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { Link2, Pencil, Plus, Sparkles, Telescope, Trash2, Unlink } from "lucide-react";
 import { StartRunDialog } from "@/components/usip/research/ResearchRuns";
+import { CreateCampaignFromSector } from "@/components/usip/research/CreateCampaignFromSector";
 import { confirmAction } from "@/components/usip/Common";
 import {
   Crumbs, HistoryButton, LinesInput, RowsEditor, SaveBar, Section, StatusBadge, TagInput,
@@ -149,6 +150,7 @@ export default function ResearchSector() {
       <PageHeader icon={<Telescope className="size-5" />} title={sector.content.name} description={sector.content.tagline || `A sector of ${market.name}.`}>
         <StatusBadge status={sector.content.status} />
         {sector.source !== "manual" && <Badge variant="outline" className="text-[10px]">{sector.source === "ai" ? "AI research" : "Downstream"}</Badge>}
+        {canEdit && <CreateCampaignFromSector sectorId={id} sector={sector.content} personas={personas} />}
         {canEdit && (
           <Button variant="outline" size="sm" onClick={() => setRunOpen(true)}>
             <Sparkles className="size-4 mr-1" /> Refresh with AI
@@ -277,7 +279,7 @@ export default function ResearchSector() {
           <p className="text-xs text-muted-foreground">All personas, including those in no sector, are on the <Link href="/personas" className="underline">Personas</Link> tab.</p>
         </Section>
 
-        <Section title="Targeting" description="Who to look for. Coming next: campaigns, discovery and screening start from this.">
+        <Section title="Targeting" description="Who to look for. Create campaign uses this as the campaign's targeting; never-target words reject people at discovery, scoring and screening.">
           <TagInput label="Job titles" hint="Clean titles as they appear on LinkedIn." value={t.titles} disabled={ro} onChange={(v) => setT({ titles: v })} placeholder="Director of Federal Programs…" />
           <TagInput label="Industries" hint="LinkedIn industry names." value={t.industries} disabled={ro} onChange={(v) => setT({ industries: v })} placeholder="Primary and Secondary Education…" />
           <TagInput label="Geographies" value={t.geographies} disabled={ro} onChange={(v) => setT({ geographies: v })} placeholder="United States, Texas…" />

@@ -181,6 +181,10 @@ async function aggregateBehavior(workspaceId: number, leadId: number) {
 async function fetchAiFit(lead: typeof leads.$inferSelect): Promise<AiFitOutput | null> {
   try {
     const out = await invokeLLM({
+      // Named: lead scoring also runs from background recalculations.
+      workspaceId: lead.workspaceId,
+      // Research phase 4: "fit" means fit to the lead's researched market.
+      research: { surface: "research", prospectTitle: lead.title },
       messages: [
         { role: "system", content: "You assess B2B lead/product fit. Output JSON only." },
         {

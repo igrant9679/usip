@@ -22,7 +22,6 @@ const TEMPLATES = "Email Builder writes templates for many recipients: no prospe
 const MAILBOX = "Personal mailbox: the recipient is known only by email address, so matching research needs a CRM lookup by address. Follow-up.";
 const PROPOSALS = "Client proposals for an existing deal: only the proposal and client name are in scope. Follow-up: the account's sector.";
 const ANON = "Website visitors are anonymous: no title or record to match, and the chat agent's own knowledge covers the product.";
-const PHASE4 = "Targeting and fit (scoring, ICP, campaign proposals) take research in phase 4, 'research drives targeting'.";
 
 const EXCLUDED: Record<string, string> = {
   "server/_core/streamHelpers.ts::runSSEStream": MAILBOX + " (Its only callers are the mailbox draft-reply and draft-forward streams.)",
@@ -46,12 +45,10 @@ const EXCLUDED: Record<string, string> = {
   "server/services/research/avoidCheck.ts::checkAvoidRules": "The avoid-rule judge: it is given the rules themselves, not the selling block.",
   "server/routers/assistant.ts::chat": "The assistant answers the rep through its tools; research reaches it through them, not a prompt block.",
   "server/routers/assistant.ts::chat#2": "The assistant answers the rep through its tools; research reaches it through them, not a prompt block.",
-  "server/routers/are/prospects.ts::scoreIcpMatch": PHASE4,
-  "server/routers/leadScoring.ts::fetchAiFit": PHASE4,
-  "server/routers/are/icp.ts::runIcpInference": PHASE4,
-  "server/routers/are/campaigns.ts::generateTargeting": PHASE4,
-  "server/services/campaignProposals.ts::proposeForCluster": PHASE4,
-  "server/services/campaignRouter.ts::routeProspects": PHASE4,
+  "server/routers/are/icp.ts::runIcpInference": "Takes ALL the workspace's researched sectors as prior knowledge through its own prompt section (phase 4), not the per-prospect block.",
+  "server/routers/are/campaigns.ts::generateTargeting": "Turns a typed description into targeting before any campaign or prospect exists; a sector's targeting is used directly by Create campaign from sector instead.",
+  "server/services/campaignProposals.ts::proposeForCluster": "Proposes campaigns from clusters of existing people; follow-up: suggest the matching research sector.",
+  "server/services/campaignRouter.ts::routeProspects": INTERNAL + " (Picks which campaign a person belongs in.)",
   "server/routers/aiCredentials.ts::test": "A key test that asks the model for 'pong'.",
   "server/routers/helpCenter.ts::askAI": "Answers questions about Velocity itself.",
   "server/routers/helpCenter.ts::generateArticleDraft": "Writes help articles about Velocity itself.",
@@ -103,6 +100,8 @@ const WIRED = [
   "server/services/socialAutopilot.ts::generateOpener",
   "server/services/socialAutopilot.ts::generateInviteNote",
   "server/services/workflowEngine.ts::send_email_draft",
+  "server/routers/are/prospects.ts::scoreIcpMatch",
+  "server/routers/leadScoring.ts::fetchAiFit",
 ];
 
 describe("every AI writer is wired to research, or excluded with a reason", () => {

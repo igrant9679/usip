@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
+import { neverTargetFromOverrides } from "@shared/researchTargeting";
 
 const NONE = "none";
 
@@ -37,6 +38,7 @@ export function CampaignResearchCard({ campaignId, campaign }: { campaignId: num
   const dirty = sector !== savedSector || persona !== savedPersona;
   const chosen = (sectors.data ?? []).find((s) => String(s.id) === sector);
   const draftChosen = chosen && chosen.status === "draft";
+  const neverTarget = neverTargetFromOverrides(campaign?.icpOverrides);
 
   return (
     <div className="space-y-3 text-xs">
@@ -71,6 +73,19 @@ export function CampaignResearchCard({ campaignId, campaign }: { campaignId: num
           </Select>
         </div>
       </div>
+      {neverTarget.length > 0 && (
+        <div className="space-y-1">
+          <div className="font-medium">Never target</div>
+          <div className="flex flex-wrap gap-1">
+            {neverTarget.map((w) => <span key={w} className="rounded border px-1.5 py-0.5 text-[10px]">{w}</span>)}
+          </div>
+          <p className="text-muted-foreground">
+            People whose title, company name or industry contains one of these are not queued by discovery, score 0, and are
+            rejected at screening with the word named on the Rejections tab. The sector's own words apply too while it is
+            Researched or Verified.
+          </p>
+        </div>
+      )}
       {draftChosen && (
         <p className="text-amber-700 dark:text-amber-300">This sector is still a Draft, so the writers will not use it until you mark it Researched or Verified.</p>
       )}

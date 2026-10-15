@@ -27,6 +27,7 @@ import {
 import { getDb } from "../../db";
 import { closedStageKeys, lostStageKeys, wonStageKeys } from "../../_core/stageSemantics";
 import { invokeLLM } from "../../_core/llm";
+import { researchPriorForIcp } from "../../services/research/targetingPrior";
 import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
 import { icpStoredFromLabels } from "@shared/icpShape";
@@ -167,6 +168,8 @@ export async function runIcpInference(workspaceId: number): Promise<void> {
   // 5. Invoke LLM with structured JSON schema
   const systemPrompt = `You are an expert B2B sales analyst. Analyse the provided CRM data and produce a structured Ideal Customer Profile (ICP) for this sales team. Be specific, data-driven, and actionable. Identify clear patterns and anti-patterns. If sample size is small, note low confidence but still produce your best inference.`;
 
+  // Research phase 4: the researched sectors are prior knowledge ("" without research).
+  const researchPrior = await researchPriorForIcp(workspaceId);
   const userPrompt = `
 ## Won Deal Statistics (${sampleCount} deals)
 - Average deal value: $${avgDealValue.toLocaleString()}
@@ -187,7 +190,9 @@ Weight the funnel signal alongside closed deals. Where there are few or no close
 deals, the funnel is the better evidence — a segment that replies and books
 meetings is validating itself even before a deal closes. Where the two conflict,
 prefer closed-won patterns and say so in the rationale.
-
+${researchPrior ? `
+${researchPrior}
+` : ""}
 Based on this data, produce a comprehensive ICP with:
 1. Target industries (top 3-5 with weights summing to 100)
 2. Target company size range (min/max employees)

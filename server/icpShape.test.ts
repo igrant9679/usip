@@ -137,10 +137,11 @@ describe("wiring", () => {
   it("campaign discovery reads the ICP through the reader, and passes the ICP's size to Apollo", () => {
     const engine = read("server/areEngine.ts");
     const fn = engine.slice(engine.indexOf("async function runDiscovery("), engine.indexOf("const targetingSlices = buildQuerySlices("));
-    expect(fn).toContain(': icpLabels(icp?.targetTitles, "title");');
-    expect(fn).toContain(': icpLabels(icp?.targetIndustries, "industry");');
-    expect(fn).toContain(': icpLabels(icp?.targetGeographies, "geography");');
-    expect(fn).toContain("employeeMin: overrides.employeeMin ?? icp?.targetCompanySizeMin ?? undefined,");
+    // Since Research phase 4 the ICP is one side of the fallback choice; it is still read through the reader.
+    expect(fn).toContain(': pickFallback(fallback, icpLabels(icp?.targetTitles, "title"), researched?.titles);');
+    expect(fn).toContain(': pickFallback(fallback, icpLabels(icp?.targetIndustries, "industry"), researched?.industries);');
+    expect(fn).toContain(': pickFallback(fallback, icpLabels(icp?.targetGeographies, "geography"), researched?.geographies);');
+    expect(fn).toContain("?? icp?.targetCompanySizeMin ?? undefined,");
     expect(engine).toContain("discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size })");
   });
 

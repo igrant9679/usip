@@ -51,6 +51,8 @@ import { checkPermission, getDb } from "../../db";
 import { parseLlmJson } from "./llmJson";
 import { invokeLLM, isRetryableLLMError } from "../../_core/llm";
 import { checkAvoidRules, holdReason } from "../../services/research/avoidCheck";
+import { campaignNeverTarget } from "../../services/research/neverTarget";
+import { neverTargetHit } from "@shared/researchTargeting";
 import { router } from "../../_core/trpc";
 import { adminWsProcedure, isAdminRole, requireMinRole, workspaceProcedure } from "../../_core/workspace";
 import { recordAudit } from "../../audit";
@@ -84,6 +86,8 @@ async function scoreIcpMatch(
 ): Promise<{ score: number; breakdown: Record<string, number> }> {
   const result = await invokeLLM({
     workspaceId,
+    // Research phase 4: fit is judged with the prospect's market research.
+    research: { surface: "research", campaignId: prospect.campaignId, prospectTitle: prospect.title, industry: prospect.industry },
     messages: [
       {
         role: "system",
@@ -184,16 +188,23 @@ export async function runEnrichAgent(
     // Score against the CAMPAIGN's targeting, not just the workspace ICP
     // (see buildEffectiveIcp).
     const [scoringCampaign] = await db
-      .select({ icpOverrides: areCampaigns.icpOverrides })
+      .select({ icpOverrides: areCampaigns.icpOverrides, researchSectorId: areCampaigns.researchSectorId })
       .from(areCampaigns)
-      .where(eq(areCampaigns.id, prospect.campaignId))
+      .where(and(eq(areCampaigns.id, prospect.campaignId), eq(areCampaigns.workspaceId, workspaceId)))
       .limit(1);
     const effectiveIcp = buildEffectiveIcp(icp, scoringCampaign?.icpOverrides);
 
     // Score ICP match
     let icpMatchScore = 50;
     let icpMatchBreakdown: Record<string, number> = {};
-    if (effectiveIcp) {
+    // Research phase 4: a never-target word is a 0 without asking the model.
+    const offTarget = scoringCampaign
+      ? neverTargetHit(await campaignNeverTarget({ workspaceId, ...scoringCampaign }), { title: prospect.title, company: prospect.companyName, industry: prospect.industry })
+      : null;
+    if (offTarget) {
+      icpMatchScore = 0;
+      icpMatchBreakdown = { neverTarget: 0 };
+    } else if (effectiveIcp) {
       const match = await scoreIcpMatch(prospect, effectiveIcp, workspaceId);
       icpMatchScore = match.score;
       icpMatchBreakdown = match.breakdown;
