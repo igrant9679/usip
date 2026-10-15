@@ -6389,6 +6389,9 @@ export const researchJobs = mysqlTable(
     outcome: mysqlEnum("outcome", ["accepted", "discarded"]),
     reviewedByUserId: int("reviewedByUserId"),
     reviewedAt: timestamp("reviewedAt"),
+    /** Taken off the Research page (migration 0207). Still on record, and still counted toward the day's runs. */
+    removedAt: timestamp("removedAt"),
+    removedByUserId: int("removedByUserId"),
     /** What a save created or updated. */
     resultType: mysqlEnum("resultType", ["market", "sector"]),
     resultId: int("resultId"),

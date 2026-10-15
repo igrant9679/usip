@@ -128,10 +128,16 @@ export default function ResearchRun() {
           </CardContent>
         </Card>
 
+        {run.removedAt && (
+          <Card><CardContent className="pt-5 text-sm text-muted-foreground">
+            This run was removed from the Research page. It stays on record, read-only: what it found is below, and what it cost still counts.
+          </CardContent></Card>
+        )}
+
         {run.status === "failed" && (
           <Card><CardContent className="pt-5 text-sm space-y-3">
             <div className="text-destructive">{run.error ?? "The run failed."}</div>
-            {run.brief && canEdit && (
+            {run.brief && canEdit && !run.removedAt && (
               <div className="flex items-center gap-2 flex-wrap">
                 <Button size="sm" disabled={redraft.isPending} onClick={() => redraft.mutate({ id })}>Draft again from this research</Button>
                 <span className="text-xs text-muted-foreground">The research is saved, so only the drafting step runs again.</span>

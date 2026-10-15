@@ -15,7 +15,8 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Loader2, Sparkles } from "lucide-react";
+import { Loader2, Sparkles, Trash2 } from "lucide-react";
+import { confirmAction } from "@/components/usip/Common";
 import { Section, useResearchRoles } from "./ResearchFields";
 import { RESEARCH_MODELS, formatUsd, researchModelOf } from "@shared/researchModels";
 
@@ -129,23 +130,105 @@ export function StartRunDialog({ target, open, onOpenChange }: { target: RunTarg
 }
 
 /** The workspace's recent runs, newest first. */
+/** What removing runs means, said once in every confirmation. */
+const REMOVE_NOTE = "They leave this list but stay on record: what they cost still counts toward today's runs, and a link to one still opens it.";
+
 export function RecentRuns() {
+  const { canEdit, canDelete: isAdmin } = useResearchRoles();
+  const utils = trpc.useUtils();
   const q = trpc.research.runs.list.useQuery({ limit: 10 }, {
     refetchInterval: (query) => ((query.state.data as any)?.runs ?? []).some((r: any) => r.status === "queued" || r.status === "running") ? 4000 : false,
   });
+  const remove = trpc.research.runs.remove.useMutation({
+    onError: (e) => toast.error(e.message),
+    onSuccess: async (r) => {
+      toast.success(r.removed === 1 ? "Run removed" : `${r.removed} runs removed`);
+      await utils.research.runs.list.invalidate();
+    },
+  });
   const runs = q.data?.runs ?? [];
   if (!q.data || runs.length === 0) return null;
+  // Its starter or an admin, once it has stopped.
+  const removable = (r: (typeof runs)[number]) => canEdit && (r.mine || isAdmin) && r.status !== "queued" && r.status !== "running";
+  const failed = runs.filter((r) => r.status === "failed" && removable(r));
+  const removeOne = (r: (typeof runs)[number]) => confirmAction(
+    {
+      title: `Remove "${r.subject}" from this list?`,
+      description: (r.status === "done" && !r.outcome ? "Its draft has not been saved and will be set aside. " : "") + REMOVE_NOTE.replace("They leave", "It leaves").replace("to one", "to it"),
+      confirmLabel: "Remove",
+    },
+    () => remove.mutate({ ids: [r.id] }),
+  );
   return (
-    <Section title="AI research runs" description={`You have used ${q.data.usedToday} of ${q.data.dailyRuns} runs in the last 24 hours.`}>
+    <Section
+      title="AI research runs"
+      description={`You have used ${q.data.usedToday} of ${q.data.dailyRuns} runs in the last 24 hours.`}
+      actions={failed.length > 0 ? (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={remove.isPending}
+          onClick={() => confirmAction(
+            { title: `Remove ${failed.length} failed ${failed.length === 1 ? "run" : "runs"}?`, description: REMOVE_NOTE, confirmLabel: "Remove" },
+            () => remove.mutate({ ids: failed.map((r) => r.id) }),
+          )}
+        >
+          <Trash2 className="size-4 mr-1" /> Remove failed runs
+        </Button>
+      ) : undefined}
+    >
+      <div className="divide-y rounded-md border">
+        {runs.map((r) => (
+          <div key={r.id} className="flex items-center gap-1 hover:bg-accent/40">
+            <Link href={`/research/runs/${r.id}`} className="flex flex-1 min-w-0 items-center gap-3 p-2.5 text-sm">
+              <div className="flex-1 min-w-0">
+                <div className="truncate">
+                  <span className="font-medium">{r.subject}</span>
+                  <span className="text-muted-foreground"> · {r.kind === "market" ? "market" : "sector"}{(r.kind === "market" ? r.marketId : r.sectorId) != null ? " refresh" : ""}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">{r.byName} · {when(r.createdAt)} · {formatUsd(r.costUsd)} · {r.searches} {r.searches === 1 ? "search" : "searches"}</div>
+              </div>
+              <RunStatusBadge status={r.status} outcome={r.outcome} />
+            </Link>
+            {removable(r) && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 w-7 p-0 mr-1.5 shrink-0"
+                title="Remove from this list"
+                aria-label={`Remove ${r.subject} from this list`}
+                disabled={remove.isPending}
+                onClick={() => removeOne(r)}
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
+            )}
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * The runs behind a market or sector, so what each one learned (its brief and
+ * sources, on the run's page) stays one click away, including runs removed
+ * from the Research page.
+ */
+export function RunsForRecord({ kind, id }: { kind: "market" | "sector"; id: number }) {
+  const q = trpc.research.runs.forRecord.useQuery({ kind, id });
+  const runs = q.data ?? [];
+  if (runs.length === 0) return null;
+  return (
+    <Section title="Research runs" description={`The AI research behind this ${kind}. Each run's page has its full brief: what it found, with the source of every figure.`}>
       <div className="divide-y rounded-md border">
         {runs.map((r) => (
           <Link key={r.id} href={`/research/runs/${r.id}`} className="flex items-center gap-3 p-2.5 hover:bg-accent/40 text-sm">
             <div className="flex-1 min-w-0">
-              <div className="truncate">
-                <span className="font-medium">{r.subject}</span>
-                <span className="text-muted-foreground"> · {r.kind === "market" ? "market" : "sector"}{(r.kind === "market" ? r.marketId : r.sectorId) != null ? " refresh" : ""}</span>
+              <div className="truncate font-medium">{r.subject}</div>
+              <div className="text-xs text-muted-foreground">
+                {when(r.createdAt)} · {formatUsd(r.costUsd)} · {r.searches} {r.searches === 1 ? "search" : "searches"}{r.removedAt ? " · removed from the Research page" : ""}
               </div>
-              <div className="text-xs text-muted-foreground">{r.byName} · {when(r.createdAt)} · {formatUsd(r.costUsd)} · {r.searches} {r.searches === 1 ? "search" : "searches"}</div>
             </div>
             <RunStatusBadge status={r.status} outcome={r.outcome} />
           </Link>

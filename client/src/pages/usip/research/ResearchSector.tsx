@@ -21,7 +21,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Link2, Pencil, Plus, Sparkles, Telescope, Trash2, Unlink } from "lucide-react";
-import { StartRunDialog } from "@/components/usip/research/ResearchRuns";
+import { RunsForRecord, StartRunDialog } from "@/components/usip/research/ResearchRuns";
 import { CreateCampaignFromSector } from "@/components/usip/research/CreateCampaignFromSector";
 import { PersonaResultsBadge, SectorResults, usePersonaResultSummaries } from "@/components/usip/research/ResearchResults";
 import { confirmAction } from "@/components/usip/Common";
@@ -374,6 +374,8 @@ export default function ResearchSector() {
             disabled={ro}
           />
         </Section>
+
+        <RunsForRecord kind="sector" id={id} />
       </div>
 
       <SaveBar

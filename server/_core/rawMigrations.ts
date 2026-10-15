@@ -4709,6 +4709,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0207: Research runs can be removed from the Research page ────────────
+  // Owner, 2026-10-15: "give me the ability to remove failed (any) searches".
+  // A removed run is hidden, not deleted: what it cost stays recorded and it
+  // still counts toward the person's runs for the day.
+  {
+    name: "0207_research_run_removed.sql",
+    statements: [
+      "ALTER TABLE `research_jobs` ADD COLUMN `removedAt` timestamp NULL",
+      "ALTER TABLE `research_jobs` ADD COLUMN `removedByUserId` int NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

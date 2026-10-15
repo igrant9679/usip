@@ -17,7 +17,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Plus, Sparkles, Telescope, Trash2, Users } from "lucide-react";
-import { StartRunDialog, type RunTarget } from "@/components/usip/research/ResearchRuns";
+import { RunsForRecord, StartRunDialog, type RunTarget } from "@/components/usip/research/ResearchRuns";
 import { MarketExtras } from "@/components/usip/research/MarketExtras";
 import { confirmAction } from "@/components/usip/Common";
 import {
@@ -250,6 +250,8 @@ export default function ResearchMarket() {
             disabled={ro}
           />
         </Section>
+
+        <RunsForRecord kind="market" id={id} />
       </div>
 
       <SaveBar

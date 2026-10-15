@@ -18,7 +18,7 @@
  *     CONFLICT rather than silently overwriting their work.
  */
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, gt, inArray, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { areCampaigns, downstreamLinks, personas, researchExternalRefs, researchJobs, researchMarkets, researchRevisions, researchSectors, users, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -32,6 +32,7 @@ import { commitDownstream, previewDownstream } from "../services/research/downst
 import { __clearResearchContextCache } from "../services/research/context";
 import { personaResultSummaries, researchResults } from "../services/research/results";
 import { cleanLinkSettings, type DownstreamMarketExtras } from "@shared/downstreamMap";
+import { isAdminRole } from "@shared/roleRank";
 import {
   insertMarket,
   insertSector,
@@ -587,7 +588,7 @@ export const researchRouter = router({
           finishedAt: researchJobs.finishedAt,
         })
         .from(researchJobs)
-        .where(eq(researchJobs.workspaceId, ctx.workspace.id))
+        .where(and(eq(researchJobs.workspaceId, ctx.workspace.id), isNull(researchJobs.removedAt)))
         .orderBy(desc(researchJobs.createdAt))
         .limit(input?.limit ?? 15);
       const ids = Array.from(new Set(rows.map((r) => r.userId)));
@@ -601,6 +602,35 @@ export const researchRouter = router({
         dailyRuns: st.dailyRuns,
         nextFreeAt: counted.length >= st.dailyRuns ? new Date(new Date(counted[0].createdAt).getTime() + RUN_WINDOW_MS) : null,
       };
+    }),
+
+    /**
+     * The runs behind a market or sector (the one that created it, and every
+     * refresh), removed ones included, so each run's brief stays reachable.
+     */
+    forRecord: workspaceProcedure.input(z.object({ kind: z.enum(["market", "sector"]), id: Id })).query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const target = input.kind === "market" ? researchJobs.marketId : researchJobs.sectorId;
+      return db
+        .select({
+          id: researchJobs.id,
+          subject: researchJobs.subject,
+          status: researchJobs.status,
+          outcome: researchJobs.outcome,
+          costUsd: researchJobs.costUsd,
+          searches: researchJobs.searches,
+          createdAt: researchJobs.createdAt,
+          removedAt: researchJobs.removedAt,
+        })
+        .from(researchJobs)
+        .where(and(
+          eq(researchJobs.workspaceId, ctx.workspace.id),
+          eq(researchJobs.kind, input.kind),
+          // A refresh names the record; a run that created it names it as its result.
+          or(eq(target, input.id), eq(researchJobs.resultId, input.id)),
+        ))
+        .orderBy(desc(researchJobs.createdAt))
+        .limit(20);
     }),
 
     /** One run: its progress while it works, and its draft (with what it would change) when it is done. */
@@ -746,6 +776,7 @@ export const researchRouter = router({
     redraft: managerProcedure.input(z.object({ id: Id })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       const job = await loadJob(db, ctx.workspace.id, input.id);
+      if (job.removedAt) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This run was removed from the Research page" });
       if (job.status !== "failed" || !(job.brief ?? "").trim()) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Only a run that failed after its research can draft again" });
       }
@@ -759,6 +790,42 @@ export const researchRouter = router({
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "research_run", entityId: job.id, after: { redraft: true } });
       enqueueResearchJob(job.id);
       return { success: true };
+    }),
+
+    /**
+     * Takes runs off the Research page (owner, 2026-10-15). They stay on
+     * record: what they cost still counts toward the day's runs and the
+     * monthly budget, and a link to one still opens it, read-only. A finished
+     * draft nobody saved is set aside. The person who started a run, or an
+     * admin; a run still going must be stopped first.
+     */
+    remove: managerProcedure.input(z.object({ ids: z.array(Id).min(1).max(50) })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const ws = ctx.workspace.id;
+      const ids = Array.from(new Set(input.ids));
+      const jobs = await db
+        .select({ id: researchJobs.id, userId: researchJobs.userId, status: researchJobs.status, outcome: researchJobs.outcome, removedAt: researchJobs.removedAt })
+        .from(researchJobs)
+        .where(and(eq(researchJobs.workspaceId, ws), inArray(researchJobs.id, ids)));
+      if (jobs.length !== ids.length) throw new TRPCError({ code: "NOT_FOUND", message: "Research run not found" });
+      const isAdmin = isAdminRole(ctx.member.role);
+      for (const j of jobs) {
+        if (j.userId !== ctx.user.id && !isAdmin) throw new TRPCError({ code: "FORBIDDEN", message: "Only the person who started a run, or an admin, can remove it" });
+        if (j.status === "queued" || j.status === "running") throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Stop the run before removing it" });
+      }
+      const now = new Date();
+      let removed = 0;
+      for (const j of jobs) {
+        if (j.removedAt) continue;
+        const setAside = j.status === "done" && !j.outcome;
+        await db
+          .update(researchJobs)
+          .set({ removedAt: now, removedByUserId: ctx.user.id, ...(setAside ? { outcome: "discarded" as const, reviewedByUserId: ctx.user.id, reviewedAt: now } : {}) })
+          .where(and(eq(researchJobs.id, j.id), eq(researchJobs.workspaceId, ws), isNull(researchJobs.removedAt), inArray(researchJobs.status, ["done", "failed", "cancelled"])));
+        await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "update", entityType: "research_run", entityId: j.id, after: { removed: true, status: j.status, ...(setAside ? { outcome: "discarded" } : {}) } });
+        removed++;
+      }
+      return { removed };
     }),
 
     /** Sets a finished draft aside without saving any of it. */
