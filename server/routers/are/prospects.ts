@@ -53,6 +53,8 @@ import { invokeLLM, isRetryableLLMError } from "../../_core/llm";
 import { checkAvoidRules, holdReason } from "../../services/research/avoidCheck";
 import { campaignNeverTarget } from "../../services/research/neverTarget";
 import { neverTargetHit } from "@shared/researchTargeting";
+import { downstreamAccountFor } from "../../services/research/downstreamAccounts";
+import { awardHook } from "@shared/downstreamMap";
 import { router } from "../../_core/trpc";
 import { adminWsProcedure, isAdminRole, requireMinRole, workspaceProcedure } from "../../_core/workspace";
 import { recordAudit } from "../../audit";
@@ -366,12 +368,24 @@ Produce:
       email: "email", linkedin: "linkedin", sms: "sms", voice: "voice",
     };
 
+    // Research phase 5: an award Downstream recorded for the prospect's
+    // organization is a real, sourced trigger — it goes FIRST, ahead of the
+    // model's guesses, so primaryHookOf and the copy lead with it.
+    const dsAccount = await downstreamAccountFor(workspaceId, { companyDomain: prospect.companyDomain, companyName: prospect.companyName });
+    const award = awardHook(dsAccount?.award);
+    const triggerEvents = award
+      ? [{ type: "funding_award", description: award.hook, date: dsAccount?.award?.year ?? "", recencyScore: 1, sourceUrl: award.sourceUrl }, ...intelArray(enrichData.triggerEvents)]
+      : enrichData.triggerEvents;
+    const personalisationHooks = award
+      ? [{ hook: award.hook, source: award.sourceUrl || "Downstream", verifiedAt: new Date().toISOString(), hookType: "award" }, ...intelArray(enrichData.personalisationHooks)]
+      : enrichData.personalisationHooks;
+
     const intelligenceData = {
       prospectQueueId: prospectId,
       workspaceId,
-      triggerEvents: enrichData.triggerEvents,
+      triggerEvents,
       painSignals: enrichData.painSignals,
-      personalisationHooks: enrichData.personalisationHooks,
+      personalisationHooks,
       techStack: enrichData.techStack,
       recentNews: enrichData.recentNews,
       industryEvents: enrichData.industryEvents,

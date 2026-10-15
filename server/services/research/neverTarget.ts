@@ -11,6 +11,7 @@ import { researchSectors } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { cleanSectorContent } from "@shared/researchShape";
 import { cleanNeverTarget, neverTargetFromOverrides } from "@shared/researchTargeting";
+import { pausedDownstreamFilter } from "./downstreamAccounts";
 
 type CampaignLike = { workspaceId: number; icpOverrides?: unknown; researchSectorId?: number | null };
 
@@ -21,7 +22,7 @@ export async function campaignNeverTarget(campaign: CampaignLike): Promise<strin
     const db = await getDb();
     if (!db) return own;
     const [s] = await db
-      .select({ targeting: researchSectors.targeting })
+      .select({ targeting: researchSectors.targeting, source: researchSectors.source, sourceRef: researchSectors.sourceRef })
       .from(researchSectors)
       .where(and(
         eq(researchSectors.id, campaign.researchSectorId),
@@ -29,7 +30,7 @@ export async function campaignNeverTarget(campaign: CampaignLike): Promise<strin
         inArray(researchSectors.status, ["researched", "verified"]),
       ))
       .limit(1);
-    if (!s) return own;
+    if (!s || (await pausedDownstreamFilter(campaign.workspaceId))(s)) return own;
     const live = cleanSectorContent({ targeting: s.targeting }).content.targeting.exclude;
     return cleanNeverTarget([...own, ...live]);
   } catch {

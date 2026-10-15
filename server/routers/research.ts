@@ -20,7 +20,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gt, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { areCampaigns, personas, researchJobs, researchMarkets, researchRevisions, researchSectors, users, workspaceSettings } from "../../drizzle/schema";
+import { areCampaigns, downstreamLinks, personas, researchExternalRefs, researchJobs, researchMarkets, researchRevisions, researchSectors, users, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
@@ -28,6 +28,24 @@ import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../_core
 import { workspaceAnthropicKey } from "../_core/llm";
 import { cancelResearchJob, enqueueResearchJob, failOrphanedJobs, type ResearchDraft } from "../services/research/engine";
 import { ICP_FALLBACKS, workspaceIcpFallback } from "../services/research/targetingPrior";
+import { commitDownstream, previewDownstream } from "../services/research/downstreamImport";
+import { __clearResearchContextCache } from "../services/research/context";
+import { cleanLinkSettings, type DownstreamMarketExtras } from "@shared/downstreamMap";
+import {
+  insertMarket,
+  insertSector,
+  loadMarket,
+  loadSector,
+  marketContentOf,
+  requireDb,
+  sameName,
+  saveMarket,
+  saveSector,
+  sectorContentOf,
+  writeRevision,
+  type Db,
+} from "../services/research/store";
+export { REVISIONS_KEPT, insertMarket, insertSector, marketContentOf, saveMarket, saveSector, sectorContentOf, type SaveResult } from "../services/research/store";
 import {
   DEFAULT_RESEARCH_DAILY_RUNS,
   MAX_RESEARCH_DAILY_RUNS,
@@ -49,282 +67,6 @@ import {
   type MarketContent,
   type SectorContent,
 } from "@shared/researchShape";
-
-type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
-
-async function requireDb(): Promise<Db> {
-  const db = await getDb();
-  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
-  return db;
-}
-
-/** Versions kept per market or sector; older ones are pruned on save. */
-export const REVISIONS_KEPT = 50;
-
-const CONFLICT_MESSAGE = "Someone else saved this since you opened it. Reload to see their changes, then make yours again.";
-
-const affectedRows = (r: unknown): number =>
-  Number(((Array.isArray(r) ? r[0] : r) as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
-
-/* ── Row ⇄ content ──────────────────────────────────────────────────────── */
-
-type MarketRow = typeof researchMarkets.$inferSelect;
-type SectorRow = typeof researchSectors.$inferSelect;
-
-export function marketContentOf(row: MarketRow): MarketContent {
-  return cleanMarketContent({
-    name: row.name,
-    tagline: row.tagline,
-    status: row.status,
-    overview: row.overview,
-    openQuestions: row.openQuestions,
-    suggestedSectors: row.suggestedSectors,
-    glossary: row.glossary,
-    competitors: row.competitors,
-    sources: row.sources,
-  }).content;
-}
-
-export function sectorContentOf(row: SectorRow): SectorContent {
-  return cleanSectorContent({
-    name: row.name,
-    shortName: row.shortName,
-    tagline: row.tagline,
-    summary: row.summary,
-    status: row.status,
-    asOf: row.asOf,
-    scores: row.scores,
-    buyers: row.buyers,
-    targeting: row.targeting,
-    messaging: row.messaging,
-    facts: row.facts,
-    openQuestions: row.openQuestions,
-    sources: row.sources,
-  }).content;
-}
-
-function marketColumns(c: MarketContent) {
-  return {
-    name: c.name,
-    tagline: c.tagline || null,
-    status: c.status,
-    overview: c.overview,
-    openQuestions: c.openQuestions,
-    suggestedSectors: c.suggestedSectors,
-    glossary: c.glossary,
-    competitors: c.competitors,
-    sources: c.sources,
-  };
-}
-
-function sectorColumns(c: SectorContent) {
-  return {
-    name: c.name,
-    shortName: c.shortName || null,
-    tagline: c.tagline || null,
-    summary: c.summary || null,
-    status: c.status,
-    asOf: c.asOf || null,
-    scores: c.scores,
-    buyers: c.buyers,
-    targeting: c.targeting,
-    messaging: c.messaging,
-    facts: c.facts,
-    openQuestions: c.openQuestions,
-    sources: c.sources,
-  };
-}
-
-/* ── Loading, scoped ────────────────────────────────────────────────────── */
-
-async function loadMarket(db: Db, workspaceId: number, id: number): Promise<MarketRow> {
-  const [row] = await db
-    .select()
-    .from(researchMarkets)
-    .where(and(eq(researchMarkets.id, id), eq(researchMarkets.workspaceId, workspaceId)))
-    .limit(1);
-  if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Market not found" });
-  return row;
-}
-
-async function loadSector(db: Db, workspaceId: number, id: number): Promise<SectorRow> {
-  const [row] = await db
-    .select()
-    .from(researchSectors)
-    .where(and(eq(researchSectors.id, id), eq(researchSectors.workspaceId, workspaceId)))
-    .limit(1);
-  if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Sector not found" });
-  return row;
-}
-
-/** Case-insensitive name clash among siblings (markets in the workspace, sectors in a market). */
-function sameName(a: string, b: string): boolean {
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
-}
-
-/* ── Versions ───────────────────────────────────────────────────────────── */
-
-async function writeRevision(
-  db: Db,
-  args: { workspaceId: number; entityType: "market" | "sector"; entityId: number; revision: number; data: unknown; changed: string[]; note: string; userId: number | null },
-) {
-  await db.insert(researchRevisions).values({
-    workspaceId: args.workspaceId,
-    entityType: args.entityType,
-    entityId: args.entityId,
-    revision: args.revision,
-    data: args.data as object,
-    changed: args.changed,
-    note: args.note.slice(0, 200),
-    savedByUserId: args.userId,
-  });
-  if (args.revision > REVISIONS_KEPT) {
-    await db
-      .delete(researchRevisions)
-      .where(and(
-        eq(researchRevisions.workspaceId, args.workspaceId),
-        eq(researchRevisions.entityType, args.entityType),
-        eq(researchRevisions.entityId, args.entityId),
-        lt(researchRevisions.revision, args.revision - REVISIONS_KEPT + 1),
-      ));
-  }
-}
-
-/* ── Saving (the one path every writer uses) ────────────────────────────── */
-
-export type SaveResult = { id: number; revision: number; changed: string[]; dropped: string[] };
-
-export async function saveMarket(
-  db: Db,
-  args: { workspaceId: number; userId: number | null; id: number; expectedRevision: number; content: unknown; note?: string },
-): Promise<SaveResult> {
-  const current = await loadMarket(db, args.workspaceId, args.id);
-  const { content, dropped } = cleanMarketContent(args.content);
-  if (!content.name) throw new TRPCError({ code: "BAD_REQUEST", message: "Give the market a name" });
-  if (current.revision !== args.expectedRevision) throw new TRPCError({ code: "CONFLICT", message: CONFLICT_MESSAGE });
-  if (!sameName(content.name, current.name)) {
-    const siblings = await db
-      .select({ id: researchMarkets.id, name: researchMarkets.name })
-      .from(researchMarkets)
-      .where(eq(researchMarkets.workspaceId, args.workspaceId));
-    if (siblings.some((s) => s.id !== args.id && sameName(s.name, content.name))) {
-      throw new TRPCError({ code: "CONFLICT", message: `There is already a market called "${content.name}"` });
-    }
-  }
-  const changed = changedParts(marketContentOf(current), content);
-  if (changed.length === 0) return { id: args.id, revision: current.revision, changed, dropped };
-  const res = await db
-    .update(researchMarkets)
-    .set({ ...marketColumns(content), revision: sql`${researchMarkets.revision} + 1`, updatedByUserId: args.userId })
-    .where(and(
-      eq(researchMarkets.id, args.id),
-      eq(researchMarkets.workspaceId, args.workspaceId),
-      eq(researchMarkets.revision, args.expectedRevision),
-    ));
-  // Compare-and-swap: a save that landed between our read and this write
-  // moved the revision on, so this one matches no row.
-  if (affectedRows(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: CONFLICT_MESSAGE });
-  const revision = args.expectedRevision + 1;
-  await writeRevision(db, { workspaceId: args.workspaceId, entityType: "market", entityId: args.id, revision, data: content, changed, note: args.note ?? "Edited", userId: args.userId });
-  return { id: args.id, revision, changed, dropped };
-}
-
-export async function saveSector(
-  db: Db,
-  args: { workspaceId: number; userId: number | null; id: number; expectedRevision: number; content: unknown; note?: string },
-): Promise<SaveResult> {
-  const current = await loadSector(db, args.workspaceId, args.id);
-  const { content, dropped } = cleanSectorContent(args.content);
-  if (!content.name) throw new TRPCError({ code: "BAD_REQUEST", message: "Give the sector a name" });
-  if (current.revision !== args.expectedRevision) throw new TRPCError({ code: "CONFLICT", message: CONFLICT_MESSAGE });
-  if (!sameName(content.name, current.name)) {
-    const siblings = await db
-      .select({ id: researchSectors.id, name: researchSectors.name })
-      .from(researchSectors)
-      .where(and(eq(researchSectors.workspaceId, args.workspaceId), eq(researchSectors.marketId, current.marketId)));
-    if (siblings.some((s) => s.id !== args.id && sameName(s.name, content.name))) {
-      throw new TRPCError({ code: "CONFLICT", message: `This market already has a sector called "${content.name}"` });
-    }
-  }
-  const changed = changedParts(sectorContentOf(current), content);
-  if (changed.length === 0) return { id: args.id, revision: current.revision, changed, dropped };
-  const res = await db
-    .update(researchSectors)
-    .set({ ...sectorColumns(content), revision: sql`${researchSectors.revision} + 1`, updatedByUserId: args.userId })
-    .where(and(
-      eq(researchSectors.id, args.id),
-      eq(researchSectors.workspaceId, args.workspaceId),
-      eq(researchSectors.revision, args.expectedRevision),
-    ));
-  if (affectedRows(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: CONFLICT_MESSAGE });
-  const revision = args.expectedRevision + 1;
-  await writeRevision(db, { workspaceId: args.workspaceId, entityType: "sector", entityId: args.id, revision, data: content, changed, note: args.note ?? "Edited", userId: args.userId });
-  return { id: args.id, revision, changed, dropped };
-}
-
-/* ── Creating (by hand and from AI research) ────────────────────────────── */
-
-type Source = "manual" | "ai" | "downstream";
-
-export async function insertMarket(
-  db: Db,
-  args: { workspaceId: number; userId: number | null; content: unknown; source?: Source; sourceRef?: string | null; note?: string },
-): Promise<{ id: number; dropped: string[] }> {
-  const { content, dropped } = cleanMarketContent(args.content);
-  if (!content.name) throw new TRPCError({ code: "BAD_REQUEST", message: "Give the market a name" });
-  const siblings = await db
-    .select({ name: researchMarkets.name })
-    .from(researchMarkets)
-    .where(eq(researchMarkets.workspaceId, args.workspaceId));
-  if (siblings.some((s) => sameName(s.name, content.name))) {
-    throw new TRPCError({ code: "CONFLICT", message: `There is already a market called "${content.name}"` });
-  }
-  const [row] = await db
-    .insert(researchMarkets)
-    .values({
-      workspaceId: args.workspaceId,
-      ...marketColumns(content),
-      source: args.source ?? "manual",
-      sourceRef: args.sourceRef ?? null,
-      revision: 1,
-      createdByUserId: args.userId,
-      updatedByUserId: args.userId,
-    })
-    .$returningId();
-  await writeRevision(db, { workspaceId: args.workspaceId, entityType: "market", entityId: row.id, revision: 1, data: content, changed: [], note: args.note ?? "Created", userId: args.userId });
-  return { id: row.id, dropped };
-}
-
-export async function insertSector(
-  db: Db,
-  args: { workspaceId: number; userId: number | null; marketId: number; content: unknown; source?: Source; sourceRef?: string | null; note?: string },
-): Promise<{ id: number; dropped: string[] }> {
-  const market = await loadMarket(db, args.workspaceId, args.marketId);
-  const { content, dropped } = cleanSectorContent(args.content);
-  if (!content.name) throw new TRPCError({ code: "BAD_REQUEST", message: "Give the sector a name" });
-  const siblings = await db
-    .select({ name: researchSectors.name })
-    .from(researchSectors)
-    .where(and(eq(researchSectors.workspaceId, args.workspaceId), eq(researchSectors.marketId, market.id)));
-  if (siblings.some((s) => sameName(s.name, content.name))) {
-    throw new TRPCError({ code: "CONFLICT", message: `This market already has a sector called "${content.name}"` });
-  }
-  const [row] = await db
-    .insert(researchSectors)
-    .values({
-      workspaceId: args.workspaceId,
-      marketId: market.id,
-      ...sectorColumns(content),
-      source: args.source ?? "manual",
-      sourceRef: args.sourceRef ?? null,
-      revision: 1,
-      createdByUserId: args.userId,
-      updatedByUserId: args.userId,
-    })
-    .$returningId();
-  await writeRevision(db, { workspaceId: args.workspaceId, entityType: "sector", entityId: row.id, revision: 1, data: content, changed: [], note: args.note ?? "Created", userId: args.userId });
-  return { id: row.id, dropped };
-}
 
 /* ── AI research runs: limits ───────────────────────────────────────────── */
 
@@ -449,6 +191,8 @@ export const researchRouter = router({
           sourceRef: row.sourceRef,
           updatedAt: row.updatedAt,
           content: marketContentOf(row),
+          /** Downstream imports: {stats, funders}. */
+          extras: (row.extras ?? null) as DownstreamMarketExtras | null,
         },
         sectors: sectors.map((s) => ({ ...s, personaCount: pmap.get(s.id) ?? 0 })),
       };
@@ -1028,4 +772,122 @@ export const researchRouter = router({
       return { success: true };
     }),
   }),
+
+  /* ── Downstream imports (phase 5) ───────────────────────────────────── */
+
+  downstream: router({
+    /** The Downstream workspaces linked to this one, with what each brought in. */
+    links: workspaceProcedure.query(async ({ ctx }) => {
+      const db = await requireDb();
+      const rows = await db.select().from(downstreamLinks).where(eq(downstreamLinks.workspaceId, ctx.workspace.id)).orderBy(asc(downstreamLinks.downstreamWorkspaceName));
+      const refs = rows.length
+        ? await db
+            .select({ linkId: researchExternalRefs.linkId, kind: researchExternalRefs.kind, c: sql<number>`count(*)` })
+            .from(researchExternalRefs)
+            .where(eq(researchExternalRefs.workspaceId, ctx.workspace.id))
+            .groupBy(researchExternalRefs.linkId, researchExternalRefs.kind)
+        : [];
+      return rows.map((l) => {
+        const n = (kind: string) => Number(refs.find((r) => r.linkId === l.id && r.kind === kind)?.c ?? 0);
+        return {
+          id: l.id,
+          name: l.downstreamWorkspaceName,
+          downstreamWorkspaceId: l.downstreamWorkspaceId,
+          sourceUrl: l.sourceUrl,
+          status: l.status,
+          audience: l.audience,
+          useSellerMessaging: l.useSellerMessaging,
+          settings: cleanLinkSettings(l.settings),
+          marketId: l.marketId,
+          lastImportAt: l.lastImportAt,
+          lastExportedAt: l.lastExportedAt,
+          counts: { sectors: n("sector"), personas: n("persona"), accounts: n("account") },
+        };
+      });
+    }),
+
+    /** This company's narrowing of the market; applies from the next import. */
+    updateSettings: adminWsProcedure
+      .input(z.object({
+        id: Id,
+        territory: z.array(z.string().max(120)).max(50),
+        employeeMin: z.number().int().min(1).nullable(),
+        employeeMax: z.number().int().min(1).nullable(),
+        addTitles: z.array(z.string().max(120)).max(50),
+        removeTitles: z.array(z.string().max(120)).max(50),
+        exclude: z.array(z.string().max(80)).max(50),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await requireDb();
+        const [l] = await db.select().from(downstreamLinks).where(and(eq(downstreamLinks.id, input.id), eq(downstreamLinks.workspaceId, ctx.workspace.id))).limit(1);
+        if (!l) throw new TRPCError({ code: "NOT_FOUND", message: "Downstream link not found" });
+        const { id, ...rest } = input;
+        const settings = cleanLinkSettings({ ...cleanLinkSettings(l.settings), ...rest });
+        await db.update(downstreamLinks).set({ settings }).where(and(eq(downstreamLinks.id, id), eq(downstreamLinks.workspaceId, ctx.workspace.id)));
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "downstream_link", entityId: id, after: { settings } });
+        return { success: true };
+      }),
+
+    /**
+     * Pausing keeps the imported research but stops the writers and targeting
+     * using it, and stops imports; resuming brings it back.
+     */
+    setStatus: adminWsProcedure
+      .input(z.object({ id: Id, status: z.enum(["active", "paused"]) }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await requireDb();
+        const res = await db.update(downstreamLinks).set({ status: input.status }).where(and(eq(downstreamLinks.id, input.id), eq(downstreamLinks.workspaceId, ctx.workspace.id)));
+        if (affectedRowsOf(res) !== 1) throw new TRPCError({ code: "NOT_FOUND", message: "Downstream link not found" });
+        __clearResearchContextCache();
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "downstream_link", entityId: input.id, after: { status: input.status } });
+        return { success: true };
+      }),
+
+    /**
+     * Unlinks a Downstream workspace. What it imported stays as ordinary
+     * research (delete the market to remove it); the next file from it has to
+     * be linked again.
+     */
+    remove: adminWsProcedure.input(z.object({ id: Id })).mutation(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const [l] = await db.select().from(downstreamLinks).where(and(eq(downstreamLinks.id, input.id), eq(downstreamLinks.workspaceId, ctx.workspace.id))).limit(1);
+      if (!l) throw new TRPCError({ code: "NOT_FOUND", message: "Downstream link not found" });
+      await db.delete(researchExternalRefs).where(and(eq(researchExternalRefs.workspaceId, ctx.workspace.id), eq(researchExternalRefs.linkId, l.id)));
+      await db.delete(downstreamLinks).where(and(eq(downstreamLinks.id, l.id), eq(downstreamLinks.workspaceId, ctx.workspace.id)));
+      __clearResearchContextCache();
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "downstream_link", entityId: l.id, before: { name: l.downstreamWorkspaceName, downstreamWorkspaceId: l.downstreamWorkspaceId } });
+      return { success: true };
+    }),
+
+    /** Reads an export and says what an import would do. Nothing is written. */
+    preview: adminWsProcedure
+      .input(z.object({ fileText: z.string().min(2).max(16 * 1024 * 1024) }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await requireDb();
+        return previewDownstream(db, ctx.workspace.id, ctx.user.id, ctx.workspace.name, input.fileText);
+      }),
+
+    /** Imports what the preview showed, as the person chose. Nothing is sent or launched. */
+    commit: adminWsProcedure
+      .input(z.object({
+        token: z.string().uuid(),
+        assign: z.boolean().optional(),
+        updateLinkUrl: z.boolean().optional(),
+        useSellerMessaging: z.boolean(),
+        segments: z.array(z.string().max(300)).max(200),
+        importOrganizations: z.boolean(),
+        takeDownstream: z.array(z.string().max(300)).max(2000),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const db = await requireDb();
+        const r = await commitDownstream(db, ctx.workspace.id, ctx.user.id, true, input);
+        __clearResearchContextCache();
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "downstream_import", entityId: r.linkId, after: { segments: input.segments, importOrganizations: input.importOrganizations, counts: r.counts } });
+        return r;
+      }),
+  }),
 });
+
+function affectedRowsOf(r: unknown): number {
+  return Number(((Array.isArray(r) ? r[0] : r) as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
+}

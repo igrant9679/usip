@@ -25,6 +25,7 @@ import { areCampaigns, personas, researchMarkets, researchSectors } from "../../
 import { getDb } from "../../db";
 import { cleanPersonaResearch, cleanSectorContent, type SectorContent } from "@shared/researchShape";
 import { icpLabels } from "@shared/icpShape";
+import { pausedDownstreamFilter } from "./downstreamAccounts";
 
 /** What the writer produces, which decides how much research it gets. */
 export type ResearchSurface =
@@ -86,9 +87,10 @@ async function snapshot(workspaceId: number): Promise<Snapshot | null> {
         .where(and(eq(researchMarkets.workspaceId, workspaceId), inArray(researchMarkets.id, marketIds)))
     : [];
   const marketName = new Map(markets.map((m) => [m.id, m.name]));
+  const isPaused = await pausedDownstreamFilter(workspaceId);
   const sectors = new Map<number, SectorRow>();
   for (const s of sectorRows) {
-    if (!marketName.has(s.marketId)) continue;
+    if (!marketName.has(s.marketId) || isPaused(s)) continue;
     sectors.set(s.id, { id: s.id, marketName: marketName.get(s.marketId)!, content: cleanSectorContent(s).content });
   }
   const personaRows = await db

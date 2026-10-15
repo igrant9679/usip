@@ -7,6 +7,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { researchSectors, workspaceSettings } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { cleanSectorContent, type SectorContent } from "@shared/researchShape";
+import { pausedDownstreamFilter } from "./downstreamAccounts";
 
 export const ICP_FALLBACKS = ["inferred", "research", "merged"] as const;
 export type IcpFallback = (typeof ICP_FALLBACKS)[number];
@@ -33,7 +34,8 @@ async function usableSectors(workspaceId: number): Promise<SectorContent[]> {
     .select()
     .from(researchSectors)
     .where(and(eq(researchSectors.workspaceId, workspaceId), inArray(researchSectors.status, ["researched", "verified"])));
-  return rows.map((r) => cleanSectorContent(r).content);
+  const isPaused = await pausedDownstreamFilter(workspaceId);
+  return rows.filter((r) => !isPaused(r)).map((r) => cleanSectorContent(r).content);
 }
 
 export type ResearchTargeting = { titles: string[]; industries: string[]; geographies: string[]; keywords: string[]; employeeMin: number | null; employeeMax: number | null };

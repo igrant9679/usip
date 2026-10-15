@@ -4648,6 +4648,52 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0205: Research, phase 5 — Downstream imports ─────────────────────────
+  // Owner, 2026-10-14 ("start phase 5"): a Downstream v2 export imports into
+  // the workspace it is linked to, as a market, sectors, personas and
+  // accounts; refs make a re-import idempotent.
+  // Plain ADD COLUMN — IF NOT EXISTS not supported on MySQL < 8.0.3. errno 1060 is tolerated.
+  {
+    name: "0205_downstream_import.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `downstream_links` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`sourceUrl` VARCHAR(500) NOT NULL, " +
+        "`downstreamWorkspaceId` VARCHAR(120) NOT NULL, " +
+        "`downstreamWorkspaceName` VARCHAR(200) NOT NULL, " +
+        "`kind` VARCHAR(40) NULL, " +
+        "`status` ENUM('active','paused') NOT NULL DEFAULT 'active', " +
+        "`audience` VARCHAR(16) NULL, " +
+        "`useSellerMessaging` BOOLEAN NOT NULL DEFAULT FALSE, " +
+        "`settings` JSON NULL, " +
+        "`marketId` INT NULL, " +
+        "`lastImportAt` TIMESTAMP NULL, " +
+        "`lastImportedByUserId` INT NULL, " +
+        "`lastFileHash` VARCHAR(64) NULL, " +
+        "`lastExportedAt` VARCHAR(40) NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "`updatedAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
+        "INDEX `ix_dl_ws` (`workspaceId`, `downstreamWorkspaceId`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "CREATE TABLE IF NOT EXISTS `research_external_refs` (" +
+        "`id` INT AUTO_INCREMENT PRIMARY KEY, " +
+        "`workspaceId` INT NOT NULL, " +
+        "`linkId` INT NOT NULL, " +
+        "`ref` VARCHAR(300) NOT NULL, " +
+        "`kind` ENUM('market','sector','persona','account') NOT NULL, " +
+        "`velocityId` INT NOT NULL, " +
+        "`revision` INT NULL, " +
+        "`contentHash` VARCHAR(64) NOT NULL, " +
+        "`writtenRevision` INT NULL, " +
+        "`createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, " +
+        "`updatedAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, " +
+        "INDEX `ix_rer_link` (`workspaceId`, `linkId`, `kind`)" +
+      ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "ALTER TABLE `research_markets` ADD COLUMN `extras` json NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

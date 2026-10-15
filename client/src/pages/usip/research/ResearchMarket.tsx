@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { Plus, Sparkles, Telescope, Trash2, Users } from "lucide-react";
 import { StartRunDialog, type RunTarget } from "@/components/usip/research/ResearchRuns";
+import { MarketExtras } from "@/components/usip/research/MarketExtras";
 import { confirmAction } from "@/components/usip/Common";
 import {
   Crumbs, HistoryButton, LinesInput, RowsEditor, SaveBar, Section, StatusBadge,
@@ -197,6 +198,8 @@ export default function ResearchMarket() {
           </div>
           <LinesInput label="Open questions" hint="What is still unknown. One per line." value={c.openQuestions} disabled={ro} onChange={(v) => draft.patch({ openQuestions: v })} rows={3} />
         </Section>
+
+        <MarketExtras extras={market.extras} />
 
         <Section title={RESEARCH_PART_LABEL.suggestedSectors} description="Sectors worth researching next. Each one not yet added shows a button above.">
           <RowsEditor

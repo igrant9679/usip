@@ -19,6 +19,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { toast } from "sonner";
 import { Plus, Sparkles, Telescope } from "lucide-react";
 import { RecentRuns, ResearchSettingsButton, StartRunDialog } from "@/components/usip/research/ResearchRuns";
+import { DownstreamSection } from "@/components/usip/research/DownstreamSection";
 import { ResearchSubNav, StatusBadge, reportDropped, useResearchRoles } from "@/components/usip/research/ResearchFields";
 
 export default function ResearchHome() {
@@ -110,6 +111,7 @@ export default function ResearchHome() {
         </div>
       )}
       <div className="mt-4"><RecentRuns /></div>
+      <div className="mt-4"><DownstreamSection /></div>
       </div>
 
       <StartRunDialog target={{ kind: "market" }} open={aiOpen} onOpenChange={setAiOpen} />

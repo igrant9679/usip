@@ -100,6 +100,7 @@ import { escapeHtml } from "@shared/escapeHtml";
 import { icpLabels } from "@shared/icpShape";
 import { dropNeverTarget, neverTargetHit, neverTargetReason } from "@shared/researchTargeting";
 import { campaignNeverTarget } from "./services/research/neverTarget";
+import { downstreamAccountFor, hasSellerDownstreamLink } from "./services/research/downstreamAccounts";
 import { pickFallback, researchTargeting, workspaceIcpFallback } from "./services/research/targetingPrior";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { inSendWindow } from "./services/sendWindow";
@@ -1038,7 +1039,22 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     // who entered without discovery (pushed, imported, routed).
     const screenNeverTarget = await campaignNeverTarget(campaign);
     let neverTargeted = 0;
+    // Research phase 5: Downstream's seller fit flags an organization in
+    // financial distress as "do not contact now". Only a link whose seller
+    // layer is this company's stores that flag, so only then is it looked up.
+    const sellerLinked = await hasSellerDownstreamLink(wsId);
     for (const p of enriched) {
+      if (sellerLinked) {
+        const ds = await downstreamAccountFor(wsId, { companyDomain: p.companyDomain, companyName: p.companyName });
+        if (ds?.fit?.flags?.includes("financial-distress")) {
+          await db
+            .update(prospectQueue)
+            .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionReason: "Downstream: the organization is in financial distress — do not contact now" })
+            .where(and(eq(prospectQueue.id, p.id), eq(prospectQueue.workspaceId, wsId)));
+          result.rejected++;
+          continue;
+        }
+      }
       const offTarget = neverTargetHit(screenNeverTarget, { title: p.title, company: p.companyName, industry: p.industry });
       if (offTarget) {
         await db

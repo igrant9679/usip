@@ -6263,6 +6263,8 @@ export const researchMarkets = mysqlTable(
     competitors: json("competitors"),
     /** [{title, url}] */
     sources: json("sources"),
+    /** Downstream imports only (migration 0205): {stats, funders} — market statistics and the funders' public rules. */
+    extras: json("extras"),
     status: mysqlEnum("status", ["draft", "researched", "verified"]).default("draft").notNull(),
     source: mysqlEnum("source", ["manual", "ai", "downstream"]).default("manual").notNull(),
     sourceRef: varchar("sourceRef", { length: 300 }),
@@ -6392,3 +6394,66 @@ export const researchJobs = mysqlTable(
   }),
 );
 export type ResearchJob = typeof researchJobs.$inferSelect;
+
+/**
+ * Which Downstream workspaces feed this Velocity workspace (Research phase 5,
+ * migration 0205). A file imports only into a workspace it is linked to; each
+ * link keeps this company's own targeting settings and whether the file's
+ * seller layer (product messaging written for one company) is theirs.
+ */
+export const downstreamLinks = mysqlTable(
+  "downstream_links",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    /** The Downstream app's address (normalized source.url). */
+    sourceUrl: varchar("sourceUrl", { length: 500 }).notNull(),
+    downstreamWorkspaceId: varchar("downstreamWorkspaceId", { length: 120 }).notNull(),
+    downstreamWorkspaceName: varchar("downstreamWorkspaceName", { length: 200 }).notNull(),
+    kind: varchar("kind", { length: 40 }),
+    status: mysqlEnum("status", ["active", "paused"]).default("active").notNull(),
+    /** "seller" | "market", from the last import. */
+    audience: varchar("audience", { length: 16 }),
+    useSellerMessaging: boolean("useSellerMessaging").default(false).notNull(),
+    /** DownstreamLinkSettings (shared/downstreamMap). */
+    settings: json("settings"),
+    /** The research market this link's imports land in. */
+    marketId: int("marketId"),
+    lastImportAt: timestamp("lastImportAt"),
+    lastImportedByUserId: int("lastImportedByUserId"),
+    lastFileHash: varchar("lastFileHash", { length: 64 }),
+    lastExportedAt: varchar("lastExportedAt", { length: 40 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({ byWs: index("ix_dl_ws").on(t.workspaceId, t.downstreamWorkspaceId) }),
+);
+export type DownstreamLink = typeof downstreamLinks.$inferSelect;
+
+/**
+ * What an import created in Velocity, by Downstream ref (migration 0205). The
+ * ref is Downstream's stable id; the hash is of what the import last WROTE, so
+ * a re-import of the same file changes nothing, and a record someone edited in
+ * Velocity since (writtenRevision moved, or the persona's fields changed) is
+ * shown as a conflict instead of being overwritten.
+ */
+export const researchExternalRefs = mysqlTable(
+  "research_external_refs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    linkId: int("linkId").notNull(),
+    ref: varchar("ref", { length: 300 }).notNull(),
+    kind: mysqlEnum("kind", ["market", "sector", "persona", "account"]).notNull(),
+    velocityId: int("velocityId").notNull(),
+    /** Downstream's revision of the item when it was last imported. */
+    revision: int("revision"),
+    contentHash: varchar("contentHash", { length: 64 }).notNull(),
+    /** The Velocity record's revision right after the import wrote it (markets, sectors). */
+    writtenRevision: int("writtenRevision"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({ byLink: index("ix_rer_link").on(t.workspaceId, t.linkId, t.kind) }),
+);
+export type ResearchExternalRef = typeof researchExternalRefs.$inferSelect;

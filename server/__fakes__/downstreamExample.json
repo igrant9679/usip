@@ -1,0 +1,537 @@
+{
+  "format": "downstream-velocity",
+  "version": 2,
+  "exportedAt": "2026-10-05T13:00:21.841Z",
+  "source": {
+    "app": "Downstream",
+    "url": "https://downstream.example.app",
+    "workspace": {
+      "id": "regional-authorities",
+      "name": "Regional Authorities",
+      "kind": "regional-authorities",
+      "tagline": "Federal regional commissions, the organizations they fund, and the constituent strategy."
+    },
+    "exportedBy": "admin"
+  },
+  "audience": "seller",
+  "intendedFor": "CommunityForce",
+  "contents": {
+    "segments": true,
+    "personas": true,
+    "knowledge": true,
+    "organizations": true,
+    "marketStats": true
+  },
+  "seller": {
+    "name": "CommunityForce",
+    "modules": [
+      {
+        "id": "discover",
+        "name": "Discover",
+        "tagline": "Find and pursue grants",
+        "description": "Funding profile, ranked federal and foundation opportunities, funder prospecting from 990s, …",
+        "fundedOrganizationNeed": "Which grants am I eligible for, which are worth pursuing, and where is each one in my pipeline?"
+      }
+    ],
+    "productFacts": [
+      "Homepage tagline: \"The awards platform built to discover, raise, run and prove.\" Public …",
+      "The four are homepage pillars, not separate products. Product pages are titled Grant …"
+    ],
+    "positioning": {
+      "whereWeWin": [
+        "**GrantHub users need a new home.** Foundant discontinued GrantHub and GrantHub Pro by Jan 31, 2026."
+      ],
+      "principles": [
+        {
+          "title": "The funded organization is the customer",
+          "text": "Funders are a source of prospect lists, program rules, and reporting requirements. The …"
+        }
+      ]
+    },
+    "messaging": {
+      "principles": [
+        {
+          "title": "Their funding, their words",
+          "text": "A school district talks about Title funds, state competitive grants, and compliance. A water …"
+        }
+      ],
+      "sequence": [
+        {
+          "step": "1. Research",
+          "channel": "This site + prospects list",
+          "purpose": "Confirm the funding they received, the program, and who helped them."
+        }
+      ],
+      "preflight": [
+        "Is the message written for exactly one organization type?"
+      ],
+      "funderEmailTemplate": "…"
+    },
+    "fitRules": [
+      {
+        "product": "grantmaker",
+        "rule": "Passes $250K or more of federal money on to subrecipients in its latest Single Audit, or is a …"
+      },
+      {
+        "product": "run",
+        "rule": "Holds a regional-authority award that is still under way, files a federal Single Audit, or …"
+      },
+      {
+        "product": "discover-raise",
+        "rule": "Eligible but not yet managing much grant money, or funded once with the award ended, closing …"
+      }
+    ],
+    "priorityTiers": [
+      {
+        "tier": 1,
+        "name": "Tier 1: Proven need, ready to email",
+        "who": "Its auditor reported grant or control problems, or it runs grant programs of its own, and a …",
+        "howToWork": "Contact these first: a documented need, the budget to act and a person to write to. Lead with …"
+      }
+    ],
+    "targetGroups": [
+      {
+        "id": "w-dra",
+        "name": "DRA grantees: already used CommunityForce",
+        "product": "run",
+        "definition": "Organizations the Delta Regional Authority funded from FY2022 to FY2026.",
+        "inCommon": [
+          "DRA's application portal runs on CommunityForce, so most of them have already used the product …",
+          "Cities, towns, parishes, colleges and nonprofits in the eight Delta states",
+          "Most DRA awards run about 24 months, so many are in or close to close-out"
+        ],
+        "pitch": "You already know CommunityForce from applying to DRA. The same platform can carry this award …",
+        "whoToContact": "The person who submitted the DRA application. Where the organization files a federal audit, …"
+      }
+    ]
+  },
+  "knowledge": {
+    "overview": {
+      "headline": "Sell to the thousands of organizations that receive the money, not only the handful that give …",
+      "purposes": []
+    },
+    "glossary": [
+      {
+        "term": "NOFO (Notice of Funding Opportunity)",
+        "definition": "The federal announcement of an available grant: eligibility, amounts, deadlines, criteria. The …",
+        "source": "https://www.ecfr.gov/current/title-2/section-200.204"
+      }
+    ],
+    "competitors": [
+      {
+        "name": "Instrumentl",
+        "category": "Grant seeker",
+        "positioning": "Grant-seeker platform to 'find, win, manage, and collaborate on grants' (discovery, AI …",
+        "pricing": "Subscription: Discover $299/mo, Pre-Award $499/mo, Full Lifecycle $999/mo billed annually …",
+        "url": "https://www.instrumentl.com/pricing"
+      }
+    ],
+    "helperFees": [
+      {
+        "model": "Hourly",
+        "range": "About $30-$50/hr junior, $50-$95/hr mid-level (about $75 midpoint), $95-$150+/hr senior; …",
+        "source": "https://grantable.co/how-much-does-a-grant-writer-cost"
+      }
+    ],
+    "helperRules": [],
+    "fundingLifecycle": {
+      "lede": "Every funded organization, in every sector, goes through the same loop: find money, win it, …",
+      "stages": [
+        {
+          "title": "Readiness, discovery, and applying",
+          "question": "What can we get, is it worth it, and how do we win it?",
+          "tasks": [
+            "Get a UEI and keep SAM.gov registration active (renew every 12 months).",
+            "Register in Grants.gov or the funder's portal and assign roles.",
+            "Search Grants.gov, SAM.gov assistance listings, state portals, commissions, and foundations.",
+            "Read the NOFO: eligibility, match, deadlines, scoring criteria.",
+            "Submit an LOI or pre-application where required; line up partners and letters.",
+            "Write the narrative, logic model, performance measures, budget, and justification (SF-424 …"
+          ],
+          "module": "discover"
+        }
+      ],
+      "thresholds": [
+        {
+          "item": "Single Audit threshold",
+          "value": "$1,000,000 federal spending in a fiscal year (was $750,000); fiscal years starting on or after …",
+          "citation": "2 CFR 200.501"
+        }
+      ],
+      "policyChanges": [
+        {
+          "date": "Aug 7, 2025",
+          "change": "Executive Order 14332, \"Improving Oversight of Federal Grantmaking.\"",
+          "impact": "Political-appointee review of funding notices and discretionary awards, plain-language NOFOs, …"
+        }
+      ]
+    },
+    "funders": [
+      {
+        "ref": "regional-authorities/authorities/dra",
+        "name": "Delta Regional Authority",
+        "shortName": "DRA",
+        "active": true,
+        "summary": "Delta Regional Authority (est. 2000) invests in 8 states across 255 counties. Latest annual …",
+        "states": [
+          "Alabama",
+          "Arkansas",
+          "Illinois",
+          "Kentucky",
+          "Louisiana",
+          "Mississippi",
+          "Missouri",
+          "Tennessee"
+        ],
+        "countyCount": 255,
+        "established": "2000",
+        "website": "https://dra.gov",
+        "applicationPortal": "https://dra.communityforce.com",
+        "fy2026Funding": "$32M",
+        "programs": [
+          {
+            "name": "States' Economic Development Assistance Program (SEDAP)",
+            "purpose": "Main investment tool: basic public infrastructure, transportation, business …",
+            "award": "$50,000-$500,000; 2026 round ~$16.6M available",
+            "match": "2025 NOFO: at least 10% for business development/job training; none for transportation/basic …",
+            "cycle": "Annual; 2026 opened Jun 1, due Jul 31, 2026 (~$16.6M: $12.25M FY26 + $4.37M carryover)",
+            "url": "https://dra.gov/programs/critical-infrastructure/sedap/"
+          }
+        ],
+        "applying": [
+          "Annual competitive NOFA cycles (2025 SEDAP: opened Jul 14, due Aug 25, awards Sep 30; 2026 …"
+        ],
+        "eligible": [
+          "Counties/parishes, cities, other political subdivisions and special purpose districts"
+        ],
+        "reporting": [
+          "Quarterly reports (SF-425 financial + SF-PPR narrative) due the 15th after each calendar …"
+        ],
+        "programReporting": [
+          {
+            "program": "SEDAP",
+            "items": [
+              "Report and track project outcomes: jobs created, jobs retained, families with improved access, …"
+            ]
+          }
+        ],
+        "reportingCalendar": "DRA requires grantees to report and track outcomes; the reporting schedule is set in each …",
+        "closeoutDays": 120,
+        "distress": {
+          "method": "Designated annually. A county/parish is distressed if its unemployment rate is at least 1 …",
+          "levels": [
+            {
+              "level": "Distressed"
+            }
+          ],
+          "counts": {
+            "FY2024": 227,
+            "FY2025": 228,
+            "2026_list_rows_as_read": 229,
+            "FY2025_persistent_poverty": 136
+          }
+        },
+        "workedExample": {
+          "title": "a DRA grant from start to finish",
+          "intro": "DRA is the authority CommunityForce knows best: DRA's application portal runs on …",
+          "stages": [
+            {
+              "stage": "1. Find the right program",
+              "funderAsks": "DRA runs yearly rounds. In 2026: Delta Workforce opened March 17 and closed May 15; SEDAP …",
+              "granteeMust": "Know which program fits the project, when it opens, and whether the county is distressed.",
+              "communityForceFit": "Discover & Raise matches the organization to the DRA program and to funding it can combine …"
+            }
+          ],
+          "stillToAdd": "why applications get sent back, where grantees fall behind on reporting, how long the wait is …"
+        },
+        "sources": [
+          {
+            "title": "CRS R45997 (Sep 17, 2026)",
+            "url": "https://www.congress.gov/crs_external_products/R/PDF/R45997/R45997.39.pdf"
+          }
+        ]
+      }
+    ]
+  },
+  "segments": [
+    {
+      "ref": "regional-authorities/k12",
+      "revision": 2,
+      "updatedAt": "2026-10-05T13:00:13.363Z",
+      "name": "K-12 School Districts & Schools",
+      "shortName": "K-12 schools",
+      "tagline": "School districts, charter schools, service agencies, and education foundations.",
+      "summary": "About 13,300 regular school districts and roughly 99,000 public schools receive most outside …",
+      "research": {
+        "status": "researched",
+        "asOf": "2026-09-28",
+        "owner": "Unassigned",
+        "scores": {
+          "reach": 5,
+          "money": 5,
+          "pain": 3,
+          "access": 4
+        }
+      },
+      "targeting": {
+        "titles": [],
+        "industries": [],
+        "geographies": [],
+        "keywords": [],
+        "employeeMin": null,
+        "employeeMax": null,
+        "organizationTypes": [
+          "Regular school districts (LEAs)",
+          "Charter schools / charter LEAs",
+          "Small rural districts (REAP-eligible)",
+          "Community-based organizations running 21st CCLC sites",
+          "Local education foundations"
+        ],
+        "exclude": []
+      },
+      "buyerRoles": [
+        "Director / Executive Director of Federal Programs",
+        "Grants Manager / Grant Coordinator",
+        "Assistant Superintendent for Business / CFO / School Business Official",
+        "Superintendent (small districts)",
+        "Director of Special Education (IDEA)",
+        "E-Rate Coordinator / Technology Director",
+        "Education Foundation Executive Director",
+        "ESA grants and federal programs staff"
+      ],
+      "personaRefs": [
+        "regional-authorities/k12/personas/director-of-federal-programs"
+      ],
+      "market": {
+        "painPoints": [
+          "Funds arrive late or unpredictably: $6.8B withheld June 30, 2025, released late July 2025",
+          "Federal program administration moving across agencies (DOL, HHS, Interior), bringing new …"
+        ],
+        "avoid": [
+          "'Fundraising' or 'donor' language for districts (use it only for education foundations)",
+          "Implying grant money replaces the core budget (supplement, not supplant)"
+        ],
+        "vocabulary": [
+          "LEA",
+          "SEA",
+          "consolidated application",
+          "allocation"
+        ],
+        "fundingPrograms": [
+          {
+            "name": "Title I, Part A (Improving Basic Programs)",
+            "agency": "ED (day-to-day admin moving to DOL via IAA)",
+            "flow": "pass-through via state education agency (formula)",
+            "purpose": "Supplemental services in high-poverty schools",
+            "typicalAward": "Formula; varies by district",
+            "url": "https://www.ed.gov/grants-and-programs/formula-grants/school-improvement/improving-basic-progra …"
+          }
+        ],
+        "marketSize": [
+          {
+            "value": "13,318",
+            "label": "Regular public school districts (2022-23)",
+            "source": "NCES Digest Table 214.10"
+          }
+        ],
+        "moneyFlow": {
+          "sources": [
+            "U.S. Department of Education (formula and discretionary)"
+          ],
+          "intermediaries": [
+            {
+              "name": "State education agencies (SEAs)",
+              "role": "Primary pass-through for ESEA/IDEA formula funds and 21st CCLC competitions; run consolidated …",
+              "count": "50 states + DC + PR (+ BIE)"
+            }
+          ],
+          "recipients": [
+            {
+              "type": "Regular school districts (LEAs)",
+              "approxCount": "13,318",
+              "notes": "Formula subrecipients of the SEA; most Title I and IDEA money flows here"
+            }
+          ]
+        },
+        "applying": [
+          "SAM.gov registration and UEI (for direct federal awards; many SEAs also require UEI of …"
+        ],
+        "postAwardReporting": [
+          "State expenditure reimbursement requests / cash drawdowns and budget amendments in state portal"
+        ],
+        "currentHelpers": [
+          "District federal programs director / grants office (often one person in small districts)"
+        ],
+        "policyWatch": [
+          "EO (Mar 20, 2025) directing steps to close ED; 10 interagency agreements with 5 agencies by …"
+        ],
+        "funderLink": "Commissions rarely fund school districts directly; they fund workforce and education projects …"
+      },
+      "sources": [
+        {
+          "title": "NCES Digest Table 214.10: districts and schools",
+          "url": "https://nces.ed.gov/programs/digest/d23/tables/dt23_214.10.asp"
+        }
+      ],
+      "seller": {
+        "leadWith": [
+          "One place to see every funding stream (formula, competitive, E-Rate, state, foundation) with …"
+        ],
+        "avoid": [],
+        "sampleOpeningLine": "Your federal programs team manages Title, IDEA, and state grants with a very small staff. We …",
+        "moduleFit": {
+          "discover": "Rank state competitive grants, ED discretionary grants, and foundation opportunities against …",
+          "raise": "Only for local education foundations and booster organizations. Never pitch donor fundraising …",
+          "run": "Education foundations and districts that run teacher grants, mini-grants, or scholarships can …",
+          "prove": "Board-ready reporting across funding streams and outcome dashboards for competitive grants …"
+        },
+        "fitScore": 2
+      }
+    }
+  ],
+  "personas": [
+    {
+      "ref": "regional-authorities/k12/personas/director-of-federal-programs",
+      "segmentRef": "regional-authorities/k12",
+      "name": "Director of Federal Programs",
+      "titles": [
+        "Director of Federal Programs",
+        "Federal Programs Director"
+      ],
+      "cares": "Keeping Title funds compliant and spent on time.",
+      "pains": [
+        "Late allocations",
+        "Audit findings"
+      ],
+      "objections": [
+        "Another system to learn"
+      ],
+      "angle": "Show the Single Audit trail.",
+      "written": true
+    },
+    {
+      "ref": "regional-authorities/local-gov/personas/grants-manager-grants-coordinator-grants-administrator",
+      "segmentRef": "regional-authorities/local-gov",
+      "name": "Grants Manager / Grants Coordinator / Grants Administrator",
+      "titles": [
+        "Grants Manager",
+        "Grants Coordinator",
+        "Grants Administrator"
+      ],
+      "pains": [
+        "Small and rural governments lack staff; NACo cites technical jargon and limited capacity as barriers",
+        "Heavy pre-award prerequisites (plans, BCAs, engineering, NEPA) before you can apply",
+        "Program volatility: BRIC canceled Apr 2025, court-ordered restoration, FY2024 NOFO canceled …",
+        "Many portals and separate reporting regimes per agency"
+      ],
+      "written": false
+    }
+  ],
+  "organizations": [
+    {
+      "ref": "regional-authorities/prospects/33b98f6ab880",
+      "revision": 1,
+      "name": "Angelic Ministries",
+      "type": "Nonprofit",
+      "segmentRef": "regional-authorities/nonprofits",
+      "state": "TN",
+      "county": "Knox",
+      "profile": {
+        "subtype": "Faith-based organization",
+        "funderRef": "regional-authorities/authorities/arc"
+      },
+      "award": {
+        "funder": "Appalachian Regional Commission",
+        "program": "INSPIRE",
+        "project": "Supportive housing and training",
+        "amount": "$500,000",
+        "year": "FY2023",
+        "sourceUrl": "https://www.arc.gov/wp-content/uploads/2023/09/INSPIRE-Award-Summaries-by-State-September-2023.pdf",
+        "stage": "ended",
+        "startDate": "2023-10-01",
+        "endDate": "2026-05-31",
+        "title": "REAL Opportunities",
+        "committedOutcomes": [
+          "This project is expected to serve 150 participants and 30 businesses."
+        ]
+      },
+      "status": "researched",
+      "seller": {
+        "fit": {
+          "product": "discover-raise",
+          "alsoFits": [],
+          "flags": [],
+          "reasons": [
+            "Holds 1 regional-authority award (ARC)",
+            "Regional-authority award has ended: next step is new funding",
+            "No other sizable federal grants found: room to raise more"
+          ],
+          "openingLine": "Your ARC project has ended, so now is the time to line up what comes next. You've already won …"
+        }
+      }
+    }
+  ],
+  "marketStats": {
+    "asOf": "2026-10-05",
+    "basis": "Every government, school district, college, hospital, and community nonprofit in the …",
+    "organizations": 247845,
+    "realisticBuyers": 63257,
+    "manageSizableGrants": 21264,
+    "fileFederalAudit": 12711,
+    "auditFindings": 3701,
+    "auditFindingsSharePct": 29.1,
+    "fundedByCommission": 1103,
+    "sizableGrantsNoCommissionAwardPct": 95.6,
+    "federalSpendingPerYear": 184240629910,
+    "largest500SharePct": 60.3,
+    "passOnToSubrecipients": 1758,
+    "passedOnPerYear": 11906539192,
+    "repeatGrantees": 275,
+    "buyersWithEmailPct": 20.1,
+    "byPeerGroup": [
+      {
+        "id": "county",
+        "name": "Counties and parishes",
+        "organizations": 1236,
+        "realisticBuyers": 1234,
+        "manageSizableGrants": 868,
+        "fileFederalAudit": 748,
+        "auditFindingsSharePct": 53.2,
+        "fundedByCommission": 95,
+        "fit": {
+          "grantmaker": 230,
+          "run": 638,
+          "discoverRaise": 366,
+          "discoverRaiseSmall": 2
+        }
+      }
+    ],
+    "byCommission": [
+      {
+        "ref": "regional-authorities/authorities/arc",
+        "shortName": "ARC",
+        "organizations": 53962,
+        "realisticBuyers": 18286,
+        "manageSizableGrants": 6309,
+        "auditFindingsSharePct": 30.9,
+        "fundedOrganizations": 400,
+        "awardsListed": 2144,
+        "awardDollars": 1168781047
+      }
+    ],
+    "tiers": [
+      {
+        "tier": 1,
+        "name": "Tier 1: Proven need, ready to email",
+        "organizations": 4399,
+        "withEmail": 4399
+      }
+    ],
+    "pools": [
+      {
+        "id": "g-gov",
+        "organizations": 522
+      }
+    ]
+  }
+}
