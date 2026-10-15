@@ -137,6 +137,20 @@ export function titleMatchLength(title: string, titles: string[]): number {
 
 const hasResearch = (p: PersonaRow) => !!(p.cares || p.angle || p.pains.length || p.objections.length);
 
+/**
+ * A sector that lists industries does not fit someone whose known industry is
+ * none of them (owner, 2026-10-15). Titles like "IT Director" or "Finance
+ * Director" exist in every industry, so a title alone must not hand a
+ * software company's IT director the county-government research. An unknown
+ * industry rules nothing out, and a sector chosen on purpose (by id, or by
+ * the campaign) is never second-guessed.
+ */
+export function industryRulesOut(sector: SectorContent | null | undefined, industry: string | null | undefined): boolean {
+  if (!sector || !industry?.trim()) return false;
+  const industries = sector.targeting.industries;
+  return industries.length > 0 && titleMatchLength(industry, industries) === 0;
+}
+
 /* ── The block ──────────────────────────────────────────────────────────── */
 
 type Item = { priority: number; text: string; keep?: boolean };
@@ -236,6 +250,7 @@ export async function researchContextFor(workspaceId: number, use: ResearchUse):
       for (const p of snap.personas) {
         if (!hasResearch(p)) continue;
         if (sectorId != null && p.sectorId !== sectorId) continue;
+        if (sectorId == null && p.sectorId != null && industryRulesOut(snap.sectors.get(p.sectorId)?.content, use.industry)) continue;
         const len = titleMatchLength(use.prospectTitle, p.titles);
         if (len > best) { best = len; persona = p; }
       }
@@ -248,6 +263,7 @@ export async function researchContextFor(workspaceId: number, use: ResearchUse):
     if (sectorId == null && use.prospectTitle) {
       let best = 0;
       for (const s of Array.from(snap.sectors.values())) {
+        if (industryRulesOut(s.content, use.industry)) continue;
         const len = titleMatchLength(use.prospectTitle, s.content.targeting.titles);
         if (len > best) { best = len; sectorId = s.id; }
       }

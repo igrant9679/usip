@@ -94,6 +94,26 @@ describe("which research applies", () => {
     expect(await researchContextFor(2, { surface: "outreach", prospectTitle: "Plumber", industry: "Government Administration" })).toMatchObject({ sectorId: 10, matchedBy: "industry" });
   });
 
+  it("a title alone does not pick a sector whose industries the person's known industry is none of", async () => {
+    // Owner, 2026-10-15: "IT Director" exists everywhere; a software company's must not get county research.
+    seed(h.db);
+    const ctx = (prospectTitle: string, industry?: string, campaignId?: number) => researchContextFor(2, { surface: "outreach", prospectTitle, industry, campaignId });
+    expect(await ctx("County Administrator", "Computer Software")).toMatchObject({ sectorId: null, personaId: null, block: "" });
+    expect(await ctx("County Administrator", "Government Administration")).toMatchObject({ sectorId: 10, matchedBy: "title" });
+    expect(await ctx("County Administrator")).toMatchObject({ sectorId: 10, matchedBy: "title" }); // unknown industry rules nothing out
+    // The persona tied to that sector is passed over too, not just the sector.
+    expect(await ctx("ADA Coordinator", "Hospital & Health Care")).toMatchObject({ sectorId: null, personaId: null, block: "" });
+    expect(await ctx("ADA Coordinator", "Government Administration")).toMatchObject({ sectorId: 10, personaId: 100 });
+    // A sector chosen on purpose is never second-guessed.
+    expect(await ctx("Finance Director", "Computer Software", 7)).toMatchObject({ sectorId: 10, matchedBy: "campaign" });
+    expect(await ctx("ADA Coordinator", "Computer Software", 7)).toMatchObject({ sectorId: 10, personaId: 100 }); // and its personas, by title
+    expect(await researchContextFor(2, { surface: "outreach", sectorId: 10, industry: "Computer Software" })).toMatchObject({ sectorId: 10, matchedBy: "sector" });
+    // A sector that lists no industries still matches on title alone.
+    __clearResearchContextCache();
+    h.db.rowsOf("research_sectors").push({ id: 12, workspaceId: 2, marketId: 1, ...cleanSectorContent({ name: "Any industry", status: "researched", targeting: { titles: ["Chief Widget Officer"] } }).content, status: "researched" });
+    expect(await ctx("Chief Widget Officer", "Computer Software")).toMatchObject({ sectorId: 12, matchedBy: "title" });
+  });
+
   it("never a draft sector, never a persona without research, never another workspace's research", async () => {
     seed(h.db);
     expect((await researchContextFor(2, { surface: "outreach", prospectTitle: "City Manager" })).block).toBe("");
