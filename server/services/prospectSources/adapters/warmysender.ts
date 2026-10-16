@@ -409,10 +409,33 @@ function propType(schema: unknown, name: string): string | null {
   return typeof t === "string" ? t : Array.isArray(t) ? String(t[0]) : null;
 }
 
+/**
+ * WarmySender refuses a text filter over its maxLength (255): 2026-10-16, a
+ * county campaign's 22 job titles joined into one jobTitle string failed
+ * every search. The schema's own limit when it states one, else 255.
+ */
+const DEFAULT_MAX_TEXT = 255;
+function maxLengthFor(schema: unknown, name: string): number {
+  const p = schemaProps(schema)?.[name];
+  const m = p && typeof p === "object" ? (p as Record<string, unknown>).maxLength : undefined;
+  return typeof m === "number" && m > 0 ? m : DEFAULT_MAX_TEXT;
+}
+
+/** Whole values, the first ones, as many as fit within max (a single over-long value is cut). */
+export function fitJoin(values: string[], sep: string, max: number): string {
+  let out = "";
+  for (const v of values) {
+    const next = out ? `${out}${sep}${v}` : v;
+    if (next.length > max) return out || v.slice(0, max);
+    out = next;
+  }
+  return out;
+}
+
 function joinFor(schema: unknown, name: string, values: string[]): unknown {
   const t = propType(schema, name);
   if (t === "array") return values;
-  return values.join(", ");
+  return fitJoin(values, ", ", maxLengthFor(schema, name));
 }
 
 /**
@@ -447,7 +470,7 @@ export function buildSearchLeadsArgs(
   if (criteria.companyDomains.length) { folded.push("companyDomain"); keywordParts.push(...criteria.companyDomains); }
   if (keywordParts.length) {
     const kw = (schema ? paramNameFor(schema, "keyword") : null) ?? "keyword";
-    args[kw] = keywordParts.join(" ");
+    args[kw] = fitJoin(keywordParts, " ", maxLengthFor(schema, kw));
   }
   const he = (schema ? paramNameFor(schema, "hasEmail") : null) ?? "has_email";
   args[he] = criteria.hasEmail !== undefined ? criteria.hasEmail : true;

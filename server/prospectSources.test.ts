@@ -18,7 +18,7 @@ import {
 } from "../shared/prospectSources";
 import { ARE_SOURCE_IDS } from "../shared/areSources";
 import {
-  buildSearchLeadsArgs, extractCursor, extractLeadRows, looksMasked, mapLeadRow, monthlyPeriodKeyForAnniversary,
+  buildSearchLeadsArgs, extractCursor, extractLeadRows, fitJoin, looksMasked, mapLeadRow, monthlyPeriodKeyForAnniversary,
   paramNameFor, parseMcpBody, unwrapToolResult, warmySenderBudgetPeriods, warmySenderCapabilities,
 } from "./services/prospectSources/adapters/warmysender";
 import { backoffMs, classifyHttpFailure, isRetryable, setVendorCallLogger, vendorFetch } from "./services/prospectSources/vendorHttp";
@@ -189,6 +189,24 @@ describe("WarmySender adapter", () => {
     expect(paramNameFor(schema, "jobTitle")).toBe("title");
     expect(paramNameFor(schema, "seniority")).toBeNull();
   });
+  it("a text filter never exceeds its maxLength: whole values, the first ones, as many as fit", () => {
+    // 2026-10-16: a county campaign's 22 titles joined into one jobTitle string (>255) failed every search.
+    const titles = ["County Administrator", "County Manager", "Deputy County Administrator", "Assistant County Manager", "Chief Administrative Officer",
+      "Director of Information Technology", "IT Director", "Chief Information Officer", "Public Information Officer", "Communications Director",
+      "Communications Manager", "Digital Communications Specialist", "Web Content Manager", "ADA Coordinator", "ADA Title II Coordinator"];
+    const schema = { properties: { jobTitle: { type: "string", maxLength: 255 }, keyword: { type: "string", maxLength: 40 } } };
+    const r = buildSearchLeadsArgs({ ...CRIT, jobTitles: titles, keywords: ["County of", "Board of Supervisors", "Digital Services", "Web Content"] }, schema, 30, null);
+    const jt = r.args.jobTitle as string;
+    expect(jt.length).toBeLessThanOrEqual(255);
+    expect(jt.startsWith("County Administrator, County Manager,")).toBe(true);
+    expect(titles.some((t) => jt.endsWith(t))).toBe(true); // no title cut in half
+    expect(r.args.keyword).toBe("County of Board of Supervisors");
+    // No limit stated: 255. One value longer than the limit is cut to it rather than dropped.
+    expect((buildSearchLeadsArgs({ ...CRIT, jobTitles: titles }, null, 30, null).args.job_title as string).length).toBeLessThanOrEqual(255);
+    expect(fitJoin(["x".repeat(300)], ", ", 255)).toHaveLength(255);
+    expect(fitJoin(["a", "b"], ", ", 255)).toBe("a, b");
+  });
+
   it("job title is APPROXIMATED until a captured schema proves a native parameter", () => {
     expect(warmySenderCapabilities(null).approximatedFilters).toContain("jobTitle");
     const proven = creds("warmysender");
