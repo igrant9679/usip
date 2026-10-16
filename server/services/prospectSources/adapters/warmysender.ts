@@ -421,6 +421,18 @@ function maxLengthFor(schema: unknown, name: string): number {
   return typeof m === "number" && m > 0 ? m : DEFAULT_MAX_TEXT;
 }
 
+/**
+ * Likewise a page size over its maximum: 2026-10-16, a limit of 100 failed
+ * every search once the text filters fit (search_leads allows 50). The
+ * schema's own maximum when it states one, else 50.
+ */
+const DEFAULT_MAX_LIMIT = 50;
+function maximumFor(schema: unknown, name: string): number {
+  const p = schemaProps(schema)?.[name];
+  const m = p && typeof p === "object" ? (p as Record<string, unknown>).maximum : undefined;
+  return typeof m === "number" && m >= 1 ? m : DEFAULT_MAX_LIMIT;
+}
+
 /** Whole values, the first ones, as many as fit within max (a single over-long value is cut). */
 export function fitJoin(values: string[], sep: string, max: number): string {
   let out = "";
@@ -476,7 +488,7 @@ export function buildSearchLeadsArgs(
   args[he] = criteria.hasEmail !== undefined ? criteria.hasEmail : true;
   if (criteria.hasPhone !== undefined) args[(schema ? paramNameFor(schema, "hasPhone") : null) ?? "has_phone"] = criteria.hasPhone;
   const lim = (schema ? paramNameFor(schema, "limit") : null) ?? "limit";
-  args[lim] = Math.max(1, Math.min(100, limit));
+  args[lim] = Math.max(1, Math.min(maximumFor(schema, lim), limit));
   if (cursor) {
     const cur = (schema ? paramNameFor(schema, "cursor") : null) ?? "cursor";
     args[cur] = cur === "page" || cur === "offset" ? Number(cursor) : cursor;
@@ -503,7 +515,7 @@ const BASE_CAPS: SourceCapabilities = {
   returnsMaskedPreview: true,
   supportsMobilePhone: false,
   supportsVerification: true,
-  maxBatchSize: 100,
+  maxBatchSize: DEFAULT_MAX_LIMIT,
   geographicCoverage: ["US", "CA"],
 };
 

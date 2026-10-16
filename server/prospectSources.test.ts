@@ -184,7 +184,7 @@ describe("WarmySender adapter", () => {
     expect(noSchema.args).toMatchObject({ job_title: "CFO", country: "US", keyword: "grants", has_email: true, limit: 30 });
     const schema = { properties: { title: { type: "array" }, country: { type: "string" }, q: { type: "string" }, page_size: { type: "integer" }, cursor: { type: "string" } } };
     const withSchema = buildSearchLeadsArgs({ ...CRIT, seniorities: ["C-level"], keywords: ["grants"] }, schema, 500, "abc");
-    expect(withSchema.args).toMatchObject({ title: ["CFO"], country: "US", q: "grants C-level", page_size: 100, cursor: "abc" });
+    expect(withSchema.args).toMatchObject({ title: ["CFO"], country: "US", q: "grants C-level", page_size: 50, cursor: "abc" });
     expect(withSchema.foldedIntoKeyword).toEqual(["seniority"]);
     expect(paramNameFor(schema, "jobTitle")).toBe("title");
     expect(paramNameFor(schema, "seniority")).toBeNull();
@@ -205,6 +205,13 @@ describe("WarmySender adapter", () => {
     expect((buildSearchLeadsArgs({ ...CRIT, jobTitles: titles }, null, 30, null).args.job_title as string).length).toBeLessThanOrEqual(255);
     expect(fitJoin(["x".repeat(300)], ", ", 255)).toHaveLength(255);
     expect(fitJoin(["a", "b"], ", ", 255)).toBe("a, b");
+  });
+  it("the page size never exceeds its maximum: the schema's own, else 50", () => {
+    // 2026-10-16: once the text filters fit, a limit of 100 failed every search (search_leads allows 50).
+    expect(buildSearchLeadsArgs(CRIT, { properties: { limit: { type: "integer", maximum: 50 } } }, 100, null).args.limit).toBe(50);
+    expect(buildSearchLeadsArgs(CRIT, { properties: { limit: { type: "integer", maximum: 25 } } }, 100, null).args.limit).toBe(25);
+    expect(buildSearchLeadsArgs(CRIT, null, 100, null).args.limit).toBe(50);
+    expect(buildSearchLeadsArgs(CRIT, null, 30, null).args.limit).toBe(30);
   });
 
   it("job title is APPROXIMATED until a captured schema proves a native parameter", () => {
