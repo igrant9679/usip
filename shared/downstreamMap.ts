@@ -276,7 +276,7 @@ export function awardHook(a: DownstreamAward | null | undefined): { hook: string
  */
 export type StoredAward = DownstreamAward & { ref: string };
 
-/** Live awards first: one ending soon is the strongest reason to talk. */
+/** Among awards of the same year, one ending soon is the strongest reason to talk. */
 const LIVE_RANK: Record<string, number> = {
   "ends-within-6-months": 5,
   active: 4,
@@ -294,13 +294,25 @@ function byRecency(a: DownstreamAward, b: DownstreamAward): number {
 }
 
 /**
- * The award a company's copy leads with: a live one (ending within six
- * months, then active, then closing out or ending within a year, then
- * starting soon), then the most recent fiscal year, then the largest.
+ * The award a company's copy leads with (owner, 2026-10-16: "let the newer
+ * award lead"): awards that have not ended (live, or with no stage given)
+ * before ended ones; among them the newest fiscal year; in the same year the
+ * one ending soonest (then active, closing out or ending within a year,
+ * starting soon, no stage); then the largest.
  */
 export function mostRelevantAward<T extends DownstreamAward>(awards: T[]): T | null {
   if (!awards.length) return null;
-  return [...awards].sort((a, b) => (LIVE_RANK[b.stage ?? ""] ?? 0) - (LIVE_RANK[a.stage ?? ""] ?? 0) || byRecency(a, b))[0];
+  const ended = (a: DownstreamAward) => (a.stage === "ended" ? 1 : 0);
+  return [...awards].sort((a, b) =>
+    ended(a) - ended(b)
+    || yearOf(b) - yearOf(a)
+    || (LIVE_RANK[b.stage ?? ""] ?? 0) - (LIVE_RANK[a.stage ?? ""] ?? 0)
+    || amountOf(b) - amountOf(a))[0];
+}
+
+/** A company's stored awards, read safely (customFields.downstreamAwards). */
+export function storedAwards(raw: unknown): StoredAward[] {
+  return (Array.isArray(raw) ? raw : []).filter((x): x is StoredAward => !!x && typeof x === "object" && typeof (x as StoredAward).ref === "string");
 }
 
 /** The company's awards with this row's award added (or replaced), newest first. */

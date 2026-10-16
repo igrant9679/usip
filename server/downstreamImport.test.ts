@@ -369,12 +369,18 @@ describe("CommunityForce's export", () => {
 describe("every award a company has (2026-10-16)", () => {
   const award = (year: string, stage: string, amount = "$100,000") => ({ funder: "ARC", program: "POWER", project: `Project ${year}`, amount, year: `FY${year}`, stage, sourceUrl: "https://arc.gov/x" }) as any;
 
-  it("the copy leads with a live award: ending soon, then active, then the most recent and largest", () => {
+  it("the copy leads with the newest award that has not ended; in the same year, the one ending soonest", () => {
+    // Owner, 2026-10-16: "let the newer award lead".
     const ended25 = { ...award("2025", "ended"), ref: "a" };
     const active24 = { ...award("2024", "active"), ref: "b" };
     const ending23 = { ...award("2023", "ends-within-6-months"), ref: "c" };
-    expect(mostRelevantAward([ended25, active24, ending23])?.ref).toBe("c");
-    expect(mostRelevantAward([ended25, active24])?.ref).toBe("b");
+    expect(mostRelevantAward([ended25, active24, ending23])?.ref).toBe("b");
+    // Marshall University: a FY2026 award with no stage leads a FY2024 one that is closing out.
+    expect(mostRelevantAward([{ ...award("2024", "closing-out", "$995,677"), ref: "p24" }, { ...award("2026", undefined as any, "$1,186,651"), ref: "p26" }])?.ref).toBe("p26");
+    expect(mostRelevantAward([{ ...award("2026", "unknown"), ref: "u" }, active24])?.ref).toBe("u");
+    // The same year: ending soonest first.
+    expect(mostRelevantAward([active24, { ...award("2024", "ends-within-6-months"), ref: "s" }])?.ref).toBe("s");
+    // Only ended awards: the newest, then the largest.
     expect(mostRelevantAward([{ ...award("2022", "ended"), ref: "d" }, ended25])?.ref).toBe("a");
     expect(mostRelevantAward([{ ...award("2025", "ended", "$5,000"), ref: "e" }, { ...ended25, amount: "$900,000" }])?.ref).toBe("a");
     expect(mostRelevantAward([])).toBeNull();
@@ -403,9 +409,12 @@ describe("every award a company has (2026-10-16)", () => {
     const am = h.db.rowsOf("accounts").filter((a: any) => a.normalizedDomain === "angelicministries.org");
     expect(am).toHaveLength(1);
     expect(am[0].customFields.downstreamAwards.map((a: any) => a.year)).toEqual(["FY2025", "FY2024", "FY2023"]);
-    expect(am[0].customFields.downstreamAward).toMatchObject({ year: "FY2024", stage: "ends-within-6-months", ref: "regional-authorities/prospects/am-2024" });
+    expect(am[0].customFields.downstreamAward).toMatchObject({ year: "FY2025", stage: "active", ref: "regional-authorities/prospects/am-2025" });
     const facts = await downstreamAccountFor(4, { companyDomain: "angelicministries.org" });
-    expect(facts?.award?.project).toBe("Housing");
+    expect(facts?.award?.project).toBe("Food pantry");
+    // The copy picks from the list by the current rule, even when the stored lead is out of date.
+    am[0].customFields = { ...am[0].customFields, downstreamAward: am[0].customFields.downstreamAwards[2] };
+    expect((await downstreamAccountFor(4, { companyDomain: "angelicministries.org" }))?.award?.project).toBe("Food pantry");
   });
 
   it("companies imported with one award get the rest from re-importing the file, once; after that nothing changes", async () => {
@@ -419,7 +428,7 @@ describe("every award a company has (2026-10-16)", () => {
     const r = await commit(4, p.token);
     expect(r.counts.accountsUnchanged).toBe(4);
     expect(am.customFields.downstreamAwards.map((a: any) => a.year)).toEqual(["FY2025", "FY2024", "FY2023"]);
-    expect(am.customFields.downstreamAward.year).toBe("FY2024");
+    expect(am.customFields.downstreamAward.year).toBe("FY2025");
     const snapshot = JSON.stringify(h.db.rowsOf("accounts").map((a: any) => a.customFields));
     p = await caller(4).research.downstream.preview({ fileText: threeAwards() });
     await commit(4, p.token);

@@ -12,7 +12,7 @@ import { and, eq } from "drizzle-orm";
 import { accountDomains, accounts, downstreamLinks } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { normalizeCompanyName, normalizeDomain } from "../company/normalize";
-import type { DownstreamAward } from "@shared/downstreamMap";
+import { mostRelevantAward, storedAwards, type DownstreamAward } from "@shared/downstreamMap";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -76,7 +76,8 @@ export async function downstreamAccountFor(
     if (!cf.downstreamRef) return null;
     return {
       accountId: id,
-      award: (cf.downstreamAward as DownstreamAward | undefined) ?? null,
+      // Picked from every award the company has, by the current rule; older imports hold only downstreamAward.
+      award: mostRelevantAward(storedAwards(cf.downstreamAwards)) ?? (cf.downstreamAward as DownstreamAward | undefined) ?? null,
       fit: (cf.downstreamFit as DownstreamAccountFacts["fit"] | undefined) ?? null,
     };
   } catch {

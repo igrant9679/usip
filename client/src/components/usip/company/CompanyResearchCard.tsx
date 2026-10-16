@@ -9,6 +9,7 @@ import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { companySourceLabel, isResearchSource } from "@shared/researchSource";
+import { mostRelevantAward, storedAwards } from "@shared/downstreamMap";
 
 type Award = { ref?: string; funder?: string; program?: string; project?: string; title?: string; amount?: string; year?: string; stage?: string; startDate?: string; endDate?: string; sourceUrl?: string };
 type Fit = { product?: string; alsoFits?: string[]; flags?: string[]; reasons?: string[]; openingLine?: string };
@@ -26,9 +27,11 @@ const FLAG: Record<string, string> = { "financial-distress": "Financial distress
 
 export function CompanyResearchCard({ account }: { account: { sourceType?: string | null; researchSectorId?: number | null; customFields?: unknown } }) {
   const cf = (account.customFields && typeof account.customFields === "object" ? account.customFields : {}) as Record<string, unknown>;
-  const lead = (cf.downstreamAward ?? null) as Award | null;
-  // Every award (2026-10-16); companies imported earlier may hold only the one they lead with.
-  const awards = (Array.isArray(cf.downstreamAwards) && cf.downstreamAwards.length ? cf.downstreamAwards : lead ? [lead] : []) as Award[];
+  // Every award (2026-10-16); companies imported earlier may hold only the one they led with.
+  const list = storedAwards(cf.downstreamAwards);
+  // The same rule the copy uses (downstreamAccountFor), so the page and the copy agree.
+  const lead = ((mostRelevantAward(list) ?? cf.downstreamAward) ?? null) as Award | null;
+  const awards = (list.length ? list : lead ? [lead] : []) as Award[];
   const [showAll, setShowAll] = useState(false);
   const fit = (cf.downstreamFit ?? null) as Fit | null;
   const touched = isResearchSource(account.sourceType) || account.researchSectorId != null || !!cf.downstreamRef;
