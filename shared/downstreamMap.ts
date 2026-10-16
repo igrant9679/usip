@@ -266,3 +266,52 @@ export function awardHook(a: DownstreamAward | null | undefined): { hook: string
   const stage = a.stage && STAGE_NOTE[a.stage] ? `; ${STAGE_NOTE[a.stage]}${a.datesEstimated ? " (dates estimated)" : ""}` : "";
   return { hook: `${who} awarded ${amount}for ${what}${prog}${year}${stage}`.slice(0, 400), sourceUrl: a.sourceUrl ?? "" };
 }
+
+/* ── Every award a company has (2026-10-16) ─────────────────────────────── */
+
+/**
+ * Downstream lists an organization once per award, so one company can come
+ * from several rows (Kawerak, Inc. from six). The company keeps every award,
+ * each with the row it came from, so a re-import replaces rather than repeats.
+ */
+export type StoredAward = DownstreamAward & { ref: string };
+
+/** Live awards first: one ending soon is the strongest reason to talk. */
+const LIVE_RANK: Record<string, number> = {
+  "ends-within-6-months": 5,
+  active: 4,
+  "closing-out": 3,
+  "ends-in-6-12-months": 3,
+  "starting-soon": 2,
+};
+const yearOf = (a: DownstreamAward) => Number(String(a.year ?? "").match(/\d{4}/)?.[0] ?? 0);
+const amountOf = (a: DownstreamAward) => Number(String(a.amount ?? "").replace(/[^0-9.]/g, "")) || 0;
+const MAX_AWARDS = 50;
+
+/** Newest fiscal year first, then the largest. */
+function byRecency(a: DownstreamAward, b: DownstreamAward): number {
+  return yearOf(b) - yearOf(a) || amountOf(b) - amountOf(a);
+}
+
+/**
+ * The award a company's copy leads with: a live one (ending within six
+ * months, then active, then closing out or ending within a year, then
+ * starting soon), then the most recent fiscal year, then the largest.
+ */
+export function mostRelevantAward<T extends DownstreamAward>(awards: T[]): T | null {
+  if (!awards.length) return null;
+  return [...awards].sort((a, b) => (LIVE_RANK[b.stage ?? ""] ?? 0) - (LIVE_RANK[a.stage ?? ""] ?? 0) || byRecency(a, b))[0];
+}
+
+/** The company's awards with this row's award added (or replaced), newest first. */
+export function withAward(existing: unknown, ref: string, award: DownstreamAward | null): StoredAward[] {
+  const list = (Array.isArray(existing) ? existing : [])
+    .filter((x): x is StoredAward => !!x && typeof x === "object" && typeof (x as StoredAward).ref === "string" && (x as StoredAward).ref !== ref);
+  if (award) list.push({ ...award, ref });
+  return list.sort(byRecency).slice(0, MAX_AWARDS);
+}
+
+/** Whether the company already holds this row's award. */
+export function hasAward(existing: unknown, ref: string): boolean {
+  return Array.isArray(existing) && existing.some((x) => !!x && typeof x === "object" && (x as StoredAward).ref === ref);
+}

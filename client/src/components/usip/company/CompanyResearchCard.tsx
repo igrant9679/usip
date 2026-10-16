@@ -4,12 +4,13 @@
  * import brought in, its public award and the seller's fit. Renders nothing
  * for a company research has never touched.
  */
+import { useState } from "react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { companySourceLabel, isResearchSource } from "@shared/researchSource";
 
-type Award = { funder?: string; program?: string; project?: string; title?: string; amount?: string; year?: string; stage?: string; startDate?: string; endDate?: string; sourceUrl?: string };
+type Award = { ref?: string; funder?: string; program?: string; project?: string; title?: string; amount?: string; year?: string; stage?: string; startDate?: string; endDate?: string; sourceUrl?: string };
 type Fit = { product?: string; alsoFits?: string[]; flags?: string[]; reasons?: string[]; openingLine?: string };
 
 const STAGE: Record<string, string> = {
@@ -25,7 +26,10 @@ const FLAG: Record<string, string> = { "financial-distress": "Financial distress
 
 export function CompanyResearchCard({ account }: { account: { sourceType?: string | null; researchSectorId?: number | null; customFields?: unknown } }) {
   const cf = (account.customFields && typeof account.customFields === "object" ? account.customFields : {}) as Record<string, unknown>;
-  const award = (cf.downstreamAward ?? null) as Award | null;
+  const lead = (cf.downstreamAward ?? null) as Award | null;
+  // Every award (2026-10-16); companies imported earlier may hold only the one they lead with.
+  const awards = (Array.isArray(cf.downstreamAwards) && cf.downstreamAwards.length ? cf.downstreamAwards : lead ? [lead] : []) as Award[];
+  const [showAll, setShowAll] = useState(false);
   const fit = (cf.downstreamFit ?? null) as Fit | null;
   const touched = isResearchSource(account.sourceType) || account.researchSectorId != null || !!cf.downstreamRef;
   const { data: sectors } = trpc.research.sectors.options.useQuery(undefined, { enabled: touched && account.researchSectorId != null, staleTime: 60_000 });
@@ -51,17 +55,30 @@ export function CompanyResearchCard({ account }: { account: { sourceType?: strin
         </div>
       </div>
 
-      {award && (award.funder || award.amount || award.program) && (
-        <div className="rounded-md border p-3 space-y-1 text-sm">
-          <div className="text-[11px] text-muted-foreground">Public award</div>
-          <div>
-            <span className="font-medium">{[award.funder, award.amount].filter(Boolean).join(" · ")}</span>
-            {(award.project || award.title) && <span> for {award.project || award.title}</span>}
-          </div>
-          <div className="text-xs text-muted-foreground">
-            {[award.program, award.year, award.stage ? STAGE[award.stage] : null, [award.startDate, award.endDate].filter(Boolean).join(" to ")].filter(Boolean).join(" · ")}
-          </div>
-          {award.sourceUrl && <a href={award.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-xs underline underline-offset-2">Source</a>}
+      {awards.length > 0 && (
+        <div className="rounded-md border p-3 space-y-2 text-sm">
+          <div className="text-[11px] text-muted-foreground">{awards.length === 1 ? "Public award" : `Public awards (${awards.length}), newest first`}</div>
+          {(showAll ? awards : awards.slice(0, 5)).map((award, i) => {
+            const leads = !!lead && (award.ref ? award.ref === lead.ref : award === lead);
+            return (
+              <div key={award.ref ?? i} className={`space-y-0.5 ${i > 0 ? "border-t pt-2" : ""}`}>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-medium">{[award.funder, award.amount].filter(Boolean).join(" · ") || award.program}</span>
+                  {(award.project || award.title) && <span>for {award.project || award.title}</span>}
+                  {leads && awards.length > 1 && <Badge variant="outline" className="text-[10px] border-transparent bg-violet-500/15 text-violet-700 dark:text-violet-300" title="The award outreach copy leads with">Leads the copy</Badge>}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {[award.program, award.year, award.stage ? STAGE[award.stage] : null, [award.startDate, award.endDate].filter(Boolean).join(" to ")].filter(Boolean).join(" · ")}
+                  {award.sourceUrl && <> · <a href={award.sourceUrl} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">Source</a></>}
+                </div>
+              </div>
+            );
+          })}
+          {awards.length > 5 && (
+            <button type="button" className="text-xs underline underline-offset-2" onClick={() => setShowAll((v) => !v)}>
+              {showAll ? "Show fewer" : `Show all ${awards.length}`}
+            </button>
+          )}
         </div>
       )}
 

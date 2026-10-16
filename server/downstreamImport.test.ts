@@ -28,6 +28,8 @@ import { parseDownstreamFile } from "@shared/downstreamContract";
 import {
   accountFromDownstream,
   awardHook,
+  mostRelevantAward,
+  withAward,
   cleanLinkSettings,
   effectiveDownstreamTargeting,
   marketExtras,
@@ -361,6 +363,67 @@ describe("CommunityForce's export", () => {
     const p2 = await caller(4).research.downstream.preview({ fileText: exportFile() });
     await expect(commit(4, p2.token)).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     await expect(caller(2).research.downstream.setStatus({ id: linkId, status: "active" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("every award a company has (2026-10-16)", () => {
+  const award = (year: string, stage: string, amount = "$100,000") => ({ funder: "ARC", program: "POWER", project: `Project ${year}`, amount, year: `FY${year}`, stage, sourceUrl: "https://arc.gov/x" }) as any;
+
+  it("the copy leads with a live award: ending soon, then active, then the most recent and largest", () => {
+    const ended25 = { ...award("2025", "ended"), ref: "a" };
+    const active24 = { ...award("2024", "active"), ref: "b" };
+    const ending23 = { ...award("2023", "ends-within-6-months"), ref: "c" };
+    expect(mostRelevantAward([ended25, active24, ending23])?.ref).toBe("c");
+    expect(mostRelevantAward([ended25, active24])?.ref).toBe("b");
+    expect(mostRelevantAward([{ ...award("2022", "ended"), ref: "d" }, ended25])?.ref).toBe("a");
+    expect(mostRelevantAward([{ ...award("2025", "ended", "$5,000"), ref: "e" }, { ...ended25, amount: "$900,000" }])?.ref).toBe("a");
+    expect(mostRelevantAward([])).toBeNull();
+  });
+
+  it("an award joins the list once per Downstream row, replacing that row's old one, newest first", () => {
+    let list = withAward(undefined, "r1", award("2023", "ended"));
+    list = withAward(list, "r2", award("2025", "active"));
+    list = withAward(list, "r1", award("2024", "ended")); // r1 changed
+    expect(list.map((a) => [a.ref, a.year])).toEqual([["r2", "FY2025"], ["r1", "FY2024"]]);
+    expect(withAward([{ junk: true }, null], "r3", null)).toEqual([]);
+  });
+
+  /** Angelic Ministries three times, as Downstream lists it: one row per award. */
+  const threeAwards = () => exportFile((f) => {
+    const base = f.organizations[0];
+    f.organizations.push(
+      { ...JSON.parse(JSON.stringify(base)), ref: "regional-authorities/prospects/am-2025", award: { ...base.award, year: "FY2025", stage: "active", project: "Food pantry" } },
+      { ...JSON.parse(JSON.stringify(base)), ref: "regional-authorities/prospects/am-2024", award: { ...base.award, year: "FY2024", stage: "ends-within-6-months", project: "Housing" } },
+    );
+  });
+
+  it("several rows of one organization make one company that keeps every award", async () => {
+    const p = await caller(4).research.downstream.preview({ fileText: threeAwards() });
+    await commit(4, p.token, { assign: true });
+    const am = h.db.rowsOf("accounts").filter((a: any) => a.normalizedDomain === "angelicministries.org");
+    expect(am).toHaveLength(1);
+    expect(am[0].customFields.downstreamAwards.map((a: any) => a.year)).toEqual(["FY2025", "FY2024", "FY2023"]);
+    expect(am[0].customFields.downstreamAward).toMatchObject({ year: "FY2024", stage: "ends-within-6-months", ref: "regional-authorities/prospects/am-2024" });
+    const facts = await downstreamAccountFor(4, { companyDomain: "angelicministries.org" });
+    expect(facts?.award?.project).toBe("Housing");
+  });
+
+  it("companies imported with one award get the rest from re-importing the file, once; after that nothing changes", async () => {
+    let p = await caller(4).research.downstream.preview({ fileText: threeAwards() });
+    await commit(4, p.token, { assign: true });
+    // As an import before 2026-10-16 left it: only the last row's award.
+    const am = h.db.rowsOf("accounts").find((a: any) => a.normalizedDomain === "angelicministries.org");
+    am.customFields = { ...am.customFields, downstreamAward: am.customFields.downstreamAwards[0] };
+    delete am.customFields.downstreamAwards;
+    p = await caller(4).research.downstream.preview({ fileText: threeAwards() });
+    const r = await commit(4, p.token);
+    expect(r.counts.accountsUnchanged).toBe(4);
+    expect(am.customFields.downstreamAwards.map((a: any) => a.year)).toEqual(["FY2025", "FY2024", "FY2023"]);
+    expect(am.customFields.downstreamAward.year).toBe("FY2024");
+    const snapshot = JSON.stringify(h.db.rowsOf("accounts").map((a: any) => a.customFields));
+    p = await caller(4).research.downstream.preview({ fileText: threeAwards() });
+    await commit(4, p.token);
+    expect(JSON.stringify(h.db.rowsOf("accounts").map((a: any) => a.customFields))).toBe(snapshot);
   });
 });
 

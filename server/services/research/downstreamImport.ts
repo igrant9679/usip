@@ -38,13 +38,18 @@ import {
   accountFromDownstream,
   cleanLinkSettings,
   effectiveDownstreamTargeting,
+  hasAward,
   knowledgeToMarket,
   marketExtras,
+  mostRelevantAward,
   personaFromDownstream,
   segmentToSector,
   sellerAllowed,
+  withAward,
+  type DownstreamAward,
   type DownstreamLinkSettings,
   type ImportedPersona,
+  type StoredAward,
 } from "@shared/downstreamMap";
 import { cleanPersonaResearch } from "@shared/researchShape";
 import { icpLabels } from "@shared/icpShape";
@@ -278,6 +283,18 @@ async function upsertRef(db: Db, workspaceId: number, linkId: number, kind: Ref[
   }
 }
 
+/** Adds a row's award to a company that lacks it (and re-picks the one the copy leads with); otherwise writes nothing. */
+async function ensureAward(db: Db, workspaceId: number, accountId: number, ref: string, award: DownstreamAward | null): Promise<void> {
+  if (!award) return;
+  const [acct] = await db.select({ customFields: accounts.customFields }).from(accounts).where(and(eq(accounts.id, accountId), eq(accounts.workspaceId, workspaceId))).limit(1);
+  if (!acct) return;
+  const cf = { ...((acct.customFields && typeof acct.customFields === "object" ? acct.customFields : {}) as Record<string, unknown>) };
+  if (hasAward(cf.downstreamAwards, ref)) return;
+  cf.downstreamAwards = withAward(cf.downstreamAwards, ref, award);
+  cf.downstreamAward = mostRelevantAward(cf.downstreamAwards as StoredAward[]) ?? award;
+  await db.update(accounts).set({ customFields: cf }).where(and(eq(accounts.id, accountId), eq(accounts.workspaceId, workspaceId)));
+}
+
 async function revisionOf(db: Db, table: typeof researchMarkets | typeof researchSectors, id: number, workspaceId: number): Promise<number> {
   const [r] = await db.select({ revision: table.revision }).from(table).where(and(eq(table.id, id), eq(table.workspaceId, workspaceId))).limit(1);
   return r?.revision ?? 1;
@@ -455,7 +472,13 @@ export async function commitDownstream(db: Db, workspaceId: number, userId: numb
       const mapped = accountFromDownstream(o, seller);
       const h = hash(mapped);
       const ref = refs.get(`account:${o.ref}`);
-      if (ref && ref.contentHash === h) { counts.accountsUnchanged++; continue; }
+      if (ref && ref.contentHash === h) {
+        counts.accountsUnchanged++;
+        // Imports before 2026-10-16 kept one award per company: an unchanged
+        // row still puts its award in the company's list, once.
+        await ensureAward(db, workspaceId, ref.velocityId, o.ref, mapped.award);
+        continue;
+      }
       let accountId = ref?.velocityId ?? null;
       if (accountId != null) {
         const [still] = await db.select({ id: accounts.id }).from(accounts).where(and(eq(accounts.id, accountId), eq(accounts.workspaceId, workspaceId))).limit(1);
@@ -489,7 +512,9 @@ export async function commitDownstream(db: Db, workspaceId: number, userId: numb
       const cf = { ...((acct?.customFields && typeof acct.customFields === "object" ? acct.customFields : {}) as Record<string, unknown>) };
       cf.downstreamRef = o.ref;
       cf.downstreamSegmentRef = mapped.segmentRef;
-      cf.downstreamAward = mapped.award;
+      // Every award the company has (one per Downstream row); the copy leads with the most relevant.
+      cf.downstreamAwards = withAward(cf.downstreamAwards, o.ref, mapped.award);
+      cf.downstreamAward = mostRelevantAward(cf.downstreamAwards as StoredAward[]) ?? mapped.award;
       cf.downstreamProfile = mapped.profile;
       if (mapped.fit) cf.downstreamFit = mapped.fit;
       else delete cf.downstreamFit;
