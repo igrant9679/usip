@@ -107,6 +107,24 @@ describe("reading an export", () => {
     expect(r.file.personas[0].pains).toEqual(["Late allocations"]);
     expect(r.dropped).toEqual(["segments[0].summary", "personas[0].pains[1]"]);
   });
+
+  it("an id or a link with ten digits in a row is not a phone number; an email in a link still goes", () => {
+    // 2026-10-16: CommunityForce's real export lost 14 organization refs like these, and a dated report link.
+    const f = JSON.parse(exportFile());
+    f.organizations[0].ref = "regional-authorities/prospects/7353593813e9";
+    f.organizations[0].segmentRef = K12;
+    f.segments[0].sources = [
+      { title: "CRS R48958", url: "https://www.everycrsreport.com/files/2026-05-27_R48958_6ead37cb994df92872d65d1504746904bebaf1e1.html" },
+      { title: "Write to us", url: "https://example.org/contact?to=jane@district.org" },
+    ];
+    f.segments[0].summary = "Phone the clerk on 5552013344";
+    const r = parseDownstreamFile(JSON.stringify(f));
+    if (!r.ok) throw new Error(r.error);
+    expect(r.file.organizations[0].ref).toBe("regional-authorities/prospects/7353593813e9");
+    expect(r.file.segments[0].sources.map((s) => s.url)).toEqual(["https://www.everycrsreport.com/files/2026-05-27_R48958_6ead37cb994df92872d65d1504746904bebaf1e1.html", ""]);
+    expect(r.file.segments[0].summary).toBe("");
+    expect(r.dropped).toEqual(["segments[0].summary", "segments[0].sources[1].url"]);
+  });
 });
 
 describe("each company narrows the market, and seller layers are only the seller's", () => {

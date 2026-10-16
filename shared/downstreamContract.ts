@@ -9,7 +9,7 @@
  * data before a single field is used.
  */
 import { z } from "zod";
-import { looksPersonal } from "./researchShape";
+import { looksPersonalValue } from "./researchShape";
 const S = z.string(), L = z.array(z.string()), N = z.number();
 // Unknown keys are dropped (z.object strips them), so newer Downstream files still parse.
 const o = <T extends z.ZodRawShape>(shape: T) => z.object(shape);
@@ -105,24 +105,32 @@ export type ParsedDownstream =
   | { ok: true; file: DownstreamFile; dropped: string[] }
   | { ok: false; error: string };
 
+/**
+ * Identifiers (ref, segmentRef, …Ref, id) are opaque: an organization ref like
+ * "…/prospects/7353593813e9" holds ten digits in a row and is no phone
+ * number. Blanking one would merge organizations on re-import (2026-10-16:
+ * 14 of CommunityForce's 2,086 were hit).
+ */
+const IDENTIFIER_KEY = /^(id|ref)$|Ref$/;
+
 /** Trims and caps every string; removes (and lists) anything that looks like an email or phone number. */
-function scrub(node: unknown, path: string, dropped: string[]): unknown {
+function scrub(node: unknown, path: string, dropped: string[], key = ""): unknown {
   if (typeof node === "string") {
     const s = node.trim().slice(0, DOWNSTREAM_LIMITS.string);
-    if (s && looksPersonal(s)) { dropped.push(path); return ""; }
+    if (s && !IDENTIFIER_KEY.test(key) && looksPersonalValue(s)) { dropped.push(path); return ""; }
     return s;
   }
   if (Array.isArray(node)) {
     const out: unknown[] = [];
     node.forEach((x, i) => {
-      const v = scrub(x, `${path}[${i}]`, dropped);
+      const v = scrub(x, `${path}[${i}]`, dropped, key);
       if (!(typeof x === "string" && v === "")) out.push(v);
     });
     return out;
   }
   if (node && typeof node === "object") {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(node as Record<string, unknown>)) out[k] = scrub(v, path ? `${path}.${k}` : k, dropped);
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) out[k] = scrub(v, path ? `${path}.${k}` : k, dropped, k);
     return out;
   }
   return node;

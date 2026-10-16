@@ -121,6 +121,19 @@ export function looksPersonal(text: string): boolean {
   return EMAIL.test(text) || PHONE_NANP.test(text) || PHONE_INTL.test(text);
 }
 
+const isLink = (s: string) => /^https?:\/\//i.test(s);
+
+/**
+ * A link is judged as a link (2026-10-16): its digits are dates, report
+ * numbers and document ids, so ten of them in a row are not a phone number
+ * ("…/2026-05-27_R48958_6ead…1504746904…" is a real source). A link is
+ * personal only when it holds an email address.
+ */
+export function looksPersonalValue(text: string): boolean {
+  if (!text) return false;
+  return isLink(text.trim()) ? EMAIL.test(text) : looksPersonal(text);
+}
+
 /* ── Cleaning ───────────────────────────────────────────────────────────── */
 
 type Dropped = string[];
@@ -128,7 +141,7 @@ type Dropped = string[];
 function clip(value: unknown, max: number, dropped: Dropped, where: string): string {
   const s = typeof value === "string" ? value.trim() : typeof value === "number" && Number.isFinite(value) ? String(value) : "";
   if (!s) return "";
-  if (looksPersonal(s)) {
+  if (looksPersonalValue(s)) {
     dropped.push(where);
     return "";
   }

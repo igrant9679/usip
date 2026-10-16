@@ -96,6 +96,22 @@ describe("the shared research shape", () => {
     expect(cleanPersonaResearch({ cares: "x@y.com", pains: ["Audits", " audits "] }).content).toEqual({ cares: "", pains: ["Audits"], objections: [], angle: "" });
   });
 
+  it("a source link's digits are dates and ids, not a phone number; an email in a link still goes", () => {
+    // 2026-10-16: a dated CRS report link was being dropped on every save.
+    const crs = "https://www.everycrsreport.com/files/2026-05-27_R48958_6ead37cb994df92872d65d1504746904bebaf1e1.html";
+    const { content, dropped } = cleanSectorContent({
+      name: "Arts",
+      sources: [{ title: "CRS", url: crs }, { title: "Mail", url: "https://x.org/?to=jane@arts.org" }],
+      facts: { programs: [{ name: "Grants for Arts", url: "https://www.arts.gov/grants/2026/1234567890" }], marketSize: [{ value: "$207M", label: "NEA", source: crs }] },
+      summary: "Call 5551234567",
+    });
+    expect(content.sources.map((s) => s.url)).toEqual([crs]);
+    expect(content.facts.programs[0].url).toBe("https://www.arts.gov/grants/2026/1234567890");
+    expect(content.facts.marketSize[0].source).toBe(crs);
+    expect(content.summary).toBe("");
+    expect(dropped).toEqual(["summary", "sources.url"]);
+  });
+
   it("names the parts that changed between two versions", () => {
     const a = cleanSectorContent({ name: "A", targeting: { titles: ["CFO"] } }).content;
     const b = cleanSectorContent({ name: "A", targeting: { titles: ["CFO", "COO"] }, messaging: { avoid: ["Never say cheap"] } }).content;
