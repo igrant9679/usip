@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { CompanyAvatar } from "@/components/usip/company/CompanyAvatar";
+import { CompanyResearchCard } from "@/components/usip/company/CompanyResearchCard";
 import { confirmAction } from "@/components/usip/Common";
 import {
   Globe, Link2, ExternalLink, Users, Building2, MapPin, DollarSign, Briefcase,
@@ -133,6 +134,8 @@ export default function CompanyProfile() {
           </section>
 
           {/* brand identity (company-enrichment stack) */}
+          <CompanyResearchCard account={c as any} />
+
           <BrandIdentityCard accountId={id} account={c as any} isAdmin={isAdmin} />
 
           {/* contacts */}

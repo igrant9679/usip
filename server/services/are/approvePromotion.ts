@@ -21,7 +21,8 @@
  * starvation, avoided by construction).
  */
 import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
-import { prospectQueue, prospects } from "../../../drizzle/schema";
+import { accounts, areCampaigns, prospectQueue, prospects } from "../../../drizzle/schema";
+import { RESEARCH_SOURCES } from "@shared/researchSource";
 import { getDb } from "../../db";
 import { associateProspectToCompany } from "../company/associationService";
 import { upsertPersonForRow, type QueuePersonShape } from "../personLink";
@@ -83,7 +84,7 @@ export async function promoteApprovedProspects(
     if (opts.queueIds && opts.queueIds.length > 0) conds.push(inArray(prospectQueue.id, opts.queueIds));
 
     const rows = await db
-      .select({ personId: prospectQueue.personProspectId })
+      .select({ personId: prospectQueue.personProspectId, campaignId: prospectQueue.campaignId })
       .from(prospectQueue)
       .innerJoin(prospects, and(
         eq(prospects.id, prospectQueue.personProspectId),
@@ -95,25 +96,41 @@ export async function promoteApprovedProspects(
     // Dedupe person ids without Set iteration (es5 target).
     const seen: Record<number, true> = {};
     const personIds: number[] = [];
+    const campaignOf: Record<number, number> = {};
     for (let i = 0; i < rows.length; i++) {
       const id = rows[i].personId;
-      if (id != null && !seen[id]) { seen[id] = true; personIds.push(id); }
+      if (id != null && !seen[id]) { seen[id] = true; personIds.push(id); campaignOf[id] = rows[i].campaignId; }
     }
     if (personIds.length === 0) return summary;
+
+    // A campaign tied to a research sector found these people with that
+    // research (2026-10-16): the companies it creates are sourced by Research,
+    // and every company it reaches belongs to that sector.
+    const campaignIds = personIds.map((id) => campaignOf[id]).filter((c, i, a) => a.indexOf(c) === i);
+    const sectorOfCampaign: Record<number, number> = {};
+    for (const c of await db.select({ id: areCampaigns.id, sectorId: areCampaigns.researchSectorId }).from(areCampaigns)
+      .where(and(eq(areCampaigns.workspaceId, workspaceId), inArray(areCampaigns.id, campaignIds)))) {
+      if (c.sectorId != null) sectorOfCampaign[c.id] = c.sectorId;
+    }
 
     const people = await db.select().from(prospects)
       .where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.id, personIds)));
     for (let i = 0; i < people.length; i++) {
       const p = people[i];
       summary.scanned++;
+      const sectorId = sectorOfCampaign[campaignOf[p.id]];
       const r = await associateProspectToCompany(
         {
           id: p.id, workspaceId: p.workspaceId, company: p.company, companyDomain: p.companyDomain,
           email: p.email, title: p.title, city: p.city, state: p.state, country: p.country,
           fieldProvenance: p.fieldProvenance,
         },
-        { sourceType: "are_approval" },
+        { sourceType: sectorId != null ? RESEARCH_SOURCES.campaign : "are_approval" },
       );
+      if (sectorId != null && r.accountId != null) {
+        await db.update(accounts).set({ researchSectorId: sectorId })
+          .where(and(eq(accounts.id, r.accountId), eq(accounts.workspaceId, workspaceId), isNull(accounts.researchSectorId)));
+      }
       if (r.status === "linked" && r.created) summary.createdAccounts++;
       else if (r.status === "linked") summary.linkedExisting++;
       else if (r.status === "needs_review") summary.needsReview++;

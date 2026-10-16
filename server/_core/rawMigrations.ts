@@ -4721,6 +4721,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0208: Companies sourced by Research ─────────────────────────────────
+  // Owner, 2026-10-16: companies the Research module imports or identifies
+  // are marked as sourced by Research. The research sector a company belongs
+  // to; the source itself is accounts.source_type ("research_downstream",
+  // "research_campaign"). Existing Downstream imports are marked by the app
+  // (services/research/accountSource), not here.
+  {
+    name: "0208_account_research_sector.sql",
+    statements: [
+      "ALTER TABLE `accounts` ADD COLUMN `research_sector_id` int NULL",
+      "CREATE INDEX `ix_accounts_research_sector` ON `accounts` (`workspaceId`, `research_sector_id`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

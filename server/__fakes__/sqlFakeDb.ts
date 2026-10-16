@@ -112,7 +112,7 @@ export function makeSqlFakeDb(opts: {
   };
 
   const select = (projection?: Record<string, unknown>) => {
-    const st: { table?: any; join?: { table: any; on: unknown }; where?: unknown; group?: Column[]; order: unknown[]; limit?: number } = { order: [] };
+    const st: { table?: any; join?: { table: any; on: unknown }; where?: unknown; group?: Column[]; order: unknown[]; limit?: number; offset?: number } = { order: [] };
     const run = (): Row[] => {
       const name = getTableName(st.table);
       if (st.table === workspaceMembers) {
@@ -164,7 +164,8 @@ export function makeSqlFakeDb(opts: {
       } else {
         out = ctxs.map((c) => ({ ...c.row }));
       }
-      return st.limit != null ? out.slice(0, st.limit) : out;
+      const from = st.offset ?? 0;
+      return st.limit != null ? out.slice(from, from + st.limit) : out.slice(from);
     };
     const b: any = {
       from(t: unknown) { st.table = t; return b; },
@@ -173,6 +174,7 @@ export function makeSqlFakeDb(opts: {
       groupBy(...cols: Column[]) { st.group = cols; return b; },
       orderBy(...o: unknown[]) { st.order = o; return b; },
       limit(n: number) { st.limit = n; return b; },
+      offset(n: number) { st.offset = n; return b; },
       then(res: (v: unknown) => void, rej: (e: unknown) => void) { try { res(run()); } catch (e) { rej(e); } },
       catch(rej: (e: unknown) => void) { return Promise.resolve().then(run).catch(rej); },
     };

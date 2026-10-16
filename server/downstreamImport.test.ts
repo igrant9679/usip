@@ -212,6 +212,8 @@ describe("CommunityForce's export", () => {
     expect(accts[0].customFields).toMatchObject({ downstreamRef: "regional-authorities/prospects/33b98f6ab880", intentTopics: ["INSPIRE"] });
     expect(accts[0].customFields.downstreamAward.funder).toBe("Appalachian Regional Commission");
     expect(accts[0].customFields.downstreamFit.product).toBe("discover-raise");
+    // Sourced by Research, in the sector its segment became (2026-10-16).
+    expect(accts.map((a: any) => [a.sourceType, a.researchSectorId])).toEqual([["research_downstream", sector.id], ["research_downstream", sector.id]]);
 
     // LSI Media sees none of it, and cannot use CommunityForce's preview.
     expect(await caller(2).research.markets.list()).toEqual([]);
@@ -318,7 +320,7 @@ describe("CommunityForce's export", () => {
     await h.db.insert(accounts).values([
       // LSI Media's comes first, so a match that ignored the workspace would find it.
       { workspaceId: 2, name: "Angelic Ministries", normalizedName: "angelic ministries", domain: "angelicministries.org", normalizedDomain: "angelicministries.org", customFields: {} },
-      { workspaceId: 4, name: "Angelic Ministries Inc", normalizedName: "angelic ministries", domain: "angelicministries.org", normalizedDomain: "angelicministries.org", customFields: { owner: "kept" } },
+      { workspaceId: 4, name: "Angelic Ministries Inc", normalizedName: "angelic ministries", domain: "angelicministries.org", normalizedDomain: "angelicministries.org", customFields: { owner: "kept" }, sourceType: "prospect_import", createdAt: new Date("2026-09-01") },
     ]);
     const p = await caller(4).research.downstream.preview({ fileText: exportFile() });
     const r = await commit(4, p.token, { assign: true });
@@ -326,6 +328,8 @@ describe("CommunityForce's export", () => {
     const [lsi, cf] = h.db.rowsOf("accounts");
     expect(cf.name).toBe("Angelic Ministries Inc");
     expect(cf.customFields).toMatchObject({ owner: "kept", downstreamRef: "regional-authorities/prospects/33b98f6ab880" });
+    // A company that already existed keeps its own source, and gains its research sector.
+    expect(cf).toMatchObject({ sourceType: "prospect_import", researchSectorId: h.db.rowsOf("research_sectors")[0].id });
     expect(lsi.customFields).toEqual({});
     expect(h.db.rowsOf("accounts").filter((a: any) => a.workspaceId === 4)).toHaveLength(2);
   });

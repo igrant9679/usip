@@ -48,6 +48,8 @@ import {
 } from "@shared/downstreamMap";
 import { cleanPersonaResearch } from "@shared/researchShape";
 import { icpLabels } from "@shared/icpShape";
+import { RESEARCH_SOURCES } from "@shared/researchSource";
+import { markDownstreamAccounts } from "./accountSource";
 
 export type ItemState = "new" | "updated" | "unchanged" | "conflict" | "deleted";
 
@@ -475,6 +477,9 @@ export async function commitDownstream(db: Db, workspaceId: number, userId: numb
             websiteUrl: domain ? `https://${domain}` : undefined,
             hqState: mapped.state || undefined,
             ...normalizedAccountFields(mapped.name, domain),
+            // Sourced by Research (2026-10-16), in the sector its segment became.
+            sourceType: RESEARCH_SOURCES.downstream,
+            researchSectorId: sectorIdByRef.get(o.segmentRef) ?? null,
           })
           .$returningId())[0].id;
         counts.accountsCreated++;
@@ -497,6 +502,10 @@ export async function commitDownstream(db: Db, workspaceId: number, userId: numb
       await upsertRef(db, workspaceId, link.id, "account", o.ref, accountId, o.revision ?? null, h, null, ref);
     }
   }
+
+  // Companies from this link carry their research sector and, where the
+  // import created them, the Research source (also catches earlier imports).
+  await markDownstreamAccounts(db, workspaceId, link.id);
 
   // 6. The link remembers this import.
   await db

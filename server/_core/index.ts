@@ -184,6 +184,14 @@ async function startServer() {
       console.error("[RawMigrations] unhandled error:", e)
     );
   }, 5_000);
+  // Mark companies earlier Downstream imports brought in as sourced by
+  // Research (2026-10-16). Idempotent; after the migrations (0208 adds the
+  // column), so 90s rather than alongside them.
+  setTimeout(() => {
+    import("../services/research/accountSource").then((m) => m.markAllDownstreamAccounts()).catch((e) =>
+      console.error("[ResearchSource] startup marking failed:", e)
+    );
+  }, 90_000);
   // Seed demo guided tours for all workspaces on startup (idempotent)
   setTimeout(() => {
     seedToursForAllWorkspaces().catch((e) =>

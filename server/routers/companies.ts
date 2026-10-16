@@ -47,6 +47,9 @@ const filters = z.object({
   hasContacts: z.boolean().optional(),
   minRating: z.enum(["fair", "good", "excellent"]).optional(),
   includeArchived: z.boolean().optional(),
+  /** Research (2026-10-16): companies sourced by Research, or in any research sector. */
+  research: z.enum(["sourced", "in_sector"]).optional(),
+  researchSectorIds: z.array(z.number().int().positive()).max(200).optional(),
 }).optional();
 const sort = z.object({
   field: z.enum(["name", "employeeCount", "revenue", "score", "lastEnriched", "createdAt", "contactCount"]),

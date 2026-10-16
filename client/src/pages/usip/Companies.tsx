@@ -27,9 +27,10 @@ import { CompanyAvatar } from "@/components/usip/company/CompanyAvatar";
 import { confirmAction } from "@/components/usip/Common";
 import {
   Search, Upload, ChevronDown, Filter, X, Building2, Globe, Link2, Users, Briefcase,
-  MapPin, DollarSign, BarChart3, ArrowUpDown, RefreshCw, GitMerge, ListPlus, Sparkles, Gauge,
+  MapPin, DollarSign, BarChart3, ArrowUpDown, RefreshCw, GitMerge, ListPlus, Sparkles, Gauge, Telescope,
 } from "lucide-react";
 import { isAdminRole } from "@shared/roleRank";
+import { companySourceLabel, isResearchSource } from "@shared/researchSource";
 
 const RATING_STYLE: Record<string, string> = {
   excellent: "bg-emerald-100 text-emerald-800", good: "bg-blue-100 text-blue-800",
@@ -61,10 +62,11 @@ function FilterGroup({ label, icon: Icon, count, open, onToggle, children }: {
     </div>
   );
 }
-function FacetList({ options, selected, onToggle, empty }: { options: [string, number][]; selected: Set<string>; onToggle: (v: string) => void; empty: string }) {
+function FacetList({ options, selected, onToggle, empty, labelOf }: { options: [string, number][]; selected: Set<string>; onToggle: (v: string) => void; empty: string; labelOf?: (v: string) => string }) {
   const [q, setQ] = useState("");
   if (!options.length) return <p className="text-[12px] text-muted-foreground">{empty}</p>;
-  const filtered = q ? options.filter(([v]) => v.toLowerCase().includes(q.toLowerCase())) : options;
+  const label = (v: string) => (labelOf ? labelOf(v) : v);
+  const filtered = q ? options.filter(([v]) => label(v).toLowerCase().includes(q.toLowerCase())) : options;
   return (
     <div className="space-y-1.5">
       {options.length > 6 && <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…" className="h-7 text-[13px]" />}
@@ -72,8 +74,8 @@ function FacetList({ options, selected, onToggle, empty }: { options: [string, n
         {filtered.map(([v, c]) => (
           <label key={v} className="flex items-center gap-2 cursor-pointer text-[13px] py-0.5">
             <Checkbox checked={selected.has(v)} onCheckedChange={() => onToggle(v)} className="size-3.5" />
-            <span className="flex-1 truncate" title={v}>{v}</span>
-            <span className="text-[11px] text-muted-foreground tabular-nums">{c}</span>
+            <span className="flex-1 truncate" title={label(v)}>{label(v)}</span>
+            {c > 0 && <span className="text-[11px] text-muted-foreground tabular-nums">{c}</span>}
           </label>
         ))}
       </div>
@@ -218,6 +220,9 @@ export default function Companies() {
   const [hasContacts, setHasContacts] = useState(false);
   const [minRating, setMinRating] = useState<"" | "fair" | "good" | "excellent">("");
   const [empMin, setEmpMin] = useState(""); const [empMax, setEmpMax] = useState("");
+  // Research (2026-10-16): companies sourced by Research, or in a research sector.
+  const [research, setResearch] = useState<"" | "sourced" | "in_sector">("");
+  const [researchSectors, setResearchSectors] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<{ field: any; direction: "asc" | "desc" }>({ field: "contactCount", direction: "desc" });
   const [page, setPage] = useState(1);
   const perPage = 50;
@@ -233,6 +238,8 @@ export default function Companies() {
   // Facet source (all accounts — lightweight) for the industry/location checkboxes.
   const { data: facetSrc } = trpc.accounts.list.useQuery();
   const industryFacet = useMemo(() => facet((facetSrc ?? []) as any[], (a) => a.industry), [facetSrc]);
+  const { data: sectorOptions } = trpc.research.sectors.options.useQuery(undefined, { staleTime: 60_000 });
+  const sectorName = useMemo(() => new Map((sectorOptions ?? []).map((s) => [s.id, s.name])), [sectorOptions]);
   const locationFacet = useMemo(() => facet((facetSrc ?? []) as any[], (a) => a.hqState || a.region || a.hqCountry), [facetSrc]);
 
   const filters = {
@@ -243,14 +250,16 @@ export default function Companies() {
     minRating: minRating || undefined,
     employeeMin: empMin ? Number(empMin) : undefined,
     employeeMax: empMax ? Number(empMax) : undefined,
+    research: research || undefined,
+    researchSectorIds: researchSectors.size ? Array.from(researchSectors).map(Number) : undefined,
   };
   const { data, isLoading, error, refetch } = trpc.companies.search.useQuery({ filters, sort, page, perPage });
   const rows = (data?.data ?? []) as any[];
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / perPage));
 
-  const activeCount = (q ? 1 : 0) + industries.size + locations.size + (hasContacts ? 1 : 0) + (minRating ? 1 : 0) + (empMin ? 1 : 0) + (empMax ? 1 : 0);
-  const clearAll = () => { setSearchInput(""); setQ(""); setIndustries(new Set()); setLocations(new Set()); setHasContacts(false); setMinRating(""); setEmpMin(""); setEmpMax(""); setPage(1); };
+  const activeCount = (q ? 1 : 0) + industries.size + locations.size + (hasContacts ? 1 : 0) + (minRating ? 1 : 0) + (empMin ? 1 : 0) + (empMax ? 1 : 0) + (research ? 1 : 0) + researchSectors.size;
+  const clearAll = () => { setSearchInput(""); setQ(""); setIndustries(new Set()); setLocations(new Set()); setHasContacts(false); setMinRating(""); setEmpMin(""); setEmpMax(""); setResearch(""); setResearchSectors(new Set()); setPage(1); };
 
   const allChecked = rows.length > 0 && rows.every((r) => checked.has(r.id));
   const toggleAll = () => setChecked((prev) => { const n = new Set(prev); if (allChecked) rows.forEach((r) => n.delete(r.id)); else rows.forEach((r) => n.add(r.id)); return n; });
@@ -383,6 +392,25 @@ export default function Companies() {
                     <Input value={empMax} onChange={(e) => { setEmpMax(e.target.value.replace(/[^0-9]/g, "")); setPage(1); }} placeholder="Max" inputMode="numeric" className="h-7 text-[13px]" />
                   </div>
                 </FilterGroup>
+                <FilterGroup label="Research" icon={Telescope} count={(research ? 1 : 0) + researchSectors.size} open={openGroups.has("research")} onToggle={() => toggleGroup("research")}>
+                  {([["", "Any company"], ["sourced", "Sourced by Research"], ["in_sector", "In a research sector"]] as const).map(([v, l]) => (
+                    <label key={v} className="flex items-center gap-2 cursor-pointer text-[13px] py-0.5">
+                      <Checkbox checked={research === v} onCheckedChange={() => { setResearch(v); setPage(1); }} className="size-3.5" /><span>{l}</span>
+                    </label>
+                  ))}
+                  {(sectorOptions ?? []).length > 0 && (
+                    <div className="mt-1.5 pt-1.5 border-t border-border/60">
+                      <div className="text-[11px] text-muted-foreground mb-0.5">Research sector</div>
+                      <FacetList
+                        options={(sectorOptions ?? []).map((s) => [String(s.id), 0] as [string, number])}
+                        selected={researchSectors}
+                        onToggle={(v) => toggleIn(researchSectors, setResearchSectors, v)}
+                        empty="No research sectors yet."
+                        labelOf={(v) => sectorName.get(Number(v)) ?? v}
+                      />
+                    </div>
+                  )}
+                </FilterGroup>
                 <FilterGroup label="Has contacts" icon={Users} count={hasContacts ? 1 : 0} open={openGroups.has("hasc")} onToggle={() => toggleGroup("hasc")}>
                   <label className="flex items-center gap-2 cursor-pointer text-[13px] py-0.5">
                     <Checkbox checked={hasContacts} onCheckedChange={() => { setHasContacts(!hasContacts); setPage(1); }} className="size-3.5" /><span>Only companies with linked people</span>
@@ -470,7 +498,15 @@ export default function Companies() {
                             <div className="flex items-center gap-2 min-w-0">
                               <CompanyAvatar name={a.name} domain={a.domain} logoUrl={a.logo?.url} faviconUrl={a.logo?.faviconUrl} size="md" />
                               <div className="min-w-0">
-                                <div className="font-medium truncate max-w-[190px]" title={a.name}>{a.name}</div>
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className="font-medium truncate max-w-[190px]" title={a.name}>{a.name}</span>
+                                  {isResearchSource(a.sourceType) && (
+                                    <span
+                                      className="shrink-0 rounded-full bg-violet-500/15 px-1.5 py-px text-[10px] font-medium text-violet-700 dark:text-violet-300"
+                                      title={[companySourceLabel(a.sourceType), a.researchSectorId != null ? sectorName.get(a.researchSectorId) : null].filter(Boolean).join(" · ")}
+                                    >Research</span>
+                                  )}
+                                </div>
                                 {a.domain && <span className="text-[11px] text-muted-foreground truncate block max-w-[190px]">{a.domain}</span>}
                               </div>
                             </div>

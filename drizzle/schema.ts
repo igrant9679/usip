@@ -185,6 +185,8 @@ export const accounts = mysqlTable(
     crmSyncStatus: varchar("crm_sync_status", { length: 24 }).default("not_synced").notNull(),
     crmExternalId: varchar("crm_external_id", { length: 128 }),
     sourceType: varchar("source_type", { length: 32 }),
+    /** The research sector the company belongs to (migration 0208), whatever created it. See @shared/researchSource. */
+    researchSectorId: int("research_sector_id"),
     dataStatus: varchar("data_status", { length: 16 }).default("partial").notNull(),
     // ── Brand identity reconciliation (migration 0152) — canonical facts the
     //    reconciler derives from brand_observations; `name` stays the display
@@ -206,6 +208,7 @@ export const accounts = mysqlTable(
     byParent: index("ix_acc_parent").on(t.parentAccountId),
     byNormDomain: index("ix_acc_norm_domain").on(t.workspaceId, t.normalizedDomain),
     byNormName: index("ix_acc_norm_name").on(t.workspaceId, t.normalizedName),
+    byResearchSector: index("ix_accounts_research_sector").on(t.workspaceId, t.researchSectorId),
     byGlobalOrg: index("ix_acc_global_org").on(t.globalOrganizationId),
   }),
 );

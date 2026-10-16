@@ -3,9 +3,10 @@
  * filters, score filter, sorting, pagination, and per-row contact counts. Powers
  * the Apollo-style company table. Only filters on data Velocity actually has.
  */
-import { and, asc, desc, eq, gte, inArray, isNull, like, lte, or, sql, exists } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, like, lte, or, sql, exists } from "drizzle-orm";
 import { getDb } from "../../db";
 import { accounts, contactAccountLinks, scoreResults } from "../../../drizzle/schema";
+import { RESEARCH_SOURCES } from "@shared/researchSource";
 import { resolveCompanyLogo, faviconUrlForDomain } from "./logoService";
 
 export interface CompanyFilters {
@@ -21,6 +22,8 @@ export interface CompanyFilters {
   hasContacts?: boolean;
   minRating?: "fair" | "good" | "excellent";
   includeArchived?: boolean;
+  research?: "sourced" | "in_sector";
+  researchSectorIds?: number[];
 }
 export interface CompanySort { field: "name" | "employeeCount" | "revenue" | "score" | "lastEnriched" | "createdAt" | "contactCount"; direction: "asc" | "desc"; }
 
@@ -40,6 +43,9 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
     conds.push(or(like(accounts.name, s), like(accounts.domain, s), like(accounts.normalizedDomain, s))!);
   }
   if (f.industries?.length) conds.push(inArray(accounts.industry, f.industries));
+  if (f.research === "sourced") conds.push(inArray(accounts.sourceType, Object.values(RESEARCH_SOURCES)));
+  if (f.research === "in_sector") conds.push(isNotNull(accounts.researchSectorId));
+  if (f.researchSectorIds?.length) conds.push(inArray(accounts.researchSectorId, f.researchSectorIds));
   if (f.ownerIds?.length) conds.push(inArray(accounts.ownerUserId, f.ownerIds));
   if (f.accountStages?.length) conds.push(inArray(accounts.accountStage, f.accountStages));
   if (f.employeeMin != null) conds.push(gte(accounts.employeeCount, f.employeeMin));
@@ -115,6 +121,7 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
       ownerUserId: a.ownerUserId, accountStage: a.accountStage,
       accountScore: a.accountScore == null ? null : Number(a.accountScore), accountRating: a.accountRating,
       lastEnrichedAt: a.lastEnrichedAt, dataStatus: a.dataStatus,
+      sourceType: a.sourceType, researchSectorId: a.researchSectorId,
       logo: { url: logo.url, faviconUrl: faviconUrlForDomain(a.normalizedDomain || a.domain), status: logo.status },
       contactCount: counts.get(a.id) ?? 0,
     };
