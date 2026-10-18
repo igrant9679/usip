@@ -19,15 +19,26 @@ const COUNTRY_CODES: Record<string, string> = {
   india: "IN", singapore: "SG",
 };
 
-const US_STATES = new Set([
+const US_STATE_NAMES = [
   "alabama","alaska","arizona","arkansas","california","colorado","connecticut","delaware","florida","georgia","hawaii","idaho",
   "illinois","indiana","iowa","kansas","kentucky","louisiana","maine","maryland","massachusetts","michigan","minnesota","mississippi",
   "missouri","montana","nebraska","nevada","new hampshire","new jersey","new mexico","new york","north carolina","north dakota","ohio",
   "oklahoma","oregon","pennsylvania","rhode island","south carolina","south dakota","tennessee","texas","utah","vermont","virginia",
   "washington","west virginia","wisconsin","wyoming","district of columbia",
+];
+const CA_PROVINCE_NAMES = [
   "ontario","quebec","british columbia","alberta","manitoba","saskatchewan","nova scotia","new brunswick","newfoundland and labrador",
   "prince edward island",
-]);
+];
+const US_STATES = new Set(US_STATE_NAMES.concat(CA_PROVINCE_NAMES));
+
+/** The country a bare state or province name lies in ("Virginia" → US, "Ontario" → CA), else null. */
+export function regionCountry(name: string): "US" | "CA" | null {
+  const n = name.trim().toLowerCase();
+  if (US_STATE_NAMES.indexOf(n) !== -1) return "US";
+  if (CA_PROVINCE_NAMES.indexOf(n) !== -1) return "CA";
+  return null;
+}
 
 export function criteriaFromTargeting(t: { titles?: unknown; industries?: unknown; geos?: unknown; keywords?: unknown }): SearchCriteria {
   const c = emptyCriteria();

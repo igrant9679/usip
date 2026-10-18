@@ -17,6 +17,18 @@ const svc = readFileSync("server/services/discovery/index.ts", "utf8");
 const engine = readFileSync("server/areEngine.ts", "utf8");
 const page = readFileSync("client/src/pages/usip/FindProspects.tsx", "utf8");
 
+describe("campaigns skip QuickEnrich when it cannot apply their places (owner decision 2026-10-18)", () => {
+  it("the engine checks the places first, before the key, the cap, or any call", () => {
+    const fn = engine.slice(engine.indexOf("async function discoverViaQuickenrich"), engine.indexOf("const res = await quickenrichContactFinder(apiKey, body)"));
+    const check = fn.indexOf("quickenrichGeoCoverage(targeting.geos)");
+    expect(check).toBeGreaterThan(-1);
+    expect(fn.indexOf("if (unfilterableGeos.length > 0)")).toBeGreaterThan(check);
+    expect(fn.indexOf("getQuickEnrichKey(")).toBeGreaterThan(fn.indexOf("if (unfilterableGeos.length > 0)"));
+    expect(fn.slice(fn.indexOf("if (unfilterableGeos.length > 0)"), fn.indexOf("getQuickEnrichKey(")))
+      .toContain("return { raw: [], nextQe: null }");
+  });
+});
+
 describe("QuickEnrich as a Find-prospects source", () => {
   it("person mode fans out to quickenrich; account mode does not (it is a people DB)", () => {
     const person = svc.slice(svc.indexOf('if (mode === "person") {'), svc.indexOf("} else {", svc.indexOf('if (mode === "person") {')));

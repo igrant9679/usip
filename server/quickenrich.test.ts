@@ -34,6 +34,7 @@ vi.mock("./db", () => ({ getDb: mocks.getDb, checkPermission: vi.fn() }));
 import { encryptSecret } from "./_core/crypto";
 import {
   buildQuickenrichFilters,
+  quickenrichGeoCoverage,
   currentQuickenrichPage,
   getQuickEnrichKey,
   getQuickenrichIndustries,
@@ -380,6 +381,38 @@ describe("buildQuickenrichFilters — targeting → their vocabulary, conservati
       geos: [],
     }, null);
     expect((body as any).title.include).toHaveLength(12);
+  });
+});
+
+describe("quickenrichGeoCoverage — places QuickEnrich cannot apply (owner decision 2026-10-18)", () => {
+  it("states with no whole country beside them are unfilterable: campaign 38 (VA/MD/NC)", () => {
+    const r = quickenrichGeoCoverage(["Virginia", "Maryland", "North Carolina"]);
+    expect(r.codes).toEqual([]);
+    expect(r.unfilterableGeos).toEqual(["Virginia", "Maryland", "North Carolina"]);
+  });
+  it("a region of a country is unfilterable too, though its country is still what a search would send", () => {
+    const r = quickenrichGeoCoverage(["Kentucky, United States"]);
+    expect(r.codes).toEqual(["US"]);
+    expect(r.unfilterableGeos).toEqual(["Kentucky, United States"]);
+  });
+  it("a whole country covers its own states and regions, not another country's", () => {
+    expect(quickenrichGeoCoverage(["United States", "Virginia", "Kentucky, United States"]).unfilterableGeos).toEqual([]);
+    expect(quickenrichGeoCoverage(["Canada", "Ontario"]).unfilterableGeos).toEqual([]);
+    expect(quickenrichGeoCoverage(["Canada", "Virginia"]).unfilterableGeos).toEqual(["Virginia"]);
+  });
+  it("a broad US region searches the US (LSI's ICP), but covers no state or city named beside it", () => {
+    const lsi = quickenrichGeoCoverage(["Northeast", "West", "Midwest"]);
+    expect(lsi.codes).toEqual(["US"]);
+    expect(lsi.unfilterableGeos).toEqual([]);
+    expect(lsi.unmappedGeos).toEqual([]);
+    expect(quickenrichGeoCoverage(["Midwest, United States", "the Pacific Northwest"]).unfilterableGeos).toEqual([]);
+    expect(quickenrichGeoCoverage(["Northeast", "Virginia"]).unfilterableGeos).toEqual(["Virginia"]);
+    expect((buildQuickenrichFilters({ titles: ["CFO"], industries: [], geos: ["Northeast", "West", "Midwest"] }, null).body as any).country_code.include).toEqual(["US"]);
+  });
+  it("cities and unknown names are unfilterable; whole countries and no places at all are fine", () => {
+    expect(quickenrichGeoCoverage(["Austin, TX", "Remote"]).unfilterableGeos).toEqual(["Austin, TX", "Remote"]);
+    expect(quickenrichGeoCoverage(["United States", "UK"]).unfilterableGeos).toEqual([]);
+    expect(quickenrichGeoCoverage([]).unfilterableGeos).toEqual([]);
   });
 });
 

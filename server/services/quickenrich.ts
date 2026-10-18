@@ -28,6 +28,7 @@ import { areScrapeJobs, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
 import { normalizeDomain } from "./scraper/domain";
+import { regionCountry } from "./prospectSources/bridge";
 import { stripNameCredentials } from "./enrichment/personName";
 import { utcDayStart } from "@shared/timeWindows";
 import { canonicalText } from "@shared/canonicalText";
@@ -254,19 +255,8 @@ export function buildQuickenrichFilters(targeting: {
   if (titles.length > 0) filters.title = { include: titles };
   if (industries.length > 0) filters.industry_linkedin = { include: industries };
 
-  const codes = new Set<string>();
-  const unmappedGeos: string[] = [];
-  for (const g of clean(targeting.geos, 12)) {
-    // "Kentucky, United States" (the inferred ICP's {region, country}): the
-    // country after the comma, since QuickEnrich filters by country only.
-    const comma = g.lastIndexOf(",");
-    const code = COUNTRY_CODES[g.toLowerCase()] ?? (comma > 0 ? COUNTRY_CODES[g.slice(comma + 1).trim().toLowerCase()] : undefined);
-    if (code) codes.add(code);
-    else unmappedGeos.push(g);
-  }
-  // Array.from, not a spread: this project's tsc target rejects iterating a
-  // Set without --downlevelIteration.
-  if (codes.size > 0) filters.country_code = { include: Array.from(codes) };
+  const { codes, unmappedGeos } = quickenrichGeoCoverage(targeting.geos);
+  if (codes.length > 0) filters.country_code = { include: codes };
 
   // Their API requires at least one active filter — and a filter-less search
   // would be "every contact they have", which is never a campaign audience
@@ -282,6 +272,53 @@ export function buildQuickenrichFilters(targeting: {
   // the wrapper: the accepted probe carried no such key, and an unproven key
   // is how the last 422 started.
   return { body: { ...filters, page: 1 }, unmappedGeos, unmappedIndustries, industryLookupUnavailable };
+}
+
+/**
+ * What QuickEnrich can do with a list of places. It filters by country only:
+ * `codes` is what gets sent (a whole country, or the country of a
+ * "Kentucky, United States" region), `unmappedGeos` what is not sent at all.
+ * `unfilterableGeos` are the places narrower than a country (a state, a
+ * region, a city, an unknown name) that no whole country in the same list
+ * covers: a search would find people outside them. Campaigns skip QuickEnrich
+ * while there are any (owner decision 2026-10-18, after a county campaign for
+ * VA/MD/NC filled its queue with people from other states and Canada).
+ * A broad US region ("Northeast", "Midwest, United States") is searched as
+ * the US instead (owner, same day): LSI's ICP names three, and they cover
+ * most of the country. It covers nothing named beside it.
+ */
+const US_REGIONS = new Set([
+  "northeast", "new england", "mid-atlantic", "east coast", "southeast", "south", "southwest",
+  "midwest", "great lakes", "west", "west coast", "mountain west", "pacific northwest", "northwest", "gulf coast",
+]);
+function isUsRegion(place: string): boolean {
+  const n = place.trim().toLowerCase().replace(/^the\s+/, "").replace(/\s+/g, " ");
+  const comma = n.lastIndexOf(",");
+  if (comma > 0 && COUNTRY_CODES[n.slice(comma + 1).trim()] === "US") return US_REGIONS.has(n.slice(0, comma).trim());
+  return US_REGIONS.has(n);
+}
+
+export function quickenrichGeoCoverage(geos: string[]): { codes: string[]; unmappedGeos: string[]; unfilterableGeos: string[] } {
+  const codes = new Set<string>();
+  const wholeCountries = new Set<string>();
+  const unmappedGeos: string[] = [];
+  const narrower: { place: string; country: string | null }[] = [];
+  for (const g of geos.map((s) => s.trim()).filter(Boolean).slice(0, 12)) {
+    const whole = COUNTRY_CODES[g.toLowerCase()];
+    if (whole) { codes.add(whole); wholeCountries.add(whole); continue; }
+    if (isUsRegion(g)) { codes.add("US"); continue; }
+    // "Kentucky, United States" (the inferred ICP's {region, country}): the
+    // country after the comma, since QuickEnrich filters by country only.
+    const comma = g.lastIndexOf(",");
+    const tail = comma > 0 ? COUNTRY_CODES[g.slice(comma + 1).trim().toLowerCase()] : undefined;
+    if (tail) { codes.add(tail); narrower.push({ place: g, country: tail }); continue; }
+    unmappedGeos.push(g);
+    narrower.push({ place: g, country: regionCountry(g) });
+  }
+  const unfilterableGeos = narrower.filter((n) => !(n.country && wholeCountries.has(n.country))).map((n) => n.place);
+  // Array.from, not a spread: this project's tsc target rejects iterating a
+  // Set without --downlevelIteration.
+  return { codes: Array.from(codes), unmappedGeos, unfilterableGeos };
 }
 
 /* ─── Contact-finder page rotation ──────────────────────────────────────── */

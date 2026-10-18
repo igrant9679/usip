@@ -78,6 +78,7 @@ import { promoteApprovedProspects } from "./services/are/approvePromotion";
 import { areNotify } from "./routers/are/notify";
 import {
   buildQuickenrichFilters,
+  quickenrichGeoCoverage,
   currentQuickenrichPage,
   getQuickEnrichKey,
   getQuickenrichDailyPullCap,
@@ -2548,6 +2549,19 @@ async function discoverViaQuickenrich(
   targeting: { titles: string[]; industries: string[]; geos: string[] },
   qePageState: QuickenrichPageState | null,
 ): Promise<{ raw: Array<Record<string, unknown>>; nextQe: QuickenrichPageState | null }> {
+  // Owner decision 2026-10-18: QuickEnrich filters by country only, so a
+  // campaign aimed at states or cities it cannot apply goes without it —
+  // searching anyway filled a VA/MD/NC county campaign's queue with people
+  // from other states, and each one cost an email lookup. A broad US region
+  // ("Northeast") searches the US (quickenrichGeoCoverage).
+  const { unfilterableGeos } = quickenrichGeoCoverage(targeting.geos);
+  if (unfilterableGeos.length > 0) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
+      `QuickEnrich skipped — it can filter by country only, and this campaign's places include ${unfilterableGeos.join(", ")}. `
+      + `Searching without them would find people outside the campaign's places. Sources that filter by state or city still run.`);
+    return { raw: [], nextQe: null };
+  }
+
   const apiKey = await getQuickEnrichKey(campaign.workspaceId);
   if (!apiKey) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
