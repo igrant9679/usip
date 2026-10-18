@@ -275,17 +275,23 @@ export function buildQuickenrichFilters(targeting: {
 }
 
 /**
- * What QuickEnrich can do with a list of places. It filters by country only:
- * `codes` is what gets sent (a whole country, or the country of a
+ * What QuickEnrich can do with a list of places. Its only exact place filter
+ * is country: `codes` is what gets sent (a whole country, or the country of a
  * "Kentucky, United States" region), `unmappedGeos` what is not sent at all.
- * `unfilterableGeos` are the places narrower than a country (a state, a
- * region, a city, an unknown name) that no whole country in the same list
- * covers: a search would find people outside them. Campaigns skip QuickEnrich
- * while there are any (owner decision 2026-10-18, after a county campaign for
- * VA/MD/NC filled its queue with people from other states and Canada).
  * A broad US region ("Northeast", "Midwest, United States") is searched as
- * the US instead (owner, same day): LSI's ICP names three, and they cover
- * most of the country. It covers nothing named beside it.
+ * the US (owner, 2026-10-18): LSI's ICP names three, and they cover most of
+ * the country. It covers nothing named beside it.
+ *
+ * When EVERY place is a US state or Canadian province, `states` lists them:
+ * campaigns search those by the person's LinkedIn area (their free-text
+ * `locality` filter) and check each person's state before queueing
+ * (quickenrichPlaceCheck; owner, 2026-10-18). `unfilterableGeos` are the
+ * places narrower than a country that neither a whole country in the list
+ * nor that route covers (a city, an unknown name, or a state beside a
+ * country or region): a search would find people outside them, so campaigns
+ * skip QuickEnrich while there are any (owner decision 2026-10-18, after a
+ * county campaign for VA/MD/NC filled its queue with people from other
+ * states and Canada).
  */
 const US_REGIONS = new Set([
   "northeast", "new england", "mid-atlantic", "east coast", "southeast", "south", "southwest",
@@ -298,12 +304,17 @@ function isUsRegion(place: string): boolean {
   return US_REGIONS.has(n);
 }
 
-export function quickenrichGeoCoverage(geos: string[]): { codes: string[]; unmappedGeos: string[]; unfilterableGeos: string[] } {
+export type QuickenrichState = { place: string; name: string; country: string };
+
+export function quickenrichGeoCoverage(geos: string[]): {
+  codes: string[]; unmappedGeos: string[]; unfilterableGeos: string[]; states: QuickenrichState[];
+} {
   const codes = new Set<string>();
   const wholeCountries = new Set<string>();
   const unmappedGeos: string[] = [];
-  const narrower: { place: string; country: string | null }[] = [];
-  for (const g of geos.map((s) => s.trim()).filter(Boolean).slice(0, 12)) {
+  const narrower: { place: string; country: string | null; state: string | null }[] = [];
+  const places = geos.map((s) => s.trim()).filter(Boolean).slice(0, 12);
+  for (const g of places) {
     const whole = COUNTRY_CODES[g.toLowerCase()];
     if (whole) { codes.add(whole); wholeCountries.add(whole); continue; }
     if (isUsRegion(g)) { codes.add("US"); continue; }
@@ -311,14 +322,43 @@ export function quickenrichGeoCoverage(geos: string[]): { codes: string[]; unmap
     // country after the comma, since QuickEnrich filters by country only.
     const comma = g.lastIndexOf(",");
     const tail = comma > 0 ? COUNTRY_CODES[g.slice(comma + 1).trim().toLowerCase()] : undefined;
-    if (tail) { codes.add(tail); narrower.push({ place: g, country: tail }); continue; }
+    if (tail) {
+      codes.add(tail);
+      const region = g.slice(0, comma).trim();
+      narrower.push({ place: g, country: tail, state: regionCountry(region) === tail ? region : null });
+      continue;
+    }
     unmappedGeos.push(g);
-    narrower.push({ place: g, country: regionCountry(g) });
+    const country = regionCountry(g);
+    narrower.push({ place: g, country, state: country ? g : null });
   }
-  const unfilterableGeos = narrower.filter((n) => !(n.country && wholeCountries.has(n.country))).map((n) => n.place);
+  const uncovered = narrower.filter((n) => !(n.country && wholeCountries.has(n.country)));
+  // The locality route only when the places are all states: beside a country
+  // or a region, a locality filter would also narrow THEM (dimensions AND).
+  const statesOnly = uncovered.length > 0 && uncovered.length === places.length && uncovered.every((n) => n.state);
+  const states = statesOnly ? uncovered.map((n) => ({ place: n.place, name: n.state as string, country: n.country as string })) : [];
+  const unfilterableGeos = statesOnly ? [] : uncovered.map((n) => n.place);
   // Array.from, not a spread: this project's tsc target rejects iterating a
   // Set without --downlevelIteration.
-  return { codes: Array.from(codes), unmappedGeos, unfilterableGeos };
+  return { codes: Array.from(codes), unmappedGeos, unfilterableGeos, states };
+}
+
+/**
+ * Where a person is, against the states a campaign searches: their state is
+ * the part of their LinkedIn area before the country ("Richmond, Virginia,
+ * United States" → Virginia; "Charleston, West Virginia, United States" is
+ * not Virginia). "unknown" when the area names no state ("Greater Richmond
+ * Region", "Washington DC-Baltimore Area") — not queued either, since an
+ * email lookup should not be spent on a guess.
+ */
+export function quickenrichPlaceCheck(locality: string | null | undefined, states: QuickenrichState[]): "inside" | "elsewhere" | "unknown" {
+  const parts = String(locality ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const country = parts.length > 0 ? COUNTRY_CODES[parts[parts.length - 1]] : undefined;
+  const statePart = country ? parts[parts.length - 2] : parts[parts.length - 1];
+  if (statePart && states.some((s) => s.name.toLowerCase() === statePart)) return "inside";
+  if (country && !states.some((s) => s.country === country)) return "elsewhere";
+  if (statePart && regionCountry(statePart)) return "elsewhere";
+  return "unknown";
 }
 
 /* ─── Contact-finder page rotation ──────────────────────────────────────── */
@@ -365,6 +405,10 @@ export type QuickEnrichDiscoveredPerson = {
   companyDomain: string | null;
   /** Their DB claims an email exists — the enrichment lookup will likely pay off. */
   hasEmail: boolean;
+  /** The person's area as LinkedIn shows it ("Richmond, Virginia, United States"). */
+  locality?: string | null;
+  /** The company's city. */
+  city?: string | null;
 };
 
 /**
@@ -433,6 +477,8 @@ export async function quickenrichContactFinder(
         companyName: str(r.company_name) ?? str(r.company),
         companyDomain: normalizeDomain(str(r.company_url) ?? str(r.company_domain) ?? str(r.company_website) ?? str(r.email_domain)),
         hasEmail: r.has_email === true,
+        locality: str(r.locality),
+        city: str(r.city),
       });
     }
     return { ok: true, people };

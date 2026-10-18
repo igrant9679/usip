@@ -79,6 +79,7 @@ import { areNotify } from "./routers/are/notify";
 import {
   buildQuickenrichFilters,
   quickenrichGeoCoverage,
+  quickenrichPlaceCheck,
   currentQuickenrichPage,
   getQuickEnrichKey,
   getQuickenrichDailyPullCap,
@@ -2549,15 +2550,17 @@ async function discoverViaQuickenrich(
   targeting: { titles: string[]; industries: string[]; geos: string[] },
   qePageState: QuickenrichPageState | null,
 ): Promise<{ raw: Array<Record<string, unknown>>; nextQe: QuickenrichPageState | null }> {
-  // Owner decision 2026-10-18: QuickEnrich filters by country only, so a
-  // campaign aimed at states or cities it cannot apply goes without it —
+  // Owner decisions 2026-10-18: QuickEnrich's only exact place filter is
+  // country, so a campaign aimed at places it cannot apply goes without it —
   // searching anyway filled a VA/MD/NC county campaign's queue with people
   // from other states, and each one cost an email lookup. A broad US region
-  // ("Northeast") searches the US (quickenrichGeoCoverage).
-  const { unfilterableGeos } = quickenrichGeoCoverage(targeting.geos);
+  // ("Northeast") searches the US; a campaign aimed only at states searches
+  // them by the person's LinkedIn area and checks each person below
+  // (quickenrichGeoCoverage, quickenrichPlaceCheck).
+  const { unfilterableGeos, states } = quickenrichGeoCoverage(targeting.geos);
   if (unfilterableGeos.length > 0) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
-      `QuickEnrich skipped — it can filter by country only, and this campaign's places include ${unfilterableGeos.join(", ")}. `
+      `QuickEnrich skipped — it can search by country, or by state when every place is a state, and this campaign's places include ${unfilterableGeos.join(", ")}. `
       + `Searching without them would find people outside the campaign's places. Sources that filter by state or city still run.`);
     return { raw: [], nextQe: null };
   }
@@ -2593,16 +2596,40 @@ async function discoverViaQuickenrich(
     return { raw: [], nextQe: null };
   }
 
+  // A state campaign: the states' country, and the states as the person's area.
+  if (states.length > 0) {
+    body.country_code = { include: Array.from(new Set(states.map((s) => s.country))) };
+    body.locality = { include: states.map((s) => s.name) };
+  }
+
   // Page rotation: the builder's body says page 1; the persisted cursor says
   // where this QUERY actually is. Keyed on the filters actually sent, so a
   // retargeted campaign (or a vocabulary change altering the mapped
-  // industries) starts back at page 1.
-  const qeKey = createHash("sha1")
-    .update(JSON.stringify([body.title ?? null, body.industry_linkedin ?? null, body.country_code ?? null]))
-    .digest("hex").slice(0, 16);
+  // industries) starts back at page 1. locality and per_page join the key
+  // only when sent, so every other campaign keeps its cursor.
+  const keyOf = (b: Record<string, unknown>) => {
+    const parts: unknown[] = [b.title ?? null, b.industry_linkedin ?? null, b.country_code ?? null];
+    if (b.locality) parts.push(b.locality);
+    if (b.per_page) parts.push(b.per_page);
+    return createHash("sha1").update(JSON.stringify(parts)).digest("hex").slice(0, 16);
+  };
+  let qeKey = keyOf(body);
   body.page = currentQuickenrichPage(qePageState, qeKey);
 
-  const res = await quickenrichContactFinder(apiKey, body);
+  let res = await quickenrichContactFinder(apiKey, body);
+  // `locality` is free text and their docs do not say how it matches. When
+  // the first page by area finds nobody, search the states' country instead
+  // and let the check below keep the people inside them (100 a page, since
+  // most are not).
+  let byArea = states.length > 0;
+  if (byArea && res.ok && res.people.length === 0 && body.page === 1) {
+    delete body.locality;
+    body.per_page = 100;
+    byArea = false;
+    qeKey = keyOf(body);
+    body.page = currentQuickenrichPage(qePageState, qeKey);
+    res = await quickenrichContactFinder(apiKey, body);
+  }
   if (!res.ok) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "error",
       `QuickEnrich search failed: ${res.error}`);
@@ -2612,16 +2639,30 @@ async function discoverViaQuickenrich(
   }
   const nextQe = nextQuickenrichPage(qePageState, qeKey, res.people.length);
 
+  // A state campaign keeps only the people whose LinkedIn area puts them in
+  // one of its states: nobody else reaches the queue or the paid lookup.
+  let found = res.people;
+  let placeNote = "";
+  if (states.length > 0) {
+    const verdicts = res.people.map((p) => quickenrichPlaceCheck(p.locality, states));
+    found = res.people.filter((_, i) => verdicts[i] === "inside");
+    const elsewhere = verdicts.filter((v) => v === "elsewhere").length;
+    const unknown = verdicts.filter((v) => v === "unknown").length;
+    placeNote = ` Searched ${states.map((s) => s.name).join(", ")} ${byArea ? "by the person's LinkedIn area" : "by country (the area search found nobody)"}: `
+      + `${found.length} inside, ${elsewhere} elsewhere, ${unknown} with no state in their area; only those inside are kept.`;
+  }
+
   // has_email first: those rows are the ones the paid lookup will convert, so
   // they get the pull headroom before the maybes.
-  const ranked = [...res.people].sort((a, b) => Number(b.hasEmail) - Number(a.hasEmail));
+  const ranked = [...found].sort((a, b) => Number(b.hasEmail) - Number(a.hasEmail));
   const kept = ranked.slice(0, headroom);
   const withEmailFlag = kept.filter((p) => p.hasEmail).length;
 
   await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
     `QuickEnrich returned ${res.people.length} people (page ${body.page}, kept ${kept.length}, ${withEmailFlag} flagged has_email). `
     + `Emails are resolved during enrichment — discovery is free and never includes them.`
-    + (unmappedGeos.length > 0
+    + placeNote
+    + (unmappedGeos.length > 0 && states.length === 0
       ? ` Geo filters not sent (no clean country mapping): ${unmappedGeos.join(", ")}.`
       : "")
     + (unmappedIndustries.length > 0
@@ -2638,6 +2679,8 @@ async function discoverViaQuickenrich(
       linkedinUrl: p.linkedinUrl,
       companyName: p.companyName,
       companyDomain: p.companyDomain,
+      // Checked to be inside the campaign's states, so it is kept on the row.
+      ...(states.length > 0 ? { geography: p.locality } : {}),
     })),
     nextQe,
   };

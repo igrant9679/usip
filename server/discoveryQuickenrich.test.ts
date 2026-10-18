@@ -19,13 +19,33 @@ const page = readFileSync("client/src/pages/usip/FindProspects.tsx", "utf8");
 
 describe("campaigns skip QuickEnrich when it cannot apply their places (owner decision 2026-10-18)", () => {
   it("the engine checks the places first, before the key, the cap, or any call", () => {
-    const fn = engine.slice(engine.indexOf("async function discoverViaQuickenrich"), engine.indexOf("const res = await quickenrichContactFinder(apiKey, body)"));
+    const fn = engine.slice(engine.indexOf("async function discoverViaQuickenrich"), engine.indexOf("let res = await quickenrichContactFinder(apiKey, body)"));
     const check = fn.indexOf("quickenrichGeoCoverage(targeting.geos)");
     expect(check).toBeGreaterThan(-1);
     expect(fn.indexOf("if (unfilterableGeos.length > 0)")).toBeGreaterThan(check);
     expect(fn.indexOf("getQuickEnrichKey(")).toBeGreaterThan(fn.indexOf("if (unfilterableGeos.length > 0)"));
     expect(fn.slice(fn.indexOf("if (unfilterableGeos.length > 0)"), fn.indexOf("getQuickEnrichKey(")))
       .toContain("return { raw: [], nextQe: null }");
+  });
+
+  it("a state campaign searches by the person's area, falls back to the country, and keeps only people inside", () => {
+    const fn = engine.slice(engine.indexOf("async function discoverViaQuickenrich"), engine.indexOf("async function discoverViaInternalCrm"));
+    const first = fn.indexOf("let res = await quickenrichContactFinder(apiKey, body)");
+    // The states go out as the person's area, before the first search.
+    const area = fn.indexOf("body.locality = { include: states.map((s) => s.name) }");
+    expect(area).toBeGreaterThan(-1);
+    expect(area).toBeLessThan(first);
+    // Only an empty FIRST page by area falls back: no area, 100 a page, its own cursor.
+    const fallback = fn.slice(fn.indexOf("if (byArea && res.ok && res.people.length === 0 && body.page === 1)"), fn.indexOf("if (!res.ok)"));
+    expect(fallback).toContain("delete body.locality");
+    expect(fallback).toContain("body.per_page = 100");
+    expect(fallback).toContain("qeKey = keyOf(body)");
+    expect(fallback).toContain("res = await quickenrichContactFinder(apiKey, body)");
+    // Every other campaign keeps its cursor: the key grows only when locality/per_page are sent.
+    expect(fn).toContain("if (b.locality) parts.push(b.locality)");
+    // Only the people inside are ranked, kept and queued.
+    expect(fn).toContain('found = res.people.filter((_, i) => verdicts[i] === "inside")');
+    expect(fn).toContain("const ranked = [...found]");
   });
 });
 

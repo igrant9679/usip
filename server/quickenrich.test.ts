@@ -35,6 +35,7 @@ import { encryptSecret } from "./_core/crypto";
 import {
   buildQuickenrichFilters,
   quickenrichGeoCoverage,
+  quickenrichPlaceCheck,
   currentQuickenrichPage,
   getQuickEnrichKey,
   getQuickenrichIndustries,
@@ -385,15 +386,30 @@ describe("buildQuickenrichFilters — targeting → their vocabulary, conservati
 });
 
 describe("quickenrichGeoCoverage — places QuickEnrich cannot apply (owner decision 2026-10-18)", () => {
-  it("states with no whole country beside them are unfilterable: campaign 38 (VA/MD/NC)", () => {
+  it("places that are all states take the state route: campaign 38 (VA/MD/NC)", () => {
+    // Owner, 2026-10-18: search them by the person's LinkedIn area and check each person.
     const r = quickenrichGeoCoverage(["Virginia", "Maryland", "North Carolina"]);
     expect(r.codes).toEqual([]);
-    expect(r.unfilterableGeos).toEqual(["Virginia", "Maryland", "North Carolina"]);
+    expect(r.unfilterableGeos).toEqual([]);
+    expect(r.states).toEqual([
+      { place: "Virginia", name: "Virginia", country: "US" },
+      { place: "Maryland", name: "Maryland", country: "US" },
+      { place: "North Carolina", name: "North Carolina", country: "US" },
+    ]);
   });
-  it("a region of a country is unfilterable too, though its country is still what a search would send", () => {
-    const r = quickenrichGeoCoverage(["Kentucky, United States"]);
+  it("a state written with its country takes the state route too; a province is Canadian", () => {
+    const r = quickenrichGeoCoverage(["Kentucky, United States", "Ontario"]);
     expect(r.codes).toEqual(["US"]);
-    expect(r.unfilterableGeos).toEqual(["Kentucky, United States"]);
+    expect(r.unfilterableGeos).toEqual([]);
+    expect(r.states).toEqual([{ place: "Kentucky, United States", name: "Kentucky", country: "US" }, { place: "Ontario", name: "Ontario", country: "CA" }]);
+  });
+  it("a state beside a city, a region or another country's whole is no state route: QuickEnrich sits out", () => {
+    // A locality filter would narrow the other places as well (their dimensions combine with AND).
+    expect(quickenrichGeoCoverage(["Virginia", "Austin, TX"])).toMatchObject({ states: [], unfilterableGeos: ["Virginia", "Austin, TX"] });
+    expect(quickenrichGeoCoverage(["Canada", "Virginia"])).toMatchObject({ states: [], unfilterableGeos: ["Virginia"] });
+    expect(quickenrichGeoCoverage(["Northeast", "Virginia"])).toMatchObject({ states: [], unfilterableGeos: ["Virginia"] });
+    // "Texas, Canada" is no Canadian province.
+    expect(quickenrichGeoCoverage(["Texas, Canada"])).toMatchObject({ states: [], unfilterableGeos: ["Texas, Canada"] });
   });
   it("a whole country covers its own states and regions, not another country's", () => {
     expect(quickenrichGeoCoverage(["United States", "Virginia", "Kentucky, United States"]).unfilterableGeos).toEqual([]);
@@ -413,6 +429,30 @@ describe("quickenrichGeoCoverage — places QuickEnrich cannot apply (owner deci
     expect(quickenrichGeoCoverage(["Austin, TX", "Remote"]).unfilterableGeos).toEqual(["Austin, TX", "Remote"]);
     expect(quickenrichGeoCoverage(["United States", "UK"]).unfilterableGeos).toEqual([]);
     expect(quickenrichGeoCoverage([]).unfilterableGeos).toEqual([]);
+    expect(quickenrichGeoCoverage(["United States", "Virginia"]).states).toEqual([]);
+  });
+});
+
+describe("quickenrichPlaceCheck — the state in a person's LinkedIn area", () => {
+  const VA_MD_NC = quickenrichGeoCoverage(["Virginia", "Maryland", "North Carolina"]).states;
+  it("the state is the part before the country", () => {
+    expect(quickenrichPlaceCheck("Richmond, Virginia, United States", VA_MD_NC)).toBe("inside");
+    expect(quickenrichPlaceCheck("Virginia Beach, Virginia, United States", VA_MD_NC)).toBe("inside");
+    expect(quickenrichPlaceCheck("Maryland, United States", VA_MD_NC)).toBe("inside");
+    expect(quickenrichPlaceCheck("raleigh, north carolina", VA_MD_NC)).toBe("inside");
+  });
+  it("another state or country is elsewhere: West Virginia is not Virginia, Washington DC is not Washington", () => {
+    expect(quickenrichPlaceCheck("Charleston, West Virginia, United States", VA_MD_NC)).toBe("elsewhere");
+    expect(quickenrichPlaceCheck("Lansing, Michigan, United States", VA_MD_NC)).toBe("elsewhere");
+    expect(quickenrichPlaceCheck("Newmarket, Ontario, Canada", VA_MD_NC)).toBe("elsewhere");
+    expect(quickenrichPlaceCheck("Manchester, England, United Kingdom", VA_MD_NC)).toBe("elsewhere");
+    expect(quickenrichPlaceCheck("Washington, District of Columbia, United States", quickenrichGeoCoverage(["Washington"]).states)).toBe("elsewhere");
+  });
+  it("an area naming no state is unknown, and so is no area", () => {
+    expect(quickenrichPlaceCheck("Washington DC-Baltimore Area", VA_MD_NC)).toBe("unknown");
+    expect(quickenrichPlaceCheck("Greater Richmond Region", VA_MD_NC)).toBe("unknown");
+    expect(quickenrichPlaceCheck("United States", VA_MD_NC)).toBe("unknown");
+    expect(quickenrichPlaceCheck(null, VA_MD_NC)).toBe("unknown");
   });
 });
 
@@ -546,6 +586,8 @@ describe("quickenrichContactFinder — free discovery, defensively parsed", () =
         linkedin_url: "https://linkedin.com/in/ada-li",
         company_name: "Acme", company_url: "https://www.acme.io/about",
         has_email: true,
+        // Documented contact-finder fields (2026-10-18): the person's area and the company's city.
+        locality: "Richmond, Virginia, United States", city: "Richmond", country_code: "US",
       }],
     }));
     const r = await quickenrichContactFinder("k", BODY);
@@ -556,6 +598,7 @@ describe("quickenrichContactFinder — free discovery, defensively parsed", () =
       linkedinUrl: "https://linkedin.com/in/ada-li",
       companyName: "Acme", companyDomain: "acme.io",
       hasEmail: true,
+      locality: "Richmond, Virginia, United States", city: "Richmond",
     }]);
   });
 
