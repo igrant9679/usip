@@ -82,6 +82,8 @@ export interface SearchResultPage {
   alreadyCharged: boolean;
   /** Units the search itself consumed (0 for free previews). */
   unitsSpent: number;
+  /** How the vendor was asked, or why nothing came back — for the logs. */
+  note?: string;
 }
 
 export interface AcquisitionResult {

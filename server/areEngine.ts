@@ -2011,10 +2011,11 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   }
 
   // Merge with persisted state so we know which slice to run next. The same
-  // JSON carries the QuickEnrich page cursor (`qe`) — see nextQuickenrichPage.
+  // JSON carries the QuickEnrich page cursor (`qe`) — see nextQuickenrichPage —
+  // and WarmySender's search cursor (`ws`).
   const persistedState =
-    (campaign as { discoveryQueryState?: { slices?: Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }>; qe?: QuickenrichPageState | null } | null }).discoveryQueryState
-    ?? { slices: [] as Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }>, qe: null };
+    (campaign as { discoveryQueryState?: { slices?: Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }>; qe?: QuickenrichPageState | null; ws?: string | null } | null }).discoveryQueryState
+    ?? { slices: [] as Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }>, qe: null, ws: null };
   const stateById = new Map<string, { id: string; q: string; lastSearchedAt: number | null; lastNewCount: number | null }>();
   for (const s of persistedState.slices ?? []) {
     stateById.set(s.id, { id: s.id, q: s.q, lastSearchedAt: s.lastSearchedAt ?? null, lastNewCount: s.lastNewCount ?? null });
@@ -2123,16 +2124,21 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // "every source id has a branch" rule: a vocabulary entry without a
   // factory here no longer compiles.
   let quickenrichNextPage: QuickenrichPageState | null = null;
+  // undefined = WarmySender did not search this tick (skipped or failed).
+  let warmysenderNextCursor: string | null | undefined;
   // Each factory receives the slots still open when its turn comes — the
   // registry-backed sources size their (billable) acquisition to it; the
   // scraper sources ignore it and stay bounded per call as before.
   const taskFactories: Record<AreSourceId, (remaining: number) => Promise<SourceResult>> = {
     warmysender: (remaining) =>
-      discoverViaRegistrySource(campaign, "warmysender", { titles, industries, geos, keywords }, remaining).then((raw) => ({
-        sourceType: "warmysender" as const,
-        query,
-        raw,
-      })),
+      discoverViaRegistrySource(campaign, "warmysender", { titles, industries, geos, keywords }, remaining, persistedState.ws ?? null).then(({ raw, nextCursor }) => {
+        warmysenderNextCursor = nextCursor;
+        return {
+          sourceType: "warmysender" as const,
+          query,
+          raw,
+        };
+      }),
     internal: () =>
       discoverViaInternalCrm(campaign, titles).then((raw) => ({
         sourceType: "internal" as const,
@@ -2284,6 +2290,8 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     // when this tick pulled, else whatever was stored (a skipped pull — no
     // key, no headroom — must not reset the rotation).
     qe: quickenrichNextPage ?? persistedState.qe ?? null,
+    // null is an answer here (the walk wrapped): only "did not search" keeps the old one.
+    ws: warmysenderNextCursor !== undefined ? warmysenderNextCursor : (persistedState.ws ?? null),
   };
   try {
     await db.update(areCampaigns).set({ discoveryQueryState: newState as any })
@@ -2439,7 +2447,9 @@ async function discoverViaRegistrySource(
   slug: "warmysender",
   targeting: { titles: string[]; industries: string[]; geos: string[]; keywords: string[] },
   remaining: number,
-): Promise<Array<Record<string, unknown>>> {
+  /** Where the last tick's search left off (WarmySender walks titles, then pages). */
+  cursor: string | null,
+): Promise<{ raw: Array<Record<string, unknown>>; nextCursor?: string | null }> {
   const { eligibleFor } = await import("./services/prospectSources/registry");
   const { runWaterfall } = await import("./services/prospectSources/executor");
   const { workspaceDeduper } = await import("./services/prospectSources/dedupe");
@@ -2454,10 +2464,10 @@ async function discoverViaRegistrySource(
     const level = reason === "no_credentials" || reason === "not_selected" || reason === "disabled" ? "info" : "warn";
     await emitLog(campaign.workspaceId, campaign.id, "discovery", level,
       `${slug} skipped — ${why?.detail ?? "not eligible"}${reason === "no_credentials" ? " (Settings → Data sources)" : ""}.`);
-    return [];
+    return { raw: [] };
   }
   const target = Math.max(0, Math.min(remaining, 100));
-  if (target === 0) return [];
+  if (target === 0) return { raw: [] };
   const deduper = await workspaceDeduper(campaign.workspaceId);
   const result = await runWaterfall({
     workspaceId: campaign.workspaceId,
@@ -2466,6 +2476,7 @@ async function discoverViaRegistrySource(
     sources: eligible,
     deduper,
     mode: "acquire",
+    cursors: { [slug]: cursor },
     ctx: { campaignId: campaign.id },
     queryLabel: `campaign ${campaign.id}`,
   });
@@ -2475,10 +2486,16 @@ async function discoverViaRegistrySource(
     await emitLog(campaign.workspaceId, campaign.id, "discovery", level,
       outcome.error
         ? `${slug}: ${outcome.error}`
-        : `${slug} returned ${outcome.searched} masked previews, ${outcome.netNew} net-new after dedupe, acquired ${outcome.acquired} (${outcome.unitsSpent} unit${outcome.unitsSpent === 1 ? "" : "s"}${outcome.fundedBy ? `, ${outcome.fundedBy}` : ""}) toward ${target} open slot${target === 1 ? "" : "s"}.`,
+        : `${slug} returned ${outcome.searched} masked previews, ${outcome.netNew} net-new after dedupe, acquired ${outcome.acquired} (${outcome.unitsSpent} unit${outcome.unitsSpent === 1 ? "" : "s"}${outcome.fundedBy ? `, ${outcome.fundedBy}` : ""}) toward ${target} open slot${target === 1 ? "" : "s"}${outcome.note ? ` — ${outcome.note}` : ""}.`,
       { perSource: result.perSource, duplicates: result.duplicates.length });
   }
-  return result.collected.map((c) => recordToQueueRow(c.record));
+  // A failed search or acquisition keeps the cursor (the same people next
+  // tick), except a refused request, which the same cursor would only repeat.
+  return {
+    raw: result.collected.map((c) => recordToQueueRow(c.record)),
+    ...(outcome && !outcome.error ? { nextCursor: outcome.nextCursor ?? null }
+      : outcome?.errorReason === "invalid_params" ? { nextCursor: null } : {}),
+  };
 }
 
 async function discoverViaApollo(

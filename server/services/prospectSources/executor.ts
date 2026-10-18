@@ -43,6 +43,8 @@ export interface SourceOutcome {
   error?: string;
   errorReason?: VendorFailure["reason"];
   nextCursor?: string | null;
+  /** The source's own note on the search (SearchResultPage.note). */
+  note?: string;
 }
 
 export interface CollectedRecord {
@@ -133,6 +135,7 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
     await recordSuccess(opts.workspaceId, s.slug, s.credentialMode);
     outcome.searched = page.records.length;
     outcome.nextCursor = page.nextCursor;
+    if (page.note) outcome.note = page.note;
     if (s.recordUsage) await s.recordUsage(opts.workspaceId, page.records.length, opts.queryLabel ?? "");
 
     // Dedupe against the workspace and everything collected so far.

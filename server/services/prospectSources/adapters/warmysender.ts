@@ -35,7 +35,6 @@ import type {
   ProspectRecord,
   ProspectSource,
   SearchContext,
-  SearchResultPage,
   SourceCredentials,
   VendorFailure,
   VendorResult,
@@ -444,16 +443,47 @@ export function fitJoin(values: string[], sep: string, max: number): string {
   return out;
 }
 
-function joinFor(schema: unknown, name: string, values: string[]): unknown {
-  const t = propType(schema, name);
-  if (t === "array") return values;
-  return fitJoin(values, ", ", maxLengthFor(schema, name));
+/**
+ * Which text filters take a list. search_leads says so per parameter: state,
+ * country, seniority, department and postalCode OR comma-separated values;
+ * jobTitle, keyword, industry and city say nothing of the kind, and
+ * jobTitle's rule is "each word you pass must start a word in the title".
+ * 2026-10-18: a county campaign's titles went out as one comma-joined
+ * jobTitle, which asks for one title holding every word of eleven titles,
+ * and every search returned nobody. The parameter's own description decides;
+ * without one, the concepts the captured schema ORs.
+ */
+const OR_CONCEPTS: Array<keyof typeof PARAM_CANDIDATES> = ["country", "stateProvince", "seniority", "department", "postalCode"];
+function joinsAsOr(schema: unknown, name: string, concept: keyof typeof PARAM_CANDIDATES): boolean {
+  const p = schemaProps(schema)?.[name];
+  const d = p && typeof p === "object" ? (p as Record<string, unknown>).description : undefined;
+  if (typeof d === "string" && d.trim()) return /[Cc]omma-separated[^.]*\bOR\b/.test(d);
+  return OR_CONCEPTS.indexOf(concept) !== -1;
+}
+
+/** A list where the parameter ORs one, else the first value alone. */
+function joinFor(schema: unknown, name: string, concept: keyof typeof PARAM_CANDIDATES, values: string[]): unknown {
+  if (propType(schema, name) === "array") return values;
+  const max = maxLengthFor(schema, name);
+  return joinsAsOr(schema, name, concept) ? fitJoin(values, ", ", max) : values[0].slice(0, max);
+}
+
+/**
+ * search_leads filters country by name ("United States", as its rows carry
+ * it) where the bridge hands vendors ISO codes: 2026-10-18, the connection
+ * probe's country "US" returned no rows for job title "Owner".
+ */
+const COUNTRY_NAMES: Record<string, string> = { US: "United States", CA: "Canada" };
+function countryName(c: string): string {
+  return COUNTRY_NAMES[c.trim().toUpperCase()] ?? c;
 }
 
 /**
  * Build search_leads arguments. With a captured schema every filter goes to
  * its native parameter and unsupported ones are folded into the keyword;
- * without one (never validated) the documented names are used.
+ * without one (never validated) the documented names are used. A filter
+ * that takes no list carries its first value: planSearchLeadsCalls spreads
+ * several titles over several calls.
  */
 export function buildSearchLeadsArgs(
   criteria: SearchCriteria,
@@ -463,23 +493,26 @@ export function buildSearchLeadsArgs(
 ): { args: Record<string, unknown>; foldedIntoKeyword: string[] } {
   const args: Record<string, unknown> = {};
   const folded: string[] = [];
-  const keywordParts: string[] = criteria.keywords.slice();
+  // The keyword is free text with no OR either: one phrase per concept, the
+  // first keyword and the first value of each folded filter (eleven keywords
+  // joined were some thirty words every lead had to hold).
+  const keywordParts: string[] = criteria.keywords.slice(0, 1);
   const put = (concept: keyof typeof PARAM_CANDIDATES, values: string[], fallback: string) => {
     if (values.length === 0) return;
     const name = schema ? paramNameFor(schema, concept) : fallback;
-    if (name) args[name] = joinFor(schema, name, values);
-    else { folded.push(concept); keywordParts.push(...values); }
+    if (name) args[name] = joinFor(schema, name, concept, values);
+    else { folded.push(concept); keywordParts.push(values[0]); }
   };
   put("jobTitle", criteria.jobTitles, "job_title");
   put("seniority", criteria.seniorities, "seniority");
   put("department", criteria.departments, "department");
   put("industry", criteria.industries, "industry");
-  put("country", criteria.countries, "country");
+  put("country", criteria.countries.map(countryName), "country");
   put("stateProvince", criteria.stateProvinces, "state");
   put("city", criteria.cities, "city");
   put("postalCode", criteria.postalCodes, "postcode");
-  if (criteria.companyNames.length) { folded.push("companyName"); keywordParts.push(...criteria.companyNames); }
-  if (criteria.companyDomains.length) { folded.push("companyDomain"); keywordParts.push(...criteria.companyDomains); }
+  if (criteria.companyNames.length) { folded.push("companyName"); keywordParts.push(criteria.companyNames[0]); }
+  if (criteria.companyDomains.length) { folded.push("companyDomain"); keywordParts.push(criteria.companyDomains[0]); }
   if (keywordParts.length) {
     const kw = (schema ? paramNameFor(schema, "keyword") : null) ?? "keyword";
     args[kw] = fitJoin(keywordParts, " ", maxLengthFor(schema, kw));
@@ -494,6 +527,71 @@ export function buildSearchLeadsArgs(
     args[cur] = cur === "page" || cur === "offset" ? Number(cursor) : cursor;
   }
   return { args, foldedIntoKeyword: folded };
+}
+
+/** search_leads calls one search() makes when titles go one per call. */
+export const MAX_TITLE_SEARCHES = 6;
+
+function titlesKey(titles: string[]): string {
+  const s = titles.join("|");
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+/** "page:offset:key" → where the title walk resumes; a cursor made for other titles starts over. */
+export function parseTitleCursor(cursor: string | null, titles: string[]): { page: number; offset: number } {
+  const m = cursor ? /^(\d+):(\d+):([a-z0-9]+)$/.exec(cursor) : null;
+  if (!m || m[3] !== titlesKey(titles)) return { page: 1, offset: 0 };
+  const offset = Number(m[2]);
+  return { page: Math.max(1, Number(m[1])), offset: offset < titles.length ? offset : 0 };
+}
+
+export interface SearchLeadsPlan {
+  calls: Array<{ args: Record<string, unknown>; limit: number }>;
+  foldedIntoKeyword: string[];
+  /** Set when the titles go one per call: the walk the cursor continues. */
+  titleWalk: { titles: string[]; page: number; offset: number } | null;
+}
+
+/**
+ * The search_leads calls for one search(). Several titles where the title
+ * filter takes one (see joinsAsOr) become one call per title, at most
+ * MAX_TITLE_SEARCHES, sharing the page size; the cursor walks on through
+ * the rest of the titles, then the next page of each. Otherwise one call.
+ */
+export function planSearchLeadsCalls(
+  criteria: SearchCriteria,
+  schema: unknown,
+  limit: number,
+  cursor: string | null,
+): SearchLeadsPlan {
+  const titleParam = schema ? paramNameFor(schema, "jobTitle") : "job_title";
+  const titlesTakeList = !!titleParam && (propType(schema, titleParam) === "array" || joinsAsOr(schema, titleParam, "jobTitle"));
+  const limName = (schema ? paramNameFor(schema, "limit") : null) ?? "limit";
+  if (criteria.jobTitles.length <= 1 || titlesTakeList) {
+    // A title walk's cursor (the campaign had several titles) is no vendor page.
+    const b = buildSearchLeadsArgs(criteria, schema, limit, cursor && /^\d+:\d+:/.test(cursor) ? null : cursor);
+    return { calls: [{ args: b.args, limit: Number(b.args[limName]) }], foldedIntoKeyword: b.foldedIntoKeyword, titleWalk: null };
+  }
+  const titles = criteria.jobTitles;
+  const at = parseTitleCursor(cursor, titles);
+  const window = titles.slice(at.offset, at.offset + MAX_TITLE_SEARCHES);
+  const per = Math.max(1, Math.ceil(limit / window.length));
+  let folded: string[] = [];
+  const calls = window.map((t) => {
+    const b = buildSearchLeadsArgs({ ...criteria, jobTitles: [t] }, schema, per, at.page > 1 ? String(at.page) : null);
+    folded = b.foldedIntoKeyword;
+    return { args: b.args, limit: Number(b.args[limName]) };
+  });
+  return { calls, foldedIntoKeyword: folded, titleWalk: { titles, page: at.page, offset: at.offset } };
+}
+
+/** A search_leads tool error as a classified failure, else null. */
+function searchToolFailure(payload: unknown): VendorFailure | null {
+  if (!payload || typeof payload !== "object" || !(payload as Record<string, unknown>).__error) return null;
+  const msg = String(((payload as Record<string, unknown>).content as Array<Record<string, unknown>> | undefined)?.[0]?.text ?? "tool error");
+  return { ok: false, reason: /scope/i.test(msg) ? "insufficient_scope" : /rate/i.test(msg) ? "rate_limited" : "http", message: msg.slice(0, 300) };
 }
 
 export function buildExportLeadsArgs(ids: string[], schema: unknown): Record<string, unknown> {
@@ -700,26 +798,61 @@ export function createWarmySenderSource(deps?: { fetchImpl?: typeof fetch }): Pr
 
     async search(criteria, c, limit, ctx) {
       const schema = cfg(c).toolSchemas?.search_leads ?? null;
-      const { args, foldedIntoKeyword } = buildSearchLeadsArgs(criteria, schema, Math.min(limit, BASE_CAPS.maxBatchSize), ctx.cursor ?? null);
-      const res = await mcpCall(c, "tools/call", { name: "search_leads", arguments: args }, "mcp.search_leads", { fetchImpl: f });
-      if (!res.ok) return res;
-      const payload = unwrapToolResult(res.result) as Record<string, unknown>;
-      if (payload && (payload as Record<string, unknown>).__error) {
-        const msg = String(((payload as Record<string, unknown>).content as Array<Record<string, unknown>> | undefined)?.[0]?.text ?? "tool error");
-        return { ok: false, reason: /scope/i.test(msg) ? "insufficient_scope" : /rate/i.test(msg) ? "rate_limited" : "http", message: msg.slice(0, 300) };
-      }
-      const rows = extractLeadRows(payload);
+      const plan = planSearchLeadsCalls(criteria, schema, Math.min(limit, BASE_CAPS.maxBatchSize), ctx.cursor ?? null);
       const records: ProspectRecord[] = [];
-      for (let i = 0; i < rows.length; i++) records.push(...mapLeadRow(rows[i]));
+      const seen = new Set<string>();
+      let done = 0;
+      let more = false;
+      let total: number | null = null;
+      let vendorCursor: string | null = null;
+      let firstKeys: string[] = [];
+      for (let k = 0; k < plan.calls.length; k++) {
+        const res = await mcpCall(c, "tools/call", { name: "search_leads", arguments: plan.calls[k].args }, "mcp.search_leads", { fetchImpl: f });
+        const payload = res.ok ? unwrapToolResult(res.result) : null;
+        const failure = !res.ok ? res : searchToolFailure(payload);
+        if (failure) {
+          // The first call speaks for the source (scope, rate limit, circuit);
+          // a later one keeps what came back and the cursor resumes at it.
+          if (done === 0) return failure;
+          break;
+        }
+        done += 1;
+        if (k === 0 && payload && typeof payload === "object") firstKeys = Object.keys(payload as Record<string, unknown>).slice(0, 12);
+        const rows = extractLeadRows(payload);
+        vendorCursor = extractCursor(payload);
+        if (vendorCursor != null || rows.length >= plan.calls[k].limit) more = true;
+        const t = extractTotal(payload);
+        if (t != null) total = (total ?? 0) + t;
+        // One person can hold two of the titles ("Deputy County Administrator").
+        for (let i = 0; i < rows.length; i++) {
+          for (const r of mapLeadRow(rows[i])) {
+            if (r.externalId && seen.has(r.externalId)) continue;
+            if (r.externalId) seen.add(r.externalId);
+            records.push(r);
+          }
+        }
+      }
+      const walk = plan.titleWalk;
+      let nextCursor = vendorCursor;
+      const notes: string[] = [];
+      if (walk) {
+        const end = walk.offset + done;
+        const key = titlesKey(walk.titles);
+        nextCursor = end < walk.titles.length ? `${walk.page}:${end}:${key}` : more ? `${walk.page + 1}:0:${key}` : null;
+        notes.push(`titles ${walk.offset + 1}–${end} of ${walk.titles.length}${walk.page > 1 ? ` (page ${walk.page})` : ""}, one per search`);
+      }
+      if (plan.foldedIntoKeyword.length) notes.push(`folded into keyword: ${plan.foldedIntoKeyword.join(", ")}`);
+      // Keys only, never values: tells "nobody matched" from "rows we cannot find".
+      if (records.length === 0) notes.push(`no rows; vendor total ${total ?? "not stated"}; payload keys ${firstKeys.join(", ") || "none"}`);
       return {
         ok: true,
         records: records.slice(0, limit),
-        nextCursor: extractCursor(payload),
-        totalAvailable: extractTotal(payload),
+        nextCursor,
+        totalAvailable: total,
         alreadyCharged: false,
         unitsSpent: 0,
-        ...(foldedIntoKeyword.length ? { note: `folded into keyword: ${foldedIntoKeyword.join(", ")}` } : {}),
-      } as VendorResult<SearchResultPage>;
+        ...(notes.length ? { note: notes.join("; ") } : {}),
+      };
     },
 
     async acquire(externalIds, c, _ctx) {

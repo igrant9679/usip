@@ -18,8 +18,9 @@ import {
 } from "../shared/prospectSources";
 import { ARE_SOURCE_IDS } from "../shared/areSources";
 import {
-  buildSearchLeadsArgs, extractCursor, extractLeadRows, fitJoin, looksMasked, mapLeadRow, monthlyPeriodKeyForAnniversary,
-  paramNameFor, parseMcpBody, unwrapToolResult, warmySenderBudgetPeriods, warmySenderCapabilities,
+  MAX_TITLE_SEARCHES, buildSearchLeadsArgs, createWarmySenderSource, extractCursor, extractLeadRows, fitJoin, looksMasked, mapLeadRow,
+  monthlyPeriodKeyForAnniversary, paramNameFor, parseMcpBody, parseTitleCursor, planSearchLeadsCalls, unwrapToolResult,
+  warmySenderBudgetPeriods, warmySenderCapabilities,
 } from "./services/prospectSources/adapters/warmysender";
 import { backoffMs, classifyHttpFailure, isRetryable, setVendorCallLogger, vendorFetch } from "./services/prospectSources/vendorHttp";
 import { criteriaFromTargeting, recordToQueueRow } from "./services/prospectSources/bridge";
@@ -181,30 +182,182 @@ describe("WarmySender adapter", () => {
   });
   it("argument builder: documented names without a schema; the captured schema wins; unsupported filters fold into keyword", () => {
     const noSchema = buildSearchLeadsArgs({ ...CRIT, keywords: ["grants"] }, null, 30, null);
-    expect(noSchema.args).toMatchObject({ job_title: "CFO", country: "US", keyword: "grants", has_email: true, limit: 30 });
+    expect(noSchema.args).toMatchObject({ job_title: "CFO", country: "United States", keyword: "grants", has_email: true, limit: 30 });
     const schema = { properties: { title: { type: "array" }, country: { type: "string" }, q: { type: "string" }, page_size: { type: "integer" }, cursor: { type: "string" } } };
     const withSchema = buildSearchLeadsArgs({ ...CRIT, seniorities: ["C-level"], keywords: ["grants"] }, schema, 500, "abc");
-    expect(withSchema.args).toMatchObject({ title: ["CFO"], country: "US", q: "grants C-level", page_size: 50, cursor: "abc" });
+    expect(withSchema.args).toMatchObject({ title: ["CFO"], country: "United States", q: "grants C-level", page_size: 50, cursor: "abc" });
     expect(withSchema.foldedIntoKeyword).toEqual(["seniority"]);
     expect(paramNameFor(schema, "jobTitle")).toBe("title");
     expect(paramNameFor(schema, "seniority")).toBeNull();
   });
   it("a text filter never exceeds its maxLength: whole values, the first ones, as many as fit", () => {
     // 2026-10-16: a county campaign's 22 titles joined into one jobTitle string (>255) failed every search.
-    const titles = ["County Administrator", "County Manager", "Deputy County Administrator", "Assistant County Manager", "Chief Administrative Officer",
-      "Director of Information Technology", "IT Director", "Chief Information Officer", "Public Information Officer", "Communications Director",
-      "Communications Manager", "Digital Communications Specialist", "Web Content Manager", "ADA Coordinator", "ADA Title II Coordinator"];
-    const schema = { properties: { jobTitle: { type: "string", maxLength: 255 }, keyword: { type: "string", maxLength: 40 } } };
-    const r = buildSearchLeadsArgs({ ...CRIT, jobTitles: titles, keywords: ["County of", "Board of Supervisors", "Digital Services", "Web Content"] }, schema, 30, null);
-    const jt = r.args.jobTitle as string;
-    expect(jt.length).toBeLessThanOrEqual(255);
-    expect(jt.startsWith("County Administrator, County Manager,")).toBe(true);
-    expect(titles.some((t) => jt.endsWith(t))).toBe(true); // no title cut in half
-    expect(r.args.keyword).toBe("County of Board of Supervisors");
-    // No limit stated: 255. One value longer than the limit is cut to it rather than dropped.
-    expect((buildSearchLeadsArgs({ ...CRIT, jobTitles: titles }, null, 30, null).args.job_title as string).length).toBeLessThanOrEqual(255);
+    const states = ["Virginia", "Maryland", "North Carolina", "South Carolina", "West Virginia", "Pennsylvania", "Delaware", "Tennessee", "Kentucky", "Georgia", "New Jersey"];
+    const schema = { properties: { state: { type: "string", maxLength: 120, description: "Comma-separated values are OR-combined." }, keyword: { type: "string", maxLength: 6 } } };
+    const r = buildSearchLeadsArgs({ ...CRIT, stateProvinces: states, keywords: ["County of"] }, schema, 30, null);
+    const st = r.args.state as string;
+    expect(st.length).toBeLessThanOrEqual(120);
+    expect(st.startsWith("Virginia, Maryland, North Carolina,")).toBe(true);
+    expect(states.some((s) => st.endsWith(s))).toBe(true); // no state cut in half
+    // One value longer than the limit is cut to it rather than dropped.
+    expect(r.args.keyword).toBe("County");
+    expect((buildSearchLeadsArgs({ ...CRIT, jobTitles: ["x".repeat(300)] }, null, 30, null).args.job_title as string)).toHaveLength(255);
     expect(fitJoin(["x".repeat(300)], ", ", 255)).toHaveLength(255);
     expect(fitJoin(["a", "b"], ", ", 255)).toBe("a, b");
+  });
+
+  /* The captured search_leads schema (workspace 2, validated 2026-10-18), the parameters that matter here. */
+  const LIVE_SCHEMA = {
+    type: "object",
+    properties: {
+      page: { type: "integer", default: 1, maximum: 2000, minimum: 1 },
+      limit: { type: "integer", default: 25, maximum: 50, minimum: 1 },
+      state: { type: "string", maxLength: 120, description: "State / region filter. US names and USPS codes are equivalent (\"Alabama\" = \"AL\"). Comma-separated values are OR-combined." },
+      country: { type: "string", maxLength: 120, description: "Country filter (e.g. \"United States\"). Comma-separated values are OR-combined." },
+      city: { type: "string", maxLength: 120, description: "City filter." },
+      keyword: { type: "string", maxLength: 255, description: "Free-text search across name, company, job title, industry, and category." },
+      industry: { type: "string", maxLength: 255, description: "Industry filter." },
+      hasEmail: { type: "boolean" },
+      jobTitle: { type: "string", maxLength: 255, description: "Job title filter. Each word you pass must start a word in the title: \"cto\" finds \"CTO\" and \"Co-Founder/CTO\" but not \"Director\"; \"market\" finds \"Marketing Manager\"." },
+      seniority: { type: "string", maxLength: 255, description: "Seniority group. Keys: founder, c_level, vp, director, manager, senior. Comma-separated values OR together. Unknown values are rejected, never ignored." },
+      department: { type: "string", maxLength: 255, description: "Department group. Comma-separated values OR together. Unknown values are rejected, never ignored." },
+      postalCode: { type: "string", maxLength: 255, description: "Postcode / ZIP prefix filter. Comma-separated values are OR-combined (up to 20)." },
+    },
+    additionalProperties: false,
+  };
+  const COUNTY_TITLES = ["County Administrator", "County Manager", "Deputy County Administrator", "Assistant County Manager", "Chief Administrative Officer",
+    "Director of Information Technology", "IT Director", "Chief Information Officer", "Public Information Officer", "Communications Director",
+    "Communications Manager", "Digital Communications Specialist", "Web Content Manager", "ADA Coordinator", "ADA Title II Coordinator",
+    "Risk Manager", "County Attorney", "Purchasing Director", "Procurement Manager", "Purchasing Agent", "Finance Director", "Budget Director"];
+  const COUNTY = criteriaFromTargeting({
+    titles: COUNTY_TITLES,
+    industries: ["Government Administration", "Executive Offices", "Legislative Offices"],
+    geos: ["Virginia", "Maryland", "North Carolina"],
+    keywords: ["County of", "County Government", "Board of Supervisors", "Board of Commissioners", "County Administrator", "Public Information Officer",
+      "ADA Coordinator", "IT Director", "Digital Services", "Web Content", "Purchasing"],
+  });
+
+  it("a list goes only where the schema says it ORs: states yes; one title, one industry, one keyword phrase per call", () => {
+    // 2026-10-18: campaign 38's titles went out as one comma-joined jobTitle (every word of eleven titles in ONE title),
+    // its eleven keywords as one ~30-word free-text query, its industries as one string: every search returned nobody.
+    const { args } = buildSearchLeadsArgs(COUNTY, LIVE_SCHEMA, 50, null);
+    expect(args).toEqual({
+      jobTitle: "County Administrator",
+      industry: "Government Administration",
+      state: "Virginia, Maryland, North Carolina",
+      keyword: "County of",
+      hasEmail: true,
+      limit: 50,
+    });
+    // ORing parameters keep their lists; the country goes by name, as the vendor's rows carry it.
+    const more = buildSearchLeadsArgs({ ...emptyCriteria(), countries: ["US", "CA"], seniorities: ["director", "vp"], departments: ["it", "finance"], postalCodes: ["220", "221"] }, LIVE_SCHEMA, 10, null).args;
+    expect(more).toMatchObject({ country: "United States, Canada", seniority: "director, vp", department: "it, finance", postalCode: "220, 221" });
+    // The connection probe asks for a country the vendor knows.
+    expect(buildSearchLeadsArgs({ ...emptyCriteria(), jobTitles: ["Owner"], countries: ["US"] }, LIVE_SCHEMA, 3, null).args.country).toBe("United States");
+    // No description, no schema: the concepts known to OR still take lists, the rest one value.
+    expect(buildSearchLeadsArgs({ ...emptyCriteria(), stateProvinces: ["Virginia", "Maryland"], industries: ["A", "B"] }, null, 10, null).args)
+      .toMatchObject({ state: "Virginia, Maryland", industry: "A" });
+  });
+
+  it("several titles become one search_leads call per title, the cursor walking the rest, then the next page", () => {
+    const first = planSearchLeadsCalls(COUNTY, LIVE_SCHEMA, 50, null);
+    expect(first.calls.map((c) => c.args.jobTitle)).toEqual(COUNTY_TITLES.slice(0, MAX_TITLE_SEARCHES));
+    expect(first.calls.every((c) => c.args.state === "Virginia, Maryland, North Carolina" && c.args.limit === 9 && c.limit === 9 && !("page" in c.args))).toBe(true);
+    expect(first.titleWalk).toEqual({ titles: COUNTY_TITLES, page: 1, offset: 0 });
+    // A title list that ORs (an array parameter) stays one call.
+    const asArray = planSearchLeadsCalls(COUNTY, { properties: { jobTitle: { type: "array" } } }, 50, null);
+    expect(asArray.calls).toHaveLength(1);
+    expect(asArray.calls[0].args.jobTitle).toEqual(COUNTY_TITLES);
+    expect(asArray.titleWalk).toBeNull();
+    // A cursor for other titles starts over; one past the end wraps.
+    expect(parseTitleCursor("1:6:zzz", COUNTY_TITLES)).toEqual({ page: 1, offset: 0 });
+    expect(parseTitleCursor("7", COUNTY_TITLES)).toEqual({ page: 1, offset: 0 });
+    // Down to one title, a stored title cursor is no page number (page NaN would be refused every tick).
+    const one = planSearchLeadsCalls({ ...COUNTY, jobTitles: ["County Administrator"] }, LIVE_SCHEMA, 50, "2:6:abc");
+    expect(one.calls).toHaveLength(1);
+    expect("page" in one.calls[0].args).toBe(false);
+    expect(planSearchLeadsCalls({ ...COUNTY, jobTitles: ["County Administrator"] }, LIVE_SCHEMA, 50, "3").calls[0].args.page).toBe(3);
+  });
+
+  it("search(): one call per title, people merged once, the cursor resumes the walk; an empty page says why", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    let rowsFor: (a: Record<string, unknown>) => Array<Record<string, unknown>> = () => [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const headers = { "content-type": "application/json", "mcp-session-id": "s-test" };
+      if (body.method !== "tools/call") return new Response(body.id ? JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }) : "", { status: body.id ? 200 : 202, headers });
+      const a = body.params.arguments as Record<string, unknown>;
+      sent.push(a);
+      const leads = rowsFor(a);
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { structuredContent: { leads, pagination: { page: a.page ?? 1, total: leads.length } } } }), { status: 200, headers });
+    }) as unknown as typeof fetch;
+    const src = createWarmySenderSource({ fetchImpl });
+    const c = creds("warmysender");
+    c.secrets = { apiKey: "ws_search_test" };
+    c.config = { toolSchemas: { search_leads: LIVE_SCHEMA } };
+    // Every title finds one person of its own; the deputy also holds "County Administrator".
+    rowsFor = (a) => {
+      const t = String(a.jobTitle);
+      const own = { id: `L-${t}`, firstName: "Pat", lastName: t.replace(/\s+/g, ""), jobTitle: t, email: "p***@county.gov", companyName: "County of Henrico", state: "Virginia" };
+      return t === "County Administrator" ? [own, { id: "L-Deputy County Administrator", firstName: "Pat", lastName: "Deputy", jobTitle: "Deputy County Administrator", email: "d***@county.gov" }] : [own];
+    };
+    const p1 = await src.search(COUNTY, c, 50, { cursor: null });
+    if (!p1.ok) throw new Error(p1.message);
+    expect(sent.map((a) => a.jobTitle)).toEqual(COUNTY_TITLES.slice(0, 6));
+    // The deputy came with the first title and is not taken again with the third.
+    expect(p1.records.map((r) => r.jobTitle)).toEqual(["County Administrator", "Deputy County Administrator", "County Manager",
+      "Assistant County Manager", "Chief Administrative Officer", "Director of Information Technology"]);
+    expect(p1.records.every((r) => r.email === null && r.emailIsMasked)).toBe(true);
+    expect(p1.note).toBe("titles 1–6 of 22, one per search");
+    expect(parseTitleCursor(p1.nextCursor, COUNTY_TITLES)).toEqual({ page: 1, offset: 6 });
+
+    // The last window: nobody left on a full page, so the walk wraps to the start.
+    sent.length = 0;
+    const p4 = await src.search(COUNTY, c, 50, { cursor: p1.nextCursor!.replace(/^1:6:/, "1:18:") });
+    if (!p4.ok) throw new Error(p4.message);
+    expect(sent.map((a) => a.jobTitle)).toEqual(COUNTY_TITLES.slice(18));
+    expect(p4.nextCursor).toBeNull();
+    // A full page on some title: the next pass is page 2.
+    rowsFor = (a) => Array.from({ length: Number(a.limit) }, (_, i) => ({ id: `${a.jobTitle}-${a.page ?? 1}-${i}`, firstName: "A", lastName: `B${i}`, email: "x***@y.gov" }));
+    const p5 = await src.search(COUNTY, c, 50, { cursor: p1.nextCursor!.replace(/^1:6:/, "1:18:") });
+    if (!p5.ok) throw new Error(p5.message);
+    expect(parseTitleCursor(p5.nextCursor, COUNTY_TITLES)).toEqual({ page: 2, offset: 0 });
+    sent.length = 0;
+    await src.search(COUNTY, c, 50, { cursor: p5.nextCursor });
+    expect(sent.every((a) => a.page === 2)).toBe(true);
+
+    // Nobody anywhere: the note tells "the vendor matched nobody" from "rows we cannot find".
+    rowsFor = () => [];
+    const empty = await src.search({ ...COUNTY, jobTitles: ["County Administrator"] }, c, 50, { cursor: null });
+    if (!empty.ok) throw new Error(empty.message);
+    expect(empty.records).toEqual([]);
+    expect(empty.note).toBe("no rows; vendor total 0; payload keys leads, pagination");
+  });
+
+  it("search(): the first call's failure is the source's; a later one keeps what came back and resumes there", async () => {
+    let calls = 0;
+    let failAt = 1;
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const headers = { "content-type": "application/json", "mcp-session-id": "s-fail" };
+      if (body.method !== "tools/call") return new Response(body.id ? JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }) : "", { status: body.id ? 200 : 202, headers });
+      calls += 1;
+      if (calls === failAt) return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, error: { code: -32602, message: "Invalid arguments for tool search_leads" } }), { status: 200, headers });
+      const t = String(body.params.arguments.jobTitle);
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { structuredContent: { leads: [{ id: `L-${t}`, firstName: "Pat", lastName: "Lee", jobTitle: t }] } } }), { status: 200, headers });
+    }) as unknown as typeof fetch;
+    const src = createWarmySenderSource({ fetchImpl });
+    const c = creds("warmysender");
+    c.secrets = { apiKey: "ws_fail_test" };
+    c.config = { toolSchemas: { search_leads: LIVE_SCHEMA } };
+    const failed = await src.search(COUNTY, c, 50, { cursor: null });
+    expect(failed.ok).toBe(false);
+    if (!failed.ok) expect(failed.reason).toBe("invalid_params");
+    calls = 0; failAt = 3;
+    const partial = await src.search(COUNTY, c, 50, { cursor: null });
+    if (!partial.ok) throw new Error(partial.message);
+    expect(partial.records.map((r) => r.jobTitle)).toEqual(COUNTY_TITLES.slice(0, 2));
+    expect(parseTitleCursor(partial.nextCursor, COUNTY_TITLES)).toEqual({ page: 1, offset: 2 });
   });
   it("the page size never exceeds its maximum: the schema's own, else 50", () => {
     // 2026-10-16: once the text filters fit, a limit of 100 failed every search (search_leads allows 50).
