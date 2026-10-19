@@ -506,7 +506,16 @@ export function buildSearchLeadsArgs(
   put("jobTitle", criteria.jobTitles, "job_title");
   put("seniority", criteria.seniorities, "seniority");
   put("department", criteria.departments, "department");
-  put("industry", criteria.industries, "industry");
+  // No industry parameter: WarmySender's person rows carry no industry, so
+  // any value matches nobody. 2026-10-19 previews: "County Administrator" in
+  // VA/MD/NC found 28, adding industry "Government Administration" 0, and
+  // "government" across the three states alone 0. Only a search with no
+  // title and no keyword folds it into the keyword (which also searches
+  // company and category), so it never narrows a title search again.
+  if (criteria.industries.length && !criteria.jobTitles.length && !criteria.keywords.length) {
+    folded.push("industry");
+    keywordParts.push(criteria.industries[0]);
+  }
   put("country", criteria.countries.map(countryName), "country");
   put("stateProvince", criteria.stateProvinces, "state");
   put("city", criteria.cities, "city");
@@ -606,9 +615,11 @@ const BASE_CAPS: SourceCapabilities = {
   // category, country, state, city, postcode, seniority, department,
   // has_email/has_phone. Job title is listed as a free-text filter on the
   // product page but absent from the MCP docs — approximated until a
-  // captured schema proves the native parameter.
-  supportedFilters: ["keyword", "industry", "country", "stateProvince", "city", "postalCode", "seniority", "department", "hasEmail", "hasPhone"],
-  approximatedFilters: ["jobTitle", "companyName", "companyDomain"],
+  // captured schema proves the native parameter. Industry is approximated
+  // whatever the schema says: its person rows carry none (see
+  // buildSearchLeadsArgs).
+  supportedFilters: ["keyword", "country", "stateProvince", "city", "postalCode", "seniority", "department", "hasEmail", "hasPhone"],
+  approximatedFilters: ["jobTitle", "industry", "companyName", "companyDomain"],
   supportsFreePreview: true,
   returnsMaskedPreview: true,
   supportsMobilePhone: false,
@@ -640,7 +651,6 @@ export function warmySenderCapabilities(c?: SourceCredentials | null): SourceCap
   };
   demote("seniority", "seniority");
   demote("department", "department");
-  demote("industry", "industry");
   demote("postalCode", "postalCode");
   return { ...BASE_CAPS, supportedFilters: supported, approximatedFilters: approximated };
 }

@@ -237,13 +237,12 @@ describe("WarmySender adapter", () => {
       "ADA Coordinator", "IT Director", "Digital Services", "Web Content", "Purchasing"],
   });
 
-  it("a list goes only where the schema says it ORs: states yes; one title, one industry, one keyword phrase per call", () => {
+  it("a list goes only where the schema says it ORs: states yes; one title, one keyword phrase per call", () => {
     // 2026-10-18: campaign 38's titles went out as one comma-joined jobTitle (every word of eleven titles in ONE title),
     // its eleven keywords as one ~30-word free-text query, its industries as one string: every search returned nobody.
     const { args } = buildSearchLeadsArgs(COUNTY, LIVE_SCHEMA, 50, null);
     expect(args).toEqual({
       jobTitle: "County Administrator",
-      industry: "Government Administration",
       state: "Virginia, Maryland, North Carolina",
       keyword: "County of",
       hasEmail: true,
@@ -255,8 +254,38 @@ describe("WarmySender adapter", () => {
     // The connection probe asks for a country the vendor knows.
     expect(buildSearchLeadsArgs({ ...emptyCriteria(), jobTitles: ["Owner"], countries: ["US"] }, LIVE_SCHEMA, 3, null).args.country).toBe("United States");
     // No description, no schema: the concepts known to OR still take lists, the rest one value.
-    expect(buildSearchLeadsArgs({ ...emptyCriteria(), stateProvinces: ["Virginia", "Maryland"], industries: ["A", "B"] }, null, 10, null).args)
-      .toMatchObject({ state: "Virginia, Maryland", industry: "A" });
+    expect(buildSearchLeadsArgs({ ...emptyCriteria(), stateProvinces: ["Virginia", "Maryland"], cities: ["Richmond", "Norfolk"] }, null, 10, null).args)
+      .toMatchObject({ state: "Virginia, Maryland", city: "Richmond" });
+  });
+
+  it("industry never goes to search_leads; only a search with no title and no keyword folds it into the keyword", () => {
+    // 2026-10-19 previews: "County Administrator" in VA/MD/NC found 28; adding industry "Government Administration" found 0,
+    // and that industry (or "government") across the three states alone found 0: the vendor's person rows carry no industry.
+    const withTitle = buildSearchLeadsArgs(COUNTY, LIVE_SCHEMA, 50, null);
+    expect(withTitle.args).not.toHaveProperty("industry");
+    expect(withTitle.args.keyword).toBe("County of");
+    expect(withTitle.foldedIntoKeyword).toEqual([]);
+    const titleNoKeyword = buildSearchLeadsArgs({ ...COUNTY, keywords: [] }, LIVE_SCHEMA, 50, null);
+    expect(titleNoKeyword.args).not.toHaveProperty("industry");
+    expect(titleNoKeyword.args).not.toHaveProperty("keyword");
+    const keywordNoTitle = buildSearchLeadsArgs({ ...COUNTY, jobTitles: [] }, LIVE_SCHEMA, 50, null);
+    expect(keywordNoTitle.args).not.toHaveProperty("industry");
+    expect(keywordNoTitle.args.keyword).toBe("County of");
+    // Nothing else to define the audience: the first industry becomes the keyword.
+    const onlyIndustry = buildSearchLeadsArgs({ ...emptyCriteria(), industries: ["Government Administration", "Executive Offices"], stateProvinces: ["Virginia"] }, LIVE_SCHEMA, 50, null);
+    expect(onlyIndustry.args).toEqual({ state: "Virginia", keyword: "Government Administration", hasEmail: true, limit: 50 });
+    expect(onlyIndustry.foldedIntoKeyword).toEqual(["industry"]);
+    // Every per-title call of a campaign search leaves it out too.
+    expect(planSearchLeadsCalls(COUNTY, LIVE_SCHEMA, 50, null).calls.every((c) => !("industry" in c.args))).toBe(true);
+    // The manifest says so whatever the schema lists, so the registry calls the match approximate.
+    const c = creds("warmysender");
+    c.config = { toolSchemas: { search_leads: LIVE_SCHEMA } };
+    const caps = warmySenderCapabilities(c);
+    expect(caps.approximatedFilters).toContain("industry");
+    expect(caps.supportedFilters).not.toContain("industry");
+    expect(caps.supportedFilters).toContain("jobTitle");
+    expect(matchCapabilities(caps, COUNTY)).toEqual({ verdict: "approximate", approximated: ["industry"], missing: [] });
+    expect(warmySenderCapabilities(null).approximatedFilters).toContain("industry");
   });
 
   it("several titles become one search_leads call per title, the cursor walking the rest, then the next page", () => {
