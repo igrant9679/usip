@@ -142,7 +142,7 @@ describe("wiring", () => {
     expect(fn).toContain(': pickFallback(fallback, icpLabels(icp?.targetIndustries, "industry"), researched?.industries);');
     expect(fn).toContain(': pickFallback(fallback, icpLabels(icp?.targetGeographies, "geography"), researched?.geographies);');
     expect(fn).toContain("?? icp?.targetCompanySizeMin ?? undefined,");
-    expect(engine).toContain("discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size })");
+    expect(engine).toContain("discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size }, ");
   });
 
   it("the AI fit scorer is shown labels with weights, not raw JSON", () => {

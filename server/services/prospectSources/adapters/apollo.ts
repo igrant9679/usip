@@ -57,7 +57,10 @@ export function createApolloSource(): ProspectSource & { acquisition: "none"; re
         return { ok: false, reason: /No Apollo API key/i.test(msg) ? "no_credentials" : /429|rate/i.test(msg) ? "rate_limited" : /401|403/.test(msg) ? "unauthorized" : "unavailable", message: msg };
       }
       const records: ProspectRecord[] = res.prospects.map((p) => ({
-        externalId: p.linkedinUrl || p.sourceUrl || `${p.firstName} ${p.lastName}@${p.companyDomain}`,
+        // api_search rows are masked (no LinkedIn URL, no last name, no
+        // domain): Apollo's person id is then the only identity that is not
+        // shared by every "Andrew" at one county.
+        externalId: p.linkedinUrl || p.sourceUrl || (p.apolloId ? `apollo:${p.apolloId}` : `${p.firstName} ${p.lastName}@${p.companyDomain || p.companyName}`),
         firstName: p.firstName, lastName: p.lastName, jobTitle: p.title || null, seniority: null,
         companyName: p.companyName || null, companyDomain: p.companyDomain || null,
         email: null, emailIsMasked: true, emailVerifiedAt: null,

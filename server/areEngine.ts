@@ -71,7 +71,17 @@ import { ARE_DEFAULT_SOURCES, normalizeSources, resolveSourceOrder, type AreSour
 // upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
 import { normalizeSequence } from "@shared/areSequenceSteps";
 import { effectiveStepGapDays, dueAtForDay, dayOffsetForPosition, planHealRevival, sanitizeDayOffsets } from "@shared/areStepCadence";
-import { apolloPulledToday, apolloSearchPeople, getApolloDailyCap } from "./services/apollo";
+import {
+  APOLLO_PAGE_SIZE,
+  apolloEmailReady,
+  apolloPulledToday,
+  apolloQueryKey,
+  apolloSearchPeople,
+  currentApolloPage,
+  getApolloDailyCap,
+  nextApolloPage,
+  type ApolloPageState,
+} from "./services/apollo";
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { queueIdentityKeys } from "./services/are/queueIdentity";
 import { promoteApprovedProspects } from "./services/are/approvePromotion";
@@ -2012,10 +2022,10 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
 
   // Merge with persisted state so we know which slice to run next. The same
   // JSON carries the QuickEnrich page cursor (`qe`) — see nextQuickenrichPage —
-  // and WarmySender's search cursor (`ws`).
+  // Apollo's (`ap`, nextApolloPage) and WarmySender's search cursor (`ws`).
   const persistedState =
-    (campaign as { discoveryQueryState?: { slices?: Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }>; qe?: QuickenrichPageState | null; ws?: string | null } | null }).discoveryQueryState
-    ?? { slices: [] as Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }>, qe: null, ws: null };
+    (campaign as { discoveryQueryState?: { slices?: Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }>; qe?: QuickenrichPageState | null; ap?: ApolloPageState | null; ws?: string | null } | null }).discoveryQueryState
+    ?? { slices: [] as Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }>, qe: null, ap: null, ws: null };
   const stateById = new Map<string, { id: string; q: string; lastSearchedAt: number | null; lastNewCount: number | null }>();
   for (const s of persistedState.slices ?? []) {
     stateById.set(s.id, { id: s.id, q: s.q, lastSearchedAt: s.lastSearchedAt ?? null, lastNewCount: s.lastNewCount ?? null });
@@ -2124,6 +2134,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // "every source id has a branch" rule: a vocabulary entry without a
   // factory here no longer compiles.
   let quickenrichNextPage: QuickenrichPageState | null = null;
+  let apolloNextPage: ApolloPageState | null = null;
   // undefined = WarmySender did not search this tick (skipped or failed).
   let warmysenderNextCursor: string | null | undefined;
   // Each factory receives the slots still open when its turn comes — the
@@ -2161,11 +2172,14 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
         raw,
       })),
     apollo: () =>
-      discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size }).then((raw) => ({
-        sourceType: "apollo" as const,
-        query,
-        raw,
-      })),
+      discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size }, persistedState.ap ?? null).then(({ raw, nextAp }) => {
+        apolloNextPage = nextAp;
+        return {
+          sourceType: "apollo" as const,
+          query,
+          raw,
+        };
+      }),
     google_business: () =>
       scrapeGoogleBusiness(campaign.workspaceId, campaign.id, query, icpContext).then(
         (raw) => ({ sourceType: "google_business" as const, query, raw }),
@@ -2290,6 +2304,8 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     // when this tick pulled, else whatever was stored (a skipped pull — no
     // key, no headroom — must not reset the rotation).
     qe: quickenrichNextPage ?? persistedState.qe ?? null,
+    // Apollo's page cursor, kept the same way.
+    ap: apolloNextPage ?? persistedState.ap ?? null,
     // null is an answer here (the walk wrapped): only "did not search" keeps the old one.
     ws: warmysenderNextCursor !== undefined ? warmysenderNextCursor : (persistedState.ws ?? null),
   };
@@ -2507,24 +2523,36 @@ async function discoverViaApollo(
     keywords: string[];
     overrides: { employeeMin?: number; employeeMax?: number };
   },
-): Promise<Array<Record<string, unknown>>> {
+  apPageState: ApolloPageState | null,
+): Promise<{ raw: Array<Record<string, unknown>>; nextAp: ApolloPageState | null }> {
   const cap = await getApolloDailyCap(campaign.workspaceId);
   const used = await apolloPulledToday(campaign.workspaceId);
   const headroom = cap - used;
   if (headroom <= 0) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
       `Apollo skipped — daily record cap reached (${used}/${cap}). Raise it in ARE Settings → Apollo.io if you want more per day.`);
-    return [];
+    return { raw: [], nextAp: null };
   }
 
-  const res = await apolloSearchPeople(campaign.workspaceId, {
+  // Page rotation (2026-10-19): the request carried no page, so every tick
+  // re-read page 1 of the same filters. A full page of APOLLO_PAGE_SIZE every
+  // time keeps one query's page numbers meaning the same people; the record
+  // cap trims what is kept below, not what is asked for.
+  const filters = {
     titles: targeting.titles,
-    industries: targeting.industries,
     locations: targeting.geos,
     keywords: targeting.keywords,
     employeeMin: targeting.overrides.employeeMin,
     employeeMax: targeting.overrides.employeeMax,
-    perPage: Math.min(headroom, 25),
+    perPage: APOLLO_PAGE_SIZE,
+  };
+  const apKey = apolloQueryKey(filters);
+  const { page, relaxed } = currentApolloPage(apPageState, apKey);
+  const res = await apolloSearchPeople(campaign.workspaceId, {
+    ...filters,
+    industries: targeting.industries,
+    keywords: relaxed ? [] : targeting.keywords,
+    page,
   });
 
   if (!res.ok) {
@@ -2537,17 +2565,38 @@ async function discoverViaApollo(
       keyless
         ? "Apollo skipped — no API key configured for this workspace. Company domains come from QuickEnrich/LinkedIn instead."
         : `Apollo search failed: ${res.error}`);
-    return [];
+    // A failed request says nothing about the page — hold the cursor.
+    return { raw: [], nextAp: null };
   }
-
-  // Apollo returns no emails on this path by design; the enrich phase resolves
-  // them from companyDomain. Say so once per tick so a queue full of
-  // email-less prospects doesn't read as a bug.
+  // Apollo returns no emails on this path by design; the enrich phase finds
+  // them from a LinkedIn URL, or from the full name and company domain. A row
+  // with neither (api_search masks the last name and sends no domain or
+  // LinkedIn URL) can only be rejected after enrichment, so it is not queued.
+  const ready = res.prospects.filter(apolloEmailReady);
+  const kept = ready.slice(0, headroom);
+  // The cap cut this page short: stay on it, and the next tick's dedup skips
+  // the people already kept.
+  const keywordsDropped = res.keywordsDropped === true;
+  const nextAp: ApolloPageState = kept.length < ready.length
+    ? { key: apKey, page, ...(relaxed || keywordsDropped ? { relaxed: true } : {}) }
+    : nextApolloPage(apPageState, apKey, {
+      pageCount: res.pageCount ?? res.prospects.length,
+      perPage: APOLLO_PAGE_SIZE,
+      totalAvailable: res.totalAvailable,
+      keywordsDropped,
+    });
+  const unusable = res.prospects.length - ready.length;
+  const masked = res.prospects.filter((p) => !apolloEmailReady(p) && p.lastNameMasked).length;
   const withDomain = res.prospects.filter((p) => p.companyDomain).length;
-  await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
-    `Apollo returned ${res.prospects.length} people (${withDomain} with a company domain) from ${res.totalAvailable.toLocaleString()} matches. Emails are resolved during enrichment — Apollo search never includes them.`);
+  await emitLog(campaign.workspaceId, campaign.id, "discovery", unusable > 0 && kept.length === 0 ? "warn" : "info",
+    `Apollo returned ${res.prospects.length} ${res.prospects.length === 1 ? "person" : "people"} (page ${page}${relaxed || keywordsDropped ? ", without keywords" : ""}, ${withDomain} with a company domain) from ${res.totalAvailable.toLocaleString()} matches; kept ${kept.length}.`
+    + (unusable > 0
+      ? ` ${unusable} not queued: no LinkedIn URL, and no full name with a company domain, so no email lookup can find them.`
+        + (masked > 0 ? ` ${masked} have the last name hidden: Apollo's free API search masks it and sends no domain; the full record needs Apollo's paid enrichment, which Velocity does not call.` : "")
+      : "")
+    + (kept.length > 0 ? " Emails are resolved during enrichment — Apollo search never includes them." : ""));
 
-  return res.prospects.map((p) => ({ ...p }));
+  return { raw: kept.map((p) => ({ ...p })), nextAp };
 }
 
 /**

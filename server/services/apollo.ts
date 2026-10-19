@@ -20,11 +20,16 @@
  * below — don't; that decision needs the owner, and apolloSearchOnly.test.ts
  * fails on any /people/match code line in this file.
  *
- * The company DOMAIN is the whole point. LinkedIn people-search gave us names
- * with no domain, so the existing Reoon-backed `resolveVerifiedEmail()` had
- * nothing to work with. Apollo hands us the domain for free, which is exactly
- * that finder's required input — so the free half of Apollo unblocks the
- * pipeline on its own.
+ * The company DOMAIN was the whole point: the old /mixed_people/search rows
+ * carried it, and it is the input the Reoon-backed `resolveVerifiedEmail()`
+ * needs. api_search, the path Apollo moved API callers to, MASKS its rows
+ * (docs.apollo.io/reference/people-api-search, read 2026-10-19): first name,
+ * `last_name_obfuscated` ("Hu***n"), title, has_* flags, and an organization
+ * with its name and has_* flags only. No last name, domain, LinkedIn URL or
+ * location, and the total is a top-level `total_entries`, not `pagination`.
+ * Such a row gives the email lookup nothing to work from, so the engine does
+ * not queue it (`apolloEmailReady`). The full record comes only from People
+ * Enrichment, which costs credits and is ruled out (above).
  *
  * THE PLACEHOLDER-EMAIL TRAP
  * --------------------------
@@ -34,6 +39,7 @@
  * sender reputation doing it). `cleanEmail()` below drops it. Do not remove
  * that guard.
  */
+import { createHash } from "node:crypto";
 import { and, eq, gte, sql } from "drizzle-orm";
 import { areScrapeJobs, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -121,6 +127,14 @@ function cleanEmail(raw: string): string {
 export interface ApolloProspect {
   firstName: string;
   lastName: string;
+  /** Apollo hid the last name (api_search's `last_name_obfuscated`, or a
+   *  starred `last_name`). lastName is then "", never the masked string:
+   *  "Hu***n" would build wrong email patterns and wrong dedup keys. */
+  lastNameMasked: boolean;
+  /** Apollo's person id, the only handle a masked row carries. */
+  apolloId: string;
+  /** api_search's has_email flag; null when the row does not say. */
+  hasEmail: boolean | null;
   title: string;
   email: string;
   linkedinUrl: string;
@@ -134,7 +148,11 @@ export interface ApolloProspect {
   confidence: number;
 }
 
-function mapPerson(p: Record<string, unknown>): ApolloProspect {
+/** A masked last name: api_search stars out the middle ("Hu***n"); lower
+ *  tiers of the old search sent an initial ("S."). Neither builds a pattern. */
+const MASKED_NAME = /\*|^[^\s.]\.?$/;
+
+export function mapPerson(p: Record<string, unknown>): ApolloProspect {
   const org = (p.organization ?? p.account ?? {}) as Record<string, unknown>;
   const location = [pick(p, "city"), pick(p, "state"), pick(p, "country")]
     .filter(Boolean)
@@ -143,14 +161,16 @@ function mapPerson(p: Record<string, unknown>): ApolloProspect {
     .replace(/^https?:\/\//i, "")
     .replace(/^www\./i, "")
     .replace(/\/.*$/, "");
+  const lastName = pick(p, "last_name", "lastName");
+  const lastNameMasked = MASKED_NAME.test(lastName) || (!lastName && pick(p, "last_name_obfuscated") !== "");
+  const hasEmail = typeof p.has_email === "boolean" ? p.has_email : null;
 
   return {
-    // Last names come back partially masked on lower Apollo tiers ("S.").
-    // Store what was actually returned rather than discarding the record —
-    // a real first name + real company domain is still enough for the
-    // email finder to work with.
     firstName: pick(p, "first_name", "firstName"),
-    lastName: pick(p, "last_name", "lastName"),
+    lastName: lastNameMasked ? "" : lastName,
+    lastNameMasked,
+    apolloId: pick(p, "id"),
+    hasEmail,
     title: pick(p, "title", "headline"),
     email: cleanEmail(pick(p, "email")),
     linkedinUrl: pick(p, "linkedin_url", "linkedinUrl"),
@@ -163,6 +183,18 @@ function mapPerson(p: Record<string, unknown>): ApolloProspect {
     emailStatus: pick(p, "email_status"),
     confidence: 0,
   };
+}
+
+/**
+ * Whether the email lookup can work from this row. The enrichment pass finds
+ * an address from a LinkedIn URL (QuickEnrich) or from first + last name +
+ * company domain (patterns verified by Reoon); a row with neither, which is
+ * every api_search row, is rejected after enrichment with "No verifiable
+ * email address found". Campaign 38 queued 19 such rows on 2026-10-19.
+ */
+export function apolloEmailReady(p: ApolloProspect): boolean {
+  if (p.email || p.linkedinUrl) return true;
+  return !!p.firstName && !!p.lastName && !p.lastNameMasked && !!p.companyDomain;
 }
 
 /* ─── Employee-band mapping ──────────────────────────────────────────────── */
@@ -203,6 +235,12 @@ export interface ApolloSearchResult {
   ok: boolean;
   prospects: ApolloProspect[];
   totalAvailable: number;
+  /** People on the page Apollo sent, before our usability filter: the page
+   *  cursor advances on this, not on what survived. */
+  pageCount?: number;
+  /** The keyword search matched nobody, so this page is the relaxed search
+   *  without keywords. */
+  keywordsDropped?: boolean;
   error?: string;
   /** Rate-limit headers echoed back so callers can log/surface them. */
   rateLimit?: Record<string, string>;
@@ -240,18 +278,21 @@ export async function apolloSearchPeople(
   // Community Development … organizational management") reliably matched ZERO
   // people. Use at most the first two campaign keywords — titles, locations,
   // and size carry the real targeting — and if that still matches nothing,
-  // retry once with no keywords at all.
+  // retry once with no keywords at all. Only on page 1: an empty later page
+  // is the end of the keyword search, not a sign that it matched nobody.
   const kw = (input.keywords ?? []).map((s) => s.trim()).filter(Boolean).slice(0, 2).join(" ");
-  const attempts: Array<Record<string, unknown>> = kw
-    ? [{ ...baseBody, q_keywords: kw }, { ...baseBody }]
-    : [{ ...baseBody }];
+  const attempts: Array<Record<string, unknown>> = !kw
+    ? [{ ...baseBody }]
+    : baseBody.page === 1
+      ? [{ ...baseBody, q_keywords: kw }, { ...baseBody }]
+      : [{ ...baseBody, q_keywords: kw }];
 
   let last: ApolloSearchResult = { ok: false, prospects: [], totalAvailable: 0, error: "No search attempted" };
   for (const body of attempts) {
-    last = await runApolloSearch(key, body);
-    // Stop on hard failure (auth/rate-limit/network) or on any results;
-    // only an ok-but-empty result falls through to the relaxed retry.
-    if (!last.ok || last.prospects.length > 0) return last;
+    last = { ...(await runApolloSearch(key, body)), keywordsDropped: !!kw && !("q_keywords" in body) };
+    // Stop on hard failure (auth/rate-limit/network) or on anyone on the
+    // page; only an ok-but-empty page falls through to the relaxed retry.
+    if (!last.ok || (last.pageCount ?? last.prospects.length) > 0) return last;
   }
   return last;
 }
@@ -319,12 +360,70 @@ async function runApolloSearch(
     // A record with neither a name nor a company is unusable downstream.
     .filter((p) => (p.firstName || p.lastName) && (p.companyName || p.companyDomain));
 
+  // api_search reports the total at the top level; the old search path put it
+  // under pagination. Reading only pagination made every log say "from 25
+  // matches" (the page size) whatever Apollo matched.
+  const total = Number(json.total_entries ?? pagination.total_entries);
   return {
     ok: true,
     prospects,
-    totalAvailable: Number(pagination.total_entries ?? prospects.length) || prospects.length,
+    totalAvailable: Number.isFinite(total) && total > 0 ? total : rawPeople.length,
+    pageCount: rawPeople.length,
     rateLimit,
   };
+}
+
+/* ─── Search page rotation ──────────────────────────────────────────────── */
+
+/** Where an engine campaign's Apollo search is: the query it was walking
+ *  (key), the next page, and whether that query had to drop its keywords. */
+export type ApolloPageState = { key: string; page: number; relaxed?: boolean };
+
+/** The engine always asks for this many people a page, so the page numbers
+ *  of one query mean the same people tick after tick. */
+export const APOLLO_PAGE_SIZE = 25;
+
+/** Apollo shows at most 50,000 people of a search (500 pages of 100). */
+export const APOLLO_MAX_RECORDS = 50_000;
+
+/** Stable key of the filters the engine sends; a retargeted campaign gets a
+ *  new key and starts again at page 1. */
+export function apolloQueryKey(input: ApolloSearchInput): string {
+  const parts = [
+    input.titles ?? [], input.locations ?? [], input.keywords ?? [],
+    toEmployeeBands(input.employeeMin, input.employeeMax), input.perPage ?? null,
+  ];
+  return createHash("sha1").update(JSON.stringify(parts)).digest("hex").slice(0, 16);
+}
+
+/** The page to request now and whether to leave the keywords out. */
+export function currentApolloPage(
+  prev: ApolloPageState | null | undefined,
+  key: string,
+): { page: number; relaxed: boolean } {
+  if (!prev || prev.key !== key || !Number.isInteger(prev.page) || prev.page < 1) return { page: 1, relaxed: false };
+  return { page: prev.page, relaxed: prev.relaxed === true };
+}
+
+/**
+ * The cursor after a search. discoverViaApollo sent no page, so every tick
+ * asked for page 1 of the same filters and got the same 25 people, who were
+ * all already queued: "→ 0 new" every tick. One page forward per full page;
+ * a short or empty page is the end of the results, and so is Apollo's
+ * 50,000-record display limit. The walk then wraps to page 1, with the
+ * keywords tried again.
+ */
+export function nextApolloPage(
+  prev: ApolloPageState | null | undefined,
+  key: string,
+  res: { pageCount: number; perPage: number; totalAvailable: number; keywordsDropped: boolean },
+): ApolloPageState {
+  const cur = currentApolloPage(prev, key);
+  const relaxed = cur.relaxed || res.keywordsDropped;
+  const seen = cur.page * res.perPage;
+  const end = Math.min(res.totalAvailable > 0 ? res.totalAvailable : Infinity, APOLLO_MAX_RECORDS);
+  if (res.pageCount < res.perPage || seen >= end) return { key, page: 1 };
+  return relaxed ? { key, page: cur.page + 1, relaxed } : { key, page: cur.page + 1 };
 }
 
 /* ─── Company name → domain resolution ───────────────────────────────────── */
@@ -336,8 +435,10 @@ const DOMAIN_CACHE_MAX = 500;
 
 /**
  * Resolve a company/organization NAME to its website domain via Apollo's
- * organization search (zero Apollo credits — same free tier as people
- * search). This is the missing link for LinkedIn-sourced prospects, which
+ * organization search. NOT free: Organization Search costs 1 Apollo credit
+ * per page (docs.apollo.io/reference/organization-search, read 2026-10-19);
+ * nothing calls this today, and wiring it in needs the owner's OK. This was
+ * meant as the missing link for LinkedIn-sourced prospects, which
  * carry an org name in the headline but no domain — and without a domain the
  * enrichment email-finder can't generate/verify addresses.
  *
