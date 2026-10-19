@@ -18,8 +18,8 @@ import {
 } from "../shared/prospectSources";
 import { ARE_SOURCE_IDS } from "../shared/areSources";
 import {
-  MAX_TITLE_SEARCHES, buildSearchLeadsArgs, createWarmySenderSource, extractCursor, extractLeadRows, fitJoin, looksMasked, mapLeadRow,
-  monthlyPeriodKeyForAnniversary, paramNameFor, parseMcpBody, parseTitleCursor, planSearchLeadsCalls, unwrapToolResult,
+  MAX_TITLE_SEARCHES, buildSearchLeadsArgs, createWarmySenderSource, describeToolResult, extractCursor, extractLeadRows, fitJoin,
+  leadCounters, looksMasked, mapLeadRow, monthlyPeriodKeyForAnniversary, paramNameFor, parseMcpBody, parseTitleCursor, planSearchLeadsCalls, unwrapToolResult,
   warmySenderBudgetPeriods, warmySenderCapabilities,
 } from "./services/prospectSources/adapters/warmysender";
 import { backoffMs, classifyHttpFailure, isRetryable, setVendorCallLogger, vendorFetch } from "./services/prospectSources/vendorHttp";
@@ -388,6 +388,97 @@ describe("WarmySender adapter", () => {
     expect(partial.records.map((r) => r.jobTitle)).toEqual(COUNTY_TITLES.slice(0, 2));
     expect(parseTitleCursor(partial.nextCursor, COUNTY_TITLES)).toEqual({ page: 1, offset: 2 });
   });
+
+  it("a tool result's JSON is found past a prose block; its shape is told without values", () => {
+    // 2026-10-19: ~70 exports came back ok with no rows we could read. WarmySender says agents get a
+    // verification reminder on save/export; read only the first text block, a reminder ahead of the JSON hides every row.
+    const reminder = { type: "text", text: "Reminder: verify these addresses before you email them." };
+    const rows = { type: "text", text: JSON.stringify({ leads: [{ id: "L1", firstName: "Pat", lastName: "Lee", email: "pat@henrico.us" }], charged: 1 }) };
+    expect(unwrapToolResult({ content: [reminder, rows] })).toEqual({ leads: [{ id: "L1", firstName: "Pat", lastName: "Lee", email: "pat@henrico.us" }], charged: 1 });
+    expect(unwrapToolResult({ content: [{ type: "text", text: '{"leads":[],"a":1}' }, { type: "text", text: '{"a":2,"b":3}' }] })).toEqual({ leads: [], a: 1, b: 3 });
+    expect(unwrapToolResult({ content: [reminder, { type: "text", text: '[{"id":"x"}]' }] })).toEqual([{ id: "x" }]);
+    expect(unwrapToolResult({ content: [reminder] })).toEqual({ text: reminder.text });
+    const shape = describeToolResult({ content: [reminder, rows] });
+    expect(shape).toBe("text (55 chars, not JSON); text JSON {leads, charged}");
+    expect(shape).not.toContain("pat@");
+    expect(describeToolResult({ structuredContent: { job_id: "j1", status: "queued" } })).toBe("structuredContent {job_id, status}");
+    expect(extractLeadRows({ exported: [{ id: "a" }] })).toEqual([{ id: "a" }]);
+  });
+
+  it("acquire(): rows past a reminder are taken; an answer with none of the leads asked for stops the source", async () => {
+    let answer: Record<string, unknown> = {};
+    const asked: unknown[] = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const headers = { "content-type": "application/json", "mcp-session-id": "s-export" };
+      if (body.method !== "tools/call") return new Response(body.id ? JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }) : "", { status: body.id ? 200 : 202, headers });
+      asked.push(body.params.arguments);
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: answer }), { status: 200, headers });
+    }) as unknown as typeof fetch;
+    const src = createWarmySenderSource({ fetchImpl });
+    const c = creds("warmysender");
+    c.secrets = { apiKey: "ws_export_test" };
+    c.config = { toolSchemas: { export_leads: { properties: { lead_ids: { type: "array" }, idempotency_key: { type: "string" } } } } };
+    const ctx = { campaignId: 38 };
+
+    answer = { content: [
+      { type: "text", text: "Reminder: verify these addresses before you email them." },
+      { type: "text", text: JSON.stringify({ leads: [
+        { id: "L1", firstName: "Pat", lastName: "Lee", jobTitle: "County Administrator", email: "pat@henrico.us" },
+        { id: "L2", firstName: "Sam", lastName: "Roe", jobTitle: "County Manager", email: "sam@wythe.gov" },
+      ] }) },
+    ] };
+    const ok = await src.acquire(["L1", "L2", "L3"], c, ctx);
+    if (!ok.ok) throw new Error(ok.message);
+    expect(asked[0]).toEqual({ lead_ids: ["L1", "L2", "L3"] });
+    expect(ok.records.map((r) => [r.externalId, r.email])).toEqual([["L1", "pat@henrico.us"], ["L2", "sam@wythe.gov"]]);
+    expect(ok.failedExternalIds).toEqual(["L3"]);
+    expect(ok.unitsSpent).toBe(2);
+    // The vendor's own count wins where it states one.
+    answer = { structuredContent: { leads: [{ id: "L1", firstName: "Pat", lastName: "Lee", email: "pat@henrico.us" }], leads_used: 0 } };
+    const owned = await src.acquire(["L1"], c, ctx);
+    if (!owned.ok) throw new Error(owned.message);
+    expect(owned.unitsSpent).toBe(0);
+
+    // A job instead of rows: terminal, so the key goes invalid until Test connection, and the log says what came back.
+    answer = { structuredContent: { job_id: "j-77", status: "queued" } };
+    const job = await src.acquire(["L1", "L2"], c, ctx);
+    expect(job.ok).toBe(false);
+    if (job.ok) return;
+    expect(job.reason).toBe("not_implemented");
+    expect(job.message).toBe("export_leads answered without any of the 2 leads asked for (it started a job; asynchronous exports are not read): " +
+      "structuredContent {job_id, status}. Check WarmySender → credits → Usage history before testing the connection again.");
+    // Prose only, or rows for other people: the same stop.
+    answer = { content: [{ type: "text", text: "Exported 2 leads to your workspace." }] };
+    const prose = await src.acquire(["L1", "L2"], c, ctx);
+    expect(!prose.ok && prose.reason === "not_implemented" && prose.message.includes("text (35 chars, not JSON)")).toBe(true);
+    answer = { structuredContent: { leads: [{ id: "OTHER", firstName: "A", lastName: "B", email: "a@b.gov" }] } };
+    const other = await src.acquire(["L1"], c, ctx);
+    expect(!other.ok && other.reason === "not_implemented").toBe(true);
+  });
+
+  it("the executor turns that stop into an invalid key: no blind exports next tick", async () => {
+    const calls: string[] = [];
+    const ws = fakeSource("warmysender", {
+      acquisition: "on_demand", calls,
+      search: async () => ({ ok: true, records: [rec("a"), rec("b")], nextCursor: null, totalAvailable: 2, alreadyCharged: false, unitsSpent: 0 }),
+      acquire: async () => ({ ok: false, reason: "not_implemented", message: "export_leads answered without any of the 2 leads asked for: structuredContent {job_id}" }),
+    });
+    const r = await runWaterfall({ workspaceId: 1, criteria: CRIT, target: 2, sources: [eligible(ws)], deduper: new Deduper(), mode: "acquire" });
+    expect(r.collected).toEqual([]);
+    expect(r.perSource[0].errorReason).toBe("not_implemented");
+    expect(r.perSource[0].error).toContain("acquire: export_leads answered without");
+    expect(h.validations).toEqual(["warmysender"]);
+    expect(h.committed).toEqual([]);
+    expect(h.released).toBe(1);
+  });
+
+  it("validation keeps the lead counters get_workspace_info reports, numbers only", () => {
+    expect(leadCounters({ tier: "pro", leads: { used_this_month: 240, monthly_allowance: 50000, name: "x" }, lead_credits: 0, seats: 3, owner_email: "o@x.com" }))
+      .toEqual({ "leads.used_this_month": 240, "leads.monthly_allowance": 50000, lead_credits: 0 });
+    expect(leadCounters(null)).toEqual({});
+  });
+
   it("the page size never exceeds its maximum: the schema's own, else 50", () => {
     // 2026-10-16: once the text filters fit, a limit of 100 failed every search (search_leads allows 50).
     expect(buildSearchLeadsArgs(CRIT, { properties: { limit: { type: "integer", maximum: 50 } } }, 100, null).args.limit).toBe(50);

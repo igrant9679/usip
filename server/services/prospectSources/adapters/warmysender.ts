@@ -74,6 +74,11 @@ export interface WarmySenderConfig {
   scopes?: string[];
   tier?: string;
   toolSchemas?: Record<string, unknown>;
+  /** The lead tools' own descriptions and output schemas, when tools/list gives them. */
+  toolOutputSchemas?: Record<string, unknown>;
+  toolDescriptions?: Record<string, string>;
+  /** Numeric lead/credit fields get_workspace_info reported at the last validation. */
+  workspaceLeadCounters?: Record<string, number>;
   toolNames?: string[];
   /** Keys of one masked search row (never values) — for field-mapping diagnosis. */
   sampleRowKeys?: string[];
@@ -219,20 +224,54 @@ function mcpRetryAfter(j: unknown): number | null {
   return typeof v === "number" ? v : null;
 }
 
-/** tools/call result → the structured payload (structuredContent, else the first text block parsed). */
+/**
+ * tools/call result → the structured payload: structuredContent, else every
+ * JSON text block (objects merged, the first block's keys winning), else the
+ * first text. Not just the first block: WarmySender says agents get a
+ * verification reminder when they save or export, and a prose block ahead of
+ * the JSON would read as `{ text }` with no rows. 2026-10-19: some seventy
+ * exports in a row came back ok with no rows we could read ("acquired 0").
+ */
 export function unwrapToolResult(result: unknown): unknown {
   if (!result || typeof result !== "object") return result;
   const r = result as Record<string, unknown>;
   if (r.isError) return { __error: true, ...r };
   if (r.structuredContent && typeof r.structuredContent === "object") return r.structuredContent;
   const content = Array.isArray(r.content) ? (r.content as Array<Record<string, unknown>>) : [];
+  let merged: Record<string, unknown> | null = null;
+  let list: unknown[] | null = null;
+  let firstText: string | null = null;
   for (let i = 0; i < content.length; i++) {
     const c = content[i];
-    if (c && c.type === "text" && typeof c.text === "string") {
-      try { return JSON.parse(c.text); } catch { return { text: c.text }; }
-    }
+    if (!c || c.type !== "text" || typeof c.text !== "string") continue;
+    if (firstText === null) firstText = c.text;
+    let j: unknown;
+    try { j = JSON.parse(c.text); } catch { continue; }
+    if (Array.isArray(j)) { if (!list) list = j; }
+    else if (j && typeof j === "object") merged = { ...(j as Record<string, unknown>), ...(merged ?? {}) };
   }
+  if (merged) return merged;
+  if (list) return list;
+  if (firstText !== null) return { text: firstText };
   return r;
+}
+
+/** A tools/call result's shape — block kinds and JSON keys, never values — for a log line. */
+export function describeToolResult(result: unknown): string {
+  if (!result || typeof result !== "object") return `result ${result === null ? "null" : typeof result}`;
+  const r = result as Record<string, unknown>;
+  const keys = (o: unknown) => Object.keys(o && typeof o === "object" ? (o as Record<string, unknown>) : {}).slice(0, 12).join(", ");
+  const parts: string[] = [];
+  if (r.structuredContent && typeof r.structuredContent === "object") parts.push(`structuredContent {${keys(r.structuredContent)}}`);
+  const content = Array.isArray(r.content) ? (r.content as Array<Record<string, unknown>>) : [];
+  for (let i = 0; i < content.length; i++) {
+    const c = content[i];
+    if (!c || c.type !== "text" || typeof c.text !== "string") { parts.push(String(c?.type ?? "unknown block")); continue; }
+    let j: unknown;
+    try { j = JSON.parse(c.text); } catch { parts.push(`text (${c.text.length} chars, not JSON)`); continue; }
+    parts.push(Array.isArray(j) ? `text JSON [${j.length}]` : `text JSON {${keys(j)}}`);
+  }
+  return parts.length ? parts.join("; ") : `keys {${keys(r)}}`;
 }
 
 /* ─── Tolerant field mapping ────────────────────────────────────────────── */
@@ -272,7 +311,7 @@ export function extractLeadRows(payload: unknown): Array<Record<string, unknown>
   if (Array.isArray(payload)) return payload as Array<Record<string, unknown>>;
   if (!payload || typeof payload !== "object") return [];
   const p = payload as Record<string, unknown>;
-  const keys = ["leads", "results", "data", "items", "records", "contacts"];
+  const keys = ["leads", "results", "data", "items", "records", "contacts", "exported", "prospects", "rows"];
   for (let i = 0; i < keys.length; i++) {
     const v = p[keys[i]];
     if (Array.isArray(v)) return v as Array<Record<string, unknown>>;
@@ -760,14 +799,24 @@ export function createWarmySenderSource(deps?: { fetchImpl?: typeof fetch }): Pr
         if (Array.isArray(list)) {
           const names: string[] = [];
           const schemas: Record<string, unknown> = {};
+          // What the lead tools say they return: the export's answer is
+          // documented nowhere else (2026-10-19).
+          const outputs: Record<string, unknown> = {};
+          const descriptions: Record<string, string> = {};
           for (let i = 0; i < list.length; i++) {
             const t = list[i] as Record<string, unknown>;
             if (typeof t.name !== "string") continue;
             names.push(t.name);
-            if (["search_leads", "save_leads", "export_leads", "get_workspace_info"].indexOf(t.name) !== -1) schemas[t.name] = t.inputSchema ?? null;
+            if (["search_leads", "save_leads", "export_leads", "get_workspace_info"].indexOf(t.name) !== -1) {
+              schemas[t.name] = t.inputSchema ?? null;
+              if (t.outputSchema && typeof t.outputSchema === "object") outputs[t.name] = t.outputSchema;
+              if (typeof t.description === "string") descriptions[t.name] = t.description.slice(0, 2000);
+            }
           }
           discovered.toolNames = names;
           discovered.toolSchemas = schemas;
+          discovered.toolOutputSchemas = outputs;
+          discovered.toolDescriptions = descriptions;
           if (names.indexOf("search_leads") === -1) {
             return { ok: false, message: `Key accepted, but this key's MCP server exposes no search_leads tool (scopes: ${scopes.join(", ") || "none"}). Reissue the key with leads:read and leads:write.`, discovered, terminal: true };
           }
@@ -779,6 +828,7 @@ export function createWarmySenderSource(deps?: { fetchImpl?: typeof fetch }): Pr
         const payload = unwrapToolResult(info.result) as Record<string, unknown> | null;
         const tier = payload && (payload.subscription_tier ?? payload.tier ?? payload.plan ?? (payload.subscription && (payload.subscription as Record<string, unknown>).tier));
         if (typeof tier === "string") discovered.tier = tier.toLowerCase();
+        discovered.workspaceLeadCounters = leadCounters(payload);
       }
       // One masked search, keys only, so a field rename is diagnosable later.
       const probe = await mcpCall(c, "tools/call", {
@@ -880,7 +930,20 @@ export function createWarmySenderSource(deps?: { fetchImpl?: typeof fetch }): Pr
       for (let i = 0; i < rows.length; i++) records.push(...mapLeadRow(rows[i]));
       const got = new Set(records.map((r) => r.externalId.replace(/#\d+$/, "")));
       const failed = externalIds.filter((id) => !got.has(id.replace(/#\d+$/, "")));
-      const charged = pick(payload ?? {}, ["units_spent", "charged", "credits_used", "new_leads", "spent"]);
+      if (failed.length === externalIds.length) {
+        // The vendor said ok and handed back none of the people asked for. It
+        // charges one unit per NEW lead exported, so asking again blind may
+        // pay for people we never receive: a terminal failure marks the key
+        // invalid (Test connection clears it) and says what came back.
+        const job = pick(payload && typeof payload === "object" ? payload : {}, ["job_id", "jobId"]);
+        return {
+          ok: false, reason: "not_implemented",
+          message: `export_leads answered without any of the ${externalIds.length} lead${externalIds.length === 1 ? "" : "s"} asked for` +
+            `${job != null ? " (it started a job; asynchronous exports are not read)" : ""}: ${describeToolResult(res.result)}. ` +
+            "Check WarmySender → credits → Usage history before testing the connection again.",
+        };
+      }
+      const charged = pick(payload ?? {}, ["units_spent", "charged", "credits_used", "new_leads", "spent", "units_used", "leads_used", "used"]);
       const unitsSpent = typeof charged === "number" ? charged : records.filter((r) => r.email && !r.emailIsMasked).length;
       return { ok: true, records, unitsSpent, failedExternalIds: failed } as AcquisitionResult & { ok: true };
     },
@@ -905,6 +968,26 @@ export function createWarmySenderSource(deps?: { fetchImpl?: typeof fetch }): Pr
       return out;
     },
   };
+}
+
+/**
+ * Lead and credit counters from get_workspace_info (numbers only, two levels
+ * deep, keyed by path): the one place the vendor may say what saves and
+ * exports have spent, since no endpoint reports it.
+ */
+export function leadCounters(payload: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  const walk = (o: unknown, prefix: string, depth: number) => {
+    if (!o || typeof o !== "object" || Array.isArray(o)) return;
+    for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
+      const path = prefix ? `${prefix}.${k}` : k;
+      if (typeof v === "number" && /lead|credit|allowance|export|save/i.test(path)) {
+        if (Object.keys(out).length < 24) out[path] = v;
+      } else if (depth < 2) walk(v, path, depth + 1);
+    }
+  };
+  walk(payload, "", 0);
+  return out;
 }
 
 function emptyCriteriaLocal(): SearchCriteria {
