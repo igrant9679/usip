@@ -179,18 +179,23 @@ describe("the router stops serving the columns nothing writes", () => {
     // Dropped rather than nulled: a null would still print "0%" through pct(),
     // and would narrow the emitted type to `null`, breaking the casts that
     // consume it. Dropping makes a missed surface a compile error.
-    expect(list).toContain("bounceRate, spamRate, reputationTier, ...a");
+    // 2026-10-24: the drop moved into safeSendingAccount (_core/safeProjections),
+    // which also drops the credentials (audit C4); both procedures call it.
+    expect(list).toContain("...safeSendingAccount(row),");
     expect(list).not.toContain("bounceRate: a.bounceRate");
+    const proj = readFileSync(join(ROOT, "server/_core/safeProjections.ts"), "utf8");
+    expect(proj).toContain('const SENDING_ACCOUNT_DEAD_FIELDS = ["bounceRate", "spamRate", "reputationTier"] as const;');
+    expect(proj).toContain("for (const k of SENDING_ACCOUNT_DEAD_FIELDS) delete out[k];");
   });
 
   it("`list` still reports a USABLE SendGrid key", () => {
     // Re-asserted here so a reflow of this return fails with a message about
     // the thing it broke, rather than in sendgridIntegration.test.ts.
-    expect(list).toContain("hasSendgridKey: !!sendgridApiKeyEnc || workspaceHasKey");
+    expect(list).toContain("hasSendgridKey: !!row.sendgridApiKeyEnc || workspaceHasKey");
   });
 
   it("`get` drops the same three — the detail view cannot disagree with the row", () => {
-    expect(get).toContain("bounceRate, spamRate, reputationTier, ...safe");
+    expect(get).toContain("const safe = safeSendingAccount(account);");
   });
 
   it("testConnection no longer re-stamps a tier from a column nothing writes", () => {

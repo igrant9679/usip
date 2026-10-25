@@ -47,7 +47,9 @@ export const csRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [c] = await db.select().from(customers).where(and(eq(customers.id, input.id), eq(customers.workspaceId, ctx.workspace.id)));
     if (!c) return null;
-    const [a] = await db.select().from(accounts).where(eq(accounts.id, c.accountId));
+    // Scoped (audit 2026-10-20, C8): a customer row made from a won deal on a
+    // foreign accountId handed that other tenant's account to this page.
+    const [a] = await db.select().from(accounts).where(and(eq(accounts.id, c.accountId), eq(accounts.workspaceId, ctx.workspace.id)));
     return { ...withStage(c), account: a ?? null };
   }),
 
@@ -190,6 +192,12 @@ export const csRouter = router({
   scheduleQbr: repProcedure.input(z.object({ customerId: z.number(), scheduledAt: z.string() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // The customer must be this workspace's (audit 2026-10-20, C8): the QBR
+    // used to store any customerId, and generateQbrPrep then read that
+    // customer — health, ARR, NPS and the account name — across tenants.
+    const [c] = await db.select({ id: customers.id }).from(customers)
+      .where(and(eq(customers.id, input.customerId), eq(customers.workspaceId, ctx.workspace.id)));
+    if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
     const r = await db.insert(qbrs).values({ workspaceId: ctx.workspace.id, customerId: input.customerId, scheduledAt: new Date(input.scheduledAt), status: "scheduled" });
     return { id: Number((r as any)[0]?.insertId ?? 0) };
   }),
@@ -199,8 +207,11 @@ export const csRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [q] = await db.select().from(qbrs).where(and(eq(qbrs.id, input.qbrId), eq(qbrs.workspaceId, ctx.workspace.id)));
     if (!q) throw new TRPCError({ code: "NOT_FOUND" });
-    const [c] = await db.select().from(customers).where(eq(customers.id, q.customerId));
-    const [a] = await db.select().from(accounts).where(eq(accounts.id, c?.accountId ?? 0));
+    // Both reads scoped (C8), so a QBR stored before scheduleQbr checked its
+    // customer still cannot read another tenant's.
+    const [c] = await db.select().from(customers).where(and(eq(customers.id, q.customerId), eq(customers.workspaceId, ctx.workspace.id)));
+    if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
+    const [a] = await db.select().from(accounts).where(and(eq(accounts.id, c.accountId), eq(accounts.workspaceId, ctx.workspace.id)));
     let prep: any = { wins: ["Adoption climbing"], risks: ["Champion stability"], asks: ["Identify expansion team"], agenda: ["Review usage", "Roadmap", "Asks"] };
     try {
       const out = await invokeLLM({
@@ -233,7 +244,7 @@ export const csRouter = router({
     } catch (e) {
       console.warn("[generateQbrPrep] LLM failed; using fallback", e);
     }
-    await db.update(qbrs).set({ aiPrep: prep }).where(eq(qbrs.id, q.id));
+    await db.update(qbrs).set({ aiPrep: prep }).where(and(eq(qbrs.id, q.id), eq(qbrs.workspaceId, ctx.workspace.id)));
     return { prep };
   }),
 

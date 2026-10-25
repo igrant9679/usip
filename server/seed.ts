@@ -2,7 +2,7 @@
  * USIP demo seeder. Idempotent — only seeds once per workspace.
  * Called from the auth flow after the first workspace is created for a user.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import {
   accounts,
   auditLog,
@@ -499,7 +499,13 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
 export async function ensureUserHasWorkspace(userId: number, userName: string | null) {
   const db = await getDb();
   if (!db) return;
-  const existing = await db.select().from(workspaceMembers).where(eq(workspaceMembers.userId, userId)).limit(1);
+  // ANY accepted membership row stops this — deactivated ones included, or
+  // offboarding would turn into provisioning (deactivationRevokesAccess.test).
+  // An invitation nobody accepted does not (audit 2026-10-20, C1): it grants no
+  // access, so someone a stranger invited would otherwise be left with no
+  // workspace at all, unable to use the product they signed up for.
+  const existing = await db.select().from(workspaceMembers)
+    .where(and(eq(workspaceMembers.userId, userId), isNull(workspaceMembers.inviteToken))).limit(1);
   if (existing.length > 0) return;
 
   const slug = `ws-${userId}-${Math.random().toString(36).slice(2, 6)}`;

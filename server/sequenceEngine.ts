@@ -312,10 +312,13 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
     if (archivedWs.has(enrollment.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
     try {
       // Fetch the sequence
+      // Every lookup from here on is scoped to the ENROLMENT's workspace
+      // (audit 2026-10-20, C9): the ids on an enrolment row were never checked
+      // at enrol time, and an id-only read here mailed another tenant's people.
       const [seq] = await db
         .select()
         .from(sequences)
-        .where(eq(sequences.id, enrollment.sequenceId));
+        .where(and(eq(sequences.id, enrollment.sequenceId), eq(sequences.workspaceId, enrollment.workspaceId)));
 
       if (!seq || seq.status !== "active") {
         // Sequence is no longer active — exit enrollment
@@ -413,14 +416,14 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           const [contact] = await db
             .select({ email: contacts.email })
             .from(contacts)
-            .where(eq(contacts.id, enrollment.contactId));
+            .where(and(eq(contacts.id, enrollment.contactId), eq(contacts.workspaceId, enrollment.workspaceId)));
           toEmail = contact?.email ?? undefined;
           toContactId = enrollment.contactId;
         } else if (enrollment.leadId) {
           const [lead] = await db
             .select({ email: leads.email })
             .from(leads)
-            .where(eq(leads.id, enrollment.leadId));
+            .where(and(eq(leads.id, enrollment.leadId), eq(leads.workspaceId, enrollment.workspaceId)));
           toEmail = lead?.email ?? undefined;
           toLeadId = enrollment.leadId;
         } else if (enrollment.prospectId) {
@@ -430,7 +433,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           const [prospect] = await db
             .select({ email: prospects.email })
             .from(prospects)
-            .where(eq(prospects.id, enrollment.prospectId));
+            .where(and(eq(prospects.id, enrollment.prospectId), eq(prospects.workspaceId, enrollment.workspaceId)));
           toEmail = prospect?.email ?? undefined;
           toProspectId = enrollment.prospectId;
         }
@@ -444,6 +447,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
             .from(sequenceAbVariants)
             .where(
               and(
+                eq(sequenceAbVariants.workspaceId, enrollment.workspaceId),
                 eq(sequenceAbVariants.sequenceId, enrollment.sequenceId),
                 eq(sequenceAbVariants.stepIndex, stepIndex),
               ),
@@ -661,7 +665,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           const [contact] = await db
             .select({ linkedinUrl: contacts.linkedinUrl })
             .from(contacts)
-            .where(eq(contacts.id, enrollment.contactId));
+            .where(and(eq(contacts.id, enrollment.contactId), eq(contacts.workspaceId, enrollment.workspaceId)));
           linkedinUrl = contact?.linkedinUrl;
           relatedType = "contact";
           relatedId = enrollment.contactId;
@@ -673,7 +677,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           const [prospect] = await db
             .select({ linkedinUrl: prospects.linkedinUrl })
             .from(prospects)
-            .where(eq(prospects.id, enrollment.prospectId));
+            .where(and(eq(prospects.id, enrollment.prospectId), eq(prospects.workspaceId, enrollment.workspaceId)));
           linkedinUrl = prospect?.linkedinUrl;
           relatedType = "prospect";
           relatedId = enrollment.prospectId;

@@ -368,6 +368,19 @@ const SURFACES: Array<{
     end: `renewalStage: "early"`,
     gate: /const cmUserId = \(await activeOwnerOrNull\(workspaceId, opp\.ownerUserId\)\) \?\? fallbackUserId;/,
   },
+  {
+    /**
+     * 2026-10-24 (audit C7): the CRM and task edits stopped taking
+     * `patch: z.record(any)`, and an owner id that survives the new schemas
+     * must be someone who works HERE now — not a leaver, and not another
+     * workspace's user.
+     */
+    what: "a CRM or task edit cannot hand a record to a departed rep or another workspace's user",
+    file: "server/services/foreignIds.ts",
+    start: "export async function assertOwnerInWorkspace(",
+    end: "\n}",
+    gate: /if \(!\(await isActiveMember\(workspaceId, userId\)\)\) \{\s*throw new TRPCError\(\{ code: "BAD_REQUEST"/,
+  },
 ];
 
 describe("every session-less path that names a member gates on active membership", () => {
@@ -386,7 +399,9 @@ describe("every session-less path that names a member gates on active membership
     // 2026-10-04: 36, with the Plivo AI calls — the agent names its owner out
     // loud and books on their calendar (voiceRelay), and a call to an agent's
     // Plivo number is filed under its member (plivoWebhook).
-    expect(SURFACES.length).toBe(36);
+    // 2026-10-24: 37, with services/foreignIds.ts — the owner check behind the
+    // explicit CRM patch schemas (audit C7).
+    expect(SURFACES.length).toBe(37);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 
@@ -482,6 +497,11 @@ describe("no unattended path reads workspaces.ownerUserId raw any more", () => {
   const ALLOWED = new Map<string, string>([
     ["server/_core/activeMembers.ts", "the resolver itself — it is what everything else calls"],
     ["server/routers/admin.ts", "the team.delete guard, which must compare against the raw column, and transferOwnership, which writes it"],
+    // 2026-10-24 (audit C1): not a notification recipient. emailPasswordReset
+    // asks "does this person OWN this workspace?" to pick which of their own
+    // workspaces' senders carries their reset link — the raw column is the
+    // question, and a stand-in owner would be the wrong answer.
+    ["server/passwordAuth.ts", "pickResetSenderWorkspace compares the column to the account being reset; it addresses nothing to the owner"],
   ]);
 
   it("every raw read is either gone or allowlisted with a reason", () => {

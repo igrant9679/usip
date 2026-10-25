@@ -25,6 +25,7 @@ import {
 } from "../services/deliverabilityRates";
 import { buildTransporter } from "./smtpConfig";
 import { encryptSecret, tryDecryptSecret } from "../_core/crypto";
+import { safeSendingAccount } from "../_core/safeProjections";
 import { recordAudit } from "../audit";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -433,15 +434,18 @@ export const sendingAccountsRouter = router({
     // mailbox it was at 0% and "excellent" (audit 2026-09-20). Dropping them
     // turns a surface that still wants a rate into a compile error rather than
     // a silent "0%"; the real numbers come from `deliverability` below.
-    return accounts.map(({ sendgridApiKeyEnc, bounceRate, spamRate, reputationTier, ...a }) => ({
-      ...a,
+    // safeSendingAccount drops every credential column (audit 2026-10-20, C4:
+    // SMTP/IMAP passwords and OAuth tokens went to every member's browser) and
+    // the three dead reputation columns, and says which secrets EXIST.
+    return accounts.map((row) => ({
+      ...safeSendingAccount(row),
       // The key never leaves the server, not even as ciphertext. The UI only
       // needs to know whether one is USABLE, so it can say "leave blank to keep
       // the current key" instead of implying the field is empty.
-      hasSendgridKey: !!sendgridApiKeyEnc || workspaceHasKey,
-      sentToday: used.get(a.id) ?? 0,
-      bouncedToday: statsMap.get(a.id)?.bounceCount ?? 0,
-      remainingToday: a.dailySendLimit - (used.get(a.id) ?? 0),
+      hasSendgridKey: !!row.sendgridApiKeyEnc || workspaceHasKey,
+      sentToday: used.get(row.id) ?? 0,
+      bouncedToday: statsMap.get(row.id)?.bounceCount ?? 0,
+      remainingToday: row.dailySendLimit - (used.get(row.id) ?? 0),
     }));
   }),
 
@@ -471,9 +475,10 @@ export const sendingAccountsRouter = router({
             eq(sendingAccountDailyStats.date, today),
           ),
         );
-      // Same three dead columns dropped as in `list` — the detail view must not
-      // be able to disagree with the row the operator clicked to reach it.
-      const { sendgridApiKeyEnc, bounceRate, spamRate, reputationTier, ...safe } = account;
+      // The same projection as `list` — the detail view must not be able to
+      // disagree with the row the operator clicked to reach it, or carry a
+      // credential the list leaves out.
+      const safe = safeSendingAccount(account);
       const { getWorkspaceSendgridKey } = await import("../services/sendgridKey");
       // Same split as `list`: the gating number from the shared counter, the
       // bounce number from the stats row that is its only home.
@@ -482,7 +487,7 @@ export const sendingAccountsRouter = router({
       return {
         ...safe,
         // Own copy OR the workspace key — the same thing a send resolves.
-        hasSendgridKey: !!sendgridApiKeyEnc || !!(await getWorkspaceSendgridKey(ctx.workspace.id)),
+        hasSendgridKey: !!account.sendgridApiKeyEnc || !!(await getWorkspaceSendgridKey(ctx.workspace.id)),
         sentToday: usedToday,
         bouncedToday: stat?.bounceCount ?? 0,
         remainingToday: account.dailySendLimit - usedToday,
@@ -804,7 +809,20 @@ export const sendingAccountsRouter = router({
       return { aliases, providerSynced: false };
     }),
 
-  testConfig: workspaceProcedure
+  /**
+   * Test settings typed into the mailbox form before saving them.
+   *
+   * 🔴 ADMIN-ONLY, AND A STORED PASSWORD ONLY GOES TO ITS STORED HOST (audit
+   * 2026-10-20, C4). Any member could call this with `editId` and a host of
+   * their choosing: the blank password field fell back to the SAVED one, and
+   * the server then logged in to the caller's host with it — handing the
+   * mailbox password to whoever ran that host. Creating and editing mailboxes
+   * is admin-only already, so testing them is too. When the saved password
+   * (or token) is the one being used, host, port and username come from the
+   * saved row as well; a password typed into the form may be tried anywhere,
+   * since it is the caller's own.
+   */
+  testConfig: adminWsProcedure
     .input(
       z.object({
         editId: z.number().int().optional(),
@@ -821,6 +839,8 @@ export const sendingAccountsRouter = router({
       let smtpPassword = input.smtpPassword;
       let sendgridApiKey = input.sendgridApiKey;
       let oauthAccessToken: string | null | undefined;
+      let usingStoredSecret = false;
+      let stored: { host: string | null; port: number | null; username: string | null } | null = null;
       // Testing a SAVED SendGrid account without retyping the key: resolve it
       // the same way a real send does — the account's own copy if it has one,
       // otherwise the WORKSPACE key from Settings → Integrations. Reading only
@@ -847,15 +867,19 @@ export const sendingAccountsRouter = router({
             ),
           );
         if (existing) {
-          if (!smtpPassword) smtpPassword = existing.smtpPassword ?? undefined;
+          if (!smtpPassword && existing.smtpPassword) {
+            smtpPassword = existing.smtpPassword;
+            usingStoredSecret = true;
+            stored = { host: existing.smtpHost, port: existing.smtpPort, username: existing.smtpUsername };
+          }
           oauthAccessToken = existing.oauthAccessToken ?? null;
         }
       }
       return testSmtpConnection({
         provider: input.provider,
-        smtpHost: input.smtpHost ?? null,
-        smtpPort: input.smtpPort ?? null,
-        smtpUsername: input.smtpUsername ?? null,
+        smtpHost: usingStoredSecret ? stored?.host ?? null : input.smtpHost ?? null,
+        smtpPort: usingStoredSecret ? stored?.port ?? null : input.smtpPort ?? null,
+        smtpUsername: usingStoredSecret ? stored?.username ?? null : input.smtpUsername ?? null,
         smtpPassword: smtpPassword ?? null,
         sesRegion: input.sesRegion ?? null,
         oauthAccessToken: oauthAccessToken ?? null,

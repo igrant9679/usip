@@ -43,6 +43,18 @@ async function resolveWorkspace(userId: number, headerVal?: string) {
    * in again with their password, and carried on at whatever role they held,
    * including admin. Offboarding a leaver removed their work, not their access.
    */
+  /**
+   * 🔴 AN INVITATION IS NOT A MEMBERSHIP UNTIL IT IS ACCEPTED (audit
+   * 2026-10-20, C1).
+   *
+   * team.invite writes the membership row at once, with an invite token on
+   * it, and this function used to ignore the token — so typing someone's
+   * email into another workspace's invite box made them a working member of
+   * it, without their knowledge, and made their account reachable from that
+   * workspace's admin tools. A row is a membership once its token is cleared,
+   * which only the invite-accept path does (finaliseAcceptance, or register
+   * claiming its own placeholder).
+   */
   // Look for membership matching header workspace if provided
   if (headerVal) {
     const wsId = Number(headerVal);
@@ -55,6 +67,7 @@ async function resolveWorkspace(userId: number, headerVal?: string) {
           eq(workspaceMembers.userId, userId),
           eq(workspaceMembers.workspaceId, wsId),
           isNull(workspaceMembers.deactivatedAt),
+          isNull(workspaceMembers.inviteToken),
         ))
         .limit(1);
       if (rows[0]) return { workspace: rows[0].ws, member: rows[0].mb };
@@ -68,7 +81,11 @@ async function resolveWorkspace(userId: number, headerVal?: string) {
     .select({ ws: workspaces, mb: workspaceMembers })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
-    .where(and(eq(workspaceMembers.userId, userId), isNull(workspaceMembers.deactivatedAt)))
+    .where(and(
+      eq(workspaceMembers.userId, userId),
+      isNull(workspaceMembers.deactivatedAt),
+      isNull(workspaceMembers.inviteToken),
+    ))
     .limit(1);
 
   if (!rows[0]) {
@@ -78,10 +95,16 @@ async function resolveWorkspace(userId: number, headerVal?: string) {
      * read it as a bug and ask someone to fix it.
      */
     const [everMember] = await db
-      .select({ id: workspaceMembers.id })
+      .select({ id: workspaceMembers.id, inviteToken: workspaceMembers.inviteToken, deactivatedAt: workspaceMembers.deactivatedAt })
       .from(workspaceMembers)
       .where(eq(workspaceMembers.userId, userId))
       .limit(1);
+    if (everMember && everMember.inviteToken && !everMember.deactivatedAt) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Your invitation hasn't been accepted yet. Open the invitation link in your email to join the workspace.",
+      });
+    }
     if (everMember) {
       throw new TRPCError({
         code: "FORBIDDEN",

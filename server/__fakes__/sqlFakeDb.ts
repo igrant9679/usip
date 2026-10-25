@@ -9,10 +9,16 @@
  * LIMIT, GROUP BY with count(*), and `col + n` in an UPDATE. Anything else
  * throws, naming the clause, so a test never passes on SQL it did not read.
  *
+ * Membership: by default the caller's role comes from `roles` and every
+ * workspace_members read answers for "the caller". With `realMembers`,
+ * workspace_members is an ordinary table — seed it (and `workspaces`) and
+ * the real resolveWorkspace runs against the rows, invite tokens and all.
+ * Raw `db.execute` statements are recorded in `executed`, not run.
+ *
  * Test-only: nothing in the app imports it.
  */
 import { MySqlDialect } from "drizzle-orm/mysql-core";
-import { Column, getTableColumns, getTableName, is, SQL } from "drizzle-orm";
+import { Column, getTableColumns, getTableName, is, SQL, Table } from "drizzle-orm";
 import { workspaceMembers } from "../../drizzle/schema";
 
 type Row = Record<string, any>;
@@ -22,10 +28,12 @@ const render = (x: unknown) => dialect.sqlToQuery(x as SQL);
 export type SqlFakeDb = ReturnType<typeof makeSqlFakeDb>;
 
 export function makeSqlFakeDb(opts: {
-  /** Workspace id → the caller's role there. */
-  roles: Record<number, string>;
-  /** The workspace the current request is for. */
-  wsId: () => number;
+  /** Workspace id → the caller's role there. Ignored with `realMembers`. */
+  roles?: Record<number, string>;
+  /** The workspace the current request is for. Ignored with `realMembers`. */
+  wsId?: () => number;
+  /** Treat workspace_members as a seeded table instead of answering for the caller. */
+  realMembers?: boolean;
   /** Runs before every UPDATE is applied, to simulate a racing write. */
   beforeUpdate?: (table: string) => void;
 }) {
@@ -112,12 +120,12 @@ export function makeSqlFakeDb(opts: {
   };
 
   const select = (projection?: Record<string, unknown>) => {
-    const st: { table?: any; join?: { table: any; on: unknown }; where?: unknown; group?: Column[]; order: unknown[]; limit?: number; offset?: number } = { order: [] };
+    const st: { table?: any; joins: { table: any; on: unknown }[]; where?: unknown; group?: Column[]; order: unknown[]; limit?: number; offset?: number } = { order: [], joins: [] };
     const run = (): Row[] => {
       const name = getTableName(st.table);
-      if (st.table === workspaceMembers) {
-        const ws = opts.wsId();
-        const role = opts.roles[ws];
+      if (st.table === workspaceMembers && !opts.realMembers) {
+        const ws = opts.wsId!();
+        const role = opts.roles![ws];
         if (!role) return [];
         if (projection && "ws" in projection) {
           return [{
@@ -128,9 +136,9 @@ export function makeSqlFakeDb(opts: {
         return [{ id: 1 }];
       }
       let ctxs = rowsOf(name).map((r) => ({ row: r, q: qualify(st.table, r) }));
-      if (st.join) {
-        const other = rowsOf(getTableName(st.join.table));
-        ctxs = ctxs.flatMap((c) => other.map((o) => ({ row: c.row, q: { ...c.q, ...qualify(st.join!.table, o) } })).filter((x) => matches(st.join!.on, x.q)));
+      for (const join of st.joins) {
+        const other = rowsOf(getTableName(join.table));
+        ctxs = ctxs.flatMap((c) => other.map((o) => ({ row: c.row, q: { ...c.q, ...qualify(join.table, o) } })).filter((x) => matches(join.on, x.q)));
       }
       ctxs = ctxs.filter((c) => matches(st.where, c.q));
       for (const o of st.order.slice().reverse()) {
@@ -141,7 +149,17 @@ export function makeSqlFakeDb(opts: {
           return m[2] === "desc" ? -d : d;
         });
       }
-      const pick = (q: Row, v: unknown) => (is(v, Column) ? q[`${getTableName((v as any).table)}.${(v as Column).name}`] : undefined);
+      const pick = (q: Row, v: unknown): unknown => {
+        if (is(v, Column)) return q[`${getTableName((v as any).table)}.${(v as Column).name}`];
+        // A whole table as a projection value, e.g. `{ ws: workspaces, mb: workspaceMembers }`.
+        if (is(v, Table)) {
+          const n = getTableName(v as any);
+          const out: Row = {};
+          for (const [k, col] of Object.entries(getTableColumns(v as any))) out[k] = q[`${n}.${(col as Column).name}`];
+          return out;
+        }
+        return undefined;
+      };
       let out: Row[];
       if (st.group) {
         const groups = new Map<string, Row[]>();
@@ -169,7 +187,7 @@ export function makeSqlFakeDb(opts: {
     };
     const b: any = {
       from(t: unknown) { st.table = t; return b; },
-      innerJoin(t: unknown, on: unknown) { st.join = { table: t, on }; return b; },
+      innerJoin(t: unknown, on: unknown) { st.joins.push({ table: t, on }); return b; },
       where(c: unknown) { st.where = c; return b; },
       groupBy(...cols: Column[]) { st.group = cols; return b; },
       orderBy(...o: unknown[]) { st.order = o; return b; },
@@ -186,7 +204,8 @@ export function makeSqlFakeDb(opts: {
     let inserted: Row[] = [];
     const doInsert = (values: Row | Row[]) => {
       inserted = (Array.isArray(values) ? values : [values]).map((v) => {
-        const id = (seq.get(name) ?? 0) + 1;
+        // Past every seeded id too, so an insert never collides with a row a test put there.
+        const id = Math.max(seq.get(name) ?? 0, ...rowsOf(name).map((r) => Number(r.id) || 0)) + 1;
         seq.set(name, id);
         const row: Row = {};
         for (const k of Object.keys(getTableColumns(table))) row[k] = null;
@@ -251,5 +270,11 @@ export function makeSqlFakeDb(opts: {
     },
   });
 
-  return { select, insert, update, delete: del, tables, rowsOf };
+  const executed: string[] = [];
+  const execute = (q: unknown) => {
+    executed.push(render(q).sql);
+    return Promise.resolve([[]]);
+  };
+
+  return { select, insert, update, delete: del, execute, executed, tables, rowsOf };
 }

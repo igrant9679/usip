@@ -47,6 +47,7 @@ import { linkEmailLogToDraft } from "../services/email/logSend";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull } from "../_core/activeMembers";
+import { assertOwnerInWorkspace, assertRowInWorkspace } from "../services/foreignIds";
 import { invalidateStageIndex, resolvedStageFor, stageIndexFor, wonStageKeys } from "../_core/stageSemantics";
 import { notifyIfEnabled } from "../services/policyNotify";
 import { isSuppressed, makeUnsubscribeUrl, unsubscribeHeaders } from "../unsubscribe";
@@ -213,6 +214,131 @@ async function cascadeDeleteAccountDependents(
   }
 }
 
+/* ──────────────────────────────────────────────────────────────────────── */
+/* What an update may change                                                */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+/**
+ * 🔴 EXPLICIT PATCH SCHEMAS (audit 2026-10-20, C7). Every update below took
+ * `patch: z.record(any)` and passed it to `.set()`. The WHERE was scoped to
+ * the caller's workspace, so the row edited was always theirs — but the patch
+ * itself could say `{ workspaceId: 4 }` and move the record into another
+ * tenant, or rewrite `id`, or point `ownerUserId` / `accountId` /
+ * `territoryId` at another tenant's rows.
+ *
+ * Each schema lists the fields a person may edit, typed and sized to the
+ * column. `.strict()`: an unknown key is an error that names it, not a field
+ * silently dropped while the save reports success. Ids that survive the
+ * schema are checked against the workspace (services/foreignIds.ts).
+ * Machine-owned columns (scores, normalised keys, enrichment provenance,
+ * logo and brand state, conversion links) are not editable here.
+ */
+const optText = (max: number) => z.string().max(max).nullable().optional();
+const optId = z.number().int().positive().nullable().optional();
+const optMoney = z.union([z.number().min(0), z.string().regex(/^\d+(\.\d{1,2})?$/)]).nullable().optional();
+
+export const ACCOUNT_PATCH = z.object({
+  name: z.string().min(1).max(200).optional(),
+  domain: optText(200),
+  industry: optText(80),
+  subIndustry: optText(80),
+  region: optText(80),
+  employeeBand: optText(40),
+  revenueBand: optText(40),
+  employeeCount: z.number().int().min(0).nullable().optional(),
+  revenue: optMoney,
+  arr: optMoney,
+  description: optText(20000),
+  notes: optText(20000),
+  color: optText(16),
+  websiteUrl: optText(2048),
+  linkedinCompanyUrl: optText(2048),
+  hqCity: optText(80),
+  hqState: optText(80),
+  hqCountry: optText(80),
+  companyPhone: optText(40),
+  foundedYear: z.number().int().min(1000).max(3000).nullable().optional(),
+  accountStage: optText(64),
+  accountRating: optText(16),
+  legalName: optText(240),
+  parentAccountId: optId,
+  territoryId: optId,
+  ownerUserId: z.number().int().positive().optional(),
+}).strict();
+
+export const CONTACT_PATCH = z.object({
+  firstName: z.string().min(1).max(80).optional(),
+  lastName: z.string().min(1).max(80).optional(),
+  title: optText(120),
+  email: optText(320),
+  phone: optText(40),
+  linkedinUrl: optText(2048),
+  city: optText(80),
+  seniority: optText(32),
+  isPrimary: z.boolean().optional(),
+  accountId: optId,
+  ownerUserId: z.number().int().positive().optional(),
+}).strict();
+
+export const LEAD_PATCH = z.object({
+  firstName: z.string().min(1).max(80).optional(),
+  lastName: z.string().min(1).max(80).optional(),
+  email: optText(320),
+  phone: optText(40),
+  company: optText(200),
+  title: optText(120),
+  source: optText(60),
+  status: z.enum(["new", "working", "qualified", "unqualified", "converted"]).optional(),
+  tags: z.array(z.string().max(60)).max(50).nullable().optional(),
+  ownerUserId: z.number().int().positive().optional(),
+}).strict();
+
+export const OPPORTUNITY_PATCH = z.object({
+  name: z.string().min(1).max(200).optional(),
+  // Accepted only so a client echoing the CURRENT stage is not an error; a
+  // change is refused below — stage moves go through setStage.
+  stage: z.string().min(1).max(60).optional(),
+  value: optMoney,
+  winProb: z.number().int().min(0).max(100).optional(),
+  closeDate: z.union([z.string(), z.date()]).nullable().optional(),
+  nextStep: optText(20000),
+  aiNote: optText(20000),
+  lostReason: optText(120),
+  winReason: optText(120),
+  pipelineId: optId,
+  accountId: z.number().int().positive().optional(),
+  ownerUserId: z.number().int().positive().optional(),
+}).strict();
+
+export const TERRITORY_PATCH = z.object({
+  name: z.string().min(1).max(120).optional(),
+  rules: z.record(z.string(), z.any()).nullable().optional(),
+  ownerUserId: optId,
+}).strict();
+
+export const PRODUCT_PATCH = z.object({
+  sku: z.string().min(1).max(60).optional(),
+  name: z.string().min(1).max(200).optional(),
+  description: optText(20000),
+  category: optText(80),
+  listPrice: z.number().min(0).optional(),
+  cost: z.number().min(0).optional(),
+  billingCycle: z.enum(["one_time", "monthly", "annual"]).optional(),
+  active: z.boolean().optional(),
+}).strict();
+
+export const TERRITORY_RULE_PATCH = z.object({
+  name: z.string().min(1).max(120).optional(),
+  priority: z.number().int().optional(),
+  industry: optText(80),
+  country: optText(80),
+  state: optText(80),
+  companyContains: optText(120),
+  territoryId: optId,
+  ownerUserId: optId,
+  active: z.boolean().optional(),
+}).strict();
+
 export const accountsRouter = router({
   list: workspaceProcedure
     .input(z.object({ search: z.string().optional() }).optional())
@@ -281,6 +407,9 @@ export const accountsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Linked ids must be this workspace's (audit 2026-10-20, C7).
+      await assertRowInWorkspace(db, "account", input.parentAccountId, ctx.workspace.id);
+      await assertRowInWorkspace(db, "territory", input.territoryId, ctx.workspace.id);
       // Apply territory rules first; explicit input.territoryId always wins.
       let resolvedTerritoryId = input.territoryId ?? null;
       let resolvedOwnerId: number = ctx.user.id;
@@ -316,13 +445,27 @@ export const accountsRouter = router({
     }),
 
   update: repProcedure
-    .input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) }))
+    .input(z.object({ id: z.number(), patch: ACCOUNT_PATCH }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [before] = await db.select().from(accounts).where(and(eq(accounts.id, input.id), eq(accounts.workspaceId, ctx.workspace.id)));
       if (!before) throw new TRPCError({ code: "NOT_FOUND" });
-      await db.update(accounts).set(input.patch).where(and(eq(accounts.id, input.id), eq(accounts.workspaceId, ctx.workspace.id)));
+      if (input.patch.parentAccountId === input.id) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "An account cannot be its own parent." });
+      }
+      await assertRowInWorkspace(db, "account", input.patch.parentAccountId, ctx.workspace.id);
+      await assertRowInWorkspace(db, "territory", input.patch.territoryId, ctx.workspace.id);
+      await assertOwnerInWorkspace(ctx.workspace.id, input.patch.ownerUserId);
+      const patch: Record<string, unknown> = { ...input.patch };
+      if (patch.revenue != null) patch.revenue = String(patch.revenue);
+      if (patch.arr != null) patch.arr = String(patch.arr);
+      // The dedupe keys follow the name and domain they are derived from.
+      if (input.patch.name !== undefined || input.patch.domain !== undefined) {
+        Object.assign(patch, normalizedAccountFields(input.patch.name ?? before.name, input.patch.domain !== undefined ? input.patch.domain : before.domain));
+      }
+      if (Object.keys(patch).length === 0) return { ok: true };
+      await db.update(accounts).set(patch as never).where(and(eq(accounts.id, input.id), eq(accounts.workspaceId, ctx.workspace.id)));
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "account", entityId: input.id, before, after: input.patch });
       return { ok: true };
     }),
@@ -402,6 +545,7 @@ export const contactsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertRowInWorkspace(db, "account", input.accountId, ctx.workspace.id);
       const r = await db.insert(contacts).values({ ...input, workspaceId: ctx.workspace.id, ownerUserId: ctx.user.id });
       const id = Number((r as any)[0]?.insertId ?? 0);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "contact", entityId: id, after: input });
@@ -426,11 +570,14 @@ export const contactsRouter = router({
       return { id };
     }),
 
-  update: repProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+  update: repProcedure.input(z.object({ id: z.number(), patch: CONTACT_PATCH })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(contacts).where(and(eq(contacts.id, input.id), eq(contacts.workspaceId, ctx.workspace.id)));
     if (!before) throw new TRPCError({ code: "NOT_FOUND" });
+    await assertRowInWorkspace(db, "account", input.patch.accountId, ctx.workspace.id);
+    await assertOwnerInWorkspace(ctx.workspace.id, input.patch.ownerUserId);
+    if (Object.keys(input.patch).length === 0) return { ok: true };
     await db.update(contacts).set(input.patch).where(and(eq(contacts.id, input.id), eq(contacts.workspaceId, ctx.workspace.id)));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "contact", entityId: input.id, before, after: input.patch });
     void import("../services/workflowEngine")
@@ -1098,11 +1245,13 @@ export const leadsRouter = router({
       return { id, ownerUserId, routed: routedOwner != null };
     }),
 
-  update: repProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+  update: repProcedure.input(z.object({ id: z.number(), patch: LEAD_PATCH })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
     if (!before) throw new TRPCError({ code: "NOT_FOUND" });
+    await assertOwnerInWorkspace(ctx.workspace.id, input.patch.ownerUserId);
+    if (Object.keys(input.patch).length === 0) return { ok: true };
     await db.update(leads).set(input.patch).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "lead", entityId: input.id, before, after: input.patch });
 
@@ -1635,6 +1784,10 @@ export const opportunitiesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // A deal on another tenant's account surfaced that account through the
+      // won-deal → customer path into cs.get (audit 2026-10-20, C8).
+      await assertRowInWorkspace(db, "account", input.accountId, ctx.workspace.id);
+      await assertRowInWorkspace(db, "pipeline", input.pipelineId, ctx.workspace.id);
       const r = await db.insert(opportunities).values({
         workspaceId: ctx.workspace.id, accountId: input.accountId, name: input.name,
         value: String(input.value), stage: input.stage, winProb: input.winProb,
@@ -1780,11 +1933,14 @@ export const opportunitiesRouter = router({
     return { ok: true, customerCreated };
   }),
 
-  update: repProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+  update: repProcedure.input(z.object({ id: z.number(), patch: OPPORTUNITY_PATCH })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(opportunities).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
     if (!before) throw new TRPCError({ code: "NOT_FOUND" });
+    await assertRowInWorkspace(db, "account", input.patch.accountId, ctx.workspace.id);
+    await assertRowInWorkspace(db, "pipeline", input.patch.pipelineId, ctx.workspace.id);
+    await assertOwnerInWorkspace(ctx.workspace.id, input.patch.ownerUserId);
     const patch: any = { ...input.patch };
     // A stage written through this generic patch bypasses everything a stage
     // change means here: stage history, daysInStage, the closed-won customer
@@ -1795,8 +1951,9 @@ export const opportunitiesRouter = router({
       throw new TRPCError({ code: "BAD_REQUEST", message: "Use opportunities.setStage to change stage — the generic update would skip stage history and closed-won/lost handling." });
     }
     delete patch.stage;
-    if (patch.value !== undefined) patch.value = String(patch.value);
+    if (patch.value != null) patch.value = String(patch.value);
     if (patch.closeDate && typeof patch.closeDate === "string") patch.closeDate = new Date(patch.closeDate);
+    if (Object.keys(patch).length === 0) return { ok: true };
     await db.update(opportunities).set(patch).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id, before, after: input.patch });
     // Stage is refused above, so this can never double with stage_changed.
@@ -2267,13 +2424,16 @@ export const territoriesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertOwnerInWorkspace(ctx.workspace.id, input.ownerUserId);
       await db.insert(territories).values({ ...input, workspaceId: ctx.workspace.id });
       return { ok: true };
     }),
 
-  update: workspaceProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+  update: workspaceProcedure.input(z.object({ id: z.number(), patch: TERRITORY_PATCH })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await assertOwnerInWorkspace(ctx.workspace.id, input.patch.ownerUserId);
+    if (Object.keys(input.patch).length === 0) return { ok: true };
     await db.update(territories).set(input.patch).where(and(eq(territories.id, input.id), eq(territories.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -2316,12 +2476,13 @@ export const productsRouter = router({
       return { ok: true };
     }),
 
-  update: workspaceProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+  update: workspaceProcedure.input(z.object({ id: z.number(), patch: PRODUCT_PATCH })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const patch: any = { ...input.patch };
     if (patch.listPrice !== undefined) patch.listPrice = String(patch.listPrice);
     if (patch.cost !== undefined) patch.cost = String(patch.cost);
+    if (Object.keys(patch).length === 0) return { ok: true };
     await db.update(products).set(patch).where(and(eq(products.id, input.id), eq(products.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -2386,13 +2547,18 @@ export const crmTerritoryRulesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertRowInWorkspace(db, "territory", input.territoryId, ctx.workspace.id);
+      await assertOwnerInWorkspace(ctx.workspace.id, input.ownerUserId);
       const r = await db.insert(crmTerritoryRules).values({ ...input, workspaceId: ctx.workspace.id });
       return { id: Number((r as any)[0]?.insertId ?? 0) };
     }),
 
-  update: repProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+  update: repProcedure.input(z.object({ id: z.number(), patch: TERRITORY_RULE_PATCH })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await assertRowInWorkspace(db, "territory", input.patch.territoryId, ctx.workspace.id);
+    await assertOwnerInWorkspace(ctx.workspace.id, input.patch.ownerUserId);
+    if (Object.keys(input.patch).length === 0) return { ok: true };
     await db.update(crmTerritoryRules).set(input.patch).where(and(eq(crmTerritoryRules.id, input.id), eq(crmTerritoryRules.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),

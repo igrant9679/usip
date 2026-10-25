@@ -88,6 +88,8 @@ import { seedToursForAllWorkspaces } from "../seedTours";
 import { seedHelpForAllWorkspaces } from "../seedHelpContent";
 import { seedAreDemoForAllWorkspaces } from "../seedAreDemo";
 import { runRawMigrations } from "./rawMigrations";
+import { configureTrustProxy } from "./clientIp";
+import { crossSiteCookieWriteGuard, trpcCsrfGuard } from "./csrf";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -110,6 +112,8 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 
 async function startServer() {
   const app = express();
+  // Before anything reads req.ip — every rate limiter keys on it (clientIp.ts).
+  configureTrustProxy(app);
   const server = createServer(app);
   // Configure body parser with larger size limit for file uploads.
   // `verify` stashes the raw bytes so webhook signature checks (xAI voice)
@@ -125,6 +129,9 @@ async function startServer() {
   // rule out. Unaffected by registerPublicRateLimits (it covers only
   // /api/scheduled, /api/voice and /api/trpc).
   registerHealthRoute(app);
+  // Ahead of every route that reads the session cookie: a write carrying it
+  // must come from this app's own pages (csrf.ts, audit 2026-10-20 C3).
+  app.use(crossSiteCookieWriteGuard);
   registerPublicRateLimits(app);
   registerStorageProxy(app);
   registerOAuthRoutes(app);
@@ -150,7 +157,9 @@ async function startServer() {
   registerAccountBriefsStreamRoutes(app);
   registerMailboxStreamRoutes(app);
   reportSecretHealth();
-  // tRPC API
+  // tRPC API. JSON-only writes first: tRPC itself also parses form posts,
+  // which a hostile page can send without a preflight (csrf.ts).
+  app.use("/api/trpc", trpcCsrfGuard);
   app.use(
     "/api/trpc",
     createExpressMiddleware({

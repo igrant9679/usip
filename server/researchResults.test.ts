@@ -162,7 +162,9 @@ describe("recording the research a sequence used", () => {
 
   it("the sequence writer saves the record with the sequence; fixed copy records who it went to without a check", () => {
     const agent = read("server/routers/are/prospects.ts");
-    expect(agent).toContain("      ...researchUseColumns(brief, brief, { hookType: primaryHookOf(intel).hookType, steps }),\n    }).where(eq(prospectIntelligence.prospectQueueId, prospectId));");
+    // 2026-10-24: the WHERE gained the workspace term (audit C6 — the dossier
+    // write was keyed on the bare prospect id).
+    expect(agent).toContain("      ...researchUseColumns(brief, brief, { hookType: primaryHookOf(intel).hookType, steps }),\n    }).where(and(eq(prospectIntelligence.prospectQueueId, prospectId), eq(prospectIntelligence.workspaceId, workspaceId)));");
     expect(agent).toContain('        ...researchUseColumns(await researchMatchFor(workspaceId, { campaignId, prospectTitle: prospect.title, industry: prospect.industry }), null, { hookType: "fixed", steps }),');
     expect(agent.match(/await checkBrief\(/g)).toHaveLength(1);
   });

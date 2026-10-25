@@ -12,8 +12,20 @@ import { generateTasksForWorkspace } from "../services/taskAutopilot";
 import { endOfZonedDay } from "@shared/availability";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { assertOutboundNotPaused } from "../services/outboundPause";
+import { assertOwnerInWorkspace } from "../services/foreignIds";
 
 const TASK_TYPES = ["call", "email", "meeting", "linkedin", "todo", "follow_up", "social_touch", "manual_email", "meeting_prep", "crm_update", "generic_action"] as const;
+
+const TASK_PATCH = z.object({
+  title: z.string().min(1).max(240).optional(),
+  description: z.string().max(20000).nullable().optional(),
+  type: z.enum(TASK_TYPES).optional(),
+  priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
+  dueAt: z.union([z.string(), z.date()]).nullable().optional(),
+  snoozedUntil: z.union([z.string(), z.date()]).nullable().optional(),
+  disposition: z.string().max(48).nullable().optional(),
+  ownerUserId: z.number().int().positive().optional(),
+}).strict();
 
 
 /* ─── Tasks ──────────────────────────────────────────────────────────── */
@@ -59,6 +71,9 @@ export const tasksRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Assigning to another workspace's user (or a leaver) filed the task
+      // under someone who can never see it (audit 2026-10-20, C7).
+      await assertOwnerInWorkspace(ctx.workspace.id, input.ownerUserId);
       const r = await db.insert(tasks).values({
         ...input,
         workspaceId: ctx.workspace.id,
@@ -117,11 +132,21 @@ export const tasksRouter = router({
     return { ok: true };
   }),
 
-  update: repProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+  /**
+   * Explicit editable fields (audit 2026-10-20, C7): this took
+   * `patch: z.record(any)` straight into `.set()`, so a patch could carry
+   * `workspaceId` and move the task into another tenant, or hand it to another
+   * tenant's user. Status changes keep their own procedures (setStatus,
+   * complete), which stamp completedAt; the AI fields belong to the autopilot.
+   */
+  update: repProcedure.input(z.object({ id: z.number(), patch: TASK_PATCH })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await assertOwnerInWorkspace(ctx.workspace.id, input.patch.ownerUserId);
     const patch: any = { ...input.patch };
     if (patch.dueAt && typeof patch.dueAt === "string") patch.dueAt = new Date(patch.dueAt);
+    if (patch.snoozedUntil && typeof patch.snoozedUntil === "string") patch.snoozedUntil = new Date(patch.snoozedUntil);
+    if (Object.keys(patch).length === 0) return { ok: true };
     await db.update(tasks).set(patch).where(and(eq(tasks.id, input.id), eq(tasks.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),

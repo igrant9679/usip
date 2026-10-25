@@ -3,6 +3,7 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
 import { mergeRequestContext } from "./requestContext";
+import { clientIpOf } from "./clientIp";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -29,17 +30,15 @@ export const router = t.router;
  * rather than the only control.
  */
 const withRequestContext = t.middleware(async ({ ctx, next }) => {
-  const fwd = ctx.req?.headers?.["x-forwarded-for"];
-  const raw = (Array.isArray(fwd) ? fwd[0] : fwd) ?? ctx.req?.socket?.remoteAddress;
-  // Same derivation as the express limiters: first hop past our own proxy.
+  // Same derivation as the express limiters: `req.ip`, which Express computes
+  // from X-Forwarded-For using the trusted hop count (_core/clientIp.ts).
   //
-  // This is a RATE-LIMIT KEY, not an identity, and Settings → Security's IP
-  // allowlist is deliberately NOT built on it (2026-09-20). Nothing in
-  // server/ calls `app.set('trust proxy', …)`, so at this hop position the
-  // value is caller-supplied: fine for a ceiling that only has to make abuse
-  // expensive, useless as an access control that would wave through anyone
-  // who sets a header. llmRateLimit.test.ts pins this hop for the limiter.
-  const clientIp = String(raw ?? "unknown").split(",")[0]!.trim() || "unknown";
+  // 2026-10-24 (audit "also urgent"): this used to take the FIRST entry of
+  // X-Forwarded-For — a value the caller writes — so rotating the header put
+  // every request in a fresh bucket. It is still a RATE-LIMIT KEY, not an
+  // identity: Settings → Security's IP allowlist stays unenforced until it is
+  // decided separately. llmRateLimit.test.ts pins this derivation.
+  const clientIp = clientIpOf(ctx.req);
   return await mergeRequestContext({ clientIp }, () => next());
 });
 

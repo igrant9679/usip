@@ -1,5 +1,6 @@
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { publicUser } from "./_core/safeProjections";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { workspaceRouter } from "./routers/workspace";
@@ -83,7 +84,9 @@ import { assistantRouter } from "./routers/assistant";
 export const appRouter = router({
   system: systemRouter,
   auth: router({
-    me: publicProcedure.query((opts) => opts.ctx.user),
+    // The safe fields only (audit 2026-10-20): ctx.user is the whole row,
+    // passwordHash and mfaTotpSecret included. _core/safeProjections.ts.
+    me: publicProcedure.query((opts) => publicUser(opts.ctx.user)),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });

@@ -113,6 +113,13 @@ export interface SendEmailInput {
    */
   logMeta?: EmailLogMeta;
   /**
+   * What the email log records INSTEAD of the body. For mail whose body is a
+   * credential — a password-reset link — because the log is a workspace's
+   * Emails page, and the workspace that sent a reset mail is not the account's
+   * owner (audit 2026-10-20, C1). Unset: the body is logged as always.
+   */
+  logPreview?: string;
+  /**
    * Extra RFC 5322 headers.
    *
    * Exists for List-Unsubscribe + List-Unsubscribe-Post (RFC 8058): Gmail and
@@ -525,8 +532,8 @@ export function createEmailAdapter(account: SendingAccount): EmailAdapter {
       cc: decorated.cc,
       bcc: decorated.bcc,
       subject: decorated.subject,
-      bodyHtml: decorated.bodyHtml,
-      bodyText: decorated.bodyText,
+      bodyHtml: input.logPreview != null ? null : decorated.bodyHtml,
+      bodyText: input.logPreview ?? decorated.bodyText,
     };
     let result: Awaited<ReturnType<typeof send>>;
     try {

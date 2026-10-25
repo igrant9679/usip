@@ -843,9 +843,21 @@ export const dashboardsRouter = router({
     return { ok: true };
   }),
 
-  updateWidget: workspaceProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+  // Explicit fields (audit 2026-10-20, the C7 class): a z.record(any) patch
+  // could rewrite workspaceId or dashboardId and move the widget elsewhere.
+  updateWidget: workspaceProcedure.input(z.object({
+    id: z.number(),
+    patch: z.object({
+      type: z.enum(dashboardWidgets.type.enumValues).optional(),
+      title: z.string().min(1).max(160).optional(),
+      config: z.record(z.string(), z.any()).optional(),
+      filters: z.record(z.string(), z.any()).nullable().optional(),
+      position: z.record(z.string(), z.any()).nullable().optional(),
+    }).strict(),
+  })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    if (Object.keys(input.patch).length === 0) return { ok: true };
     await db.update(dashboardWidgets).set(input.patch).where(and(eq(dashboardWidgets.id, input.id), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),

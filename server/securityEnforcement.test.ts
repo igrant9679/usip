@@ -377,18 +377,25 @@ describe("the blocked member is given somewhere to go", () => {
 });
 
 describe("the allowlist is deliberately not built on the rate-limit hop", () => {
-  it("_core/trpc.ts still takes the FIRST x-forwarded-for hop, and says why", () => {
-    // Companion to llmRateLimit.test.ts, which pins the same hop for the
-    // limiter key. Re-pointing it to satisfy an allowlist would change the
-    // limiter's behaviour as a side effect.
+  /**
+   * 2026-10-24 (audit "also urgent"): the rate limiters stopped keying on the
+   * FIRST X-Forwarded-For entry — the one the caller writes — and key on
+   * `req.ip` under a trusted hop count instead (_core/clientIp.ts). That is the
+   * "prerequisite" the old pin here described. It landed for the LIMITERS
+   * only; the allowlist still waits for the hop count to be confirmed against
+   * live traffic, because a wrong guess there locks every member out.
+   */
+  it("_core/trpc.ts keys on req.ip through clientIpOf, and says the allowlist is not built on it", () => {
     const src = read("server/_core/trpc.ts");
-    expect(src).toContain('.split(",")[0]');
-    expect(src).toMatch(/allowlist is deliberately NOT built on it/);
+    expect(src).toContain("const clientIp = clientIpOf(ctx.req);");
+    expect(src).not.toContain('.split(",")[0]');
+    expect(src).toMatch(/IP allowlist stays unenforced/);
   });
 
-  it("nothing has quietly added a trust-proxy setting", () => {
-    // The prerequisite, not the feature. If this ever lands it must be
-    // verified against a real request before the allowlist is switched on.
-    expect(read("server/_core/index.ts")).not.toMatch(/trust proxy/);
+  it("trust proxy is set in exactly one place, before anything reads req.ip", () => {
+    const index = read("server/_core/index.ts");
+    expect(index).toContain("configureTrustProxy(app);");
+    expect(index).not.toMatch(/app\.set\(\s*["']trust proxy/);
+    expect(read("server/_core/clientIp.ts")).toContain('app.set("trust proxy", trustProxySetting());');
   });
 });

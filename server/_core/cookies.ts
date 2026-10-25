@@ -39,10 +39,16 @@ export function getSessionCookieOptions(
   //       ? hostname
   //       : undefined;
 
+  // "lax", not "none" (audit 2026-10-20, C3): with "none" the browser attached
+  // the session to POSTs that any other website started, which is the whole
+  // of a cross-site request forgery. Lax still sends it on top-level GET
+  // navigations — following a link into the app, an email's invite or reset
+  // link — and the app never runs inside another site's frame with a session.
+  // The other two locks are in _core/csrf.ts.
   return {
     httpOnly: true,
     path: "/",
-    sameSite: "none",
+    sameSite: "lax",
     secure: isSecureRequest(req),
   };
 }

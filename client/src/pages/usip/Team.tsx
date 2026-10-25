@@ -397,6 +397,19 @@ export default function Team() {
     onError: (e) => toast.error(e.message),
   });
 
+  // The way to put a new password on an account an admin may not set directly
+  // (it also lives in another workspace, or the person hasn't accepted yet):
+  // the link goes to the person's own inbox.
+  const sendPasswordReset = trpc.team.sendPasswordReset.useMutation({
+    onSuccess: () => {
+      setPwTarget(null);
+      setPwValue("");
+      setPwConfirm("");
+      toast.success("Password reset link sent to their email");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const resendInvitation = trpc.team.resendInvitation.useMutation({
     onSuccess: () => toast.success("Invitation re-sent"),
     onError: (e) => toast.error(e.message),
@@ -1408,6 +1421,7 @@ export default function Team() {
           <div className="space-y-4 py-2">
             <p className="text-sm text-muted-foreground">
               Set a local password for this member. They can use it to sign in directly if your workspace supports password-based login.
+              If their account also belongs to another workspace, you can only send them a reset link — they choose the password.
             </p>
             <div className="space-y-1">
               <Label htmlFor="pw-new">New password</Label>
@@ -1437,6 +1451,13 @@ export default function Team() {
           <DialogFooter>
             <Button variant="ghost" onClick={() => { setPwTarget(null); setPwValue(""); setPwConfirm(""); }}>
               Cancel
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!pwTarget || sendPasswordReset.isPending}
+              onClick={() => { if (pwTarget) sendPasswordReset.mutate({ memberId: pwTarget.memberId }); }}
+            >
+              {sendPasswordReset.isPending ? "Sending…" : "Send reset link"}
             </Button>
             <Button
               disabled={!pwValue || !pwConfirm || pwMismatch || pwTooShort || setMemberPassword.isPending}

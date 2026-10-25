@@ -54,7 +54,9 @@ describe("auth.logout", () => {
     expect(clearedCookies[0]?.options).toMatchObject({
       maxAge: -1,
       secure: true,
-      sameSite: "none",
+      // 2026-10-24: Lax, not None (audit C3 — None attached the session to
+      // POSTs any other site started).
+      sameSite: "lax",
       httpOnly: true,
       path: "/",
     });

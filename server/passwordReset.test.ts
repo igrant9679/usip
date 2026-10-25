@@ -119,9 +119,21 @@ describe("the routes keep their guarantees", () => {
 
   const forgot = handler("/api/auth/forgot-password");
   const reset = handler("/api/auth/reset-password");
+  /**
+   * 2026-10-24: minting and mailing moved out of the forgot-password handler
+   * into emailPasswordReset, which team.sendPasswordReset shares (audit C1:
+   * the reset link is how an admin helps an account they may not edit).
+   */
+  const minting = (() => {
+    const at = src.indexOf("export async function emailPasswordReset(");
+    const end = src.indexOf("async function claimableInvite(", at);
+    return at > 0 && end > at ? src.slice(at, end) : "";
+  })();
 
   it("isolated both handlers, and did not run past them", () => {
-    expect(forgot.length).toBeGreaterThan(500);
+    expect(forgot).toContain("await emailPasswordReset(db, user.id);");
+    expect(minting.length).toBeGreaterThan(800);
+    expect(forgot.length).toBeGreaterThan(400);
     expect(reset.length).toBeGreaterThan(500);
     // Each slice must contain its OWN route and not the next one.
     expect(forgot).not.toContain("/api/auth/reset-password");
@@ -137,13 +149,17 @@ describe("the routes keep their guarantees", () => {
   });
 
   it("stores only the HASH of the token", () => {
-    expect(forgot).toContain("hashResetToken(token)");
+    expect(minting).toContain("hashResetToken(token)");
     // The raw token may only be used to build the emailed link.
-    expect(forgot).not.toMatch(/passwordResetTokenHash:\s*token\b/);
+    expect(minting).not.toMatch(/passwordResetTokenHash:\s*token\b/);
   });
 
   it("sets an expiry when minting", () => {
-    expect(forgot).toContain("resetTokenExpiry(");
+    expect(minting).toContain("resetTokenExpiry(");
+  });
+
+  it("keeps the link out of the sending workspace's email log", () => {
+    expect(minting).toMatch(/logPreview: `Password reset link sent to/);
   });
 
   it("reset-password checks the expiry", () => {
@@ -168,13 +184,13 @@ describe("the routes keep their guarantees", () => {
   });
 
   it("escapes the name it drops into the email body", () => {
-    expect(forgot).toContain("escapeHtml(");
+    expect(minting).toContain("escapeHtml(");
   });
 
   it("builds the link through appUrl, not a raw env read", () => {
     // The public-URL bug class: a relative or stale link in an email is a link
     // no mail client can follow.
-    expect(forgot).toContain("appUrl(");
+    expect(minting).toContain("appUrl(");
   });
 });
 

@@ -45,7 +45,7 @@ import { choosePoolAccount } from "../../emailDelivery";
 import { findOrCreateAccount } from "../../services/crmMatching";
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
-import { workspaceProcedure } from "../../_core/workspace";
+import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../../_core/activeMembers";
 import { notifyOwner } from "../../_core/notification";
 import { areNotify } from "./notify";
@@ -126,11 +126,15 @@ export async function promoteProspectToCrm(
   const db = await getDb();
   if (!db) return null;
 
+  // Scoped by workspace, and the campaign must be the prospect's own (audit
+  // 2026-10-20, C5): both ids reached here from ingestSignal's raw input, and
+  // an id-only read promoted another tenant's prospect into this CRM under
+  // another tenant's campaign name.
   const [prospect] = await db.select().from(prospectQueue)
-    .where(eq(prospectQueue.id, prospectQueueId)).limit(1);
-  if (!prospect) return null;
+    .where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId))).limit(1);
+  if (!prospect || prospect.campaignId !== campaignId) return null;
   const [campaign] = await db.select().from(areCampaigns)
-    .where(eq(areCampaigns.id, campaignId)).limit(1);
+    .where(and(eq(areCampaigns.id, campaignId), eq(areCampaigns.workspaceId, workspaceId))).limit(1);
   if (!campaign) return null;
 
   /**
@@ -229,7 +233,7 @@ export async function promoteProspectToCrm(
   let opportunityId: number | undefined;
   if (opts.createOpportunity) {
     const [intel] = await db.select().from(prospectIntelligence)
-      .where(eq(prospectIntelligence.prospectQueueId, prospectQueueId)).limit(1);
+      .where(and(eq(prospectIntelligence.prospectQueueId, prospectQueueId), eq(prospectIntelligence.workspaceId, workspaceId))).limit(1);
     // prospectIntelligence stores these as TOP-LEVEL json columns — there is
     // no `data` wrapper, so an earlier `intel?.data?.x` always resolved
     // undefined and the note was permanently blank.
@@ -258,7 +262,7 @@ export async function promoteProspectToCrm(
       ownerUserId: owner,
     }).$returningId();
     opportunityId = newOpp.id;
-    await db.execute(sql`UPDATE are_campaigns SET opportunitiesCreated = opportunitiesCreated + 1 WHERE id = ${campaignId}`);
+    await db.execute(sql`UPDATE are_campaigns SET opportunitiesCreated = opportunitiesCreated + 1 WHERE id = ${campaignId} AND workspaceId = ${workspaceId}`);
   }
 
   // ── Carry the ARE enrichment onto the contact ───────────────────────────
@@ -296,7 +300,7 @@ export async function promoteProspectToCrm(
       linkedContactId: contactId,
       ...(opportunityId ? { linkedOpportunityId: opportunityId } : {}),
     })
-    .where(eq(prospectQueue.id, prospectQueueId));
+    .where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
 
   return { accountId, contactId, opportunityId };
 }
@@ -313,6 +317,25 @@ export async function processSignal(
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
+
+  /**
+   * 🔴 THE PROSPECT MUST BE THIS WORKSPACE'S, AND IN THIS CAMPAIGN (audit
+   * 2026-10-20, C5). Every statement below used to key on the bare ids, and
+   * ingestSignal passed them straight from a member's input: one call could
+   * mark another tenant's prospect replied or skipped, bump their campaign's
+   * counters, suppress their contact, or promote them into this CRM. The
+   * internal callers (open tracking, the reply poller, meeting attribution)
+   * derive both ids from a row they already scoped, so for them this is one
+   * cheap read that always passes.
+   */
+  const [owned] = await db.select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId })
+    .from(prospectQueue)
+    .where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)))
+    .limit(1);
+  if (!owned || owned.campaignId !== campaignId) {
+    console.warn(`[ARE] processSignal: prospect ${prospectQueueId} is not in campaign ${campaignId} of workspace ${workspaceId} — signal dropped`);
+    return;
+  }
 
   // Determine sentiment via LLM for reply-type signals
   let sentiment: "positive" | "neutral" | "negative" | "objection" | null = null;
@@ -364,13 +387,13 @@ export async function processSignal(
         // Execute recommended action
         switch (sentData.recommendedAction) {
           case "pause_sequence":
-            await db.update(prospectQueue).set({ sequenceStatus: "replied" }).where(eq(prospectQueue.id, prospectQueueId));
+            await db.update(prospectQueue).set({ sequenceStatus: "replied" }).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
             actionTaken = "paused_sequence";
             break;
           case "create_opportunity": {
-            await db.update(prospectQueue).set({ sequenceStatus: "replied" }).where(eq(prospectQueue.id, prospectQueueId));
+            await db.update(prospectQueue).set({ sequenceStatus: "replied" }).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
             // Increment prospectsReplied counter
-            await db.execute(sql`UPDATE are_campaigns SET prospectsReplied = prospectsReplied + 1 WHERE id = ${campaignId}`);
+            await db.execute(sql`UPDATE are_campaigns SET prospectsReplied = prospectsReplied + 1 WHERE id = ${campaignId} AND workspaceId = ${workspaceId}`);
             actionTaken = "flagged_for_opportunity";
 
             // A positive reply is the promotion trigger the linkedContactId
@@ -399,7 +422,7 @@ export async function processSignal(
             break;
           }
           case "add_suppression":
-            const [prospect] = await db.select().from(prospectQueue).where(eq(prospectQueue.id, prospectQueueId)).limit(1);
+            const [prospect] = await db.select().from(prospectQueue).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId))).limit(1);
             if (prospect) {
               await db.insert(areSuppressionList).values({
                 workspaceId,
@@ -408,7 +431,7 @@ export async function processSignal(
                 reason: "unsubscribe",
                 addedAt: new Date(),
               });
-              await db.update(prospectQueue).set({ sequenceStatus: "skipped" }).where(eq(prospectQueue.id, prospectQueueId));
+              await db.update(prospectQueue).set({ sequenceStatus: "skipped" }).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
               actionTaken = "added_suppression";
             }
             break;
@@ -423,8 +446,8 @@ export async function processSignal(
   if (signalType === "meeting_booked") {
     sentiment = "positive";
     sentimentReason = "Meeting booked — highest positive signal";
-    await db.update(prospectQueue).set({ sequenceStatus: "replied" }).where(eq(prospectQueue.id, prospectQueueId));
-    await db.execute(sql`UPDATE are_campaigns SET meetingsBooked = meetingsBooked + 1 WHERE id = ${campaignId}`);
+    await db.update(prospectQueue).set({ sequenceStatus: "replied" }).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
+    await db.execute(sql`UPDATE are_campaigns SET meetingsBooked = meetingsBooked + 1 WHERE id = ${campaignId} AND workspaceId = ${workspaceId}`);
     actionTaken = "meeting_booked";
 
     // A booked meeting always promotes the prospect into the CRM (it is the
@@ -437,7 +460,7 @@ export async function processSignal(
     // this tenant's notification body below.
     const [campaign] = await db.select().from(areCampaigns)
       .where(and(eq(areCampaigns.id, campaignId), eq(areCampaigns.workspaceId, workspaceId))).limit(1);
-    const [prospect] = await db.select().from(prospectQueue).where(eq(prospectQueue.id, prospectQueueId)).limit(1);
+    const [prospect] = await db.select().from(prospectQueue).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId))).limit(1);
     const promoted = await promoteProspectToCrm(workspaceId, prospectQueueId, campaignId, {
       createOpportunity: !!campaign?.signalToOpportunityEnabled,
     });
@@ -485,7 +508,7 @@ export async function processSignal(
 
   // Handle bounces and unsubscribes
   if (signalType === "email_bounce" || signalType === "email_unsubscribe" || signalType === "sms_unsubscribe") {
-    const [prospect] = await db.select().from(prospectQueue).where(eq(prospectQueue.id, prospectQueueId)).limit(1);
+    const [prospect] = await db.select().from(prospectQueue).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId))).limit(1);
     if (prospect) {
       await db.insert(areSuppressionList).values({
         workspaceId,
@@ -493,7 +516,7 @@ export async function processSignal(
         reason: signalType === "email_bounce" ? "bounce" : "unsubscribe",
         addedAt: new Date(),
       });
-      await db.update(prospectQueue).set({ sequenceStatus: "skipped" }).where(eq(prospectQueue.id, prospectQueueId));
+      await db.update(prospectQueue).set({ sequenceStatus: "skipped" }).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
       actionTaken = "added_suppression";
     }
   }
@@ -503,7 +526,7 @@ export async function processSignal(
 
   // Fire ARE in-app notification for key events
   if (signalType === "email_open" || signalType === "email_click" || signalType === "linkedin_accepted") {
-    const [p] = await db.select({ firstName: prospectQueue.firstName, lastName: prospectQueue.lastName, companyName: prospectQueue.companyName }).from(prospectQueue).where(eq(prospectQueue.id, prospectQueueId)).limit(1);
+    const [p] = await db.select({ firstName: prospectQueue.firstName, lastName: prospectQueue.lastName, companyName: prospectQueue.companyName }).from(prospectQueue).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId))).limit(1);
     const label = signalType === "email_open" ? "opened your email" : signalType === "email_click" ? "clicked a link" : "accepted your LinkedIn connection";
     if (p) {
       await areNotify({
@@ -1092,8 +1115,15 @@ export const executionRouter = router({
       return { dryRun: false, wouldRevive: rows.length, revived: rows.length };
     }),
 
-  /** Ingest an incoming signal (called from webhook or manual test) */
-  ingestSignal: workspaceProcedure
+  /**
+   * Ingest a signal by hand. No screen calls this and no webhook does either —
+   * the real producers (open tracking, the reply poller, meeting attribution)
+   * call processSignal directly — so it is an admin's test lever, and admin-
+   * only (audit 2026-10-20, C5). The prospect is loaded within the caller's
+   * workspace and the CAMPAIGN COMES FROM IT; a campaignId or executionQueueId
+   * that does not belong to that prospect is refused rather than trusted.
+   */
+  ingestSignal: adminWsProcedure
     .input(z.object({
       prospectQueueId: z.number(),
       campaignId: z.number(),
@@ -1108,10 +1138,31 @@ export const executionRouter = router({
       executionQueueId: z.number().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [prospect] = await db.select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId })
+        .from(prospectQueue)
+        .where(and(eq(prospectQueue.id, input.prospectQueueId), eq(prospectQueue.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!prospect) throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found" });
+      if (input.campaignId !== prospect.campaignId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "That prospect is not in that campaign." });
+      }
+      if (input.executionQueueId !== undefined) {
+        const [step] = await db.select({ id: areExecutionQueue.id })
+          .from(areExecutionQueue)
+          .where(and(
+            eq(areExecutionQueue.id, input.executionQueueId),
+            eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+            eq(areExecutionQueue.prospectQueueId, prospect.id),
+          ))
+          .limit(1);
+        if (!step) throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found" });
+      }
       await processSignal(
         ctx.workspace.id,
-        input.prospectQueueId,
-        input.campaignId,
+        prospect.id,
+        prospect.campaignId,
         input.signalType,
         input.rawPayload,
         input.executionQueueId,

@@ -97,11 +97,12 @@ describe("one key, one place to rotate it", () => {
     expect(conn).toContain("resolveSendgridKey(db, ctx.workspace.id, undefined, account.id)");
     expect(conn).not.toContain("tryDecryptSecret(account.sendgridApiKeyEnc)");
 
-    const cfg = router.slice(router.indexOf("testConfig: workspaceProcedure"), router.indexOf("testConnection: workspaceProcedure"));
+    // 2026-10-24: testConfig is admin-only now (audit C4).
+    const cfg = router.slice(router.indexOf("testConfig: adminWsProcedure"), router.indexOf("testConnection: workspaceProcedure"));
     expect(cfg).toContain("resolveSendgridKey(db, ctx.workspace.id, undefined, input.editId)");
 
     // …and the flag the UI reads must mean "usable", not "has its own copy".
-    expect(router).toContain("hasSendgridKey: !!sendgridApiKeyEnc || workspaceHasKey");
+    expect(router).toContain("hasSendgridKey: !!row.sendgridApiKeyEnc || workspaceHasKey");
   });
 
   it("the sender picker can use the workspace key with no mailbox saved yet", () => {
