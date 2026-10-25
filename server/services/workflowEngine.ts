@@ -64,6 +64,7 @@
  */
 import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { getDb } from "../db";
+import { safeFetch } from "./scraper/ssrfGuard";
 import { archivedWorkspaceIds, isWorkspaceArchived } from "../_core/workspaceArchive";
 import { notifyIfEnabled } from "./policyNotify";
 import {
@@ -166,7 +167,10 @@ async function runAction(
         if (!url) return "webhook: no url";
         const body = p.body ? JSON.stringify(p.body)
           : JSON.stringify({ event: "workflow_fired", ruleId: rule.id, ruleName: rule.name, payload: ctx.payload, firedAt: new Date().toISOString() });
-        const resp = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...(p.headers ?? {}) }, body, signal: AbortSignal.timeout(10_000) });
+        // Through the SSRF guard (audit 2026-10-20): the URL is whatever a
+        // member typed into the rule, and a plain fetch would POST to cloud
+        // metadata or the private network.
+        const resp = await safeFetch(String(url), { method: "POST", headers: { "Content-Type": "application/json", ...(p.headers ?? {}) }, body, signal: AbortSignal.timeout(10_000), maxRedirects: 0 });
         return resp.ok ? null : `webhook ${url} returned ${resp.status}`;
       }
       case "post_slack": {
@@ -174,7 +178,7 @@ async function runAction(
         if (!url) return "post_slack: no Slack webhook configured";
         const payload: Record<string, any> = { text: p.message ?? `Workflow rule fired: ${rule.name}` };
         if (p.channel) payload.channel = p.channel;
-        const resp = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(10_000) });
+        const resp = await safeFetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(10_000), maxRedirects: 0 });
         return resp.ok ? null : `Slack webhook returned ${resp.status}`;
       }
       case "notify_teams": {
@@ -182,7 +186,7 @@ async function runAction(
         if (!url) return "notify_teams: no Teams webhook configured";
         const message = p.message ?? `Workflow rule fired: ${rule.name}`;
         const payload = { type: "message", attachments: [{ contentType: "application/vnd.microsoft.card.adaptive", content: { type: "AdaptiveCard", body: [{ type: "TextBlock", text: message, wrap: true }], "$schema": "http://adaptivecards.io/schemas/adaptive-card.json", version: "1.4" } }] };
-        const resp = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(10_000) });
+        const resp = await safeFetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(10_000), maxRedirects: 0 });
         return resp.ok ? null : `Teams webhook returned ${resp.status}`;
       }
       case "create_task": {

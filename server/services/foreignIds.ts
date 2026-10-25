@@ -14,13 +14,13 @@
  */
 import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
-import { accounts, contacts, crmPipelines, customers, territories } from "../../drizzle/schema";
+import { accounts, contacts, crmPipelines, customers, sequences, territories } from "../../drizzle/schema";
 import { isActiveMember } from "../_core/activeMembers";
 import type { getDb } from "../db";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
-const TABLES = { account: accounts, contact: contacts, pipeline: crmPipelines, territory: territories, customer: customers } as const;
+const TABLES = { account: accounts, contact: contacts, pipeline: crmPipelines, territory: territories, customer: customers, sequence: sequences } as const;
 export type ForeignKind = keyof typeof TABLES;
 
 /** No-op for null/undefined (clearing a link is always allowed). */

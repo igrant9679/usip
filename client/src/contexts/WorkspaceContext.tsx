@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { getActiveWorkspaceId, setActiveWorkspaceId } from "@/lib/activeWorkspace";
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 type WS = { id: number; name: string; slug: string; plan: string; role: "super_admin" | "admin" | "manager" | "rep" };
@@ -12,14 +13,13 @@ type WorkspaceCtx = {
 
 const Ctx = createContext<WorkspaceCtx>({ workspaces: [], current: null, switchTo: () => {}, isLoading: true });
 
-const KEY = "usip:workspaceId";
-
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.workspace.list.useQuery(undefined, { staleTime: 60_000 });
+  // Per TAB (lib/activeWorkspace.ts): switching here must not retarget the
+  // requests of another open tab (audit 2026-10-20).
   const [currentId, setCurrentId] = useState<number | null>(() => {
-    if (typeof window === "undefined") return null;
-    const v = window.localStorage.getItem(KEY);
+    const v = getActiveWorkspaceId();
     return v ? Number(v) : null;
   });
 
@@ -28,13 +28,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (currentId && data.find((w) => w.id === currentId)) return;
     const first = data[0]!;
     setCurrentId(first.id);
-    window.localStorage.setItem(KEY, String(first.id));
+    setActiveWorkspaceId(first.id);
   }, [data, currentId]);
 
   const switchTo = useCallback(
     (id: number) => {
       setCurrentId(id);
-      window.localStorage.setItem(KEY, String(id));
+      setActiveWorkspaceId(id);
       // Hard-invalidate everything so all panels reload for the new workspace
       utils.invalidate();
     },

@@ -58,6 +58,13 @@ vi.mock("./services/sendgridKey", async (importActual) => ({
   ...(await importActual<typeof import("./services/sendgridKey")>()),
   getWorkspaceSendgridKey: async () => null,
 }));
+// The SMTP test refuses internal hosts by resolving them (ssrfGuard). The
+// mailboxes here use reserved .example names, which do not resolve — treat
+// those as public, and let everything else through the real check.
+vi.mock("./services/scraper/ssrfGuard", async (importActual) => {
+  const actual = await importActual<typeof import("./services/scraper/ssrfGuard")>();
+  return { ...actual, assertPublicHost: async (h: string) => (/\.example$/.test(h) ? undefined : actual.assertPublicHost(h)) };
+});
 vi.mock("./routers/smtpConfig", async (importActual) => ({
   ...(await importActual<typeof import("./routers/smtpConfig")>()),
   buildTransporter: (o: { host: string; port: number; username: string; password: string }) => {

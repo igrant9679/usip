@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { rankOf, ROLE_RANK } from "@shared/roleRank";
+import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
 
 /** Compact "Agent call-backs" rail link — only renders when Grok voice agents
  *  have actually logged inbound calls, so mailboxes without voice stay clean. */
@@ -216,10 +217,7 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
     setBody("");
     setAiLoading(true);
 
-    const wsId =
-      typeof window !== "undefined"
-        ? window.localStorage.getItem("usip:workspaceId")
-        : null;
+    const wsId = getActiveWorkspaceId();
 
     let accumulated = "";
     try {

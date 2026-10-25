@@ -17,7 +17,7 @@
  */
 import type { Express, Request, Response } from "express";
 import bcrypt from "bcryptjs";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import rateLimit from "express-rate-limit";
 import { nanoid } from "nanoid";
 import { getDb } from "./db";
@@ -27,6 +27,7 @@ import { sdk } from "./_core/sdk";
 import { sessionLifetimeMs } from "./_core/securityPolicy";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { clientIpOf, rateLimitKey } from "./_core/clientIp";
+import { useTotpStep } from "./_core/sessionRevocation";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { escapeHtml } from "@shared/escapeHtml";
 import { safeReturnPath } from "@shared/returnPath";
@@ -244,6 +245,25 @@ export async function emailPasswordReset(db: LiveDb, userId: number): Promise<bo
 }
 
 /**
+ * Give THIS browser a fresh session after the person changed their own
+ * password or 2FA — which bumped session_version and so ended every session,
+ * this one included. Their other devices stay signed out; this one does not.
+ * A no-op where there is no response to set a cookie on (tests, scripts).
+ */
+export async function reissueSessionCookie(db: LiveDb, req: Request, res: Response, userId: number): Promise<void> {
+  if (typeof (res as { cookie?: unknown }).cookie !== "function") return;
+  const [u] = await db
+    .select({ openId: users.openId, name: users.name, sessionVersion: users.sessionVersion })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  if (!u) return;
+  const lifetimeMs = await sessionLifetimeForUser(db, userId);
+  const token = await sdk.createSessionToken(u.openId, { name: u.name || "", expiresInMs: lifetimeMs, sessionVersion: u.sessionVersion ?? 0 });
+  res.cookie(COOKIE_NAME, token, { ...getSessionCookieOptions(req), maxAge: lifetimeMs });
+}
+
+/**
  * The ONE existing row register may touch: an invitation placeholder that has
  * never been an account, claimed with the token of the invite that created it.
  *
@@ -366,6 +386,10 @@ export function registerPasswordAuthRoutes(app: Express) {
       .set({
         passwordHash,
         loginMethod: "password",
+        // Every session minted under the old password ends with it (audit
+        // 2026-10-20): a reset is what someone does when they think another
+        // person has their account, and that person's token must stop working.
+        sessionVersion: sql`${users.sessionVersion} + 1`,
         // Single use — clearing these is what spends the token.
         passwordResetTokenHash: null,
         passwordResetExpiresAt: null,
@@ -404,6 +428,7 @@ export function registerPasswordAuthRoutes(app: Express) {
           loginMethod: users.loginMethod,
           mfaTotpSecret: users.mfaTotpSecret,
           mfaTotpEnabledAt: users.mfaTotpEnabledAt,
+          sessionVersion: users.sessionVersion,
         })
         .from(users)
         .where(eq(users.email, normalizedEmail));
@@ -447,8 +472,12 @@ export function registerPasswordAuthRoutes(app: Express) {
           res.status(401).json({ error: "Enter the 6-digit code from your authenticator app.", mfaRequired: true });
           return;
         }
-        const { verifyTotp } = await import("./services/totp");
-        if (!verifyTotp(user.mfaTotpSecret, totpCode)) {
+        // A code works ONCE (audit 2026-10-20): its time-step is spent on
+        // success, so the same six digits cannot be replayed for the rest of
+        // their ~90-second window.
+        const { matchTotpStep } = await import("./services/totp");
+        const step = matchTotpStep(user.mfaTotpSecret, totpCode);
+        if (step === null || !(await useTotpStep(db, user.id, step))) {
           try {
             const [member] = await db
               .select({ workspaceId: workspaceMembers.workspaceId })
@@ -509,6 +538,7 @@ export function registerPasswordAuthRoutes(app: Express) {
       const sessionToken = await sdk.createSessionToken(user.openId, {
         name: user.name || "",
         expiresInMs: lifetimeMs,
+        sessionVersion: user.sessionVersion ?? 0,
       });
 
       const cookieOptions = getSessionCookieOptions(req);
@@ -587,6 +617,7 @@ export function registerPasswordAuthRoutes(app: Express) {
           openId: users.openId,
           passwordHash: users.passwordHash,
           loginMethod: users.loginMethod,
+          sessionVersion: users.sessionVersion,
         })
         .from(users)
         .where(eq(users.email, normalizedEmail));
@@ -708,6 +739,7 @@ export function registerPasswordAuthRoutes(app: Express) {
       const sessionToken = await sdk.createSessionToken(openId, {
         name: cleanName ?? "",
         expiresInMs: lifetimeMs,
+        sessionVersion: existing?.sessionVersion ?? 0,
       });
 
       const cookieOptions = getSessionCookieOptions(req);

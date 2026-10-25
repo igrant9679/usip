@@ -104,6 +104,16 @@ function vitePluginManusDebugCollector(): Plugin {
     },
 
     configureServer(server: ViteDevServer) {
+      // GET /__manus__/debug-collector.js — served from client/dev, NOT from
+      // the public dir: everything in client/public is copied into every
+      // production build, which is how this script came to be served to the
+      // public from getvelocityai.app (audit 2026-10-20).
+      server.middlewares.use("/__manus__/debug-collector.js", (req, res, next) => {
+        if (req.method !== "GET" && req.method !== "HEAD") return next();
+        res.writeHead(200, { "Content-Type": "application/javascript" });
+        res.end(fs.readFileSync(path.join(PROJECT_ROOT, "client", "dev", "__manus__", "debug-collector.js"), "utf-8"));
+      });
+
       // POST /__manus__/logs: Browser sends logs (written directly to files)
       server.middlewares.use("/__manus__/logs", (req, res, next) => {
         if (req.method !== "POST") {
@@ -156,10 +166,19 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
+/**
+ * The Manus runtime and debug collector are DEV tooling, and never ship
+ * (audit 2026-10-20, "also urgent"). The runtime was a 367 KB inline script on
+ * every production page that listened to every keystroke, input and mouse
+ * move, read cookies and local storage, and obeyed SpacePreviewerChannel
+ * messages from ANY origin — so a page that framed the app could drive it.
+ * `command === "serve"` is the Vite dev server; `vite build` is "build".
+ */
+const basePlugins = [react(), tailwindcss(), jsxLocPlugin()];
+const devOnlyPlugins = () => [vitePluginManusRuntime(), vitePluginManusDebugCollector()];
 
-export default defineConfig({
-  plugins,
+export default defineConfig(({ command }) => ({
+  plugins: command === "serve" ? [...basePlugins, ...devOnlyPlugins()] : basePlugins,
   resolve: {
     alias: {
       "@": path.resolve(PROJECT_ROOT, "client", "src"),
@@ -190,4 +209,4 @@ export default defineConfig({
       deny: ["**/.*"],
     },
   },
-});
+}));

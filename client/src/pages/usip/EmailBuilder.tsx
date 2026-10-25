@@ -37,6 +37,7 @@ import {
   Loader2, RefreshCw, PenLine
 } from "lucide-react";
 import { confirmAction, ConfirmButton } from "@/components/usip/Common";
+import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
 type BlockType = "header" | "text" | "image" | "button" | "divider" | "spacer" | "two_column" | "footer";
@@ -1049,10 +1050,7 @@ function Builder({ templateId }: { templateId: number }) {
       const controller = new AbortController();
       rewriteAbortRef.current = controller;
 
-      const wsId =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem("usip:workspaceId")
-          : null;
+      const wsId = getActiveWorkspaceId();
 
       let accumulated = "";
       try {

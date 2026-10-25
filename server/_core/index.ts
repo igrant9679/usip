@@ -90,6 +90,7 @@ import { seedAreDemoForAllWorkspaces } from "../seedAreDemo";
 import { runRawMigrations } from "./rawMigrations";
 import { configureTrustProxy } from "./clientIp";
 import { crossSiteCookieWriteGuard, trpcCsrfGuard } from "./csrf";
+import { securityHeaders } from "./securityHeaders";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -114,6 +115,10 @@ async function startServer() {
   const app = express();
   // Before anything reads req.ip — every rate limiter keys on it (clientIp.ts).
   configureTrustProxy(app);
+  // No "X-Powered-By: Express", and the framing/HSTS/nosniff/referrer headers
+  // on every response, ahead of every route (securityHeaders.ts).
+  app.disable("x-powered-by");
+  app.use(securityHeaders);
   const server = createServer(app);
   // Configure body parser with larger size limit for file uploads.
   // `verify` stashes the raw bytes so webhook signature checks (xAI voice)

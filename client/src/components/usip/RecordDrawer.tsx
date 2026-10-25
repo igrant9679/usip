@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
 
 type RelatedType = "lead" | "contact" | "account" | "opportunity" | "customer";
 
@@ -318,10 +319,7 @@ function AccountBriefPanel({ accountId }: { accountId: number }) {
     setStreamingContent("");
     setStreaming(true);
 
-    const wsId =
-      typeof window !== "undefined"
-        ? window.localStorage.getItem("usip:workspaceId")
-        : null;
+    const wsId = getActiveWorkspaceId();
 
     let accumulated = "";
     try {

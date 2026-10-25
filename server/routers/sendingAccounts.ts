@@ -24,8 +24,10 @@ import {
   ratesFromCounts,
 } from "../services/deliverabilityRates";
 import { buildTransporter } from "./smtpConfig";
+import { encryptField, readStoredSecret } from "../emailAdapter";
 import { encryptSecret, tryDecryptSecret } from "../_core/crypto";
 import { safeSendingAccount } from "../_core/safeProjections";
+import { assertPublicHost } from "../services/scraper/ssrfGuard";
 import { recordAudit } from "../audit";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -98,6 +100,15 @@ export async function testSmtpConnection(params: {
   } else {
     // generic_smtp
     if (!host) return { ok: false, error: "SMTP host is required" };
+  }
+
+  // Not an internal address (audit 2026-10-20): this logs in to whatever
+  // host:port it is given, so without the check it was a way to probe — and
+  // hand credentials to — anything on the private network or cloud metadata.
+  try {
+    await assertPublicHost(host);
+  } catch (e) {
+    return { ok: false, error: `SMTP host refused: ${e instanceof Error ? e.message : String(e)}` };
   }
 
   // ── Real connection check ──────────────────────────────────────────
@@ -645,6 +656,9 @@ export const sendingAccountsRouter = router({
       const [result] = await db.insert(sendingAccounts).values({
         workspaceId: ctx.workspace.id,
         ...cols,
+        // Encrypted at rest (audit 2026-10-20, C4); every reader decrypts.
+        ...(cols.smtpPassword ? { smtpPassword: encryptField(cols.smtpPassword) } : {}),
+        ...(cols.imapPassword ? { imapPassword: encryptField(cols.imapPassword) } : {}),
         // Defaults applied HERE rather than on the shared schema — see the
         // note on AccountCreateInput. Same values as before for a create.
         dailySendLimit: cols.dailySendLimit ?? 500,
@@ -672,6 +686,9 @@ export const sendingAccountsRouter = router({
       // saving any other field would silently wipe the key and every campaign
       // send would start failing with no visible cause.
       if (sendgridApiKey?.trim()) patch.sendgridApiKeyEnc = encryptSecret(sendgridApiKey.trim());
+      // Mailbox passwords are encrypted at rest (audit 2026-10-20, C4).
+      if (typeof patch.smtpPassword === "string" && patch.smtpPassword) patch.smtpPassword = encryptField(patch.smtpPassword);
+      if (typeof patch.imapPassword === "string" && patch.imapPassword) patch.imapPassword = encryptField(patch.imapPassword);
       await db
         .update(sendingAccounts)
         .set(patch as never)
@@ -777,7 +794,7 @@ export const sendingAccountsRouter = router({
           smtpHost: row.smtpHost ?? null,
           smtpPort: row.smtpPort ?? 587,
           smtpUsername: row.smtpUsername ?? row.fromEmail,
-          smtpPassword: row.smtpPassword ?? null,
+          smtpPassword: row.smtpPassword ? encryptField(row.smtpPassword) : null,
           imapHost: row.imapHost ?? null,
           imapPort: row.imapPort ?? 993,
           dailySendLimit: row.dailySendLimit ?? 50,
@@ -868,7 +885,7 @@ export const sendingAccountsRouter = router({
           );
         if (existing) {
           if (!smtpPassword && existing.smtpPassword) {
-            smtpPassword = existing.smtpPassword;
+            smtpPassword = readStoredSecret(existing.smtpPassword) ?? undefined;
             usingStoredSecret = true;
             stored = { host: existing.smtpHost, port: existing.smtpPort, username: existing.smtpUsername };
           }
@@ -908,7 +925,7 @@ export const sendingAccountsRouter = router({
         smtpHost: account.smtpHost,
         smtpPort: account.smtpPort,
         smtpUsername: account.smtpUsername,
-        smtpPassword: account.smtpPassword,
+        smtpPassword: readStoredSecret(account.smtpPassword),
         sesRegion: account.sesRegion,
         oauthAccessToken: account.oauthAccessToken,
         // Same resolution as a real send: own copy, else the workspace key.

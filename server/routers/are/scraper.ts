@@ -22,6 +22,7 @@ import { router } from "../../_core/trpc";
 import { workspaceProcedure, isAdminRole } from "../../_core/workspace";
 import { cleanScrapedField, isPlaceholderToken, usableDomainOrNull, usableEmailOrNull, usablePhoneOrNull } from "@shared/fieldHygiene";
 import { searchLinkedInProfiles } from "../../services/linkedinLookup";
+import { safeFetch } from "../../services/scraper/ssrfGuard";
 
 // isAdminRole comes from _core/workspace.ts — one rank map for the repo.
 
@@ -133,11 +134,16 @@ function cleanForLLM(rawHtml: string): string {
   return s.substring(0, 6000);
 }
 
+/**
+ * Through the SSRF guard (audit 2026-10-20): `scrapeWeb` takes a member's URL
+ * as-is, and a plain fetch would have read cloud metadata or anything on the
+ * private network and handed the body to the LLM — and back to the caller.
+ */
 async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
       signal: controller.signal,
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; USIP-ARE/1.0; +https://usipsales.manus.space)",

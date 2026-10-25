@@ -274,8 +274,11 @@ describe("the session lifetime is derived at the mint sites", () => {
     expect(src).toContain("sessionLifetimeForUser");
     expect(src).not.toMatch(/maxAge:\s*ONE_YEAR_MS/);
     expect(src).not.toMatch(/expiresInMs:\s*ONE_YEAR_MS/);
-    expect((src.match(/maxAge:\s*lifetimeMs/g) ?? []).length).toBe(2);
-    expect((src.match(/expiresInMs:\s*lifetimeMs/g) ?? []).length).toBe(2);
+    // 2026-10-24: three mint sites — login, register, and reissueSessionCookie
+    // (a fresh token for this browser after the person changes their own
+    // password or 2FA, which ends their other sessions).
+    expect((src.match(/maxAge:\s*lifetimeMs/g) ?? []).length).toBe(3);
+    expect((src.match(/expiresInMs:\s*lifetimeMs/g) ?? []).length).toBe(3);
   });
 
   it("it excludes workspaces the user has left", () => {

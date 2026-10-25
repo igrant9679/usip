@@ -76,6 +76,7 @@ import { downloadProposalDocx } from "./proposalExports/buildDocx";
 import { ProposalTimeline } from "./proposalExports/ProposalTimeline";
 import { FileDown, FileType2 } from "lucide-react";
 import { ConfirmButton } from "@/components/usip/Common";
+import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -476,10 +477,7 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
     setGenerating(true);
     setEditContent(""); // clear any prior content; stream will fill in
 
-    const wsId =
-      typeof window !== "undefined"
-        ? window.localStorage.getItem("usip:workspaceId")
-        : null;
+    const wsId = getActiveWorkspaceId();
 
     try {
       const res = await fetch(

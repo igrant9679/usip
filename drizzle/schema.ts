@@ -54,8 +54,37 @@ export const users = mysqlTable("users", {
    */
   passwordResetTokenHash: varchar("password_reset_token_hash", { length: 64 }),
   passwordResetExpiresAt: timestamp("password_reset_expires_at"),
+  /**
+   * Session revocation (migration 0209, audit 2026-10-20). Every session token
+   * carries the version it was minted at; bumping this ends all of them at
+   * once. Bumped by a password reset or change, a 2FA change, and an admin's
+   * reset of either.
+   */
+  sessionVersion: int("session_version").default(0).notNull(),
+  /**
+   * The last TOTP time-step accepted for this account (migration 0209). A code
+   * is good for ~90 seconds (±1 step of drift); without this the same code
+   * could be replayed for that whole window.
+   */
+  mfaLastStep: int("mfa_last_step"),
 });
 export type User = typeof users.$inferSelect;
+
+/**
+ * Single sessions ended before their expiry — what logout writes (migration
+ * 0209). Keyed by the token's `jti`; a row outlives its token by nothing,
+ * since expired rows are swept whenever a new one is written.
+ */
+export const revokedSessions = mysqlTable(
+  "revoked_sessions",
+  {
+    jti: varchar("jti", { length: 32 }).primaryKey(),
+    userId: int("userId").notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byExpiry: index("ix_rs_expires").on(t.expiresAt) }),
+);
 export type InsertUser = typeof users.$inferInsert;
 
 export const workspaces = mysqlTable("workspaces", {

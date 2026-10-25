@@ -8,6 +8,7 @@
 import { useMemo, useState } from "react";
 import { useRoute } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { safeRedirectUrl } from "@shared/safeRedirect";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,7 +35,10 @@ export default function PublicForm() {
     e.preventDefault();
     submit.mutate({ publicId, data: values }, {
       onSuccess: (r: any) => {
-        if (r?.redirectUrl) { window.location.href = r.redirectUrl; return; }
+        // Only an http(s) URL or an in-app path is followed — never a
+        // javascript: URL (shared/safeRedirect.ts, audit 2026-10-20).
+        const to = safeRedirectUrl(r?.redirectUrl);
+        if (to) { window.location.href = to; return; }
         setDone(true);
       },
     });
