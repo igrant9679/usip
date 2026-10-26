@@ -596,12 +596,13 @@ Classes (pick exactly one):
     case "not_interested":
       await socialTask(db, workspaceId, msg, owner, `${name} not interested (${chan}) — review`, "low", "follow_up"); action = "marked"; break;
     case "out_of_office":
-      // Noted, not snoozed, and that is correct rather than unfinished: no
-      // code path on the Unipile side ever pauses an enrollment (the only
-      // update(enrollments) call sites are inboundReplyPoller, routers/
-      // sequences, routers/dataHealth and sequenceEngine), so there is
-      // nothing here to schedule a resume for. Mirroring the email branch
-      // would stamp a resumeAt with no pausedEnrollmentIds behind it.
+      // Noted, not snoozed. Since 2026-10-26 the messaging webhook pauses the
+      // replier's enrolments (sequenceEngine.pauseEnrollmentsForSocialReply,
+      // audit O6), but no LinkedIn message records WHICH ones, so there is
+      // nothing here to schedule a resume for — mirroring the email branch
+      // would stamp a resumeAt with no pausedEnrollmentIds behind it. An
+      // away message on LinkedIn is rare and typed by a person; the rep
+      // resumes by hand.
       action = "ooo_noted"; break;
     default:
       action = "none";

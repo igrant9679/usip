@@ -15,7 +15,7 @@
 
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { inSendWindow } from "./services/sendWindow";
-import { and, eq, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import {
   activities,
   contacts,
@@ -36,7 +36,12 @@ import { invokeLLM } from "./_core/llm";
 import type { ResearchUse } from "./services/research/context";
 import { researchUseFor } from "./services/research/recipient";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "./services/humanCopy";
-import { isSuppressed } from "./unsubscribe";
+import { describeSuppression, findSuppression, linkedinUrlVariants } from "./services/suppression";
+import { affected } from "./services/draftSend";
+import { getWorkspaceTimezone } from "./services/workspaceTimezone";
+import { pickLinkedInAccount } from "./services/are/linkedinStep";
+import { extractLinkedInIdentifier } from "./services/linkedinLookup";
+import { checkLinkedInAction, recordLinkedInAction } from "./services/linkedin/activityGate";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -225,10 +230,10 @@ type AutoEnrollEvent =
 // ─── Sequence-timezone clock ──────────────────────────────────────────────────
 
 /**
- * Current wall-clock info in an IANA timezone (no deps — Intl only).
+ * Wall-clock info in an IANA timezone (no deps — Intl only).
  * Falls back to UTC on a bad/missing timezone string.
  */
-function nowInTz(tz: string | undefined): { hhmm: string; dow: number; dateKey: string } {
+function nowInTz(tz: string | undefined, at: Date = new Date()): { hhmm: string; dow: number; dateKey: string } {
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: tz || "UTC",
@@ -236,7 +241,7 @@ function nowInTz(tz: string | undefined): { hhmm: string; dow: number; dateKey: 
       weekday: "short",
       year: "numeric", month: "2-digit", day: "2-digit",
       hour: "2-digit", minute: "2-digit",
-    }).formatToParts(new Date());
+    }).formatToParts(at);
     const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
     const dowMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
     return {
@@ -245,8 +250,7 @@ function nowInTz(tz: string | undefined): { hhmm: string; dow: number; dateKey: 
       dateKey: `${get("year")}-${get("month")}-${get("day")}`,
     };
   } catch {
-    const d = new Date();
-    return { hhmm: d.toISOString().slice(11, 16), dow: d.getUTCDay(), dateKey: d.toISOString().slice(0, 10) };
+    return { hhmm: at.toISOString().slice(11, 16), dow: at.getUTCDay(), dateKey: at.toISOString().slice(0, 10) };
   }
 }
 
@@ -256,6 +260,44 @@ type SequenceSendSettings = {
   sendWindowEnd?: string;
   skipWeekends?: boolean;
 };
+
+type ResolvedSendSettings = Required<SequenceSendSettings>;
+
+/**
+ * The send window a sequence actually runs in (audit 2026-10-20, O9).
+ *
+ * No screen saved a time zone and updateMeta replaced the whole settings
+ * object, so every sequence ran its "08:00–18:00" in UTC — 3 to 4 AM Eastern.
+ * A sequence without its own zone now uses the WORKSPACE's (Settings →
+ * workspace time zone). "Skip weekends" showed as on while the engine read an
+ * unset value as off; unset is now on, matching the screens.
+ */
+async function resolveSendSettings(seq: { settings: unknown }, workspaceId: number): Promise<ResolvedSendSettings> {
+  const s = (seq.settings ?? {}) as SequenceSendSettings;
+  return {
+    timezone: s.timezone || (await getWorkspaceTimezone(workspaceId)),
+    sendWindowStart: s.sendWindowStart || "08:00",
+    sendWindowEnd: s.sendWindowEnd || "18:00",
+    skipWeekends: s.skipWeekends !== false,
+  };
+}
+
+function inSequenceWindow(cfg: ResolvedSendSettings, at: Date): boolean {
+  const local = nowInTz(cfg.timezone, at);
+  if (cfg.skipWeekends && (local.dow === 0 || local.dow === 6)) return false;
+  // Zero-padded HH:MM strings compare correctly lexicographically.
+  return local.hhmm >= cfg.sendWindowStart && local.hhmm < cfg.sendWindowEnd;
+}
+
+/** The next quarter-hour the window is open, looking at most 8 days ahead. */
+function nextWindowOpen(cfg: ResolvedSendSettings, from: Date): Date {
+  const step = 15 * 60_000;
+  const start = Math.ceil((from.getTime() + 1) / step) * step;
+  for (let t = start; t <= from.getTime() + 8 * 86_400_000; t += step) {
+    if (inSequenceWindow(cfg, new Date(t))) return new Date(t);
+  }
+  return new Date(from.getTime() + HOLD_RECHECK_MS);
+}
 
 // ─── Daily email cap tracking (in-memory, resets at midnight) ─────────────────
 
@@ -270,19 +312,48 @@ function getDailyKey(workspaceId: number): string {
   return `${workspaceId}:${today}`;
 }
 
-function incrementDailyCount(workspaceId: number): boolean {
-  const key = getDailyKey(workspaceId);
-  const current = dailyEmailCounts.get(key) ?? 0;
-  if (current >= WORKSPACE_DAILY_CAP) return false;
-  dailyEmailCounts.set(key, current + 1);
-  return true;
-}
-
 // ─── Core processor ───────────────────────────────────────────────────────────
 
+/** Gap after a step that does not wait, so one tick never runs two steps of one enrolment. */
+const STEP_GAP_MS = 60_000;
 /**
- * Process all active enrollments whose nextActionAt is in the past.
+ * How far a held enrolment is pushed. A held row used to keep its past
+ * nextActionAt, so it sat at the front of the unordered 200-row page every
+ * tick and, once there were 200 of them, nothing behind them — in any
+ * workspace — ever ran (audit 2026-10-20, O23).
+ */
+const HOLD_RECHECK_MS = 15 * 60_000;
+/** A daily cap is not going to lift in five minutes. */
+const CAP_RECHECK_MS = 60 * 60_000;
+
+/** Drafts in these states are finished with; any other one is still on its way out. */
+const SETTLED_DRAFT_STATUSES = new Set(["sent", "rejected"]);
+
+/**
+ * Process every active enrolment whose next step is due.
  * Called every 5 minutes by the server cron.
+ *
+ * What it guarantees (audit 2026-10-20, Phase 1):
+ *
+ *   • ONE SEND PER STEP. A step is claimed by a conditional UPDATE that moves
+ *     currentStep on only if it still holds the value this tick read. Two
+ *     overlapping ticks both see the row; one moves it, and only that one
+ *     writes the draft, the task or the LinkedIn message.
+ *   • ONE STEP PER PERSON PER TICK, across all their enrolments.
+ *   • STEPS WAIT FOR THE EMAIL BEFORE THEM. While a draft from this enrolment
+ *     is waiting for review, approval or sending, nothing after it runs, and a
+ *     wait counts from the moment the email actually went out. Drafts used to
+ *     pile up behind review and go out together, minutes apart (O3).
+ *   • A WAIT COUNTS ONCE. The step before a wait used to schedule the wait's
+ *     days, and the wait step then added them again: "day 1, wait 3, wait 4"
+ *     sent on days 1, 7 and 15 (O2).
+ *   • PAUSED IS HELD. A paused or draft sequence's enrolments are not touched;
+ *     they continue where they were when it is reactivated. Only archiving a
+ *     sequence ends them (O1).
+ *   • HELD ROWS STEP ASIDE. A row that cannot go now (outside its window, over
+ *     a cap, waiting on a draft or a LinkedIn limit) is pushed forward, and
+ *     the page is read oldest-due first, so it cannot starve the rows behind
+ *     it (O23).
  */
 export async function processEnrollments(): Promise<{ processed: number; errors: number }> {
   const db = await getDb();
@@ -292,132 +363,165 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
   let processed = 0;
   let errors = 0;
 
-  // Fetch all active enrollments due for processing
+  // Archived workspaces are frozen (2026-08-12) — excluded in SQL, because a
+  // frozen row that is merely skipped keeps its place at the head of the page.
+  const archivedWs = await archivedWorkspaceIds();
   const due = await db
-    .select()
+    .select({ enrollment: enrollments, seq: sequences })
     .from(enrollments)
+    .innerJoin(
+      sequences,
+      // Scoped to the ENROLMENT's workspace (audit 2026-10-20, C9): the ids on
+      // an enrolment row were never checked at enrol time.
+      and(eq(sequences.id, enrollments.sequenceId), eq(sequences.workspaceId, enrollments.workspaceId)),
+    )
     .where(
       and(
         eq(enrollments.status, "active"),
-        or(
-          isNull(enrollments.nextActionAt),
-          lte(enrollments.nextActionAt, now)
-        )
-      )
+        or(isNull(enrollments.nextActionAt), lte(enrollments.nextActionAt, now)),
+        // Paused and draft sequences HOLD their enrolments; archived ones are
+        // read only to end them.
+        inArray(sequences.status, ["active", "archived"]),
+        archivedWs.size > 0 ? notInArray(enrollments.workspaceId, Array.from(archivedWs)) : undefined,
+      ),
     )
+    .orderBy(asc(enrollments.nextActionAt), asc(enrollments.id))
     .limit(200); // process up to 200 per tick to avoid overload
 
-    const archivedWs = await archivedWorkspaceIds();
-  for (const enrollment of due) {
-    if (archivedWs.has(enrollment.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
-    try {
-      // Fetch the sequence
-      // Every lookup from here on is scoped to the ENROLMENT's workspace
-      // (audit 2026-10-20, C9): the ids on an enrolment row were never checked
-      // at enrol time, and an id-only read here mailed another tenant's people.
-      const [seq] = await db
-        .select()
-        .from(sequences)
-        .where(and(eq(sequences.id, enrollment.sequenceId), eq(sequences.workspaceId, enrollment.workspaceId)));
+  const people = new Set<string>();
+  const sendSettings = new Map<number, ResolvedSendSettings>();
+  const linkedinVerdicts = new Map<string, Awaited<ReturnType<typeof checkLinkedInAction>>>();
 
-      if (!seq || seq.status !== "active") {
-        // Sequence is no longer active — exit enrollment
-        await db
-          .update(enrollments)
-          .set({ status: "exited" })
-          .where(eq(enrollments.id, enrollment.id));
+  for (const { enrollment, seq } of due) {
+    try {
+      // Every write below names the row AND the step this tick read, so a
+      // row another tick has moved on is left alone.
+      if (seq.status === "archived") {
+        await db.update(enrollments).set({ status: "exited" }).where(and(
+          eq(enrollments.id, enrollment.id),
+          eq(enrollments.workspaceId, enrollment.workspaceId),
+          eq(enrollments.status, "active"),
+          eq(enrollments.currentStep, enrollment.currentStep),
+        ));
         continue;
       }
+
+      const person = enrollment.contactId
+        ? `c:${enrollment.contactId}`
+        : enrollment.leadId ? `l:${enrollment.leadId}` : `p:${enrollment.prospectId}`;
+      if (people.has(person)) continue; // still due — next tick
+
+      const hold = async (until: Date) => {
+        await db.update(enrollments).set({ nextActionAt: until }).where(and(
+          eq(enrollments.id, enrollment.id),
+          eq(enrollments.workspaceId, enrollment.workspaceId),
+          eq(enrollments.status, "active"),
+          eq(enrollments.currentStep, enrollment.currentStep),
+        ));
+      };
+
+      // ── Wait for this enrolment's own drafts ─────────────────────────────
+      const drafts = await db
+        .select({ status: emailDrafts.status, sentAt: emailDrafts.sentAt })
+        .from(emailDrafts)
+        .where(and(eq(emailDrafts.workspaceId, enrollment.workspaceId), eq(emailDrafts.enrollmentId, enrollment.id)));
+      if (drafts.some((d) => !SETTLED_DRAFT_STATUSES.has(String(d.status)))) {
+        await hold(new Date(now.getTime() + HOLD_RECHECK_MS));
+        continue;
+      }
+      const lastSentAt = drafts.reduce<number>((max, d) => (d.sentAt ? Math.max(max, new Date(d.sentAt).getTime()) : max), 0);
 
       const steps = normalizeSteps(seq.steps);
       const stepIndex = enrollment.currentStep;
 
       if (stepIndex >= steps.length) {
-        // All steps done — mark finished
-        await db
-          .update(enrollments)
-          .set({ status: "finished" })
-          .where(eq(enrollments.id, enrollment.id));
+        // All steps done, and the last email has gone (or been rejected).
+        await db.update(enrollments).set({ status: "finished" }).where(and(
+          eq(enrollments.id, enrollment.id),
+          eq(enrollments.workspaceId, enrollment.workspaceId),
+          eq(enrollments.status, "active"),
+          eq(enrollments.currentStep, enrollment.currentStep),
+        ));
         processed++;
         continue;
       }
 
       const step = steps[stepIndex];
       const nextStepIndex = stepIndex + 1;
-      const hasNextStep = nextStepIndex < steps.length;
 
-      // A disabled step is skipped entirely: advance the enrollment past it on
-      // this tick rather than sending, waiting, or creating a task. Enrollments
-      // already mid-sequence therefore roll forward the moment a step is
-      // retired, instead of stalling on it.
+      /** Take this step. False means another tick already did. */
+      const claim = async (nextActionAt: Date): Promise<boolean> => {
+        const res = await db.update(enrollments).set({ currentStep: nextStepIndex, nextActionAt }).where(and(
+          eq(enrollments.id, enrollment.id),
+          eq(enrollments.workspaceId, enrollment.workspaceId),
+          eq(enrollments.status, "active"),
+          eq(enrollments.currentStep, enrollment.currentStep),
+        ));
+        if (affected(res) !== 1) return false;
+        people.add(person);
+        return true;
+      };
+      const claimNow = () => claim(new Date(now.getTime() + STEP_GAP_MS));
+
+      // A disabled step is skipped entirely: the enrolment rolls past it
+      // instead of stalling on a retired step.
       if (step.enabled === false) {
-        await db
-          .update(enrollments)
-          .set(
-            hasNextStep
-              ? { currentStep: nextStepIndex, nextActionAt: new Date() }
-              : { status: "finished" as never },
-          )
-          .where(eq(enrollments.id, enrollment.id));
-        processed++;
+        if (await claimNow()) processed++;
         continue;
       }
 
-      // A LinkedIn DM or invite goes out the moment its step runs, with no gate
-      // of its own: it waits for the workspace send window (owner ask 2026-09-25,
-      // see @shared/sendWindow), which stays shut while outbound is paused.
-      // Invites waited only for the LinkedIn limits until 2026-10-06.
+      // A LinkedIn DM or invite waits for the workspace send window (owner ask
+      // 2026-09-25, see @shared/sendWindow), which stays shut while outbound
+      // is paused.
       if ((step.type === "linkedin_dm" || step.type === "linkedin_invite") && !(await inSendWindow(enrollment.workspaceId))) {
-        continue; // outside the workspace send window — try next tick
+        await hold(new Date(now.getTime() + HOLD_RECHECK_MS));
+        continue;
+      }
+
+      if (step.type === "wait") {
+        // The wait counts from when this step came due or the last email
+        // actually went out, whichever is later — never from both.
+        const base = Math.max(enrollment.nextActionAt ? new Date(enrollment.nextActionAt).getTime() : now.getTime(), lastSentAt);
+        if (await claim(new Date(base + (step.waitDays ?? 1) * 86_400_000))) processed++;
+        continue;
       }
 
       if (step.type === "email") {
-        // Enforce the sequence's send window + weekend skip in ITS timezone.
-        // These settings existed in the editor but were never consulted in
-        // the send path — emails went out at any hour, any day, and the
-        // daily key reset at UTC midnight regardless of the configured tz.
-        const sendCfg = (seq.settings ?? {}) as SequenceSendSettings;
-        const local = nowInTz(sendCfg.timezone);
-        if (sendCfg.skipWeekends && (local.dow === 0 || local.dow === 6)) {
-          continue; // weekend in the sequence's timezone — try next tick
+        let cfg = sendSettings.get(seq.id);
+        if (!cfg) {
+          cfg = await resolveSendSettings(seq, enrollment.workspaceId);
+          sendSettings.set(seq.id, cfg);
         }
-        const winStart = sendCfg.sendWindowStart ?? "08:00";
-        const winEnd = sendCfg.sendWindowEnd ?? "18:00";
-        // Zero-padded HH:MM strings compare correctly lexicographically.
-        if (local.hhmm < winStart || local.hhmm >= winEnd) {
-          continue; // outside the send window — try next tick
+        if (!inSequenceWindow(cfg, now)) {
+          await hold(nextWindowOpen(cfg, now));
+          continue;
         }
 
-        // Enforce daily caps (per-sequence key rolls at the sequence's
-        // local midnight, not UTC)
-        const seqDailyCap = seq.dailyCap ?? Infinity;
-        const seqKey = `seq:${seq.id}:${local.dateKey}`;
+        // Daily caps (per-sequence key rolls at the sequence's local midnight).
+        const seqKey = `seq:${seq.id}:${nowInTz(cfg.timezone, now).dateKey}`;
         const seqCount = dailyEmailCounts.get(seqKey) ?? 0;
-
-        if (seqCount >= seqDailyCap) {
-          // Skip this tick — try again next run
+        const wsKey = getDailyKey(enrollment.workspaceId);
+        const wsCount = dailyEmailCounts.get(wsKey) ?? 0;
+        if (seqCount >= (seq.dailyCap ?? Infinity) || wsCount >= WORKSPACE_DAILY_CAP) {
+          await hold(new Date(now.getTime() + CAP_RECHECK_MS));
           continue;
         }
 
-        const wsCapOk = incrementDailyCount(enrollment.workspaceId);
-        if (!wsCapOk) {
-          // Workspace daily cap hit — skip
-          continue;
-        }
-        dailyEmailCounts.set(seqKey, seqCount + 1);
-
-        // Resolve recipient email
+        // Resolve the recipient.
         let toEmail: string | undefined;
+        let linkedinUrl: string | null = null;
+        let companyDomain: string | null = null;
         let toContactId: number | undefined;
         let toLeadId: number | undefined;
         let toProspectId: number | undefined;
-
         if (enrollment.contactId) {
           const [contact] = await db
-            .select({ email: contacts.email })
+            .select({ email: contacts.email, linkedinUrl: contacts.linkedinUrl, companyDomain: contacts.companyDomain })
             .from(contacts)
             .where(and(eq(contacts.id, enrollment.contactId), eq(contacts.workspaceId, enrollment.workspaceId)));
           toEmail = contact?.email ?? undefined;
+          linkedinUrl = contact?.linkedinUrl ?? null;
+          companyDomain = contact?.companyDomain ?? null;
           toContactId = enrollment.contactId;
         } else if (enrollment.leadId) {
           const [lead] = await db
@@ -427,246 +531,171 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           toEmail = lead?.email ?? undefined;
           toLeadId = enrollment.leadId;
         } else if (enrollment.prospectId) {
-          // Prospect-native enrollment path (migration 0085). No
-          // contact-promotion happened — engine reads the email
+          // Prospect-native enrollment path (migration 0085): the email comes
           // straight from the prospects row.
           const [prospect] = await db
-            .select({ email: prospects.email })
+            .select({ email: prospects.email, linkedinUrl: prospects.linkedinUrl, companyDomain: prospects.companyDomain })
             .from(prospects)
             .where(and(eq(prospects.id, enrollment.prospectId), eq(prospects.workspaceId, enrollment.workspaceId)));
           toEmail = prospect?.email ?? undefined;
+          linkedinUrl = prospect?.linkedinUrl ?? null;
+          companyDomain = prospect?.companyDomain ?? null;
           toProspectId = enrollment.prospectId;
         }
 
+        /**
+         * The person must not be suppressed — the ONE check
+         * (services/suppression), so the do-not-contact list, a LinkedIn
+         * profile or a whole company domain stop this email too, not only the
+         * email suppression list. Asked BEFORE the claim, so a failed lookup
+         * leaves the step to run next tick instead of losing it.
+         *
+         * Skips the STEP rather than exiting the enrolment: a bounce stops
+         * email, not this sequence's task steps (a rep's phone call).
+         */
+        let skip: string | null = toEmail ? null : "no email address";
         if (toEmail) {
-          // A/B variant assignment: pick a variant for this step if any exist
-          let draftSubject = step.subject ?? "Follow-up";
-          let draftBody = step.body ?? "";
-          const variants = await db
-            .select()
-            .from(sequenceAbVariants)
-            .where(
-              and(
-                eq(sequenceAbVariants.workspaceId, enrollment.workspaceId),
-                eq(sequenceAbVariants.sequenceId, enrollment.sequenceId),
-                eq(sequenceAbVariants.stepIndex, stepIndex),
-              ),
-            );
-          // Pick a variant if any are configured. Increment of sentCount
-          // is deferred until AFTER the draft insert succeeds — previously
-          // the bump ran first, which left the variant counter wrong when
-          // the insert threw (counter says "we sent 5 with variant A"
-          // when only 4 drafts actually exist).
-          let chosenVariantId: number | null = null;
-          let chosenVariantCount: number | null = null;
-          if (variants.length > 0) {
-            // Weighted random selection based on splitPct. Guard against
-            // all-zero weights (Math.random() * 0 = 0, loop never
-            // decrements past zero, always picks variants[0] → silent
-            // unfairness). Fall back to uniform random when every
-            // variant has splitPct=0.
-            const totalWeight = variants.reduce((s, v) => s + v.splitPct, 0);
-            let chosen = variants[0];
-            if (totalWeight <= 0) {
-              chosen = variants[Math.floor(Math.random() * variants.length)];
-            } else {
-              let rand = Math.random() * totalWeight;
-              for (const v of variants) {
-                rand -= v.splitPct;
-                if (rand <= 0) { chosen = v; break; }
-              }
-            }
-            draftSubject = chosen.subject;
-            draftBody = chosen.body;
-            chosenVariantId = chosen.id;
-            chosenVariantCount = chosen.sentCount;
-          }
+          const hit = await findSuppression(enrollment.workspaceId, { email: toEmail, linkedinUrl, companyDomain }, "email");
+          if (hit) skip = describeSuppression(hit);
+        }
 
-          // AI-dynamic steps carry no static copy by design — the canvas
-          // deliberately hides subject/body for them. Generate now.
-          if (step.emailMode === "dynamic" && variants.length === 0) {
-            const generated = await generateDynamicEmail(
-              step,
-              enrollment.workspaceId,
-              await researchUseFor(enrollment.workspaceId, "outreach", { contactId: enrollment.contactId, leadId: enrollment.leadId, prospectId: enrollment.prospectId }),
-            );
-            if (generated) {
-              draftSubject = generated.subject;
-              draftBody = generated.body;
+        if (!(await claimNow())) continue;
+        processed++;
+        if (skip || !toEmail) {
+          console.log(
+            `[SequenceEngine] sequence ${enrollment.sequenceId} step ${stepIndex}: ${skip} — draft SKIPPED for enrollment ${enrollment.id}.`,
+          );
+          continue;
+        }
+        dailyEmailCounts.set(seqKey, seqCount + 1);
+        dailyEmailCounts.set(wsKey, wsCount + 1);
+
+        // A/B variant assignment: pick a variant for this step if any exist
+        let draftSubject = step.subject ?? "Follow-up";
+        let draftBody = step.body ?? "";
+        const variants = await db
+          .select()
+          .from(sequenceAbVariants)
+          .where(
+            and(
+              eq(sequenceAbVariants.workspaceId, enrollment.workspaceId),
+              eq(sequenceAbVariants.sequenceId, enrollment.sequenceId),
+              eq(sequenceAbVariants.stepIndex, stepIndex),
+            ),
+          );
+        let chosenVariantId: number | null = null;
+        if (variants.length > 0) {
+          // Weighted random selection based on splitPct. Guard against
+          // all-zero weights (Math.random() * 0 = 0, loop never decrements
+          // past zero, always picks variants[0] → silent unfairness). Fall
+          // back to uniform random when every variant has splitPct=0.
+          const totalWeight = variants.reduce((s, v) => s + v.splitPct, 0);
+          let chosen = variants[0];
+          if (totalWeight <= 0) {
+            chosen = variants[Math.floor(Math.random() * variants.length)];
+          } else {
+            let rand = Math.random() * totalWeight;
+            for (const v of variants) {
+              rand -= v.splitPct;
+              if (rand <= 0) { chosen = v; break; }
             }
           }
+          draftSubject = chosen.subject;
+          draftBody = chosen.body;
+          chosenVariantId = chosen.id;
+        }
 
-          // HARD GUARD: never create a draft with no body. A dynamic step
-          // used to persist as subject:"" body:"" and land here unchanged —
-          // `step.subject ?? "Follow-up"` doesn't fire on "" — so the engine
-          // queued a genuinely blank email against a real prospect. If we
-          // still have nothing to say, skip the send and advance rather than
-          // mailing emptiness; the log names the sequence and step.
-          const hasContent = draftBody.trim().length > 0;
-          if (!hasContent) {
-            console.error(
-              `[SequenceEngine] sequence ${enrollment.sequenceId} step ${stepIndex}: empty body — send SKIPPED for enrollment ${enrollment.id}.` +
-              (step.emailMode === "dynamic"
-                ? " AI generation returned nothing (check the workspace's AI provider key)."
-                : " The step has no content saved."),
-            );
+        // AI-dynamic steps carry no static copy by design — the canvas
+        // deliberately hides subject/body for them. Generate now.
+        if (step.emailMode === "dynamic" && variants.length === 0) {
+          const generated = await generateDynamicEmail(
+            step,
+            enrollment.workspaceId,
+            await researchUseFor(enrollment.workspaceId, "outreach", { contactId: enrollment.contactId, leadId: enrollment.leadId, prospectId: enrollment.prospectId }),
+          );
+          if (generated) {
+            draftSubject = generated.subject;
+            draftBody = generated.body;
           }
-
-          /**
-           * Second reason to skip the draft: the recipient is suppressed.
-           *
-           * Nothing in this engine checked, and a bounce does not touch
-           * enrollments — handleBounceEvent marks the draft, writes a
-           * suppression row, and stops. So a hard-bounced or unsubscribed
-           * recipient stayed actively enrolled and the engine minted a fresh
-           * `pending_review` draft for every remaining step, once per tick.
-           *
-           * No mail escaped: every send path DOES check suppression. What went
-           * wrong was quieter — the review queue filled with unsendable drafts,
-           * and `sequenceAbVariants.sentCount` is bumped at DRAFT CREATION, so
-           * variant denominators counted sends that could never happen and
-           * understated the winning variant.
-           *
-           * Skips the STEP and advances, exactly like the empty-body guard above,
-           * rather than exiting the whole enrollment. An email opt-out must not
-           * cancel this sequence's `task` steps (a rep's phone call) or its
-           * LinkedIn steps — those are different channels and the person did not
-           * opt out of them. areEngine checks suppression at both enrolment and
-           * dispatch; this brings the same discipline here without overreaching.
-           */
-          const suppressed = await isSuppressed(enrollment.workspaceId, toEmail);
-          if (suppressed) {
-            console.log(
-              `[SequenceEngine] sequence ${enrollment.sequenceId} step ${stepIndex}: ` +
-              `${toEmail} is suppressed — draft SKIPPED for enrollment ${enrollment.id}.`,
-            );
-          }
-
-          if (hasContent && !suppressed) {
-          // Create email draft for review.
-          // stepIndex captures which sequence step this draft was generated
-          // for, since enrollment.currentStep will advance before the draft
-          // is read by the analytics view.
-          await db.insert(emailDrafts).values({
-            workspaceId: enrollment.workspaceId,
-            subject: draftSubject,
-            body: draftBody,
-            toContactId,
-            toLeadId,
-            toProspectId,
-            toEmail,
-            sequenceId: enrollment.sequenceId,
-            enrollmentId: enrollment.id,
-            stepIndex,
-            // Migration 0141. Without this the variant's openCount/replyCount
-            // could never be attributed, which is why A/B promotion had no
-            // signal to work from. NULL when the step has no variants.
-            abVariantId: chosenVariantId,
-            status: "pending_review",
-            aiGenerated: false,
-          } as never);
-          /**
-           * No sentCount bump. sequence_ab_variants' counters are dead columns —
-           * variant performance is DERIVED from email_drafts by
-           * performanceMetrics.getSequenceAbVariantStats, which counts drafts that
-           * reached status 'sent'.
-           *
-           * Deriving is strictly better than a counter here, not merely tidier:
-           * this code runs at draft CREATION, and a `pending_review` draft may
-           * never send — a suppressed recipient being the obvious case, which the
-           * guard a few lines above now skips outright. The old counter therefore
-           * credited sends that never happened, and it gates
-           * `minSendsForPromotion`, so it could open the promotion threshold on
-           * mail nobody received. `abVariantId` on the draft above is the source
-           * row that makes the derivation possible.
-           */
-          } // end if (hasContent)
         }
 
-        // Advance to next step
-        if (hasNextStep) {
-          const nextStep = steps[nextStepIndex];
-          const nextActionAt = nextStep.type === "wait"
-            ? new Date(now.getTime() + (nextStep.waitDays ?? 1) * 86400000)
-            : new Date(now.getTime() + 60000); // 1 min delay for immediate steps
-          await db
-            .update(enrollments)
-            .set({ currentStep: nextStepIndex, nextActionAt })
-            .where(eq(enrollments.id, enrollment.id));
-        } else {
-          await db
-            .update(enrollments)
-            .set({ status: "finished" })
-            .where(eq(enrollments.id, enrollment.id));
+        // HARD GUARD: never create a draft with no body. A dynamic step used
+        // to persist as subject:"" body:"" and land here unchanged —
+        // `step.subject ?? "Follow-up"` doesn't fire on "" — so the engine
+        // queued a genuinely blank email against a real prospect. The step is
+        // skipped (it was claimed above) rather than mailing emptiness.
+        if (draftBody.trim().length === 0) {
+          console.error(
+            `[SequenceEngine] sequence ${enrollment.sequenceId} step ${stepIndex}: empty body — send SKIPPED for enrollment ${enrollment.id}.` +
+            (step.emailMode === "dynamic"
+              ? " AI generation returned nothing (check the workspace's AI provider key)."
+              : " The step has no content saved."),
+          );
+          continue;
         }
 
-      } else if (step.type === "wait") {
-        // Wait step — just advance to next step and set nextActionAt
-        if (hasNextStep) {
-          const nextStep = steps[nextStepIndex];
-          const waitDays = step.waitDays ?? 1;
-          const nextActionAt = nextStep.type === "wait"
-            ? new Date(now.getTime() + (nextStep.waitDays ?? 1) * 86400000)
-            : new Date(now.getTime() + waitDays * 86400000);
-          await db
-            .update(enrollments)
-            .set({ currentStep: nextStepIndex, nextActionAt })
-            .where(eq(enrollments.id, enrollment.id));
-        } else {
-          await db
-            .update(enrollments)
-            .set({ status: "finished" })
-            .where(eq(enrollments.id, enrollment.id));
-        }
+        // stepIndex captures which sequence step this draft was generated for,
+        // since enrollment.currentStep has already advanced.
+        await db.insert(emailDrafts).values({
+          workspaceId: enrollment.workspaceId,
+          subject: draftSubject,
+          body: draftBody,
+          toContactId,
+          toLeadId,
+          toProspectId,
+          toEmail,
+          sequenceId: enrollment.sequenceId,
+          enrollmentId: enrollment.id,
+          stepIndex,
+          // Migration 0141. Without this the variant's openCount/replyCount
+          // could never be attributed. NULL when the step has no variants.
+          abVariantId: chosenVariantId,
+          status: "pending_review",
+          aiGenerated: false,
+        } as never);
+        /**
+         * No sentCount bump. sequence_ab_variants' counters are dead columns —
+         * variant performance is DERIVED from email_drafts by
+         * performanceMetrics.getSequenceAbVariantStats, which counts drafts that
+         * reached status 'sent'. A counter bumped here, at draft CREATION,
+         * credited sends that never happened.
+         */
+        continue;
+      }
 
-      } else if (step.type === "task") {
-        // Create a task for the rep
-        const dueAt = new Date(
-          now.getTime() + (step.taskDueOffsetDays ?? 1) * 86400000
-        );
+      if (step.type === "task") {
+        if (!(await claimNow())) continue;
+        processed++;
         await db.insert(tasks).values({
           workspaceId: enrollment.workspaceId,
           // title is varchar(240) — normalizeStep already clamps the derived
           // title, but clamp again here so a legacy taskTitle can't overflow.
           title: (step.taskTitle ?? "Follow up").slice(0, 240),
           description: step.taskBody ?? null,
-          dueAt,
+          dueAt: new Date(now.getTime() + (step.taskDueOffsetDays ?? 1) * 86_400_000),
           relatedType: enrollment.contactId ? "contact" : enrollment.leadId ? "lead" : "prospect",
           relatedId: (enrollment.contactId ?? enrollment.leadId ?? enrollment.prospectId) as number,
           status: "open",
           priority: "normal",
         });
+        continue;
+      }
 
-        // Advance to next step
-        if (hasNextStep) {
-          const nextStep = steps[nextStepIndex];
-          const nextActionAt = nextStep.type === "wait"
-            ? new Date(now.getTime() + (nextStep.waitDays ?? 1) * 86400000)
-            : new Date(now.getTime() + 60000);
-          await db
-            .update(enrollments)
-            .set({ currentStep: nextStepIndex, nextActionAt })
-            .where(eq(enrollments.id, enrollment.id));
-        } else {
-          await db
-            .update(enrollments)
-            .set({ status: "finished" })
-            .where(eq(enrollments.id, enrollment.id));
-        }
-
-      } else if (step.type === "linkedin_dm" || step.type === "linkedin_invite") {
-        // ── LinkedIn outreach via Unipile ──────────────────────────────────────
-        // Resolve the target's LinkedIn URL (used as provider ID lookup)
+      if (step.type === "linkedin_dm" || step.type === "linkedin_invite") {
+        // ── LinkedIn outreach via Unipile ────────────────────────────────────
         let linkedinUrl: string | null | undefined;
+        let email: string | null | undefined;
+        let companyDomain: string | null | undefined;
         let relatedType: "contact" | "lead" | "prospect" = "contact";
         let relatedId: number | undefined;
-
         if (enrollment.contactId) {
           const [contact] = await db
-            .select({ linkedinUrl: contacts.linkedinUrl })
+            .select({ linkedinUrl: contacts.linkedinUrl, email: contacts.email, companyDomain: contacts.companyDomain })
             .from(contacts)
             .where(and(eq(contacts.id, enrollment.contactId), eq(contacts.workspaceId, enrollment.workspaceId)));
           linkedinUrl = contact?.linkedinUrl;
+          email = contact?.email;
+          companyDomain = contact?.companyDomain;
           relatedType = "contact";
           relatedId = enrollment.contactId;
         } else if (enrollment.leadId) {
@@ -675,167 +704,138 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           // Leads don't have a linkedinUrl field — skip gracefully
         } else if (enrollment.prospectId) {
           const [prospect] = await db
-            .select({ linkedinUrl: prospects.linkedinUrl })
+            .select({ linkedinUrl: prospects.linkedinUrl, email: prospects.email, companyDomain: prospects.companyDomain })
             .from(prospects)
             .where(and(eq(prospects.id, enrollment.prospectId), eq(prospects.workspaceId, enrollment.workspaceId)));
           linkedinUrl = prospect?.linkedinUrl;
+          email = prospect?.email;
+          companyDomain = prospect?.companyDomain;
           relatedType = "prospect";
           relatedId = enrollment.prospectId;
         }
+        const identifier = linkedinUrl ? extractLinkedInIdentifier(linkedinUrl) : null;
 
-        // Find the sequence owner's Unipile LinkedIn account
-        const [unipileAcct] = await db
-          .select()
-          .from(unipileAccounts)
-          .where(
-            and(
-              eq(unipileAccounts.workspaceId, enrollment.workspaceId),
-              eq(unipileAccounts.provider, "LINKEDIN"),
-            ),
-          )
-          .limit(1);
+        // The SEQUENCE OWNER's account, as ARE does (audit 2026-10-20, O12):
+        // this used to take whichever LinkedIn account the database returned
+        // first, so a rep's sequence could invite people as a colleague.
+        const account = await pickLinkedInAccount(enrollment.workspaceId, seq.assignedToUserId ?? seq.ownerUserId ?? null);
+        const isInvite = step.type === "linkedin_invite";
+        const text = (isInvite ? step.note : step.body) ?? "";
 
-        if (unipileAcct && linkedinUrl) {
-          // Extract the LinkedIn member URN / profile ID from the URL
-          // e.g. https://www.linkedin.com/in/john-doe → john-doe
-          const profileSlug = linkedinUrl.replace(/\/+$/, "").split("/").pop() ?? linkedinUrl;
+        let skip: string | null = null;
+        if (!account) skip = "no Unipile LinkedIn account";
+        else if (!identifier) skip = "no LinkedIn profile on the record";
+        else if (!isInvite && !text.trim()) skip = "the step has no message";
+        else {
+          const hit = await findSuppression(enrollment.workspaceId, { email, linkedinUrl, companyDomain }, "linkedin");
+          if (hit) skip = describeSuppression(hit);
+        }
+        if (!skip && isInvite) {
+          // Never ask twice: an invitation pending or accepted is the answer.
+          const [prior] = await db
+            .select({ id: unipileInvites.id })
+            .from(unipileInvites)
+            .where(and(eq(unipileInvites.workspaceId, enrollment.workspaceId), eq(unipileInvites.recipientProviderId, identifier!)))
+            .limit(1);
+          if (prior) skip = "already invited";
+        }
+        if (skip) {
+          console.warn(`[SequenceEngine] Skipping LinkedIn step for enrollment ${enrollment.id}: ${skip}`);
+          if (await claimNow()) processed++;
+          continue;
+        }
 
-          try {
-            if (step.type === "linkedin_dm") {
-              const result = await sendMessage({
-                accountId: unipileAcct.unipileAccountId,
-                attendeesIds: [profileSlug],
-                text: step.body ?? "",
-              });
-              // Log to unipile_messages. The recipient's provider id is the
-              // fact genuineSocialReplyScope() matches an inbound DM against —
-              // without it a reply to this step reads as a stranger's message
-              // and is never classified or counted (2026-09-20).
-              await db.insert(unipileMessages).values({
-                workspaceId: enrollment.workspaceId,
-                unipileAccountId: unipileAcct.unipileAccountId,
-                provider: "LINKEDIN",
-                chatId: result.chatId || result.id,
-                messageId: result.id,
-                direction: "outbound",
-                recipientProviderId: profileSlug,
-                text: step.body ?? "",
-                linkedContactId: enrollment.contactId ?? null,
-                linkedLeadId: enrollment.leadId ?? null,
-              });
-              // Log activity
-              if (relatedId) {
-                await db.insert(activities).values({
-                  workspaceId: enrollment.workspaceId,
-                  type: "linkedin",
-                  relatedType,
-                  relatedId,
-                  subject: "LinkedIn DM sent",
-                  body: step.body ?? "",
-                });
-              }
-            } else {
-              // linkedin_invite
-              // Behind the SAME activity gate as every other automated
-              // sender (2026-09-20) — this path predated the gate and sent
-              // ungoverned, contradicting the precondition the ARE LinkedIn
-              // step documents for having two automated senders at all.
-              const { checkLinkedInAction, recordLinkedInAction } = await import("./services/linkedin/activityGate");
-              const inviteGate = await checkLinkedInAction({ workspaceId: enrollment.workspaceId, unipileAccountId: unipileAcct.unipileAccountId, kind: "invite" });
-              if (!inviteGate.allowed) {
-                // Held: log and let the step advance (the engine's existing
-                // contract — it never blocks a sequence on channel failures).
-                console.log(`[SequenceEngine] invite held by LinkedIn limits for enrollment ${enrollment.id}: ${inviteGate.reason ?? "cap"}`);
-                throw new Error(`held by LinkedIn limits: ${inviteGate.reason ?? "cap"}`);
-              }
-              await sendLinkedInInvitation({
-                accountId: unipileAcct.unipileAccountId,
-                providerId: profileSlug,
-                message: step.note ?? "",
-              });
-              await recordLinkedInAction({ workspaceId: enrollment.workspaceId, unipileAccountId: unipileAcct.unipileAccountId, kind: "invite" });
-              // Log to unipile_invites
-              await db.insert(unipileInvites).values({
-                workspaceId: enrollment.workspaceId,
-                userId: unipileAcct.userId,
-                unipileAccountId: unipileAcct.unipileAccountId,
-                recipientProviderId: profileSlug,
-                message: step.note ?? "",
-                status: "pending",
-                linkedContactId: enrollment.contactId ?? null,
-                linkedLeadId: enrollment.leadId ?? null,
-              });
-              // Log activity
-              if (relatedId) {
-                await db.insert(activities).values({
-                  workspaceId: enrollment.workspaceId,
-                  type: "linkedin",
-                  relatedType,
-                  relatedId,
-                  subject: "LinkedIn connection request sent",
-                  body: step.note ?? "",
-                });
-              }
-            }
-          } catch (liErr) {
-            console.warn(`[SequenceEngine] LinkedIn step failed for enrollment ${enrollment.id}:`, liErr);
-            // Don't throw — advance past the step so the sequence continues
+        /**
+         * THE GATE, for DMs as well as invites (O11/O12). DMs went out with no
+         * check at all and counted against nothing, and an invite the gate
+         * held was skipped for good. A refusal now HOLDS the step until the
+         * gate says it may run; one account's verdict serves the whole tick.
+         */
+        const kind = isInvite ? "invite" as const : "message" as const;
+        const gateKey = `${account!.unipileAccountId}:${kind}`;
+        let verdict = linkedinVerdicts.get(gateKey);
+        if (!verdict) {
+          verdict = await checkLinkedInAction({ workspaceId: enrollment.workspaceId, unipileAccountId: account!.unipileAccountId, kind });
+          linkedinVerdicts.set(gateKey, verdict);
+        }
+        if (!verdict.allowed) {
+          const wait = Math.min(Math.max(verdict.retryAfterMs ?? HOLD_RECHECK_MS, HOLD_RECHECK_MS), 86_400_000);
+          await hold(new Date(now.getTime() + wait));
+          continue;
+        }
+
+        if (!(await claimNow())) continue;
+        processed++;
+        // One action per account per tick; the next one is re-checked.
+        linkedinVerdicts.delete(gateKey);
+        try {
+          if (!isInvite) {
+            const result = await sendMessage({
+              accountId: account!.unipileAccountId,
+              attendeesIds: [identifier!],
+              text,
+            });
+            await recordLinkedInAction({ workspaceId: enrollment.workspaceId, unipileAccountId: account!.unipileAccountId, kind: "message", source: "sequence", targetIdentifier: identifier });
+            // The recipient's provider id is the fact genuineSocialReplyScope()
+            // matches an inbound DM against (2026-09-20).
+            await db.insert(unipileMessages).values({
+              workspaceId: enrollment.workspaceId,
+              unipileAccountId: account!.unipileAccountId,
+              provider: "LINKEDIN",
+              chatId: result.chatId || result.id,
+              messageId: result.id,
+              direction: "outbound",
+              recipientProviderId: identifier,
+              text,
+              linkedContactId: enrollment.contactId ?? null,
+              linkedLeadId: enrollment.leadId ?? null,
+            });
+          } else {
+            await sendLinkedInInvitation({
+              accountId: account!.unipileAccountId,
+              providerId: identifier!,
+              message: text,
+            });
+            await recordLinkedInAction({ workspaceId: enrollment.workspaceId, unipileAccountId: account!.unipileAccountId, kind: "invite", source: "sequence", targetIdentifier: identifier });
+            await db.insert(unipileInvites).values({
+              workspaceId: enrollment.workspaceId,
+              userId: account!.userId ?? 0,
+              unipileAccountId: account!.unipileAccountId,
+              recipientProviderId: identifier!,
+              message: text,
+              status: "pending",
+              linkedContactId: enrollment.contactId ?? null,
+              linkedLeadId: enrollment.leadId ?? null,
+            } as never);
           }
-        } else {
-          console.warn(
-            `[SequenceEngine] Skipping LinkedIn step for enrollment ${enrollment.id}: ` +
-            `${!unipileAcct ? "no Unipile LinkedIn account" : "no LinkedIn URL on contact"}`
-          );
+          if (relatedId) {
+            await db.insert(activities).values({
+              workspaceId: enrollment.workspaceId,
+              type: "linkedin",
+              relatedType,
+              relatedId,
+              subject: isInvite ? "LinkedIn connection request sent" : "LinkedIn DM sent",
+              body: text,
+            });
+          }
+        } catch (liErr) {
+          // The step was claimed before the call, so it is not retried: a
+          // timeout after LinkedIn accepted the message would otherwise send
+          // it twice.
+          console.warn(`[SequenceEngine] LinkedIn step failed for enrollment ${enrollment.id}:`, liErr);
         }
-
-        // Advance to next step regardless of LinkedIn outcome
-        if (hasNextStep) {
-          const nextStep = steps[nextStepIndex];
-          const nextActionAt = nextStep.type === "wait"
-            ? new Date(now.getTime() + (nextStep.waitDays ?? 1) * 86400000)
-            : new Date(now.getTime() + 60000);
-          await db
-            .update(enrollments)
-            .set({ currentStep: nextStepIndex, nextActionAt })
-            .where(eq(enrollments.id, enrollment.id));
-        } else {
-          await db
-            .update(enrollments)
-            .set({ status: "finished" })
-            .where(eq(enrollments.id, enrollment.id));
-        }
-
-      } else {
-        // Terminal arm. Anything the chain above does not name — a legacy row,
-        // hand-written JSON, a channel this engine cannot send — used to fall
-        // straight through writing NOTHING: currentStep and nextActionAt were
-        // left as they were, so the due query re-selected the same enrollment
-        // on every 5-minute tick forever while `processed++` below made the
-        // log read as healthy work. Advance past it instead, and say which
-        // type it was, because there is no reason column on `enrollments` to
-        // record it on (2026-09-20).
-        console.warn(
-          `[SequenceEngine] enrollment ${enrollment.id}: unsupported step type ` +
-          `"${String(step.type)}" at index ${stepIndex} — advancing past it`
-        );
-        if (hasNextStep) {
-          const nextStep = steps[nextStepIndex];
-          const nextActionAt = nextStep.type === "wait"
-            ? new Date(now.getTime() + (nextStep.waitDays ?? 1) * 86400000)
-            : new Date(now.getTime() + 60000);
-          await db
-            .update(enrollments)
-            .set({ currentStep: nextStepIndex, nextActionAt })
-            .where(eq(enrollments.id, enrollment.id));
-        } else {
-          await db
-            .update(enrollments)
-            .set({ status: "finished" })
-            .where(eq(enrollments.id, enrollment.id));
-        }
+        continue;
       }
 
-      processed++;
+      // Terminal arm. Anything the chain above does not name — a legacy row,
+      // hand-written JSON, a channel this engine cannot send — used to write
+      // NOTHING, so the due query re-selected it every tick forever. Advance
+      // past it instead, and say which type it was (2026-09-20).
+      console.warn(
+        `[SequenceEngine] enrollment ${enrollment.id}: unsupported step type ` +
+        `"${String(step.type)}" at index ${stepIndex} — advancing past it`,
+      );
+      if (await claimNow()) processed++;
     } catch (err) {
       errors++;
       console.error(`[SequenceEngine] Error processing enrollment ${enrollment.id}:`, err);
@@ -978,6 +978,71 @@ export async function pauseOnReply(
 }
 
 /**
+ * A genuine LinkedIn reply stops the person's sequences, as an email reply does
+ * (audit 2026-10-20, O6).
+ *
+ * Nothing on the LinkedIn side ever paused an enrolment: a prospect could
+ * answer the sequence's DM and get its next email anyway. Called by the
+ * messaging webhook for every inbound DM that answers our outreach, before any
+ * classifier runs and whatever the autopilot mode — "this person replied" is a
+ * fact, not a judgement for a model to make.
+ *
+ * The person is whoever the outbound row we wrote to them was linked to: its
+ * contact or lead, and any prospect whose LinkedIn profile is the one we
+ * messaged (prospect enrolments are not linked on unipile rows). Sequences
+ * with "Pause enrollment on reply" switched off keep running, as on email.
+ */
+export async function pauseEnrollmentsForSocialReply(input: {
+  workspaceId: number;
+  chatId: string;
+  senderProviderId: string | null;
+  linkedContactId: number | null;
+  linkedLeadId: number | null;
+}): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const [outbound] = await db
+    .select({ recipient: unipileMessages.recipientProviderId })
+    .from(unipileMessages)
+    .where(and(
+      eq(unipileMessages.workspaceId, input.workspaceId),
+      eq(unipileMessages.chatId, input.chatId),
+      eq(unipileMessages.direction, "outbound"),
+    ))
+    .limit(1);
+  const identifier = (outbound?.recipient || input.senderProviderId || "").trim();
+  const variants = identifier ? linkedinUrlVariants(identifier) : [];
+  const prospectIds = variants.length
+    ? (await db.select({ id: prospects.id }).from(prospects)
+        .where(and(eq(prospects.workspaceId, input.workspaceId), inArray(prospects.linkedinUrl, variants)))).map((r) => r.id)
+    : [];
+  const who = [
+    ...(input.linkedContactId ? [eq(enrollments.contactId, input.linkedContactId)] : []),
+    ...(input.linkedLeadId ? [eq(enrollments.leadId, input.linkedLeadId)] : []),
+    ...(prospectIds.length ? [inArray(enrollments.prospectId, prospectIds)] : []),
+  ];
+  if (who.length === 0) return [];
+  const active = await db
+    .select({ id: enrollments.id, settings: sequences.settings })
+    .from(enrollments)
+    .innerJoin(sequences, and(eq(sequences.id, enrollments.sequenceId), eq(sequences.workspaceId, enrollments.workspaceId)))
+    .where(and(
+      eq(enrollments.workspaceId, input.workspaceId),
+      eq(enrollments.status, "active"),
+      who.length === 1 ? who[0] : or(...who),
+    ));
+  const paused: number[] = [];
+  for (const e of active) {
+    if ((e.settings as { replyDetection?: boolean } | null)?.replyDetection === false) continue;
+    await db.update(enrollments).set({ status: "paused", resumeAt: null })
+      .where(and(eq(enrollments.id, e.id), eq(enrollments.status, "active")));
+    paused.push(e.id);
+  }
+  if (paused.length) console.log(`[SequenceEngine] LinkedIn reply paused enrollment(s) ${paused.join(", ")}`);
+  return paused;
+}
+
+/**
  * Resume enrollments whose out-of-office snooze has expired (migration 0181;
  * the stamp is written by services/replyClassifier's out_of_office branch).
  *
@@ -1015,10 +1080,11 @@ export async function resumeDueEnrollments(): Promise<{ resumed: number }> {
     if (archivedWs.has(e.workspaceId)) continue;
     // Claim-before-act: repeating status + isNotNull in the UPDATE makes an
     // overlapping tick idempotent (the shape inboundReplyPoller uses to claim
-    // a draft's first reply).
+    // a draft's first reply). The step keeps the time it was due: waking up
+    // must not cut a wait short or restart one (audit 2026-10-20).
     await db
       .update(enrollments)
-      .set({ status: "active", resumeAt: null, nextActionAt: now } as never)
+      .set({ status: "active", resumeAt: null, nextActionAt: resumeNextActionAt(e.nextActionAt, now) } as never)
       .where(
         and(
           eq(enrollments.id, e.id),
@@ -1030,6 +1096,23 @@ export async function resumeDueEnrollments(): Promise<{ resumed: number }> {
   }
   if (resumed > 0) console.log(`[SequenceEngine] resumed ${resumed} out-of-office enrollment(s)`);
   return { resumed };
+}
+
+/**
+ * When a resumed enrolment's next step is due: exactly when it was due before
+ * the pause (now, if it never had a time).
+ *
+ * Resuming used to set nextActionAt to now, which did two wrong things. A wait
+ * still running was cut short, so the next email went out the moment someone
+ * pressed Resume. And a wait whose time had already passed was restarted,
+ * because the engine counts a wait from when its step came due (audit
+ * 2026-10-20, "resume → spaced steps"). A past time is due on the next tick
+ * anyway, so keeping it costs nothing. Everything after stays spaced because
+ * each email must go out before the following wait starts counting.
+ */
+export function resumeNextActionAt(current: Date | string | null | undefined, now: Date = new Date()): Date {
+  const t = current ? new Date(current).getTime() : NaN;
+  return Number.isFinite(t) ? new Date(t) : now;
 }
 
 // ─── Enrollment stats ─────────────────────────────────────────────────────────

@@ -33,9 +33,18 @@ import { buildMergeContextFromDb, resolveMergeVars, bodyToHtmlDocument, injectTr
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { areExecutionQueue } from "../../drizzle/schema";
 import { applyAccountSendDefaults } from "../services/sending/accountDefaults";
-import { isEmailSuppressed } from "./emailSuppressions";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
-import { assertOutboundNotPaused } from "../services/outboundPause";
+import { assertOutboundNotPaused, isOutboundPaused } from "../services/outboundPause";
+import { describeSuppression, findSuppression } from "../services/suppression";
+import { claimDraftForSend, draftHoldReason, isDefinitelyNotSent, markDraftFailed, releaseDraftClaim } from "../services/draftSend";
+import { makeUnsubscribeUrl, unsubscribeFooter, unsubscribeHeaders } from "../unsubscribe";
+import { assertSendAllowed } from "../sendLimits";
+
+/** Still 'sending' — i.e. the send itself, not the bookkeeping after it, failed. */
+async function isClaimed(db: any, draftId: number): Promise<boolean> {
+  const [row] = await db.select({ status: emailDrafts.status }).from(emailDrafts).where(eq(emailDrafts.id, draftId)).limit(1);
+  return row?.status === "sending";
+}
 
 /* ─── AES-256-GCM helpers ─────────────────────────────────────────────── */
 export function getEncKey(): Buffer {
@@ -217,6 +226,21 @@ export const smtpConfigRouter = router({
       if (!draft) throw new TRPCError({ code: "NOT_FOUND", message: "Draft not found" });
       if (draft.status !== "approved") throw new TRPCError({ code: "BAD_REQUEST", message: "Only approved drafts can be sent" });
 
+      /**
+       * CLAIMED before anything else (audit 2026-10-20, O16/O17): this read
+       * 'approved', sent, and only then wrote 'sent', so a double click, a
+       * second admin or "Send approved" running at the same time sent it
+       * again. Whoever moves it to 'sending' sends it.
+       */
+      if (!(await claimDraftForSend(db, ctx.workspace.id, draft.id, draft.status, ["approved"]))) {
+        throw new TRPCError({ code: "CONFLICT", message: "This draft was just sent or picked up by another sender." });
+      }
+      let transportCalled = false;
+      try {
+
+      const held = await draftHoldReason(db, draft);
+      if (held) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Not sent: ${held}.` });
+
       // Resolve recipient email
       let toEmail = draft.toEmail ?? null;
       if (!toEmail && draft.toContactId) {
@@ -229,12 +253,13 @@ export const smtpConfigRouter = router({
       }
       if (!toEmail) throw new TRPCError({ code: "BAD_REQUEST", message: "No recipient email address found for this draft" });
 
-      // Check suppression list before sending
-      const suppressed = await isEmailSuppressed(ctx.workspace.id, toEmail);
+      // The ONE suppression check (services/suppression): both lists, by
+      // address and by company domain.
+      const suppressed = await findSuppression(ctx.workspace.id, { email: toEmail }, "email");
       if (suppressed) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `${toEmail} is on the suppression list (unsubscribed or bounced). Remove them from the suppression list in Settings → Email Suppressions to re-enable sending.`,
+          message: `${toEmail}: ${describeSuppression(suppressed)}. Remove them from that list to re-enable sending.`,
         });
       }
 
@@ -264,18 +289,33 @@ export const smtpConfigRouter = router({
       const resolvedSubject = resolveMergeVars(draft.subject, mergeCtx);
       const resolvedBody = resolveMergeVars(draft.body, mergeCtx);
 
+      // Every email carries an unsubscribe link and the RFC 8058 one-click
+      // headers (O15) — this path sent neither.
+      const unsubscribeUrl = makeUnsubscribeUrl(publicAppOrigin(), ctx.workspace.id, toEmail);
+      const footer = unsubscribeFooter(unsubscribeUrl);
+
       try {
+        transportCalled = true;
         await transporter.sendMail({
           from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
           to: toEmail,
           replyTo: cfg.replyTo ?? undefined,
           subject: resolvedSubject,
-          text: resolvedBody,
-          html: resolvedBody.replace(/\n/g, "<br>"),
+          text: resolvedBody + footer.text,
+          html: resolvedBody.replace(/\n/g, "<br>") + footer.html,
+          headers: unsubscribeHeaders(publicAppOrigin(), ctx.workspace.id, toEmail),
         });
       } catch (err: any) {
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `Failed to send email: ${err?.message}` });
+        // Back to 'approved' only when the error proves nothing left;
+        // otherwise 'failed', for a person to decide (O14).
+        const reason = `Failed to send email: ${err?.message}`;
+        if (isDefinitelyNotSent(err)) await releaseDraftClaim(db, draft.id, "approved", reason);
+        else await markDraftFailed(db, draft.id, reason);
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: reason });
       }
+
+      // Sent. Marked first, so nothing below can make it look unsent (A4).
+      await db.update(emailDrafts).set({ status: "sent", sentAt: new Date(), sendError: null, sendClaimedAt: null } as never).where(eq(emailDrafts.id, draft.id));
 
       // A real outbound message left the workspace. The metered adapter factory
       // cannot see this path — it builds its own transporter from the SMTP
@@ -308,9 +348,6 @@ export const smtpConfigRouter = router({
         status: "sent",
       });
 
-      // Mark as sent
-      await db.update(emailDrafts).set({ status: "sent", sentAt: new Date() }).where(eq(emailDrafts.id, draft.id));
-
       // Log to activities
       if (draft.toContactId || draft.toLeadId) {
         await db.insert(activities).values({
@@ -325,6 +362,11 @@ export const smtpConfigRouter = router({
       }
 
       return { ok: true, sentTo: toEmail };
+      } catch (err) {
+        // Stopped before the transport: nothing left, so it is approved again.
+        if (!transportCalled) await releaseDraftClaim(db, draft.id, "approved").catch(() => {});
+        throw err;
+      }
     }),
 
   /** Send all approved drafts for the workspace (rate-limited 1/sec, max 200) */
@@ -382,7 +424,6 @@ export const smtpConfigRouter = router({
         .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
       const openTracking = sendPrefs?.openTracking !== false;
       const clickTracking = sendPrefs?.clickTracking !== false;
-      const unsubHeader = sendPrefs?.unsubHeader === true;
       const optOutEnabled = sendPrefs?.optOutEnabled === true;
       const optOutMessage = sendPrefs?.optOutMessage ?? "";
 
@@ -413,9 +454,29 @@ export const smtpConfigRouter = router({
           null;
 
         if (!toEmail) { skipped++; continue; }
-        // Skip suppressed emails
-        const isSuppressed = await isEmailSuppressed(ctx.workspace.id, toEmail);
-        if (isSuppressed) { skipped++; continue; }
+
+        /**
+         * Asked again for EVERY draft (audit 2026-10-20, O16): this loop runs
+         * for up to 200 seconds, and pause and the daily caps were checked
+         * once, before the first send. Either one ends the run; what is left
+         * stays approved for later.
+         */
+        if (await isOutboundPaused(ctx.workspace.id)) { skipped += drafts.length - (sent + failed + skipped); break; }
+        try {
+          await assertSendAllowed(ctx.workspace.id, draft.sendingAccountId ?? null);
+        } catch {
+          skipped += drafts.length - (sent + failed + skipped);
+          break;
+        }
+
+        // Claimed per draft: a second admin, a retried request or the row's
+        // own Send button can no longer send the same draft again.
+        if (!(await claimDraftForSend(db, ctx.workspace.id, draft.id, "approved", ["approved"]))) { skipped++; continue; }
+        const release = () => releaseDraftClaim(db, draft.id, "approved");
+        if (await draftHoldReason(db, draft)) { await release(); skipped++; continue; }
+        // The ONE suppression check: both lists, by address and company domain.
+        if (await findSuppression(ctx.workspace.id, { email: toEmail }, "email")) { await release(); skipped++; continue; }
+        let transportCalled = false;
         try {
           // Pre-send: resolve merge vars — drafts may target a contact, lead,
           // or prospect (sequence-engine drafts often have no contact row).
@@ -457,28 +518,26 @@ export const smtpConfigRouter = router({
             textBody = decorated.bodyText ?? textBody;
           }
 
-          // Sequence opt-out footer: appended AFTER tracking injection so its
-          // one-click unsubscribe link isn't click-wrapped.
+          // Opt-out footer: appended AFTER tracking injection so its one-click
+          // unsubscribe link isn't click-wrapped.
           //
-          // The INBOX decides whether there is a footer and what it says when
-          // it has one configured; the workspace setting is the fallback for an
-          // inbox that has not. Either way the link stays this path's tokenised
-          // one-click URL, which is strictly better than the mailto the adapter
-          // has to use — the setting governs the wording, not the mechanism.
+          // EVERY email has one (audit 2026-10-20, O15) — it used to appear
+          // only when an opt-out message was switched on, and it was off by
+          // default. The INBOX decides the wording when it has one configured;
+          // the workspace setting is the fallback; the standard footer is used
+          // when neither has wording. The link is always this path's
+          // tokenised URL, which asks before it acts (emailTracking.ts).
+          const unsubscribeUrl = `${appBaseUrl}/api/track/unsubscribe/${encodeURIComponent(token)}`;
           const inboxOptOut = acct?.optOutEnabled === true && !!acct.optOutMessage?.trim();
           const effectiveOptOutEnabled = inboxOptOut || optOutEnabled;
           const effectiveOptOutMessage = inboxOptOut ? acct!.optOutMessage! : optOutMessage;
-          if (effectiveOptOutEnabled) {
-            const optOut = renderSequenceOptOut(effectiveOptOutMessage, {
-              unsubscribeUrl: `${appBaseUrl}/api/track/unsubscribe/${encodeURIComponent(token)}`,
-            });
-            if (optOut) {
-              textBody = `${textBody}\n\n${optOut.text}`;
-              htmlBody = htmlBody.includes("</body>")
-                ? htmlBody.replace("</body>", `${optOut.html}</body>`)
-                : htmlBody + optOut.html;
-            }
-          }
+          const optOut = (effectiveOptOutEnabled ? renderSequenceOptOut(effectiveOptOutMessage, { unsubscribeUrl }) : null)
+            ?? (() => { const f = unsubscribeFooter(unsubscribeUrl); return { text: f.text.trim(), html: f.html }; })();
+          textBody = `${textBody}\n\n${optOut.text}`;
+          htmlBody = htmlBody.includes("</body>")
+            ? htmlBody.replace("</body>", `${optOut.html}</body>`)
+            : htmlBody + optOut.html;
+          transportCalled = true;
           await transporter.sendMail({
             from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
             to: toEmail,
@@ -487,14 +546,16 @@ export const smtpConfigRouter = router({
             text: textBody,
             html: htmlBody,
             // RFC 8058 one-click unsubscribe — the POST endpoint suppresses the
-            // recipient via the existing email_suppressions system.
-            headers: unsubHeader
-              ? {
-                  "List-Unsubscribe": `<${appBaseUrl}/api/track/unsubscribe/${encodeURIComponent(token)}>, <mailto:${cfg.fromEmail}?subject=unsubscribe>`,
-                  "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-                }
-              : undefined,
+            // recipient via the existing email_suppressions system. Always on
+            // (O15): Gmail and Yahoo require it of bulk senders.
+            headers: {
+              "List-Unsubscribe": `<${unsubscribeUrl}>, <mailto:${cfg.fromEmail}?subject=unsubscribe>`,
+              "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            },
           });
+          // Sent. Marked first, so no bookkeeping below can make it look
+          // unsent and send it again (A4).
+          await db.update(emailDrafts).set({ status: "sent", sentAt: new Date(), sendError: null, sendClaimedAt: null } as never).where(eq(emailDrafts.id, draft.id));
           // Per message, not per batch: this loop sends one email per draft.
           await recordEmailsSent(ctx.workspace.id, 1);
           // Per message for the same reason. Without this row the bulk blast —
@@ -518,7 +579,6 @@ export const smtpConfigRouter = router({
             bodyText: textBody,
             status: "sent",
           });
-          await db.update(emailDrafts).set({ status: "sent", sentAt: new Date() }).where(eq(emailDrafts.id, draft.id));
           if (draft.toContactId || draft.toLeadId) {
             await db.insert(activities).values({
               workspaceId: ctx.workspace.id,
@@ -531,8 +591,15 @@ export const smtpConfigRouter = router({
             });
           }
           sent++;
-        } catch {
-          failed++;
+        } catch (err) {
+          if (!(await isClaimed(db, draft.id).catch(() => true))) {
+            sent++; // sent and marked sent; only the bookkeeping after it failed
+          } else {
+            const reason = err instanceof Error ? err.message : String(err);
+            if (!transportCalled || isDefinitelyNotSent(err)) await releaseDraftClaim(db, draft.id, "approved", reason).catch(() => {});
+            else await markDraftFailed(db, draft.id, reason).catch(() => {});
+            failed++;
+          }
         }
 
         // Rate limit: 1 email per second

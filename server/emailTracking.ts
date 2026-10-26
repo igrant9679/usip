@@ -24,6 +24,7 @@ import { getDb } from "./db";
 import { appUrl } from "./appUrl";
 import { emailDrafts, emailTrackingEvents } from "../drizzle/schema";
 import { normalizeSuppressionEmail } from "./unsubscribe";
+import { escapeHtml } from "@shared/escapeHtml";
 import { requireScheduledSecret } from "./scheduledTaskAuth";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "./_core/activeMembers";
 
@@ -32,6 +33,27 @@ const TRACKING_PIXEL = Buffer.from(
   "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
   "base64",
 );
+
+const TRACK_UNSUB_STYLE = `<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:80px auto;padding:0 16px;text-align:center;color:#333}
+h1{color:#111;font-size:20px}p{color:#666;line-height:1.5}button{margin-top:16px;background:#dc2626;color:#fff;border:0;border-radius:8px;padding:12px 22px;font-size:15px;font-weight:600;cursor:pointer}</style>`;
+
+const TRACK_UNSUB_CONFIRM = (email: string, token: string) => `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Unsubscribe</title>${TRACK_UNSUB_STYLE}</head>
+<body><h1>Unsubscribe <strong>${escapeHtml(email)}</strong>?</h1>
+<p>You'll stop receiving emails from this sender at this address.</p>
+<form method="POST" action="/api/track/unsubscribe/${encodeURIComponent(token)}"><button type="submit">Yes, unsubscribe me</button></form>
+<p style="margin-top:24px;font-size:13px;color:#999">Didn't mean to click this? Just close the page — nothing has changed.</p>
+</body></html>`;
+
+const TRACK_UNSUB_DONE = (email: string) => `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Unsubscribed</title>${TRACK_UNSUB_STYLE}</head>
+<body><h1>You have been unsubscribed</h1>
+<p>The address <strong>${escapeHtml(email)}</strong> has been removed from our mailing list.</p>
+<p>You will no longer receive emails from this sender.</p>
+<p style="margin-top:40px;font-size:12px;color:#999">If this was a mistake, please contact the sender directly.</p>
+</body></html>`;
+
+const TRACK_UNSUB_INVALID = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invalid link</title>${TRACK_UNSUB_STYLE}</head>
+<body><h1>This unsubscribe link is not valid</h1><p>Reply to any message from the sender and ask to be removed.</p></body></html>`;
 
 export function registerEmailTrackingRoutes(app: Express) {
   /**
@@ -308,54 +330,48 @@ export function registerEmailTrackingRoutes(app: Express) {
   });
 
   /**
-   * RFC 8058 one-click unsubscribe — mail clients POST here (no UI) when the
-   * List-Unsubscribe / List-Unsubscribe-Post headers are present. Same
-   * suppression path as the human-facing GET below.
+   * POST — the act. Two callers: the confirmation form the GET below shows,
+   * and the recipient's mail client via RFC 8058 one-click (the
+   * List-Unsubscribe / List-Unsubscribe-Post headers), which posts the body
+   * `List-Unsubscribe=One-Click`.
    */
   app.post("/api/track/unsubscribe/:token", async (req: Request, res: Response) => {
     const { token } = req.params;
     if (!token) { res.status(400).send("Invalid token"); return; }
+    const body = req.body as Record<string, unknown> | undefined;
+    const oneClick = String(body?.["List-Unsubscribe"] ?? "").trim() === "One-Click";
     try {
       const { recordUnsubscribeByToken } = await import("./routers/emailSuppressions");
-      const result = await recordUnsubscribeByToken(token, req.headers["user-agent"]);
-      res.status(result.ok ? 200 : 404).send(result.ok ? "Unsubscribed" : "Unknown token");
+      const result = await recordUnsubscribeByToken(token, req.headers["user-agent"], oneClick ? "one_click_header" : "link_confirmed");
+      if (!result.ok) { res.status(404).type("html").send(TRACK_UNSUB_INVALID); return; }
+      // RFC 8058 clients want a 200 and ignore the body; a person gets the page.
+      res.status(200).type("html").send(TRACK_UNSUB_DONE(result.email ?? ""));
     } catch (e) {
-      console.error("[EmailTracking] one-click unsubscribe failed:", e);
+      console.error("[EmailTracking] unsubscribe failed:", e);
       res.status(500).send("Error");
     }
   });
 
   /**
-   * Unsubscribe — one-click opt-out via tracking token
-   * GET /api/track/unsubscribe/:token
+   * GET /api/track/unsubscribe/:token — ASKS, never acts (audit 2026-10-20,
+   * O15). This unsubscribed on sight, and corporate mail security fetches
+   * every link in an inbound message to scan it, so a scanner unsubscribed
+   * people who had clicked nothing. The page it showed also printed the
+   * address unescaped. Same rule as /api/unsubscribe (unsubscribe.ts): a
+   * scanner issues GET and stops; it does not submit forms.
    */
   app.get("/api/track/unsubscribe/:token", async (req: Request, res: Response) => {
     const { token } = req.params;
     if (!token) {
-      return res.status(400).send("<h2>Invalid unsubscribe link.</h2>");
+      return res.status(400).type("html").send(TRACK_UNSUB_INVALID);
     }
     try {
-      const { recordUnsubscribeByToken } = await import("./routers/emailSuppressions");
-      const result = await recordUnsubscribeByToken(token, req.headers["user-agent"]);
-      if (result.ok) {
-        return res.status(200).send(
-          `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Unsubscribed</title>
-          <style>body{font-family:sans-serif;max-width:480px;margin:80px auto;text-align:center;color:#333}
-          h1{color:#111}p{color:#666}</style></head>
-          <body><h1>You have been unsubscribed</h1>
-          <p>The address <strong>${result.email ?? ""}</strong> has been removed from our mailing list.</p>
-          <p>You will no longer receive emails from this sender.</p>
-          <p style="margin-top:40px;font-size:12px;color:#999">If this was a mistake, please contact the sender directly.</p>
-          </body></html>`
-        );
-      } else {
-        return res.status(400).send(
-          `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Error</title></head>
-          <body><h2>This unsubscribe link is invalid or has already been used.</h2></body></html>`
-        );
-      }
+      const { unsubscribeTargetByToken } = await import("./routers/emailSuppressions");
+      const target = await unsubscribeTargetByToken(token);
+      if (!target) return res.status(400).type("html").send(TRACK_UNSUB_INVALID);
+      return res.status(200).type("html").send(TRACK_UNSUB_CONFIRM(target.email, token));
     } catch (e) {
-      console.error("[EmailTracking] unsubscribe failed:", e);
+      console.error("[EmailTracking] unsubscribe page failed:", e);
       return res.status(500).send("<h2>An error occurred. Please try again later.</h2>");
     }
   });

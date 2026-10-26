@@ -27,6 +27,7 @@ import {
   activities,
   sequences,
   prospectQueue,
+  prospects,
 } from "../drizzle/schema";
 import { eq, and, or, desc, inArray, isNull, sql } from "drizzle-orm";
 import { decryptField } from "./emailAdapter";
@@ -303,7 +304,6 @@ export async function processInboundReply(data: InboundReplyData) {
       // contact or lead matched, try to attribute the reply to a
       // prospect so the engine pauses the right enrollment row and
       // the prospect's history surfaces the message.
-      const { prospects } = await import("../drizzle/schema");
       const [matchedProspect] = await db.select({ id: prospects.id })
         .from(prospects)
         .where(and(eq(prospects.workspaceId, data.workspaceId), eq(prospects.email, data.fromEmail)));
@@ -416,17 +416,34 @@ export async function processInboundReply(data: InboundReplyData) {
     });
   }
 
-  // 5. Pause sequence enrollment if pauseOnReply is set
-  if (matchedContactId || matchedLeadId || matchedProspectId) {
-    const enrollmentConditions = [
+  // 5. Pause sequence enrollment if pauseOnReply is set.
+  //
+  // EVERY enrolment of the person who replied (audit 2026-10-20, O5). This
+  // paused only one kind — the contact's, else the lead's, else the
+  // prospect's — and ignored the enrolment of the draft they were actually
+  // replying to, so the same person enrolled as a lead and a prospect, or
+  // replying from a contact whose draft came from a prospect enrolment, kept
+  // receiving follow-ups. Now: the matched draft's enrolment, plus every
+  // contact, lead and prospect enrolment carrying this address. Paused
+  // enrolments also hold their drafts already written (draftSend).
+  const sameAddress = async (tbl: typeof contacts | typeof leads | typeof prospects): Promise<number[]> =>
+    (await db.select({ id: tbl.id }).from(tbl)
+      .where(and(eq(tbl.workspaceId, data.workspaceId), eq(tbl.email, data.fromEmail)))).map((r) => r.id);
+  const [replierContactIds, replierLeadIds, replierProspectIds] = await Promise.all([
+    sameAddress(contacts), sameAddress(leads), sameAddress(prospects),
+  ]);
+  const replierEnrollments = [
+    ...(matchedDraft?.enrollmentId ? [eq(enrollments.id, matchedDraft.enrollmentId as number)] : []),
+    ...(replierContactIds.length ? [inArray(enrollments.contactId, replierContactIds)] : []),
+    ...(replierLeadIds.length ? [inArray(enrollments.leadId, replierLeadIds)] : []),
+    ...(replierProspectIds.length ? [inArray(enrollments.prospectId, replierProspectIds)] : []),
+  ];
+  if (replierEnrollments.length > 0) {
+    const activeEnrollments = await db.select().from(enrollments).where(and(
       eq(enrollments.workspaceId, data.workspaceId),
       eq(enrollments.status, "active"),
-    ];
-    if (matchedContactId) enrollmentConditions.push(eq(enrollments.contactId, matchedContactId));
-    else if (matchedLeadId) enrollmentConditions.push(eq(enrollments.leadId, matchedLeadId));
-    else if (matchedProspectId) enrollmentConditions.push(eq(enrollments.prospectId, matchedProspectId));
-
-    const activeEnrollments = await db.select().from(enrollments).where(and(...enrollmentConditions));
+      replierEnrollments.length === 1 ? replierEnrollments[0] : or(...replierEnrollments),
+    ));
     if (activeEnrollments.length > 0) {
       // Honor each sequence's "Pause enrollment on reply" toggle — it was a
       // no-op here (every active enrollment got paused unconditionally).
@@ -443,7 +460,8 @@ export async function processInboundReply(data: InboundReplyData) {
       const pausedIds: number[] = [];
       for (const enrollment of activeEnrollments) {
         if (pauseBySeq.get(enrollment.sequenceId) === false) continue;
-        await db.update(enrollments).set({ status: "paused" }).where(eq(enrollments.id, enrollment.id));
+        await db.update(enrollments).set({ status: "paused" })
+          .where(and(eq(enrollments.id, enrollment.id), eq(enrollments.status, "active")));
         pausedIds.push(enrollment.id);
       }
       // Durable link from THIS reply to the enrollments it stopped (0181).

@@ -509,7 +509,10 @@ describe("C9: the sequence engine reads people within the enrolment's workspace"
     const src = strip(read("server/sequenceEngine.ts"));
     const lookups = src.match(/\.where\([^;]*?enrollment\.(sequenceId|contactId|leadId|prospectId)\)[^;]*?;/g) ?? [];
     const byId = lookups.filter((l) => /eq\((sequences|contacts|leads|prospects)\.id, enrollment\./.test(l));
-    expect(byId.length, "the scan found the engine's lookups").toBeGreaterThanOrEqual(6);
+    // 5 since 2026-10-26 (Phase 1): the per-row sequence read became the due
+    // query's join, which is held to the same rule just below.
+    expect(byId.length, "the scan found the engine's lookups").toBeGreaterThanOrEqual(5);
     for (const l of byId) expect(l).toMatch(/eq\((sequences|contacts|leads|prospects)\.workspaceId, enrollment\.workspaceId\)/);
+    expect(src).toContain("and(eq(sequences.id, enrollments.sequenceId), eq(sequences.workspaceId, enrollments.workspaceId))");
   });
 });

@@ -823,7 +823,17 @@ export const emailDrafts = mysqlTable(
     sequenceId: int("sequenceId"),
     enrollmentId: int("enrollmentId"),
     pipelineJobId: int("pipelineJobId"),
-    status: mysqlEnum("status", ["pending_review", "approved", "rejected", "sent", "ai_pending_review"]).default("pending_review").notNull(),
+    /**
+     * 'sending' and 'failed' since migration 0210 (audit 2026-10-20, O14/O16/O17):
+     * a sender CLAIMS the draft (→ sending) before the transport is called, and a
+     * send whose outcome is unknown ends in 'failed' with `sendError`, never back
+     * in a queue that would send it again. See services/draftSend.ts.
+     */
+    status: mysqlEnum("status", ["pending_review", "approved", "rejected", "sent", "ai_pending_review", "sending", "failed"]).default("pending_review").notNull(),
+    /** Why the last send attempt stopped (0210). Cleared by a new claim. */
+    sendError: varchar("sendError", { length: 500 }),
+    /** When the current 'sending' claim was taken (0210); the stale-claim sweep reads it. */
+    sendClaimedAt: timestamp("sendClaimedAt"),
     aiGenerated: boolean("aiGenerated").default(true).notNull(),
     aiPrompt: text("aiPrompt"),
     tone: varchar("tone", { length: 64 }), // 'formal' | 'casual' | 'value_prop' | etc.
@@ -882,6 +892,8 @@ export const emailDrafts = mysqlTable(
      * cheaper" claim got written about a query that was already indexed.
      */
     byAcct: index("ix_ed_sending_account").on(t.sendingAccountId),
+    /** 0210: the sequence engine asks "does this enrolment have a draft still to go out?" every tick. */
+    byEnrollment: index("ix_ed_enrollment").on(t.enrollmentId, t.status),
   }),
 );
 

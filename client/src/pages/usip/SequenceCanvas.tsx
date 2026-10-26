@@ -244,6 +244,8 @@ function CanvasInner({
   // Latest unsaved canvas, so we can flush it if the user navigates away
   // before the debounce fires (previously a 30s window of silent data loss).
   const pendingSave = useRef<{ n: Node[]; e: Edge[] } | null>(null);
+  /** The stored canvas this view was loaded from; a save must still find it there (L2). */
+  const baseVersion = useRef<string | undefined>(undefined);
   const flushRef = useRef<() => void>(() => {});
   const history = useHistory({ nodes: [], edges: [] });
 
@@ -254,10 +256,14 @@ function CanvasInner({
   const utils = trpc.useUtils();
   const canvasQ = trpc.sequences.getCanvas.useQuery({ id: sequenceId });
   const saveCanvas = trpc.sequences.saveCanvas.useMutation({
-    onSuccess: () => setSaveState("saved"),
+    onSuccess: (r) => { baseVersion.current = r.version; setSaveState("saved"); },
     onError: (e) => { setSaveState("unsaved"); toast.error(e.message); },
   });
-  const updateSequence = trpc.sequences.update.useMutation({
+  // updateMeta, not update: update's .strict() patch takes only name,
+  // description and dailyCap, so saving settings here ALWAYS failed and the
+  // time zone chosen in this panel never reached the server (audit
+  // 2026-10-20, O8/O9). updateMeta merges settings into what is stored.
+  const updateSequence = trpc.sequences.updateMeta.useMutation({
     onSuccess: () => {
       utils.sequences.get.invalidate({ id: sequenceId });
       toast.success("Sequence settings saved");
@@ -268,6 +274,7 @@ function CanvasInner({
   // Hydrate from server
   useEffect(() => {
     if (!canvasQ.data) return;
+    baseVersion.current = canvasQ.data.version || undefined;
     const rfNodes: Node[] = canvasQ.data.nodes.map((n: any) => ({
       id: n.id,
       type: n.type,
@@ -301,6 +308,7 @@ function CanvasInner({
     pendingSave.current = null;
     saveCanvas.mutate({
       id: sequenceId,
+      baseVersion: baseVersion.current,
       nodes: n.map((nd) => ({
         id: nd.id,
         type: nd.type as any,
@@ -337,18 +345,28 @@ function CanvasInner({
   };
   useEffect(() => () => flushRef.current(), []);
 
+  /**
+   * Only an EDIT is saved (audit 2026-10-20, L2). React Flow reports a
+   * "dimensions" change for every node it measures as the canvas first draws,
+   * and a "select" change for every click; both counted as edits, so merely
+   * opening the canvas marked it unsaved and wrote it back 2.5 s later — and a
+   * teammate who only looked could overwrite someone else's work. A drag saves
+   * once, when it ends.
+   */
   const onNodesChange = useCallback((changes: NodeChange[]) => {
+    const edited = changes.some((c) => c.type !== "dimensions" && c.type !== "select" && !(c.type === "position" && c.dragging));
     setNodes((nds) => {
       const next = applyNodeChanges(changes, nds);
-      triggerAutosave(next, edges);
+      if (edited) triggerAutosave(next, edges);
       return next;
     });
   }, [edges, triggerAutosave]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
+    const edited = changes.some((c) => c.type !== "select");
     setEdges((eds) => {
       const next = applyEdgeChanges(changes, eds);
-      triggerAutosave(nodes, next);
+      if (edited) triggerAutosave(nodes, next);
       return next;
     });
   }, [nodes, triggerAutosave]);
@@ -388,6 +406,7 @@ function CanvasInner({
     setSaveState("saving");
     saveCanvas.mutate({
       id: sequenceId,
+      baseVersion: baseVersion.current,
       nodes: nodes.map((nd) => ({
         id: nd.id,
         type: nd.type as any,
@@ -437,14 +456,14 @@ function CanvasInner({
     exitConditions: ExitCondition[];
     settings: SequenceSettings;
   }) => {
+    const { timezone, sendWindowStart, sendWindowEnd, skipWeekends, replyDetection } = patch.settings;
     updateSequence.mutate({
       id: sequenceId,
-      patch: {
-        name: patch.name,
-        description: patch.description,
-        exitConditions: patch.exitConditions,
-        settings: patch.settings,
-      },
+      name: patch.name,
+      description: patch.description,
+      exitConditions: patch.exitConditions,
+      // null clears it back to the workspace's zone.
+      settings: { timezone: timezone || null, sendWindowStart, sendWindowEnd, skipWeekends, replyDetection },
     });
   };
 

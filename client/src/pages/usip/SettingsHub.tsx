@@ -829,12 +829,11 @@ function EmailSettingsTab({
         </p>
 
         <div className="space-y-3 pt-1">
-          <CheckRow
-            checked={emailPrefs.unsubHeader}
-            onChange={(v) => setEmailPrefs({ ...emailPrefs, unsubHeader: v })}
-            label="Include one-click unsubscribe headers"
-            helper="Recommended for organizations that send 5,000 emails or more within a 24-hour period."
-          />
+          {/* Always on since 2026-10-26 (audit O15): every sales email carries an
+              unsubscribe link and the one-click headers, so this is no longer a choice. */}
+          <p className="text-xs text-muted-foreground">
+            Every email includes an unsubscribe link and one-click unsubscribe headers. Gmail and Yahoo require them.
+          </p>
           <CheckRow
             checked={emailPrefs.openTracking}
             onChange={(v) => setEmailPrefs({ ...emailPrefs, openTracking: v })}

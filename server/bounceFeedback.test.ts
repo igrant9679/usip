@@ -32,17 +32,28 @@ const stripComments = (s: string) =>
 describe("sequenceEngine honours the suppression list", () => {
   const src = stripComments(read("server/sequenceEngine.ts"));
 
+  // 2026-10-26 (audit 2026-10-20, A8): the engine asks the ONE suppression
+  // check (services/suppression — both lists, address, LinkedIn profile and
+  // company domain) instead of unsubscribe.isSuppressed. Behaviour is pinned
+  // in phase1Sends.test.ts; these keep the shape.
   it("checks suppression before creating a draft", () => {
-    expect(src).toMatch(/isSuppressed\(enrollment\.workspaceId,\s*toEmail\)/);
-    expect(src).toMatch(/import \{ isSuppressed \} from "\.\/unsubscribe"/);
+    expect(src).toMatch(/findSuppression\(enrollment\.workspaceId,\s*\{ email: toEmail/);
+    expect(src).toMatch(/import \{[^}]*\bfindSuppression\b[^}]*\} from "\.\/services\/suppression"/);
+    const email = src.slice(src.indexOf('if (step.type === "email")'));
+    expect(email.indexOf("findSuppression(")).toBeLessThan(email.indexOf("db.insert(emailDrafts)"));
   });
 
   it("gates the draft insert on the suppression result", () => {
-    // Paired with the existing hasContent guard, so a suppressed recipient
-    // produces no draft while the enrollment still advances past the step —
-    // skipping WITHOUT advancing would stall it on that step forever, the same
-    // shape as an unhandled step type.
-    expect(src).toMatch(/if \(hasContent && !suppressed\)/);
+    // A suppressed recipient produces no draft while the enrollment still
+    // advances past the step — skipping WITHOUT advancing would stall it on
+    // that step forever, the same shape as an unhandled step type. The claim
+    // (which advances) comes first; the skip after it.
+    const email = src.slice(src.indexOf('if (step.type === "email")'));
+    const claim = email.indexOf("if (!(await claimNow())) continue;");
+    const skip = email.indexOf("if (skip || !toEmail)");
+    expect(claim).toBeGreaterThan(-1);
+    expect(skip).toBeGreaterThan(claim);
+    expect(skip).toBeLessThan(email.indexOf("db.insert(emailDrafts)"));
   });
 
   it("skips only the EMAIL step, and does not exit the enrollment", () => {
@@ -53,7 +64,7 @@ describe("sequenceEngine honours the suppression list", () => {
      * different channels the person never opted out of. It also broke the
      * engine's own empty-body test, which was the signal worth listening to.
      */
-    const guard = src.slice(src.indexOf("const suppressed = await isSuppressed"));
+    const guard = src.slice(src.indexOf("const hit = await findSuppression(enrollment.workspaceId, { email: toEmail"));
     expect(guard.slice(0, 300)).not.toMatch(/status: "exited"/);
     expect(guard.slice(0, 300)).not.toMatch(/status: "finished"/);
   });

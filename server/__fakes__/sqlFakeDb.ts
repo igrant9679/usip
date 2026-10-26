@@ -4,8 +4,8 @@
  * It renders each drizzle condition with MySqlDialect and evaluates the SQL
  * that produced, so a missing `workspaceId = ?` is a row that leaks, not a
  * condition object that merely looks right. It understands only what the
- * routers under test write: ANDs (and one level of OR) of =, <>, <, >,
- * IS NULL and IN, column-to-column equality in joins, ORDER BY a column,
+ * routers under test write: ANDs (and one level of OR) of =, <>, <, >, <=, >=,
+ * IS NULL, IN and NOT IN, column-to-column equality in (inner and left) joins, ORDER BY a column,
  * LIMIT, GROUP BY with count(*), and `col + n` in an UPDATE. Anything else
  * throws, naming the clause, so a test never passes on SQL it did not read.
  *
@@ -88,6 +88,8 @@ export function makeSqlFakeDb(opts: {
     if ((m = clause.match(new RegExp(`^${REF} = ${REF}$`)))) return same(lookup(ctx, m[1]), lookup(ctx, m[2]));
     if ((m = clause.match(new RegExp(`^${REF} < \\?$`)))) return cmp(lookup(ctx, m[1]), params[pi.i++]) < 0;
     if ((m = clause.match(new RegExp(`^${REF} > \\?$`)))) return cmp(lookup(ctx, m[1]), params[pi.i++]) > 0;
+    if ((m = clause.match(new RegExp(`^${REF} <= \\?$`)))) { const v = lookup(ctx, m[1]); const p = params[pi.i++]; return v != null && cmp(v, p) <= 0; }
+    if ((m = clause.match(new RegExp(`^${REF} >= \\?$`)))) { const v = lookup(ctx, m[1]); const p = params[pi.i++]; return v != null && cmp(v, p) >= 0; }
     if ((m = clause.match(new RegExp(`^${REF} is null$`)))) return lookup(ctx, m[1]) == null;
     if ((m = clause.match(new RegExp(`^${REF} is not null$`)))) return lookup(ctx, m[1]) != null;
     if ((m = clause.match(new RegExp(`^${REF} in \\(([?, ]+)\\)$`)))) {
@@ -95,6 +97,13 @@ export function makeSqlFakeDb(opts: {
       const set = params.slice(pi.i, pi.i + n);
       pi.i += n;
       return set.some((p) => same(p, lookup(ctx, m![1])));
+    }
+    if ((m = clause.match(new RegExp(`^${REF} not in \\(([?, ]+)\\)$`)))) {
+      const n = (m[2].match(/\?/g) ?? []).length;
+      const set = params.slice(pi.i, pi.i + n);
+      pi.i += n;
+      const v = lookup(ctx, m[1]);
+      return v != null && !set.some((p) => same(p, v));
     }
     throw new Error(`fake db: unsupported clause "${clause}"`);
   };
@@ -120,7 +129,7 @@ export function makeSqlFakeDb(opts: {
   };
 
   const select = (projection?: Record<string, unknown>) => {
-    const st: { table?: any; joins: { table: any; on: unknown }[]; where?: unknown; group?: Column[]; order: unknown[]; limit?: number; offset?: number } = { order: [], joins: [] };
+    const st: { table?: any; joins: { table: any; on: unknown; left?: boolean }[]; where?: unknown; group?: Column[]; order: unknown[]; limit?: number; offset?: number } = { order: [], joins: [] };
     const run = (): Row[] => {
       const name = getTableName(st.table);
       if (st.table === workspaceMembers && !opts.realMembers) {
@@ -138,11 +147,18 @@ export function makeSqlFakeDb(opts: {
       let ctxs = rowsOf(name).map((r) => ({ row: r, q: qualify(st.table, r) }));
       for (const join of st.joins) {
         const other = rowsOf(getTableName(join.table));
-        ctxs = ctxs.flatMap((c) => other.map((o) => ({ row: c.row, q: { ...c.q, ...qualify(join.table, o) } })).filter((x) => matches(join.on, x.q)));
+        ctxs = ctxs.flatMap((c) => {
+          const hits = other.map((o) => ({ row: c.row, q: { ...c.q, ...qualify(join.table, o) } })).filter((x) => matches(join.on, x.q));
+          // LEFT JOIN keeps the row, with the joined table's columns NULL.
+          return hits.length || !join.left ? hits : [{ row: c.row, q: { ...c.q, ...qualify(join.table, {}) } }];
+        });
       }
       ctxs = ctxs.filter((c) => matches(st.where, c.q));
       for (const o of st.order.slice().reverse()) {
-        const m = render(o).sql.match(/^(`\w+`\.`\w+`) (asc|desc)$/);
+        // A bare column orders ascending, as in SQL.
+        const m = is(o, Column)
+          ? ([, `\`${getTableName((o as any).table)}\`.\`${(o as Column).name}\``, "asc"] as const)
+          : render(o).sql.match(/^(`\w+`\.`\w+`) (asc|desc)$/);
         if (!m) continue;
         ctxs.sort((a, b) => {
           const d = cmp(lookup(a.q, m[1]), lookup(b.q, m[1]));
@@ -193,6 +209,7 @@ export function makeSqlFakeDb(opts: {
     const b: any = {
       from(t: unknown) { st.table = t; return b; },
       innerJoin(t: unknown, on: unknown) { st.joins.push({ table: t, on }); return b; },
+      leftJoin(t: unknown, on: unknown) { st.joins.push({ table: t, on, left: true }); return b; },
       where(c: unknown) { st.where = c; return b; },
       groupBy(...cols: Column[]) { st.group = cols; return b; },
       orderBy(...o: unknown[]) { st.order = o; return b; },
@@ -220,6 +237,8 @@ export function makeSqlFakeDb(opts: {
       });
     };
     const chain: any = {
+      // INSERT IGNORE: a duplicate is the caller's concern here; the fake keeps every row.
+      ignore() { return chain; },
       values(v: Row | Row[]) { doInsert(v); return chain; },
       $returningId() { return Promise.resolve(inserted.map((r) => ({ id: r.id }))); },
       then(res: (v: unknown) => void) { res([{ affectedRows: inserted.length, insertId: inserted[0]?.id }]); },

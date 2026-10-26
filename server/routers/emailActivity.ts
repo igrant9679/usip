@@ -224,6 +224,7 @@ export const emailActivityRouter = {
       if (input.status === "awaiting") {
         conds.push(inArray(emailDrafts.status, ["pending_review", "ai_pending_review", "approved"]));
       }
+      if (input.status === "failed") conds.push(eq(emailDrafts.status, "failed"));
       if (term) {
         conds.push(sql`(${emailDrafts.subject} LIKE ${like} OR ${emailDrafts.toEmail} LIKE ${like}
           OR ${emailDrafts.body} LIKE ${like})`);

@@ -49,6 +49,23 @@ export function makeUnsubscribeUrl(
 }
 
 /**
+ * The footer every outbound sales email carries — one unsubscribe link, muted.
+ *
+ * Shared by every draft sender since 2026-10-26 (audit 2026-10-20, O15): the
+ * SMTP draft paths carried a link only when two settings were both switched
+ * on, and both were off by default, so most of what they sent had none.
+ */
+export function unsubscribeFooter(unsubscribeUrl: string): { html: string; text: string } {
+  const href = escapeHtml(unsubscribeUrl);
+  return {
+    html: `<p style="margin:32px 0 0;color:#9ca3af;font-size:11px;text-align:center;line-height:1.5">
+    Don't want these emails? <a href="${href}" style="color:#9ca3af;text-decoration:underline">Unsubscribe</a>
+  </p>`,
+    text: `\n\n—\nUnsubscribe: ${unsubscribeUrl}`,
+  };
+}
+
+/**
  * The RFC 8058 one-click headers for a recipient.
  *
  * Gmail and Yahoo have required these of bulk senders since February 2024.

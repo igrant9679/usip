@@ -565,6 +565,24 @@ export function registerUnipileWebhookRoutes(app: Express) {
         const archivedWs = await archivedWorkspaceIds();
         if (archivedWs.has(acct.workspaceId)) return;
 
+        // A reply to our outreach stops the person's sequences — before any
+        // classifier, in every autopilot mode, Off included (audit 2026-10-20,
+        // O6). Best effort: a failure here must not lose the message above.
+        if (sc.tier) {
+          try {
+            const { pauseEnrollmentsForSocialReply } = await import("./sequenceEngine");
+            await pauseEnrollmentsForSocialReply({
+              workspaceId: acct.workspaceId,
+              chatId: chatId || messageId,
+              senderProviderId,
+              linkedContactId: sc.linkedContactId,
+              linkedLeadId: sc.linkedLeadId,
+            });
+          } catch (e) {
+            console.error("[UnipileMsgWebhook] pausing the replier's sequences failed:", e);
+          }
+        }
+
         if (rowId) {
           const [ws] = await db.select({ mode: workspaceSettings.conversationAutopilotMode })
             .from(workspaceSettings).where(eq(workspaceSettings.workspaceId, acct.workspaceId)).limit(1);

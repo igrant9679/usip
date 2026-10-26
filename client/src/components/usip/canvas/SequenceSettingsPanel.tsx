@@ -62,6 +62,8 @@ const EXIT_LABELS: Record<string, string> = {
 };
 
 /* ─── Timezone list (abbreviated) ──────────────────────────────────────── */
+/** No zone of its own: the engine uses the workspace's (Settings). */
+const WORKSPACE_TZ = "__workspace__";
 const TIMEZONES = [
   "UTC",
   "America/New_York",
@@ -193,14 +195,15 @@ export function SequenceSettingsPanel({ open, readOnly, name, description, exitC
         <Section title="Sending window">
           <Field label="Timezone">
             <Select
-              value={draftSettings.timezone ?? "UTC"}
+              value={draftSettings.timezone || WORKSPACE_TZ}
               disabled={readOnly}
-              onValueChange={(v) => patchSettings({ timezone: v })}
+              onValueChange={(v) => patchSettings({ timezone: v === WORKSPACE_TZ ? undefined : v })}
             >
               <SelectTrigger className="text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value={WORKSPACE_TZ} className="text-xs">Workspace time zone</SelectItem>
                 {TIMEZONES.map((tz) => (
                   <SelectItem key={tz} value={tz} className="text-xs">{tz}</SelectItem>
                 ))}

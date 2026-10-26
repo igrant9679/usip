@@ -1,6 +1,7 @@
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { inSendWindow } from "../services/sendWindow";
 import { TRPCError } from "@trpc/server";
+import { createHash } from "crypto";
 import { and, asc, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { accounts, activities, campaigns, chatAgents, contacts, emailDrafts, emailReplies, enrollments, forms, landingPages, leads, prospects, segmentSequenceRules, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaceMembers, workspaces, workspaceSettings } from "../../drizzle/schema";
@@ -10,7 +11,21 @@ import { createEmailAdapter } from "../emailAdapter";
 import { invokeLLM } from "../_core/llm";
 import { researchUseFor } from "../services/research/recipient";
 import { buildBrandContext } from "../services/brandContext";
-import { isSuppressed, makeUnsubscribeUrl, unsubscribeHeaders } from "../unsubscribe";
+import { makeUnsubscribeUrl, unsubscribeFooter, unsubscribeHeaders } from "../unsubscribe";
+import { describeSuppression, findSuppression } from "../services/suppression";
+import {
+  EDITABLE_DRAFT_STATUSES,
+  MANUAL_SEND_FROM,
+  affected,
+  claimDraftForSend,
+  draftHoldReason,
+  isDefinitelyNotSent,
+  markDraftFailed,
+  releaseDraftClaim,
+  sweepStaleSendingDrafts,
+  type DraftStatus,
+} from "../services/draftSend";
+import { resumeNextActionAt } from "../sequenceEngine";
 import { bumpCampaignCounter } from "../campaignCounters";
 import { assertSendAllowed } from "../sendLimits";
 
@@ -18,17 +33,10 @@ import { assertSendAllowed } from "../sendLimits";
 /** The ONE public origin — see server/appUrl.ts. */
 const getAppBaseUrl = publicAppOrigin;
 
-/** Footer block appended to outbound HTML — single unsubscribe link, muted styling. */
-function unsubscribeFooterHtml(unsubscribeUrl: string): string {
-  return `<p style="margin:32px 0 0;color:#9ca3af;font-size:11px;text-align:center;line-height:1.5">
-    Don't want these emails? <a href="${unsubscribeUrl}" style="color:#9ca3af;text-decoration:underline">Unsubscribe</a>
-  </p>`;
-}
-
+/** The footer every sales email carries (unsubscribe.unsubscribeFooter, shared with the SMTP paths). */
+const unsubscribeFooterHtml = (unsubscribeUrl: string): string => unsubscribeFooter(unsubscribeUrl).html;
 /** Footer line appended to outbound plain text. Plain URL is fine — clients auto-link. */
-function unsubscribeFooterText(unsubscribeUrl: string): string {
-  return `\n\n—\nUnsubscribe: ${unsubscribeUrl}`;
-}
+const unsubscribeFooterText = (unsubscribeUrl: string): string => unsubscribeFooter(unsubscribeUrl).text;
 import { router } from "../_core/trpc";
 import { adminWsProcedure, managerProcedure, repProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
@@ -435,6 +443,20 @@ function stepsToCanvas(steps: ListStep[]): { nodes: CanvasNode[]; edges: CanvasE
  * copy. No-op for normal (non-template) sequences, so existing behavior is
  * unchanged.
  */
+/**
+ * A short fingerprint of a stored canvas. Computed from rows as the database
+ * returns them, on both sides of a save, so the comparison never depends on
+ * how JSON key order came back.
+ */
+function canvasVersion(
+  nodes: Array<{ id: string; type: string; positionX: number; positionY: number; data: unknown }>,
+  edges: Array<{ id: string; source: string; target: string; sourceHandle?: string | null; label?: string | null }>,
+): string {
+  const n = nodes.map((x) => [x.id, x.type, x.positionX, x.positionY, x.data ?? null]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  const e = edges.map((x) => [x.id, x.source, x.target, x.sourceHandle ?? null, x.label ?? null]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  return createHash("sha1").update(JSON.stringify([n, e])).digest("hex").slice(0, 16);
+}
+
 async function assertTemplateEditable(db: any, ctx: any, id: number): Promise<void> {
   const [seq] = await db.select({ isTemplate: sequences.isTemplate, ownerUserId: sequences.ownerUserId })
     .from(sequences).where(and(eq(sequences.id, id), eq(sequences.workspaceId, ctx.workspace.id)));
@@ -626,9 +648,10 @@ export const sequencesRouter = router({
     dailyCap: z.number().int().min(1).max(10000).nullable().optional(),
     exitConditions: z.array(z.object({ type: z.enum(["reply","bounce","unsubscribe","goal_met","manual"]), enabled: z.boolean() })).optional(),
     settings: z.object({
-      timezone: z.string().optional(),
-      sendWindowStart: z.string().optional(),
-      sendWindowEnd: z.string().optional(),
+      /** null = use the workspace's time zone. */
+      timezone: z.string().max(64).nullable().optional(),
+      sendWindowStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+      sendWindowEnd: z.string().regex(/^\d{2}:\d{2}$/).optional(),
       skipWeekends: z.boolean().optional(),
       replyDetection: z.boolean().optional(),
     }).optional(),
@@ -637,8 +660,28 @@ export const sequencesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await assertTemplateEditable(db, ctx, input.id);
-    const { id, ...patch } = input;
-    await db.update(sequences).set(patch).where(and(eq(sequences.id, id), eq(sequences.workspaceId, ctx.workspace.id)));
+    const { id, settings, ...patch } = input;
+    /**
+     * MERGE, don't replace (audit 2026-10-20, O9). The settings dialog sends
+     * the four fields it shows, and replacing the stored object with them
+     * dropped the time zone the canvas had saved — so the window silently fell
+     * back to UTC. Keys the caller did not send keep their stored value; a
+     * null time zone clears it back to the workspace's.
+     */
+    let mergedSettings: Record<string, unknown> | undefined;
+    if (settings) {
+      const [cur] = await db.select({ settings: sequences.settings }).from(sequences)
+        .where(and(eq(sequences.id, id), eq(sequences.workspaceId, ctx.workspace.id)));
+      if (!cur) throw new TRPCError({ code: "NOT_FOUND" });
+      mergedSettings = { ...((cur.settings ?? {}) as Record<string, unknown>) };
+      for (const [k, v] of Object.entries(settings)) {
+        if (v === undefined) continue;
+        if (v === null) delete mergedSettings[k];
+        else mergedSettings[k] = v;
+      }
+    }
+    await db.update(sequences).set({ ...patch, ...(mergedSettings ? { settings: mergedSettings } : {}) })
+      .where(and(eq(sequences.id, id), eq(sequences.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
   updateSteps: repProcedure.input(z.object({
@@ -768,13 +811,27 @@ export const sequencesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await assertTemplateEditable(db, ctx, input.id);
     await db.update(sequences).set({ status: input.status }).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
+    /**
+     * Pausing (or returning to draft) HOLDS the enrolments: the engine leaves
+     * them where they are and they continue on reactivation. It used to exit
+     * every one of them on the next tick, for good (audit 2026-10-20, O1).
+     * Archiving is the one transition that ends them.
+     */
+    if (input.status === "archived") {
+      await db.update(enrollments).set({ status: "exited", resumeAt: null })
+        .where(and(
+          eq(enrollments.sequenceId, input.id),
+          eq(enrollments.workspaceId, ctx.workspace.id),
+          inArray(enrollments.status, ["active", "paused"]),
+        ));
+    }
     return { ok: true };
   }),
 
   /* ── Canvas ── */
   getCanvas: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
     const db = await getDb();
-    if (!db) return { nodes: [], edges: [] };
+    if (!db) return { nodes: [], edges: [], version: "" };
     const [nodes, edges, [seq]] = await Promise.all([
       db.select().from(sequenceNodes).where(and(eq(sequenceNodes.sequenceId, input.id), eq(sequenceNodes.workspaceId, ctx.workspace.id))),
       db.select().from(sequenceEdges).where(and(eq(sequenceEdges.sequenceId, input.id), eq(sequenceEdges.workspaceId, ctx.workspace.id))),
@@ -784,12 +841,16 @@ export const sequencesRouter = router({
     // have steps[] but no canvas rows. Derive a canvas from steps on read
     // so the canvas view isn't empty. We don't persist here — the next
     // saveCanvas writes the user's positions.
+    // The STORED canvas's version — what a save made from this view must
+    // still find there (saveCanvas's baseVersion, audit 2026-10-20, L2).
+    const version = canvasVersion(nodes, edges);
     if (nodes.length === 0 && seq && Array.isArray(seq.steps) && (seq.steps as unknown[]).length > 0) {
       const derived = stepsToCanvas(seq.steps as ListStep[]);
       const now = new Date();
       // Pad with sequenceId/workspaceId/timestamps so the derived shape
       // matches a real DB row — the client expects the full row shape.
       return {
+        version,
         nodes: derived.nodes.map((n) => ({
           ...n,
           sequenceId: input.id,
@@ -807,7 +868,7 @@ export const sequencesRouter = router({
         })),
       };
     }
-    return { nodes, edges };
+    return { nodes, edges, version };
   }),
 
   saveCanvas: repProcedure
@@ -827,6 +888,12 @@ export const sequencesRouter = router({
         sourceHandle: z.string().nullable().optional(),
         label: z.string().nullable().optional(),
       })),
+      /**
+       * The version (getCanvas.version) this edit was made on. If the stored
+       * canvas has changed since — a teammate's save — the save is refused
+       * rather than writing over their work (audit 2026-10-20, L2).
+       */
+      baseVersion: z.string().max(64).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       await checkPermission(ctx, "manage_sequences");
@@ -843,6 +910,19 @@ export const sequencesRouter = router({
       // archived sequences are locked.
       if (seq.status === "active" || seq.status === "archived") {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot edit canvas while sequence is running. Pause it first." });
+      }
+      const storedCanvas = async () => {
+        const [n, e] = await Promise.all([
+          db.select().from(sequenceNodes).where(and(eq(sequenceNodes.sequenceId, input.id), eq(sequenceNodes.workspaceId, ctx.workspace.id))),
+          db.select().from(sequenceEdges).where(and(eq(sequenceEdges.sequenceId, input.id), eq(sequenceEdges.workspaceId, ctx.workspace.id))),
+        ]);
+        return canvasVersion(n, e);
+      };
+      if (input.baseVersion !== undefined && (await storedCanvas()) !== input.baseVersion) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Someone else changed this sequence since you opened it. Reload to see their changes; yours were not saved.",
+        });
       }
       // Replace all nodes + edges atomically
       await db.delete(sequenceNodes).where(and(eq(sequenceNodes.sequenceId, input.id), eq(sequenceNodes.workspaceId, ctx.workspace.id)));
@@ -879,7 +959,7 @@ export const sequencesRouter = router({
         .update(sequences)
         .set({ steps: derivedSteps, updatedAt: new Date() })
         .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
-      return { ok: true, syncedSteps: derivedSteps.length };
+      return { ok: true, syncedSteps: derivedSteps.length, version: await storedCanvas() };
     }),
 
   /* ── Enrollments ── */
@@ -946,6 +1026,19 @@ export const sequencesRouter = router({
         .where(and(eq(leads.id, input.leadId), eq(leads.workspaceId, ctx.workspace.id)));
       if (!l) throw new TRPCError({ code: "NOT_FOUND", message: "Lead not found" });
     }
+    // The ONE suppression check, at enrolment as at every send (A8): someone
+    // who said no — on either list, by address, LinkedIn profile or company
+    // domain — is not enrolled. A bounce alone does not stop enrolment; it
+    // stops the email steps when they come.
+    const [person] = input.contactId
+      ? await db.select({ email: contacts.email, linkedinUrl: contacts.linkedinUrl, companyDomain: contacts.companyDomain }).from(contacts)
+          .where(and(eq(contacts.id, input.contactId), eq(contacts.workspaceId, ctx.workspace.id)))
+      : await db.select({ email: leads.email }).from(leads)
+          .where(and(eq(leads.id, input.leadId!), eq(leads.workspaceId, ctx.workspace.id)));
+    const suppressed = person ? await findSuppression(ctx.workspace.id, person, "any") : null;
+    if (suppressed) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: `Not enrolled: this person's ${describeSuppression(suppressed)}.` });
+    }
     // Enrollment guard: block contacts with invalid email if workspace setting is enabled
     if (input.contactId) {
       const [settings] = await db.select().from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
@@ -965,7 +1058,9 @@ export const sequencesRouter = router({
       currentStep: 0,
       nextActionAt: new Date(),
     });
-    return { ok: true };
+    // A paused or draft sequence holds new enrolments until it is activated
+    // (O1); the caller says so rather than implying they are on their way.
+    return { ok: true, heldUntilActive: seq.status !== "active" };
   }),
 
   /**
@@ -1166,6 +1261,32 @@ export const sequencesRouter = router({
         }
       }
 
+      // ── The ONE suppression check (A8) ──────────────────────────
+      // Either list, by address, LinkedIn profile or company domain. A bounce
+      // alone does not block enrolment; it stops the email steps when due.
+      let skippedSuppressed = 0;
+      {
+        const keep = async (
+          ids: number[],
+          load: (ids: number[]) => Promise<Array<{ id: number; email: string | null; linkedinUrl?: string | null; companyDomain?: string | null }>>,
+        ): Promise<number[]> => {
+          if (ids.length === 0) return ids;
+          const rows = await load(ids);
+          const blocked = new Set<number>();
+          for (const r of rows) {
+            if (await findSuppression(ctx.workspace.id, r, "any")) blocked.add(r.id);
+          }
+          skippedSuppressed += blocked.size;
+          return ids.filter((id) => !blocked.has(id));
+        };
+        finalContactIds = await keep(finalContactIds, (ids) => db.select({ id: contacts.id, email: contacts.email, linkedinUrl: contacts.linkedinUrl, companyDomain: contacts.companyDomain })
+          .from(contacts).where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, ids))));
+        finalLeadIds = await keep(finalLeadIds, (ids) => db.select({ id: leads.id, email: leads.email })
+          .from(leads).where(and(eq(leads.workspaceId, ctx.workspace.id), inArray(leads.id, ids))));
+        finalProspectIds = await keep(finalProspectIds, (ids) => db.select({ id: prospects.id, email: prospects.email, linkedinUrl: prospects.linkedinUrl, companyDomain: prospects.companyDomain })
+          .from(prospects).where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, ids))));
+      }
+
       const now = new Date();
       const rows: any[] = [];
       for (const cid of finalContactIds) rows.push({
@@ -1191,6 +1312,10 @@ export const sequencesRouter = router({
         blockedInvalidEmail,
         /** Skipped because an ARE campaign is actively working them. */
         skippedInCampaign,
+        /** Skipped because they are suppressed (services/suppression). */
+        skippedSuppressed,
+        /** The sequence is paused or a draft: these wait until it is activated (O1). */
+        heldUntilActive: seq.status !== "active",
       };
     }),
 
@@ -1200,14 +1325,26 @@ export const sequencesRouter = router({
     // resumeAt: null on all three manual transitions — a rep acting on a row
     // that an OOO snooze had already stamped must not inherit its pending
     // wake-up (0181). Their decision is the later one.
-    await db.update(enrollments).set({ status: "paused", resumeAt: null }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
+    // Active only: "pausing" a finished or exited row used to re-open it.
+    await db.update(enrollments).set({ status: "paused", resumeAt: null }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id), eq(enrollments.status, "active")));
     return { ok: true };
   }),
 
   resumeEnrollment: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(enrollments).set({ status: "active", nextActionAt: new Date(), resumeAt: null }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
+    /**
+     * Paused only — resuming a finished or exited enrolment restarted it — and
+     * the step keeps the time it was due: this set nextActionAt to now, which
+     * sent the next email the moment someone pressed Resume however recently
+     * the last had gone (audit 2026-10-20, "resume → spaced steps").
+     */
+    const [enr] = await db.select({ status: enrollments.status, nextActionAt: enrollments.nextActionAt }).from(enrollments)
+      .where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
+    if (!enr) throw new TRPCError({ code: "NOT_FOUND" });
+    if (enr.status !== "paused") throw new TRPCError({ code: "BAD_REQUEST", message: `Only a paused enrolment can be resumed (this one is ${enr.status}).` });
+    await db.update(enrollments).set({ status: "active", nextActionAt: resumeNextActionAt(enr.nextActionAt), resumeAt: null })
+      .where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id), eq(enrollments.status, "paused")));
     return { ok: true };
   }),
 
@@ -1590,6 +1727,8 @@ export async function deliverEmailDraft(params: {
   workspaceId: number;
   userId: number;
   draftId: number;
+  /** The statuses this caller may take the draft from (services/draftSend). */
+  claimFrom?: DraftStatus[];
 }): Promise<{ ok: true; messageId?: string; alreadySent?: boolean; sentAt?: Date | null }> {
   const { workspaceId, userId, draftId } = params;
   const db = await getDb();
@@ -1604,6 +1743,52 @@ export async function deliverEmailDraft(params: {
   if (draft.status === "sent") {
     return { ok: true, alreadySent: true, sentAt: draft.sentAt };
   }
+  if (draft.status === "sending") {
+    throw new TRPCError({ code: "CONFLICT", message: "This email is already being sent." });
+  }
+
+  /**
+   * CLAIM FIRST (audit 2026-10-20, O14/O17). This read a status, sent, and
+   * only then wrote 'sent' — so the row's Send button racing the auto-send
+   * worker, or a double click, sent the same email twice. Whoever moves the
+   * row to 'sending' sends it; everyone else is told it is taken.
+   */
+  const from = await claimDraftForSend(db, workspaceId, draft.id, draft.status, params.claimFrom ?? MANUAL_SEND_FROM);
+  if (!from) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: draft.status === "rejected"
+        ? "This draft was rejected. Approve it before sending."
+        : "This draft was just sent or picked up by another sender.",
+    });
+  }
+  const claim = { from, transportCalled: false, settled: false };
+  try {
+    return await sendClaimedDraft(db, draft, workspaceId, userId, claim);
+  } catch (err) {
+    // Nothing reached the transport, so nothing left: put it back as it was.
+    if (!claim.settled && !claim.transportCalled) {
+      await releaseDraftClaim(db, draft.id, from, err instanceof Error ? err.message : String(err)).catch(() => {});
+    }
+    throw err;
+  }
+}
+
+/** The send itself, for a draft deliverEmailDraft has claimed. */
+async function sendClaimedDraft(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  draft: typeof emailDrafts.$inferSelect,
+  workspaceId: number,
+  userId: number,
+  claim: { from: DraftStatus; transportCalled: boolean; settled: boolean },
+): Promise<{ ok: true; messageId?: string }> {
+  // ── Hold: the reply, pause or exit that came after this draft was written ──
+  // (audit 2026-10-20, O4). A sequence draft goes only while its enrolment
+  // runs and its sequence is active.
+  const held = await draftHoldReason(db, draft);
+  if (held) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Not sent: ${held}.` });
+  }
 
   // ── Resolve recipient ─────────────────────────────────────────────
   const recipient = await resolveDraftRecipient(db, workspaceId, draft);
@@ -1617,21 +1802,24 @@ export async function deliverEmailDraft(params: {
   }
 
   // ── Suppression check ────────────────────────────────────────────
-  // Don't send to recipients who unsubscribed, bounced, or were
-  // manually added to email_suppressions. Mark the draft rejected so
-  // it falls out of the pending queue and surfaces the reason in audit.
-  if (await isSuppressed(workspaceId, toEmail)) {
+  // Don't send to anyone suppressed — the ONE check (services/suppression):
+  // the email suppression list and the do-not-contact list, by address and
+  // by company domain. Mark the draft rejected so it falls out of the
+  // pending queue and surfaces the reason in audit.
+  const suppression = await findSuppression(workspaceId, { email: toEmail }, "email");
+  if (suppression) {
     await db
       .update(emailDrafts)
-      .set({ status: "rejected", reviewedByUserId: userId })
+      .set({ status: "rejected", reviewedByUserId: userId, sendClaimedAt: null, sendError: describeSuppression(suppression) } as never)
       .where(eq(emailDrafts.id, draft.id));
+    claim.settled = true;
     await recordAudit({
       workspaceId,
       actorUserId: userId,
       action: "update",
       entityType: "email_draft",
       entityId: draft.id,
-      after: { deliveryStatus: "suppressed", recipient: toEmail, reason: "on email_suppressions list" },
+      after: { deliveryStatus: "suppressed", recipient: toEmail, reason: describeSuppression(suppression) },
     });
     console.log(`[deliverEmailDraft] draft ${draft.id} → suppressed (${toEmail})`);
     throw new TRPCError({
@@ -1823,6 +2011,8 @@ export async function deliverEmailDraft(params: {
   // ── Deliver ──────────────────────────────────────────────────────
   let sentMessageId: string | undefined;
   let deliveryError: string | undefined;
+  let deliveryErr: unknown;
+  claim.transportCalled = true;
   try {
     const sendRes = await adapter.sendEmail({
       fromEmail: fromAccount.fromEmail,
@@ -1847,6 +2037,7 @@ export async function deliverEmailDraft(params: {
     });
     sentMessageId = sendRes.messageId;
   } catch (err) {
+    deliveryErr = err;
     deliveryError = err instanceof Error ? err.message : String(err);
     console.error(
       `[deliverEmailDraft] delivery failed for draft ${draft.id} (${toEmail}): ${deliveryError}`,
@@ -1865,29 +2056,47 @@ export async function deliverEmailDraft(params: {
         trackingToken: sentMessageId.slice(0, 64),
         toEmail,
         sendingAccountId: fromAccount.id,
-      })
+        sendError: null,
+        sendClaimedAt: null,
+      } as never)
       .where(eq(emailDrafts.id, draft.id));
+    claim.settled = true;
 
-    const relatedType = draft.toContactId ? "contact" : draft.toLeadId ? "lead" : null;
-    const relatedId = draft.toContactId ?? draft.toLeadId;
-    if (relatedType && relatedId) {
-      await db.insert(activities).values({
-        workspaceId,
-        type: "email",
-        relatedType,
-        relatedId,
-        subject: renderedSubject,
-        body: renderedBodyText,
-        actorUserId: userId,
-        occurredAt: new Date(),
-      });
-    }
+    // Bookkeeping. The email has gone, so nothing below may turn this into a
+    // failed send — a caller that sees an error may send it again (A4).
+    try {
+      const relatedType = draft.toContactId ? "contact" : draft.toLeadId ? "lead" : null;
+      const relatedId = draft.toContactId ?? draft.toLeadId;
+      if (relatedType && relatedId) {
+        await db.insert(activities).values({
+          workspaceId,
+          type: "email",
+          relatedType,
+          relatedId,
+          subject: renderedSubject,
+          body: renderedBodyText,
+          actorUserId: userId,
+          occurredAt: new Date(),
+        });
+      }
 
-    // Bump campaign totalSent if this draft belongs to a campaign-driven
-    // sequence. Silently no-ops for ad-hoc / unparented drafts.
-    if (draft.sequenceId) {
-      await bumpCampaignCounter(workspaceId, draft.sequenceId, "totalSent");
+      // Bump campaign totalSent if this draft belongs to a campaign-driven
+      // sequence. Silently no-ops for ad-hoc / unparented drafts.
+      if (draft.sequenceId) {
+        await bumpCampaignCounter(workspaceId, draft.sequenceId, "totalSent");
+      }
+    } catch (e) {
+      console.error(`[deliverEmailDraft] draft ${draft.id} sent; recording it failed:`, e);
     }
+  } else {
+    // The transport was called. Back where it came from only if the error
+    // proves nothing left (a refused connection, login or recipient);
+    // otherwise 'failed' with the reason, never re-queued, because it may
+    // have been delivered (audit 2026-10-20, O14).
+    const reason = deliveryError ?? "The mail server returned no message id";
+    if (isDefinitelyNotSent(deliveryErr)) await releaseDraftClaim(db, draft.id, claim.from, reason);
+    else await markDraftFailed(db, draft.id, reason);
+    claim.settled = true;
   }
 
   await recordAudit({
@@ -1967,6 +2176,9 @@ export async function autoSendForAllWorkspaces(): Promise<{
   let skippedLowScore = 0;
   let failed = 0;
 
+  // A claim whose sender died mid-send becomes 'failed', never sendable again.
+  await sweepStaleSendingDrafts(db).catch((e) => console.error("[autoSend] stale-claim sweep failed:", e));
+
     const archivedWs = await archivedWorkspaceIds();
   for (const ws of enabledWs) {
     if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
@@ -2006,6 +2218,8 @@ export async function autoSendForAllWorkspaces(): Promise<{
       .from(emailDrafts)
       .leftJoin(leads, eq(leads.id, emailDrafts.toLeadId))
       .leftJoin(contacts, eq(contacts.id, emailDrafts.toContactId))
+      .leftJoin(enrollments, eq(enrollments.id, emailDrafts.enrollmentId))
+      .innerJoin(sequences, and(eq(sequences.id, emailDrafts.sequenceId), eq(sequences.workspaceId, emailDrafts.workspaceId)))
       .where(
         and(
           eq(emailDrafts.workspaceId, ws.workspaceId),
@@ -2017,6 +2231,11 @@ export async function autoSendForAllWorkspaces(): Promise<{
           // with aiGenerated:false), so automated sequence outreach never
           // auto-sent at all. Dropped it; sequenceId-scoping is correct.
           isNotNull(emailDrafts.sequenceId),
+          // Held drafts are not candidates (O4): a paused or ended enrolment,
+          // or a sequence that is not active. deliverEmailDraft checks again
+          // at send time; this keeps them from occupying the page.
+          eq(sequences.status, "active"),
+          sql`(${emailDrafts.enrollmentId} IS NULL OR ${enrollments.status} IN ('active', 'finished'))`,
           sendableGate,
         ),
       )
@@ -2099,38 +2318,25 @@ export async function autoSendForAllWorkspaces(): Promise<{
         continue;
       }
 
-      // Compare-and-swap to claim this draft before dispatching. Two
-      // overlapping autoSend ticks (cron can run concurrently if a
-      // previous tick took >5min) could both SELECT the same
-      // pending_review row. Flipping status atomically with a WHERE
-      // status="pending_review" filter means whichever tick wins the
-      // race gets a row, the other gets affectedRows=0 and skips.
-      const [claimResult] = await db.execute(
-        sql`UPDATE \`email_drafts\`
-            SET \`status\` = 'approved',
-                \`reviewedByUserId\` = ${actorUserId}
-            WHERE \`id\` = ${draft.id}
-              AND \`workspaceId\` = ${ws.workspaceId}
-              AND \`status\` = 'pending_review'`,
-      );
-      const claimed = (claimResult as { affectedRows?: number })?.affectedRows ?? 0;
-      if (claimed === 0) {
-        // Another tick (or a manual reviewer) grabbed it. Don't count
-        // as skipped — it's just lost-race, not a policy decision.
-        continue;
-      }
-
+      // deliverEmailDraft CLAIMS the draft (pending_review → sending) before
+      // the transport, so two overlapping ticks cannot both send it. The
+      // claim used to flip it to 'approved' here instead, and a failed send
+      // then left it 'approved' for good, where auto-send never looks
+      // (audit 2026-10-20, O14).
       try {
         await deliverEmailDraft({
           workspaceId: ws.workspaceId,
           userId: actorUserId,
           draftId: draft.id,
+          claimFrom: ["pending_review"],
         });
         dispatched++;
         console.log(
           `[autoSend] ws ${ws.workspaceId} draft ${draft.id} dispatched (score=${recipientScore} ≥ ${scoreMin})`,
         );
       } catch (err) {
+        // Lost the claim to another tick or a person: not a failure.
+        if (err instanceof TRPCError && err.code === "CONFLICT") continue;
         failed++;
         console.error(
           `[autoSend] ws ${ws.workspaceId} draft ${draft.id} failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -2284,10 +2490,17 @@ ${HUMAN_COPY_RULES}${brandBlock ? `\n\n${brandBlock}` : ""}`,
       return { id: Number((r as any)[0]?.insertId ?? 0), subject, body };
     }),
 
+  /**
+   * Every draft action names the states it acts on (audit 2026-10-20, O17).
+   * Approving a SENT draft used to put it back in the queue, and editing or
+   * deleting one rewrote the record of what went out.
+   */
   approve: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(emailDrafts).set({ status: "approved", reviewedByUserId: ctx.user.id }).where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id)));
+    const res = await db.update(emailDrafts).set({ status: "approved", reviewedByUserId: ctx.user.id, sendError: null } as never)
+      .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id), inArray(emailDrafts.status, ["pending_review", "ai_pending_review", "failed"])));
+    if (affected(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: "Only a draft awaiting review, or one that failed, can be approved." });
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "email_draft", entityId: input.id, after: { status: "approved" } });
     return { ok: true };
   }),
@@ -2317,7 +2530,9 @@ ${HUMAN_COPY_RULES}${brandBlock ? `\n\n${brandBlock}` : ""}`,
   reject: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(emailDrafts).set({ status: "rejected", reviewedByUserId: ctx.user.id }).where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id)));
+    const res = await db.update(emailDrafts).set({ status: "rejected", reviewedByUserId: ctx.user.id })
+      .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id), inArray(emailDrafts.status, ["pending_review", "ai_pending_review", "approved", "failed"])));
+    if (affected(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: "This draft has already been sent, or is being sent." });
     return { ok: true };
   }),
 
@@ -2345,14 +2560,20 @@ ${HUMAN_COPY_RULES}${brandBlock ? `\n\n${brandBlock}` : ""}`,
   update: repProcedure.input(z.object({ id: z.number(), subject: z.string(), body: z.string() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(emailDrafts).set({ subject: input.subject, body: input.body }).where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id)));
+    const res = await db.update(emailDrafts).set({ subject: input.subject, body: input.body })
+      .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id), inArray(emailDrafts.status, EDITABLE_DRAFT_STATUSES)));
+    if (affected(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: "A sent email can't be edited." });
     return { ok: true };
   }),
 
   delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.delete(emailDrafts).where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id)));
+    // A sent draft is the record of what went out (and what its unsubscribe
+    // link points at); one being sent is someone else's.
+    const res = await db.delete(emailDrafts)
+      .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, ctx.workspace.id), inArray(emailDrafts.status, EDITABLE_DRAFT_STATUSES)));
+    if (affected(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: "A sent email can't be deleted." });
     return { ok: true };
   }),
 });
