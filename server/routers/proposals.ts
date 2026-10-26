@@ -31,6 +31,8 @@ import { invokeLLM } from "../_core/llm";
 import { researchUseForProposal } from "../services/research/recipient";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
 import { changeOpportunityStage } from "../services/stageChange";
+import { calendarDayFrom, deadlineFrom } from "../services/calendarDeadline";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { canonicalWonStageKey } from "../_core/stageSemantics";
 import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
 import { publicProcedure, router } from "../_core/trpc";
@@ -278,6 +280,7 @@ export const proposalsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const tz = await getWorkspaceTimezone(ctx.workspace.id);
       const [result] = await db.insert(proposals).values({
         workspaceId: ctx.workspace.id,
         createdBy: ctx.user.id,
@@ -289,12 +292,14 @@ export const proposalsRouter = router({
         contactId: input.contactId ?? null,
         accountId: input.accountId ?? null,
         projectType: input.projectType || null,
-        rfpDeadline: input.rfpDeadline ? new Date(input.rfpDeadline) : null,
-        completionDate: input.completionDate ? new Date(input.completionDate) : null,
+        // Days picked as dates (R29): a deadline lasts its whole day in the
+        // workspace's zone; a completion date is a day on the calendar.
+        rfpDeadline: deadlineFrom(input.rfpDeadline, tz),
+        completionDate: calendarDayFrom(input.completionDate),
         budget: input.budget != null ? String(input.budget) : null,
         description: input.description || null,
         requirements: input.requirements ?? [],
-        expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+        expiresAt: deadlineFrom(input.expiresAt, tz),
         status: "draft",
       });
       return { id: (result as any).insertId as number };
@@ -331,7 +336,7 @@ export const proposalsRouter = router({
       if (completionDate !== undefined)
         patch.completionDate = completionDate ? new Date(completionDate) : null;
       if (budget !== undefined) patch.budget = budget != null ? String(budget) : null;
-      if (expiresAt !== undefined) patch.expiresAt = expiresAt ? new Date(expiresAt) : null;
+      if (expiresAt !== undefined) patch.expiresAt = deadlineFrom(expiresAt, await getWorkspaceTimezone(ctx.workspace.id));
       if (skipAutoExtend !== undefined) patch.skipAutoExtend = skipAutoExtend;
       await db.update(proposals).set(patch).where(eq(proposals.id, id));
       // Sync budget to linked opportunity if budget changed
@@ -454,7 +459,7 @@ export const proposalsRouter = router({
       const values = {
         proposalId: input.proposalId,
         name: input.name,
-        milestoneDate: input.milestoneDate ? new Date(input.milestoneDate) : null,
+        milestoneDate: calendarDayFrom(input.milestoneDate),
         description: input.description || null,
         owner: input.owner,
         sortOrder: input.sortOrder,
@@ -1394,7 +1399,7 @@ Reason: ${input.reason}`,
       await db
         .update(proposals)
         .set({
-          expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+          expiresAt: deadlineFrom(input.expiresAt, await getWorkspaceTimezone(ctx.workspace.id)),
           updatedAt: new Date(),
         })
         .where(inArray(proposals.id, validIds));

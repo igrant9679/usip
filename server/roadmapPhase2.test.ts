@@ -118,11 +118,17 @@ describe("the writers are wired (structural)", () => {
 
 describe("2.2 mergeAccounts repoints the evidence tables", () => {
   it("brand observations, enrichment events, and logo assets follow the merge", () => {
+    // 2026-10-26 (audit Phase 2, R12): the merge re-points from one table of
+    // every account reference, in a transaction; these three must stay on it.
+    // The behaviour is exercised in phase2Crm.test.ts.
     const src = read("server/services/company/mergeService.ts");
+    const list = src.slice(src.indexOf("export const ACCOUNT_REF_COLUMNS"), src.indexOf("export const ACCOUNT_POLY_REFS"));
+    expect(list).toContain("{ table: brandObservations,");
+    expect(list).toContain("{ table: organizationEnrichmentEvents,");
+    expect(list).toContain("{ table: companyLogoAssets,");
     const fn = src.slice(src.indexOf("export async function mergeAccounts"));
-    expect(fn).toContain("db.update(brandObservations)");
-    expect(fn).toContain("db.update(organizationEnrichmentEvents)");
-    expect(fn).toContain("db.update(companyLogoAssets)");
+    expect(fn).toContain("for (const ref of ACCOUNT_REF_COLUMNS)");
+    expect(fn).toContain("db.transaction(");
   });
 });
 

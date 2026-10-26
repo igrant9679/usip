@@ -111,6 +111,7 @@ import { ProspectScoringPanel } from "@/components/usip/scoring/ProspectScoringP
 import { SelectionToolbar } from "@/components/usip/people/SelectionToolbar";
 import { SearchSettingsSheet, type AppliedFilter } from "@/components/usip/people/SearchSettingsSheet";
 import { LinkedInEnrichmentSummaryCard, EnrichButton } from "@/components/usip/people/LinkedInEnrichment";
+import { useClearOnChange } from "@/hooks/useClearOnChange";
 
 /* ─────────────────────────── filter rail ──────────────────────────────── */
 
@@ -328,7 +329,7 @@ export default function People() {
   // Tier / seniority / sort are whole-dataset (server) filters — reset paging
   // whenever they change so Total + page 1 reflect the new query.
   useEffect(() => { setPage(1); }, [tiers, seniorities, sortField, sortDir]);
-  const { data, isLoading, error, refetch } = trpc.prospects.list.useQuery({
+  const listQuery = {
     page,
     perPage,
     emailStatus: emailStatus || undefined,
@@ -351,7 +352,11 @@ export default function People() {
     hasLinkedin: hasLinkedin || undefined,
     sortField: SERVER_SORT[sortField],
     sortDir,
-  });
+  };
+  const { data, isLoading, error, refetch } = trpc.prospects.list.useQuery(listQuery);
+  // A new search, filter, sort or page is a new set of rows; a selection
+  // made on the old one must not ride along to the bulk actions (R4).
+  useClearOnChange(listQuery, () => setChecked(new Set()));
 
   const total = data?.total ?? 0;
   const pageRows = (data?.data ?? []) as Prospect[];

@@ -691,9 +691,9 @@ export default function Pipeline() {
           options={(accounts ?? []).map((a) => ({ value: String(a.id), label: a.name }))}
         />
         <div className="grid grid-cols-3 gap-3">
-          <Field name="value" label="Value ($)" type="number" required defaultValue={10000} />
+          <Field name="value" label="Value ($)" type="money" required defaultValue={10000} />
           <SelectField name="stage" label="Stage" options={STAGES.map((s) => ({ value: s.id, label: s.label }))} defaultValue="discovery" />
-          <Field name="winProb" label="Win %" type="number" defaultValue={25} />
+          <Field name="winProb" label="Win %" type="number" min={0} max={100} defaultValue={25} />
         </div>
         <Field name="closeDate" label="Expected close date" type="date" />
       </FormDialog>

@@ -124,7 +124,10 @@ export function RelatedTasks({ entityType, entityId }: { entityType: string; ent
         onSubmit={(f) => create.mutate({
           title: String(f.get("title")),
           description: String(f.get("description") ?? "") || undefined,
-          dueAt: f.get("dueAt") ? new Date(String(f.get("dueAt"))).toISOString() : undefined,
+          // The day picked, "YYYY-MM-DD" — the server makes it the END of that
+          // day in the workspace's zone. toISOString() sent UTC midnight, which
+          // west of Greenwich is yesterday evening: overdue at creation (R29).
+          dueAt: String(f.get("dueAt") ?? "") || undefined,
           priority: f.get("priority") as any,
           ownerUserId: f.get("ownerUserId") ? Number(f.get("ownerUserId")) : undefined,
           relatedType: entityType,
@@ -234,7 +237,10 @@ export default function Tasks() {
           create.mutate({
             title: String(f.get("title")),
             description: String(f.get("description") ?? "") || undefined,
-            dueAt: f.get("dueAt") ? new Date(String(f.get("dueAt"))).toISOString() : undefined,
+            // The day picked, "YYYY-MM-DD" — the server makes it the END of that
+            // day in the workspace's zone. toISOString() sent UTC midnight, which
+            // west of Greenwich is yesterday evening: overdue at creation (R29).
+            dueAt: String(f.get("dueAt") ?? "") || undefined,
             priority: f.get("priority") as any,
             ownerUserId: f.get("ownerUserId") ? Number(f.get("ownerUserId")) : undefined,
             relatedType: relType || undefined,

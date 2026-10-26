@@ -44,7 +44,10 @@ describe("Data Health describes People", () => {
   const src = R("server/routers/dataHealth.ts");
   // getMetrics ends where mergeContacts begins; mergeContacts legitimately
   // reads contacts (it merges contact rows) and must not be in this slice.
-  const fn = src.slice(src.indexOf("getMetrics: workspaceProcedure"), src.indexOf("mergeContacts: repProcedure"));
+  // (2026-10-26: mergeContacts is admin-only now — audit Phase 2, P9.)
+  const end = src.indexOf("mergeContacts: adminWsProcedure");
+  const fn = src.slice(src.indexOf("getMetrics: workspaceProcedure"), end);
+  it("the window is real", () => expect(end).toBeGreaterThan(src.indexOf("getMetrics: workspaceProcedure")));
   it("counts prospects, not contacts", () => {
     expect(fn).toContain(".from(prospects)");
     expect(fn).not.toContain(".from(contacts)");

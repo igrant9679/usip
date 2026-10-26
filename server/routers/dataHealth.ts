@@ -1,8 +1,9 @@
 import { TRPCError } from "@trpc/server";
 import { and, count, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { activities, contacts, emailDrafts, enrollments, opportunityContactRoles, prospects, prospectQueue } from "../../drizzle/schema";
+import { contacts, prospects, prospectQueue } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { mergeContacts } from "../services/contactMerge";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, requireMinRole, workspaceProcedure } from "../_core/workspace";
@@ -93,8 +94,14 @@ export const dataHealthRouter = router({
     };
   }),
 
-  /** Merge duplicate contacts: keep primary, copy missing fields from secondary, re-point FK references, delete secondary. */
-  mergeContacts: repProcedure
+  /**
+   * Merge duplicate contacts: the survivor keeps its values and fills blanks
+   * from the duplicate, every reference moves to it, and the duplicate is
+   * deleted — through services/contactMerge, in one transaction, audited
+   * (audit 2026-10-20, P9). Admin only: it deletes a record, and was open to
+   * reps.
+   */
+  mergeContacts: adminWsProcedure
     .input(z.object({
       primaryId: z.number(),
       secondaryId: z.number(),
@@ -104,47 +111,7 @@ export const dataHealthRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const wsId = ctx.workspace.id;
-
-      const [primary] = await db.select().from(contacts).where(and(eq(contacts.id, input.primaryId), eq(contacts.workspaceId, wsId)));
-      const [secondary] = await db.select().from(contacts).where(and(eq(contacts.id, input.secondaryId), eq(contacts.workspaceId, wsId)));
-      if (!primary || !secondary) throw new TRPCError({ code: "NOT_FOUND", message: "One or both contacts not found" });
-
-      // Build patch: fill empty primary fields from secondary, or use overrideFields
-      const fillable: (keyof typeof primary)[] = ["title", "phone", "linkedinUrl", "city", "seniority", "accountId"];
-      const patch: Record<string, any> = {};
-      for (const field of fillable) {
-        const pVal = primary[field];
-        const sVal = secondary[field];
-        if (input.overrideFields.includes(field)) {
-          if (sVal !== null && sVal !== undefined && sVal !== "") patch[field] = sVal;
-        } else if ((pVal === null || pVal === undefined || pVal === "") && sVal !== null && sVal !== undefined && sVal !== "") {
-          patch[field] = sVal;
-        }
-      }
-      if (Object.keys(patch).length > 0) {
-        await db.update(contacts).set(patch).where(and(eq(contacts.id, input.primaryId), eq(contacts.workspaceId, wsId)));
-      }
-
-      // Re-point FK references from secondary → primary
-      await db.update(activities).set({ relatedId: input.primaryId }).where(and(eq(activities.relatedType, "contact"), eq(activities.relatedId, input.secondaryId), eq(activities.workspaceId, wsId)));
-      await db.update(emailDrafts).set({ toContactId: input.primaryId }).where(and(eq(emailDrafts.toContactId, input.secondaryId), eq(emailDrafts.workspaceId, wsId)));
-      await db.update(enrollments).set({ contactId: input.primaryId }).where(and(eq(enrollments.contactId, input.secondaryId), eq(enrollments.workspaceId, wsId)));
-      // For opportunity contact roles, delete the secondary's role if primary already has one on the same opp
-      const secRoles = await db.select().from(opportunityContactRoles).where(and(eq(opportunityContactRoles.contactId, input.secondaryId), eq(opportunityContactRoles.workspaceId, wsId)));
-      for (const role of secRoles) {
-        const existing = await db.select().from(opportunityContactRoles).where(and(eq(opportunityContactRoles.opportunityId, role.opportunityId), eq(opportunityContactRoles.contactId, input.primaryId), eq(opportunityContactRoles.workspaceId, wsId)));
-        if (existing.length > 0) {
-          await db.delete(opportunityContactRoles).where(eq(opportunityContactRoles.id, role.id));
-        } else {
-          await db.update(opportunityContactRoles).set({ contactId: input.primaryId }).where(eq(opportunityContactRoles.id, role.id));
-        }
-      }
-
-      // Delete the secondary contact
-      await db.delete(contacts).where(and(eq(contacts.id, input.secondaryId), eq(contacts.workspaceId, wsId)));
-
-      return { ok: true, primaryId: input.primaryId, mergedFields: Object.keys(patch) };
+      return mergeContacts(db, ctx.workspace.id, { ...input, actorUserId: ctx.user.id });
     }),
 
   /**

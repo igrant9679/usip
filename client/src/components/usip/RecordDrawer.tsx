@@ -689,15 +689,7 @@ function ContactEnrichPanel({ contactId, onEnriched }: { contactId: number; onEn
   );
 }
 
-export function RecordDrawer({
-  open,
-  onOpenChange,
-  relatedType,
-  relatedId,
-  title,
-  subtitle,
-  headerExtras,
-}: {
+type RecordDrawerProps = {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   relatedType: RelatedType;
@@ -705,8 +697,35 @@ export function RecordDrawer({
   title: string;
   subtitle?: string;
   headerExtras?: React.ReactNode;
-}) {
-  const [tab, setTab] = useState<"overview" | "timeline" | "opp-timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence" | "verify" | "brief" | "email" | "enrich" | "linkedin">("overview");
+};
+
+type DrawerTab = "overview" | "timeline" | "opp-timeline" | "call" | "meeting" | "note" | "files" | "score" | "intelligence" | "verify" | "brief" | "email" | "enrich" | "linkedin";
+
+/** Only these types render an Overview; the rest open on their timeline. */
+const HAS_OVERVIEW: RelatedType[] = ["contact", "account", "opportunity"];
+
+/**
+ * One drawer per record (audit 2026-10-20, R6). The pages keep a single
+ * drawer mounted and swap its record, and every piece of state below — the
+ * open tab, the email being written, an AI draft — carried over to the next
+ * record: a draft written for lead A sat ready to send to lead B. Keyed by
+ * the record, the drawer starts fresh for each one. Leads and customers have
+ * no Overview, and opened on that blank tab.
+ */
+export function RecordDrawer(props: RecordDrawerProps) {
+  return <RecordDrawerForRecord key={`${props.relatedType}:${props.relatedId ?? "none"}`} {...props} />;
+}
+
+function RecordDrawerForRecord({
+  open,
+  onOpenChange,
+  relatedType,
+  relatedId,
+  title,
+  subtitle,
+  headerExtras,
+}: RecordDrawerProps) {
+  const [tab, setTab] = useState<DrawerTab>(() => (HAS_OVERVIEW.includes(relatedType) ? "overview" : "timeline"));
   const [emailSubject, setEmailSubject] = useState("");
   const [emailBody, setEmailBody] = useState("");
   const [emailAiPrompt, setEmailAiPrompt] = useState("");
@@ -844,7 +863,7 @@ export function RecordDrawer({
 
         <div className="flex gap-1 border-b text-xs mt-2 overflow-x-auto">
           {[
-            ...(relatedType !== "lead" ? [{ k: "overview", label: "Overview" }] : []),
+            ...(HAS_OVERVIEW.includes(relatedType) ? [{ k: "overview", label: "Overview" }] : []),
             { k: "timeline", label: "Timeline" },
             { k: "call", label: "Log call" },
             { k: "meeting", label: "Log meeting" },
@@ -856,7 +875,6 @@ export function RecordDrawer({
             ...((relatedType === "contact" || relatedType === "lead") ? [{ k: "email", label: "Send Email" }] : []),
             ...((relatedType === "contact" || relatedType === "lead") ? [{ k: "linkedin", label: "LinkedIn" }] : []),
             ...(relatedType === "contact" ? [{ k: "verify", label: "Email Verify" }] : []),
-            ...(["contact", "lead", "account", "opportunity"].includes(relatedType) ? [{ k: "files", label: "Files" }] : []),
             ...(relatedType === "contact" ? [{ k: "enrich", label: "AI Enrich" }] : []),
             ...(relatedType === "account" ? [{ k: "brief", label: "AI Brief" }] : []),
           ].map((t) => (

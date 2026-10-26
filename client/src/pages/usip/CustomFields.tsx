@@ -11,6 +11,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Pencil, Plus, Trash2, SlidersHorizontal, X } from "lucide-react";
 import { toast } from "sonner";
+// The delete button used this without importing it, so the page threw the
+// moment one field existed (audit 2026-10-20, R1).
+import { ConfirmButton } from "@/components/usip/Common";
 
 const ENTITY_TYPES = ["lead", "contact", "account", "opportunity"] as const;
 type EntityType = (typeof ENTITY_TYPES)[number];

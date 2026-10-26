@@ -4,12 +4,14 @@
  * customers, domains) to the surviving primary and archiving the duplicate.
  * Preserves history (rows are re-pointed, not deleted).
  */
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, getTableName, inArray, isNull, sql } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
   accounts, prospects, contacts, contactAccountLinks, opportunities, customers,
   accountDomains, activities, brandObservations, organizationEnrichmentEvents,
-  companyLogoAssets,
+  companyLogoAssets, proposals, accountBriefs, emailReplies, tasks, meetings,
+  attachments, recordFiles, calendarEvents, voiceCalls, crmNotes, recordListMembers,
+  qbrs, contractAmendments, supportTickets,
 } from "../../../drizzle/schema";
 
 export interface DuplicateGroup {
@@ -93,37 +95,139 @@ export async function findDuplicateAccounts(ws: number): Promise<DuplicateGroup[
   }));
 }
 
-export async function mergeAccounts(ws: number, primaryAccountId: number, duplicateAccountId: number): Promise<{ ok: boolean; reason?: string }> {
+/**
+ * Every column that points a row at a CRM account (not a SENDING account:
+ * sendingAccountDailyStats, senderPoolMembers and mailboxAiTriage use the
+ * name for mailboxes). Exported so a test can hold the list against the
+ * schema.
+ */
+export const ACCOUNT_REF_COLUMNS = [
+  { table: prospects, col: prospects.accountId, ws: prospects.workspaceId },
+  { table: contacts, col: contacts.accountId, ws: contacts.workspaceId },
+  { table: contactAccountLinks, col: contactAccountLinks.accountId, ws: contactAccountLinks.workspaceId },
+  { table: opportunities, col: opportunities.accountId, ws: opportunities.workspaceId },
+  { table: proposals, col: proposals.accountId, ws: proposals.workspaceId },
+  { table: accountDomains, col: accountDomains.accountId, ws: accountDomains.workspaceId },
+  { table: accountBriefs, col: accountBriefs.accountId, ws: accountBriefs.workspaceId },
+  { table: emailReplies, col: emailReplies.accountId, ws: emailReplies.workspaceId },
+  // Evidence/history tables (roadmap P2.2) — a merged account must not
+  // orphan its brand observations, enrichment events, or logo assets.
+  { table: brandObservations, col: brandObservations.accountId, ws: brandObservations.workspaceId },
+  { table: organizationEnrichmentEvents, col: organizationEnrichmentEvents.accountId, ws: organizationEnrichmentEvents.workspaceId },
+  { table: companyLogoAssets, col: companyLogoAssets.accountId, ws: companyLogoAssets.workspaceId },
+] as const;
+
+/** Rows that name an account through relatedType/relatedId (or entityType/entityId). */
+export const ACCOUNT_POLY_REFS = [
+  { table: tasks, type: tasks.relatedType, id: tasks.relatedId, ws: tasks.workspaceId, idKey: "relatedId" },
+  { table: activities, type: activities.relatedType, id: activities.relatedId, ws: activities.workspaceId, idKey: "relatedId" },
+  { table: meetings, type: meetings.relatedType, id: meetings.relatedId, ws: meetings.workspaceId, idKey: "relatedId" },
+  { table: attachments, type: attachments.relatedType, id: attachments.relatedId, ws: attachments.workspaceId, idKey: "relatedId" },
+  { table: recordFiles, type: recordFiles.relatedType, id: recordFiles.relatedId, ws: recordFiles.workspaceId, idKey: "relatedId" },
+  { table: calendarEvents, type: calendarEvents.relatedType, id: calendarEvents.relatedId, ws: calendarEvents.workspaceId, idKey: "relatedId" },
+  { table: voiceCalls, type: voiceCalls.relatedType, id: voiceCalls.relatedId, ws: voiceCalls.workspaceId, idKey: "relatedId" },
+  { table: crmNotes, type: crmNotes.entityType, id: crmNotes.entityId, ws: crmNotes.workspaceId, idKey: "entityId" },
+] as const;
+
+/** Tables keyed by a customer row, which follow it when two customers fold into one. */
+const CUSTOMER_REF_TABLES = [
+  { table: qbrs, col: qbrs.customerId, ws: qbrs.workspaceId },
+  { table: contractAmendments, col: contractAmendments.customerId, ws: contractAmendments.workspaceId },
+  { table: supportTickets, col: supportTickets.customerId, ws: supportTickets.workspaceId },
+] as const;
+
+export type MergeResult = {
+  ok: boolean;
+  reason?: string;
+  /** Rows re-pointed, by table. */
+  moved?: Record<string, number>;
+  /** When both accounts were customers: the duplicate's customer row, folded into the survivor's. */
+  customerFolded?: { from: number; into: number; droppedArr: string } | null;
+};
+
+const affected = (r: unknown) => Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
+
+/**
+ * Merge a duplicate account into the one that survives.
+ *
+ * Audit 2026-10-20, R12: eleven separate writes with no transaction, so a
+ * failure part-way left the company split across two records; tasks, notes,
+ * files, meetings, list memberships, proposals and briefs stayed on the
+ * archived duplicate; and when both accounts were customers, both customer
+ * rows moved to the survivor and its ARR was counted twice. Now every
+ * reference moves in one transaction, a list never holds the company twice,
+ * and two customer rows fold into the survivor's (its ARR stands; the
+ * duplicate's is reported, not added).
+ */
+export async function mergeAccounts(ws: number, primaryAccountId: number, duplicateAccountId: number): Promise<MergeResult> {
   if (primaryAccountId === duplicateAccountId) return { ok: false, reason: "cannot merge an account into itself" };
   const db = await getDb();
   if (!db) return { ok: false, reason: "db unavailable" };
 
-  const [primary] = await db.select({ id: accounts.id }).from(accounts).where(and(eq(accounts.workspaceId, ws), eq(accounts.id, primaryAccountId))).limit(1);
-  const [dup] = await db.select({ id: accounts.id }).from(accounts).where(and(eq(accounts.workspaceId, ws), eq(accounts.id, duplicateAccountId))).limit(1);
+  const [primary] = await db.select({ id: accounts.id, name: accounts.name, archivedAt: accounts.archivedAt }).from(accounts).where(and(eq(accounts.workspaceId, ws), eq(accounts.id, primaryAccountId))).limit(1);
+  const [dup] = await db.select({ id: accounts.id, name: accounts.name, archivedAt: accounts.archivedAt }).from(accounts).where(and(eq(accounts.workspaceId, ws), eq(accounts.id, duplicateAccountId))).limit(1);
   if (!primary || !dup) return { ok: false, reason: "account not found" };
+  if (primary.archivedAt) return { ok: false, reason: `"${primary.name}" was merged away already — pick an account that is still active to keep.` };
+  if (dup.archivedAt) return { ok: false, reason: `"${dup.name}" was already merged.` };
 
-  const reassign = { accountId: primaryAccountId } as never;
-  await db.update(prospects).set(reassign).where(and(eq(prospects.workspaceId, ws), eq(prospects.accountId, duplicateAccountId)));
-  await db.update(contacts).set(reassign).where(and(eq(contacts.workspaceId, ws), eq(contacts.accountId, duplicateAccountId)));
-  await db.update(contactAccountLinks).set(reassign).where(and(eq(contactAccountLinks.workspaceId, ws), eq(contactAccountLinks.accountId, duplicateAccountId)));
-  await db.update(opportunities).set(reassign).where(and(eq(opportunities.workspaceId, ws), eq(opportunities.accountId, duplicateAccountId)));
-  await db.update(customers).set(reassign).where(and(eq(customers.workspaceId, ws), eq(customers.accountId, duplicateAccountId)));
-  await db.update(accountDomains).set(reassign).where(and(eq(accountDomains.workspaceId, ws), eq(accountDomains.accountId, duplicateAccountId)));
-  // Evidence/history tables (roadmap P2.2) — a merged account must not
-  // orphan its brand observations, enrichment events, or logo assets.
-  // (prospect_linkedin_field_changes is prospect-scoped — nothing to repoint.)
-  await db.update(brandObservations).set(reassign).where(and(eq(brandObservations.workspaceId, ws), eq(brandObservations.accountId, duplicateAccountId)));
-  await db.update(organizationEnrichmentEvents).set({ accountId: primaryAccountId } as never).where(and(eq(organizationEnrichmentEvents.workspaceId, ws), eq(organizationEnrichmentEvents.accountId, duplicateAccountId)));
-  await db.update(companyLogoAssets).set({ accountId: primaryAccountId } as never).where(and(eq(companyLogoAssets.workspaceId, ws), eq(companyLogoAssets.accountId, duplicateAccountId)));
+  return db.transaction(async (tx) => {
+    const moved: Record<string, number> = {};
+    for (const ref of ACCOUNT_REF_COLUMNS) {
+      const r = await tx.update(ref.table).set({ accountId: primaryAccountId } as never)
+        .where(and(eq(ref.ws, ws), eq(ref.col, duplicateAccountId)));
+      moved[getTableName(ref.table)] = affected(r);
+    }
+    // Child accounts follow their parent.
+    moved.child_accounts = affected(await tx.update(accounts).set({ parentAccountId: primaryAccountId } as never)
+      .where(and(eq(accounts.workspaceId, ws), eq(accounts.parentAccountId, duplicateAccountId))));
+    for (const ref of ACCOUNT_POLY_REFS) {
+      const r = await tx.update(ref.table).set({ [ref.idKey]: primaryAccountId } as never)
+        .where(and(eq(ref.ws, ws), eq(ref.type, "account"), eq(ref.id, duplicateAccountId)));
+      moved[getTableName(ref.table)] = affected(r);
+    }
 
-  await db.update(accounts).set({ archivedAt: new Date(), dataStatus: "merged" } as never)
-    .where(and(eq(accounts.workspaceId, ws), eq(accounts.id, duplicateAccountId)));
+    // Lists: a list that already holds the survivor drops the duplicate's row.
+    const dupMemberships = await tx.select({ id: recordListMembers.id, listId: recordListMembers.listId }).from(recordListMembers)
+      .where(and(eq(recordListMembers.workspaceId, ws), eq(recordListMembers.recordType, "account"), eq(recordListMembers.recordId, duplicateAccountId)));
+    let listsMoved = 0;
+    for (const m of dupMemberships) {
+      const [already] = await tx.select({ id: recordListMembers.id }).from(recordListMembers)
+        .where(and(eq(recordListMembers.workspaceId, ws), eq(recordListMembers.listId, m.listId), eq(recordListMembers.recordType, "account"), eq(recordListMembers.recordId, primaryAccountId)))
+        .limit(1);
+      if (already) await tx.delete(recordListMembers).where(and(eq(recordListMembers.id, m.id), eq(recordListMembers.workspaceId, ws)));
+      else { await tx.update(recordListMembers).set({ recordId: primaryAccountId }).where(and(eq(recordListMembers.id, m.id), eq(recordListMembers.workspaceId, ws))); listsMoved++; }
+    }
+    moved.record_list_members = listsMoved;
 
-  try {
-    await db.insert(activities).values({
+    // Customers: one company, one customer row.
+    const [dupCustomer] = await tx.select({ id: customers.id, arr: customers.arr }).from(customers)
+      .where(and(eq(customers.workspaceId, ws), eq(customers.accountId, duplicateAccountId))).limit(1);
+    const [primaryCustomer] = await tx.select({ id: customers.id }).from(customers)
+      .where(and(eq(customers.workspaceId, ws), eq(customers.accountId, primaryAccountId))).limit(1);
+    let customerFolded: MergeResult["customerFolded"] = null;
+    if (dupCustomer && primaryCustomer) {
+      for (const ref of CUSTOMER_REF_TABLES) {
+        await tx.update(ref.table).set({ customerId: primaryCustomer.id } as never)
+          .where(and(eq(ref.ws, ws), eq(ref.col, dupCustomer.id)));
+      }
+      await tx.delete(customers).where(and(eq(customers.workspaceId, ws), eq(customers.id, dupCustomer.id)));
+      customerFolded = { from: dupCustomer.id, into: primaryCustomer.id, droppedArr: String(dupCustomer.arr ?? "0") };
+    } else if (dupCustomer) {
+      await tx.update(customers).set({ accountId: primaryAccountId } as never)
+        .where(and(eq(customers.workspaceId, ws), eq(customers.id, dupCustomer.id)));
+    }
+    moved.customers = dupCustomer ? 1 : 0;
+
+    await tx.update(accounts).set({ archivedAt: new Date(), dataStatus: "merged" } as never)
+      .where(and(eq(accounts.workspaceId, ws), eq(accounts.id, duplicateAccountId)));
+
+    await tx.insert(activities).values({
       workspaceId: ws, type: "system", relatedType: "account", relatedId: primaryAccountId,
-      subject: `Merged account #${duplicateAccountId} into #${primaryAccountId}`.slice(0, 240),
+      subject: `Merged "${dup.name}" (#${duplicateAccountId}) into "${primary.name}" (#${primaryAccountId})`.slice(0, 240),
+      body: customerFolded
+        ? `Both were customers: customer #${customerFolded.from} (ARR ${customerFolded.droppedArr}) folded into #${customerFolded.into}, whose ARR stands.`
+        : null,
     } as never);
-  } catch { /* best-effort */ }
-  return { ok: true };
+    return { ok: true, moved, customerFolded };
+  });
 }

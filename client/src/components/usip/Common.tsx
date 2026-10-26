@@ -227,14 +227,24 @@ export function FormDialog({
   );
 }
 
-export function Field({ name, label, type = "text", required, placeholder, defaultValue, value, onChange }: { name: string; label: string; type?: string; required?: boolean; placeholder?: string; defaultValue?: string | number; value?: string; onChange?: (e: any) => void }) {
+/**
+ * `type="money"` is a number input that takes cents (audit 2026-10-20, R28):
+ * a plain number input steps by 1, so inside a form "10.50" failed the
+ * browser's validation and the dialog would not submit. Money starts at 0;
+ * `allowNegative` drops that floor, for a change such as an ARR delta.
+ */
+export function Field({ name, label, type = "text", required, placeholder, defaultValue, value, onChange, allowNegative, step, min, max }: { name: string; label: string; type?: string; required?: boolean; placeholder?: string; defaultValue?: string | number; value?: string; onChange?: (e: any) => void; allowNegative?: boolean; step?: string; min?: string | number; max?: string | number }) {
   const controlled = value !== undefined;
+  const money = type === "money";
+  const numberAttrs = money
+    ? { type: "number", step: step ?? "0.01", min: allowNegative ? min : min ?? 0, max, inputMode: "decimal" as const }
+    : { type, step, min, max };
   return (
     <div className="space-y-1">
       <Label htmlFor={name}>{label}</Label>
       {controlled
-        ? <Input id={name} name={name} type={type} required={required} placeholder={placeholder} value={value} onChange={onChange} />
-        : <Input id={name} name={name} type={type} required={required} placeholder={placeholder} defaultValue={defaultValue} />}
+        ? <Input id={name} name={name} {...numberAttrs} required={required} placeholder={placeholder} value={value} onChange={onChange} />
+        : <Input id={name} name={name} {...numberAttrs} required={required} placeholder={placeholder} defaultValue={defaultValue} />}
     </div>
   );
 }

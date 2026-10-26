@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, isNull, isNotNull, lt, lte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { invokeLLM } from "../_core/llm";
 import {
@@ -47,7 +47,7 @@ import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { assertOwnerInWorkspace, assertRowInWorkspace } from "../services/foreignIds";
-import { invalidateStageIndex, resolvedStageFor, stageIndexFor, stageResolver } from "../_core/stageSemantics";
+import { defaultPipelineId, invalidateStageIndex, resolvedStageFor, stageIndexFor, stageResolver } from "../_core/stageSemantics";
 import { isSuppressed, makeUnsubscribeUrl, unsubscribeHeaders } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
 import {
@@ -67,7 +67,8 @@ import { centsToDecimal, computeQuoteTotals, toCents } from "@shared/quoteTotals
 import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { renderMergeFields, resolveBookingUrl, scrubForSend } from "../mergeVars";
-import { normalizedAccountFields } from "../services/company/normalize";
+import { businessDomainFromEmail, normalizedAccountFields } from "../services/company/normalize";
+import { accountMatchesForLead, findContactByEmail } from "../services/crmMatching";
 import { ACTIVE_ENROLLMENT_STATUSES } from "../services/crossEngineEnrollment";
 import { assertOutboundNotPaused } from "../services/outboundPause";
 
@@ -1310,52 +1311,138 @@ export const leadsRouter = router({
       return { deleted: rows.length };
     }),
 
-  /** Convert a lead → account + contact (+ optional opportunity). */
+  /**
+   * What converting this lead would match (audit 2026-10-20, R8): accounts it
+   * may already be — its work-email domain, then its company name — and a
+   * contact that already has its address. The convert dialog shows these
+   * before anything is created.
+   */
+  convertPreview: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
+    if (!lead) throw new TRPCError({ code: "NOT_FOUND" });
+    const accountMatches = await accountMatchesForLead(db, ctx.workspace.id, lead);
+    const contactId = lead.email ? await findContactByEmail(db, ctx.workspace.id, lead.email) : null;
+    const [contactMatch] = contactId
+      ? await db.select({ id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName, email: contacts.email, accountId: contacts.accountId })
+        .from(contacts).where(and(eq(contacts.id, contactId), eq(contacts.workspaceId, ctx.workspace.id))).limit(1)
+      : [];
+    return {
+      alreadyConverted: lead.status === "converted",
+      accountMatches,
+      contactMatch: contactMatch ?? null,
+      newAccountName: lead.company ?? `${lead.firstName} ${lead.lastName}`,
+    };
+  }),
+
+  /**
+   * Convert a lead → account + contact (+ an opportunity, only if asked).
+   *
+   * Audit 2026-10-20, R8: a double click converted twice; every conversion
+   * made a NEW account and contact, so a second person from Acme made a
+   * second Acme; and it always invented a $25,000, 25% deal in a stage key
+   * ("discovery") the pipeline might not have. Now the lead is claimed first
+   * (a second convert is refused), the account and contact are the ones the
+   * user picked — or the match, when they said nothing — and a deal is made
+   * only on request, with the value given, in the default pipeline's first
+   * open stage. The writes run in one transaction: a failure leaves the lead
+   * unconverted and nothing half-made.
+   *
+   * accountId / contactId: a number uses that record; null forces a new one;
+   * omitted takes the match if there is one.
+   */
   convert: repProcedure
-    .input(z.object({ id: z.number(), createOpportunity: z.boolean().default(true), opportunityValue: z.number().optional() }))
+    .input(z.object({
+      id: z.number(),
+      accountId: z.number().int().positive().nullable().optional(),
+      contactId: z.number().int().positive().nullable().optional(),
+      createOpportunity: z.boolean().default(false),
+      opportunityValue: z.number().min(0).optional(),
+      opportunityName: z.string().trim().min(1).max(200).optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
+      const ws = ctx.workspace.id;
+      const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ws)));
       if (!lead) throw new TRPCError({ code: "NOT_FOUND" });
+      if (lead.status === "converted") throw new TRPCError({ code: "CONFLICT", message: "This lead was already converted." });
+      await assertRowInWorkspace(db, "account", input.accountId, ws);
+      await assertRowInWorkspace(db, "contact", input.contactId, ws);
 
       const convName = lead.company ?? `${lead.firstName} ${lead.lastName}`;
-      const accR = await db.insert(accounts).values({
-        workspaceId: ctx.workspace.id, name: convName, ...normalizedAccountFields(convName, null), ownerUserId: ctx.user.id,
-      });
-      const accountId = Number((accR as any)[0]?.insertId ?? 0);
-
-      const conR = await db.insert(contacts).values({
-        workspaceId: ctx.workspace.id, accountId, firstName: lead.firstName, lastName: lead.lastName, email: lead.email, phone: lead.phone, title: lead.title, isPrimary: true, ownerUserId: ctx.user.id,
-      });
-      const contactId = Number((conR as any)[0]?.insertId ?? 0);
-      // People-as-master (0160): the converted lead's contact links to a
-      // canonical People record too. Fire-and-forget; backfill heals misses.
-      void import("../services/personLink")
-        .then((m) => m.upsertPersonForContact(ctx.workspace.id, {
-          id: contactId, firstName: lead.firstName, lastName: lead.lastName,
-          email: lead.email ?? null, phone: lead.phone ?? null, title: lead.title ?? null,
-          linkedinUrl: null, companyName: lead.company ?? null, companyDomain: null,
-        }))
-        .catch((e) => console.error("[personLink] lead-convert link failed:", (e as Error).message));
-
-      let opportunityId: number | null = null;
+      const domain = businessDomainFromEmail(lead.email) || null;
+      // The deal's stage: the default pipeline's first OPEN stage, by flags.
+      let deal: { pipelineId: number | null; key: string; winProb: number; meta: { isWon: boolean; isLost: boolean } } | null = null;
       if (input.createOpportunity) {
-        const oR = await db.insert(opportunities).values({
-          workspaceId: ctx.workspace.id, accountId,
-          name: `${lead.company ?? lead.lastName} – New opportunity`,
-          stage: "discovery", value: String(input.opportunityValue ?? 25000), winProb: 25, ownerUserId: ctx.user.id,
-          stageEnteredAt: new Date(),
-        } as never);
-        opportunityId = Number((oR as any)[0]?.insertId ?? 0);
+        const stages = await stageResolver(db, ws);
+        const pipelineId = await defaultPipelineId(db, ws);
+        const key = stages.allowedKeys(pipelineId).find((k) => { const m = stages.resolve(pipelineId, k); return !m.isWon && !m.isLost; });
+        if (!key) throw new TRPCError({ code: "BAD_REQUEST", message: "The default pipeline has no open stage to put the deal in." });
+        const meta = stages.resolve(pipelineId, key);
+        deal = { pipelineId, key, winProb: meta.defaultWinProb ?? 20, meta };
       }
 
-      await db.update(leads).set({
-        status: "converted",
-        convertedAccountId: accountId,
-        convertedContactId: contactId,
-        convertedOpportunityId: opportunityId,
-      }).where(eq(leads.id, lead.id));
+      const done = await db.transaction(async (tx) => {
+        // Claim the lead before creating anything: of two converts, one lands.
+        const claim = await tx.update(leads).set({ status: "converted" })
+          .where(and(eq(leads.id, lead.id), eq(leads.workspaceId, ws), ne(leads.status, "converted")));
+        if (Number((claim as any)?.[0]?.affectedRows ?? 0) !== 1) {
+          throw new TRPCError({ code: "CONFLICT", message: "This lead was already converted." });
+        }
+
+        let accountId = input.accountId ?? null;
+        if (accountId == null && input.accountId === undefined) accountId = (await accountMatchesForLead(tx, ws, lead))[0]?.id ?? null;
+        const accountCreated = accountId == null;
+        if (accountCreated) {
+          const accR = await tx.insert(accounts).values({
+            workspaceId: ws, name: convName, domain: domain ?? undefined, ...normalizedAccountFields(convName, domain), ownerUserId: ctx.user.id,
+          });
+          accountId = Number((accR as any)[0]?.insertId ?? 0);
+        }
+
+        let contactId = input.contactId ?? null;
+        if (contactId == null && input.contactId === undefined && lead.email) contactId = await findContactByEmail(tx, ws, lead.email);
+        const contactCreated = contactId == null;
+        if (contactCreated) {
+          const conR = await tx.insert(contacts).values({
+            workspaceId: ws, accountId: accountId!, firstName: lead.firstName, lastName: lead.lastName, email: lead.email, phone: lead.phone, title: lead.title, isPrimary: true, ownerUserId: ctx.user.id,
+          });
+          contactId = Number((conR as any)[0]?.insertId ?? 0);
+        }
+
+        let opportunityId: number | null = null;
+        if (deal) {
+          const oR = await tx.insert(opportunities).values({
+            workspaceId: ws, accountId: accountId!, pipelineId: deal.pipelineId,
+            name: input.opportunityName ?? `${convName} – New opportunity`,
+            stage: deal.key, value: String(input.opportunityValue ?? 0), winProb: deal.winProb, ownerUserId: ctx.user.id,
+            ...stageDatesForNewDeal(deal.meta),
+          } as never);
+          opportunityId = Number((oR as any)[0]?.insertId ?? 0);
+        }
+
+        await tx.update(leads).set({
+          convertedAccountId: accountId,
+          convertedContactId: contactId,
+          convertedOpportunityId: opportunityId,
+        }).where(and(eq(leads.id, lead.id), eq(leads.workspaceId, ws)));
+        return { accountId: accountId!, contactId: contactId!, opportunityId, accountCreated, contactCreated };
+      });
+      const { accountId, contactId, opportunityId } = done;
+
+      if (done.contactCreated) {
+        // People-as-master (0160): the converted lead's contact links to a
+        // canonical People record too. Fire-and-forget; backfill heals misses.
+        void import("../services/personLink")
+          .then((m) => m.upsertPersonForContact(ws, {
+            id: contactId, firstName: lead.firstName, lastName: lead.lastName,
+            email: lead.email ?? null, phone: lead.phone ?? null, title: lead.title ?? null,
+            linkedinUrl: null, companyName: lead.company ?? null, companyDomain: domain,
+          }))
+          .catch((e) => console.error("[personLink] lead-convert link failed:", (e as Error).message));
+      }
 
       // Follow the conversion through to People (audit 2026-09-20): prospect
       // rows that pointed at this LEAD keep working after it converts — the
@@ -1366,30 +1453,30 @@ export const leadsRouter = router({
         await db.update(prospects)
           .set({ linkedContactId: contactId, accountId } as never)
           .where(and(
-            eq(prospects.workspaceId, ctx.workspace.id),
+            eq(prospects.workspaceId, ws),
             eq(prospects.linkedLeadId, lead.id),
             isNull(prospects.linkedContactId),
           ));
-        await db.insert(contactAccountLinks).values({
-          workspaceId: ctx.workspace.id,
-          personType: "contact",
-          personId: contactId,
-          accountId,
-          relationshipType: "current_employer",
-          titleAtCompany: lead.title ?? null,
-          sourceType: "lead_convert",
-        } as never);
+        if (done.contactCreated) {
+          await db.insert(contactAccountLinks).values({
+            workspaceId: ws,
+            personType: "contact",
+            personId: contactId,
+            accountId,
+            relationshipType: "current_employer",
+            titleAtCompany: lead.title ?? null,
+            sourceType: "lead_convert",
+          } as never);
+        }
       } catch (e) {
         console.error("[crm.convert] prospect/account-link writeback failed:", (e as Error).message);
       }
 
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "lead", entityId: lead.id, after: { converted: true, accountId, contactId, opportunityId } });
+      await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "update", entityType: "lead", entityId: lead.id, after: { converted: true, accountId, contactId, opportunityId, accountCreated: done.accountCreated, contactCreated: done.contactCreated } });
       /**
-       * Conversion is three record events at once and announced none of them.
-       * Fired here, after the audit, rather than inline between the inserts:
-       * departedOwnerCascade.test.ts windows on the
-       * `applyTerritoryRules( → db.insert(accounts)` span above and nothing
-       * may land inside it.
+       * Conversion is up to three record events at once. Fired after the
+       * audit, and only for records this conversion CREATED — a reused
+       * contact was created long ago.
        *
        * No record_created for the ACCOUNT — accounts are out of scope for v1
        * (runAction's update_field/enroll_sequence/send_email_draft all reject
@@ -1398,25 +1485,27 @@ export const leadsRouter = router({
       void import("../services/workflowEngine")
         .then(async (m) => {
           // `source: "lead_convert"` is the key a rule uses to EXCLUDE the
-          // three events one conversion click emits — it is in the contact and
+          // events one conversion click emits — it is in the contact and
           // lead field vocabularies for that reason.
-          await m.fireRecordCreated(ctx.workspace.id, "contact", contactId, {
-            email: lead.email, title: lead.title, accountId, source: "lead_convert",
-          }, ctx.user.id);
-          if (opportunityId) {
-            await m.fireRecordCreated(ctx.workspace.id, "opportunity", opportunityId, {
-              name: `${lead.company ?? lead.lastName} – New opportunity`,
-              stage: "discovery", value: Number(input.opportunityValue ?? 25000), winProb: 25, accountId,
+          if (done.contactCreated) {
+            await m.fireRecordCreated(ws, "contact", contactId, {
+              email: lead.email, title: lead.title, accountId, source: "lead_convert",
+            }, ctx.user.id);
+          }
+          if (opportunityId && deal) {
+            await m.fireRecordCreated(ws, "opportunity", opportunityId, {
+              name: input.opportunityName ?? `${convName} – New opportunity`,
+              stage: deal.key, value: Number(input.opportunityValue ?? 0), winProb: deal.winProb, accountId,
             }, ctx.user.id);
           }
           // The "when a lead converts" rule people actually want.
-          await m.fireRecordUpdated(ctx.workspace.id, "lead", lead.id, lead, {
+          await m.fireRecordUpdated(ws, "lead", lead.id, lead, {
             status: "converted", convertedAccountId: accountId,
             convertedContactId: contactId, convertedOpportunityId: opportunityId,
           }, lead.ownerUserId ?? null);
         })
         .catch(() => { /* workflow firing is best-effort */ });
-      return { accountId, contactId, opportunityId };
+      return { accountId, contactId, opportunityId, accountCreated: done.accountCreated, contactCreated: done.contactCreated };
     }),
 
   /** AI lead scoring re-run for one lead. Server-side LLM. */

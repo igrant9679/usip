@@ -7,7 +7,8 @@
  * routers under test write: ANDs (and one level of OR) of =, <>, <, >, <=, >=,
  * IS NULL, IN and NOT IN, LIKE ('%' wildcards), column-to-column equality in (inner and left) joins, ORDER BY a column,
  * LIMIT, GROUP BY with count(*), `col + n` or `COALESCE(col, NOW() | ?)` in an UPDATE, and an insert's
- * onDuplicateKeyUpdate against the table's unique indexes. Anything else
+ * onDuplicateKeyUpdate against the table's unique indexes, `lower(col) = ?`, and
+ * db.transaction(fn) — which rolls every table back if fn throws. Anything else
  * throws, naming the clause, so a test never passes on SQL it did not read.
  *
  * Membership: by default the caller's role comes from `roles` and every
@@ -85,6 +86,10 @@ export function makeSqlFakeDb(opts: {
       return any;
     }
     if ((m = clause.match(new RegExp(`^${REF} = \\?$`)))) return same(lookup(ctx, m[1]), params[pi.i++]);
+    if ((m = clause.match(new RegExp(`^lower\\(${REF}\\) = \\?$`)))) {
+      const v = lookup(ctx, m[1]);
+      return v != null && String(v).toLowerCase() === String(params[pi.i++]);
+    }
     if ((m = clause.match(new RegExp(`^${REF} <> \\?$`)))) return !same(lookup(ctx, m[1]), params[pi.i++]);
     if ((m = clause.match(new RegExp(`^${REF} = ${REF}$`)))) return same(lookup(ctx, m[1]), lookup(ctx, m[2]));
     if ((m = clause.match(new RegExp(`^${REF} < \\?$`)))) return cmp(lookup(ctx, m[1]), params[pi.i++]) < 0;
@@ -335,5 +340,29 @@ export function makeSqlFakeDb(opts: {
     return Promise.resolve([[]]);
   };
 
-  return { select, insert, update, delete: del, execute, executed, tables, rowsOf };
+  /**
+   * A transaction that commits by returning and rolls back by throwing: the
+   * tables are snapshotted (rows copied) before fn runs and restored if it
+   * throws. `committed` / `rolledBack` count the outcomes for assertions.
+   */
+  const txLog = { committed: 0, rolledBack: 0 };
+  const transaction = async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => {
+    const snapshot = new Map(Array.from(tables.entries()).map(([k, rs]) => [k, rs.map((r) => ({ ...r }))]));
+    const seqSnapshot = new Map(seq);
+    try {
+      const out = await fn(api);
+      txLog.committed++;
+      return out;
+    } catch (e) {
+      tables.clear();
+      snapshot.forEach((rs, k) => tables.set(k, rs));
+      seq.clear();
+      seqSnapshot.forEach((v, k) => seq.set(k, v));
+      txLog.rolledBack++;
+      throw e;
+    }
+  };
+
+  const api = { select, insert, update, delete: del, execute, executed, tables, rowsOf, transaction, txLog };
+  return api;
 }

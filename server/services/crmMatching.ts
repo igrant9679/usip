@@ -7,9 +7,12 @@
  * as the slugify / canonicalText / mergeKeys consolidations: the rule decides
  * identity, so it gets one definition.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { accounts, contacts } from "../../drizzle/schema";
-import { normalizedAccountFields } from "./company/normalize";
+import { businessDomainFromEmail, normalizeCompanyName, normalizedAccountFields } from "./company/normalize";
+
+/** Reads only — a transaction handle is fine. */
+type ReadDb = Pick<NonNullable<Awaited<ReturnType<typeof import("../db").getDb>>>, "select">;
 
 export interface AccountIdentity {
   companyName: string;
@@ -65,6 +68,38 @@ export async function findOrCreateAccount(
   return created.id;
 }
 
+export type AccountMatch = { id: number; name: string; domain: string | null; reason: "domain" | "name" };
+
+/**
+ * The accounts a lead could already be (audit 2026-10-20, R8): converting
+ * created a NEW account every time, so a second person from Acme made a
+ * second Acme. Domain first — from the lead's work address, never a consumer
+ * mailbox — then the normalised company name. Merged-away (archived) accounts
+ * are not offered.
+ */
+export async function accountMatchesForLead(
+  db: ReadDb,
+  workspaceId: number,
+  lead: { company?: string | null; email?: string | null },
+): Promise<AccountMatch[]> {
+  const out: AccountMatch[] = [];
+  const domain = businessDomainFromEmail(lead.email);
+  if (domain) {
+    const rows = await db.select({ id: accounts.id, name: accounts.name, domain: accounts.domain }).from(accounts)
+      .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.normalizedDomain, domain), isNull(accounts.archivedAt)))
+      .limit(5);
+    for (const r of rows) out.push({ ...r, domain: r.domain ?? null, reason: "domain" });
+  }
+  const name = normalizeCompanyName(lead.company);
+  if (name) {
+    const rows = await db.select({ id: accounts.id, name: accounts.name, domain: accounts.domain }).from(accounts)
+      .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.normalizedName, name), isNull(accounts.archivedAt)))
+      .limit(5);
+    for (const r of rows) if (!out.some((o) => o.id === r.id)) out.push({ ...r, domain: r.domain ?? null, reason: "name" });
+  }
+  return out;
+}
+
 /**
  * An existing contact with this address in this workspace, or null.
  *
@@ -75,7 +110,7 @@ export async function findOrCreateAccount(
  * prevent.
  */
 export async function findContactByEmail(
-  db: NonNullable<Awaited<ReturnType<typeof import("../db").getDb>>>,
+  db: ReadDb,
   workspaceId: number,
   email: string,
 ): Promise<number | null> {

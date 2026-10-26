@@ -1,5 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useLocation, useParams, Link } from "wouter";
+import { localDayOf } from "@/lib/localDay";
+import { storedToCalendarDate } from "@shared/calendarDate";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Button } from "@/components/ui/button";
@@ -123,9 +125,11 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
     clientWebsite: proposal.clientWebsite ?? "",
     orgAbbr: proposal.orgAbbr ?? "",
     projectType: proposal.projectType ?? "",
-    rfpDeadline: proposal.rfpDeadline ? new Date(proposal.rfpDeadline).toISOString().slice(0, 10) : "",
-    completionDate: proposal.completionDate ? new Date(proposal.completionDate).toISOString().slice(0, 10) : "",
-    expiresAt: proposal.expiresAt ? new Date(proposal.expiresAt).toISOString().slice(0, 10) : "",
+    // Deadlines read back on the viewer's local day; a completion date is a
+    // calendar day (R29). The UTC slice moved an expiry forward a day per edit.
+    rfpDeadline: localDayOf(proposal.rfpDeadline),
+    completionDate: storedToCalendarDate(proposal.completionDate) ?? "",
+    expiresAt: localDayOf(proposal.expiresAt),
     skipAutoExtend: proposal.skipAutoExtend ?? false,
     budget: proposal.budget ? String(proposal.budget) : "",
     description: proposal.description ?? "",
@@ -666,7 +670,7 @@ function TimelineTab({ proposal, milestones, onRefetch }: { proposal: any; miles
     setEditMilestone(m);
     setForm({
       name: m.name,
-      milestoneDate: m.milestoneDate ? new Date(m.milestoneDate).toISOString().slice(0, 10) : "",
+      milestoneDate: storedToCalendarDate(m.milestoneDate) ?? "",
       description: m.description ?? "",
       owner: m.owner,
     });

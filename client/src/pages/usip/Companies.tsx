@@ -22,15 +22,15 @@ import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuRadioGroup, DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { CompanyAvatar } from "@/components/usip/company/CompanyAvatar";
-import { confirmAction } from "@/components/usip/Common";
 import {
   Search, Upload, ChevronDown, Filter, X, Building2, Globe, Link2, Users, Briefcase,
   MapPin, DollarSign, BarChart3, ArrowUpDown, RefreshCw, GitMerge, ListPlus, Sparkles, Gauge, Telescope,
 } from "lucide-react";
 import { isAdminRole } from "@shared/roleRank";
 import { companySourceLabel, isResearchSource } from "@shared/researchSource";
+import { useClearOnChange } from "@/hooks/useClearOnChange";
 
 const RATING_STYLE: Record<string, string> = {
   excellent: "bg-emerald-100 text-emerald-800", good: "bg-blue-100 text-blue-800",
@@ -254,6 +254,8 @@ export default function Companies() {
     researchSectorIds: researchSectors.size ? Array.from(researchSectors).map(Number) : undefined,
   };
   const { data, isLoading, error, refetch } = trpc.companies.search.useQuery({ filters, sort, page, perPage });
+  // Selection belongs to the rows it was made on (R4).
+  useClearOnChange({ filters, sort, page }, () => setChecked(new Set()));
   const rows = (data?.data ?? []) as any[];
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / perPage));
@@ -272,7 +274,7 @@ export default function Companies() {
     onError: (e) => toast.error(e.message),
   });
   const merge = trpc.companies.merge.useMutation({
-    onSuccess: () => { toast.success("Companies merged"); setChecked(new Set()); utils.companies.search.invalidate(); },
+    onSuccess: () => { toast.success("Companies merged"); setChecked(new Set()); setMergePair(null); utils.companies.search.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
   const backfill = trpc.companies.backfill.useMutation({
@@ -328,10 +330,17 @@ export default function Companies() {
     }
   };
 
+  // Which of the two selected companies survives (audit 2026-10-20, R12):
+  // the confirm said "the first", and the first was whichever box happened
+  // to be ticked first — the user never saw which one would be kept.
+  const [mergePair, setMergePair] = useState<{ a: { id: number; name: string }; b: { id: number; name: string } } | null>(null);
+  const [survivorId, setSurvivorId] = useState<number | null>(null);
   const doMerge = () => {
-    const ids = [...checked];
+    const ids = Array.from(checked);
     if (ids.length !== 2) { toast.error("Select exactly two companies to merge"); return; }
-    confirmAction({ title: "Merge the second company into the first?", description: "Contacts, prospects and deals move to the first.", confirmLabel: "Merge" }, () => { merge.mutate({ primaryAccountId: ids[0], duplicateAccountId: ids[1] }); });
+    const nameOf = (id: number) => (rows.find((r) => r.id === id)?.name as string | undefined) ?? `Company #${id}`;
+    setMergePair({ a: { id: ids[0], name: nameOf(ids[0]) }, b: { id: ids[1], name: nameOf(ids[1]) } });
+    setSurvivorId(null);
   };
 
   return (
@@ -543,6 +552,33 @@ export default function Companies() {
           </section>
         </div>
       </div>
+      <Dialog open={!!mergePair} onOpenChange={(o) => { if (!o) setMergePair(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Merge two companies</DialogTitle></DialogHeader>
+          {mergePair && (
+            <div className="space-y-3 text-sm">
+              <p className="text-muted-foreground">Pick the company to keep. Everything on the other — people, deals, proposals, tasks, notes, files, list memberships and its customer record — moves to it, and the other is archived.</p>
+              {[mergePair.a, mergePair.b].map((c) => (
+                <label key={c.id} className="flex items-center gap-2">
+                  <input type="radio" name="survivor" checked={survivorId === c.id} onChange={() => setSurvivorId(c.id)} />
+                  <span>Keep <strong>{c.name}</strong></span>
+                </label>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setMergePair(null)}>Cancel</Button>
+            <Button disabled={!mergePair || survivorId == null || merge.isPending}
+              onClick={() => {
+                if (!mergePair || survivorId == null) return;
+                const dupId = survivorId === mergePair.a.id ? mergePair.b.id : mergePair.a.id;
+                merge.mutate({ primaryAccountId: survivorId, duplicateAccountId: dupId });
+              }}>
+              {merge.isPending ? "Merging…" : "Merge"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Shell>
   );
 }

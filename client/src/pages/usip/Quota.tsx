@@ -187,7 +187,7 @@ export default function Quota() {
               <div className="grid grid-cols-3 gap-3">
                 <div className="space-y-1.5">
                   <Label>Revenue ($)</Label>
-                  <Input type="number" min="0" value={form.revenueTarget} onChange={(e) => setForm((f) => ({ ...f, revenueTarget: e.target.value }))} placeholder="0" />
+                  <Input type="number" min="0" step="0.01" inputMode="decimal" value={form.revenueTarget} onChange={(e) => setForm((f) => ({ ...f, revenueTarget: e.target.value }))} placeholder="0" />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Deals</Label>
