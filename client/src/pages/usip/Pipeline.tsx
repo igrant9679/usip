@@ -264,7 +264,9 @@ function ForecastView() {
   if (!fc) return null;
 
   const { grandTotal, grandWeighted, months, stages } = fc;
-  const coverageRatio = grandTotal > 0 ? Math.round((grandWeighted / grandTotal) * 100) : 0;
+  // Weighted ÷ total is the pipeline's average confidence, not coverage
+  // (coverage compares pipeline with a target) — R19.
+  const weightedShare = grandTotal > 0 ? Math.round((grandWeighted / grandTotal) * 100) : 0;
   const maxMonthWeighted = Math.max(...months.map((m) => m.weighted), 1);
 
   const fmtMonth = (key: string) => {
@@ -316,9 +318,9 @@ function ForecastView() {
       {/* KPI row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
-          { label: "Total Pipeline", value: fmt$(grandTotal), sub: "excl. lost" },
+          { label: "Total Pipeline", value: fmt$(grandTotal), sub: "open deals" },
           { label: "Weighted Forecast", value: fmt$(grandWeighted), sub: "probability-adjusted" },
-          { label: "Coverage Ratio", value: `${coverageRatio}%`, sub: "weighted / total" },
+          { label: "Weighted Share", value: `${weightedShare}%`, sub: "weighted / total" },
           { label: "Open Deals", value: String(stages.reduce((s, st) => s + st.count, 0)), sub: "across all stages" },
         ].map(({ label, value, sub }) => (
           <Card key={label}>
@@ -609,11 +611,11 @@ export default function Pipeline() {
             {STAGES.map((s) => {
               const items = grouped[s.id] ?? [];
               const total = items.reduce((sum, o) => sum + Number(o.value ?? 0), 0);
+              // The deal's own win % — the one the forecast weights by. The AI's
+              // estimate was preferred here, so this column and the Forecast
+              // tab disagreed about the same deals (R39).
               const avgProb = items.length > 0
-                ? Math.round(items.reduce((sum, o) => {
-                    const intel = intelMap.get(o.id);
-                    return sum + (intel ? Math.round(Number(intel.winProbability)) : o.winProb);
-                  }, 0) / items.length)
+                ? Math.round(items.reduce((sum, o) => sum + Number(o.winProb ?? 0), 0) / items.length)
                 : null;
               return (
                 <div
@@ -677,6 +679,9 @@ export default function Pipeline() {
           stage: String(f.get("stage")),
           winProb: Number(f.get("winProb") ?? 25),
           pipelineId,
+          // A calendar date, "YYYY-MM-DD" (R16): the dialog had no close date,
+          // so every new deal landed in the forecast's "No close date" bucket.
+          closeDate: String(f.get("closeDate") ?? "") || undefined,
         })}
       >
         <Field name="name" label="Name" required />
@@ -686,10 +691,11 @@ export default function Pipeline() {
           options={(accounts ?? []).map((a) => ({ value: String(a.id), label: a.name }))}
         />
         <div className="grid grid-cols-3 gap-3">
-          <Field name="value" label="Value ($)" type="number" required defaultValue={10000} />
+          <Field name="value" label="Value ($)" type="money" required defaultValue={10000} />
           <SelectField name="stage" label="Stage" options={STAGES.map((s) => ({ value: s.id, label: s.label }))} defaultValue="discovery" />
-          <Field name="winProb" label="Win %" type="number" defaultValue={25} />
+          <Field name="winProb" label="Win %" type="number" min={0} max={100} defaultValue={25} />
         </div>
+        <Field name="closeDate" label="Expected close date" type="date" />
       </FormDialog>
 
       <RecordDrawer

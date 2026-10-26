@@ -12,6 +12,24 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { isAdminRole } from "@shared/roleRank";
 
+type RunSummary = {
+  matched?: number; enrolled?: number; refused?: string;
+  skipped?: { alreadyEnrolled?: number; invalidEmail?: number; inCampaign?: number; suppressed?: number };
+};
+
+/** "Matched 12 · enrolled 8 · skipped 2 already enrolled, 1 suppressed", or why it refused. */
+function describeRun(r: RunSummary): string {
+  if (r.refused) return r.refused;
+  const skipped = r.skipped ?? {};
+  const parts = [
+    skipped.alreadyEnrolled ? `${skipped.alreadyEnrolled} already enrolled` : null,
+    skipped.invalidEmail ? `${skipped.invalidEmail} invalid email` : null,
+    skipped.inCampaign ? `${skipped.inCampaign} in a campaign` : null,
+    skipped.suppressed ? `${skipped.suppressed} suppressed` : null,
+  ].filter(Boolean);
+  return `Matched ${r.matched ?? 0} · enrolled ${r.enrolled ?? 0}${parts.length ? ` · skipped ${parts.join(", ")}` : ""}`;
+}
+
 export default function SegmentRules() {
   const { current } = useWorkspace();
   const isAdmin = isAdminRole(current?.role);
@@ -142,6 +160,8 @@ export default function SegmentRules() {
                     <div className="text-xs text-muted-foreground">
                       {rule.lastRunAt ? new Date(rule.lastRunAt).toLocaleString() : "Never run"}
                     </div>
+                    {/* What the last run did and why it left people out (audit 2026-10-20, P2). */}
+                    {rule.lastRunSummary ? <div className="text-[11px] text-muted-foreground max-w-[260px]">{describeRun(rule.lastRunSummary as RunSummary)}</div> : null}
                   </div>
                   <Badge variant={rule.enabled ? "default" : "secondary"} className="shrink-0">
                     {rule.enabled ? <><CheckCircle2 className="size-3 mr-1" />Active</> : "Paused"}

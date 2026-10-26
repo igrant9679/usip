@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
+import { calendarDayFrom } from "../services/calendarDeadline";
 import { z } from "zod";
 import { accounts, contractAmendments, customers, qbrs, supportTickets } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
@@ -131,7 +132,7 @@ export const csRouter = router({
       customerId: input.customerId,
       type: input.type,
       arrDelta: String(input.arrDelta),
-      effectiveAt: new Date(input.effectiveAt),
+      effectiveAt: calendarDayFrom(input.effectiveAt) ?? new Date(),
       notes: input.notes,
       createdByUserId: ctx.user.id,
     });
@@ -154,7 +155,7 @@ export const csRouter = router({
      * writes amendments 30-200 days in the past), so the rolled contractEnd can
      * legitimately land inside 90 days or still in the past.
      */
-    const eff = new Date(input.effectiveAt);
+    const eff = calendarDayFrom(input.effectiveAt) ?? new Date();
     const termMs = c.contractStart && c.contractEnd ? c.contractEnd.getTime() - c.contractStart.getTime() : 365 * 86400000;
     const patch: { arr: string; contractStart?: Date; contractEnd?: Date; renewalStage?: RenewalStage } = { arr: String(newArr) };
     if (input.type === "renewal") {
@@ -198,7 +199,7 @@ export const csRouter = router({
     const [c] = await db.select({ id: customers.id }).from(customers)
       .where(and(eq(customers.id, input.customerId), eq(customers.workspaceId, ctx.workspace.id)));
     if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
-    const r = await db.insert(qbrs).values({ workspaceId: ctx.workspace.id, customerId: input.customerId, scheduledAt: new Date(input.scheduledAt), status: "scheduled" });
+    const r = await db.insert(qbrs).values({ workspaceId: ctx.workspace.id, customerId: input.customerId, scheduledAt: calendarDayFrom(input.scheduledAt) ?? new Date(input.scheduledAt), status: "scheduled" });
     return { id: Number((r as any)[0]?.insertId ?? 0) };
   }),
 

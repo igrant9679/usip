@@ -233,6 +233,9 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
     const wp = stage === "won" ? 100 : stage === "negotiation" ? randInt(60, 90) : stage === "proposal" ? randInt(40, 70) : stage === "qualified" ? randInt(25, 55) : randInt(10, 35);
     const accId = rand(accountIds);
     const accName = COMPANIES[accountIds.indexOf(accId)]?.name ?? "Account";
+    // Phase 2 (R14/R16): the dates days-in-stage and won-this-period count from.
+    const days = randInt(2, 35);
+    const closeDate = daysFromNow(stage === "won" ? -randInt(1, 60) : randInt(5, 90));
     const r = await db.insert(opportunities).values({
       workspaceId,
       accountId: accId,
@@ -240,8 +243,11 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
       stage,
       value: String(value),
       winProb: wp,
-      closeDate: daysFromNow(stage === "won" ? -randInt(1, 60) : randInt(5, 90)),
-      daysInStage: randInt(2, 35),
+      closeDate,
+      daysInStage: days,
+      stageEnteredAt: daysFromNow(-days),
+      wonAt: stage === "won" ? closeDate : null,
+      lostAt: stage === "lost" ? daysFromNow(-days) : null,
       aiNote: rand(["Champion confirmed.", "Awaiting legal review.", "Procurement engaged.", "Pricing pushback expected.", "Multi-thread in progress."]),
       nextStep: rand(["Send revised quote", "Schedule exec sponsor sync", "Confirm security review", "Finalize MSA terms"]),
       ownerUserId,

@@ -471,7 +471,7 @@ export const companiesRouter = router({
       requireRole(ctx.member.role, "admin");
       const res = await mergeAccounts(ctx.workspace.id, input.primaryAccountId, input.duplicateAccountId);
       if (!res.ok) throw new TRPCError({ code: "BAD_REQUEST", message: res.reason });
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "account_merge", entityId: input.primaryAccountId, after: { merged: input.duplicateAccountId } });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "account_merge", entityId: input.primaryAccountId, after: { merged: input.duplicateAccountId, moved: res.moved, customerFolded: res.customerFolded ?? null } });
       return res;
     }),
 });

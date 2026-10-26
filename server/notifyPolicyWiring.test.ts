@@ -187,7 +187,7 @@ describe("the wired flag is honest", () => {
     const SITES: Record<string, string> = {
       newLeadRouted: "server/services/policyNotify.ts",
       salesReadyCrossed: "server/routers/leadScoring.ts",
-      dealMoved: "server/routers/crm.ts",
+      dealMoved: "server/services/stageChange.ts",
       taskOverdue: "server/services/workflowEngine.ts",
       mention: "server/routers/are/prospects.ts",
     };
@@ -586,11 +586,17 @@ describe("the four dispatch sites added here", () => {
      * both conditions this is the notification that teaches people to ignore
      * the bell.
      */
-    const src = strip(read("server/routers/crm.ts"));
-    expect(src).toMatch(
-      /if \(before\.stage !== input\.stage && before\.ownerUserId && before\.ownerUserId !== ctx\.user\.id\)/,
-    );
-    expect(src).toMatch(/event: "dealMoved"/);
+    // 2026-10-26: every path moves deals through services/stageChange now
+    // (audit Phase 2, R21). A same-column drop returns before anything runs,
+    // and only a landed move reaches the notice.
+    const src = strip(read("server/services/stageChange.ts"));
+    const noop = src.indexOf("if (before.stage === toStage) return unchanged;");
+    const landed = src.indexOf("!== 1) return unchanged;");
+    const notice = src.indexOf('event: "dealMoved"');
+    expect(noop).toBeGreaterThan(-1);
+    expect(landed).toBeGreaterThan(noop);
+    expect(notice).toBeGreaterThan(landed);
+    expect(src).toMatch(/if \(before\.ownerUserId && before\.ownerUserId !== input\.actorUserId\)/);
   });
 
   it("taskOverdue rides the cron that already finds the tasks", () => {

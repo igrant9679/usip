@@ -12,9 +12,8 @@
  *   - removeCoOwner(opportunityId, userId)  — remove co-owner
  */
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, like } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { activeTaskStatuses } from "@shared/taskStatus";
 import {
   accounts,
   activities,
@@ -24,13 +23,10 @@ import {
   opportunityIntelligence,
   opportunityStageHistory,
   stageApprovals,
-  tasks,
   workspaceMembers,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
-import { activeOwnerOrNull } from "../_core/activeMembers";
-import { resolvedStageFor } from "../_core/stageSemantics";
-import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
+import { changeOpportunityStage } from "../services/stageChange";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
@@ -299,96 +295,20 @@ export const opportunityIntelligenceRouter = router({
         .set({ status: input.approved ? "approved" : "rejected", approverUserId: ctx.user.id, reviewNote: input.reviewNote ?? null })
         .where(and(eq(stageApprovals.id, input.approvalId), eq(stageApprovals.workspaceId, ctx.workspace.id)));
 
+      // Apply it through the one stage-change service (audit 2026-10-20, R21):
+      // history (with the manager's note), owner notice, closed-won/lost,
+      // audit, workflow rules and the won/lost dates — as every path does.
       if (input.approved) {
-        const [opp] = await db
-          .select({
-            accountId: opportunities.accountId,
-            value: opportunities.value,
-            ownerUserId: opportunities.ownerUserId,
-            pipelineId: opportunities.pipelineId,
-            name: opportunities.name,
-            stage: opportunities.stage,
-          })
-          .from(opportunities)
-          .where(and(eq(opportunities.id, approval.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
-        const meta = await resolvedStageFor(db, ctx.workspace.id, opp?.pipelineId ?? null, approval.toStage);
-
-        // Apply stage change. workspaceId on the UPDATE (2026-09-20): the WHERE
-        // was keyed only on the opportunity id carried by the approval row, so
-        // a concurrent or crafted call could mutate another workspace's
-        // opportunity. tenantScope's UPDATE scan walked past it because the
-        // WHERE contains no `input.` token.
-        await db
-          .update(opportunities)
-          .set({ stage: approval.toStage as any, daysInStage: 0 })
-          .where(and(eq(opportunities.id, approval.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
-
-        // Write stage history
-        await db.insert(opportunityStageHistory).values({
+        await changeOpportunityStage(db, {
           workspaceId: ctx.workspace.id,
           opportunityId: approval.opportunityId,
-          fromStage: approval.fromStage,
           toStage: approval.toStage,
-          changedByUserId: ctx.user.id,
+          actorUserId: ctx.user.id,
+          actorName: ctx.user.name ?? null,
+          source: "approval",
           note: `Approved by manager. ${input.reviewNote ?? ""}`.trim(),
         });
-
-        // The approval queue is a THIRD way a deal reaches a closing stage, and
-        // until 2026-09-20 it was the only one that did nothing about it:
-        // approving a move to Won left the account un-converted and approving a
-        // move to Lost left the deal abandoned. Both non-fatal — the stage move
-        // is what the manager asked for and it has already landed.
-        if (opp && meta.isWon) {
-          try {
-            await ensureCustomerForWonOpp(db, ctx.workspace.id, opp, ctx.user.id);
-          } catch (e) {
-            console.warn("[opportunityIntelligence.reviewStageChange] customer creation failed:", e);
-          }
-        }
-        if (opp && meta.isLost) {
-          try {
-            const dealName = opp.name ?? "the deal";
-            const existing = await db.select({ id: tasks.id }).from(tasks).where(and(
-              eq(tasks.workspaceId, ctx.workspace.id),
-              eq(tasks.relatedType, "opportunity"),
-              eq(tasks.relatedId, approval.opportunityId),
-              like(tasks.title, "Win-back:%"),
-              inArray(tasks.status, activeTaskStatuses()),
-            )).limit(1);
-            if (existing.length === 0) {
-              await db.insert(tasks).values({
-                workspaceId: ctx.workspace.id,
-                title: `Win-back: ${dealName}`.slice(0, 240),
-                description: `"${dealName}" closed lost from stage "${approval.fromStage}". Check back in — circumstances (budget, priorities, the champion's role) often change within a quarter.`,
-                type: "follow_up",
-                priority: "normal",
-                status: "open",
-                dueAt: new Date(Date.now() + 90 * 86400000),
-                ownerUserId: await activeOwnerOrNull(ctx.workspace.id, opp.ownerUserId),
-                relatedType: "opportunity",
-                relatedId: approval.opportunityId,
-                source: "ai",
-                aiReasoning: "Auto-created on closed-lost so the deal re-enters nurture instead of being abandoned.",
-                aiConfidence: 70,
-              } as never);
-            }
-          } catch (e) {
-            console.warn("[opportunityIntelligence.reviewStageChange] closed-lost win-back task failed:", e);
-          }
-        }
-        // Door three of five for opportunities.stage. The approval queue wrote
-        // the stage and its own history row but announced nothing to the rule
-        // engine, so a manager approving a move to Won fired no rule at all
-        // (2026-09-20).
-        void import("../services/workflowEngine")
-          .then((m) => m.fireStageChanged(
-            ctx.workspace.id, approval.opportunityId, approval.fromStage, approval.toStage,
-            { value: Number(opp?.value ?? 0), isWon: meta.isWon, isLost: meta.isLost, name: opp?.name ?? null },
-            opp?.ownerUserId ?? null,
-          ))
-          .catch(() => { /* workflow firing is best-effort */ });
       }
-
       return { ok: true };
     }),
 

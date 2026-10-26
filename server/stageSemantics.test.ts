@@ -351,67 +351,55 @@ describe("no client file decides won/lost from the stage NAME", () => {
 /* ─── 3. the write paths, individually ────────────────────────────────────── */
 
 describe("every path that moves a deal into a closing stage consults the flags", () => {
-  it("crm.setStage no longer skips the flags when pipelineId is null", () => {
-    // `if (before.pipelineId)` gated the ONLY flag read on a nullable column
-    // that nothing backfills, so every legacy deal — and everything
-    // proposals.ts creates — fell back to matching the string "won".
-    const w = windowBetween(read("server/routers/crm.ts"), "setStage: repProcedure", "if (isWon) winProb = 100;");
-    expect(w).toContain("resolvedStageFor(");
-    expect(w).not.toContain("if (before.pipelineId)");
-    expect(w).not.toMatch(/input\.stage === "won"/);
+  /**
+   * 2026-10-26 (audit Phase 2, R21). The four pins that stood here checked each
+   * stage writer's OWN copy of the closing logic — crm.setStage,
+   * pipelineAlerts.moveDealStage, opportunityIntelligence.reviewStageChange and
+   * the two proposal accepts — and the copies had drifted. They now all call
+   * services/stageChange.changeOpportunityStage, so the flag handling is
+   * pinned once, there, and each path is pinned to call it. The service's
+   * behaviour is exercised for real in phase2Revenue.test.ts.
+   */
+  it("every stage writer moves the deal through the one stage-change service", () => {
+    const crm = read("server/routers/crm.ts");
+    expect(windowBetween(crm, "setStage: repProcedure", "update: repProcedure")).toContain("changeOpportunityStage(");
+    const alerts = read("server/routers/pipelineAlerts.ts");
+    expect(windowBetween(alerts, "moveDealStage: workspaceProcedure", "sendDigest")).toContain("changeOpportunityStage(");
+    const intel = read("server/routers/opportunityIntelligence.ts");
+    expect(windowBetween(intel, "if (input.approved) {", "listPendingApprovals")).toContain("changeOpportunityStage(");
+    const prop = read("server/routers/proposals.ts");
+    expect(prop.match(/changeOpportunityStage\(/g)?.length ?? 0).toBe(2);
+    // No router writes the stage column itself any more.
+    for (const f of ["server/routers/crm.ts", "server/routers/pipelineAlerts.ts", "server/routers/opportunityIntelligence.ts", "server/routers/proposals.ts"]) {
+      expect(read(f), `${f} updates opportunities.stage directly`).not.toMatch(/\.update\(opportunities\)\s*\.set\(\{[^}]*\bstage:/);
+    }
   });
 
-  it("pipelineAlerts.moveDealStage handles BOTH flags and owns the task properly", () => {
-    const w = windowBetween(
-      read("server/routers/pipelineAlerts.ts"),
-      "moveDealStage: workspaceProcedure",
-      "return { ok: true, customerCreated };",
-    );
-    expect(w).toContain("resolvedStageFor(");
-    expect(w).toContain("ensureCustomerForWonOpp(");
-    // Closed-lost had no downstream step on this endpoint at all, so the same
-    // gesture behaved differently depending on which screen the rep used.
-    expect(w).toContain("meta.isLost");
-    expect(w).toContain("Win-back:");
-    expect(w).toContain("activeOwnerOrNull(");
-  });
-
-  it("opportunityIntelligence.reviewStageChange scopes its UPDATE and runs the close handling", () => {
-    const src = read("server/routers/opportunityIntelligence.ts");
-    const w = windowBetween(src, "if (input.approved) {", "insert(opportunityStageHistory)");
-    expect(w).toContain("resolvedStageFor(");
-    /**
-     * 2026-09-20: the tenant scope is pinned on the UPDATE STATEMENT, not on
-     * the branch. The same change added a SELECT two statements above the
-     * UPDATE, and that SELECT carries its own eq(opportunities.workspaceId,
-     * ctx.workspace.id) — so a branch-wide `toContain("opportunities.
-     * workspaceId")` stayed green with the UPDATE's WHERE reverted to
-     * `eq(opportunities.id, approval.opportunityId)` alone, which is the
-     * cross-tenant write this test is named after. The slice starts inside the
-     * approved branch so the unrelated `.update(opportunities)` earlier in the
-     * file cannot anchor it.
-     */
-    const upd = windowBetween(
-      src.slice(src.indexOf("if (input.approved) {")),
-      ".update(opportunities)",
-      "db.insert(opportunityStageHistory)",
-    );
-    expect(upd).toContain("eq(opportunities.workspaceId, ctx.workspace.id)");
-    expect(upd).not.toMatch(/where\(eq\(opportunities\.id, approval\.opportunityId\)\)/);
-    // Approving a move to Won used to leave the account un-converted.
-    const after = windowBetween(src, "insert(opportunityStageHistory)", "listPendingApprovals");
-    expect(after).toContain("ensureCustomerForWonOpp(");
-    expect(after).toContain("Win-back:");
+  it("the stage-change service consults the flags and runs both closing steps", () => {
+    const src = read("server/services/stageChange.ts");
+    expect(src).toContain("stageResolver(db, workspaceId)");
+    // A stage from another pipeline is refused (R20).
+    expect(src).toContain("allowedKeys(before.pipelineId ?? null).includes(toStage)");
+    expect(src).not.toMatch(/toStage === "won"|toStage === "lost"/);
+    const won = windowBetween(src, "if (meta.isWon) {", "if (meta.isLost) {");
+    expect(won).toContain("ensureCustomerForWonOpp(");
+    const lost = windowBetween(src, "if (meta.isLost) {", "recordAudit(");
+    expect(lost).toContain("Win-back:");
+    expect(lost).toContain("activeOwnerOrNull(");
+    // The UPDATE is scoped to the tenant and to the stage it read.
+    const upd = windowBetween(src, ".update(opportunities)", "affectedRows");
+    expect(upd).toContain("eq(opportunities.workspaceId, workspaceId)");
+    expect(upd).toContain("eq(opportunities.stage, before.stage)");
   });
 
   it("proposals.ts writes the workspace's own won stage and creates the Customer", () => {
     const src = read("server/routers/proposals.ts");
     expect(src).not.toMatch(/stage: "won"/);
-    expect(src).toContain("canonicalWonStageKey(");
-    expect(src).toContain("ensureCustomerForWonOpp(");
-    // Both accept paths — authenticated and the public share-link one.
+    // Both accept paths — authenticated and the public share-link one — each
+    // resolve the won stage for a linked deal and for a deal they create.
     expect(src.match(/canonicalWonStageKey\(/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
-    expect(src.match(/ensureCustomerForWonOpp\(/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
+    // A CREATED won deal has no stage move, so it runs closed-won itself.
+    expect(src.match(/ensureCustomerForWonOpp\(/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 
   /**
@@ -476,10 +464,13 @@ describe("every path that moves a deal into a closing stage consults the flags",
     const src = read("client/src/pages/usip/DealsV2.tsx");
     expect(src).toContain(`from "@shared/stageSemantics"`);
     expect(src).toContain("buildStageIndex(");
-    expect(src).toContain("stageIdx.isOpen(o.stage)");
-    expect(src).toContain("stageIdx.isWon(o.stage)");
     expect(src).toContain("stageIdx.isWon(vars.stage)");
     expect(src).not.toMatch(/stageRows\.find\(/);
+    // 2026-10-26 (audit Phase 2, R39): the header totals no longer classify
+    // the board rows here at all — they are the server's deal metrics, the
+    // numbers every other revenue screen shows.
+    expect(src).toContain("trpc.opportunities.summary.useQuery(");
+    expect(src).not.toMatch(/openOpps\.reduce\(/);
   });
 
   it("dealAutopilot asks the workspace instead of carrying its own five literals", () => {

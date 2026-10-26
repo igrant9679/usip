@@ -71,8 +71,13 @@ describe("the two engines check each other before a manual add", () => {
   it("a sequence enroll refuses someone a campaign is working, and says so", () => {
     const seq = read("routers", "sequences.ts");
     const fn = seq.slice(seq.indexOf("bulkEnroll: repProcedure"), seq.indexOf("pauseEnrollment: repProcedure"));
-    expect(fn).toContain("activeCampaignsForProspects(ctx.workspace.id, resolved.prospectIds)");
+    // 2026-10-26 (audit Phase 2, P2): the checks moved into the one screen
+    // every enrolment passes — bulkEnroll and the segment auto-enrol rules.
+    const screen = seq.slice(seq.indexOf("export async function screenEnrollmentCandidates("), seq.indexOf("export const sequencesRouter"));
+    expect(screen).toContain("activeCampaignsForProspects(workspaceId, resolved.prospectIds)");
+    expect(fn).toContain("screenEnrollmentCandidates(db, ctx.workspace.id, input.sequenceId,");
     expect(fn).toContain("skippedInCampaign,");
+    expect(read("routers", "segmentRules.ts")).toContain("screenEnrollmentCandidates(db, workspaceId, rule.sequenceId,");
     expect(client("components", "usip", "AddToMenu.tsx")).toContain("a campaign is already working them");
   });
 });

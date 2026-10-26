@@ -1344,7 +1344,7 @@ export default function Team() {
                   defaultValue="rep"
                   options={ROLES.filter((r) => rankOf(r) <= rankOf(myRole)).map((r) => ({ value: r, label: r }))}
                 />
-                <Field name="quota" label="Annual quota (optional)" type="number" placeholder="250000" />
+                <Field name="quota" label="Annual quota (optional)" type="money" placeholder="250000" />
                 <DialogFooter>
                   <Button type="button" variant="ghost" onClick={() => setInviteOpen(false)}>Cancel</Button>
                   <Button type="submit" disabled={invite.isPending}>

@@ -4,6 +4,7 @@
  * Right column: associated account card + contacts with roles.
  */
 import { Building2, ExternalLink, TrendingUp, Calendar, Clock } from "lucide-react";
+import { formatCalendarDate } from "@shared/calendarDate";
 import { InfoPanel } from "./InfoPanel";
 import { AssociatedEntitiesList, type AssociatedEntity } from "./AssociatedEntitiesList";
 
@@ -69,11 +70,9 @@ interface OpportunityOverviewProps {
   onContactClick?: (contactId: number) => void;
 }
 
-function fmtDate(d: Date | string | null | undefined): string {
-  if (!d) return "—";
-  const dt = d instanceof Date ? d : new Date(d);
-  return dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
+// A close date is a calendar date (shared/calendarDate): read in the viewer's
+// zone, the 14th showed as the 13th anywhere west of UTC (R16/R29).
+const fmtDate = (d: Date | string | null | undefined): string => formatCalendarDate(d);
 
 function fmtCurrency(v: string | number): string {
   const n = Number(v);

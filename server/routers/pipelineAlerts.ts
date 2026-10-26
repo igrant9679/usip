@@ -6,19 +6,17 @@ import { z } from "zod";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
-import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
-import { activeOwnerOrNull } from "../_core/activeMembers";
-import { closedStageKeys, resolvedStageFor, stageIndexFor } from "../_core/stageSemantics";
-import { activeTaskStatuses } from "@shared/taskStatus";
+import { changeOpportunityStage } from "../services/stageChange";
+import { refreshDaysInStage } from "../services/dealDates";
+import { closedStageKeys, stageIndexFor } from "../_core/stageSemantics";
 import { TRPCError } from "@trpc/server";
-import { eq, and, inArray, isNull, desc, like, lt, gte, notInArray, sql } from "drizzle-orm";
+import { eq, and, inArray, isNull, desc, lt, gte, notInArray, sql } from "drizzle-orm";
 import {
   pipelineAlerts,
   opportunities,
   activities,
   opportunityContactRoles,
   workflowRules,
-  tasks,
   users,
   crmPipelineStages,
 } from "../../drizzle/schema";
@@ -42,6 +40,9 @@ export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ sc
   const db = await getDb();
   if (!db) return { scanned: 0, created: 0 };
   const now = new Date();
+  // Days in stage, counted from when the deal entered it (R14) — before
+  // anything below, or the stuck-deal rules read yesterday's number.
+  await refreshDaysInStage(db, wsId, now);
   const noActivityCutoff = new Date(now.getTime() - ALERT_THRESHOLDS.noActivityDays * 86400000);
   const closingSoonCutoff = new Date(now.getTime() + ALERT_THRESHOLDS.closingSoonDays * 86400000);
 
@@ -130,6 +131,8 @@ export const pipelineAlertsRouter = router({
     const now = new Date();
     const noActivityCutoff = new Date(now.getTime() - ALERT_THRESHOLDS.noActivityDays * 86400000);
     const closingSoonCutoff = new Date(now.getTime() + ALERT_THRESHOLDS.closingSoonDays * 86400000);
+    // Same as the sweep: days in stage first, so "stuck" reads today's count.
+    await refreshDaysInStage(db, wsId, now);
 
     // Get all active opportunities
     const opps = await db
@@ -484,7 +487,11 @@ export const pipelineAlertsRouter = router({
       return { ok: true };
     }),
 
-  /** Move a deal to a new stage from the alerts page */
+  /**
+   * Move a deal to a new stage from the alerts page — through the one
+   * stage-change service (audit 2026-10-20, R21). This path skipped the win %,
+   * the history, the audit and the owner's notice.
+   */
   moveDealStage: workspaceProcedure
     .input(z.object({
       opportunityId: z.number(),
@@ -493,105 +500,15 @@ export const pipelineAlertsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      // Validate the target stage against the workspace's real pipeline stage
-      // keys. Previously any string was written, so a stale/foreign vocabulary
-      // (e.g. "closed_won") could be saved and the kanban — which buckets by
-      // the canonical keys — would silently drop the deal off the board.
-      const validKeys = await db
-        .select({ key: crmPipelineStages.key })
-        .from(crmPipelineStages)
-        .where(eq(crmPipelineStages.workspaceId, ctx.workspace.id));
-      const keySet = new Set(validKeys.map((r) => r.key));
-      if (keySet.size > 0 && !keySet.has(input.newStage)) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Unknown pipeline stage "${input.newStage}". Pick a stage from this workspace's pipeline.`,
-        });
-      }
-      const [opp] = await db
-        .select({
-          accountId: opportunities.accountId,
-          value: opportunities.value,
-          ownerUserId: opportunities.ownerUserId,
-          pipelineId: opportunities.pipelineId,
-          name: opportunities.name,
-          stage: opportunities.stage,
-        })
-        .from(opportunities)
-        .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)))
-        .limit(1);
-      await db
-        .update(opportunities)
-        .set({ stage: input.newStage, daysInStage: 0 })
-        .where(
-          and(
-            eq(opportunities.id, input.opportunityId),
-            eq(opportunities.workspaceId, ctx.workspace.id),
-          )
-        );
-      // Won/lost from the flags on the deal's OWN pipeline — the same
-      // resolution crm.setStage uses. 2026-09-20: this used to accept any
-      // isWon row anywhere in the workspace (so a custom Won stage in an
-      // unrelated pipeline decided this deal), and it had no closed-LOST
-      // handling at all. Two endpoints, one user gesture, two behaviours.
-      let customerCreated = false;
-      if (opp) {
-        const meta = await resolvedStageFor(db, ctx.workspace.id, opp.pipelineId ?? null, input.newStage);
-        if (meta.isWon) {
-          try {
-            customerCreated = await ensureCustomerForWonOpp(db, ctx.workspace.id, opp, ctx.user.id);
-          } catch (e) {
-            console.warn("[pipelineAlerts.moveDealStage] customer creation failed:", e);
-          }
-        }
-        // Closed Lost → the ~90-day win-back touch the kanban path has created
-        // since closed-lost stopped being a dead end. Owner resolved through
-        // the membership gate: an auto-created task filed under a departed rep
-        // sits in nobody's queue.
-        if (meta.isLost) {
-          try {
-            const dealName = opp.name ?? "the deal";
-            const existing = await db.select({ id: tasks.id }).from(tasks).where(and(
-              eq(tasks.workspaceId, ctx.workspace.id),
-              eq(tasks.relatedType, "opportunity"),
-              eq(tasks.relatedId, input.opportunityId),
-              like(tasks.title, "Win-back:%"),
-              inArray(tasks.status, activeTaskStatuses()),
-            )).limit(1);
-            if (existing.length === 0) {
-              await db.insert(tasks).values({
-                workspaceId: ctx.workspace.id,
-                title: `Win-back: ${dealName}`.slice(0, 240),
-                description: `"${dealName}" closed lost from stage "${opp.stage}". Check back in — circumstances (budget, priorities, the champion's role) often change within a quarter.`,
-                type: "follow_up",
-                priority: "normal",
-                status: "open",
-                dueAt: new Date(Date.now() + 90 * 86400000),
-                ownerUserId: await activeOwnerOrNull(ctx.workspace.id, opp.ownerUserId),
-                relatedType: "opportunity",
-                relatedId: input.opportunityId,
-                source: "ai",
-                aiReasoning: "Auto-created on closed-lost so the deal re-enters nurture instead of being abandoned.",
-                aiConfidence: 70,
-              } as never);
-            }
-          } catch (e) {
-            console.warn("[pipelineAlerts.moveDealStage] closed-lost win-back task failed:", e);
-          }
-        }
-        // The Alerts page's move control is the SECOND of five doors that write
-        // opportunities.stage, and until 2026-09-20 only crm.setStage announced
-        // it — so a "when a deal is won" rule simply did not fire when the deal
-        // was moved from here. Best-effort, never blocks the move.
-        void import("../services/workflowEngine")
-          .then((m) => m.fireStageChanged(
-            ctx.workspace.id, input.opportunityId, opp.stage ?? null, input.newStage,
-            { value: Number(opp.value ?? 0), isWon: meta.isWon, isLost: meta.isLost, name: opp.name ?? null },
-            opp.ownerUserId ?? null,
-          ))
-          .catch(() => { /* workflow firing is best-effort */ });
-      }
-      return { ok: true, customerCreated };
+      const r = await changeOpportunityStage(db, {
+        workspaceId: ctx.workspace.id,
+        opportunityId: input.opportunityId,
+        toStage: input.newStage,
+        actorUserId: ctx.user.id,
+        actorName: ctx.user.name ?? null,
+        source: "alerts",
+      });
+      return { ok: true, changed: r.changed, customerCreated: r.customerCreated };
     }),
 
   /**

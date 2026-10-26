@@ -395,6 +395,11 @@ export const prospectsRouter = router({
         if (v !== undefined) (patch as any)[k] = v;
       }
       if (Object.keys(patch).length === 0) return { ok: true };
+      // A person's review is a human's call; discovery reads this and leaves
+      // it alone (audit 2026-10-20, P3).
+      if (patch.verificationStatus !== undefined) {
+        Object.assign(patch, { verificationSetBy: "human", verificationSetByUserId: ctx.user.id, verificationSetAt: new Date() });
+      }
       await db.update(prospects).set(patch)
         .where(and(eq(prospects.id, id), eq(prospects.workspaceId, ctx.workspace.id)));
       await recordAudit({
@@ -500,7 +505,7 @@ export const prospectsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       await db.update(prospects)
-        .set({ verificationStatus: "rejected" })
+        .set({ verificationStatus: "rejected", verificationSetBy: "human", verificationSetByUserId: ctx.user.id, verificationSetAt: new Date() } as never)
         .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id)));
       return { ok: true };
     }),

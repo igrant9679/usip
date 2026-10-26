@@ -61,8 +61,8 @@ export default function Products() {
         <Field name="category" label="Category" />
         <TextareaField name="description" label="Description" rows={2} />
         <div className="grid grid-cols-3 gap-2">
-          <Field name="listPrice" label="List price" type="number" required />
-          <Field name="cost" label="Cost" type="number" defaultValue={0} />
+          <Field name="listPrice" label="List price" type="money" required />
+          <Field name="cost" label="Cost" type="money" defaultValue={0} />
           <SelectField name="billingCycle" label="Cycle" options={[{ value: "annual", label: "annual" }, { value: "monthly", label: "monthly" }, { value: "one_time", label: "one_time" }]} defaultValue="annual" />
         </div>
       </FormDialog>

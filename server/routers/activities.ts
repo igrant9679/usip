@@ -13,6 +13,7 @@ import { endOfZonedDay } from "@shared/availability";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { assertOutboundNotPaused } from "../services/outboundPause";
 import { assertOwnerInWorkspace } from "../services/foreignIds";
+import { deadlineFrom } from "../services/calendarDeadline";
 
 const TASK_TYPES = ["call", "email", "meeting", "linkedin", "todo", "follow_up", "social_touch", "manual_email", "meeting_prep", "crm_update", "generic_action"] as const;
 
@@ -78,7 +79,9 @@ export const tasksRouter = router({
         ...input,
         workspaceId: ctx.workspace.id,
         ownerUserId: input.ownerUserId ?? ctx.user.id,
-        dueAt: input.dueAt ? new Date(input.dueAt) : null,
+        // A day picked as the due date lasts the whole day in the workspace's
+        // zone (R29): UTC midnight made "due today" overdue at creation.
+        dueAt: deadlineFrom(input.dueAt, await getWorkspaceTimezone(ctx.workspace.id)),
         status: "open",
       });
       const id = Number((r as any)[0]?.insertId ?? 0);
@@ -144,7 +147,7 @@ export const tasksRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await assertOwnerInWorkspace(ctx.workspace.id, input.patch.ownerUserId);
     const patch: any = { ...input.patch };
-    if (patch.dueAt && typeof patch.dueAt === "string") patch.dueAt = new Date(patch.dueAt);
+    if (patch.dueAt && typeof patch.dueAt === "string") patch.dueAt = deadlineFrom(patch.dueAt, await getWorkspaceTimezone(ctx.workspace.id));
     if (patch.snoozedUntil && typeof patch.snoozedUntil === "string") patch.snoozedUntil = new Date(patch.snoozedUntil);
     if (Object.keys(patch).length === 0) return { ok: true };
     await db.update(tasks).set(patch).where(and(eq(tasks.id, input.id), eq(tasks.workspaceId, ctx.workspace.id)));
@@ -243,7 +246,7 @@ export const tasksRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const due = input.template.dueAt ? new Date(input.template.dueAt) : null;
+      const due = deadlineFrom(input.template.dueAt, await getWorkspaceTimezone(ctx.workspace.id));
       const values = input.targets.map((t) => ({
         workspaceId: ctx.workspace.id,
         title: input.template.title,

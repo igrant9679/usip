@@ -231,7 +231,7 @@ export const ACTION_DESCRIPTIONS: Record<string, string> = {
   "opportunities.create": "Create a deal on an account.",
   "opportunities.update": "Update a deal (stage, value, close date, probability, next step).",
   "leads.create": "Create a lead.",
-  "leads.convert": "Convert a lead into account + contact + opportunity.",
+  "leads.convert": "Convert a lead into an account and a contact (an existing match is used unless told otherwise), and a deal only when createOpportunity is set, at the value given.",
   "prospects.create": "Create a person record.",
   "prospects.update": "Update a person's fields.",
   "prospects.convertToLead": "Turn a person into a lead.",

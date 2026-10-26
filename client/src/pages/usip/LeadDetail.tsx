@@ -5,7 +5,9 @@
  * components/usip/DetailShell — the same vocabulary as CompanyProfile, so
  * opening a lead from the list no longer flips the design language.
  */
+import { useState } from "react";
 import { useParams, Link, useLocation } from "wouter";
+import { ConvertLeadDialog } from "@/components/usip/ConvertLeadDialog";
 import { trpc } from "@/lib/trpc";
 import { CustomFieldsPanel } from "@/components/usip/CustomFieldsPanel";
 import { Shell, EmptyState } from "@/components/usip/Shell";
@@ -16,7 +18,6 @@ import { AddToMenu } from "@/components/usip/AddToMenu";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Target, Mail, Phone, Briefcase, Zap, Building2 } from "lucide-react";
-import { toast } from "sonner";
 
 export default function LeadDetail() {
   const { id: idStr } = useParams<{ id: string }>();
@@ -24,16 +25,14 @@ export default function LeadDetail() {
   const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   const { data: lead, isLoading } = trpc.leads.get.useQuery({ id }, { enabled: !Number.isNaN(id) });
-  const convert = trpc.leads.convert.useMutation({
-    onSuccess: ({ accountId, contactId, opportunityId }) => {
-      utils.leads.get.invalidate({ id });
-      toast.success("Converted");
-      if (opportunityId) setLocation(`/opportunities/${opportunityId}`);
-      else if (contactId) setLocation(`/contacts/${contactId}`);
-      else if (accountId) setLocation(`/accounts/${accountId}`);
-    },
-    onError: (e) => toast.error(e.message),
-  });
+  // Converting asks what the lead becomes first (R8) — see ConvertLeadDialog.
+  const [converting, setConverting] = useState(false);
+  const afterConvert = ({ accountId, contactId, opportunityId }: { accountId: number; contactId: number; opportunityId: number | null }) => {
+    utils.leads.get.invalidate({ id });
+    if (opportunityId) setLocation(`/opportunities/${opportunityId}`);
+    else if (contactId) setLocation(`/contacts/${contactId}`);
+    else if (accountId) setLocation(`/accounts/${accountId}`);
+  };
 
   if (isLoading) return <Shell title="Lead"><div className="p-6 space-y-3">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-16 rounded-lg bg-muted/50 animate-pulse" />)}</div></Shell>;
   if (!lead) return <Shell title="Lead"><EmptyState title="Lead not found" /></Shell>;
@@ -63,10 +62,9 @@ export default function LeadDetail() {
           ) : <div className="text-[12px] text-muted-foreground">No AI suggestion yet.</div>}
           {!converted ? (
             <div className="pt-3">
-              <Button size="sm" disabled={convert.isPending} onClick={() => convert.mutate({ id: lead.id, createOpportunity: true })}>
-                {convert.isPending ? "Converting…" : "Convert to opportunity"}
-              </Button>
-              <p className="text-[11.5px] text-muted-foreground mt-1">Creates the account, primary contact, and opportunity, then opens the deal.</p>
+              <Button size="sm" onClick={() => setConverting(true)}>Convert…</Button>
+              <p className="text-[11.5px] text-muted-foreground mt-1">Pick the account and contact it becomes (an existing match, or new), and optionally a deal.</p>
+              <ConvertLeadDialog leadId={converting ? lead.id : null} onOpenChange={setConverting} onConverted={afterConvert} />
             </div>
           ) : (
             <div className="text-[12px] text-muted-foreground pt-3">

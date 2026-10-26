@@ -673,19 +673,27 @@ describe("the planner reads and the executor writes, in that order", () => {
     const svc = read("server/services/personMerge.ts");
     expect(svc, "the error-swallowing helper must not be imported here").not.toContain('from "../audit"');
     expect(executor, "…nor called").not.toContain("recordAudit(");
-    const audit = executor.indexOf("db.insert(auditLog)");
-    expect(audit).toBeGreaterThan(-1);
+    // 2026-10-26 (audit Phase 2, P94): the record, the fill, every repoint and
+    // the delete run in ONE transaction, the record first — so the losers are
+    // never deleted without it, and never deleted with their references
+    // half-moved.
+    const tx = executor.indexOf("await db.transaction(async (tx) => {");
+    expect(tx).toBeGreaterThan(-1);
+    const audit = executor.indexOf("tx.insert(auditLog)");
+    expect(audit).toBeGreaterThan(tx);
     expect(executor.indexOf(".delete(prospects)")).toBeGreaterThan(audit);
     expect(executor.indexOf(".update(prospects)")).toBeGreaterThan(audit);
     // Every queued repoint/drop runs after it too — the writes are collected in
     // phase A and executed in phase C.
-    expect(executor.indexOf("for (let w = 0; w < writes.length; w++)")).toBeGreaterThan(audit);
+    expect(executor.indexOf("for (let w = 0; w < writes.length; w++) await writes[w](tx);")).toBeGreaterThan(audit);
+    // …and none of them runs on the bare handle, outside it.
+    expect(executor).not.toMatch(/writes\.push\(\(\) => db/);
     // A failure abandons the cluster and is REPORTED, not warned about.
     expect(executor).toContain("unrecorded.push(");
   });
 
   it("an irreversible operation records what it destroyed", () => {
-    const at = executor.indexOf("db.insert(auditLog)");
+    const at = executor.indexOf("tx.insert(auditLog)");
     expect(at).toBeGreaterThan(-1);
     const call = executor.slice(at, at + 800);
     expect(call).toContain('entityType: "person_merge"');
@@ -764,7 +772,7 @@ function makeDb(handler: (st: State) => unknown[], log: Op[]) {
     });
     return b;
   };
-  return {
+  const api: Record<string, unknown> = {
     select: (sel?: Record<string, unknown>) => selectBuilder(sel),
     update: (t: unknown) => ({
       set: (payload: unknown) => ({
@@ -786,7 +794,16 @@ function makeDb(handler: (st: State) => unknown[], log: Op[]) {
         return Promise.resolve([]);
       },
     }),
+    // Phase C runs in a transaction (2026-10-26, P94); the recording fake runs
+    // it on itself and logs the boundary.
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      log.push({ kind: "select", table: "<begin>" });
+      const out = await fn(api);
+      log.push({ kind: "select", table: "<commit>" });
+      return out;
+    },
   };
+  return api;
 }
 
 const h = vi.hoisted(() => ({ db: null as unknown }));
@@ -1138,6 +1155,33 @@ describe("executePersonMerge, run for real", () => {
     const { executePersonMerge } = await import("./services/personMerge");
     await expect(executePersonMerge(h.db as never, WS, { clusters: [], actorUserId: 1 }))
       .rejects.toThrow(/named explicitly/);
+  });
+});
+
+/* ── A merge that fails part-way changes nothing (audit 2026-10-20, P94) ──── */
+
+describe("a merge that fails part-way is abandoned, not half-written", () => {
+  it("a failing statement inside the merge stops it before the delete, and reports the cluster", async () => {
+    const log: Op[] = [];
+    const db = makeDb(scriptedHandler, log) as any;
+    const update = db.update;
+    // The survivor's fill is the first write inside the transaction.
+    db.update = (t: unknown) => (tableName(t) === "prospects"
+      ? { set: () => ({ where: () => Promise.reject(new Error("lock wait timeout")) }) }
+      : update(t));
+    h.db = db;
+    const { executePersonMerge } = await import("./services/personMerge");
+    const r = await executePersonMerge(db, WS, { clusters: [APPROVED], actorUserId: 42 });
+    expect(r.merged).toEqual([]);
+    expect(r.peopleDeleted).toBe(0);
+    expect(r.unrecorded.map((u) => u.reason)).toEqual(["the merge could not be written (lock wait timeout), so nothing changed for this cluster."]);
+    expect(log.some((o) => o.kind === "delete" && o.table === "prospects")).toBe(false);
+    // It ran inside the transaction, which the real driver rolls back.
+    const begin = log.findIndex((o) => o.table === "<begin>");
+    const audit = log.findIndex((o) => o.kind === "insert" && o.table === "audit_log");
+    expect(begin).toBeGreaterThan(-1);
+    expect(audit).toBeGreaterThan(begin);
+    expect(log.some((o) => o.table === "<commit>")).toBe(false);
   });
 });
 

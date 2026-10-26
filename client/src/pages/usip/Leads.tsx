@@ -21,6 +21,8 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
 import { leadTierLabel, tierForGrade, type LeadTier } from "@shared/leadTier";
+import { useClearOnChange } from "@/hooks/useClearOnChange";
+import { ConvertLeadDialog } from "@/components/usip/ConvertLeadDialog";
 
 const NEUTRAL_TONE = "bg-slate-200 text-slate-700";
 const GRADE_TONE: Record<string, string> = { A: "bg-emerald-100 text-emerald-800", B: "bg-blue-100 text-blue-800", C: "bg-amber-100 text-amber-800", D: "bg-rose-100 text-rose-800" };
@@ -165,6 +167,8 @@ export default function Leads() {
   const { can } = usePermissions();
   const utils = trpc.useUtils();
   const { data, isLoading, error, refetch } = trpc.leads.list.useQuery({ search });
+  // Selection belongs to the rows it was made on (R4).
+  useClearOnChange({ search }, () => setSelectedIds(new Set()));
 
   const suggestNextAction = trpc.leadsAi.suggestNextAction.useMutation({
     onSuccess: () => utils.leads.list.invalidate(),
@@ -174,10 +178,8 @@ export default function Leads() {
     onSuccess: () => { utils.leads.list.invalidate(); toast.success("Re-scored"); },
     onError: (e: any) => toast.error("Re-score failed", { description: e.message }),
   });
-  const convert = trpc.leads.convert.useMutation({
-    onSuccess: () => { utils.leads.list.invalidate(); utils.workspace.summary.invalidate(); toast.success("Converted to account + contact + opportunity"); },
-    onError: (e: any) => toast.error("Convert failed", { description: e.message }),
-  });
+  // Converting asks what the lead becomes first (R8) — see ConvertLeadDialog.
+  const [convertingId, setConvertingId] = useState<number | null>(null);
   const deleteMut = trpc.leads.delete.useMutation({
     onSuccess: () => { utils.leads.list.invalidate(); toast.success("Lead deleted"); },
     onError: (e: any) => toast.error(e.message),
@@ -330,7 +332,7 @@ export default function Leads() {
                     <td className="px-3 py-2 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
                       <Button size="sm" variant="ghost" onClick={() => rescore.mutate({ leadId: l.id })} disabled={rescore.isPending}><Sparkles className="size-3.5" /> AI score</Button>
                       {l.status !== "converted" && (
-                        <Button size="sm" variant="outline" className="bg-card" onClick={() => convert.mutate({ id: l.id, createOpportunity: true })} disabled={convert.isPending}><UserCheck className="size-3.5" /> Convert</Button>
+                        <Button size="sm" variant="outline" className="bg-card" onClick={() => setConvertingId(l.id)}><UserCheck className="size-3.5" /> Convert</Button>
                       )}
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -370,6 +372,7 @@ export default function Leads() {
       {editLead && (
         <EditLeadDialog lead={editLead} open={!!editLead} onOpenChange={(v) => !v && setEditLead(null)} onSaved={() => setEditLead(null)} />
       )}
+      <ConvertLeadDialog leadId={convertingId} onOpenChange={(o) => { if (!o) setConvertingId(null); }} />
     </Shell>
   );
 }

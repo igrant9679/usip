@@ -33,6 +33,22 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { Streamdown } from "streamdown";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
+
+/**
+ * A proposal section as the client should see it (audit 2026-10-20, R22).
+ * Sections are written in the rich editor (HTML) or by AI Generate
+ * (Markdown), and the portal printed either as plain text — the client read
+ * "<p><strong>…" or "## Scope". HTML is sanitised before it renders (this page
+ * is public); Markdown is rendered as Markdown.
+ */
+function SectionBody({ content }: { content: string }) {
+  if (/<\/?[a-z][a-z0-9]*[\s>]/i.test(content)) {
+    return <div className="prose prose-sm max-w-none text-gray-700" dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(content) }} />;
+  }
+  return <div className="prose prose-sm max-w-none text-gray-700"><Streamdown>{content}</Streamdown></div>;
+}
 
 const STATUS_CONFIG = {
   draft: { label: "Draft", color: "bg-slate-100 text-slate-600 border-slate-200" },
@@ -301,7 +317,7 @@ export default function ProposalPortal() {
                   <h2 className="text-base font-semibold text-gray-800 mb-3 pb-2 border-b border-gray-100">
                     {SECTION_LABELS[key] ?? key}
                   </h2>
-                  <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{content}</div>
+                  <SectionBody content={content} />
                 </div>
               ))}
             </TabsContent>

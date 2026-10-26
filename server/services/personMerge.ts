@@ -119,6 +119,8 @@ import { isPlaceholderToken, usableEmailOrNull } from "@shared/fieldHygiene";
 import { isGenericInboxEmail } from "@shared/genericEmail";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+/** What phase C's statements run on: the merge's transaction (or, in a test, the db). */
+type Tx = Pick<Db, "update" | "delete" | "insert" | "select">;
 type Row = Record<string, unknown> & { id: number };
 
 /** How many duplicate EMAIL CLUSTERS one plan will reason about. Not a page
@@ -362,6 +364,7 @@ export const MERGEABLE_FIELDS = [
   "linkedLeadId", "accountId", "globalOrganizationId", "companyMatchStatus",
   "confidenceScore", "confidenceTier", "verificationStatus",
   "verificationNotes", "sourceUrls", "linkedinUrlVerified", "lastEnrichedAt",
+  "verificationSetBy", "verificationSetByUserId", "verificationSetAt",
   "lastDiscoveryRunId", "profileImageUrl", "profileImageSource",
   "profileImageSourceUrl", "profileImageLastVerifiedAt", "profileImageStatus",
 ] as const;
@@ -421,6 +424,9 @@ export interface AtomicFieldGroup {
 export const ATOMIC_FIELD_GROUPS: AtomicFieldGroup[] = [
   { lead: "profileImageUrl", carry: ["profileImageSource", "profileImageSourceUrl", "profileImageStatus", "profileImageLastVerifiedAt"] },
   { lead: "linkedinUrl", carry: ["linkedinUrlVerified"] },
+  // Who set a review travels with it (migration 0213, audit 2026-10-20 P3):
+  // a survivor that takes a loser's verdict must not credit it to its own setter.
+  { lead: "verificationStatus", carry: ["verificationSetBy", "verificationSetByUserId", "verificationSetAt"] },
   {
     lead: "email",
     carry: ["emailStatus", "emailVerifiedAt", "emailRevealedAt"],
@@ -1606,8 +1612,9 @@ export async function executePersonMerge(
       else repoints.push({ key, rows: n, mode });
     };
 
-    /** Statements queued by phase A and run, in order, by phase C. */
-    const writes: Array<() => Promise<unknown>> = [];
+    /** Statements queued by phase A and run, in order, by phase C — on the
+     *  handle phase C gives them, which is its transaction. */
+    const writes: Array<(h: Tx) => Promise<unknown>> = [];
 
     for (let t = 0; t < PERSON_REF_TABLES.length; t++) {
       const ref = PERSON_REF_TABLES[t];
@@ -1658,7 +1665,7 @@ export async function executePersonMerge(
           record(ref.key, others);
           const dropIds = others.map((r) => r.id);
           (ref.dependents ?? []).forEach((dep) => {
-            writes.push(() => db
+            writes.push((h) => h
               .update(dep.table)
               .set({ [dep.field]: keeper.id } as never)
               .where(and(eq(dep.wsColumn, workspaceId), inArray(dep.column, dropIds))));
@@ -1666,12 +1673,12 @@ export async function executePersonMerge(
           // The delete precedes the keeper's UPDATE and only this once: the
           // unique index will not hold two rows on the survivor's id at the
           // same instant. Everything it removes is already in `destroyed`.
-          writes.push(() => db
+          writes.push((h) => h
             .delete(ref.table)
             .where(and(eq(wsCol, workspaceId), inArray(ref.idColumn, dropIds))));
         }
         if (Object.keys(patch).length > 0) {
-          writes.push(() => db
+          writes.push((h) => h
             .update(ref.table)
             .set(patch as never)
             .where(and(eq(wsCol, workspaceId), eq(ref.idColumn, keeper.id))));
@@ -1697,7 +1704,7 @@ export async function executePersonMerge(
         ));
       const n = Number((before[0] as { n: unknown } | undefined)?.n ?? 0);
       if (n > 0) {
-        writes.push(() => db
+        writes.push((h) => h
           .update(ref.table)
           .set({ [ref.field]: survivorId } as never)
           .where(and(
@@ -1737,7 +1744,7 @@ export async function executePersonMerge(
           ));
         const n = Number((before[0] as { n: unknown } | undefined)?.n ?? 0);
         if (n > 0) {
-          writes.push(() => db
+          writes.push((h) => h
             .update(ref.table)
             .set({ [ref.field]: survivorId } as never)
             // The discriminator is repeated at the statement: an id list alone
@@ -1784,12 +1791,12 @@ export async function executePersonMerge(
       if (dropRows.length > 0) {
         record(ref.key, dropRows);
         const dropIds = dropRows.map((r) => r.id);
-        writes.push(() => db
+        writes.push((h) => h
           .delete(ref.table)
           .where(and(eq(ref.wsColumn, workspaceId), inArray(ref.idColumn, dropIds))));
       }
       if (moveIds.length > 0) {
-        writes.push(() => db
+        writes.push((h) => h
           .update(ref.table)
           .set({ [ref.field]: survivorId } as never)
           .where(and(eq(ref.wsColumn, workspaceId), inArray(ref.idColumn, moveIds))));
@@ -1809,7 +1816,7 @@ export async function executePersonMerge(
         const mapped = loserIds.indexOf(id) !== -1 ? survivorId : id;
         if (next.indexOf(mapped) === -1) next.push(mapped);
       });
-      writes.push(() => db
+      writes.push((h) => h
         .update(campaignProposals)
         .set({ prospectIds: next, size: next.length } as never)
         .where(and(eq(campaignProposals.workspaceId, workspaceId), eq(campaignProposals.id, proposal.id))));
@@ -1818,7 +1825,7 @@ export async function executePersonMerge(
 
     /* ═══ PHASE B — THE RECORD, BEFORE ANYTHING IS DESTROYED.
      *
-     * Inserted directly on THIS db handle rather than through `recordAudit`,
+     * Inserted on the merge's own transaction rather than through `recordAudit`,
      * whose whole body is `try { … } catch (e) { console.warn }` and which opens
      * its own connection: a failure there is invisible, and the caller is still
      * told the merge succeeded. Here a failure throws, the cluster is abandoned
@@ -1834,54 +1841,60 @@ export async function executePersonMerge(
       // list is small, never trimmed, and is what an operator greps for.
       discardedEmails,
     });
+    /* ═══ PHASE C — WRITE, in one transaction with the audit row (audit
+     * 2026-10-20, P94). The repoints and the delete were separate statements:
+     * a failure part-way left references moved and the losers still there, or
+     * — worse — rows deleted with their references half-moved. Now the audit
+     * row, the survivor's fill, every repoint and the delete land together or
+     * not at all, and a cluster that fails is reported, not half-merged. */
     try {
-      await db.insert(auditLog).values({
-        workspaceId,
-        actorUserId: opts.actorUserId ?? null,
-        action: "delete",
-        entityType: "person_merge",
-        entityId: survivorId,
-        before: trimmedPayload.payload as never,
-        after: {
-          survivorId,
-          losedIds: loserIds,
-          survivorReason: cluster.survivorReason,
-          fieldsFilled: union.filled,
-          discardedEmails,
-          repoints,
-          auditTrimmed: trimmedPayload.trimmed,
-        } as never,
-        ip: null,
-        userAgent: null,
+      await db.transaction(async (tx) => {
+        await tx.insert(auditLog).values({
+          workspaceId,
+          actorUserId: opts.actorUserId ?? null,
+          action: "delete",
+          entityType: "person_merge",
+          entityId: survivorId,
+          before: trimmedPayload.payload as never,
+          after: {
+            survivorId,
+            losedIds: loserIds,
+            survivorReason: cluster.survivorReason,
+            fieldsFilled: union.filled,
+            discardedEmails,
+            repoints,
+            auditTrimmed: trimmedPayload.trimmed,
+          } as never,
+          ip: null,
+          userAgent: null,
+        });
+
+        // 1. FILL THE SURVIVOR'S BLANKS.
+        if (Object.keys(union.patch).length > 0) {
+          await tx
+            .update(prospects)
+            .set(union.patch as never)
+            .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.id, survivorId)));
+        }
+
+        // 2. REPOINT every reference, BEFORE any delete of a People row.
+        for (let w = 0; w < writes.length; w++) await writes[w](tx);
+
+        // 3. DELETE THE LOSERS — last, scoped by workspaceId AND by the explicit
+        //    id list the caller approved and this plan re-confirmed. Never by
+        //    email, which would take a row inserted between the plan and the delete.
+        await tx
+          .delete(prospects)
+          .where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.id, loserIds)));
       });
     } catch (e) {
       unrecorded.push({
         key: cluster.key,
         email: cluster.email,
-        reason: `the audit row could not be written (${(e as Error).message}), so nothing was deleted for this cluster.`,
+        reason: `the merge could not be written (${(e as Error).message}), so nothing changed for this cluster.`,
       });
       continue;
     }
-
-    /* ═══ PHASE C — WRITE. */
-
-    // 1. FILL THE SURVIVOR'S BLANKS.
-    if (Object.keys(union.patch).length > 0) {
-      await db
-        .update(prospects)
-        .set(union.patch as never)
-        .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.id, survivorId)));
-    }
-
-    // 2. REPOINT every reference, BEFORE any delete of a People row.
-    for (let w = 0; w < writes.length; w++) await writes[w]();
-
-    // 3. DELETE THE LOSERS — last, scoped by workspaceId AND by the explicit
-    //    id list the caller approved and this plan re-confirmed. Never by
-    //    email, which would take a row inserted between the plan and the delete.
-    await db
-      .delete(prospects)
-      .where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.id, loserIds)));
     peopleDeleted += loserIds.length;
 
     merged.push({

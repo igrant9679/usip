@@ -69,6 +69,7 @@ import { toast } from "sonner";
 import { useLocation } from "wouter";
 import { ProspectImportDialog } from "./ProspectImportDialog";
 import { confirmAction } from "@/components/usip/Common";
+import { useClearOnChange } from "@/hooks/useClearOnChange";
 
 /* ─── Types ────────────────────────────────────────────────────────────────── */
 type EnrichmentData = {
@@ -269,12 +270,15 @@ export default function ProspectsPage() {
 
   const utils = trpc.useUtils();
 
-  const { data, isLoading, refetch } = trpc.prospects.list.useQuery({
+  const listQuery = {
     page,
     perPage,
     emailStatus: emailStatusFilter !== "all" ? emailStatusFilter : undefined,
     promoted: promotedFilter === "promoted" ? true : promotedFilter === "not_promoted" ? false : undefined,
-  });
+  };
+  const { data, isLoading, refetch } = trpc.prospects.list.useQuery(listQuery);
+  // Selection belongs to the rows it was made on (R4).
+  useClearOnChange(listQuery, () => setSelectedIds(new Set()));
 
   const reoonBalance = trpc.prospects.reoonBalance.useQuery(undefined, {
     refetchInterval: 5 * 60 * 1000, // refresh every 5 min so users see credit drain

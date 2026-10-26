@@ -105,6 +105,21 @@ function needsValue(operator: RuleOperator) {
   return operator !== "is_empty" && operator !== "is_not_empty";
 }
 
+/**
+ * The value a rule starts with for a field (audit 2026-10-20, P19). A Yes/No
+ * select SHOWED "Yes" over an empty value, so "Is primary contact is Yes"
+ * saved as "is blank" and matched nobody — or, under "contains", everybody.
+ */
+/** Text fields start on "contains"; every other kind on its own first operator. */
+function defaultOperatorFor(field: RuleField): RuleOperator {
+  const type = FIELDS.find((x) => x.value === field)?.type ?? "text";
+  return type === "text" ? "contains" : getOperators(field)[0].value;
+}
+
+function defaultValueFor(field: RuleField): string {
+  return FIELDS.find((x) => x.value === field)?.type === "boolean" ? "true" : "";
+}
+
 // ─── Rule Row ─────────────────────────────────────────────────────────────────
 function RuleRow({
   rule,
@@ -133,7 +148,12 @@ function RuleRow({
 
       <Select
         value={rule.field}
-        onValueChange={(v) => onChange({ ...rule, field: v as RuleField, operator: "contains", value: "" })}
+        onValueChange={(v) => {
+          // The field's own first operator: "contains" was kept for every
+          // field, so on a Yes/No or a status it matched everyone (P19).
+          const field = v as RuleField;
+          onChange({ ...rule, field, operator: defaultOperatorFor(field), value: defaultValueFor(field) });
+        }}
       >
         <SelectTrigger className="h-8 w-40 text-xs">
           <SelectValue />
@@ -149,7 +169,7 @@ function RuleRow({
 
       <Select
         value={rule.operator}
-        onValueChange={(v) => onChange({ ...rule, operator: v as RuleOperator, value: "" })}
+        onValueChange={(v) => onChange({ ...rule, operator: v as RuleOperator, value: defaultValueFor(rule.field) })}
       >
         <SelectTrigger className="h-8 w-40 text-xs">
           <SelectValue />
@@ -179,7 +199,7 @@ function RuleRow({
               </SelectContent>
             </Select>
           ) : fieldMeta?.type === "boolean" ? (
-            <Select value={rule.value || "true"} onValueChange={(v) => onChange({ ...rule, value: v })}>
+            <Select value={rule.value} onValueChange={(v) => onChange({ ...rule, value: v })}>
               <SelectTrigger className="h-8 w-24 text-xs">
                 <SelectValue />
               </SelectTrigger>
@@ -250,7 +270,7 @@ function SegmentBuilderModal({
   const addRule = () => {
     setForm((f) => ({
       ...f,
-      rules: [...f.rules, { id: crypto.randomUUID(), field: "email", operator: "contains", value: "" }],
+      rules: [...f.rules, { id: crypto.randomUUID(), field: "email", operator: defaultOperatorFor("email"), value: "" }],
     }));
     setPreviewCount(null);
   };
@@ -272,6 +292,12 @@ function SegmentBuilderModal({
 
   const handleSave = () => {
     if (!form.name.trim()) { toast.error("Name is required"); return; }
+    // No rules matches every contact, and a linked auto-enrol rule then
+    // enrols the whole base on its next hourly run (P1). The server refuses
+    // it too.
+    if (form.rules.length === 0) { toast.error("Add at least one rule — a segment with no rules matches every contact."); return; }
+    const unfinished = form.rules.find((r) => needsValue(r.operator) && !r.value.trim());
+    if (unfinished) { toast.error("Every rule needs a value (or use \"is empty\")."); return; }
     if (initial) {
       updateMut.mutate({ id: initial.id, name: form.name, description: form.description, matchType: form.matchType, rules: form.rules });
     } else {
@@ -506,12 +532,24 @@ export default function Segments() {
       </div>
 
       {/* Builder Modal */}
-      <SegmentBuilderModal
-        open={builderOpen}
-        initial={editing}
-        onClose={() => { setBuilderOpen(false); setEditing(null); }}
-        onSaved={() => { setBuilderOpen(false); setEditing(null); }}
-      />
+      {/* Mounted per segment (P1): one long-lived modal read `initial` only on
+          its first render, so Edit opened a blank form, or the previous
+          segment's — and Save wrote that over the one being edited. */}
+      {builderOpen && (
+        <SegmentBuilderModal
+          key={editing?.id ?? "new"}
+          open
+          initial={editing ? {
+            id: editing.id,
+            name: editing.name,
+            description: editing.description ?? "",
+            matchType: editing.matchType === "any" ? "any" : "all",
+            rules: Array.isArray(editing.rules) ? editing.rules : [],
+          } : undefined}
+          onClose={() => { setBuilderOpen(false); setEditing(null); }}
+          onSaved={() => { setBuilderOpen(false); setEditing(null); }}
+        />
+      )}
 
       {/* Delete Confirm */}
       <Dialog open={confirmDelete !== null} onOpenChange={(v) => !v && setConfirmDelete(null)}>

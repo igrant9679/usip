@@ -1,17 +1,59 @@
 /**
  * Sprint 4 — Quota Management
  * Procedures: get, set, progress (actual vs target for a period)
+ *
+ * Audit 2026-10-20, Phase 2 (R17): attainment counted won deals by updatedAt,
+ * so editing an old win moved it into this period, and a QUARTERLY target was
+ * measured against the one month it was saved under. Wins now count by wonAt,
+ * through services/dealMetrics (the same deals the Dashboard and Forecast
+ * count), over the range the period TYPE names, in the workspace's zone.
  */
 import { TRPCError } from "@trpc/server";
-import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lt } from "drizzle-orm";
 import { z } from "zod";
-import { activities, opportunities, quotaTargets, workspaceMembers } from "../../drizzle/schema";
+import { activities, quotaTargets, workspaceMembers } from "../../drizzle/schema";
 import { getDb } from "../db";
-import { wonStageKeys } from "../_core/stageSemantics";
+import { closedIn, loadMetricDeals, quotaPeriodRange } from "../services/dealMetrics";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { router } from "../_core/trpc";
 import { managerProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
 
-const periodRegex = /^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/;
+const periodRegex = /^\d{4}-(0[1-9]|1[0-2]|Q[1-4]|FY)$/;
+
+/**
+ * The key a target is stored under, from the month picked and its type: a
+ * monthly target under "2026-11", a quarterly one under "2026-Q4", an annual
+ * one under "2026-FY". So a quarterly target is ONE row for the quarter, shown
+ * whichever of its months is picked, not a row per month it was saved from.
+ */
+export function quotaPeriodKey(period: string, periodType: "monthly" | "quarterly" | "annual"): string {
+  const m = /^(\d{4})-(\d{2}|Q[1-4]|FY)$/.exec(period);
+  if (!m) return period;
+  const year = m[1];
+  const month = /^\d{2}$/.test(m[2]) ? Number(m[2]) : m[2].startsWith("Q") ? (Number(m[2][1]) - 1) * 3 + 1 : 1;
+  if (periodType === "annual") return `${year}-FY`;
+  if (periodType === "quarterly") return `${year}-Q${Math.floor((month - 1) / 3) + 1}`;
+  return /^\d{2}$/.test(m[2]) ? period : `${year}-${String(month).padStart(2, "0")}`;
+}
+
+/** The months a quarter or year key spans ("2026-Q4" → 2026-10…12). */
+function monthKeysIn(period: string): string[] {
+  const q = /^(\d{4})-Q([1-4])$/.exec(period);
+  const fy = /^(\d{4})-FY$/.exec(period);
+  const year = (q ?? fy)?.[1];
+  if (!year) return [];
+  const first = q ? (Number(q[2]) - 1) * 3 + 1 : 1;
+  const n = q ? 3 : 12;
+  return Array.from({ length: n }, (_, i) => `${year}-${String(first + i).padStart(2, "0")}`);
+}
+
+/** Every key a target covering this month could be stored under. */
+function periodKeysCovering(period: string): string[] {
+  const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(period);
+  if (!m) return [period];
+  const q = Math.floor((Number(m[2]) - 1) / 3) + 1;
+  return [period, `${m[1]}-Q${q}`, `${m[1]}-FY`];
+}
 
 /**
  * For procedures that expose per-user quota / attainment data, restrict
@@ -46,7 +88,11 @@ export const quotaRouter = router({
       // server-side so a crafted client can't pass another rep's id.
       const scope = quotaScopeUserId(ctx, input?.userId);
       if (scope !== null) rows = rows.filter((r) => r.userId === scope);
-      if (input?.period) rows = rows.filter((r) => r.period === input.period);
+      if (input?.period) {
+        // A picked month also shows the quarter and year targets around it.
+        const keys = periodKeysCovering(input.period);
+        rows = rows.filter((r) => keys.includes(r.period));
+      }
       return rows;
     }),
 
@@ -55,7 +101,7 @@ export const quotaRouter = router({
     .input(
       z.object({
         userId: z.number(),
-        period: z.string().regex(periodRegex, "period must be YYYY-MM or YYYY-QN"),
+        period: z.string().regex(periodRegex, "period must be YYYY-MM, YYYY-QN or YYYY-FY"),
         periodType: z.enum(["monthly", "quarterly", "annual"]).default("monthly"),
         revenueTarget: z.number().min(0).default(0),
         dealsTarget: z.number().int().min(0).default(0),
@@ -72,12 +118,13 @@ export const quotaRouter = router({
         .where(and(eq(workspaceMembers.userId, input.userId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "User is not a member of this workspace" });
 
+      const period = quotaPeriodKey(input.period, input.periodType);
       await db
         .insert(quotaTargets)
         .values({
           workspaceId: ctx.workspace.id,
           userId: input.userId,
-          period: input.period,
+          period,
           periodType: input.periodType,
           revenueTarget: String(input.revenueTarget),
           dealsTarget: input.dealsTarget,
@@ -92,7 +139,20 @@ export const quotaRouter = router({
             updatedAt: new Date(),
           },
         });
-      return { ok: true };
+      // A quarterly or annual target saved before this was stored under the
+      // month it was set from; the row just written supersedes it.
+      if (period !== input.period || input.periodType !== "monthly") {
+        const legacy = monthKeysIn(period).filter((k) => k !== period);
+        if (legacy.length > 0) {
+          await db.delete(quotaTargets).where(and(
+            eq(quotaTargets.workspaceId, ctx.workspace.id),
+            eq(quotaTargets.userId, input.userId),
+            eq(quotaTargets.periodType, input.periodType),
+            inArray(quotaTargets.period, legacy),
+          ));
+        }
+      }
+      return { ok: true, period };
     }),
 
   /** Delete a quota target */
@@ -129,56 +189,32 @@ export const quotaRouter = router({
 
       if (!target) return null;
 
-      // Derive date range from period string (YYYY-MM or YYYY-QN)
-      let startDate: Date;
-      let endDate: Date;
-      if (/^\d{4}-Q[1-4]$/.test(input.period)) {
-        const [yearStr, qStr] = input.period.split("-Q");
-        const year = parseInt(yearStr);
-        const q = parseInt(qStr);
-        const startMonth = (q - 1) * 3;
-        startDate = new Date(year, startMonth, 1);
-        endDate = new Date(year, startMonth + 3, 0, 23, 59, 59);
-      } else {
-        const [yearStr, monthStr] = input.period.split("-");
-        const year = parseInt(yearStr);
-        const month = parseInt(monthStr) - 1;
-        startDate = new Date(year, month, 1);
-        endDate = new Date(year, month + 1, 0, 23, 59, 59);
-      }
+      const tz = await getWorkspaceTimezone(ctx.workspace.id);
+      const range = quotaPeriodRange(tz, target.period, target.periodType);
 
-      // Count closed-won opportunities (revenue + deals)
-      const wonOpps = await db
-        .select()
-        .from(opportunities)
-        .where(
-          and(
-            eq(opportunities.workspaceId, ctx.workspace.id),
-            eq(opportunities.ownerUserId, targetUserId),
-            inArray(opportunities.stage, await wonStageKeys(db, ctx.workspace.id)),
-            gte(opportunities.updatedAt, startDate),
-            lte(opportunities.updatedAt, endDate),
-          ),
-        );
-
-      const actualRevenue = wonOpps.reduce((sum, o) => sum + Number(o.value ?? 0), 0);
-      const actualDeals = wonOpps.length;
+      // Won deals by WHEN they were won — the same classification and the
+      // same wonAt the Dashboard and Forecast read.
+      const deals = await loadMetricDeals(db, ctx.workspace.id, { ownerUserId: targetUserId });
+      const won = closedIn(deals, "won", range);
+      const actualRevenue = won.value;
+      const actualDeals = won.count;
 
       // Count activities
       const acts = await db
-        .select()
+        .select({ id: activities.id })
         .from(activities)
         .where(
           and(
             eq(activities.workspaceId, ctx.workspace.id),
             eq(activities.actorUserId, targetUserId),
-            gte(activities.createdAt, startDate),
-            lte(activities.createdAt, endDate),
+            gte(activities.createdAt, range.start),
+            lt(activities.createdAt, range.end),
           ),
         );
       const actualActivities = acts.length;
 
       return {
+        range: { start: range.start, end: range.end, label: range.label },
         target,
         actual: { revenue: actualRevenue, deals: actualDeals, activities: actualActivities },
         attainment: {
@@ -200,7 +236,7 @@ export const quotaRouter = router({
       const targets = await db
         .select()
         .from(quotaTargets)
-        .where(and(eq(quotaTargets.workspaceId, ctx.workspace.id), eq(quotaTargets.period, input.period)));
+        .where(and(eq(quotaTargets.workspaceId, ctx.workspace.id), inArray(quotaTargets.period, periodKeysCovering(input.period))));
       return targets;
     }),
 });

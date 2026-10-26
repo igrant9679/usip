@@ -1,6 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { activeTaskStatuses } from "@shared/taskStatus";
-import { and, desc, eq, inArray, isNull, isNotNull, like, lt, lte, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { invokeLLM } from "../_core/llm";
 import {
@@ -48,11 +47,19 @@ import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { assertOwnerInWorkspace, assertRowInWorkspace } from "../services/foreignIds";
-import { invalidateStageIndex, resolvedStageFor, stageIndexFor, wonStageKeys } from "../_core/stageSemantics";
-import { notifyIfEnabled } from "../services/policyNotify";
+import { defaultPipelineId, invalidateStageIndex, resolvedStageFor, stageIndexFor, stageResolver } from "../_core/stageSemantics";
 import { isSuppressed, makeUnsubscribeUrl, unsubscribeHeaders } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
-import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
+import {
+  boardDealsWhere, changeOpportunityStage, moveDealsOffStage, moveDealsToPipeline, rekeyStageDeals, restampStageDeals,
+  stageDatesForNewDeal,
+} from "../services/stageChange";
+import { normalizeCalendarDate } from "@shared/calendarDate";
+import {
+  addMonths, closedIn, closeMonthKey, currentRanges, dollars, inRange, instantMonthKey, loadMetricDeals,
+  monthKey, openTotals, zonedYmd, type Range,
+} from "../services/dealMetrics";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 // One arithmetic rule for line-item money, shared with quotes. See
 // shared/quoteTotals.ts — a deal line and a quote line do the same sum.
@@ -60,7 +67,8 @@ import { centsToDecimal, computeQuoteTotals, toCents } from "@shared/quoteTotals
 import { escapeHtml as sharedEscapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { renderMergeFields, resolveBookingUrl, scrubForSend } from "../mergeVars";
-import { normalizedAccountFields } from "../services/company/normalize";
+import { businessDomainFromEmail, normalizedAccountFields } from "../services/company/normalize";
+import { accountMatchesForLead, findContactByEmail } from "../services/crmMatching";
 import { ACTIVE_ENROLLMENT_STATUSES } from "../services/crossEngineEnrollment";
 import { assertOutboundNotPaused } from "../services/outboundPause";
 
@@ -1303,51 +1311,138 @@ export const leadsRouter = router({
       return { deleted: rows.length };
     }),
 
-  /** Convert a lead → account + contact (+ optional opportunity). */
+  /**
+   * What converting this lead would match (audit 2026-10-20, R8): accounts it
+   * may already be — its work-email domain, then its company name — and a
+   * contact that already has its address. The convert dialog shows these
+   * before anything is created.
+   */
+  convertPreview: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
+    if (!lead) throw new TRPCError({ code: "NOT_FOUND" });
+    const accountMatches = await accountMatchesForLead(db, ctx.workspace.id, lead);
+    const contactId = lead.email ? await findContactByEmail(db, ctx.workspace.id, lead.email) : null;
+    const [contactMatch] = contactId
+      ? await db.select({ id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName, email: contacts.email, accountId: contacts.accountId })
+        .from(contacts).where(and(eq(contacts.id, contactId), eq(contacts.workspaceId, ctx.workspace.id))).limit(1)
+      : [];
+    return {
+      alreadyConverted: lead.status === "converted",
+      accountMatches,
+      contactMatch: contactMatch ?? null,
+      newAccountName: lead.company ?? `${lead.firstName} ${lead.lastName}`,
+    };
+  }),
+
+  /**
+   * Convert a lead → account + contact (+ an opportunity, only if asked).
+   *
+   * Audit 2026-10-20, R8: a double click converted twice; every conversion
+   * made a NEW account and contact, so a second person from Acme made a
+   * second Acme; and it always invented a $25,000, 25% deal in a stage key
+   * ("discovery") the pipeline might not have. Now the lead is claimed first
+   * (a second convert is refused), the account and contact are the ones the
+   * user picked — or the match, when they said nothing — and a deal is made
+   * only on request, with the value given, in the default pipeline's first
+   * open stage. The writes run in one transaction: a failure leaves the lead
+   * unconverted and nothing half-made.
+   *
+   * accountId / contactId: a number uses that record; null forces a new one;
+   * omitted takes the match if there is one.
+   */
   convert: repProcedure
-    .input(z.object({ id: z.number(), createOpportunity: z.boolean().default(true), opportunityValue: z.number().optional() }))
+    .input(z.object({
+      id: z.number(),
+      accountId: z.number().int().positive().nullable().optional(),
+      contactId: z.number().int().positive().nullable().optional(),
+      createOpportunity: z.boolean().default(false),
+      opportunityValue: z.number().min(0).optional(),
+      opportunityName: z.string().trim().min(1).max(200).optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
+      const ws = ctx.workspace.id;
+      const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ws)));
       if (!lead) throw new TRPCError({ code: "NOT_FOUND" });
+      if (lead.status === "converted") throw new TRPCError({ code: "CONFLICT", message: "This lead was already converted." });
+      await assertRowInWorkspace(db, "account", input.accountId, ws);
+      await assertRowInWorkspace(db, "contact", input.contactId, ws);
 
       const convName = lead.company ?? `${lead.firstName} ${lead.lastName}`;
-      const accR = await db.insert(accounts).values({
-        workspaceId: ctx.workspace.id, name: convName, ...normalizedAccountFields(convName, null), ownerUserId: ctx.user.id,
-      });
-      const accountId = Number((accR as any)[0]?.insertId ?? 0);
-
-      const conR = await db.insert(contacts).values({
-        workspaceId: ctx.workspace.id, accountId, firstName: lead.firstName, lastName: lead.lastName, email: lead.email, phone: lead.phone, title: lead.title, isPrimary: true, ownerUserId: ctx.user.id,
-      });
-      const contactId = Number((conR as any)[0]?.insertId ?? 0);
-      // People-as-master (0160): the converted lead's contact links to a
-      // canonical People record too. Fire-and-forget; backfill heals misses.
-      void import("../services/personLink")
-        .then((m) => m.upsertPersonForContact(ctx.workspace.id, {
-          id: contactId, firstName: lead.firstName, lastName: lead.lastName,
-          email: lead.email ?? null, phone: lead.phone ?? null, title: lead.title ?? null,
-          linkedinUrl: null, companyName: lead.company ?? null, companyDomain: null,
-        }))
-        .catch((e) => console.error("[personLink] lead-convert link failed:", (e as Error).message));
-
-      let opportunityId: number | null = null;
+      const domain = businessDomainFromEmail(lead.email) || null;
+      // The deal's stage: the default pipeline's first OPEN stage, by flags.
+      let deal: { pipelineId: number | null; key: string; winProb: number; meta: { isWon: boolean; isLost: boolean } } | null = null;
       if (input.createOpportunity) {
-        const oR = await db.insert(opportunities).values({
-          workspaceId: ctx.workspace.id, accountId,
-          name: `${lead.company ?? lead.lastName} – New opportunity`,
-          stage: "discovery", value: String(input.opportunityValue ?? 25000), winProb: 25, ownerUserId: ctx.user.id,
-        });
-        opportunityId = Number((oR as any)[0]?.insertId ?? 0);
+        const stages = await stageResolver(db, ws);
+        const pipelineId = await defaultPipelineId(db, ws);
+        const key = stages.allowedKeys(pipelineId).find((k) => { const m = stages.resolve(pipelineId, k); return !m.isWon && !m.isLost; });
+        if (!key) throw new TRPCError({ code: "BAD_REQUEST", message: "The default pipeline has no open stage to put the deal in." });
+        const meta = stages.resolve(pipelineId, key);
+        deal = { pipelineId, key, winProb: meta.defaultWinProb ?? 20, meta };
       }
 
-      await db.update(leads).set({
-        status: "converted",
-        convertedAccountId: accountId,
-        convertedContactId: contactId,
-        convertedOpportunityId: opportunityId,
-      }).where(eq(leads.id, lead.id));
+      const done = await db.transaction(async (tx) => {
+        // Claim the lead before creating anything: of two converts, one lands.
+        const claim = await tx.update(leads).set({ status: "converted" })
+          .where(and(eq(leads.id, lead.id), eq(leads.workspaceId, ws), ne(leads.status, "converted")));
+        if (Number((claim as any)?.[0]?.affectedRows ?? 0) !== 1) {
+          throw new TRPCError({ code: "CONFLICT", message: "This lead was already converted." });
+        }
+
+        let accountId = input.accountId ?? null;
+        if (accountId == null && input.accountId === undefined) accountId = (await accountMatchesForLead(tx, ws, lead))[0]?.id ?? null;
+        const accountCreated = accountId == null;
+        if (accountCreated) {
+          const accR = await tx.insert(accounts).values({
+            workspaceId: ws, name: convName, domain: domain ?? undefined, ...normalizedAccountFields(convName, domain), ownerUserId: ctx.user.id,
+          });
+          accountId = Number((accR as any)[0]?.insertId ?? 0);
+        }
+
+        let contactId = input.contactId ?? null;
+        if (contactId == null && input.contactId === undefined && lead.email) contactId = await findContactByEmail(tx, ws, lead.email);
+        const contactCreated = contactId == null;
+        if (contactCreated) {
+          const conR = await tx.insert(contacts).values({
+            workspaceId: ws, accountId: accountId!, firstName: lead.firstName, lastName: lead.lastName, email: lead.email, phone: lead.phone, title: lead.title, isPrimary: true, ownerUserId: ctx.user.id,
+          });
+          contactId = Number((conR as any)[0]?.insertId ?? 0);
+        }
+
+        let opportunityId: number | null = null;
+        if (deal) {
+          const oR = await tx.insert(opportunities).values({
+            workspaceId: ws, accountId: accountId!, pipelineId: deal.pipelineId,
+            name: input.opportunityName ?? `${convName} – New opportunity`,
+            stage: deal.key, value: String(input.opportunityValue ?? 0), winProb: deal.winProb, ownerUserId: ctx.user.id,
+            ...stageDatesForNewDeal(deal.meta),
+          } as never);
+          opportunityId = Number((oR as any)[0]?.insertId ?? 0);
+        }
+
+        await tx.update(leads).set({
+          convertedAccountId: accountId,
+          convertedContactId: contactId,
+          convertedOpportunityId: opportunityId,
+        }).where(and(eq(leads.id, lead.id), eq(leads.workspaceId, ws)));
+        return { accountId: accountId!, contactId: contactId!, opportunityId, accountCreated, contactCreated };
+      });
+      const { accountId, contactId, opportunityId } = done;
+
+      if (done.contactCreated) {
+        // People-as-master (0160): the converted lead's contact links to a
+        // canonical People record too. Fire-and-forget; backfill heals misses.
+        void import("../services/personLink")
+          .then((m) => m.upsertPersonForContact(ws, {
+            id: contactId, firstName: lead.firstName, lastName: lead.lastName,
+            email: lead.email ?? null, phone: lead.phone ?? null, title: lead.title ?? null,
+            linkedinUrl: null, companyName: lead.company ?? null, companyDomain: domain,
+          }))
+          .catch((e) => console.error("[personLink] lead-convert link failed:", (e as Error).message));
+      }
 
       // Follow the conversion through to People (audit 2026-09-20): prospect
       // rows that pointed at this LEAD keep working after it converts — the
@@ -1358,30 +1453,30 @@ export const leadsRouter = router({
         await db.update(prospects)
           .set({ linkedContactId: contactId, accountId } as never)
           .where(and(
-            eq(prospects.workspaceId, ctx.workspace.id),
+            eq(prospects.workspaceId, ws),
             eq(prospects.linkedLeadId, lead.id),
             isNull(prospects.linkedContactId),
           ));
-        await db.insert(contactAccountLinks).values({
-          workspaceId: ctx.workspace.id,
-          personType: "contact",
-          personId: contactId,
-          accountId,
-          relationshipType: "current_employer",
-          titleAtCompany: lead.title ?? null,
-          sourceType: "lead_convert",
-        } as never);
+        if (done.contactCreated) {
+          await db.insert(contactAccountLinks).values({
+            workspaceId: ws,
+            personType: "contact",
+            personId: contactId,
+            accountId,
+            relationshipType: "current_employer",
+            titleAtCompany: lead.title ?? null,
+            sourceType: "lead_convert",
+          } as never);
+        }
       } catch (e) {
         console.error("[crm.convert] prospect/account-link writeback failed:", (e as Error).message);
       }
 
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "lead", entityId: lead.id, after: { converted: true, accountId, contactId, opportunityId } });
+      await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "update", entityType: "lead", entityId: lead.id, after: { converted: true, accountId, contactId, opportunityId, accountCreated: done.accountCreated, contactCreated: done.contactCreated } });
       /**
-       * Conversion is three record events at once and announced none of them.
-       * Fired here, after the audit, rather than inline between the inserts:
-       * departedOwnerCascade.test.ts windows on the
-       * `applyTerritoryRules( → db.insert(accounts)` span above and nothing
-       * may land inside it.
+       * Conversion is up to three record events at once. Fired after the
+       * audit, and only for records this conversion CREATED — a reused
+       * contact was created long ago.
        *
        * No record_created for the ACCOUNT — accounts are out of scope for v1
        * (runAction's update_field/enroll_sequence/send_email_draft all reject
@@ -1390,25 +1485,27 @@ export const leadsRouter = router({
       void import("../services/workflowEngine")
         .then(async (m) => {
           // `source: "lead_convert"` is the key a rule uses to EXCLUDE the
-          // three events one conversion click emits — it is in the contact and
+          // events one conversion click emits — it is in the contact and
           // lead field vocabularies for that reason.
-          await m.fireRecordCreated(ctx.workspace.id, "contact", contactId, {
-            email: lead.email, title: lead.title, accountId, source: "lead_convert",
-          }, ctx.user.id);
-          if (opportunityId) {
-            await m.fireRecordCreated(ctx.workspace.id, "opportunity", opportunityId, {
-              name: `${lead.company ?? lead.lastName} – New opportunity`,
-              stage: "discovery", value: Number(input.opportunityValue ?? 25000), winProb: 25, accountId,
+          if (done.contactCreated) {
+            await m.fireRecordCreated(ws, "contact", contactId, {
+              email: lead.email, title: lead.title, accountId, source: "lead_convert",
+            }, ctx.user.id);
+          }
+          if (opportunityId && deal) {
+            await m.fireRecordCreated(ws, "opportunity", opportunityId, {
+              name: input.opportunityName ?? `${convName} – New opportunity`,
+              stage: deal.key, value: Number(input.opportunityValue ?? 0), winProb: deal.winProb, accountId,
             }, ctx.user.id);
           }
           // The "when a lead converts" rule people actually want.
-          await m.fireRecordUpdated(ctx.workspace.id, "lead", lead.id, lead, {
+          await m.fireRecordUpdated(ws, "lead", lead.id, lead, {
             status: "converted", convertedAccountId: accountId,
             convertedContactId: contactId, convertedOpportunityId: opportunityId,
           }, lead.ownerUserId ?? null);
         })
         .catch(() => { /* workflow firing is best-effort */ });
-      return { accountId, contactId, opportunityId };
+      return { accountId, contactId, opportunityId, accountCreated: done.accountCreated, contactCreated: done.contactCreated };
     }),
 
   /** AI lead scoring re-run for one lead. Server-side LLM. */
@@ -1788,12 +1885,21 @@ export const opportunitiesRouter = router({
       // won-deal → customer path into cs.get (audit 2026-10-20, C8).
       await assertRowInWorkspace(db, "account", input.accountId, ctx.workspace.id);
       await assertRowInWorkspace(db, "pipeline", input.pipelineId, ctx.workspace.id);
+      // The same rule a move obeys (R20): a stage the deal's pipeline has no
+      // column for strands it off every board.
+      const stages = await stageResolver(db, ctx.workspace.id);
+      if (!stages.allowedKeys(input.pipelineId ?? null).includes(input.stage)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `"${input.stage}" is not a stage in this pipeline. Pick one of its own stages.` });
+      }
+      const meta = stages.resolve(input.pipelineId ?? null, input.stage);
       const r = await db.insert(opportunities).values({
         workspaceId: ctx.workspace.id, accountId: input.accountId, name: input.name,
         value: String(input.value), stage: input.stage, winProb: input.winProb,
         pipelineId: input.pipelineId ?? null,
-        closeDate: input.closeDate ? new Date(input.closeDate) : null, ownerUserId: ctx.user.id,
-      });
+        // A calendar date, kept on the day picked (R16/R29).
+        closeDate: normalizeCalendarDate(input.closeDate), ownerUserId: ctx.user.id,
+        ...stageDatesForNewDeal(meta),
+      } as never);
       const id = Number((r as any)[0]?.insertId ?? 0);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "opportunity", entityId: id, after: input });
       void import("../services/workflowEngine")
@@ -1804,133 +1910,25 @@ export const opportunitiesRouter = router({
       return { id };
     }),
 
-  /** Move card on Kanban. */
+  /**
+   * Move card on Kanban. Every stage move goes through services/stageChange
+   * (audit 2026-10-20, R21): history, owner notice, closed-won → Customer,
+   * closed-lost → win-back, audit, workflow rules, and the won/lost dates
+   * quota counts from. A drop back on the same column changes nothing (R13);
+   * a stage from another pipeline is refused (R20).
+   */
   setStage: repProcedure.input(z.object({ id: z.number(), stage: z.string().min(1).max(60) })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const [before] = await db.select().from(opportunities).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
-    if (!before) throw new TRPCError({ code: "NOT_FOUND" });
-    // Won/lost comes from the stage's FLAGS, never from its name — see
-    // server/_core/stageSemantics.ts. 2026-09-20: this used to be gated on
-    // `if (before.pipelineId)`, and pipelineId is nullable with nothing
-    // backfilling it — so every legacy deal, and everything proposals.ts
-    // creates, skipped the flags entirely and fell back to matching the
-    // literal strings "won"/"lost". A workspace whose closing stage is keyed
-    // `signed` never got the Closed Won → Customer step on those deals.
-    const meta = await resolvedStageFor(db, ctx.workspace.id, before.pipelineId ?? null, input.stage);
-    const isWon = meta.isWon;
-    const isLost = meta.isLost;
-    let winProb = meta.defaultWinProb ?? before.winProb;
-    if (isWon) winProb = 100;
-    if (isLost) winProb = 0;
-    await db.update(opportunities).set({ stage: input.stage, winProb, daysInStage: 0 }).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
-    // Record the transition for the Stage history tab. Non-fatal on insert
-    // failure — the row update is what users see; history is auxiliary.
-    try {
-      await db.insert(opportunityStageHistory).values({
-        workspaceId: ctx.workspace.id,
-        opportunityId: input.id,
-        fromStage: before.stage,
-        toStage: input.stage,
-        changedByUserId: ctx.user.id,
-        daysInPrevStage: before.daysInStage ?? null,
-      });
-    } catch (e) {
-      console.warn("[crm.setStage] stage-history insert failed:", e);
-    }
-    /**
-     * Tell the deal's owner it moved — the "A deal I own moves stage" switch in
-     * Settings → Notifications, which had no dispatch site at all until now.
-     *
-     * Two conditions, both deliberate. The stage must actually have CHANGED:
-     * the Kanban re-issues setStage on a drop that lands back in the same
-     * column, and a notification saying a deal moved to where it already was is
-     * noise that teaches people to ignore the bell. And the owner must not be
-     * the person who moved it — telling someone what they just did themselves
-     * is the same kind of noise, and the common case on this endpoint.
-     */
-    if (before.stage !== input.stage && before.ownerUserId && before.ownerUserId !== ctx.user.id) {
-      await notifyIfEnabled({
-        workspaceId: ctx.workspace.id,
-        userId: before.ownerUserId,
-        event: "dealMoved",
-        kind: "system",
-        title: `Deal moved: ${before.name}`,
-        body: `${ctx.user.name ?? "Someone"} moved "${before.name}" from ${before.stage} to ${input.stage}.`,
-        relatedType: "opportunity",
-        relatedId: input.id,
-      });
-    }
-    // Funnel: Closed Won → the account becomes a Customer (post-sale CS handoff:
-    // health, renewals, QBRs). Shared helper so every won path behaves the same.
-    // Non-fatal so the stage move always lands.
-    let customerCreated = false;
-    if (isWon) {
-      try {
-        customerCreated = await ensureCustomerForWonOpp(db, ctx.workspace.id, before, ctx.user.id);
-      } catch (e) {
-        console.warn("[crm.setStage] closed-won customer creation failed:", e);
-      }
-    }
-    // Funnel: Closed Lost → schedule a win-back touch. Closed WON has had an
-    // automatic downstream step since day one (account becomes a Customer);
-    // closed LOST had nothing at all — the deal sat at stage "lost" forever
-    // with no reason recorded and no path back into nurture, so every lost
-    // deal was simply abandoned. Dated ~90 days out, which is the point of a
-    // win-back rather than an immediate re-pitch.
-    //
-    // NOTE: opportunities.lostReason exists in the schema but setStage takes
-    // no such input and no UI collects one, so it is still never populated.
-    // Capturing it needs a prompt on the three client call sites (kanban drag,
-    // kanban menu, DealsV2 menu) — deliberately not adding a server parameter
-    // that nothing sends.
-    if (isLost) {
-      try {
-        const dealName = (before as any).name ?? "the deal";
-        const existing = await db.select({ id: tasks.id }).from(tasks).where(and(
-          eq(tasks.workspaceId, ctx.workspace.id),
-          eq(tasks.relatedType, "opportunity"),
-          eq(tasks.relatedId, input.id),
-          like(tasks.title, "Win-back:%"),
-          inArray(tasks.status, activeTaskStatuses()),
-        )).limit(1);
-        if (existing.length === 0) {
-          await db.insert(tasks).values({
-            workspaceId: ctx.workspace.id,
-            title: `Win-back: ${dealName}`.slice(0, 240),
-            description: `"${dealName}" closed lost from stage "${before.stage}". Check back in — circumstances (budget, priorities, the champion's role) often change within a quarter.`,
-            type: "follow_up",
-            priority: "normal",
-            status: "open",
-            dueAt: new Date(Date.now() + 90 * 86400000),
-            ownerUserId: before.ownerUserId ?? null,
-            relatedType: "opportunity",
-            relatedId: input.id,
-            source: "ai",
-            aiReasoning: "Auto-created on closed-lost so the deal re-enters nurture instead of being abandoned.",
-            aiConfidence: 70,
-          } as never);
-        }
-      } catch (e) {
-        console.warn("[crm.setStage] closed-lost win-back task failed:", e);
-      }
-    }
-    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id, before: { stage: before.stage }, after: { stage: input.stage, customerCreated } });
-    // Fire user-defined `stage_changed` workflow rules (best-effort, non-blocking).
-    void import("../services/workflowEngine")
-      .then((m) => m.fireWorkflowRules(ctx.workspace.id, "stage_changed", {
-        payload: {
-          entity: "opportunity",
-          stage: input.stage,
-          fromStage: before.stage,
-          value: Number(before.value ?? 0),
-          winProb, isWon, isLost,
-          name: (before as any).name ?? null,
-        },
-        relatedType: "opportunity", relatedId: input.id, ownerUserId: before.ownerUserId ?? null,
-      }))
-      .catch(() => { /* workflow firing is best-effort */ });
-    return { ok: true, customerCreated };
+    const r = await changeOpportunityStage(db, {
+      workspaceId: ctx.workspace.id,
+      opportunityId: input.id,
+      toStage: input.stage,
+      actorUserId: ctx.user.id,
+      actorName: ctx.user.name ?? null,
+      source: "board",
+    });
+    return { ok: true, changed: r.changed, customerCreated: r.customerCreated };
   }),
 
   update: repProcedure.input(z.object({ id: z.number(), patch: OPPORTUNITY_PATCH })).mutation(async ({ ctx, input }) => {
@@ -1952,7 +1950,9 @@ export const opportunitiesRouter = router({
     }
     delete patch.stage;
     if (patch.value != null) patch.value = String(patch.value);
-    if (patch.closeDate && typeof patch.closeDate === "string") patch.closeDate = new Date(patch.closeDate);
+    // A calendar date: "2026-11-14" was parsed as UTC midnight, the evening of
+    // the 13th west of Greenwich (R16/R29). Null clears it.
+    if (patch.closeDate !== undefined) patch.closeDate = normalizeCalendarDate(patch.closeDate);
     if (Object.keys(patch).length === 0) return { ok: true };
     await db.update(opportunities).set(patch).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id, before, after: input.patch });
@@ -2059,47 +2059,70 @@ export const opportunitiesRouter = router({
     return { ok: true };
   }),
 
-  /** Weighted pipeline forecast grouped by close month. */
+  /**
+   * Weighted pipeline forecast grouped by expected close month. OPEN deals
+   * only (audit 2026-10-20, R19): won deals were summed into "Total pipeline",
+   * so closing a deal never moved the number. Close months are calendar months
+   * of the close date. Every figure comes from services/dealMetrics, the same
+   * classification the Dashboard, Deals, Forecast and Quota read (R39).
+   */
   forecast: workspaceProcedure
     .input(z.object({ stages: z.array(z.string()).optional() }).optional())
     .query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const allRows = await db.select().from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id));
-    const stageIdx = await stageIndexFor(db, ctx.workspace.id);
-    // Collect all available stages (excluding lost) for the filter dropdown
-    const availableStages = [...new Set(allRows.filter((o) => !stageIdx.isLost(o.stage)).map((o) => o.stage))].sort();
+    const open = (await loadMetricDeals(db, ctx.workspace.id)).filter((d) => d.status === "open");
+    const keys = open.map((d) => d.stage);
+    const availableStages = keys.filter((k, i) => keys.indexOf(k) === i).sort();
     const filterStages = input?.stages && input.stages.length > 0 ? input.stages : null;
-    const rows = filterStages ? allRows.filter((o) => filterStages.includes(o.stage)) : allRows;
+    const rows = filterStages ? open.filter((d) => filterStages.includes(d.stage)) : open;
+    // Accumulated in cents, converted once.
     const byMonth: Record<string, { month: string; total: number; weighted: number; count: number; stages: Record<string, number> }> = {};
     const byStage: Record<string, { stage: string; total: number; weighted: number; count: number }> = {};
-    let grandTotal = 0;
-    let grandWeighted = 0;
-    for (const opp of rows) {
-      if (stageIdx.isLost(opp.stage)) continue;
-      const val = Number(opp.value ?? 0);
-      const prob = opp.winProb ?? 20;
-      const weighted = val * (prob / 100);
-      grandTotal += val;
-      grandWeighted += weighted;
-      if (!byStage[opp.stage]) byStage[opp.stage] = { stage: opp.stage, total: 0, weighted: 0, count: 0 };
-      byStage[opp.stage].total += val;
-      byStage[opp.stage].weighted += weighted;
-      byStage[opp.stage].count++;
-      const closeDate = opp.closeDate ? new Date(opp.closeDate) : null;
-      const monthKey = closeDate
-        ? `${closeDate.getFullYear()}-${String(closeDate.getMonth() + 1).padStart(2, "0")}`
-        : "no-date";
-      if (!byMonth[monthKey]) byMonth[monthKey] = { month: monthKey, total: 0, weighted: 0, count: 0, stages: {} };
-      byMonth[monthKey].total += val;
-      byMonth[monthKey].weighted += weighted;
-      byMonth[monthKey].count++;
-      byMonth[monthKey].stages[opp.stage] = (byMonth[monthKey].stages[opp.stage] ?? 0) + val;
+    for (const d of rows) {
+      const weighted = (d.valueCents * d.winProb) / 100;
+      const st = (byStage[d.stage] ??= { stage: d.stage, total: 0, weighted: 0, count: 0 });
+      st.total += d.valueCents;
+      st.weighted += weighted;
+      st.count++;
+      const key = closeMonthKey(d) ?? "no-date";
+      const mo = (byMonth[key] ??= { month: key, total: 0, weighted: 0, count: 0, stages: {} });
+      mo.total += d.valueCents;
+      mo.weighted += weighted;
+      mo.count++;
+      mo.stages[d.stage] = (mo.stages[d.stage] ?? 0) + d.valueCents;
     }
-    const months = Object.values(byMonth).sort((a, b) => a.month.localeCompare(b.month));
-    const stages = Object.values(byStage);
-    return { grandTotal, grandWeighted, months, stages, availableStages };
+    const months = Object.values(byMonth)
+      .sort((a, b) => a.month.localeCompare(b.month))
+      .map((m) => ({
+        ...m, total: dollars(m.total), weighted: dollars(m.weighted),
+        stages: Object.fromEntries(Object.entries(m.stages).map(([k, v]) => [k, dollars(v)])),
+      }));
+    const stages = Object.values(byStage).map((st) => ({ ...st, total: dollars(st.total), weighted: dollars(st.weighted) }));
+    const totals = openTotals(rows);
+    return { grandTotal: totals.value, grandWeighted: totals.weighted, months, stages, availableStages };
   }),
+
+  /**
+   * The headline deal numbers, workspace-wide, for any page that shows them
+   * (the Deals header computed its own from the board rows, R39).
+   */
+  summary: workspaceProcedure
+    .query(async ({ ctx }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const deals = await loadMetricDeals(db, ctx.workspace.id);
+      const tz = await getWorkspaceTimezone(ctx.workspace.id);
+      const r = currentRanges(tz);
+      return {
+        open: openTotals(deals),
+        won: closedIn(deals, "won"),
+        lost: closedIn(deals, "lost"),
+        wonThisMonth: closedIn(deals, "won", r.month),
+        wonThisQuarter: closedIn(deals, "won", r.quarter),
+        lostThisQuarter: closedIn(deals, "lost", r.quarter),
+      };
+    }),
 
   /** Detail view: opportunity + account + contact roles + recent activities. */
   getWithRelated: workspaceProcedure
@@ -2176,37 +2199,34 @@ export const opportunitiesRouter = router({
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const rows = await db
-        .select()
-        .from(opportunities)
-        .where(eq(opportunities.workspaceId, ctx.workspace.id));
-      const stages = await stageIndexFor(db, ctx.workspace.id);
+      const deals = await loadMetricDeals(db, ctx.workspace.id);
+      const tz = await getWorkspaceTimezone(ctx.workspace.id);
 
-      // Build month buckets for the last N months
+      // Month buckets for the last N months in the workspace's zone, stepped
+      // from day 1: setMonth() on the 29th–31st skipped or repeated a month
+      // (R83). Cents until the end.
       const buckets: Record<string, { label: string; revenue: number; forecast: number }> = {};
+      const { y, m } = zonedYmd(tz, new Date());
       for (let i = input.months - 1; i >= 0; i--) {
-        const d = new Date();
-        d.setMonth(d.getMonth() - i);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-        const label = d.toLocaleString("en-US", { month: "short" });
-        buckets[key] = { label, revenue: 0, forecast: 0 };
+        const b = addMonths(y, m, -i);
+        const label = new Date(Date.UTC(b.y, b.m - 1, 15)).toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+        buckets[monthKey(b.y, b.m)] = { label, revenue: 0, forecast: 0 };
       }
 
-      for (const opp of rows) {
-        const val = Number(opp.value ?? 0);
-        const prob = opp.winProb ?? 20;
-        const closeDate = opp.closeDate ? new Date(opp.closeDate) : null;
-        if (!closeDate) continue;
-        const key = `${closeDate.getFullYear()}-${String(closeDate.getMonth() + 1).padStart(2, "0")}`;
-        if (!buckets[key]) continue;
-        if (stages.isWon(opp.stage)) {
-          buckets[key].revenue += val;
-        } else if (!stages.isLost(opp.stage)) {
-          buckets[key].forecast += val * (prob / 100);
+      for (const d of deals) {
+        if (d.status === "won" && d.wonAt) {
+          // Revenue lands in the month it was WON — the close date is only
+          // what someone expected.
+          const bucket = buckets[instantMonthKey(tz, d.wonAt)];
+          if (bucket) bucket.revenue += d.valueCents;
+        } else if (d.status === "open") {
+          const key = closeMonthKey(d);
+          const bucket = key ? buckets[key] : undefined;
+          if (bucket) bucket.forecast += (d.valueCents * d.winProb) / 100;
         }
       }
 
-      return Object.values(buckets);
+      return Object.values(buckets).map((b) => ({ ...b, revenue: dollars(b.revenue), forecast: dollars(b.forecast) }));
     }),
 
   /** Live stat-card deltas: current vs previous month for pipeline, closed-won, leads, customers. */
@@ -2214,24 +2234,30 @@ export const opportunitiesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const wid = ctx.workspace.id;
-    const now = new Date();
-    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
-    const lastMonthEnd = thisMonthStart - 1;
-    const allOpps = await db.select().from(opportunities).where(eq(opportunities.workspaceId, wid));
+    const tz = await getWorkspaceTimezone(wid);
+    const r = currentRanges(tz);
+    const deals = await loadMetricDeals(db, wid);
     const allLeads = await db.select({ id: leads.id, createdAt: leads.createdAt }).from(leads).where(eq(leads.workspaceId, wid));
     const allCustomers = await db.select({ id: customers.id, createdAt: customers.createdAt }).from(customers).where(eq(customers.workspaceId, wid));
-    const stages = await stageIndexFor(db, wid);
-    const openOpps = allOpps.filter((o) => stages.isOpen(o.stage));
-    const wonOpps = allOpps.filter((o) => stages.isWon(o.stage));
-    const pipelineNow = openOpps.reduce((s, o) => s + Number(o.value ?? 0), 0);
-    const pipelinePrev = allOpps.filter((o) => stages.isOpen(o.stage) && (o.updatedAt ?? 0) >= lastMonthStart && (o.updatedAt ?? 0) <= lastMonthEnd).reduce((s, o) => s + Number(o.value ?? 0), 0);
-    const closedWonNow = wonOpps.filter((o) => (o.updatedAt ?? 0) >= thisMonthStart).length;
-    const closedWonPrev = wonOpps.filter((o) => (o.updatedAt ?? 0) >= lastMonthStart && (o.updatedAt ?? 0) <= lastMonthEnd).length;
-    const leadsNow = allLeads.filter((l) => (l.createdAt ?? 0) >= thisMonthStart).length;
-    const leadsPrev = allLeads.filter((l) => (l.createdAt ?? 0) >= lastMonthStart && (l.createdAt ?? 0) <= lastMonthEnd).length;
+    const open = openTotals(deals);
+    // The pipeline as it stood when this month began: deals that existed then
+    // and were still open — open now, or closed since. The old figure summed
+    // open deals whose updatedAt fell last month, which is not a pipeline.
+    let pipelinePrevCents = 0;
+    for (const d of deals) {
+      if (!d.createdAt || d.createdAt >= r.month.start) continue;
+      const closedAt = d.status === "won" ? d.wonAt : d.status === "lost" ? d.lostAt : null;
+      if (d.status === "open" || (closedAt && closedAt >= r.month.start)) pipelinePrevCents += d.valueCents;
+    }
+    const pipelinePrev = dollars(pipelinePrevCents);
+    // Won by WHEN it was won (R16/R17): updatedAt moved any edited old win
+    // into this month.
+    const closedWonNow = closedIn(deals, "won", r.month).count;
+    const closedWonPrev = closedIn(deals, "won", r.prevMonth).count;
+    const leadsNow = allLeads.filter((l) => inRange(l.createdAt, r.month)).length;
+    const leadsPrev = allLeads.filter((l) => inRange(l.createdAt, r.prevMonth)).length;
     const custNow = allCustomers.length;
-    const custPrev = allCustomers.filter((c) => (c.createdAt ?? 0) < thisMonthStart).length;
+    const custPrev = allCustomers.filter((c) => c.createdAt != null && c.createdAt < r.month.start).length;
     const delta = (a: number, b: number) => b === 0 ? (a > 0 ? 100 : 0) : Math.round(((a - b) / b) * 100);
     // Proposal health counts
     const STALE_MS = 48 * 60 * 60 * 1000;
@@ -2263,16 +2289,18 @@ export const opportunitiesRouter = router({
         p.status !== "not_accepted",
     ).length;
     return {
-      pipelineValue: pipelineNow,
-      pipelineDelta: delta(pipelineNow, pipelinePrev),
+      pipelineValue: open.value,
+      pipelineDelta: delta(open.value, pipelinePrev),
+      weightedPipeline: open.weighted,
       closedWonCount: closedWonNow,
+      closedWonValue: closedIn(deals, "won", r.month).value,
       closedWonDelta: delta(closedWonNow, closedWonPrev),
       activeLeads: allLeads.length,
       leadsDelta: delta(leadsNow, leadsPrev),
       customerCount: custNow,
       customerDelta: delta(custNow, custPrev),
-      openOppsCount: openOpps.length,
-      totalWonValue: wonOpps.reduce((s, o) => s + Number(o.value ?? 0), 0),
+      openOppsCount: open.count,
+      totalWonValue: closedIn(deals, "won").value,
       staleProposals,
       expiringProposals,
     };
@@ -2306,36 +2334,37 @@ export const opportunitiesRouter = router({
   forecastByRep: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
-    const opps = await db.select().from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id));
-    const stages = await stageIndexFor(db, ctx.workspace.id);
-    const now = new Date();
-    const qStart = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
-    const qEnd = new Date(qStart.getFullYear(), qStart.getMonth() + 3, 1);
-    const rollup: Record<string, { ownerUserId: number | null; openCount: number; total: number; weighted: number; commit: number; bestCase: number; wonThisQuarter: number }> = {};
-    for (const o of opps) {
-      const key = String(o.ownerUserId ?? "unassigned");
-      if (!rollup[key]) rollup[key] = { ownerUserId: o.ownerUserId ?? null, openCount: 0, total: 0, weighted: 0, commit: 0, bestCase: 0, wonThisQuarter: 0 };
-      const v = Number(o.value ?? 0);
-      const p = o.winProb ?? 20;
-      if (stages.isWon(o.stage)) {
-        if (o.closeDate && o.closeDate >= qStart && o.closeDate < qEnd) rollup[key].wonThisQuarter += v;
-        continue;
-      }
-      if (stages.isClosed(o.stage)) continue;
-      rollup[key].openCount += 1;
-      rollup[key].total += v;
-      rollup[key].weighted += v * (p / 100);
-      if (p >= 90) rollup[key].commit += v;
-      if (p >= 50) rollup[key].bestCase += v;
+    const deals = await loadMetricDeals(db, ctx.workspace.id);
+    const quarter = currentRanges(await getWorkspaceTimezone(ctx.workspace.id)).quarter;
+    // Grouped first, then totalled by the same functions every page uses — so
+    // the per-rep rows add up to the Pipeline and Deals totals exactly.
+    const byOwner = new Map<string, { ownerUserId: number | null; deals: typeof deals }>();
+    for (const d of deals) {
+      const key = String(d.ownerUserId ?? "unassigned");
+      if (!byOwner.has(key)) byOwner.set(key, { ownerUserId: d.ownerUserId, deals: [] });
+      byOwner.get(key)!.deals.push(d);
     }
-    return Object.values(rollup);
+    return Array.from(byOwner.values()).map(({ ownerUserId, deals: own }) => {
+      const open = openTotals(own);
+      return {
+        ownerUserId,
+        openCount: open.count,
+        total: open.value,
+        weighted: open.weighted,
+        commit: open.commit,
+        bestCase: open.bestCase,
+        // Won IN the quarter (wonAt), not expected to close in it.
+        wonThisQuarter: closedIn(own, "won", quarter).value,
+      };
+    });
   }),
 
   stageFunnel: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
     const stages = await stageIndexFor(db, ctx.workspace.id);
-    const rows = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), notInArray(opportunities.stage, stages.closedKeys())))
+    // Open by the deal's OWN pipeline's flags, like every other deal number.
+    const rows = (await loadMetricDeals(db, ctx.workspace.id)).filter((d) => d.status === "open");
 
     // The order used to be hardcoded as ["prospect",…,"closing"] — stage keys
     // that do not exist in this system. The real default keys are discovery /
@@ -2368,7 +2397,7 @@ export const opportunitiesRouter = router({
       const s = o.stage ?? "discovery";
       if (!map[s]) map[s] = { count: 0, value: 0 };
       map[s].count++;
-      map[s].value += Number(o.value ?? 0);
+      map[s].value += o.valueCents;
     }
     // Any stage with deals but no definition still gets a column.
     for (const s of Object.keys(map)) {
@@ -2377,36 +2406,36 @@ export const opportunitiesRouter = router({
 
     return ordered
       .filter((s) => map[s])
-      .map((s) => ({ stage: labelByKey.get(s) ?? s, count: map[s].count, value: map[s].value }));
+      .map((s) => ({ stage: labelByKey.get(s) ?? s, count: map[s].count, value: dollars(map[s].value) }));
   }),
 
-  /** Top 5 reps by closed-won value (this month, fallback to all-time). */
+  /** Top 5 reps by closed-won value (won this month, fallback to all-time). */
   topReps: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
-    const thisMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
-    const rows = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), inArray(opportunities.stage, await wonStageKeys(db, ctx.workspace.id))));
-    const thisMonth = rows.filter((o) => (o.updatedAt ?? 0) >= thisMonthStart);
-    const buildMap = (src: typeof rows) => {
+    const won = (await loadMetricDeals(db, ctx.workspace.id)).filter((d) => d.status === "won");
+    const month = currentRanges(await getWorkspaceTimezone(ctx.workspace.id)).month;
+    const thisMonth = won.filter((d) => inRange(d.wonAt, month));
+    const buildMap = (src: typeof won) => {
       const m: Record<number, { value: number; count: number }> = {};
-      for (const o of src) { const uid = o.ownerUserId ?? 0; if (!m[uid]) m[uid] = { value: 0, count: 0 }; m[uid].value += Number(o.value ?? 0); m[uid].count++; }
+      for (const o of src) { const uid = o.ownerUserId ?? 0; if (!m[uid]) m[uid] = { value: 0, count: 0 }; m[uid].value += o.valueCents; m[uid].count++; }
       return m;
     };
-    const source = Object.keys(buildMap(thisMonth)).length > 0 ? buildMap(thisMonth) : buildMap(rows);
+    const source = Object.keys(buildMap(thisMonth)).length > 0 ? buildMap(thisMonth) : buildMap(won);
     const memberRows = await db.select({ userId: workspaceMembers.userId, name: users.name }).from(workspaceMembers).leftJoin(users, eq(users.id, workspaceMembers.userId)).where(eq(workspaceMembers.workspaceId, ctx.workspace.id));
     const nameMap = Object.fromEntries(memberRows.map((m) => [m.userId, m.name ?? "Rep"]));
-    return Object.entries(source).map(([uid, v]) => ({ userId: Number(uid), name: nameMap[Number(uid)] ?? "Rep", value: v.value, count: v.count })).sort((a, b) => b.value - a.value).slice(0, 5);
+    return Object.entries(source).map(([uid, v]) => ({ userId: Number(uid), name: nameMap[Number(uid)] ?? "Rep", value: dollars(v.value), count: v.count })).sort((a, b) => b.value - a.value).slice(0, 5);
   }),
 
-  /** Win/loss ratio for the last 90 days. */
+  /** Win/loss ratio for the last 90 days — by when each deal was won or lost. */
   winLoss: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return { won: 0, lost: 0, wonValue: 0, lostValue: 0 };
-    const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
-    const stages = await stageIndexFor(db, ctx.workspace.id);
-    const rows = await db.select().from(opportunities).where(and(eq(opportunities.workspaceId, ctx.workspace.id), inArray(opportunities.stage, stages.closedKeys())));
-    const recent = rows.filter((o) => (o.updatedAt ?? 0) >= cutoff);
-    return { won: recent.filter((o) => stages.isWon(o.stage)).length, lost: recent.filter((o) => stages.isLost(o.stage)).length, wonValue: recent.filter((o) => stages.isWon(o.stage)).reduce((s, o) => s + Number(o.value ?? 0), 0), lostValue: recent.filter((o) => stages.isLost(o.stage)).reduce((s, o) => s + Number(o.value ?? 0), 0) };
+    const deals = await loadMetricDeals(db, ctx.workspace.id);
+    const last90: Range = { start: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000), end: new Date(Date.now() + 1) };
+    const won = closedIn(deals, "won", last90);
+    const lost = closedIn(deals, "lost", last90);
+    return { won: won.count, lost: lost.count, wonValue: won.value, lostValue: lost.value };
   }),
 });
 
@@ -2685,6 +2714,20 @@ async function ensureDefaultPipeline(db: NonNullable<Awaited<ReturnType<typeof g
   return pipelineId;
 }
 
+/** The pipeline a stage belongs to, as the board-scoping helpers need it. */
+async function pipelineRefFor(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, pipelineId: number) {
+  const [row] = await db.select({ id: crmPipelines.id, isDefault: crmPipelines.isDefault }).from(crmPipelines)
+    .where(and(eq(crmPipelines.id, pipelineId), eq(crmPipelines.workspaceId, workspaceId))).limit(1);
+  return row ?? { id: pipelineId, isDefault: false };
+}
+
+async function assertStageKeyFree(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, pipelineId: number, key: string) {
+  const [clash] = await db.select({ id: crmPipelineStages.id }).from(crmPipelineStages)
+    .where(and(eq(crmPipelineStages.workspaceId, workspaceId), eq(crmPipelineStages.pipelineId, pipelineId), eq(crmPipelineStages.key, key)))
+    .limit(1);
+  if (clash) throw new TRPCError({ code: "CONFLICT", message: `This pipeline already has a stage with the key "${key}".` });
+}
+
 export const crmPipelinesRouter = router({
   /** Returns all pipelines for the workspace, seeding the Default one if none exist. */
   list: workspaceProcedure.query(async ({ ctx }) => {
@@ -2705,10 +2748,17 @@ export const crmPipelinesRouter = router({
         .where(and(eq(crmPipelines.id, pipelineId), eq(crmPipelines.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!pipeline) throw new TRPCError({ code: "NOT_FOUND" });
-      const stages = await db.select().from(crmPipelineStages)
+      const stageRows = await db.select().from(crmPipelineStages)
         .where(and(eq(crmPipelineStages.workspaceId, ctx.workspace.id), eq(crmPipelineStages.pipelineId, pipelineId)))
         .orderBy(crmPipelineStages.sortOrder, crmPipelineStages.id);
-      return { pipeline, stages };
+      // How many deals each stage holds, so the settings page can say what a
+      // delete or a Won/Lost change will touch (R18).
+      const onBoard = await db.select({ stage: opportunities.stage }).from(opportunities)
+        .where(boardDealsWhere(ctx.workspace.id, pipeline));
+      const counts = new Map<string, number>();
+      for (const d of onBoard) counts.set(d.stage, (counts.get(d.stage) ?? 0) + 1);
+      const stages = stageRows.map((st) => ({ ...st, dealCount: counts.get(st.key) ?? 0 }));
+      return { pipeline, stages, dealCount: onBoard.length };
     }),
 
   createPipeline: repProcedure
@@ -2761,7 +2811,7 @@ export const crmPipelinesRouter = router({
     }),
 
   deletePipeline: repProcedure
-    .input(z.object({ id: z.number() }))
+    .input(z.object({ id: z.number(), moveToPipelineId: z.number().int().positive().optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -2769,10 +2819,26 @@ export const crmPipelinesRouter = router({
       const [target] = await db.select().from(crmPipelines).where(and(eq(crmPipelines.id, input.id), eq(crmPipelines.workspaceId, ctx.workspace.id))).limit(1);
       if (!target) throw new TRPCError({ code: "NOT_FOUND" });
       if (target.isDefault) throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot delete the default pipeline" });
+      // Its deals move to another pipeline first (R18): left behind, they sat
+      // on no board while every revenue number still counted them.
+      const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(opportunities).where(boardDealsWhere(ctx.workspace.id, target));
+      let moved = 0;
+      if (Number(n) > 0) {
+        if (!input.moveToPipelineId || input.moveToPipelineId === input.id) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `${n} deal${Number(n) === 1 ? " is" : "s are"} in this pipeline. Pick a pipeline to move ${Number(n) === 1 ? "it" : "them"} to.` });
+        }
+        const [dest] = await db.select({ id: crmPipelines.id, name: crmPipelines.name }).from(crmPipelines)
+          .where(and(eq(crmPipelines.id, input.moveToPipelineId), eq(crmPipelines.workspaceId, ctx.workspace.id))).limit(1);
+        if (!dest) throw new TRPCError({ code: "NOT_FOUND", message: "That pipeline no longer exists." });
+        moved = await moveDealsToPipeline(db, {
+          workspaceId: ctx.workspace.id, from: target, toPipelineId: dest.id, actorUserId: ctx.user.id,
+          note: `Pipeline "${target.name}" deleted — moved to "${dest.name}"`,
+        });
+      }
       await db.delete(crmPipelineStages).where(and(eq(crmPipelineStages.pipelineId, input.id), eq(crmPipelineStages.workspaceId, ctx.workspace.id)));
       await db.delete(crmPipelines).where(and(eq(crmPipelines.id, input.id), eq(crmPipelines.workspaceId, ctx.workspace.id)));
       invalidateStageIndex(ctx.workspace.id);
-      return { ok: true };
+      return { ok: true, moved };
     }),
 
   createStage: repProcedure
@@ -2788,6 +2854,10 @@ export const crmPipelinesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertRowInWorkspace(db, "pipeline", input.pipelineId, ctx.workspace.id);
+      // A key is how a deal names its stage; two stages sharing one in a
+      // pipeline made the board put the deal in whichever came first (R18).
+      await assertStageKeyFree(db, ctx.workspace.id, input.pipelineId, input.key);
       const r = await db.insert(crmPipelineStages).values({ ...input, workspaceId: ctx.workspace.id });
       invalidateStageIndex(ctx.workspace.id);
       return { id: Number((r as any)[0]?.insertId ?? 0) };
@@ -2808,19 +2878,68 @@ export const crmPipelinesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [stage] = await db.select().from(crmPipelineStages)
+        .where(and(eq(crmPipelineStages.id, input.id), eq(crmPipelineStages.workspaceId, ctx.workspace.id))).limit(1);
+      if (!stage) throw new TRPCError({ code: "NOT_FOUND" });
+      const pipeline = await pipelineRefFor(db, ctx.workspace.id, stage.pipelineId);
+      const rekey = input.patch.key !== undefined && input.patch.key !== stage.key;
+      if (rekey) await assertStageKeyFree(db, ctx.workspace.id, stage.pipelineId, input.patch.key!);
       await db.update(crmPipelineStages).set(input.patch).where(and(eq(crmPipelineStages.id, input.id), eq(crmPipelineStages.workspaceId, ctx.workspace.id)));
+      // A new key carries the stage's deals with it; they held the old one and
+      // fell off the board (R18).
+      if (rekey) await rekeyStageDeals(db, { workspaceId: ctx.workspace.id, pipeline, fromKey: stage.key, toKey: input.patch.key! });
       // Ticking Won on a stage retroactively reclassifies every deal sitting in
-      // it — that is the point of deriving at read time — so the memo has to go.
+      // it — that is the point of deriving at read time — so the memo has to
+      // go, and the deals' won / lost dates follow the flags.
+      const isWon = input.patch.isWon ?? !!stage.isWon;
+      const isLost = input.patch.isLost ?? !!stage.isLost;
+      if (isWon !== !!stage.isWon || isLost !== !!stage.isLost) {
+        await restampStageDeals(db, { workspaceId: ctx.workspace.id, pipeline, key: input.patch.key ?? stage.key, isWon: isWon && !isLost, isLost });
+      }
       invalidateStageIndex(ctx.workspace.id);
       return { ok: true };
     }),
 
-  deleteStage: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  /**
+   * Delete a stage (R18). Its deals move to another stage of the same kind in
+   * the same pipeline — a won deal to another Won stage, so past revenue stays
+   * revenue — and a pipeline keeps at least one Won stage.
+   */
+  deleteStage: repProcedure
+    .input(z.object({ id: z.number(), moveToKey: z.string().min(1).max(60).optional() }))
+    .mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [doomed] = await db.select().from(crmPipelineStages)
+      .where(and(eq(crmPipelineStages.id, input.id), eq(crmPipelineStages.workspaceId, ctx.workspace.id))).limit(1);
+    if (!doomed) throw new TRPCError({ code: "NOT_FOUND" });
+    const siblings = await db.select().from(crmPipelineStages)
+      .where(and(eq(crmPipelineStages.workspaceId, ctx.workspace.id), eq(crmPipelineStages.pipelineId, doomed.pipelineId)));
+    const kind = (r: { isWon: unknown; isLost: unknown }) => (Number(r.isLost) ? "lost" : Number(r.isWon) ? "won" : "open");
+    const others = siblings.filter((r) => r.id !== doomed.id);
+    if (kind(doomed) === "won" && !others.some((r) => kind(r) === "won")) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "This is the pipeline's only Won stage — without one, no deal in it can be won. Add another Won stage first." });
+    }
+    const pipeline = await pipelineRefFor(db, ctx.workspace.id, doomed.pipelineId);
+    const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(opportunities)
+      .where(boardDealsWhere(ctx.workspace.id, pipeline, doomed.key));
+    let moved = 0;
+    if (Number(n) > 0) {
+      const dest = others.find((r) => r.key === input.moveToKey);
+      if (!dest) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `${n} deal${Number(n) === 1 ? " is" : "s are"} in this stage. Pick a stage to move ${Number(n) === 1 ? "it" : "them"} to.` });
+      }
+      if (kind(dest) !== kind(doomed)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Move these deals to another ${kind(doomed) === "open" ? "open" : kind(doomed) === "won" ? "Won" : "Lost"} stage, so their numbers stay where they are.` });
+      }
+      moved = await moveDealsOffStage(db, {
+        workspaceId: ctx.workspace.id, pipeline, fromKey: doomed.key, toKey: dest.key, actorUserId: ctx.user.id,
+        note: `Stage "${doomed.label}" deleted — moved to "${dest.label}"`,
+      });
+    }
     await db.delete(crmPipelineStages).where(and(eq(crmPipelineStages.id, input.id), eq(crmPipelineStages.workspaceId, ctx.workspace.id)));
     invalidateStageIndex(ctx.workspace.id);
-    return { ok: true };
+    return { ok: true, moved };
   }),
 
   /** Bulk reorder — pass [{id, sortOrder}]. */

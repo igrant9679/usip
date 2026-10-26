@@ -5,8 +5,10 @@
  * that produced, so a missing `workspaceId = ?` is a row that leaks, not a
  * condition object that merely looks right. It understands only what the
  * routers under test write: ANDs (and one level of OR) of =, <>, <, >, <=, >=,
- * IS NULL, IN and NOT IN, column-to-column equality in (inner and left) joins, ORDER BY a column,
- * LIMIT, GROUP BY with count(*), and `col + n` or `COALESCE(col, NOW() | ?)` in an UPDATE. Anything else
+ * IS NULL, IN and NOT IN, LIKE ('%' wildcards, case-insensitive), column-to-column equality in (inner and left) joins, ORDER BY a column,
+ * LIMIT, GROUP BY with count(*), `col + n` or `COALESCE(col, NOW() | ?)` in an UPDATE, and an insert's
+ * onDuplicateKeyUpdate against the table's unique indexes, `lower(col) = ?`, and
+ * db.transaction(fn) — which rolls every table back if fn throws. Anything else
  * throws, naming the clause, so a test never passes on SQL it did not read.
  *
  * Membership: by default the caller's role comes from `roles` and every
@@ -17,7 +19,7 @@
  *
  * Test-only: nothing in the app imports it.
  */
-import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { getTableConfig, MySqlDialect } from "drizzle-orm/mysql-core";
 import { Column, getTableColumns, getTableName, is, SQL, Table } from "drizzle-orm";
 import { workspaceMembers } from "../../drizzle/schema";
 
@@ -84,6 +86,10 @@ export function makeSqlFakeDb(opts: {
       return any;
     }
     if ((m = clause.match(new RegExp(`^${REF} = \\?$`)))) return same(lookup(ctx, m[1]), params[pi.i++]);
+    if ((m = clause.match(new RegExp(`^lower\\(${REF}\\) = \\?$`)))) {
+      const v = lookup(ctx, m[1]);
+      return v != null && String(v).toLowerCase() === String(params[pi.i++]);
+    }
     if ((m = clause.match(new RegExp(`^${REF} <> \\?$`)))) return !same(lookup(ctx, m[1]), params[pi.i++]);
     if ((m = clause.match(new RegExp(`^${REF} = ${REF}$`)))) return same(lookup(ctx, m[1]), lookup(ctx, m[2]));
     if ((m = clause.match(new RegExp(`^${REF} < \\?$`)))) return cmp(lookup(ctx, m[1]), params[pi.i++]) < 0;
@@ -92,6 +98,12 @@ export function makeSqlFakeDb(opts: {
     if ((m = clause.match(new RegExp(`^${REF} >= \\?$`)))) { const v = lookup(ctx, m[1]); const p = params[pi.i++]; return v != null && cmp(v, p) >= 0; }
     if ((m = clause.match(new RegExp(`^${REF} is null$`)))) return lookup(ctx, m[1]) == null;
     if ((m = clause.match(new RegExp(`^${REF} is not null$`)))) return lookup(ctx, m[1]) != null;
+    if ((m = clause.match(new RegExp(`^${REF} like \\?$`)))) {
+      const v = lookup(ctx, m[1]);
+      const pat = String(params[pi.i++]).split("%").map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
+      // Case-insensitive, as LIKE is under MySQL's default (_ci) collation.
+      return v != null && new RegExp(`^${pat}$`, "is").test(String(v));
+    }
     if ((m = clause.match(new RegExp(`^${REF} in \\(([?, ]+)\\)$`)))) {
       const n = (m[2].match(/\?/g) ?? []).length;
       const set = params.slice(pi.i, pi.i + n);
@@ -240,6 +252,22 @@ export function makeSqlFakeDb(opts: {
       // INSERT IGNORE: a duplicate is the caller's concern here; the fake keeps every row.
       ignore() { return chain; },
       values(v: Row | Row[]) { doInsert(v); return chain; },
+      // A new row that collides with an existing one on a unique index is
+      // dropped, and the existing row takes `set` instead.
+      onDuplicateKeyUpdate({ set }: { set: Row }) {
+        const uniques = getTableConfig(table).indexes
+          .filter((ix: any) => ix.config.unique)
+          .map((ix: any) => (ix.config.columns as Column[]).map((c) => Object.entries(getTableColumns(table)).find(([, col]) => (col as Column).name === c.name)![0]));
+        const all = rowsOf(name);
+        for (const r of inserted.slice()) {
+          const twin = all.find((o) => o !== r && uniques.some((cols) => cols.every((k) => same(o[k], r[k]))));
+          if (!twin) continue;
+          all.splice(all.indexOf(r), 1);
+          inserted.splice(inserted.indexOf(r), 1);
+          Object.assign(twin, set);
+        }
+        return chain;
+      },
       $returningId() { return Promise.resolve(inserted.map((r) => ({ id: r.id }))); },
       then(res: (v: unknown) => void) { res([{ affectedRows: inserted.length, insertId: inserted[0]?.id }]); },
     };
@@ -278,7 +306,9 @@ export function makeSqlFakeDb(opts: {
                     r[k] = Number(r[src] ?? 0) + Number(m[2]);
                   } else r[k] = v;
                 }
-                r.updatedAt = new Date();
+                // ON UPDATE CURRENT_TIMESTAMP, as MySQL applies it: an updatedAt
+                // the statement sets explicitly is kept.
+                if (!("updatedAt" in values)) r.updatedAt = new Date();
                 n++;
               }
               res([{ affectedRows: n }]);
@@ -311,5 +341,29 @@ export function makeSqlFakeDb(opts: {
     return Promise.resolve([[]]);
   };
 
-  return { select, insert, update, delete: del, execute, executed, tables, rowsOf };
+  /**
+   * A transaction that commits by returning and rolls back by throwing: the
+   * tables are snapshotted (rows copied) before fn runs and restored if it
+   * throws. `committed` / `rolledBack` count the outcomes for assertions.
+   */
+  const txLog = { committed: 0, rolledBack: 0 };
+  const transaction = async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => {
+    const snapshot = new Map(Array.from(tables.entries()).map(([k, rs]) => [k, rs.map((r) => ({ ...r }))]));
+    const seqSnapshot = new Map(seq);
+    try {
+      const out = await fn(api);
+      txLog.committed++;
+      return out;
+    } catch (e) {
+      tables.clear();
+      snapshot.forEach((rs, k) => tables.set(k, rs));
+      seq.clear();
+      seqSnapshot.forEach((v, k) => seq.set(k, v));
+      txLog.rolledBack++;
+      throw e;
+    }
+  };
+
+  const api = { select, insert, update, delete: del, execute, executed, tables, rowsOf, transaction, txLog };
+  return api;
 }

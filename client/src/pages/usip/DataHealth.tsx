@@ -1,5 +1,6 @@
 import { Shell, PageHeader, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { isAdminRole } from "@shared/roleRank";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/usip/Common";
@@ -176,7 +177,7 @@ function MergeDialog({
         ) : (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              The <strong>primary</strong> (left) contact will be kept. The secondary will be deleted and its activity history merged into the primary. Check a field to use the secondary's value instead.
+              The <strong>primary</strong> (left) contact will be kept. Everything that points at the secondary — activity, tasks, emails, replies, suppressions, deal roles, proposals, lists, enrolments and its People record — moves to the primary, then the secondary is deleted (the deleted record is kept in the audit log). Check a field to use the secondary's value instead.
             </p>
 
             {/* Side-by-side header */}
@@ -835,6 +836,9 @@ export default function DataHealth() {
   const splits = trpc.dataHealth.personContactDuplicates.useQuery();
 
   const [mergeGroup, setMergeGroup] = useState<DupeGroup | null>(null);
+  // Merging deletes a contact, so it is an admin action (audit 2026-10-20, P9).
+  const me = trpc.profile.getMe.useQuery();
+  const canMerge = isAdminRole(me.data?.role);
 
   /**
    * On demand, not on load: the audit replays every past import and scans up
@@ -1051,6 +1055,8 @@ export default function DataHealth() {
                           size="sm"
                           variant="outline"
                           className="h-7 text-xs px-2"
+                          disabled={!canMerge}
+                          title={canMerge ? undefined : "Only admins can merge contacts"}
                           onClick={() => setMergeGroup(group as DupeGroup)}
                         >
                           <GitMerge className="size-3 mr-1" />

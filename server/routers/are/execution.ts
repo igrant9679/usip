@@ -262,6 +262,8 @@ export async function promoteProspectToCrm(
       aiNote: aiNote || undefined,
       campaignId,
       ownerUserId: owner,
+      // Phase 2 (R14): the day it entered its stage, which days-in-stage counts from.
+      stageEnteredAt: new Date(),
     }).$returningId();
     opportunityId = newOpp.id;
     await db.execute(sql`UPDATE are_campaigns SET opportunitiesCreated = opportunitiesCreated + 1 WHERE id = ${campaignId} AND workspaceId = ${workspaceId}`);

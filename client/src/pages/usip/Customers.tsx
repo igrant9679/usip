@@ -184,7 +184,7 @@ export default function Customers() {
           notes: String(f.get("notes") ?? "") || undefined,
         })}>
         <SelectField name="type" label="Type" options={["upgrade", "downgrade", "addon", "renewal", "termination", "price_change"].map((t) => ({ value: t, label: t }))} defaultValue="upgrade" />
-        <Field name="arrDelta" label="Δ ARR" type="number" defaultValue={0} />
+        <Field name="arrDelta" label="Δ ARR" type="money" allowNegative defaultValue={0} />
         <Field name="effectiveAt" label="Effective" type="date" />
         <TextareaField name="notes" label="Notes" />
       </FormDialog>

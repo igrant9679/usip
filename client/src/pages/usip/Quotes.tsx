@@ -187,7 +187,7 @@ export default function Quotes() {
                 </select>
                 <input className="col-span-3 text-sm border rounded h-9 px-2" placeholder="Item name" value={li.name} onChange={(e) => updLi(i, { name: e.target.value })} />
                 <input type="number" className="col-span-1 text-sm border rounded h-9 px-2" value={li.quantity} onChange={(e) => updLi(i, { quantity: Number(e.target.value) })} />
-                <input type="number" className="col-span-2 text-sm border rounded h-9 px-2" value={li.unitPrice} onChange={(e) => updLi(i, { unitPrice: Number(e.target.value) })} />
+                <input type="number" step="0.01" min="0" inputMode="decimal" className="col-span-2 text-sm border rounded h-9 px-2" value={li.unitPrice} onChange={(e) => updLi(i, { unitPrice: Number(e.target.value) })} />
                 <input type="number" className="col-span-2 text-sm border rounded h-9 px-2" value={li.discountPct} onChange={(e) => updLi(i, { discountPct: Number(e.target.value) })} />
                 <Button type="button" size="sm" variant="ghost" className="col-span-1" onClick={() => setLis((arr) => arr.filter((_, k) => k !== i))}><Trash2 className="size-3.5" /></Button>
               </li>
