@@ -4766,6 +4766,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0211: When a deal entered its stage, and when it was won or lost ────
+  // Audit 2026-10-20 (Phase 2, R14/R16/R17): daysInStage never counted up and
+  // nothing recorded when a deal closed, so quota and "won this month" read
+  // updatedAt. Existing deals are backfilled once by the app
+  // (services/dealDates.backfillDealDates), which needs the per-pipeline stage
+  // flags to know which deals are won or lost.
+  {
+    name: "0211_opportunity_stage_dates.sql",
+    statements: [
+      "ALTER TABLE `opportunities` ADD COLUMN `stageEnteredAt` timestamp NULL",
+      "ALTER TABLE `opportunities` ADD COLUMN `wonAt` timestamp NULL",
+      "ALTER TABLE `opportunities` ADD COLUMN `lostAt` timestamp NULL",
+      "CREATE INDEX `ix_opp_won_at` ON `opportunities` (`workspaceId`, `wonAt`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

@@ -331,6 +331,15 @@ async function startServer() {
       .catch((e) => console.error("[sequences] LinkedIn text heal failed:", e));
   }, 100_000);
 
+  // Migration 0211 added when each deal entered its stage and was won or lost;
+  // deals from before it get those dates once, from their stage history
+  // (audit 2026-10-20, Phase 2). Idempotent — only rows still without them.
+  setTimeout(() => {
+    import("../services/dealDates")
+      .then((m) => m.backfillDealDates())
+      .catch((e) => console.error("[dealDates] backfill failed:", e));
+  }, 45_000);
+
   // Scheduled report emails (daily/weekly/monthly via the system sender).
   const runReports = () => {
     runReportScheduler().catch((e: unknown) => console.error("[ReportScheduler] tick failed:", e));

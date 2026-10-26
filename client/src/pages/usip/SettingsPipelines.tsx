@@ -9,8 +9,14 @@
  *   - Set per-stage default win probability and won/lost flags
  *
  * Stage `key` strings are stored in `opportunities.stage` (VARCHAR(60)
- * since migration 0082). Renaming the label has no data impact; renaming
- * the key requires a follow-up backfill (not exposed yet).
+ * since migration 0082). Renaming the label has no data impact; a new key
+ * carries the stage's deals with it (server side).
+ *
+ * Audit 2026-10-20, Phase 2 (R18): deleting a stage or pipeline left its deals
+ * on no board while every number still counted them, and deleting Won turned
+ * past wins into open pipeline. Each stage now shows how many deals it holds;
+ * deleting one that has deals asks where they go (a stage of the same kind),
+ * and changing Won/Lost on a stage with deals says what that reclassifies.
  */
 import { useState } from "react";
 import { Link } from "wouter";
@@ -43,20 +49,59 @@ export default function SettingsPipelines() {
   const renamePipeline = trpc.crmPipelines.renamePipeline.useMutation({ onSuccess: () => { invalidateAll(); toast.success("Renamed"); }, onError: (e) => toast.error(e.message) });
   const setDefault = trpc.crmPipelines.setDefault.useMutation({ onSuccess: () => { invalidateAll(); toast.success("Default updated"); }, onError: (e) => toast.error(e.message) });
   const deletePipeline = trpc.crmPipelines.deletePipeline.useMutation({
-    onSuccess: () => { invalidateAll(); setSelectedId(null); toast.success("Deleted"); },
+    onSuccess: (r) => {
+      invalidateAll(); utils.opportunities.board.invalidate(); setSelectedId(null); setPipelineDeleteOpen(false);
+      toast.success(r.moved ? `Deleted — ${r.moved} deal${r.moved === 1 ? "" : "s"} moved` : "Deleted");
+    },
     onError: (e) => toast.error(e.message),
   });
   const createStage = trpc.crmPipelines.createStage.useMutation({ onSuccess: () => invalidateAll(), onError: (e) => toast.error(e.message) });
   const updateStage = trpc.crmPipelines.updateStage.useMutation({ onSuccess: () => invalidateAll(), onError: (e) => toast.error(e.message) });
-  const deleteStage = trpc.crmPipelines.deleteStage.useMutation({ onSuccess: () => invalidateAll(), onError: (e) => toast.error(e.message) });
+  const deleteStage = trpc.crmPipelines.deleteStage.useMutation({
+    onSuccess: (r) => { invalidateAll(); utils.opportunities.board.invalidate(); setStageToDelete(null); if (r.moved) toast.success(`Deleted — ${r.moved} deal${r.moved === 1 ? "" : "s"} moved`); },
+    onError: (e) => toast.error(e.message),
+  });
   const reorderStages = trpc.crmPipelines.reorderStages.useMutation({ onSuccess: () => invalidateAll(), onError: (e) => toast.error(e.message) });
 
   const [newOpen, setNewOpen] = useState(false);
   const [newStageOpen, setNewStageOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editLabel, setEditLabel] = useState("");
+  const [stageToDelete, setStageToDelete] = useState<(typeof stages)[number] | null>(null);
+  const [pipelineDeleteOpen, setPipelineDeleteOpen] = useState(false);
 
   const stages = detail?.stages ?? [];
+  const kindOf = (s: { isWon: boolean; isLost: boolean }) => (s.isLost ? "lost" : s.isWon ? "won" : "open");
+  const kindLabel = { open: "open", won: "Won", lost: "Lost" } as const;
+  const plural = (n: number) => `${n} deal${n === 1 ? "" : "s"}`;
+
+  function askDeleteStage(s: (typeof stages)[number]) {
+    if (s.dealCount === 0) {
+      confirmAction({ title: `Delete stage "${s.label}"?`, description: "No deals are in this stage.", confirmLabel: "Delete" }, () => { deleteStage.mutate({ id: s.id }); });
+      return;
+    }
+    const targets = stages.filter((t) => t.id !== s.id && kindOf(t) === kindOf(s));
+    if (targets.length === 0) {
+      toast.error(`${plural(s.dealCount)} ${s.dealCount === 1 ? "is" : "are"} in this stage. Add another ${kindLabel[kindOf(s)]} stage to move ${s.dealCount === 1 ? "it" : "them"} to first.`);
+      return;
+    }
+    setStageToDelete(s);
+  }
+
+  /** Won/Lost decide what counts as revenue; changing them on a stage with deals says so first. */
+  function setFlags(s: (typeof stages)[number], patch: { isWon: boolean; isLost: boolean }) {
+    const apply = () => updateStage.mutate({ id: s.id, patch });
+    if (s.dealCount === 0) return apply();
+    const now = kindOf(s);
+    const next = kindOf(patch);
+    const leaving = now === "won" ? "leave revenue and quota" : now === "open" ? "leave the open pipeline" : "stop counting as lost";
+    const joining = next === "open" ? "count as open pipeline again" : `count as ${next} from when they entered this stage`;
+    confirmAction({
+      title: `Count ${plural(s.dealCount)} as ${next === "open" ? "open pipeline" : next}?`,
+      description: `The ${plural(s.dealCount)} in "${s.label}" ${leaving} and ${joining}.`,
+      confirmLabel: "Change",
+    }, apply);
+  }
 
   function move(stageId: number, dir: -1 | 1) {
     const idx = stages.findIndex((s) => s.id === stageId);
@@ -117,7 +162,10 @@ export default function SettingsPipelines() {
                   </Button>
                   {!detail.pipeline.isDefault && (
                     <Button size="sm" variant="ghost" className="text-destructive"
-                      onClick={() => { confirmAction({ title: `Delete pipeline "${detail.pipeline.name}"?`, description: "Stages will be removed; existing opportunities keep their stage value.", confirmLabel: "Delete" }, () => { deletePipeline.mutate({ id: detail.pipeline.id }); }); }}>
+                      onClick={() => {
+                        if (detail.dealCount > 0) { setPipelineDeleteOpen(true); return; }
+                        confirmAction({ title: `Delete pipeline "${detail.pipeline.name}"?`, description: "No deals are in this pipeline. Its stages are removed.", confirmLabel: "Delete" }, () => { deletePipeline.mutate({ id: detail.pipeline.id }); });
+                      }}>
                       <Trash2 className="size-3.5 mr-1" /> Delete
                     </Button>
                   )}
@@ -147,7 +195,7 @@ export default function SettingsPipelines() {
                           {s.label}
                         </button>
                       )}
-                      <div className="text-[11px] text-muted-foreground mt-0.5">key: <code>{s.key}</code></div>
+                      <div className="text-[11px] text-muted-foreground mt-0.5">key: <code>{s.key}</code> · {plural(s.dealCount)}</div>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-muted-foreground">Win %</span>
@@ -158,15 +206,15 @@ export default function SettingsPipelines() {
                           if (Number.isFinite(v) && v !== s.defaultWinProb) updateStage.mutate({ id: s.id, patch: { defaultWinProb: v } });
                         }} />
                       <label className="text-xs flex items-center gap-1">
-                        <input type="checkbox" checked={s.isWon} onChange={(e) => updateStage.mutate({ id: s.id, patch: { isWon: e.target.checked, isLost: e.target.checked ? false : s.isLost } })} />
+                        <input type="checkbox" checked={s.isWon} onChange={(e) => setFlags(s, { isWon: e.target.checked, isLost: e.target.checked ? false : s.isLost })} />
                         Won
                       </label>
                       <label className="text-xs flex items-center gap-1">
-                        <input type="checkbox" checked={s.isLost} onChange={(e) => updateStage.mutate({ id: s.id, patch: { isLost: e.target.checked, isWon: e.target.checked ? false : s.isWon } })} />
+                        <input type="checkbox" checked={s.isLost} onChange={(e) => setFlags(s, { isLost: e.target.checked, isWon: e.target.checked ? false : s.isWon })} />
                         Lost
                       </label>
                       <Button size="icon" variant="ghost" className="size-7 text-destructive"
-                        onClick={() => { confirmAction({ title: `Delete stage "${s.label}"?`, description: "Opportunities currently in this stage keep their stored value.", confirmLabel: "Delete" }, () => { deleteStage.mutate({ id: s.id }); }); }}>
+                        onClick={() => askDeleteStage(s)}>
                         <Trash2 className="size-3.5" />
                       </Button>
                     </div>
@@ -189,6 +237,34 @@ export default function SettingsPipelines() {
         <Field name="name" label="Name" required placeholder="e.g. SMB Renewals" />
         <p className="text-xs text-muted-foreground">Stages will be cloned from the currently selected pipeline.</p>
       </FormDialog>
+
+      {stageToDelete && (
+        <FormDialog open onOpenChange={(v) => { if (!v) setStageToDelete(null); }} title={`Delete stage "${stageToDelete.label}"`}
+          submitLabel="Move deals and delete" isPending={deleteStage.isPending}
+          onSubmit={(f) => deleteStage.mutate({ id: stageToDelete.id, moveToKey: String(f.get("moveToKey")) })}>
+          <p className="text-sm text-muted-foreground">
+            {plural(stageToDelete.dealCount)} {stageToDelete.dealCount === 1 ? "is" : "are"} in this stage. Pick
+            another {kindLabel[kindOf(stageToDelete)]} stage to move {stageToDelete.dealCount === 1 ? "it" : "them"} to — the
+            same kind, so won deals stay won and the pipeline stays the pipeline.
+          </p>
+          <SelectField name="moveToKey" label="Move deals to"
+            options={stages.filter((t) => t.id !== stageToDelete.id && kindOf(t) === kindOf(stageToDelete)).map((t) => ({ value: t.key, label: t.label }))} />
+        </FormDialog>
+      )}
+
+      {detail && pipelineDeleteOpen && (
+        <FormDialog open onOpenChange={setPipelineDeleteOpen} title={`Delete pipeline "${detail.pipeline.name}"`}
+          submitLabel="Move deals and delete" isPending={deletePipeline.isPending}
+          onSubmit={(f) => deletePipeline.mutate({ id: detail.pipeline.id, moveToPipelineId: Number(f.get("moveToPipelineId")) })}>
+          <p className="text-sm text-muted-foreground">
+            {plural(detail.dealCount)} {detail.dealCount === 1 ? "is" : "are"} in this pipeline. Pick a pipeline to move
+            {detail.dealCount === 1 ? " it" : " them"} to. Each keeps its stage where that pipeline has the same one,
+            otherwise it goes to that pipeline's first stage of the same kind.
+          </p>
+          <SelectField name="moveToPipelineId" label="Move deals to"
+            options={(pipelines ?? []).filter((p) => p.id !== detail.pipeline.id).map((p) => ({ value: String(p.id), label: p.name }))} />
+        </FormDialog>
+      )}
 
       {detail && (
         <FormDialog open={newStageOpen} onOpenChange={setNewStageOpen} title="New stage" isPending={createStage.isPending}

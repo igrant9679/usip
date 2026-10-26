@@ -173,7 +173,9 @@ export default function Quota() {
               </div>
               <div className="space-y-1.5">
                 <Label>Period Type</Label>
-                <Select value={form.periodType} onValueChange={(v) => setForm((f) => ({ ...f, periodType: v }))}>
+                {/* The type decides the stored period (month, quarter or year), so
+                    changing it on an existing target would leave the old one behind. */}
+                <Select value={form.periodType} onValueChange={(v) => setForm((f) => ({ ...f, periodType: v }))} disabled={!!editTarget}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="monthly">Monthly</SelectItem>
@@ -209,7 +211,9 @@ export default function Quota() {
 }
 
 function QuotaCard({ target, name, workspaceId, period, onEdit, onRemove }: any) {
-  const { data: progress } = trpc.quota.progress.useQuery({ userId: target.userId, period });
+  // The target's OWN period: a quarterly target is stored once for its quarter
+  // ("2026-Q4") and measured over all three months, whichever one is picked.
+  const { data: progress } = trpc.quota.progress.useQuery({ userId: target.userId, period: target.period });
 
   return (
     <Card>
@@ -221,7 +225,10 @@ function QuotaCard({ target, name, workspaceId, period, onEdit, onRemove }: any)
             <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:text-red-600" onClick={onRemove}><Trash2 className="h-3.5 w-3.5" /></Button>
           </div>
         </div>
-        <Badge variant="outline" className="w-fit text-xs">{target.periodType}</Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="w-fit text-xs">{target.periodType}</Badge>
+          {progress?.range && <span className="text-xs text-muted-foreground">{progress.range.label}</span>}
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Targets */}

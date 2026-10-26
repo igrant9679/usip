@@ -340,19 +340,24 @@ const SURFACES: Array<{
    * move and the manager approval queue. Neither has a session belonging to the
    * deal's owner, so both resolve it through the gate.
    */
+  /**
+   * 2026-10-26 (audit Phase 2, R21): both endpoints — and the kanban, and the
+   * proposal accepts — now move deals through services/stageChange, so the
+   * win-back task is raised in one place for all of them.
+   */
   {
-    what: "the alert-panel stage move's win-back task is not owned by a departed rep",
-    file: "server/routers/pipelineAlerts.ts",
+    what: "a closed-lost stage move's win-back task is not owned by a departed rep, from any path",
+    file: "server/services/stageChange.ts",
     start: "if (meta.isLost) {",
     end: "aiConfidence: 70",
-    gate: /ownerUserId: await activeOwnerOrNull\(ctx\.workspace\.id, opp\.ownerUserId\)/,
+    gate: /ownerUserId: await activeOwnerOrNull\(workspaceId, before\.ownerUserId\)/,
   },
   {
-    what: "an approved closed-lost stage change raises a win-back task somebody owns",
-    file: "server/routers/opportunityIntelligence.ts",
-    start: "if (opp && meta.isLost) {",
-    end: "aiConfidence: 70",
-    gate: /ownerUserId: await activeOwnerOrNull\(ctx\.workspace\.id, opp\.ownerUserId\)/,
+    what: "a closed-won move from the public portal names an active member as the CSM fallback",
+    file: "server/services/stageChange.ts",
+    start: "if (meta.isWon) {",
+    end: "ensureCustomerForWonOpp(",
+    gate: /input\.actorUserId \?\? \(await workspaceNotifyUserId\(workspaceId\)\)/,
   },
   {
     /**

@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { KanbanSquare, Building2, Users, DollarSign, Brain, Loader2, Trash2 } from "lucide-react";
 import { ConfirmButton } from "@/components/usip/Common";
 import { toast } from "sonner";
+import { formatCalendarDate, storedToCalendarDate } from "@shared/calendarDate";
 
 function fmt$(n: any) {
   // Full, comma-grouped amount to match the list pages (e.g. $1,250,000).
@@ -83,9 +84,21 @@ export default function OpportunityDetail() {
           <Badge variant="outline">{o.stage}</Badge>
           <Badge variant="secondary">{fmt$(o.value)}</Badge>
           <Badge>{o.winProb}%</Badge>
-          {o.closeDate && <span className="text-xs text-muted-foreground">Close {new Date(o.closeDate).toLocaleDateString()}</span>}
           {o.daysInStage > 0 && <span className="text-xs text-muted-foreground">{o.daysInStage}d in stage</span>}
         </div>
+        {/* No screen could set a close date (audit 2026-10-20, R16), so the
+            forecast's months were mostly "No close date". A calendar date:
+            the server stores the day picked, not midnight UTC. */}
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          Expected close
+          <Input type="date" className="h-7 w-40 text-xs" disabled={update.isPending}
+            key={storedToCalendarDate(o.closeDate) ?? "none"}
+            defaultValue={storedToCalendarDate(o.closeDate) ?? ""}
+            onBlur={(e) => {
+              const next = e.target.value || null;
+              if (next !== (storedToCalendarDate(o.closeDate) ?? null)) update.mutate({ id: o.id, patch: { closeDate: next } });
+            }} />
+        </label>
         {o.nextStep && <div className="text-muted-foreground text-xs">Next: <span className="text-foreground">{o.nextStep}</span></div>}
         {account && (
           <div className="flex items-center gap-2 pt-2"><Building2 className="size-4 text-muted-foreground" />
@@ -219,7 +232,7 @@ export default function OpportunityDetail() {
         </>}
         meta={<>
           {account && <Link href={`/accounts/${account.id}`} className="inline-flex items-center gap-1 text-blue-600 hover:underline"><Building2 className="size-3.5" />{account.name}</Link>}
-          {o.closeDate && <span>Close {new Date(o.closeDate).toLocaleDateString()}</span>}
+          {o.closeDate && <span>Close {formatCalendarDate(o.closeDate)}</span>}
           {o.daysInStage > 0 && <span>{o.daysInStage}d in stage</span>}
         </>}
         actions={<ConfirmButton

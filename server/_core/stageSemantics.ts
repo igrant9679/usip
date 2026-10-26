@@ -88,7 +88,8 @@ async function stageRowsFor(db: Db, workspaceId: number): Promise<StageRow[]> {
     .orderBy(crmPipelineStages.sortOrder, crmPipelineStages.id);
 }
 
-async function defaultPipelineId(db: Db, workspaceId: number): Promise<number | null> {
+/** The workspace's default pipeline — the board a deal with no pipelineId sits on. */
+export async function defaultPipelineId(db: Db, workspaceId: number): Promise<number | null> {
   const [row] = await db
     .select({ id: crmPipelines.id })
     .from(crmPipelines)
@@ -129,6 +130,50 @@ export async function resolvedStageFor(
   }
   const index = await stageIndexFor(db, workspaceId);
   return { isWon: index.isWon(stageKey), isLost: index.isLost(stageKey), defaultWinProb: null };
+}
+
+/** The stage keys a workspace with no pipeline configured uses (crm.ts seeds these). */
+export const LEGACY_STAGE_KEYS = ["discovery", "qualified", "proposal", "negotiation", "won", "lost"];
+
+export type StageResolver = {
+  /** resolvedStageFor's answer for one deal, without a query per deal. */
+  resolve(pipelineId: number | null, stageKey: string): { isWon: boolean; isLost: boolean; defaultWinProb: number | null };
+  /** The stage keys a deal in this pipeline may move to. */
+  allowedKeys(pipelineId: number | null): string[];
+};
+
+/**
+ * resolvedStageFor for MANY deals (audit 2026-10-20, Phase 2): the same search
+ * order — the deal's pipeline, the default pipeline, the workspace index — from
+ * one read of the stage table. Deal metrics classify every deal in a
+ * workspace; a query per deal would make that a page-load N+1.
+ */
+export async function stageResolver(db: Db, workspaceId: number): Promise<StageResolver> {
+  const [rows, defId, index] = await Promise.all([
+    stageRowsFor(db, workspaceId),
+    defaultPipelineId(db, workspaceId),
+    stageIndexFor(db, workspaceId),
+  ]);
+  const ofPipeline = (id: number | null) => (id ? rows.filter((r) => Number(r.pipelineId) === id) : []);
+  return {
+    resolve(pipelineId, stageKey) {
+      const same = rows.filter((r) => r.key === stageKey);
+      let match = pipelineId ? same.find((r) => Number(r.pipelineId) === pipelineId) : undefined;
+      if (!match && same.length > 0 && defId) match = same.find((r) => Number(r.pipelineId) === defId);
+      if (match) {
+        const isLost = !!Number(match.isLost);
+        return { isWon: !isLost && !!Number(match.isWon), isLost, defaultWinProb: match.defaultWinProb ?? null };
+      }
+      return { isWon: index.isWon(stageKey), isLost: index.isLost(stageKey), defaultWinProb: null };
+    },
+    allowedKeys(pipelineId) {
+      if (rows.length === 0) return LEGACY_STAGE_KEYS.slice();
+      const own = ofPipeline(pipelineId);
+      const pick = own.length > 0 ? own : ofPipeline(defId);
+      const keys = (pick.length > 0 ? pick : rows).map((r) => r.key);
+      return keys.filter((k, i) => keys.indexOf(k) === i);
+    },
+  };
 }
 
 async function canonicalKey(

@@ -345,6 +345,17 @@ export const opportunities = mysqlTable(
     winProb: int("winProb").default(20).notNull(),
     closeDate: timestamp("closeDate"),
     daysInStage: int("daysInStage").default(0).notNull(),
+    /**
+     * Migration 0211 (audit 2026-10-20, R14/R16/R17): when the deal entered its
+     * current stage, and when it was won or lost. daysInStage was reset to 0 on
+     * every move and never counted up, so stuck-deal alerts never fired; and
+     * nothing recorded WHEN a deal closed, so quota and every "won this month"
+     * read updatedAt — any later edit moved a win into the current period.
+     * Written only by services/stageChange.ts.
+     */
+    stageEnteredAt: timestamp("stageEnteredAt"),
+    wonAt: timestamp("wonAt"),
+    lostAt: timestamp("lostAt"),
     aiNote: text("aiNote"),
     nextStep: text("nextStep"),
     lostReason: varchar("lostReason", { length: 120 }),
@@ -362,6 +373,8 @@ export const opportunities = mysqlTable(
     byStage: index("ix_opp_stage").on(t.workspaceId, t.stage),
     byPipeline: index("ix_opp_pipeline").on(t.workspaceId, t.pipelineId),
     byLastActivity: index("ix_opp_last_activity").on(t.workspaceId, t.lastActivityAt),
+    /** 0211: quota and "won this period" read wins by date. */
+    byWonAt: index("ix_opp_won_at").on(t.workspaceId, t.wonAt),
   }),
 );
 export type Opportunity = typeof opportunities.$inferSelect;

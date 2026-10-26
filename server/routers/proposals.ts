@@ -30,6 +30,7 @@ import { appUrl } from "../appUrl";
 import { invokeLLM } from "../_core/llm";
 import { researchUseForProposal } from "../services/research/recipient";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
+import { changeOpportunityStage } from "../services/stageChange";
 import { canonicalWonStageKey } from "../_core/stageSemantics";
 import { ensureCustomerForWonOpp } from "../services/wonToCustomer";
 import { publicProcedure, router } from "../_core/trpc";
@@ -774,77 +775,63 @@ export const proposalsRouter = router({
         });
       }
       // ── Auto-create or update Pipeline opportunity ──
+      // A LINKED deal is closed won whether or not the proposal carries an
+      // account (audit 2026-10-20, R25): the wizard never sends one, so
+      // accepting a proposal made in the UI left its deal open. The move goes
+      // through the one stage-change service (R21), which also makes a
+      // repeated accept a no-op for the deal.
       let opportunityId = proposal.linkedOpportunityId ?? null;
-      if (proposal.accountId) {
-        const oppValue = proposal.budget ? String(proposal.budget) : "0";
-        if (opportunityId) {
-          const [existingOpp] = await db
-            // `stage` is read so the stage_changed fire below can report a real
-            // fromStage — accepting a proposal is door four of the five that
-            // write opportunities.stage.
-            .select({ accountId: opportunities.accountId, ownerUserId: opportunities.ownerUserId, pipelineId: opportunities.pipelineId, stage: opportunities.stage })
-            .from(opportunities)
-            .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
-          // Update existing opportunity to the workspace's OWN won stage. The
-          // literal "won" parked the deal in a key a custom pipeline has no
-          // column for, so an accepted proposal fell off its own kanban.
-          const wonStage = await canonicalWonStageKey(db, ctx.workspace.id, existingOpp?.pipelineId ?? null);
-          await db
-            .update(opportunities)
-            .set({ stage: wonStage, winProb: 100, value: oppValue, updatedAt: new Date() })
-            .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
-          // Closed Won → Customer, the same downstream step every other won
-          // path runs. Neither accept path called it until 2026-09-20, so a
-          // proposal-accepted deal was Closed Won with no customer record and
-          // no renewal ever scheduled. Idempotent, and non-fatal.
-          if (existingOpp) {
-            try {
-              await ensureCustomerForWonOpp(db, ctx.workspace.id, { accountId: existingOpp.accountId, value: oppValue, ownerUserId: existingOpp.ownerUserId }, ctx.user.id);
-            } catch (e) {
-              console.warn("[proposals.acceptProposal] closed-won customer creation failed:", e);
-            }
-          }
-          // "When a deal is WON" is the rule people build first, and accepting
-          // a proposal — the most natural way a deal is won — fired nothing
-          // until 2026-09-20.
-          const wonOppId = opportunityId;
-          void import("../services/workflowEngine")
-            .then((m) => m.fireStageChanged(
-              ctx.workspace.id, wonOppId, existingOpp?.stage ?? null, wonStage,
-              { value: Number(oppValue), winProb: 100, isWon: true, name: proposal.title },
-              existingOpp?.ownerUserId ?? null,
-            ))
-            .catch(() => { /* workflow firing is best-effort */ });
-        } else {
-          // No fire on this branch: it CREATES a won opportunity as a side
-          // effect of accepting. record_created there would double with the
-          // accept notification, and there is no stage transition to report.
-          // Create a new opportunity already in the won stage
-          const wonStage = await canonicalWonStageKey(db, ctx.workspace.id, null);
-          const oppResult = await db.insert(opportunities).values({
+      const oppValue = proposal.budget ? String(proposal.budget) : "0";
+      if (opportunityId) {
+        const [existingOpp] = await db
+          .select({ pipelineId: opportunities.pipelineId })
+          .from(opportunities)
+          .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+        if (existingOpp) {
+          // The workspace's OWN won stage: the literal "won" parked the deal in
+          // a key a custom pipeline has no column for.
+          const wonStage = await canonicalWonStageKey(db, ctx.workspace.id, existingOpp.pipelineId ?? null);
+          await changeOpportunityStage(db, {
             workspaceId: ctx.workspace.id,
-            accountId: proposal.accountId,
-            name: proposal.title,
-            stage: wonStage,
-            value: oppValue,
-            winProb: 100,
-            ownerUserId: ctx.user.id,
-            closeDate: new Date(),
-            nextStep: `Kickoff: follow up on accepted proposal "${proposal.title}"`,
+            opportunityId,
+            toStage: wonStage,
+            actorUserId: ctx.user.id,
+            actorName: ctx.user.name ?? null,
+            source: "proposal",
+            note: `Proposal "${proposal.title}" accepted`,
+            alsoSet: { value: oppValue },
           });
-          opportunityId = Number((oppResult as any)[0]?.insertId ?? 0) || null;
-          // Link the opportunity back to the proposal
-          if (opportunityId) {
-            await db
-              .update(proposals)
-              .set({ linkedOpportunityId: opportunityId })
-              .where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
-          }
-          try {
-            await ensureCustomerForWonOpp(db, ctx.workspace.id, { accountId: proposal.accountId, value: oppValue, ownerUserId: ctx.user.id }, ctx.user.id);
-          } catch (e) {
-            console.warn("[proposals.acceptProposal] closed-won customer creation failed:", e);
-          }
+        }
+      } else if (proposal.accountId) {
+        // Create a new opportunity already in the won stage. No stage move to
+        // report; the dates say when it was won.
+        const wonStage = await canonicalWonStageKey(db, ctx.workspace.id, null);
+        const now = new Date();
+        const oppResult = await db.insert(opportunities).values({
+          workspaceId: ctx.workspace.id,
+          accountId: proposal.accountId,
+          name: proposal.title,
+          stage: wonStage,
+          value: oppValue,
+          winProb: 100,
+          ownerUserId: ctx.user.id,
+          closeDate: now,
+          stageEnteredAt: now,
+          wonAt: now,
+          nextStep: `Kickoff: follow up on accepted proposal "${proposal.title}"`,
+        } as never);
+        opportunityId = Number((oppResult as any)[0]?.insertId ?? 0) || null;
+        // Link the opportunity back to the proposal
+        if (opportunityId) {
+          await db
+            .update(proposals)
+            .set({ linkedOpportunityId: opportunityId })
+            .where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
+        }
+        try {
+          await ensureCustomerForWonOpp(db, ctx.workspace.id, { accountId: proposal.accountId, value: oppValue, ownerUserId: ctx.user.id }, ctx.user.id);
+        } catch (e) {
+          console.warn("[proposals.acceptProposal] closed-won customer creation failed:", e);
         }
       }
       await logProposalActivity(db, {
@@ -1031,68 +1018,59 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         });
       }
       // ── Auto-create Pipeline opportunity ──
+      // A linked deal is closed won whether or not the proposal has an account
+      // (R25), through the one stage-change service (R21).
       let opportunityId = proposal.linkedOpportunityId ?? null;
-      if (proposal.accountId) {
-        const oppValue = proposal.budget ? String(proposal.budget) : "0";
-        if (opportunityId) {
-          const [existingOpp] = await db
-            // `stage` for the stage_changed fire below — door five of five.
-            .select({ accountId: opportunities.accountId, ownerUserId: opportunities.ownerUserId, pipelineId: opportunities.pipelineId, stage: opportunities.stage })
-            .from(opportunities)
-            .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, proposal.workspaceId)));
-          const wonStage = await canonicalWonStageKey(db, proposal.workspaceId, existingOpp?.pipelineId ?? null);
-          await db
-            .update(opportunities)
-            .set({ stage: wonStage, winProb: 100, value: oppValue, updatedAt: new Date() })
-            .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, proposal.workspaceId)));
-          if (existingOpp && ownerUserId) {
-            try {
-              await ensureCustomerForWonOpp(db, proposal.workspaceId, { accountId: existingOpp.accountId, value: oppValue, ownerUserId: existingOpp.ownerUserId }, ownerUserId);
-            } catch (e) {
-              console.warn("[proposals.acceptByToken] closed-won customer creation failed:", e);
-            }
-          }
-          // Same omission as the internal accept path above: the client portal
-          // won the deal and no stage_changed rule heard about it.
-          const wonOppId = opportunityId;
-          void import("../services/workflowEngine")
-            .then((m) => m.fireStageChanged(
-              proposal.workspaceId, wonOppId, existingOpp?.stage ?? null, wonStage,
-              { value: Number(oppValue), winProb: 100, isWon: true, name: proposal.title },
-              existingOpp?.ownerUserId ?? null,
-            ))
-            .catch(() => { /* workflow firing is best-effort */ });
-        } else {
-          // No fire: this branch CREATES a won opportunity rather than moving
-          // one — see the internal accept path above for why.
-          const wonStage = await canonicalWonStageKey(db, proposal.workspaceId, null);
-          const oppResult = await db.insert(opportunities).values({
+      const oppValue = proposal.budget ? String(proposal.budget) : "0";
+      if (opportunityId) {
+        const [existingOpp] = await db
+          .select({ pipelineId: opportunities.pipelineId })
+          .from(opportunities)
+          .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, proposal.workspaceId)));
+        if (existingOpp) {
+          const wonStage = await canonicalWonStageKey(db, proposal.workspaceId, existingOpp.pipelineId ?? null);
+          await changeOpportunityStage(db, {
             workspaceId: proposal.workspaceId,
-            accountId: proposal.accountId,
-            name: proposal.title,
-            stage: wonStage,
-            value: oppValue,
-            winProb: 100,
-            ownerUserId: ownerUserId ?? undefined,
-            closeDate: new Date(),
-            nextStep: `Kickoff: ${proposal.clientName} accepted the proposal via client portal.`,
+            opportunityId,
+            toStage: wonStage,
+            actorUserId: null,
+            actorName: proposal.clientName ?? null,
+            source: "proposal_portal",
+            note: `Proposal "${proposal.title}" accepted on the client portal`,
+            alsoSet: { value: oppValue },
           });
-          opportunityId = Number((oppResult as any)[0]?.insertId ?? 0) || null;
-          if (opportunityId) {
-            await db
-              .update(proposals)
-              .set({ linkedOpportunityId: opportunityId })
-              .where(eq(proposals.id, proposal.id));
-          }
-          // cmUserId falls back to the caller, and this path has no session —
-          // so the customer is only created when the workspace still has an
-          // active member to own it.
-          if (ownerUserId) {
-            try {
-              await ensureCustomerForWonOpp(db, proposal.workspaceId, { accountId: proposal.accountId, value: oppValue, ownerUserId }, ownerUserId);
-            } catch (e) {
-              console.warn("[proposals.acceptByToken] closed-won customer creation failed:", e);
-            }
+        }
+      } else if (proposal.accountId) {
+        const wonStage = await canonicalWonStageKey(db, proposal.workspaceId, null);
+        const now = new Date();
+        const oppResult = await db.insert(opportunities).values({
+          workspaceId: proposal.workspaceId,
+          accountId: proposal.accountId,
+          name: proposal.title,
+          stage: wonStage,
+          value: oppValue,
+          winProb: 100,
+          ownerUserId: ownerUserId ?? undefined,
+          closeDate: now,
+          stageEnteredAt: now,
+          wonAt: now,
+          nextStep: `Kickoff: ${proposal.clientName} accepted the proposal via client portal.`,
+        } as never);
+        opportunityId = Number((oppResult as any)[0]?.insertId ?? 0) || null;
+        if (opportunityId) {
+          await db
+            .update(proposals)
+            .set({ linkedOpportunityId: opportunityId })
+            .where(eq(proposals.id, proposal.id));
+        }
+        // cmUserId falls back to the caller, and this path has no session —
+        // so the customer is only created when the workspace still has an
+        // active member to own it.
+        if (ownerUserId) {
+          try {
+            await ensureCustomerForWonOpp(db, proposal.workspaceId, { accountId: proposal.accountId, value: oppValue, ownerUserId }, ownerUserId);
+          } catch (e) {
+            console.warn("[proposals.acceptByToken] closed-won customer creation failed:", e);
           }
         }
       }

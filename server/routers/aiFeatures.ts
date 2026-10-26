@@ -41,6 +41,8 @@ import {
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { wonStageKeys } from "../_core/stageSemantics";
+import { closedIn, closeMonthKey, currentRanges, instantMonthKey, loadMetricDeals, openTotals } from "../services/dealMetrics";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
@@ -607,39 +609,43 @@ async function applySuggestionRow(
 // ─── Forecast — AI Commentary ─────────────────────────────────────────────────
 
 export const forecastAiRouter = router({
-  /** Generate AI forecast commentary for the current period */
+  /**
+   * Generate AI forecast commentary for the current period.
+   *
+   * Audit 2026-10-20, Phase 2 (R19): the numbers fed to the model summed EVERY
+   * deal — won and lost ones too — into "Total pipeline", so the narrative
+   * described a pipeline that did not exist; and a failed model call saved
+   * "Unable to generate commentary" over the last good one. The figures now
+   * come from services/dealMetrics (the same open pipeline the Forecast tab
+   * shows), the month is the workspace's, and nothing is saved unless the
+   * model returned commentary.
+   */
   generateCommentary: workspaceProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-    const now = new Date();
-    const periodLabel = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const tz = await getWorkspaceTimezone(ctx.workspace.id);
+    const periodLabel = commentaryPeriodLabel(tz);
+    const ranges = currentRanges(tz);
 
-    // Gather pipeline data
-    const oppRows = await db
-      .select({ stage: opportunities.stage, value: opportunities.value, winProb: opportunities.winProb, closeDate: opportunities.closeDate })
-      .from(opportunities)
-      .where(eq(opportunities.workspaceId, ctx.workspace.id));
-
-    const totalPipeline = oppRows.reduce((s, o) => s + Number(o.value ?? 0), 0);
-    const weightedForecast = oppRows.reduce((s, o) => s + Number(o.value ?? 0) * (Number(o.winProb ?? 0) / 100), 0);
-    const closingThisMonth = oppRows.filter((o) => {
-      if (!o.closeDate) return false;
-      const d = new Date(o.closeDate);
-      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-    });
-    const closingValue = closingThisMonth.reduce((s, o) => s + Number(o.value ?? 0), 0);
-    const stageCounts = oppRows.reduce((acc, o) => { acc[o.stage] = (acc[o.stage] ?? 0) + 1; return acc; }, {} as Record<string, number>);
-    const atRisk = oppRows.filter((o) => o.winProb !== null && Number(o.winProb) < 30 && Number(o.value ?? 0) > 0).length;
+    const deals = await loadMetricDeals(db, ctx.workspace.id);
+    const open = deals.filter((d) => d.status === "open");
+    const totals = openTotals(open);
+    const closingThisMonth = open.filter((d) => closeMonthKey(d) === periodLabel);
+    const closingValue = openTotals(closingThisMonth).value;
+    const wonThisMonth = closedIn(deals, "won", ranges.month);
+    const stageCounts = open.reduce((acc, o) => { acc[o.stage] = (acc[o.stage] ?? 0) + 1; return acc; }, {} as Record<string, number>);
+    const atRisk = open.filter((o) => o.winProb < 30 && o.valueCents > 0).length;
 
     const prompt = `You are a sales analytics AI. Write a concise forecast commentary for this month. Return JSON only.
 
 Period: ${periodLabel}
-Total pipeline value: $${totalPipeline.toLocaleString()}
-Weighted forecast: $${Math.round(weightedForecast).toLocaleString()}
-Deals closing this month: ${closingThisMonth.length} worth $${closingValue.toLocaleString()}
-At-risk deals (win prob <30%): ${atRisk}
-Stage breakdown: ${Object.entries(stageCounts).map(([s, c]) => `${s}: ${c}`).join(", ")}
+Open pipeline value: $${totals.value.toLocaleString()} across ${totals.count} open deals
+Weighted forecast (open deals): $${Math.round(totals.weighted).toLocaleString()}
+Open deals expected to close this month: ${closingThisMonth.length} worth $${closingValue.toLocaleString()}
+Won so far this month: ${wonThisMonth.count} deals worth $${wonThisMonth.value.toLocaleString()}
+At-risk open deals (win prob <30%): ${atRisk}
+Open deals by stage: ${Object.entries(stageCounts).map(([s, c]) => `${s}: ${c}`).join(", ") || "none"}
 
 Return: {
   "commentary": "<2-3 sentence narrative suitable for a sales manager — include specific numbers, key risks, and one recommended action>",
@@ -649,19 +655,24 @@ Return: {
 }
 Include 3-4 highlights covering the most important metrics.`;
 
-    let commentary = "Unable to generate commentary at this time.";
+    let commentary = "";
     let highlights: Array<{ label: string; value: string; sentiment: string }> = [];
-
     try {
       const res = await invokeLLM({
         messages: [{ role: "user", content: prompt }],
         response_format: { type: "json_object" },
         max_tokens: 400,
       });
-      const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
-      commentary = String(parsed.commentary ?? commentary).slice(0, 1000);
+      const parsed = JSON.parse(String(res.choices?.[0]?.message?.content ?? "{}"));
+      commentary = String(parsed.commentary ?? "").trim().slice(0, 1000);
       highlights = Array.isArray(parsed.highlights) ? parsed.highlights.slice(0, 6) : [];
-    } catch { /* use defaults */ }
+    } catch (e) {
+      console.warn("[forecastAi] commentary generation failed:", e);
+    }
+    // Keep the last good commentary rather than replace it with an apology.
+    if (!commentary) {
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "The AI could not write commentary just now. The last commentary is unchanged — try again in a minute." });
+    }
 
     // Upsert: delete old for this period, insert new
     await db
@@ -682,8 +693,7 @@ Include 3-4 highlights covering the most important metrics.`;
   getCommentary: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return null;
-    const now = new Date();
-    const periodLabel = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const periodLabel = commentaryPeriodLabel(await getWorkspaceTimezone(ctx.workspace.id));
     const [row] = await db
       .select()
       .from(forecastAiCommentary)
@@ -693,6 +703,11 @@ Include 3-4 highlights covering the most important metrics.`;
     return row ?? null;
   }),
 });
+
+/** "YYYY-MM" of the workspace's current month — the key commentary is saved and read under. */
+function commentaryPeriodLabel(tz: string): string {
+  return instantMonthKey(tz, new Date());
+}
 
 // ─── Mailbox — AI Triage ──────────────────────────────────────────────────────
 

@@ -58,8 +58,9 @@ export const NOTIFY_EVENTS: readonly NotifyEvent[] = [
     key: "dealMoved",
     label: "A deal I own moves stage",
     defaults: { inApp: true, email: false },
-    // routers/crm.ts setStage, when the stage really changed and the owner is
-    // not the person who moved it.
+    // services/stageChange.ts — every stage move (kanban, alerts, approvals,
+    // proposal accepts) — when the stage really changed and the owner is not
+    // the person who moved it.
     wired: true,
   },
   {

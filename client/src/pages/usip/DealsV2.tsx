@@ -102,7 +102,18 @@ export default function DealsV2() {
   const utils = trpc.useUtils();
 
   const board = trpc.opportunities.board.useQuery({});
-  const pipe = trpc.crmPipelines.get.useQuery({} as any);
+  // The header numbers come from the server's deal metrics — the same ones
+  // the Dashboard, Pipeline forecast, Forecast and Quota read (audit
+  // 2026-10-20, R39). This page summed the board rows itself.
+  const summary = trpc.opportunities.summary.useQuery();
+  // Which pipeline's board to show (R20). Every deal sat under the DEFAULT
+  // pipeline's columns, and "Move to stage" offered keys another pipeline's
+  // deal cannot hold — the server now refuses those, so offer only its own.
+  const pipelines = trpc.crmPipelines.list.useQuery();
+  const defaultPipelineId = pipelines.data?.find((p) => p.isDefault)?.id ?? pipelines.data?.[0]?.id;
+  const [selectedPipelineId, setSelectedPipelineId] = useState<number | undefined>(undefined);
+  const pipelineId = selectedPipelineId ?? defaultPipelineId;
+  const pipe = trpc.crmPipelines.get.useQuery(pipelineId ? { pipelineId } : ({} as any));
   const autopilot = trpc.deals.getAutopilotSettings.useQuery();
   const alerts = trpc.pipelineAlerts.list.useQuery(undefined as any, { retry: false });
   const commentary = trpc.forecastAi.getCommentary.useQuery(undefined as any, { retry: false });
@@ -140,6 +151,7 @@ export default function DealsV2() {
   const setStage = trpc.opportunities.setStage.useMutation({
     onSuccess: (_d, vars) => {
       utils.opportunities.board.invalidate();
+      utils.opportunities.summary.invalidate();
       if (stageIdx.isWon(vars.stage)) {
         setCelebrate(Date.now());
         toast.success("Deal won! 🎉");
@@ -150,7 +162,8 @@ export default function DealsV2() {
   });
 
   const mode = autopilot.data?.mode ?? "off";
-  const opps = (board.data ?? []) as Opp[];
+  // This pipeline's deals; a deal with no pipeline sits on the default board.
+  const opps = ((board.data ?? []) as Opp[]).filter((o: any) => !pipelineId || (o.pipelineId ?? defaultPipelineId) === pipelineId);
 
   // Stage columns: prefer the workspace pipeline's stages; fall back to legacy;
   // then append any stage present in the data that isn't already a column.
@@ -169,10 +182,10 @@ export default function DealsV2() {
     return m;
   }, [opps]);
 
-  const openOpps = opps.filter((o) => stageIdx.isOpen(o.stage));
-  const totalValue = openOpps.reduce((s, o) => s + Number(o.value ?? 0), 0);
-  const weighted = openOpps.reduce((s, o) => s + Number(o.value ?? 0) * (Number(o.winProb ?? 0) / 100), 0);
-  const wonCount = opps.filter((o) => stageIdx.isWon(o.stage)).length;
+  const openCount = summary.data?.open.count ?? 0;
+  const totalValue = summary.data?.open.value ?? 0;
+  const weighted = summary.data?.open.weighted ?? 0;
+  const wonCount = summary.data?.won.count ?? 0;
   const activeAlerts = (alerts.data as any[])?.filter?.((a) => !a.dismissedAt) ?? (alerts.data as any[]) ?? [];
 
   const StatCard = ({ label, value, tone }: { label: string; value: string | number; tone?: "good" | "warn" }) => {
@@ -221,6 +234,14 @@ export default function DealsV2() {
           <KanbanSquare className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Deals</h1>
           <div className="flex-1" />
+          {(pipelines.data?.length ?? 0) > 1 && (
+            <Select value={String(pipelineId ?? "")} onValueChange={(v) => setSelectedPipelineId(Number(v))}>
+              <SelectTrigger className="h-7 w-[160px] text-xs" title="Pipeline"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {pipelines.data!.map((p) => <SelectItem key={p.id} value={String(p.id)}>{p.name}{p.isDefault ? " (default)" : ""}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
           <Link href="/pipeline" className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mr-1"><ExternalLink className="size-3" /> Classic pipeline</Link>
           <div className="flex items-center gap-1.5">
             <Bot className="size-3.5 text-muted-foreground" />
@@ -252,7 +273,7 @@ export default function DealsV2() {
 
           {/* Stats */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <StatCard label="Open deals" value={openOpps.length} />
+            <StatCard label="Open deals" value={openCount} />
             <StatCard label="Pipeline value" value={money(totalValue)} />
             <StatCard label="Weighted" value={money(weighted)} tone="good" />
             <StatCard label="Won" value={wonCount} tone="good" />
