@@ -72,7 +72,10 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
       if (r.skippedAlreadyEnrolled > 0) notes.push(`${r.skippedAlreadyEnrolled} already enrolled`);
       if (r.skippedInCampaign > 0) notes.push(`${r.skippedInCampaign} skipped — a campaign is already working them`);
       if (r.blockedInvalidEmail > 0) notes.push(`${r.blockedInvalidEmail} blocked — invalid or missing email`);
+      if (r.skippedSuppressed > 0) notes.push(`${r.skippedSuppressed} skipped — on a suppression list`);
       if (notes.length) toast[r.enrolled > 0 ? "info" : "error"](notes.join(" · "));
+      // A paused or draft sequence holds new enrolments (audit 2026-10-20, O1).
+      if (r.enrolled > 0 && r.heldUntilActive) toast.info(`"${name}" is not active — nothing is sent until it is activated`);
       if (r.enrolled === 0 && notes.length === 0) toast.info("No one enrolled");
       utils.sequences.getEnrollmentStats.invalidate({ sequenceId: vars.sequenceId });
       invalidatePeople();

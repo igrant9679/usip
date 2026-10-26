@@ -1052,3 +1052,13 @@ describe("the Emails page shows a draft whose send failed", () => {
     expect(statusApplies({ status: "sent" } as never, "draft")).toBe(false);
   });
 });
+
+describe("enrolling into a held sequence says so (O1)", () => {
+  it("every bulk-enrol screen tells the person nothing is sent until the sequence is activated", () => {
+    for (const p of ["components/usip/AddToMenu.tsx", "components/usip/people/SelectionToolbar.tsx", "pages/usip/Sequences.tsx"]) {
+      const src = readFileSync(join(__dirname, "..", "client", "src", p), "utf8");
+      expect(src, p).toContain("r.heldUntilActive");
+      expect(src, p).toContain("r.skippedSuppressed");
+    }
+  });
+});

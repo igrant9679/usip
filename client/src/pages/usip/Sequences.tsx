@@ -136,7 +136,10 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
       const parts = [`Enrolled ${r.enrolled}`];
       if (r.skippedAlreadyEnrolled > 0) parts.push(`${r.skippedAlreadyEnrolled} already enrolled`);
       if (r.blockedInvalidEmail > 0) parts.push(`${r.blockedInvalidEmail} blocked (invalid email)`);
+      if (r.skippedSuppressed > 0) parts.push(`${r.skippedSuppressed} skipped (suppressed)`);
       toast.success(parts.join(" · "));
+      // A paused or draft sequence holds new enrolments (audit 2026-10-20, O1).
+      if (r.enrolled > 0 && r.heldUntilActive) toast.info("This sequence is not active — nothing is sent until it is activated");
       onEnrolled();
       onClose();
     },
