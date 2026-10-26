@@ -6,7 +6,7 @@
  * condition object that merely looks right. It understands only what the
  * routers under test write: ANDs (and one level of OR) of =, <>, <, >, <=, >=,
  * IS NULL, IN and NOT IN, column-to-column equality in (inner and left) joins, ORDER BY a column,
- * LIMIT, GROUP BY with count(*), and `col + n` in an UPDATE. Anything else
+ * LIMIT, GROUP BY with count(*), and `col + n` or `COALESCE(col, NOW() | ?)` in an UPDATE. Anything else
  * throws, naming the clause, so a test never passes on SQL it did not read.
  *
  * Membership: by default the caller's role comes from `roles` and every
@@ -262,7 +262,15 @@ export function makeSqlFakeDb(opts: {
                 if (!matches(cond, qualify(table, r))) continue;
                 for (const [k, v] of Object.entries(values)) {
                   if (is(v, SQL)) {
-                    const m = render(v).sql.match(/`(\w+)` \+ (\d+)$/);
+                    // COALESCE(col, NOW()) / COALESCE(col, ?): keep a value that is there.
+                    const q = render(v);
+                    const co = q.sql.match(/^COALESCE\((`\w+`\.`\w+`), (NOW\(\)|\?)\)$/i);
+                    if (co) {
+                      const cur = lookup(qualify(table, r), co[1]);
+                      r[k] = cur ?? (co[2] === "?" ? q.params[0] : new Date());
+                      continue;
+                    }
+                    const m = q.sql.match(/`(\w+)` \+ (\d+)$/);
                     if (!m) throw new Error(`fake db: unsupported SET ${render(v).sql}`);
                     // The SQL names the DB column (session_version); the row is
                     // keyed by the JS name (sessionVersion).

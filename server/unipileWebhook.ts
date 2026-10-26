@@ -570,7 +570,7 @@ export function registerUnipileWebhookRoutes(app: Express) {
         // O6). Best effort: a failure here must not lose the message above.
         if (sc.tier) {
           try {
-            const { pauseEnrollmentsForSocialReply } = await import("./sequenceEngine");
+            const { pauseEnrollmentsForSocialReply, socialReplyProfileUrls } = await import("./sequenceEngine");
             await pauseEnrollmentsForSocialReply({
               workspaceId: acct.workspaceId,
               chatId: chatId || messageId,
@@ -578,6 +578,27 @@ export function registerUnipileWebhookRoutes(app: Express) {
               linkedContactId: sc.linkedContactId,
               linkedLeadId: sc.linkedLeadId,
             });
+            // …and the Revenue Engine's: a campaign prospect who answers its
+            // LinkedIn step is a reply like any other (A1). Nothing produced
+            // a linkedin_reply signal, so these prospects kept being followed
+            // up. processSignal stops the sequence before its model runs.
+            const urls = await socialReplyProfileUrls({ workspaceId: acct.workspaceId, chatId: chatId || messageId, senderProviderId });
+            if (urls.length > 0) {
+              const { prospectQueue } = await import("../drizzle/schema");
+              const { inArray } = await import("drizzle-orm");
+              const queued = await db.select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId })
+                .from(prospectQueue)
+                .where(and(
+                  eq(prospectQueue.workspaceId, acct.workspaceId),
+                  inArray(prospectQueue.linkedinUrl, urls),
+                  inArray(prospectQueue.sequenceStatus, ["enrolled", "paused", "approved"]),
+                ));
+              const { processSignal } = await import("./routers/are/execution");
+              for (const q of queued) {
+                void processSignal(acct.workspaceId, q.id, q.campaignId, "linkedin_reply", { text: text || subject || "" })
+                  .catch((e) => console.error(`[UnipileMsgWebhook] ARE processSignal failed for queue row ${q.id}:`, e));
+              }
+            }
           } catch (e) {
             console.error("[UnipileMsgWebhook] pausing the replier's sequences failed:", e);
           }

@@ -17,6 +17,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "../../db";
 import { prospects, prospectQueue } from "../../../drizzle/schema";
 import { existingClaim, queueIdentityKeys, type QueueIdentityShape } from "./queueIdentity";
+import { describeSuppression, findSuppression } from "../suppression";
 import type { ActiveSequenceHit } from "../crossEngineEnrollment";
 
 export interface PushResult {
@@ -122,6 +123,12 @@ export async function pushPeopleIntoCampaign(
     const verdict = classifyPushCandidate(shape, campaignId, index, inSequence.get(p.id));
     if (verdict.kind !== "ready") {
       skipped.push({ prospectId: p.id, reason: verdict.reason });
+      continue;
+    }
+    // The ONE suppression check, at the door into a campaign (A8).
+    const suppression = await findSuppression(workspaceId, { email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain }, "any");
+    if (suppression) {
+      skipped.push({ prospectId: p.id, reason: `Suppressed — ${describeSuppression(suppression)}` });
       continue;
     }
 

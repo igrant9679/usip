@@ -70,7 +70,7 @@ import { ARE_DEFAULT_SOURCES, normalizeSources, resolveSourceOrder, type AreSour
 // One rule for a step's index + variant key, shared with the A/B metadata
 // upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
 import { normalizeSequence } from "@shared/areSequenceSteps";
-import { effectiveStepGapDays, dueAtForDay, dayOffsetForPosition, planHealRevival, sanitizeDayOffsets } from "@shared/areStepCadence";
+import { effectiveStepGapDays, dayOffsetForPosition, planHealRevival, sanitizeDayOffsets } from "@shared/areStepCadence";
 import {
   APOLLO_PAGE_SIZE,
   apolloEmailReady,
@@ -107,7 +107,10 @@ import {
   sequenceCompletionVerdict,
 } from "./services/sequenceCompletion";
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
-import { isSuppressed as isSuppressedSitewide, makeUnsubscribeUrl, unsubscribeHeaders } from "./unsubscribe";
+import { makeUnsubscribeUrl, unsubscribeFooter, unsubscribeHeaders } from "./unsubscribe";
+import { describeSuppression, findSuppression } from "./services/suppression";
+import { HELD_PAUSED, HELD_REPLIED, claimStepForDispatch, releaseProspectSteps, respaced } from "./services/are/stepHold";
+import { getWorkspaceTimezone, startOfLocalDay } from "./services/workspaceTimezone";
 import { escapeHtml } from "@shared/escapeHtml";
 import { icpLabels } from "@shared/icpShape";
 import { dropNeverTarget, neverTargetHit, neverTargetReason } from "@shared/researchTargeting";
@@ -142,6 +145,12 @@ const ENRICH_PER_TICK = 5;
  */
 const SEQUENCE_PER_CAMPAIGN_TICK = 3;
 const ENROLL_PER_CAMPAIGN_TICK = 10;
+/** LinkedIn (and other non-email) steps read per campaign tick — their own page (A5). */
+const OTHER_CHANNEL_PER_TICK = 50;
+/** A LinkedIn step the limit gate held, or one behind it: tried again in an hour. */
+const LINKEDIN_HELD_MS = 60 * 60_000;
+/** A LinkedIn step waiting for its connection request to be accepted. */
+const LINKEDIN_WAIT_MS = 6 * 60 * 60_000;
 // Final checks can spend Reoon credits and seconds — bound them per tick so
 // the 3-minute engine cadence never stalls. Unchecked rows still enroll.
 const FINAL_CHECKS_PER_TICK = 5;
@@ -599,6 +608,8 @@ async function enrollApprovedForCampaignUnlocked(
       .select({
         id: prospectQueue.id,
         email: prospectQueue.email,
+        linkedinUrl: prospectQueue.linkedinUrl,
+        companyDomain: prospectQueue.companyDomain,
         personProspectId: prospectQueue.personProspectId,
         sequence: prospectIntelligence.generatedSequence,
         cadence: prospectIntelligence.cadenceDayOffsets,
@@ -745,6 +756,17 @@ async function enrollApprovedForCampaignUnlocked(
 
     let finalChecksThisTick = 0;
     for (const row of rows) {
+      /**
+       * Approved again after a pause: its steps are HELD, not gone (A3). Put
+       * them back on the calendar from now, keeping their spacing, rather than
+       * minting a second copy of the sequence beside them.
+       */
+      if ((await releaseProspectSteps(db, wsId, row.id, new Date())) > 0) {
+        await db.update(prospectQueue).set({ sequenceStatus: "enrolled" })
+          .where(and(eq(prospectQueue.id, row.id), eq(prospectQueue.workspaceId, wsId)));
+        await emitLog(wsId, campId, "enroll", "info", `Prospect ${row.id} resumed: held steps put back on the calendar from now`);
+        continue;
+      }
       // Idempotency — if LIVE execution rows already exist, just sync the status.
       //
       // "Live" is the word that was missing. This counted ALL execution rows,
@@ -800,28 +822,20 @@ async function enrollApprovedForCampaignUnlocked(
         }
       }
 
-      // Suppressed? Skip rather than enroll.
-      if (row.email) {
-        const [supp] = await db
-          .select({ n: sql<number>`count(*)` })
-          .from(areSuppressionList)
-          .where(
-            and(
-              eq(areSuppressionList.workspaceId, wsId),
-              eq(areSuppressionList.email, row.email),
-            ),
-          );
-        if (Number(supp?.n ?? 0) > 0) {
-          await db
-            .update(prospectQueue)
-            .set({
-              sequenceStatus: "skipped",
-              rejectedAt: new Date(),
-              rejectionReason: "On suppression list — not enrolled",
-            })
-            .where(eq(prospectQueue.id, row.id));
-          continue;
-        }
+      // Suppressed? Skip rather than enroll. The ONE check (A8): both lists,
+      // by address, LinkedIn profile and company domain — this read the
+      // campaign list by address only, and never the workspace list.
+      const suppression = await findSuppression(wsId, { email: row.email, linkedinUrl: row.linkedinUrl, companyDomain: row.companyDomain }, "any");
+      if (suppression) {
+        await db
+          .update(prospectQueue)
+          .set({
+            sequenceStatus: "skipped",
+            rejectedAt: new Date(),
+            rejectionReason: `On suppression list — not enrolled (${describeSuppression(suppression)})`.slice(0, 500),
+          })
+          .where(eq(prospectQueue.id, row.id));
+        continue;
       }
 
       const steps = normalizeSequence(row.sequence);
@@ -892,15 +906,21 @@ async function enrollApprovedForCampaignUnlocked(
         await db.update(prospectQueue).set({ sequenceStatus: "enrolled" }).where(eq(prospectQueue.id, row.id));
         continue;
       }
-      const execRows = remaining.map((s) => ({
+      // Never in the past, and never closer together than the cadence: a
+      // resumed sequence whose slots have gone is RE-SPACED from now (A2).
+      // Flooring each step at now made every overdue step due in the same
+      // tick — a re-approved prospect got several emails at once.
+      const dueTimes = respaced(
+        remaining.map((s) => anchor + dayOffsetForPosition(dayOffsets, positionOf.get(s.stepIndex) ?? 0, gapDays) * 86_400_000),
+        now,
+      );
+      const execRows = remaining.map((s, i) => ({
         workspaceId: wsId,
         campaignId: campId,
         prospectQueueId: row.id,
         stepIndex: s.stepIndex,
         channel: s.channel,
-        // Never in the past: a resumed step whose slot has already gone is due
-        // now, not overdue-and-dispatched-in-a-burst.
-        scheduledAt: dueAtForDay(anchor, dayOffsetForPosition(dayOffsets, positionOf.get(s.stepIndex) ?? 0, gapDays), now),
+        scheduledAt: new Date(dueTimes[i]),
         status: "scheduled" as const,
         messageContent: { subject: s.subject, body: s.body, variantKey: s.variantKey },
       }));
@@ -1260,8 +1280,10 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
     // A range comparison is also sargable: `DATE(col) = …` wraps the column in
     // a function and cannot use an index, so the old form scanned every row for
     // the campaign on every tick.
-    const startOfUtcDay = new Date();
-    startOfUtcDay.setUTCHours(0, 0, 0, 0);
+    // …and since 2026-10-26 the day is the WORKSPACE's (audit A31): the cap
+    // rolled over at UTC midnight while the send window ran in the workspace
+    // zone, so for an Eastern workspace the "day" restarted mid-evening.
+    const startOfDay = startOfLocalDay(await getWorkspaceTimezone(wsId));
     const [sentToday] = await db
       .select({ n: sql<number>`count(*)` })
       .from(areExecutionQueue)
@@ -1269,7 +1291,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         and(
           eq(areExecutionQueue.campaignId, campId),
           eq(areExecutionQueue.status, "sent"),
-          gte(areExecutionQueue.executedAt, startOfUtcDay),
+          gte(areExecutionQueue.executedAt, startOfDay),
         ),
       );
     const remaining = Math.max(0, campaign.dailySendCap - Number(sentToday?.n ?? 0));
@@ -1391,19 +1413,28 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       // The workspace send window (owner ask 2026-09-25, see @shared/sendWindow): outside it nothing is dispatched.
       // Due rows stay `scheduled` and go at the first tick inside it.
       const windowOpen = await inSendWindow(wsId);
-      const due = !windowOpen ? [] : await db
+      /**
+       * Email and the other channels read SEPARATE pages (audit A5). One page,
+       * limited to the email budget and ordered by due time, let LinkedIn steps
+       * waiting on a connection or a limit sit at its head every tick; once
+       * there were as many of them as the budget, no email was selected again.
+       */
+      const duePage = (email: boolean, limit: number) => db
         .select()
         .from(areExecutionQueue)
-        .where(
-          and(
-            eq(areExecutionQueue.campaignId, campId),
-            eq(areExecutionQueue.workspaceId, wsId),
-            eq(areExecutionQueue.status, "scheduled"),
-            lte(areExecutionQueue.scheduledAt, new Date()),
-          ),
-        )
+        .where(and(
+          eq(areExecutionQueue.campaignId, campId),
+          eq(areExecutionQueue.workspaceId, wsId),
+          eq(areExecutionQueue.status, "scheduled"),
+          lte(areExecutionQueue.scheduledAt, new Date()),
+          email ? eq(areExecutionQueue.channel, "email") : ne(areExecutionQueue.channel, "email"),
+        ))
         .orderBy(areExecutionQueue.scheduledAt)
-        .limit(remaining);
+        .limit(limit);
+      const due = !windowOpen ? [] : [
+        ...(await duePage(true, remaining)),
+        ...(await duePage(false, Math.min(remaining, OTHER_CHANNEL_PER_TICK))),
+      ].sort((a, b) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime());
 
       // Resolved lazily on the first email step, then reused for the batch.
       let bookingUrl: string | undefined;
@@ -1424,8 +1455,24 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
        * queries each to be told the same thing.
        */
       let linkedinHeld: string | null = null;
+      /** Sends left today on this campaign, across channels: every send counts. */
+      let budget = remaining;
+      /** Prospects that have had a step this tick (A2). */
+      const stepsThisTick = new Set<number>();
+      const gapMs = effectiveStepGapDays((campaign as { stepGapDays?: number | null }).stepGapDays) * 86_400_000;
 
       for (const step of due) {
+        if (budget <= 0) break;
+        /**
+         * ONE STEP PER PROSPECT PER TICK (audit A2). A second step due for
+         * someone who already had one this tick moves a campaign gap later,
+         * rather than going out minutes after the first.
+         */
+        if (stepsThisTick.has(step.prospectQueueId)) {
+          await db.update(areExecutionQueue).set({ scheduledAt: new Date(Date.now() + gapMs) })
+            .where(and(eq(areExecutionQueue.id, step.id), eq(areExecutionQueue.status, "scheduled")));
+          continue;
+        }
         /**
          * LINKEDIN (wired 2026-08-15). Previously every non-email step was
          * skipped with "not wired" — on campaign 13 that was 57 of 126 steps,
@@ -1448,7 +1495,13 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
               .where(eq(areExecutionQueue.id, step.id));
             continue;
           }
-          if (linkedinHeld) continue; // already established for this tick
+          if (linkedinHeld) {
+            // Held for the reason the step before it was: step aside, so it
+            // does not head the page again next tick (A5).
+            await db.update(areExecutionQueue).set({ scheduledAt: new Date(Date.now() + LINKEDIN_HELD_MS) })
+              .where(and(eq(areExecutionQueue.id, step.id), eq(areExecutionQueue.status, "scheduled")));
+            continue;
+          }
 
           const [lp] = await db
             .select()
@@ -1462,6 +1515,14 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
               .where(eq(areExecutionQueue.id, step.id));
             continue;
           }
+          if (lp.sequenceStatus === "paused" || lp.sequenceStatus === "replied") {
+            // HELD, not skipped (A3): resuming — or an auto-reply turning out
+            // to be one — brings it back.
+            await db.update(areExecutionQueue)
+              .set({ status: "paused", failureReason: lp.sequenceStatus === "paused" ? HELD_PAUSED : HELD_REPLIED })
+              .where(and(eq(areExecutionQueue.id, step.id), eq(areExecutionQueue.status, "scheduled")));
+            continue;
+          }
           if (lp.sequenceStatus !== "enrolled") {
             await db
               .update(areExecutionQueue)
@@ -1470,6 +1531,15 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
                 failureReason: `Prospect no longer enrolled (status: ${lp.sequenceStatus})`,
                 executedAt: new Date(),
               })
+              .where(eq(areExecutionQueue.id, step.id));
+            continue;
+          }
+          // The ONE suppression check, LinkedIn channel (A8): LinkedIn steps
+          // checked no list at all. A bounce alone does not stop this channel.
+          const liSuppression = await findSuppression(wsId, { email: lp.email, linkedinUrl: lp.linkedinUrl, companyDomain: lp.companyDomain }, "linkedin");
+          if (liSuppression) {
+            await db.update(areExecutionQueue)
+              .set({ status: "skipped", failureReason: `On suppression list (${describeSuppression(liSuppression)})`.slice(0, 500), executedAt: new Date() })
               .where(eq(areExecutionQueue.id, step.id));
             continue;
           }
@@ -1486,6 +1556,10 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             resolveSenderTokens(applyMerge(lmc.body ?? "", lp), { fromName: linkedinOwner?.name ?? null }),
             "areEngine.linkedin",
           );
+          // CLAIMED before the call (A30): two overlapping ticks both read this
+          // row as scheduled; whoever moves it sends it.
+          if (!(await claimStepForDispatch(db, step.id))) continue;
+          stepsThisTick.add(step.prospectQueueId);
           const outcome = await dispatchLinkedInStep({
             workspaceId: wsId,
             campaignId: campId,
@@ -1496,7 +1570,13 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
           });
 
           if (outcome.kind === "deferred") {
-            // Row stays SCHEDULED — this is a wait, not a failure.
+            // Back to SCHEDULED — a wait, not a failure — and moved forward, so
+            // a step waiting on a connection or a limit stops heading the page
+            // (A5). Nothing was sent, so the prospect may have another step.
+            await db.update(areExecutionQueue)
+              .set({ status: "scheduled", failureReason: null, executedAt: null, scheduledAt: new Date(Date.now() + (outcome.stopChannel ? LINKEDIN_HELD_MS : LINKEDIN_WAIT_MS)) })
+              .where(and(eq(areExecutionQueue.id, step.id), eq(areExecutionQueue.status, "failed")));
+            stepsThisTick.delete(step.prospectQueueId);
             if (outcome.stopChannel) {
               linkedinHeld = outcome.reason;
               await emitLog(wsId, campId, "dispatch", "info", `LinkedIn steps held: ${outcome.reason}`);
@@ -1513,6 +1593,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             .where(eq(areExecutionQueue.id, step.id));
           if (outcome.kind === "sent") {
             result.sent++;
+            budget--;
             await emitLog(wsId, campId, "dispatch", "info",
               `LinkedIn ${outcome.via} sent to ${lp.firstName ?? ""} ${lp.lastName ?? ""}`.trim());
           }
@@ -1557,7 +1638,15 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             .where(eq(areExecutionQueue.id, step.id));
           continue;
         }
-        // Prospect replied / was skipped / completed → stop the sequence.
+        // Paused, or replied: HELD, not skipped (A3) — resuming, or an
+        // auto-reply turning out to be one, brings the step back.
+        if (p.sequenceStatus === "paused" || p.sequenceStatus === "replied") {
+          await db.update(areExecutionQueue)
+            .set({ status: "paused", failureReason: p.sequenceStatus === "paused" ? HELD_PAUSED : HELD_REPLIED })
+            .where(and(eq(areExecutionQueue.id, step.id), eq(areExecutionQueue.status, "scheduled")));
+          continue;
+        }
+        // Skipped / completed / canceled → stop the sequence.
         if (p.sequenceStatus !== "enrolled") {
           await db
             .update(areExecutionQueue)
@@ -1576,31 +1665,15 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             .where(eq(areExecutionQueue.id, step.id));
           continue;
         }
-        // Suppression re-check at send time (may have been added since enroll).
-        const [supp] = await db
-          .select({ n: sql<number>`count(*)` })
-          .from(areSuppressionList)
-          .where(
-            and(
-              eq(areSuppressionList.workspaceId, wsId),
-              eq(areSuppressionList.email, p.email),
-            ),
-          );
-        if (Number(supp?.n ?? 0) > 0) {
+        // Suppression re-check at send time (may have been added since
+        // enrolment): the ONE check (A8) — both lists, by address, LinkedIn
+        // profile and company domain. The workspace list was added here on
+        // 2026-09-20; the profile and domain columns were never read.
+        const suppression = await findSuppression(wsId, { email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain }, "email");
+        if (suppression) {
           await db
             .update(areExecutionQueue)
-            .set({ status: "skipped", failureReason: "On suppression list", executedAt: new Date() })
-            .where(eq(areExecutionQueue.id, step.id));
-          continue;
-        }
-        // The SITE-WIDE list too (audit 2026-09-20). Unsubscribes, bounces and
-        // spam complaints from every other send path land in email_suppressions,
-        // and this dispatcher read only its own ARE list — so an address that
-        // opted out of sequence mail kept receiving campaign mail.
-        if (await isSuppressedSitewide(wsId, p.email)) {
-          await db
-            .update(areExecutionQueue)
-            .set({ status: "skipped", failureReason: "On suppression list (workspace)", executedAt: new Date() })
+            .set({ status: "skipped", failureReason: `On suppression list (${describeSuppression(suppression)})`.slice(0, 500), executedAt: new Date() })
             .where(eq(areExecutionQueue.id, step.id));
           continue;
         }
@@ -1659,20 +1732,19 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
         // Compliance wrap (audit 2026-09-20): campaign mail previously carried
         // no unsubscribe route at all. The signed per-recipient URL stands on
         // its own (workspaceId+email HMAC — server/unsubscribe.ts), so the
-        // RFC 8058 headers go on EVERY campaign send; the visible footer is
-        // appended when the workspace enabled its opt-out message.
+        // RFC 8058 headers go on EVERY campaign send. Since 2026-10-26 the
+        // visible footer does too (audit O15): the workspace's opt-out wording
+        // when it has one, the standard footer when it has not.
         const unsubHeaders = unsubscribeHeaders(appBaseUrl, wsId, p.email);
         let textOut = bodyIsHtml ? htmlBodyToText(body) : body;
-        if (optOutMessage) {
-          const optOut = renderSequenceOptOut(optOutMessage, {
-            unsubscribeUrl: makeUnsubscribeUrl(appBaseUrl, wsId, p.email),
-          });
-          if (optOut) {
-            html = html.includes("</body>")
-              ? html.replace("</body>", `${optOut.html}</body>`)
-              : `${html}\n${optOut.html}`;
-            textOut = `${textOut}\n\n${optOut.text}`;
-          }
+        {
+          const unsubscribeUrl = makeUnsubscribeUrl(appBaseUrl, wsId, p.email);
+          const optOut = (optOutMessage ? renderSequenceOptOut(optOutMessage, { unsubscribeUrl }) : null)
+            ?? (() => { const f = unsubscribeFooter(unsubscribeUrl); return { html: f.html, text: f.text.trim() }; })();
+          html = html.includes("</body>")
+            ? html.replace("</body>", `${optOut.html}</body>`)
+            : `${html}\n${optOut.html}`;
+          textOut = `${textOut}\n\n${optOut.text}`;
         }
 
         /**
@@ -1693,14 +1765,12 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
          * A clean failure below overwrites this with the real reason, which IS
          * healable, so genuine retries keep working exactly as before.
          */
-        await db
-          .update(areExecutionQueue)
-          .set({
-            status: "failed",
-            failureReason: "Dispatch interrupted — send state unknown",
-            executedAt: new Date(),
-          })
-          .where(eq(areExecutionQueue.id, step.id));
+        //
+        // And CONDITIONAL (audit A30): `WHERE status = 'scheduled'`, checked.
+        // Unconditional, two overlapping ticks that both read the row as due
+        // both "claimed" it and both sent.
+        if (!(await claimStepForDispatch(db, step.id))) continue;
+        stepsThisTick.add(step.prospectQueueId);
 
         const sendRes = await sendCampaignEmailViaPool(wsId, {
           to: p.email,
@@ -1748,6 +1818,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             })
             .where(eq(areExecutionQueue.id, step.id));
           result.sent++;
+          budget--;
         } else if (sendRes.blocked) {
           /**
            * A CAP IS NOT A FAILURE. Nothing was transmitted: the pool refuses
@@ -1765,6 +1836,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
             .set({ status: "scheduled", failureReason: null, executedAt: null })
             .where(eq(areExecutionQueue.id, step.id));
           poolHeld = sendRes.reason ?? "sending capacity exhausted";
+          stepsThisTick.delete(step.prospectQueueId);
           continue;
         } else {
           await db

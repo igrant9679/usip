@@ -978,6 +978,28 @@ export async function pauseOnReply(
 }
 
 /**
+ * The LinkedIn profile a DM reply answers, in every spelling a stored
+ * profile URL may have: the one our outbound message in that chat was sent
+ * to, else the sender's id. Shared by the sequence pause below and the
+ * Revenue Engine's (unipileWebhook).
+ */
+export async function socialReplyProfileUrls(input: { workspaceId: number; chatId: string; senderProviderId: string | null }): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const [outbound] = await db
+    .select({ recipient: unipileMessages.recipientProviderId })
+    .from(unipileMessages)
+    .where(and(
+      eq(unipileMessages.workspaceId, input.workspaceId),
+      eq(unipileMessages.chatId, input.chatId),
+      eq(unipileMessages.direction, "outbound"),
+    ))
+    .limit(1);
+  const identifier = (outbound?.recipient || input.senderProviderId || "").trim();
+  return identifier ? linkedinUrlVariants(identifier) : [];
+}
+
+/**
  * A genuine LinkedIn reply stops the person's sequences, as an email reply does
  * (audit 2026-10-20, O6).
  *
@@ -1001,17 +1023,7 @@ export async function pauseEnrollmentsForSocialReply(input: {
 }): Promise<number[]> {
   const db = await getDb();
   if (!db) return [];
-  const [outbound] = await db
-    .select({ recipient: unipileMessages.recipientProviderId })
-    .from(unipileMessages)
-    .where(and(
-      eq(unipileMessages.workspaceId, input.workspaceId),
-      eq(unipileMessages.chatId, input.chatId),
-      eq(unipileMessages.direction, "outbound"),
-    ))
-    .limit(1);
-  const identifier = (outbound?.recipient || input.senderProviderId || "").trim();
-  const variants = identifier ? linkedinUrlVariants(identifier) : [];
+  const variants = await socialReplyProfileUrls(input);
   const prospectIds = variants.length
     ? (await db.select({ id: prospects.id }).from(prospects)
         .where(and(eq(prospects.workspaceId, input.workspaceId), inArray(prospects.linkedinUrl, variants)))).map((r) => r.id)

@@ -31,6 +31,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, getTableColumns, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
+import { HELD_PAUSED, holdProspectSteps, releaseProspectSteps } from "../../services/are/stepHold";
 import { z } from "zod";
 import {
   areAbVariants,
@@ -1527,11 +1528,28 @@ export const prospectsRouter = router({
        * The status flip still happens regardless (that IS idempotent — it is
        * how canceled/paused rows get back into the engine's approved set).
        */
-      await db.update(prospectQueue).set({
+      /**
+       * Only from pending, sourcing, paused or canceled (audit 2026-10-20, A2).
+       * Re-approving a prospect who had REPLIED or COMPLETED re-enrolled them:
+       * their unsent steps were minted again and every overdue one fell due
+       * in the same tick. Approving one already approved is a no-op.
+       */
+      const res = await db.update(prospectQueue).set({
         sequenceStatus: "approved",
         approvedAt: sql`COALESCE(${prospectQueue.approvedAt}, NOW())`,
         approvedByUserId: sql`COALESCE(${prospectQueue.approvedByUserId}, ${ctx.user.id})`,
-      }).where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
+      }).where(and(
+        eq(prospectQueue.id, input.prospectId),
+        eq(prospectQueue.workspaceId, ctx.workspace.id),
+        inArray(prospectQueue.sequenceStatus, ["pending", "sourcing", "paused", "canceled"]),
+      ));
+      if (Number((res as any)?.[0]?.affectedRows ?? 0) !== 1) {
+        const [cur] = await db.select({ status: prospectQueue.sequenceStatus }).from(prospectQueue)
+          .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id))).limit(1);
+        if (!cur) throw new TRPCError({ code: "NOT_FOUND" });
+        if (cur.status === "approved") return { success: true };
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Only a pending, paused or canceled prospect can be approved (this one is ${cur.status}).` });
+      }
       // Approved people's companies go to the Companies page (2026-09-15).
       // Fire-and-forget: association is metadata, never blocks the approval.
       void promoteApprovedProspects(ctx.workspace.id, { queueIds: [input.prospectId] });
@@ -1573,12 +1591,14 @@ export const prospectsRouter = router({
         return { ok: true, alreadyCanceled: true, skippedSteps: 0 };
       }
       const reasonText = `Sequence canceled${input.reason ? ` — ${input.reason}` : ""}`;
-      // Count + skip every still-scheduled execution queue row for this prospect.
+      // Count + skip every still-pending execution queue row for this
+      // prospect — scheduled, and paused (held by a pause or a reply since
+      // 2026-10-26, or paused by hand): a cancel stops everything.
       const [pre] = await db.select({ n: sql<number>`count(*)` }).from(areExecutionQueue)
         .where(and(
           eq(areExecutionQueue.workspaceId, ctx.workspace.id),
           eq(areExecutionQueue.prospectQueueId, input.prospectId),
-          eq(areExecutionQueue.status, "scheduled"),
+          inArray(areExecutionQueue.status, ["scheduled", "paused"]),
         ));
       const skipped = Number(pre?.n ?? 0);
       if (skipped > 0) {
@@ -1589,7 +1609,7 @@ export const prospectsRouter = router({
         }).where(and(
           eq(areExecutionQueue.workspaceId, ctx.workspace.id),
           eq(areExecutionQueue.prospectQueueId, input.prospectId),
-          eq(areExecutionQueue.status, "scheduled"),
+          inArray(areExecutionQueue.status, ["scheduled", "paused"]),
         ));
       }
       await db.update(prospectQueue).set({
@@ -1615,9 +1635,13 @@ export const prospectsRouter = router({
       return { ok: true, alreadyCanceled: false, skippedSteps: skipped };
     }),
 
-  /** Pause an enrolled prospect's sequence. The dispatcher already
-   *  filters on sequenceStatus='enrolled', so pause is a no-op at the
-   *  queue level — we just flip the status. Resuming flips it back. */
+  /**
+   * Pause an enrolled prospect's sequence: their scheduled steps are HELD
+   * (audit 2026-10-20, A3). This only flipped the status, and the dispatcher
+   * then marked each step that fell due while paused `skipped` — for good, so
+   * resuming brought none of them back. Resuming releases them from now,
+   * keeping their spacing.
+   */
   pauseSequence: workspaceProcedure
     .input(z.object({ prospectId: z.number() }))
     .mutation(async ({ ctx, input }) => {
@@ -1631,16 +1655,17 @@ export const prospectsRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: `Can only pause an enrolled sequence (current status: ${before.sequenceStatus})` });
       }
       await db.update(prospectQueue).set({ sequenceStatus: "paused" })
-        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
+        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id), eq(prospectQueue.sequenceStatus, "enrolled")));
+      const held = await holdProspectSteps(db, ctx.workspace.id, input.prospectId, HELD_PAUSED);
       await db.insert(areEngineLogs).values({
         workspaceId: ctx.workspace.id,
         campaignId: before.campaignId,
         phase: "sequence.pause",
         level: "info",
         message: `Sequence paused for ${before.firstName ?? ""} ${before.lastName ?? ""}`,
-        details: { prospectId: input.prospectId, before: "enrolled", after: "paused", actorUserId: ctx.user.id } as any,
+        details: { prospectId: input.prospectId, before: "enrolled", after: "paused", heldSteps: held, actorUserId: ctx.user.id } as any,
       });
-      return { ok: true };
+      return { ok: true, heldSteps: held };
     }),
 
   resumeSequence: workspaceProcedure
@@ -1656,16 +1681,19 @@ export const prospectsRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: `Can only resume a paused sequence (current status: ${before.sequenceStatus})` });
       }
       await db.update(prospectQueue).set({ sequenceStatus: "enrolled" })
-        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
+        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id), eq(prospectQueue.sequenceStatus, "paused")));
+      // Back on the calendar from now, spaced as they were — not every
+      // overdue step at once.
+      const released = await releaseProspectSteps(db, ctx.workspace.id, input.prospectId, new Date());
       await db.insert(areEngineLogs).values({
         workspaceId: ctx.workspace.id,
         campaignId: before.campaignId,
         phase: "sequence.resume",
         level: "info",
         message: `Sequence resumed for ${before.firstName ?? ""} ${before.lastName ?? ""}`,
-        details: { prospectId: input.prospectId, before: "paused", after: "enrolled", actorUserId: ctx.user.id } as any,
+        details: { prospectId: input.prospectId, before: "paused", after: "enrolled", releasedSteps: released, actorUserId: ctx.user.id } as any,
       });
-      return { ok: true };
+      return { ok: true, releasedSteps: released };
     }),
 
   /** List sequence rows for the campaign Sequences tab. Returns both
@@ -2709,7 +2737,11 @@ export const prospectsRouter = router({
       if (!effectiveIcp) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No active ICP profile or campaign targeting" });
       const match = await scoreIcpMatch(prospect, effectiveIcp, ctx.workspace.id);
       const autoApproveThreshold = 70; // fallback default
-      const newStatus = match.score >= autoApproveThreshold ? "pending" : "skipped";
+      // Re-grading moves only a prospect that is not in a sequence (audit
+      // 2026-10-20, A2): sending one who had replied, completed or was
+      // enrolled back to "pending" was the first half of re-enrolling them.
+      const mayRegrade = ["pending", "skipped", "sourcing", "canceled"].includes(prospect.sequenceStatus);
+      const newStatus = !mayRegrade ? prospect.sequenceStatus : match.score >= autoApproveThreshold ? "pending" : "skipped";
       await db.update(prospectQueue).set({
         icpMatchScore: match.score,
         icpMatchBreakdown: JSON.stringify(match.breakdown),

@@ -52,6 +52,29 @@ export async function getWorkspaceTimezone(workspaceId: number, nowMs = Date.now
   return tz;
 }
 
+/**
+ * The instant the current day began in `tz` — local midnight, as a Date.
+ *
+ * For day-based limits that must roll over when the customer's day does: a
+ * campaign's daily cap counted from UTC midnight while its send window ran in
+ * the workspace zone, so for an Eastern workspace the "day" restarted at 7 or
+ * 8 PM, mid-evening (audit 2026-10-20, A31). Intl only; a bad zone reads as UTC.
+ */
+export function startOfLocalDay(tz: string, now: Date = new Date()): Date {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz || "UTC", hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit",
+    }).formatToParts(now);
+    const n = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+    const sinceMidnight = ((n("hour") * 60 + n("minute")) * 60 + n("second")) * 1000 + now.getUTCMilliseconds();
+    return new Date(now.getTime() - sinceMidnight);
+  } catch {
+    const d = new Date(now);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }
+}
+
 /** Test seam: drop memoised zones. */
 export function _clearWorkspaceTimezoneCache(): void {
   cache.clear();

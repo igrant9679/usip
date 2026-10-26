@@ -313,7 +313,8 @@ export const unipileRouter = router({
       // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
       await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
-      // Verify account ownership
+      // Verify account ownership — in THIS workspace, as sendLinkedInInvite
+      // does: the same user's account connected elsewhere is not this one's.
       const [account] = await db
         .select()
         .from(unipileAccounts)
@@ -321,10 +322,22 @@ export const unipileRouter = router({
           and(
             eq(unipileAccounts.unipileAccountId, input.unipileAccountId),
             eq(unipileAccounts.userId, ctx.user.id),
+            eq(unipileAccounts.workspaceId, ctx.workspace.id),
           ),
         )
         .limit(1);
       if (!account) throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
+
+      // The LinkedIn limit gate (audit 2026-10-20, O11): a person's own DM is
+      // still activity on the account the gate protects. Person-initiated, so
+      // it may go while the account's automation is switched off; the caps,
+      // spacing and hours still apply, and it counts.
+      const isLinkedIn = String(account.provider).toUpperCase() === "LINKEDIN";
+      const { checkLinkedInAction, recordLinkedInAction } = await import("../services/linkedin/activityGate");
+      if (isLinkedIn) {
+        const gate = await checkLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: input.unipileAccountId, kind: "message", personInitiated: true });
+        if (!gate.allowed) throw new TRPCError({ code: "BAD_REQUEST", message: `Held by LinkedIn limits: ${gate.message ?? gate.reason ?? "cap reached"}` });
+      }
 
       const result = await sendMessage({
         chatId: input.chatId,
@@ -333,6 +346,9 @@ export const unipileRouter = router({
         text: input.text,
         linkedinInmail: input.linkedinInmail,
       });
+      if (isLinkedIn) {
+        await recordLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: input.unipileAccountId, kind: "message", source: "manual", targetIdentifier: input.attendeesIds?.[0] ?? null });
+      }
 
       // Store message record. recipientProviderId is not decoration: it is one
       // of the three facts genuineSocialReplyScope() asks about, so a rep's
@@ -988,7 +1004,12 @@ export const unipileRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
       if (!acct) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Connect a LinkedIn account first." });
+      // Gated and counted like every LinkedIn action (O11).
+      const { checkLinkedInAction, recordLinkedInAction } = await import("../services/linkedin/activityGate");
+      const gate = await checkLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: acct, kind: "reaction", personInitiated: true });
+      if (!gate.allowed) throw new TRPCError({ code: "BAD_REQUEST", message: `Held by LinkedIn limits: ${gate.message ?? gate.reason ?? "cap reached"}` });
       await reactToPost(acct, input.socialId, input.reactionType);
+      await recordLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: acct, kind: "reaction", source: "manual", targetIdentifier: input.socialId });
       return { ok: true };
     }),
 
@@ -1001,7 +1022,13 @@ export const unipileRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
       if (!acct) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Connect a LinkedIn account first." });
+      // Gated and counted like every LinkedIn action (O11); a comment is a
+      // public reaction to a post.
+      const { checkLinkedInAction, recordLinkedInAction } = await import("../services/linkedin/activityGate");
+      const gate = await checkLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: acct, kind: "reaction", personInitiated: true });
+      if (!gate.allowed) throw new TRPCError({ code: "BAD_REQUEST", message: `Held by LinkedIn limits: ${gate.message ?? gate.reason ?? "cap reached"}` });
       const res = await commentOnPost(acct, input.socialId, input.text);
+      await recordLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: acct, kind: "reaction", source: "manual", targetIdentifier: input.socialId });
       return { ok: true, id: res.id };
     }),
 

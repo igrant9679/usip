@@ -51,6 +51,8 @@ import { notifyOwner } from "../../_core/notification";
 import { areNotify } from "./notify";
 import { runSignalEnhancement } from "./signalEnhancement";
 import { isSendableChannel, unsendableReason } from "@shared/areSequenceSteps";
+import { markAreProspectReplied } from "../../services/are/stepHold";
+import { normaliseAreSuppression } from "../../services/suppression";
 
 /* ─── Prospect → CRM promotion ──────────────────────────────────────────── */
 
@@ -344,6 +346,18 @@ export async function processSignal(
 
   const replySignals = ["email_reply", "linkedin_reply", "sms_reply", "voice_connected_interested", "voice_connected_not_interested"];
 
+  /**
+   * A REPLY STOPS THE SEQUENCE — here, before any model runs (audit
+   * 2026-10-20, A1). It used to stop only if the model recommended
+   * "pause_sequence": "not now", an empty body or a model error kept the
+   * follow-ups going to someone who had answered. The prospect becomes
+   * `replied` and their scheduled steps are HELD, so an auto-responder can be
+   * undone by the reply classifier (out_of_office) without losing them.
+   */
+  if (replySignals.includes(signalType)) {
+    await markAreProspectReplied(db, workspaceId, prospectQueueId);
+  }
+
   if (replySignals.includes(signalType)) {
     const replyText = String(rawPayload.body ?? rawPayload.text ?? rawPayload.message ?? "");
     if (replyText) {
@@ -424,13 +438,13 @@ export async function processSignal(
           case "add_suppression":
             const [prospect] = await db.select().from(prospectQueue).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId))).limit(1);
             if (prospect) {
-              await db.insert(areSuppressionList).values({
+              await db.insert(areSuppressionList).values(normaliseAreSuppression({
                 workspaceId,
                 email: prospect.email ?? undefined,
                 linkedinUrl: prospect.linkedinUrl ?? undefined,
-                reason: "unsubscribe",
+                reason: "unsubscribe" as const,
                 addedAt: new Date(),
-              });
+              }) as never);
               await db.update(prospectQueue).set({ sequenceStatus: "skipped" }).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
               actionTaken = "added_suppression";
             }
@@ -510,12 +524,12 @@ export async function processSignal(
   if (signalType === "email_bounce" || signalType === "email_unsubscribe" || signalType === "sms_unsubscribe") {
     const [prospect] = await db.select().from(prospectQueue).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId))).limit(1);
     if (prospect) {
-      await db.insert(areSuppressionList).values({
+      await db.insert(areSuppressionList).values(normaliseAreSuppression({
         workspaceId,
         email: prospect.email ?? undefined,
-        reason: signalType === "email_bounce" ? "bounce" : "unsubscribe",
+        reason: signalType === "email_bounce" ? "bounce" as const : "unsubscribe" as const,
         addedAt: new Date(),
-      });
+      }) as never);
       await db.update(prospectQueue).set({ sequenceStatus: "skipped" }).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
       actionTaken = "added_suppression";
     }
@@ -739,8 +753,13 @@ export const executionRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db.update(areExecutionQueue).set({ status: "scheduled" })
-        .where(and(eq(areExecutionQueue.id, input.id), eq(areExecutionQueue.workspaceId, ctx.workspace.id)));
+      // Only a PAUSED step can be resumed (audit 2026-10-20, A30): this put
+      // any row back to scheduled — a SENT one included, which then went again.
+      const res = await db.update(areExecutionQueue).set({ status: "scheduled", failureReason: null })
+        .where(and(eq(areExecutionQueue.id, input.id), eq(areExecutionQueue.workspaceId, ctx.workspace.id), eq(areExecutionQueue.status, "paused")));
+      if (Number((res as any)?.[0]?.affectedRows ?? 0) !== 1) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Only a paused step can be resumed." });
+      }
       return { success: true };
     }),
 
@@ -1193,14 +1212,14 @@ export const executionRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db.insert(areSuppressionList).values({
+      await db.insert(areSuppressionList).values(normaliseAreSuppression({
         workspaceId: ctx.workspace.id,
         email: input.email,
         linkedinUrl: input.linkedinUrl,
         companyDomain: input.companyDomain,
         reason: input.reason,
         addedByUserId: ctx.user.id,
-      });
+      }) as never);
       return { success: true };
     }),
 });

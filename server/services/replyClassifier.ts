@@ -28,6 +28,7 @@ import { sendWorkspaceEmail } from "../emailDelivery";
 import { resolveBookingUrl } from "../mergeVars";
 import { sendMessage } from "../lib/unipile";
 import { normalizeSuppressionEmail } from "../unsubscribe";
+import { resumeAreProspectAfterAutoReply } from "./are/stepHold";
 import { escapeHtml } from "@shared/escapeHtml";
 
 export const REPLY_CLASSES = [
@@ -397,8 +398,10 @@ export async function applyReplyAction(workspaceId: number, reply: any, byUser: 
       // the robot replies again → paused → snoozed again, and every cycle also
       // bumps campaigns.totalReplied in the poller. Four polite probes is
       // persistence; an unbounded loop is a machine talking to a machine.
+      // The campaign prospect this reply came from, if any (migration 0174).
+      const queueId: number | null = reply.prospectQueueId ?? null;
       let snoozesSoFar = 0;
-      if (ids.length > 0) {
+      if (ids.length > 0 || queueId) {
         const [prior] = await db.select({ n: sql<number>`count(*)` }).from(emailReplies).where(and(
           eq(emailReplies.workspaceId, workspaceId),
           eq(emailReplies.fromEmail, reply.fromEmail),
@@ -422,6 +425,14 @@ export async function applyReplyAction(workspaceId: number, reply: any, byUser: 
         // Nothing this reply paused (legacy row, replyDetection off, no
         // enrollment), or the probe budget is spent — leave it paused.
         action = "ooo_noted";
+      }
+      // The Revenue Engine's twin (audit 2026-10-20, A1): processSignal marked
+      // the campaign prospect replied and held their steps the moment the
+      // reply landed, before anything knew it was a robot. An auto-responder
+      // releases them from the return date, within the same probe budget.
+      if (queueId && snoozesSoFar < OOO_MAX_SNOOZES) {
+        const back = oooResumeAt(reply.oooReturnsAt, new Date(reply.receivedAt));
+        if (await resumeAreProspectAfterAutoReply(db, workspaceId, queueId, back)) action = "ooo_snoozed";
       }
       break;
     }
@@ -562,8 +573,10 @@ Classes (pick exactly one):
       let bookingLinkSent = false;
       let bookingLinkHeld = false;
       if (mode === "auto" && msg.chatId && socialAutopilotMaySend(tier)) {
-        if (!(await inSendWindow(workspaceId))) {
-          // Held for the workspace send window, as the email path is.
+        const gate = await socialDmGate(workspaceId, msg.provider, msg.unipileAccountId);
+        if (!(await inSendWindow(workspaceId)) || !gate.allowed) {
+          // Held for the workspace send window, as the email path is, or for
+          // the LinkedIn limits.
           await db.update(unipileMessages).set({ bookingLinkPendingAt: new Date() } as never)
             .where(eq(unipileMessages.id, msg.id));
           bookingLinkHeld = true;
@@ -573,6 +586,7 @@ Classes (pick exactly one):
             if (bookingUrl) {
               await sendMessage({ chatId: msg.chatId, text: bookingLinkDmText(name, bookingUrl) });
               bookingLinkSent = true;
+              await gate.record();
             }
           } catch (e) {
             console.error(`[SocialClassifier] booking-link DM failed for message ${msg.id}:`, e);
@@ -582,7 +596,7 @@ Classes (pick exactly one):
       if (bookingLinkSent) action = "booking_link_sent";
       await socialTask(db, workspaceId, msg, owner,
         bookingLinkSent ? `Booking link sent (${chan}) — ${name}`
-          : bookingLinkHeld ? `Meeting requested (${chan}) — ${name} (booking link goes out when the send window opens)`
+          : bookingLinkHeld ? `Meeting requested (${chan}) — ${name} (booking link goes out when the send window opens and LinkedIn limits allow)`
           : `Meeting requested (${chan}) — ${name}`,
         "high", "meeting_prep");
       break;
@@ -631,6 +645,22 @@ async function sendBookingLinkEmail(
     `<p>Looking forward to it.</p>`;
   const res = await sendWorkspaceEmail(workspaceId, { to: reply.fromEmail, subject, html });
   return res.ok;
+}
+
+/**
+ * The LinkedIn limit gate, for the autopilot's own DMs (audit 2026-10-20,
+ * O11): the booking-link DM went out with no check at all and counted against
+ * nothing, while the Limits page said every LinkedIn action was governed.
+ * Other providers (WhatsApp, …) have no gate and pass.
+ */
+async function socialDmGate(workspaceId: number, provider: string | null | undefined, unipileAccountId: string | null | undefined) {
+  if (String(provider ?? "").toLowerCase() !== "linkedin" || !unipileAccountId) return { allowed: true, record: async () => {} };
+  const { checkLinkedInAction, recordLinkedInAction } = await import("./linkedin/activityGate");
+  const verdict = await checkLinkedInAction({ workspaceId, unipileAccountId, kind: "message" });
+  return {
+    allowed: verdict.allowed,
+    record: () => recordLinkedInAction({ workspaceId, unipileAccountId, kind: "message", source: "booking_link" }),
+  };
 }
 
 /** The in-thread booking-link DM to an interested LinkedIn replier. */
@@ -684,6 +714,7 @@ export async function sendHeldBookingLinks(nowMs = Date.now()): Promise<{ sent: 
     id: unipileMessages.id, workspaceId: unipileMessages.workspaceId, chatId: unipileMessages.chatId,
     senderName: unipileMessages.senderName, unipileAccountId: unipileMessages.unipileAccountId,
     senderProviderId: unipileMessages.senderProviderId,
+    provider: unipileMessages.provider,
     pendingAt: unipileMessages.bookingLinkPendingAt,
   }).from(unipileMessages).where(isNotNull(unipileMessages.bookingLinkPendingAt)).limit(100);
   for (const m of dms) {
@@ -710,8 +741,12 @@ export async function sendHeldBookingLinks(nowMs = Date.now()): Promise<{ sent: 
       const owner = await activeOwnerOrNull(m.workspaceId, acct?.userId ?? null);
       const bookingUrl = await resolveBookingUrl(m.workspaceId, owner);
       if (socialAutopilotMaySend(tier) && bookingUrl) {
+        const gate = await socialDmGate(m.workspaceId, m.provider, m.unipileAccountId);
+        // Held by LinkedIn limits: still pending, tried again on the next run.
+        if (!gate.allowed) { out.held++; continue; }
         await sendMessage({ chatId: m.chatId, text: bookingLinkDmText(m.senderName || "there", bookingUrl) });
         ok = true;
+        await gate.record();
       }
     } catch (e) {
       console.error(`[SocialClassifier] held booking link failed for message ${m.id}:`, e);

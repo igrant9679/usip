@@ -832,9 +832,10 @@ describe("the SMTP draft paths claim each draft and always carry an unsubscribe"
     // Pause, the daily cap and the claim are asked per draft, before its send.
     const src = readFileSync(join(__dirname, "routers", "smtpConfig.ts"), "utf8");
     const loop = src.slice(src.indexOf("for (const draft of drafts)"), src.indexOf("await sleep(1000)"));
-    expect(loop.indexOf("isOutboundPaused(")).toBeLessThan(loop.indexOf("transporter.sendMail("));
-    expect(loop.indexOf("assertSendAllowed(")).toBeLessThan(loop.indexOf("transporter.sendMail("));
-    expect(loop.indexOf("claimDraftForSend(")).toBeLessThan(loop.indexOf("transporter.sendMail("));
+    for (const call of ["isOutboundPaused(", "assertSendAllowed(", "claimDraftForSend("]) {
+      expect(loop.indexOf(call), call).toBeGreaterThan(-1);
+      expect(loop.indexOf(call), call).toBeLessThan(loop.indexOf("transporter.sendMail("));
+    }
   }, 20_000);
 });
 

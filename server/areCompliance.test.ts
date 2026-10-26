@@ -18,8 +18,12 @@ describe("ARE campaign mail is compliant bulk mail", () => {
   it("dispatch checks the SITE-WIDE suppression list, not only its own ARE list", () => {
     // Unsubscribes, bounces and spam complaints from every other send path
     // land in email_suppressions; the dispatcher must read it too.
-    expect(engine).toContain("isSuppressedSitewide(wsId, p.email)");
-    expect(engine).toContain('"On suppression list (workspace)"');
+    // Since 2026-10-26 (audit A8) through the ONE check, which reads both
+    // lists — and the LinkedIn-profile and company-domain columns too.
+    expect(engine).toContain('findSuppression(wsId, { email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain }, "email")');
+    const suppression = readFileSync("server/services/suppression.ts", "utf8");
+    expect(suppression).toContain(".from(emailSuppressions)");
+    expect(suppression).toContain(".from(areSuppressionList)");
   });
 
   it("every campaign send carries the RFC 8058 one-click headers", () => {

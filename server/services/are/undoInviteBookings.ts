@@ -24,6 +24,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { areCampaigns, areExecutionQueue, areSignalLog, meetings, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { effectiveStepGapDays, planHealRevival, type HealRow } from "@shared/areStepCadence";
+import { releaseProspectSteps } from "./stepHold";
 
 export const REPLIED_SKIP_REASON = "Prospect no longer enrolled (status: replied)";
 const REPLY_SIGNALS = ["email_reply", "linkedin_reply", "sms_reply", "voice_connected_interested", "voice_connected_not_interested"] as const;
@@ -141,6 +142,9 @@ export async function undoInviteBookingSignals(
         await db.update(areExecutionQueue).set({ scheduledAt: c.to } as never)
           .where(and(eq(areExecutionQueue.id, c.id), eq(areExecutionQueue.status, "scheduled")));
       }
+      // Since 2026-10-26 the dispatcher HOLDS a replied prospect's steps
+      // instead of skipping them (audit A3), so those come back too.
+      await releaseProspectSteps(db, workspaceId, p.id, new Date());
     }
     await db.execute(sql`UPDATE are_campaigns SET meetingsBooked = GREATEST(0, meetingsBooked - 1) WHERE id = ${t.campaignId} AND workspaceId = ${workspaceId}`);
     await db.delete(areSignalLog).where(and(eq(areSignalLog.id, t.id), eq(areSignalLog.workspaceId, workspaceId)));

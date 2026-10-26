@@ -74,9 +74,12 @@ describe("phase 3 selects only enrollable rows", () => {
     expect(phase).toContain("const anchor = firstSendMs ?? now");
     // 0169: the campaign owns the cadence; 0170: a per-prospect timeline
     // override wins when set. Both flow through the shared rules
-    // (dayOffsetForPosition picks the day, dueAtForDay floors at now) — never
-    // the generated sequence's own dayOffset.
-    expect(phase).toContain("dueAtForDay(anchor, dayOffsetForPosition(dayOffsets, positionOf.get(s.stepIndex) ?? 0, gapDays), now)");
+    // (dayOffsetForPosition picks the day) — never the generated sequence's
+    // own dayOffset. Since 2026-10-26 (audit A2) the times are re-spaced from
+    // now (stepHold.respaced) instead of each floored at now, which made
+    // every overdue step of a resumed sequence due in one tick.
+    expect(phase).toContain("anchor + dayOffsetForPosition(dayOffsets, positionOf.get(s.stepIndex) ?? 0, gapDays) * 86_400_000");
+    expect(phase).toContain("const dueTimes = respaced(");
     expect(phase).toContain("sanitizeDayOffsets(row.cadence)");
     expect(phase).not.toContain("anchor + s.dayOffset");
   });
