@@ -546,6 +546,189 @@ export async function liveEnrolledCounts(
   return new Map(rows.map((r) => [r.sequenceId, Number(r.n)]));
 }
 
+/**
+ * The checks every enrolment into a sequence passes (audit 2026-10-20, P2):
+ * an invalid address (when the workspace blocks them), someone already in
+ * this sequence — by id, or the same person as another record by email —
+ * someone an ARE campaign is working, and anyone suppressed. bulkEnroll and
+ * the segment auto-enrol rules both enrol through this, and report what
+ * each check skipped.
+ */
+export async function screenEnrollmentCandidates(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  sequenceId: number,
+  ids: { contactIds: number[]; leadIds: number[]; prospectIds: number[] },
+): Promise<{
+  contactIds: number[]; leadIds: number[]; prospectIds: number[];
+  skipped: { alreadyEnrolled: number; invalidEmail: number; inCampaign: number; suppressed: number };
+}> {
+  const { contactIds, leadIds, prospectIds } = ids;
+  // ── Invalid-email guard (contacts + prospects) ──────────────
+  let blockedInvalidEmail = 0;
+  let enrollableContactIds = contactIds;
+  let enrollableProspectIds = prospectIds;
+  const [settings] = await db.select().from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId));
+  const blockInvalid = !!settings?.blockInvalidEmailsFromSequences;
+  if (blockInvalid && contactIds.length > 0) {
+    const rows = await db.select({ id: contacts.id, status: contacts.emailVerificationStatus })
+      .from(contacts)
+      .where(and(eq(contacts.workspaceId, workspaceId), inArray(contacts.id, contactIds)));
+    const allowed = new Set<number>();
+    for (const r of rows) {
+      if (r.status === "invalid") blockedInvalidEmail++;
+      else allowed.add(r.id);
+    }
+    enrollableContactIds = enrollableContactIds.filter((id) => allowed.has(id));
+  }
+  // Prospects: missing email is always disqualifying (engine has
+  // no way to deliver). emailStatus="unavailable" is also a hard
+  // fail when the workspace flag is on (Discovery v2 marks that
+  // state when verification ruled the address bad). Other states
+  // (verified / unverified / null) are allowed through and the
+  // engine's per-send suppression/bounce checks handle edge cases.
+  if (prospectIds.length > 0) {
+    const rows = await db.select({
+      id: prospects.id,
+      email: prospects.email,
+      emailStatus: prospects.emailStatus,
+    }).from(prospects)
+      .where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.id, prospectIds)));
+    const allowed = new Set<number>();
+    for (const r of rows) {
+      if (!r.email) { blockedInvalidEmail++; continue; }
+      if (blockInvalid && r.emailStatus === "unavailable") { blockedInvalidEmail++; continue; }
+      allowed.add(r.id);
+    }
+    enrollableProspectIds = enrollableProspectIds.filter((id) => allowed.has(id));
+  }
+
+  // ── Dedup against existing non-exited enrollments ───────────
+  // Per-target-type. A prospect that's already enrolled is skipped
+  // separately from a contact dedup so promoting later doesn't
+  // double-count.
+  const existing = await db.select({
+    contactId: enrollments.contactId,
+    leadId: enrollments.leadId,
+    prospectId: enrollments.prospectId,
+  }).from(enrollments)
+    .where(and(
+      eq(enrollments.workspaceId, workspaceId),
+      eq(enrollments.sequenceId, sequenceId),
+      inArray(enrollments.status, ["active", "paused", "finished"]),
+    ));
+  const existingContactIds = new Set(existing.map((e) => e.contactId).filter((x): x is number => x != null));
+  const existingLeadIds = new Set(existing.map((e) => e.leadId).filter((x): x is number => x != null));
+  const existingProspectIds = new Set(existing.map((e) => e.prospectId).filter((x): x is number => x != null));
+  let finalContactIds = enrollableContactIds.filter((id) => !existingContactIds.has(id));
+  let finalLeadIds = leadIds.filter((id) => !existingLeadIds.has(id));
+  let finalProspectIds = enrollableProspectIds.filter((id) => !existingProspectIds.has(id));
+  let skippedAlreadyEnrolled =
+    (enrollableContactIds.length - finalContactIds.length) +
+    (leadIds.length - finalLeadIds.length) +
+    (enrollableProspectIds.length - finalProspectIds.length);
+
+  // ── Cross-type dedup by EMAIL ────────────────────────────────
+  // Id-based dedup misses the same human across record types: a
+  // prospect promoted to a lead/contact is a new row with a new id,
+  // so they could be enrolled twice and receive duplicate emails.
+  // Collect the emails behind existing enrollments + this batch and
+  // skip any candidate whose email is already covered.
+  const emailOf = async (
+    tbl: typeof contacts | typeof leads | typeof prospects,
+    ids: number[],
+  ): Promise<Map<number, string>> => {
+    if (ids.length === 0) return new Map();
+    const rows = await db.select({ id: tbl.id, email: tbl.email }).from(tbl)
+      .where(and(eq(tbl.workspaceId, workspaceId), inArray(tbl.id, ids)));
+    return new Map(rows.filter((r) => r.email).map((r) => [r.id, r.email!.toLowerCase()]));
+  };
+  const [existCEmails, existLEmails, existPEmails, candCEmails, candLEmails, candPEmails] = await Promise.all([
+    emailOf(contacts, [...existingContactIds]),
+    emailOf(leads, [...existingLeadIds]),
+    emailOf(prospects, [...existingProspectIds]),
+    emailOf(contacts, finalContactIds),
+    emailOf(leads, finalLeadIds),
+    emailOf(prospects, finalProspectIds),
+  ]);
+  const seenEmails = new Set<string>([...existCEmails.values(), ...existLEmails.values(), ...existPEmails.values()]);
+  const dedupByEmail = (ids: number[], emails: Map<number, string>): number[] =>
+    ids.filter((id) => {
+      const em = emails.get(id);
+      if (!em) return true; // no email — engine-level checks handle it
+      if (seenEmails.has(em)) { skippedAlreadyEnrolled++; return false; }
+      seenEmails.add(em);
+      return true;
+    });
+  finalContactIds = dedupByEmail(finalContactIds, candCEmails);
+  finalLeadIds = dedupByEmail(finalLeadIds, candLEmails);
+  finalProspectIds = dedupByEmail(finalProspectIds, candPEmails);
+
+  // ── The OTHER engine (seams audit, 2026-09-02) ───────────────
+  // A person an ARE campaign is actively working must not also be
+  // sequenced: two engines, two copies, no shared suppression. Resolve
+  // every candidate to its People row and ask the ARE queue.
+  let skippedInCampaign = 0;
+  {
+    const { resolveToPeopleIds, activeCampaignsForProspects } = await import("../services/crossEngineEnrollment");
+    const resolved = await resolveToPeopleIds(workspaceId, {
+      prospectIds: finalProspectIds, contactIds: finalContactIds, leadIds: finalLeadIds,
+    });
+    const inCampaign = await activeCampaignsForProspects(workspaceId, resolved.prospectIds);
+    if (inCampaign.size > 0) {
+      // Map back: which candidate ids correspond to a claimed People row.
+      const claimedEmails = new Set<string>();
+      const claimedProspectIds = new Set<number>();
+      const claimedPeople = await db.select({ id: prospects.id, email: prospects.email, linkedContactId: prospects.linkedContactId, linkedLeadId: prospects.linkedLeadId })
+        .from(prospects).where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.id, Array.from(inCampaign.keys()))));
+      const claimedContactIds = new Set<number>();
+      const claimedLeadIds = new Set<number>();
+      for (const p of claimedPeople) {
+        claimedProspectIds.add(p.id);
+        if (p.email) claimedEmails.add(p.email.toLowerCase());
+        if (p.linkedContactId) claimedContactIds.add(p.linkedContactId);
+        if (p.linkedLeadId) claimedLeadIds.add(p.linkedLeadId);
+      }
+      const drop = <T extends number>(ids: T[], hit: (id: T) => boolean): T[] => ids.filter((id) => { if (hit(id)) { skippedInCampaign++; return false; } return true; });
+      finalProspectIds = drop(finalProspectIds, (id) => claimedProspectIds.has(id) || claimedEmails.has(candPEmails.get(id) ?? " "));
+      finalContactIds = drop(finalContactIds, (id) => claimedContactIds.has(id) || claimedEmails.has(candCEmails.get(id) ?? " "));
+      finalLeadIds = drop(finalLeadIds, (id) => claimedLeadIds.has(id) || claimedEmails.has(candLEmails.get(id) ?? " "));
+    }
+  }
+
+  // ── The ONE suppression check (A8) ──────────────────────────
+  // Either list, by address, LinkedIn profile or company domain. A bounce
+  // alone does not block enrolment; it stops the email steps when due.
+  let skippedSuppressed = 0;
+  {
+    const keep = async (
+      ids: number[],
+      load: (ids: number[]) => Promise<Array<{ id: number; email: string | null; linkedinUrl?: string | null; companyDomain?: string | null }>>,
+    ): Promise<number[]> => {
+      if (ids.length === 0) return ids;
+      const rows = await load(ids);
+      const blocked = new Set<number>();
+      for (const r of rows) {
+        if (await findSuppression(workspaceId, r, "any")) blocked.add(r.id);
+      }
+      skippedSuppressed += blocked.size;
+      return ids.filter((id) => !blocked.has(id));
+    };
+    finalContactIds = await keep(finalContactIds, (ids) => db.select({ id: contacts.id, email: contacts.email, linkedinUrl: contacts.linkedinUrl, companyDomain: contacts.companyDomain })
+      .from(contacts).where(and(eq(contacts.workspaceId, workspaceId), inArray(contacts.id, ids))));
+    finalLeadIds = await keep(finalLeadIds, (ids) => db.select({ id: leads.id, email: leads.email })
+      .from(leads).where(and(eq(leads.workspaceId, workspaceId), inArray(leads.id, ids))));
+    finalProspectIds = await keep(finalProspectIds, (ids) => db.select({ id: prospects.id, email: prospects.email, linkedinUrl: prospects.linkedinUrl, companyDomain: prospects.companyDomain })
+      .from(prospects).where(and(eq(prospects.workspaceId, workspaceId), inArray(prospects.id, ids))));
+  }
+
+  return {
+    contactIds: finalContactIds, leadIds: finalLeadIds, prospectIds: finalProspectIds,
+    skipped: { alreadyEnrolled: skippedAlreadyEnrolled, invalidEmail: blockedInvalidEmail, inCampaign: skippedInCampaign, suppressed: skippedSuppressed },
+  };
+}
+
 export const sequencesRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
@@ -1197,164 +1380,13 @@ export const sequencesRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: `${foreign} of the selected records were not found in this workspace — nothing was enrolled.` });
       }
 
-      // ── Invalid-email guard (contacts + prospects) ──────────────
-      let blockedInvalidEmail = 0;
-      let enrollableContactIds = contactIds;
-      let enrollableProspectIds = prospectIds;
-      const [settings] = await db.select().from(workspaceSettings)
-        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
-      const blockInvalid = !!settings?.blockInvalidEmailsFromSequences;
-      if (blockInvalid && contactIds.length > 0) {
-        const rows = await db.select({ id: contacts.id, status: contacts.emailVerificationStatus })
-          .from(contacts)
-          .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, contactIds)));
-        const allowed = new Set<number>();
-        for (const r of rows) {
-          if (r.status === "invalid") blockedInvalidEmail++;
-          else allowed.add(r.id);
-        }
-        enrollableContactIds = enrollableContactIds.filter((id) => allowed.has(id));
-      }
-      // Prospects: missing email is always disqualifying (engine has
-      // no way to deliver). emailStatus="unavailable" is also a hard
-      // fail when the workspace flag is on (Discovery v2 marks that
-      // state when verification ruled the address bad). Other states
-      // (verified / unverified / null) are allowed through and the
-      // engine's per-send suppression/bounce checks handle edge cases.
-      if (prospectIds.length > 0) {
-        const rows = await db.select({
-          id: prospects.id,
-          email: prospects.email,
-          emailStatus: prospects.emailStatus,
-        }).from(prospects)
-          .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, prospectIds)));
-        const allowed = new Set<number>();
-        for (const r of rows) {
-          if (!r.email) { blockedInvalidEmail++; continue; }
-          if (blockInvalid && r.emailStatus === "unavailable") { blockedInvalidEmail++; continue; }
-          allowed.add(r.id);
-        }
-        enrollableProspectIds = enrollableProspectIds.filter((id) => allowed.has(id));
-      }
-
-      // ── Dedup against existing non-exited enrollments ───────────
-      // Per-target-type. A prospect that's already enrolled is skipped
-      // separately from a contact dedup so promoting later doesn't
-      // double-count.
-      const existing = await db.select({
-        contactId: enrollments.contactId,
-        leadId: enrollments.leadId,
-        prospectId: enrollments.prospectId,
-      }).from(enrollments)
-        .where(and(
-          eq(enrollments.workspaceId, ctx.workspace.id),
-          eq(enrollments.sequenceId, input.sequenceId),
-          inArray(enrollments.status, ["active", "paused", "finished"]),
-        ));
-      const existingContactIds = new Set(existing.map((e) => e.contactId).filter((x): x is number => x != null));
-      const existingLeadIds = new Set(existing.map((e) => e.leadId).filter((x): x is number => x != null));
-      const existingProspectIds = new Set(existing.map((e) => e.prospectId).filter((x): x is number => x != null));
-      let finalContactIds = enrollableContactIds.filter((id) => !existingContactIds.has(id));
-      let finalLeadIds = leadIds.filter((id) => !existingLeadIds.has(id));
-      let finalProspectIds = enrollableProspectIds.filter((id) => !existingProspectIds.has(id));
-      let skippedAlreadyEnrolled =
-        (enrollableContactIds.length - finalContactIds.length) +
-        (leadIds.length - finalLeadIds.length) +
-        (enrollableProspectIds.length - finalProspectIds.length);
-
-      // ── Cross-type dedup by EMAIL ────────────────────────────────
-      // Id-based dedup misses the same human across record types: a
-      // prospect promoted to a lead/contact is a new row with a new id,
-      // so they could be enrolled twice and receive duplicate emails.
-      // Collect the emails behind existing enrollments + this batch and
-      // skip any candidate whose email is already covered.
-      const emailOf = async (
-        tbl: typeof contacts | typeof leads | typeof prospects,
-        ids: number[],
-      ): Promise<Map<number, string>> => {
-        if (ids.length === 0) return new Map();
-        const rows = await db.select({ id: tbl.id, email: tbl.email }).from(tbl)
-          .where(and(eq(tbl.workspaceId, ctx.workspace.id), inArray(tbl.id, ids)));
-        return new Map(rows.filter((r) => r.email).map((r) => [r.id, r.email!.toLowerCase()]));
-      };
-      const [existCEmails, existLEmails, existPEmails, candCEmails, candLEmails, candPEmails] = await Promise.all([
-        emailOf(contacts, [...existingContactIds]),
-        emailOf(leads, [...existingLeadIds]),
-        emailOf(prospects, [...existingProspectIds]),
-        emailOf(contacts, finalContactIds),
-        emailOf(leads, finalLeadIds),
-        emailOf(prospects, finalProspectIds),
-      ]);
-      const seenEmails = new Set<string>([...existCEmails.values(), ...existLEmails.values(), ...existPEmails.values()]);
-      const dedupByEmail = (ids: number[], emails: Map<number, string>): number[] =>
-        ids.filter((id) => {
-          const em = emails.get(id);
-          if (!em) return true; // no email — engine-level checks handle it
-          if (seenEmails.has(em)) { skippedAlreadyEnrolled++; return false; }
-          seenEmails.add(em);
-          return true;
-        });
-      finalContactIds = dedupByEmail(finalContactIds, candCEmails);
-      finalLeadIds = dedupByEmail(finalLeadIds, candLEmails);
-      finalProspectIds = dedupByEmail(finalProspectIds, candPEmails);
-
-      // ── The OTHER engine (seams audit, 2026-09-02) ───────────────
-      // A person an ARE campaign is actively working must not also be
-      // sequenced: two engines, two copies, no shared suppression. Resolve
-      // every candidate to its People row and ask the ARE queue.
-      let skippedInCampaign = 0;
-      {
-        const { resolveToPeopleIds, activeCampaignsForProspects } = await import("../services/crossEngineEnrollment");
-        const resolved = await resolveToPeopleIds(ctx.workspace.id, {
-          prospectIds: finalProspectIds, contactIds: finalContactIds, leadIds: finalLeadIds,
-        });
-        const inCampaign = await activeCampaignsForProspects(ctx.workspace.id, resolved.prospectIds);
-        if (inCampaign.size > 0) {
-          // Map back: which candidate ids correspond to a claimed People row.
-          const claimedEmails = new Set<string>();
-          const claimedProspectIds = new Set<number>();
-          const claimedPeople = await db.select({ id: prospects.id, email: prospects.email, linkedContactId: prospects.linkedContactId, linkedLeadId: prospects.linkedLeadId })
-            .from(prospects).where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, Array.from(inCampaign.keys()))));
-          const claimedContactIds = new Set<number>();
-          const claimedLeadIds = new Set<number>();
-          for (const p of claimedPeople) {
-            claimedProspectIds.add(p.id);
-            if (p.email) claimedEmails.add(p.email.toLowerCase());
-            if (p.linkedContactId) claimedContactIds.add(p.linkedContactId);
-            if (p.linkedLeadId) claimedLeadIds.add(p.linkedLeadId);
-          }
-          const drop = <T extends number>(ids: T[], hit: (id: T) => boolean): T[] => ids.filter((id) => { if (hit(id)) { skippedInCampaign++; return false; } return true; });
-          finalProspectIds = drop(finalProspectIds, (id) => claimedProspectIds.has(id) || claimedEmails.has(candPEmails.get(id) ?? " "));
-          finalContactIds = drop(finalContactIds, (id) => claimedContactIds.has(id) || claimedEmails.has(candCEmails.get(id) ?? " "));
-          finalLeadIds = drop(finalLeadIds, (id) => claimedLeadIds.has(id) || claimedEmails.has(candLEmails.get(id) ?? " "));
-        }
-      }
-
-      // ── The ONE suppression check (A8) ──────────────────────────
-      // Either list, by address, LinkedIn profile or company domain. A bounce
-      // alone does not block enrolment; it stops the email steps when due.
-      let skippedSuppressed = 0;
-      {
-        const keep = async (
-          ids: number[],
-          load: (ids: number[]) => Promise<Array<{ id: number; email: string | null; linkedinUrl?: string | null; companyDomain?: string | null }>>,
-        ): Promise<number[]> => {
-          if (ids.length === 0) return ids;
-          const rows = await load(ids);
-          const blocked = new Set<number>();
-          for (const r of rows) {
-            if (await findSuppression(ctx.workspace.id, r, "any")) blocked.add(r.id);
-          }
-          skippedSuppressed += blocked.size;
-          return ids.filter((id) => !blocked.has(id));
-        };
-        finalContactIds = await keep(finalContactIds, (ids) => db.select({ id: contacts.id, email: contacts.email, linkedinUrl: contacts.linkedinUrl, companyDomain: contacts.companyDomain })
-          .from(contacts).where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, ids))));
-        finalLeadIds = await keep(finalLeadIds, (ids) => db.select({ id: leads.id, email: leads.email })
-          .from(leads).where(and(eq(leads.workspaceId, ctx.workspace.id), inArray(leads.id, ids))));
-        finalProspectIds = await keep(finalProspectIds, (ids) => db.select({ id: prospects.id, email: prospects.email, linkedinUrl: prospects.linkedinUrl, companyDomain: prospects.companyDomain })
-          .from(prospects).where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, ids))));
-      }
+      // Invalid address, already enrolled (by id or email), worked by an ARE
+      // campaign, suppressed — the one screen every enrolment passes (P2).
+      const screened = await screenEnrollmentCandidates(db, ctx.workspace.id, input.sequenceId, { contactIds, leadIds, prospectIds });
+      const finalContactIds = screened.contactIds;
+      const finalLeadIds = screened.leadIds;
+      const finalProspectIds = screened.prospectIds;
+      const { alreadyEnrolled: skippedAlreadyEnrolled, invalidEmail: blockedInvalidEmail, inCampaign: skippedInCampaign, suppressed: skippedSuppressed } = screened.skipped;
 
       const now = new Date();
       const rows: any[] = [];

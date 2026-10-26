@@ -5,7 +5,7 @@
  * that produced, so a missing `workspaceId = ?` is a row that leaks, not a
  * condition object that merely looks right. It understands only what the
  * routers under test write: ANDs (and one level of OR) of =, <>, <, >, <=, >=,
- * IS NULL, IN and NOT IN, LIKE ('%' wildcards), column-to-column equality in (inner and left) joins, ORDER BY a column,
+ * IS NULL, IN and NOT IN, LIKE ('%' wildcards, case-insensitive), column-to-column equality in (inner and left) joins, ORDER BY a column,
  * LIMIT, GROUP BY with count(*), `col + n` or `COALESCE(col, NOW() | ?)` in an UPDATE, and an insert's
  * onDuplicateKeyUpdate against the table's unique indexes, `lower(col) = ?`, and
  * db.transaction(fn) — which rolls every table back if fn throws. Anything else
@@ -101,7 +101,8 @@ export function makeSqlFakeDb(opts: {
     if ((m = clause.match(new RegExp(`^${REF} like \\?$`)))) {
       const v = lookup(ctx, m[1]);
       const pat = String(params[pi.i++]).split("%").map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
-      return v != null && new RegExp(`^${pat}$`, "s").test(String(v));
+      // Case-insensitive, as LIKE is under MySQL's default (_ci) collation.
+      return v != null && new RegExp(`^${pat}$`, "is").test(String(v));
     }
     if ((m = clause.match(new RegExp(`^${REF} in \\(([?, ]+)\\)$`)))) {
       const n = (m[2].match(/\?/g) ?? []).length;

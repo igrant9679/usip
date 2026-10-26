@@ -22,35 +22,14 @@ import {
   sequences,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { screenEnrollmentCandidates } from "./sequences";
+import { matchesSegment, type SegmentRule } from "@shared/segmentRules";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 
-/* ─── Rule evaluation helpers (mirrors segments.ts) ─────────────────── */
-type Rule = { field: string; operator: string; value: string };
-
-function applyRule(contact: Record<string, any>, rule: Rule): boolean {
-  const raw = contact[rule.field];
-  const val = raw === null || raw === undefined ? "" : String(raw);
-  const ruleVal = rule.value.toLowerCase();
-  const valLower = val.toLowerCase();
-  switch (rule.operator) {
-    case "equals": return valLower === ruleVal;
-    case "not_equals": return valLower !== ruleVal;
-    case "contains": return valLower.includes(ruleVal);
-    case "not_contains": return !valLower.includes(ruleVal);
-    case "is_empty": return val === "";
-    case "is_not_empty": return val !== "";
-    case "gt": return new Date(val) > new Date(rule.value);
-    case "lt": return new Date(val) < new Date(rule.value);
-    default: return true;
-  }
-}
-
-function evaluateRules(contact: Record<string, any>, rules: Rule[], matchType: "all" | "any"): boolean {
-  if (rules.length === 0) return true;
-  if (matchType === "all") return rules.every((r) => applyRule(contact, r));
-  return rules.some((r) => applyRule(contact, r));
-}
+/* ─── Rule evaluation: the one evaluator segments.ts uses too (P19) ───── */
+type Rule = SegmentRule;
+const evaluateRules = (contact: Record<string, any>, rules: Rule[], matchType: "all" | "any") => matchesSegment(contact, rules, matchType);
 
 /* ─── Core enrollment logic (exported for cron use) ─────────────────── */
 export async function runSegmentEnrollmentForWorkspace(workspaceId: number): Promise<{ enrolled: number; skipped: number; rules: number }> {
@@ -91,16 +70,28 @@ export async function runSegmentEnrollmentForWorkspace(workspaceId: number): Pro
   let totalSkipped = 0;
 
   for (const rule of rules) {
+    const record = (summary: Record<string, unknown>, enrolledNow = 0) => db.update(segmentSequenceRules)
+      .set({ lastRunAt: new Date(), enrolledCount: (rule.enrolledCount ?? 0) + enrolledNow, lastRunSummary: { at: new Date().toISOString(), ...summary } } as never)
+      .where(and(eq(segmentSequenceRules.id, rule.id), eq(segmentSequenceRules.workspaceId, workspaceId)));
+
     if (!activeSeqIds.has(rule.sequenceId)) {
       totalSkipped++;
+      await record({ matched: 0, enrolled: 0, refused: "The sequence is not active." });
       continue;
     }
 
     const segment = segmentMap.get(rule.segmentId);
-    if (!segment) { totalSkipped++; continue; }
+    if (!segment) { totalSkipped++; await record({ matched: 0, enrolled: 0, refused: "The segment no longer exists." }); continue; }
 
     const segRules = (segment.rules as Rule[]) ?? [];
     const matchType = (segment.matchType ?? "all") as "all" | "any";
+
+    // A segment with no rules matches EVERY contact (audit 2026-10-20, P1):
+    // one saved by mistake enrolled the whole base on the next hourly run.
+    if (segRules.length === 0) {
+      await record({ matched: 0, enrolled: 0, refused: "The segment has no rules, so it would match every contact. Nothing was enrolled." });
+      continue;
+    }
 
     // Find contacts matching the segment
     const matchingContacts = allContacts.filter((c) =>
@@ -108,45 +99,32 @@ export async function runSegmentEnrollmentForWorkspace(workspaceId: number): Pro
     );
 
     if (matchingContacts.length === 0) {
-      await db.update(segmentSequenceRules).set({ lastRunAt: new Date() }).where(eq(segmentSequenceRules.id, rule.id));
+      await record({ matched: 0, enrolled: 0 });
       continue;
     }
 
-    // Get already-enrolled contact IDs for this sequence
-    const matchingContactIds = matchingContacts.map((c) => c.id);
-    const existingEnrollments = await db
-      .select({ contactId: enrollments.contactId })
-      .from(enrollments)
-      .where(
-        and(
-          eq(enrollments.workspaceId, workspaceId),
-          eq(enrollments.sequenceId, rule.sequenceId),
-          inArray(enrollments.contactId, matchingContactIds)
-        )
-      );
-    const alreadyEnrolledIds = new Set(existingEnrollments.map((e) => e.contactId));
+    // The same screen every enrolment passes (P2): invalid addresses, people
+    // already in the sequence (by id or email), people an ARE campaign is
+    // working, and anyone suppressed. This run skipped all four.
+    const screened = await screenEnrollmentCandidates(db, workspaceId, rule.sequenceId, {
+      contactIds: matchingContacts.map((c) => c.id), leadIds: [], prospectIds: [],
+    });
+    const skipped = screened.skipped;
+    totalSkipped += skipped.alreadyEnrolled + skipped.invalidEmail + skipped.inCampaign + skipped.suppressed;
 
-    // Enroll contacts not yet enrolled
-    let ruleEnrolled = 0;
-    for (const contact of matchingContacts) {
-      if (alreadyEnrolledIds.has(contact.id)) { totalSkipped++; continue; }
-
-      await db.insert(enrollments).values({
+    const now = new Date();
+    if (screened.contactIds.length > 0) {
+      await db.insert(enrollments).values(screened.contactIds.map((contactId) => ({
         workspaceId,
         sequenceId: rule.sequenceId,
-        contactId: contact.id,
-        status: "active",
+        contactId,
+        status: "active" as const,
         currentStep: 0,
-        nextActionAt: new Date(),
-      });
-      ruleEnrolled++;
-      totalEnrolled++;
+        nextActionAt: now,
+      })));
     }
-
-    // Update rule stats
-    await db.update(segmentSequenceRules)
-      .set({ lastRunAt: new Date(), enrolledCount: (rule.enrolledCount ?? 0) + ruleEnrolled })
-      .where(eq(segmentSequenceRules.id, rule.id));
+    totalEnrolled += screened.contactIds.length;
+    await record({ matched: matchingContacts.length, enrolled: screened.contactIds.length, skipped }, screened.contactIds.length);
   }
 
   return { enrolled: totalEnrolled, skipped: totalSkipped, rules: rules.length };

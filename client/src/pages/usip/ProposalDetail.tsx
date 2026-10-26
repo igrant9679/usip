@@ -77,7 +77,7 @@ import { buildPrintHTML, openPrintWindow } from "./proposalExports/buildPrintHTM
 import { downloadProposalDocx } from "./proposalExports/buildDocx";
 import { ProposalTimeline } from "./proposalExports/ProposalTimeline";
 import { FileDown, FileType2 } from "lucide-react";
-import { ConfirmButton } from "@/components/usip/Common";
+import { ConfirmButton, confirmAction } from "@/components/usip/Common";
 import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
 
 // ── Status config ─────────────────────────────────────────────────────────────
@@ -142,6 +142,12 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
 
   const updateStatusMutation = trpc.proposals.updateStatus.useMutation({
     onSuccess: () => { toast.success("Status updated"); onRefetch(); },
+    onError: (e) => toast.error(e.message),
+  });
+  // "Accepted" is acceptance, not a label (audit 2026-10-20, R26): it closes
+  // the linked deal and raises the follow-up, so it goes through acceptProposal.
+  const acceptMutation = trpc.proposals.acceptProposal.useMutation({
+    onSuccess: (r) => { toast.success(r.alreadyAccepted ? "Already accepted" : "Proposal accepted"); onRefetch(); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -321,8 +327,21 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
             return (
               <button
                 key={k}
-                onClick={() => !isActive && updateStatusMutation.mutate({ id: proposal.id, status: k as ProposalStatus })}
-                disabled={isActive || updateStatusMutation.isPending}
+                onClick={() => {
+                  if (isActive) return;
+                  if (k === "accepted") {
+                    confirmAction({
+                      title: "Mark this proposal accepted?",
+                      description: proposal.linkedOpportunityId
+                        ? "Its linked deal is closed won, a follow-up task is created and the owner is told."
+                        : "A follow-up task is created and the owner is told.",
+                      confirmLabel: "Accept",
+                    }, () => acceptMutation.mutate({ id: proposal.id }));
+                    return;
+                  }
+                  updateStatusMutation.mutate({ id: proposal.id, status: k as ProposalStatus });
+                }}
+                disabled={isActive || updateStatusMutation.isPending || acceptMutation.isPending}
                 className={cn(
                   "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all",
                   isActive ? cn(v.color, "ring-2 ring-offset-1 ring-current") : "border-border text-muted-foreground hover:border-teal-500/50 hover:text-foreground",
@@ -1474,13 +1493,13 @@ function PipelinePanel({ proposal, onRefetch }: { proposal: any; onRefetch: () =
     },
     onError: (e) => toast.error(e.message),
   });
-  const createAndLink = trpc.proposals.acceptProposal.useMutation({
+  // An OPEN deal for the proposal (R26): this called acceptProposal, so
+  // creating a deal marked the proposal accepted and the deal won.
+  const createAndLink = trpc.proposals.createOpportunity.useMutation({
     onSuccess: (data) => {
-      if (data.opportunityId) {
-        toast.success(`Pipeline opportunity created and linked (#${data.opportunityId})`);
-        utils.proposals.get.invalidate({ id: proposal.id });
-        onRefetch();
-      }
+      toast.success(`Pipeline opportunity created and linked (#${data.opportunityId})`);
+      utils.proposals.get.invalidate({ id: proposal.id });
+      onRefetch();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -1545,7 +1564,7 @@ function PipelinePanel({ proposal, onRefetch }: { proposal: any; onRefetch: () =
                 variant="outline"
                 size="sm"
                 className="gap-1.5 text-xs text-teal-400 border-teal-500/30 hover:bg-teal-500/10"
-                onClick={() => createAndLink.mutate({ id: proposal.id })}
+                onClick={() => createAndLink.mutate({ proposalId: proposal.id })}
                 disabled={createAndLink.isPending}
               >
                 <Plus className="size-3.5" />

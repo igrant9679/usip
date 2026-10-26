@@ -17,6 +17,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { openExtensionRequest } from "@shared/proposalExtension";
 import { eq, inArray, sql } from "drizzle-orm";
 import { activeTaskStatuses } from "@shared/taskStatus";
 import { classifyOpen, type OpenSignal } from "@shared/openTracking";
@@ -886,9 +887,11 @@ export function registerEmailTrackingRoutes(app: Express) {
       let slaNotifsent = 0;
       for (const pendingAct of pendingExtActivities) {
         try {
-          // Check if there's already a resolution (approved/declined) for this proposal
-          const resolutionActs = await db
-            .select({ id: activities.id })
+          // Still open only if this request is the proposal's latest
+          // extension event (R23). This selected only ids and then read
+          // .subject, so it never saw a resolution and nagged forever.
+          const proposalActs = await db
+            .select({ id: activities.id, subject: activities.subject, occurredAt: activities.occurredAt })
             .from(activities)
             .where(
               and(
@@ -896,12 +899,7 @@ export function registerEmailTrackingRoutes(app: Express) {
                 eq(activities.relatedType, "proposal"),
               ),
             );
-          const hasResolution = resolutionActs.some(
-            (a) =>
-              (a as any).subject?.toLowerCase().includes("extension approved") ||
-              (a as any).subject?.toLowerCase().includes("extension declined"),
-          );
-          if (hasResolution) continue;
+          if (openExtensionRequest(proposalActs)?.id !== pendingAct.id) continue;
           // Check if we already sent an SLA overdue notification for this activity
           const alreadyNotified = await db
             .select({ id: activities.id })
@@ -969,9 +967,9 @@ export function registerEmailTrackingRoutes(app: Express) {
       let slaTasksCreated = 0;
       for (const act72 of overdue72Acts) {
         try {
-          // Skip if already resolved
+          // Skip unless this request is still the latest extension event (R23).
           const resActs = await db
-            .select({ id: activities.id, subject: activities.subject })
+            .select({ id: activities.id, subject: activities.subject, occurredAt: activities.occurredAt })
             .from(activities)
             .where(
               and(
@@ -979,12 +977,7 @@ export function registerEmailTrackingRoutes(app: Express) {
                 eq(activities.relatedType, "proposal"),
               ),
             );
-          const resolved = resActs.some(
-            (a) =>
-              (a as any).subject?.toLowerCase().includes("extension approved") ||
-              (a as any).subject?.toLowerCase().includes("extension declined"),
-          );
-          if (resolved) continue;
+          if (openExtensionRequest(resActs)?.id !== act72.id) continue;
           // Check if a 72h escalation task already exists for this proposal
           const existingEscalation = await db
             .select({ id: tasks.id })

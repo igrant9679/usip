@@ -5,6 +5,7 @@ import { getDb } from "../db";
 import { audienceSegments, contacts } from "../../drizzle/schema";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { matchesSegment, segmentProblem } from "@shared/segmentRules";
 
 // ─── Rule schema ──────────────────────────────────────────────────────────────
 const RuleSchema = z.object({
@@ -23,29 +24,15 @@ const RuleSchema = z.object({
 type Rule = z.infer<typeof RuleSchema>;
 
 // ─── Evaluate rules against contacts in JS (post-fetch) ──────────────────────
-function applyRule(contact: Record<string, any>, rule: Rule): boolean {
-  const raw = contact[rule.field];
-  const val = raw === null || raw === undefined ? "" : String(raw);
-  const ruleVal = rule.value.toLowerCase();
-  const valLower = val.toLowerCase();
-
-  switch (rule.operator) {
-    case "equals": return valLower === ruleVal;
-    case "not_equals": return valLower !== ruleVal;
-    case "contains": return valLower.includes(ruleVal);
-    case "not_contains": return !valLower.includes(ruleVal);
-    case "is_empty": return val === "";
-    case "is_not_empty": return val !== "";
-    case "gt": return new Date(val) > new Date(rule.value);
-    case "lt": return new Date(val) < new Date(rule.value);
-    default: return true;
-  }
+// One evaluator, shared with the hourly auto-enrol (audit 2026-10-20, P19).
+function evaluateRules(contact: Record<string, any>, rules: Rule[], matchType: "all" | "any"): boolean {
+  return matchesSegment(contact, rules, matchType);
 }
 
-function evaluateRules(contact: Record<string, any>, rules: Rule[], matchType: "all" | "any"): boolean {
-  if (rules.length === 0) return true;
-  if (matchType === "all") return rules.every((r) => applyRule(contact, r));
-  return rules.some((r) => applyRule(contact, r));
+/** Refuses a segment that cannot mean what it says (P1, P19). */
+function assertSavable(rules: Rule[]) {
+  const problem = segmentProblem(rules);
+  if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
 }
 
 // ─── Router ───────────────────────────────────────────────────────────────────
@@ -68,6 +55,7 @@ export const segmentsRouter = router({
       rules: z.array(RuleSchema),
     }))
     .mutation(async ({ ctx, input }) => {
+      assertSavable(input.rules);
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
 
@@ -102,6 +90,7 @@ export const segmentsRouter = router({
       rules: z.array(RuleSchema),
     }))
     .mutation(async ({ ctx, input }) => {
+      assertSavable(input.rules);
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
 

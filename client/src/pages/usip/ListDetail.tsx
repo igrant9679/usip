@@ -9,7 +9,7 @@
  * Backed by recordLists.get / members / addMembers / removeMember. People lists
  * hold prospects; Companies lists hold accounts.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useLocation, Link } from "wouter";
 import { AddToMenu } from "@/components/usip/AddToMenu";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
@@ -384,7 +384,19 @@ function AddRecordsDialog({
   onAdd: (ids: number[]) => void;
 }) {
   const [q, setQ] = useState("");
-  const prospectsQ = trpc.prospects.list.useQuery({ page: 1, perPage: 100 }, { enabled: open && !isCompanies });
+  // People are searched ON THE SERVER, a page at a time (audit 2026-10-20,
+  // P18). This fetched the first 100 and filtered them in the browser, so
+  // anyone past the hundredth was unfindable however exactly you typed them.
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  useEffect(() => { const t = setTimeout(() => { setSearch(q.trim()); setPage(1); }, 250); return () => clearTimeout(t); }, [q]);
+  const PER_PAGE = 100;
+  const prospectsQ = trpc.prospects.list.useQuery(
+    { page, perPage: PER_PAGE, search: search || undefined },
+    { enabled: open && !isCompanies },
+  );
+  const peopleTotal = Number((prospectsQ.data as any)?.total ?? 0);
+  const peoplePages = Math.max(1, Math.ceil(peopleTotal / PER_PAGE));
   const accountsQ = trpc.accounts.list.useQuery(undefined, { enabled: open && isCompanies });
 
   const all: { id: number; primary: string; secondary?: string }[] = useMemo(() => {
@@ -395,10 +407,13 @@ function AddRecordsDialog({
   }, [isCompanies, accountsQ.data, prospectsQ.data]);
 
   const loading = isCompanies ? accountsQ.isLoading : prospectsQ.isLoading;
+  // Companies are all loaded and filtered here; people already come back
+  // matching the search.
   const filtered = useMemo(() => {
+    if (!isCompanies) return all;
     const s = q.trim().toLowerCase();
     return s ? all.filter((r) => `${r.primary} ${r.secondary ?? ""}`.toLowerCase().includes(s)) : all;
-  }, [all, q]);
+  }, [all, q, isCompanies]);
 
   const toggle = (id: number) => { const n = new Set(picked); n.has(id) ? n.delete(id) : n.add(id); setPicked(n); };
 
@@ -421,8 +436,8 @@ function AddRecordsDialog({
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center px-4">
               <Sparkles className="size-6 text-muted-foreground opacity-50 mb-2" />
-              <p className="text-sm text-muted-foreground">{all.length === 0 ? `No ${isCompanies ? "companies" : "people"} in this workspace yet.` : "Start your search by typing above."}</p>
-              {all.length === 0 && <Button variant="outline" size="sm" className="mt-3" onClick={() => (window.location.href = isCompanies ? "/accounts" : "/v2/people")}>Go find some</Button>}
+              <p className="text-sm text-muted-foreground">{!isCompanies && search ? `No one matches "${search}".` : all.length === 0 ? `No ${isCompanies ? "companies" : "people"} in this workspace yet.` : "Start your search by typing above."}</p>
+              {all.length === 0 && !(!isCompanies && search) && <Button variant="outline" size="sm" className="mt-3" onClick={() => (window.location.href = isCompanies ? "/accounts" : "/v2/people")}>Go find some</Button>}
             </div>
           ) : (
             filtered.map((r) => (
@@ -438,6 +453,13 @@ function AddRecordsDialog({
         </div>
         <DialogFooter className="items-center">
           <span className="text-[12px] text-muted-foreground mr-auto">{picked.size} selected</span>
+          {!isCompanies && peoplePages > 1 && (
+            <span className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+              <Button variant="outline" size="sm" className="h-7 px-2" disabled={page <= 1 || prospectsQ.isFetching} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</Button>
+              Page {page} of {peoplePages} · {peopleTotal.toLocaleString()} people
+              <Button variant="outline" size="sm" className="h-7 px-2" disabled={page >= peoplePages || prospectsQ.isFetching} onClick={() => setPage((p) => Math.min(peoplePages, p + 1))}>Next</Button>
+            </span>
+          )}
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button disabled={picked.size === 0 || adding} style={{ backgroundColor: accent }} onClick={() => onAdd([...picked])}>
             {adding ? <Loader2 className="size-4 animate-spin mr-1.5" /> : null} Add to list

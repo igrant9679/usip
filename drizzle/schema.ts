@@ -3145,6 +3145,8 @@ export const segmentSequenceRules = mysqlTable(
     enabled: boolean("enabled").default(true).notNull(),
     lastRunAt: timestamp("lastRunAt"),
     enrolledCount: int("enrolledCount").default(0).notNull(),
+    /** Migration 0212 (audit 2026-10-20, P2): what the last run matched, enrolled and skipped, and why. */
+    lastRunSummary: json("lastRunSummary"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -4497,6 +4499,15 @@ export const prospects = mysqlTable(
     confidenceTier: mysqlEnum("confidenceTier", ["high", "medium", "low"]),
     verificationStatus: mysqlEnum("verificationStatus", ["verified", "needs_review", "rejected"]),
     verificationNotes: text("verificationNotes"),
+    /**
+     * Migration 0213 (audit 2026-10-20, P3): who set verificationStatus —
+     * "human" (People review, archive) or "discovery". A discovery run never
+     * overwrites a human's verdict, never touches an archived person, and
+     * never downgrades a verified one.
+     */
+    verificationSetBy: varchar("verificationSetBy", { length: 16 }),
+    verificationSetByUserId: int("verificationSetByUserId"),
+    verificationSetAt: timestamp("verificationSetAt"),
     sourceUrls: json("sourceUrls"),
     linkedinUrlVerified: boolean("linkedinUrlVerified").default(false).notNull(),
     lastEnrichedAt: timestamp("lastEnrichedAt"),

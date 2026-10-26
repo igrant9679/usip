@@ -364,6 +364,7 @@ export const MERGEABLE_FIELDS = [
   "linkedLeadId", "accountId", "globalOrganizationId", "companyMatchStatus",
   "confidenceScore", "confidenceTier", "verificationStatus",
   "verificationNotes", "sourceUrls", "linkedinUrlVerified", "lastEnrichedAt",
+  "verificationSetBy", "verificationSetByUserId", "verificationSetAt",
   "lastDiscoveryRunId", "profileImageUrl", "profileImageSource",
   "profileImageSourceUrl", "profileImageLastVerifiedAt", "profileImageStatus",
 ] as const;
@@ -423,6 +424,9 @@ export interface AtomicFieldGroup {
 export const ATOMIC_FIELD_GROUPS: AtomicFieldGroup[] = [
   { lead: "profileImageUrl", carry: ["profileImageSource", "profileImageSourceUrl", "profileImageStatus", "profileImageLastVerifiedAt"] },
   { lead: "linkedinUrl", carry: ["linkedinUrlVerified"] },
+  // Who set a review travels with it (migration 0213, audit 2026-10-20 P3):
+  // a survivor that takes a loser's verdict must not credit it to its own setter.
+  { lead: "verificationStatus", carry: ["verificationSetBy", "verificationSetByUserId", "verificationSetAt"] },
   {
     lead: "email",
     carry: ["emailStatus", "emailVerifiedAt", "emailRevealedAt"],

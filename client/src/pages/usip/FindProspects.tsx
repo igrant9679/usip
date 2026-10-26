@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { confirmAction } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { foldRedirectUrl } from "./dataEnrichmentTabs";
@@ -618,7 +619,14 @@ function RunDetail({ runId }: { runId: number }) {
       <CardHeader className="pb-2">
         <CardTitle className="text-sm flex items-center justify-between">
           <span>Run #{run.id} — {run.mode} · {run.status}</span>
-          <Button size="sm" variant="ghost" onClick={() => reprocess.mutate({ runId })} disabled={reprocess.isPending} className="gap-1 text-xs">
+          {/* A re-score re-applies every raw find of the run to the people it
+              matched — a whole run, so it asks first (audit 2026-10-20, P3). */}
+          <Button size="sm" variant="ghost" disabled={reprocess.isPending} className="gap-1 text-xs"
+            onClick={() => confirmAction({
+              title: `Re-score run #${run.id}?`,
+              description: `This re-applies all ${run.rawFindCount} raw finds to the people they matched. People someone has reviewed — verified or rejected — keep their status.`,
+              confirmLabel: "Re-score",
+            }, () => reprocess.mutate({ runId }))}>
             <RefreshCw className="size-3" /> Re-score from raw finds
           </Button>
         </CardTitle>

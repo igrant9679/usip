@@ -4782,6 +4782,45 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0212: Why a segment auto-enrol rule skipped people ─────────────────
+  // Audit 2026-10-20 (Phase 2, P2): the hourly run skipped the guards normal
+  // enrolment applies and said nothing about who it left out. It now screens
+  // through sequences.screenEnrollmentCandidates and records the counts here.
+  {
+    name: "0212_segment_rule_run_summary.sql",
+    statements: [
+      "ALTER TABLE `segment_sequence_rules` ADD COLUMN `lastRunSummary` json NULL",
+    ],
+  },
+
+  // ── 0213: Who set a person's review status ──────────────────────────────
+  // Audit 2026-10-20 (Phase 2, P3): every discovery run rewrote
+  // prospects.verificationStatus, so archived people came back and manual
+  // verifications were downgraded. Existing rows have no setter recorded;
+  // the run treats them conservatively (never touches rejected, never
+  // downgrades verified).
+  {
+    name: "0213_prospect_verification_setter.sql",
+    statements: [
+      "ALTER TABLE `prospects` ADD COLUMN `verificationSetBy` varchar(16) NULL",
+      "ALTER TABLE `prospects` ADD COLUMN `verificationSetByUserId` int NULL",
+      "ALTER TABLE `prospects` ADD COLUMN `verificationSetAt` timestamp NULL",
+    ],
+  },
+
+  // ── 0214: One wording for proposal extension events ─────────────────────
+  // Audit 2026-10-20 (Phase 2, R23): requests were written as "Client
+  // requested an extension" and declines as "Extension request declined",
+  // which no reader matched. Old rows take the wording shared/
+  // proposalExtension.ts writes now.
+  {
+    name: "0214_proposal_extension_subjects.sql",
+    statements: [
+      "UPDATE `activities` SET `subject` = 'Extension requested' WHERE `relatedType` = 'proposal' AND `subject` = 'Client requested an extension'",
+      "UPDATE `activities` SET `subject` = 'Extension declined' WHERE `relatedType` = 'proposal' AND `subject` = 'Extension request declined'",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

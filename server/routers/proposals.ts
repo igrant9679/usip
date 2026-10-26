@@ -6,7 +6,7 @@
  *         duplicate, sendToClient, acceptProposal, acceptByToken
  */
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, like, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, like, ne, or } from "drizzle-orm";
 import crypto from "crypto";
 import { z } from "zod";
 import {
@@ -23,6 +23,7 @@ import {
   activities,
   users,
   proposalScoreHistory,
+  contacts,
 } from "../../drizzle/schema";
 import { createEmailAdapter } from "../emailAdapter";
 import { getDb } from "../db";
@@ -30,7 +31,9 @@ import { appUrl } from "../appUrl";
 import { invokeLLM } from "../_core/llm";
 import { researchUseForProposal } from "../services/research/recipient";
 import { workspaceNotifyUserId } from "../_core/activeMembers";
-import { changeOpportunityStage } from "../services/stageChange";
+import { changeOpportunityStage, stageDatesForNewDeal } from "../services/stageChange";
+import { EXTENSION_SUBJECT, extensionEventOf, openExtensionRequest } from "@shared/proposalExtension";
+import { defaultPipelineId, stageResolver } from "../_core/stageSemantics";
 import { calendarDayFrom, deadlineFrom } from "../services/calendarDeadline";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { canonicalWonStageKey } from "../_core/stageSemantics";
@@ -100,6 +103,9 @@ async function getMilestones(db: Awaited<ReturnType<typeof getDb>>, proposalId: 
 function generateShareToken() {
   return crypto.randomBytes(32).toString("hex");
 }
+
+/** Statuses a client can accept from: the proposal is out with them (R24). */
+const ACCEPTABLE_STATUSES = ["sent", "under_review", "revision_requested"] as const;
 
 /**
  * Insert a system activity row for a proposal event.
@@ -384,11 +390,16 @@ export const proposalsRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // "Accepted" is not a label: it closes the linked deal, raises the
+      // follow-up and tells the owner. Setting it here skipped all of that
+      // (audit 2026-10-20, R26) — acceptance goes through acceptProposal.
+      if (input.status === "accepted") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Use Accept to accept a proposal — it closes the linked deal and creates the follow-up." });
+      }
       const db = await getDb();
       await getProposalOrThrow(db, input.id, ctx.workspace.id);
       const patch: Record<string, unknown> = { status: input.status };
       if (input.status === "sent") patch.sentAt = new Date();
-      if (input.status === "accepted") patch.acceptedAt = new Date();
       await db.update(proposals).set(patch).where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
       await logProposalActivity(db, {
         workspaceId: ctx.workspace.id,
@@ -715,11 +726,20 @@ export const proposalsRouter = router({
         // Non-fatal: mark as sent regardless
       }
 
-      // Mark proposal as sent
-      await db
-        .update(proposals)
-        .set({ status: "sent", sentAt: new Date() })
-        .where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
+      // A send moves a draft or a revision to Sent — nothing else (audit
+      // 2026-10-20, R27): a resend set an ACCEPTED proposal back to Sent, even
+      // when the email never went. sentAt records an actual delivery.
+      if (proposal.status === "draft" || proposal.status === "revision_requested") {
+        await db
+          .update(proposals)
+          .set({ status: "sent", sentAt: new Date() })
+          .where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id), inArray(proposals.status, ["draft", "revision_requested"])));
+      } else if (emailOk) {
+        await db
+          .update(proposals)
+          .set({ sentAt: new Date() })
+          .where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
+      }
 
       const deliveryNote = emailOk
         ? `Email sent to ${proposal.clientEmail}${senderEmail ? ` from ${senderEmail}` : ""}`
@@ -746,11 +766,15 @@ export const proposalsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
       const proposal = await getProposalOrThrow(db, input.id, ctx.workspace.id);
-      // Mark accepted
-      await db
+      // Mark accepted — once. A double click ran every side effect twice: two
+      // follow-up tasks, two notices, two deal-won fires (audit 2026-10-20, R24).
+      const claim = await db
         .update(proposals)
         .set({ status: "accepted", acceptedAt: new Date() })
-        .where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
+        .where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id), ne(proposals.status, "accepted")));
+      if (Number((claim as any)?.[0]?.affectedRows ?? 0) !== 1) {
+        return { ok: true, alreadyAccepted: true, opportunityId: proposal.linkedOpportunityId ?? null, taskId: null };
+      }
       // Create follow-up task
       const taskTitle = `Follow up: ${proposal.title} — accepted by ${proposal.clientName}`;
       const taskResult = await db.insert(tasks).values({
@@ -985,11 +1009,27 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       const proposal = rows[0];
       // Idempotent: if already accepted, return ok
       if (proposal.status === "accepted") return { ok: true, alreadyAccepted: true };
-      // Mark accepted
-      await db
+      // Only a proposal that is out with the client, and not expired, can be
+      // accepted (audit 2026-10-20, R24): drafts, declined and expired ones
+      // were accepted from the link, and a double click ran every side effect
+      // twice. The update names the states it accepts from, so of two clicks
+      // one lands.
+      const claim = await db
         .update(proposals)
         .set({ status: "accepted", acceptedAt: new Date() })
-        .where(eq(proposals.id, proposal.id));
+        .where(and(
+          eq(proposals.id, proposal.id),
+          inArray(proposals.status, ACCEPTABLE_STATUSES),
+          or(isNull(proposals.expiresAt), gt(proposals.expiresAt, new Date())),
+        ));
+      if (Number((claim as any)?.[0]?.affectedRows ?? 0) !== 1) {
+        const [now] = await db.select({ status: proposals.status, expiresAt: proposals.expiresAt }).from(proposals).where(eq(proposals.id, proposal.id)).limit(1);
+        if (now?.status === "accepted") return { ok: true, alreadyAccepted: true };
+        if (now?.expiresAt && new Date(now.expiresAt).getTime() <= Date.now()) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This proposal has expired. Request an extension and the team will get back to you." });
+        }
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This proposal is not open for acceptance. Contact the team that sent it." });
+      }
       /**
        * PUBLIC PATH — the client accepts from a share link, with no session.
        * The resulting follow-up task is the only thing that tells the business
@@ -1128,6 +1168,50 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       });
       return { ok: true, sectionKey: rev.sectionKey, content: rev.content };
     }),
+  /**
+   * Create an OPEN deal for this proposal and link it (audit 2026-10-20,
+   * R26). "Create & Link" called acceptProposal, so creating a deal for a
+   * proposal still being written marked it accepted and the deal won.
+   */
+  createOpportunity: repProcedure
+    .input(z.object({ proposalId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const proposal = await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      if (proposal.linkedOpportunityId) {
+        throw new TRPCError({ code: "CONFLICT", message: "This proposal already has a linked deal." });
+      }
+      // A deal belongs to a company: the proposal's, else its contact's.
+      let accountId = proposal.accountId ?? null;
+      if (!accountId && proposal.contactId) {
+        const [c] = await db.select({ accountId: contacts.accountId }).from(contacts)
+          .where(and(eq(contacts.id, proposal.contactId), eq(contacts.workspaceId, ctx.workspace.id))).limit(1);
+        accountId = c?.accountId ?? null;
+      }
+      if (!accountId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Link the proposal to a company (or a contact at one) first — a deal belongs to a company." });
+      }
+      const stages = await stageResolver(db, ctx.workspace.id);
+      const pipelineId = await defaultPipelineId(db, ctx.workspace.id);
+      const key = stages.allowedKeys(pipelineId).find((k) => { const m = stages.resolve(pipelineId, k); return !m.isWon && !m.isLost; });
+      if (!key) throw new TRPCError({ code: "BAD_REQUEST", message: "The default pipeline has no open stage to put the deal in." });
+      const meta = stages.resolve(pipelineId, key);
+      const r = await db.insert(opportunities).values({
+        workspaceId: ctx.workspace.id, accountId, pipelineId, name: proposal.title.slice(0, 200), stage: key,
+        value: proposal.budget ? String(proposal.budget) : "0", winProb: meta.defaultWinProb ?? 20, ownerUserId: ctx.user.id,
+        ...stageDatesForNewDeal(meta),
+      } as never);
+      const opportunityId = Number((r as any)[0]?.insertId ?? 0);
+      await db.update(proposals).set({ linkedOpportunityId: opportunityId })
+        .where(and(eq(proposals.id, proposal.id), eq(proposals.workspaceId, ctx.workspace.id)));
+      await logProposalActivity(db, {
+        workspaceId: ctx.workspace.id, proposalId: proposal.id, actorUserId: ctx.user.id, actorName: ctx.user.name ?? undefined,
+        subject: `Deal created and linked (#${opportunityId})`,
+      });
+      return { opportunityId };
+    }),
+
   /**
    * Link or unlink an existing opportunity to a proposal.
    * Pass opportunityId=null to unlink.
@@ -1363,7 +1447,7 @@ Reason: ${input.reason}`,
         type: "note",
         relatedType: "proposal",
         relatedId: proposal.id,
-        subject: "Client requested an extension",
+        subject: EXTENSION_SUBJECT.requested,
         body: `${clientLabel} submitted an extension request via the proposal portal.
 
 Reason: ${input.reason}`,
@@ -1423,10 +1507,19 @@ Reason: ${input.reason}`,
       await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
       const proposal = await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
-      const newDate = new Date(input.newExpiresAt);
+      // The day picked lasts to its end in the workspace's zone (R29), and it
+      // must be in the future (R68: the default was a week past an expiry
+      // that had already gone).
+      const tz = await getWorkspaceTimezone(ctx.workspace.id);
+      const newDate = deadlineFrom(input.newExpiresAt, tz);
+      if (!newDate || newDate.getTime() <= Date.now()) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Pick a new expiry date after today." });
+      }
+      // An expired proposal was marked Not Accepted by the expiry sweep; an
+      // approved extension puts it back in front of the client (R68).
       await db
         .update(proposals)
-        .set({ expiresAt: newDate, updatedAt: new Date() })
+        .set({ expiresAt: newDate, updatedAt: new Date(), ...(proposal.status === "not_accepted" ? { status: "sent" as const } : {}) })
         .where(and(eq(proposals.id, input.proposalId), eq(proposals.workspaceId, ctx.workspace.id)));
       // Log activity
       await logProposalActivity(db, {
@@ -1434,7 +1527,7 @@ Reason: ${input.reason}`,
         proposalId: input.proposalId,
         actorUserId: ctx.user.id,
         actorName: ctx.user.name ?? undefined,
-        subject: `Extension approved — new expiry: ${newDate.toLocaleDateString()}`,
+        subject: `${EXTENSION_SUBJECT.approved} — new expiry: ${newDate.toLocaleDateString("en-US", { timeZone: tz })}`,
         body: input.note ?? undefined,
       });
       // Send email to client if possible
@@ -1447,7 +1540,7 @@ Reason: ${input.reason}`,
             .limit(1);
           const subject = `Your proposal has been extended — "${proposal.title}"`;
           const html = `<p>Hi ${proposal.clientName ?? "there"},</p>
-<p>Great news — your extension request has been approved. The proposal <strong>${proposal.title}</strong> is now valid until <strong>${newDate.toLocaleDateString()}</strong>.</p>
+<p>Great news — your extension request has been approved. The proposal <strong>${proposal.title}</strong> is now valid until <strong>${newDate.toLocaleDateString("en-US", { timeZone: tz })}</strong>.</p>
 ${input.note ? `<p>${input.note}</p>` : ""}
 ${proposal.shareToken ? `<p><a href="${appUrl(`/p/${proposal.shareToken}`)}">View proposal &rarr;</a></p>` : ""}
 <p>Best regards,<br/>${ctx.user.name ?? "The team"}</p>`;
@@ -1530,7 +1623,7 @@ ${proposal.shareToken ? `<p><a href="${appUrl(`/p/${proposal.shareToken}`)}">Vie
         proposalId: input.proposalId,
         actorUserId: ctx.user.id,
         actorName: ctx.user.name ?? undefined,
-        subject: "Extension request declined",
+        subject: EXTENSION_SUBJECT.declined,
         body: input.reason ?? undefined,
       });
       // Send decline email to client if possible
@@ -1664,15 +1757,11 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
       requestedAt: Date;
       reason: string | null;
     }> = [];
-    for (const [proposalId, acts] of byProposal.entries()) {
-      const hasRequest = acts.some((a) => a.subject.toLowerCase().includes("extension requested"));
-      const hasResolution = acts.some(
-        (a) =>
-          a.subject.toLowerCase().includes("extension approved") ||
-          a.subject.toLowerCase().includes("extension declined"),
-      );
-      if (hasRequest && !hasResolution) {
-        const req = acts.find((a) => a.subject.toLowerCase().includes("extension requested"))!;
+    for (const [proposalId, acts] of Array.from(byProposal.entries())) {
+      // Open when the LATEST extension event is a request (R23): "ever
+      // resolved" hid every request after the first answer.
+      const req = openExtensionRequest(acts);
+      if (req) {
         const proposal = proposalRows.find((p) => p.id === proposalId)!;
         pending.push({
           id: proposalId,
@@ -1721,7 +1810,7 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
         .orderBy(desc(activities.occurredAt));
       if (extActs.length === 0) return { status: "none" as const, resolvedAt: null, newExpiresAt: null, reason: null };
       const latest = extActs[0];
-      if (latest.subject.toLowerCase().includes("extension approved")) {
+      if (extensionEventOf(latest.subject) === "approved") {
         return {
           status: "approved" as const,
           resolvedAt: latest.occurredAt,
@@ -1729,7 +1818,7 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
           reason: latest.body ?? null,
         };
       }
-      if (latest.subject.toLowerCase().includes("extension declined")) {
+      if (extensionEventOf(latest.subject) === "declined") {
         return {
           status: "denied" as const,
           resolvedAt: latest.occurredAt,

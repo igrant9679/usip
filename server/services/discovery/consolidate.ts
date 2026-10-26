@@ -20,14 +20,27 @@
  * a key field (different titles for the same name+company) drops the
  * candidate to "needs_review" with a note. Low-confidence rows are
  * still SAVED so the user can triage them; they're just flagged.
+ *
+ * Audit 2026-10-20, Phase 2:
+ *   P3 — a run (or a re-score) rewrote every matched person's review
+ *        status: archived people came back, ready to enrol, and verified
+ *        ones were downgraded. Now an archived person is not touched at
+ *        all, a status a human set is kept, a verified one is never
+ *        downgraded, and what discovery sets is recorded as discovery's.
+ *   P15 — account mode clustered every find by COMPANY, so it saved one
+ *        person per company and no companies at all, and company-only finds
+ *        (Google Business, news) were dropped for having no name. People are
+ *        now clustered as people in both modes, and in account mode the
+ *        company-only finds become accounts.
  */
 import { and, eq, or } from "drizzle-orm";
 import { canonicalText } from "@shared/canonicalText";
 import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "../enrichment/fieldMerge";
 import { normalizePersonNamePair } from "../enrichment/personName";
-import { normalizeCompanyDisplayName } from "../company/normalize";
+import { normalizeCompanyDisplayName, normalizeCompanyName, normalizeDomain, normalizedAccountFields } from "../company/normalize";
 import { getDb } from "../../db";
 import {
+  accounts,
   discoveryLogs,
   discoveryRuns,
   prospects,
@@ -90,19 +103,16 @@ export function consolidateIdentities(
   rows: RawFindRow[],
   mode: "person" | "account",
 ): IdentityCandidate[] {
+  // People are clustered as people in BOTH modes (P15): clustering account
+  // mode by company merged everyone at a company into one person. `mode`
+  // only decides what happens to the finds with no person (persistCompanies).
+  void mode;
   const clusters = new Map<string, RawFindRow[]>();
   for (const row of rows) {
-    let key = "";
-    if (mode === "person") {
-      const nm = norm(`${row.firstName ?? ""} ${row.lastName ?? ""}`);
-      const co = norm(row.companyName ?? "");
-      if (!nm) continue; // need at least a name
-      key = co ? `${nm}|${co}` : nm;
-    } else {
-      // Prefer domain because companies often share a partial name.
-      key = norm(row.companyDomain ?? "") || norm(row.companyName ?? "");
-      if (!key) continue;
-    }
+    const nm = norm(`${row.firstName ?? ""} ${row.lastName ?? ""}`);
+    const co = norm(row.companyName ?? "");
+    if (!nm) continue; // need at least a name
+    const key = co ? `${nm}|${co}` : nm;
     const arr = clusters.get(key) ?? [];
     arr.push(row);
     clusters.set(key, arr);
@@ -239,11 +249,69 @@ export function scoreConfidence(c: IdentityCandidate): ScoredCandidate {
   return { ...c, score, tier, status, notes, linkedinUrlVerified };
 }
 
+/**
+ * The review status a run may write onto a person it matched (P3): never
+ * over a human's verdict, never a downgrade of a verified person. Spread into
+ * the update; an empty object leaves the status as it is.
+ */
+export function discoveryVerdict(
+  existing: { verificationStatus?: string | null; verificationSetBy?: string | null } | undefined,
+  next: "verified" | "needs_review",
+): Record<string, unknown> {
+  if (existing?.verificationSetBy === "human") return {};
+  if (existing?.verificationStatus === "verified" && next !== "verified") return {};
+  return { verificationStatus: next, verificationSetBy: "discovery", verificationSetAt: new Date() };
+}
+
+/** A find with no person on it — a company (Google Business, news, a directory). */
+export const isCompanyOnlyFind = (r: { firstName?: string | null; lastName?: string | null; companyName?: string | null; companyDomain?: string | null }) =>
+  !norm(`${r.firstName ?? ""} ${r.lastName ?? ""}`) && !!(norm(r.companyDomain ?? "") || norm(r.companyName ?? ""));
+
+/**
+ * Account mode: the companies found with no person become accounts (P15) —
+ * matched by domain, then name, and created when new. Never fires
+ * record_created (a bulk path; see workflowTriggers.test.ts).
+ */
+export async function persistCompanies(
+  workspaceId: number,
+  rows: RawFindRow[],
+): Promise<{ accountsCreated: number; accountsMatched: number }> {
+  const db = await getDb();
+  if (!db) return { accountsCreated: 0, accountsMatched: 0 };
+  const byCompany = new Map<string, RawFindRow>();
+  for (const r of rows) {
+    if (!isCompanyOnlyFind(r)) continue;
+    const key = normalizeDomain(r.companyDomain) || normalizeCompanyName(r.companyName);
+    if (!key || byCompany.has(key)) continue;
+    byCompany.set(key, r);
+  }
+  let accountsCreated = 0, accountsMatched = 0;
+  for (const r of Array.from(byCompany.values())) {
+    const domain = normalizeDomain(r.companyDomain) || null;
+    const name = normalizeCompanyDisplayName(r.companyName) ?? r.companyName ?? domain ?? "";
+    const nameKey = normalizeCompanyName(name);
+    let hit: { id: number } | undefined;
+    if (domain) [hit] = await db.select({ id: accounts.id }).from(accounts).where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.normalizedDomain, domain))).limit(1);
+    if (!hit && nameKey) [hit] = await db.select({ id: accounts.id }).from(accounts).where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.normalizedName, nameKey))).limit(1);
+    if (hit) { accountsMatched++; continue; }
+    await db.insert(accounts).values({
+      workspaceId, name: name.slice(0, 200), domain: domain ?? undefined, ...normalizedAccountFields(name, domain),
+    } as never);
+    accountsCreated++;
+  }
+  return { accountsCreated, accountsMatched };
+}
+
 /* ─── Persist into prospects (dedup-aware) ───────────────────────── */
 
 export interface PersistResult {
   prospectsCreated: number;
   prospectsUpdated: number;
+  /** Matched people left alone because someone archived them (P3). */
+  prospectsSkippedArchived?: number;
+  /** Account mode: companies found with no person, saved as accounts (P15). */
+  accountsCreated?: number;
+  accountsMatched?: number;
   highConfidenceCount: number;
   mediumConfidenceCount: number;
   lowConfidenceCount: number;
@@ -259,6 +327,7 @@ export async function persistAsProspects(
 
   let created = 0;
   let updated = 0;
+  let skippedArchived = 0;
   let high = 0, medium = 0, low = 0;
 
   for (const c of candidates) {
@@ -316,6 +385,8 @@ export async function persistAsProspects(
       const [existing] = await db.select().from(prospects)
         .where(and(eq(prospects.id, existingId), eq(prospects.workspaceId, workspaceId)))
         .limit(1);
+      // An archived person stays archived and untouched (P3).
+      if (existing?.verificationStatus === "rejected") { skippedArchived++; continue; }
       const merged = mergeAll(
         {
           email: existing?.email, phone: existing?.phone, company: existing?.company,
@@ -334,7 +405,7 @@ export async function persistAsProspects(
         fieldProvenance: merged.ledger,
         confidenceScore: c.score,
         confidenceTier: c.tier,
-        verificationStatus: c.status,
+        ...discoveryVerdict(existing, c.status),
         verificationNotes,
         sourceUrls: sourceUrlsJson,
         linkedinUrlVerified: c.linkedinUrlVerified,
@@ -367,12 +438,14 @@ export async function persistAsProspects(
         confidenceScore: c.score,
         confidenceTier: c.tier,
         verificationStatus: c.status,
+        verificationSetBy: "discovery",
+        verificationSetAt: new Date(),
         verificationNotes,
         sourceUrls: sourceUrlsJson,
         linkedinUrlVerified: c.linkedinUrlVerified,
         lastEnrichedAt: new Date(),
         lastDiscoveryRunId: runId,
-      });
+      } as never);
       created++;
     }
   }
@@ -380,6 +453,7 @@ export async function persistAsProspects(
   return {
     prospectsCreated: created,
     prospectsUpdated: updated,
+    prospectsSkippedArchived: skippedArchived,
     highConfidenceCount: high,
     mediumConfidenceCount: medium,
     lowConfidenceCount: low,
@@ -420,7 +494,8 @@ export async function processRun(
     } as any,
   });
 
-  const result = await persistAsProspects(workspaceId, runId, scored);
+  const result: PersistResult = await persistAsProspects(workspaceId, runId, scored);
+  if (mode === "account") Object.assign(result, await persistCompanies(workspaceId, rows));
 
   await db.update(discoveryRuns).set({
     prospectsCreated: result.prospectsCreated,
@@ -431,7 +506,9 @@ export async function processRun(
 
   await db.insert(discoveryLogs).values({
     workspaceId, runId, phase: "persist.complete", level: "info",
-    message: `Persisted ${result.prospectsCreated} new / ${result.prospectsUpdated} updated prospects`,
+    message: `Persisted ${result.prospectsCreated} new / ${result.prospectsUpdated} updated prospects`
+      + (result.prospectsSkippedArchived ? ` (${result.prospectsSkippedArchived} archived left alone)` : "")
+      + (mode === "account" ? `; ${result.accountsCreated ?? 0} new / ${result.accountsMatched ?? 0} existing companies` : ""),
     details: result as any,
   });
 
