@@ -30,6 +30,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { sendingAccounts } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { buildTransporter } from "../routers/smtpConfig";
+import { readStoredSecret } from "../emailAdapter";
 import { utcDayStart } from "@shared/timeWindows";
 import { zonedDowHour } from "@shared/availability";
 import { getWorkspaceTimezone } from "./workspaceTimezone";
@@ -171,7 +172,8 @@ export async function runWarmupEngine(): Promise<void> {
         port: acct.smtpPort ?? 587,
         secure: (acct.smtpPort ?? 587) === 465,
         username: acct.smtpUsername,
-        password: acct.smtpPassword,
+        // Stored encrypted from 2026-10-24 (audit C4); older rows read as-is.
+        password: readStoredSecret(acct.smtpPassword) ?? "",
       });
 
       let sent = 0;

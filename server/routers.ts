@@ -1,6 +1,7 @@
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { publicUser } from "./_core/safeProjections";
+import { endCurrentSession } from "./_core/sessionRevocation";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { workspaceRouter } from "./routers/workspace";
@@ -87,7 +88,11 @@ export const appRouter = router({
     // The safe fields only (audit 2026-10-20): ctx.user is the whole row,
     // passwordHash and mfaTotpSecret included. _core/safeProjections.ts.
     me: publicProcedure.query((opts) => publicUser(opts.ctx.user)),
-    logout: publicProcedure.mutation(({ ctx }) => {
+    logout: publicProcedure.mutation(async ({ ctx }) => {
+      // End the token itself, not just the browser's copy of it (audit
+      // 2026-10-20): clearing the cookie alone left a copied token valid for
+      // up to a year. Best-effort — signing out must always clear the cookie.
+      await endCurrentSession(ctx.req).catch((e) => console.warn("[auth.logout] revoke failed:", (e as Error).message));
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;

@@ -11,6 +11,7 @@ import { workspaceIntegrations } from "../../drizzle/schema";
 import { checkPermission, getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
+import { safeFetch } from "../services/scraper/ssrfGuard";
 import {
   SENDGRID_PROVIDER, getWorkspaceSendgridKey, redactIntegrationConfig, setWorkspaceSendgridKey,
 } from "../services/sendgridKey";
@@ -172,7 +173,9 @@ export const integrationsRouter = router({
             success = false;
           } else {
             try {
-              const res = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(5000) });
+              // Through the SSRF guard (audit 2026-10-20): this probed any
+              // URL saved as the webhook, internal addresses included.
+              const res = await safeFetch(String(url), { method: "HEAD", signal: AbortSignal.timeout(5000), maxRedirects: 0 });
               result = `Webhook responded with HTTP ${res.status}`;
               success = res.ok;
             } catch (e: any) {

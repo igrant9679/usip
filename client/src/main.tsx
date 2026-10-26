@@ -2,6 +2,7 @@ import { trpc } from "@/lib/trpc";
 import { UNAUTHED_ERR_MSG } from "@shared/const";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink, TRPCClientError } from "@trpc/client";
+import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
 import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
@@ -60,7 +61,9 @@ const trpcClient = trpc.createClient({
       url: "/api/trpc",
       transformer: superjson,
       fetch(input, init) {
-        const wsId = typeof window !== "undefined" ? window.localStorage.getItem("usip:workspaceId") : null;
+        // This TAB's workspace, not the last one any tab switched to
+        // (lib/activeWorkspace.ts, audit 2026-10-20).
+        const wsId = getActiveWorkspaceId();
         const headers = new Headers(init?.headers);
         if (wsId) headers.set("x-workspace-id", wsId);
         return globalThis.fetch(input, {

@@ -75,6 +75,33 @@ function isBlockedHostname(host: string): boolean {
 }
 
 /**
+ * Validate a bare hostname (or literal IP) the same way a URL's host is
+ * validated: not a blocked name, and every address it resolves to public.
+ * For connections that are not HTTP — the SMTP connection test (audit
+ * 2026-10-20: it would log in to any host:port a caller named, internal ones
+ * included). Throws Error on rejection.
+ */
+export async function assertPublicHost(rawHost: string): Promise<void> {
+  const host = String(rawHost ?? "").trim().replace(/^\[|\]$/g, "");
+  if (!host) throw new Error("No host");
+  if (isBlockedHostname(host)) throw new Error(`Blocked host: ${host}`);
+  if (net.isIP(host)) {
+    if (isPrivateIp(host)) throw new Error(`Blocked private/internal IP: ${host}`);
+    return;
+  }
+  let addrs: { address: string }[];
+  try {
+    addrs = await dnsLookup(host, { all: true });
+  } catch {
+    throw new Error(`DNS resolution failed for ${host}`);
+  }
+  if (addrs.length === 0) throw new Error(`No DNS records for ${host}`);
+  for (const a of addrs) {
+    if (isPrivateIp(a.address)) throw new Error(`${host} resolves to a private/internal address (${a.address})`);
+  }
+}
+
+/**
  * Validate a single URL: must be http/https, host must not be a blocked
  * name, and every resolved IP must be public. Throws Error on rejection.
  */
@@ -116,20 +143,30 @@ export async function assertPublicUrl(rawUrl: string): Promise<URL> {
 /**
  * SSRF-safe fetch. Validates the initial URL, then follows redirects
  * manually, re-validating each hop's destination. Caps redirects at 5.
- * Signature mirrors the subset of fetch() the scrapers use.
+ * Signature mirrors the subset of fetch() its callers use.
+ *
+ * 2026-10-24 (audit "also urgent"): also carries a method and body, for the
+ * workflow webhooks and the integrations webhook test, which POSTed (and
+ * HEADed) any URL a member typed — cloud metadata and the private network
+ * included. Those pass `maxRedirects: 0`: a webhook that answers with a
+ * redirect gets the 3xx back rather than a re-sent body.
  */
 export async function safeFetch(
   rawUrl: string,
-  init: { headers?: Record<string, string>; signal?: AbortSignal },
+  init: { headers?: Record<string, string>; signal?: AbortSignal; method?: string; body?: string; maxRedirects?: number },
 ): Promise<Response> {
   let currentUrl = rawUrl;
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+  const maxRedirects = init.maxRedirects ?? MAX_REDIRECTS;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
     const validated = await assertPublicUrl(currentUrl);
     const res = await fetch(validated.toString(), {
+      method: init.method,
+      body: init.body,
       headers: init.headers,
       signal: init.signal,
       redirect: "manual",
     });
+    if (maxRedirects === 0) return res;
     // 3xx with a Location → validate the next hop and continue.
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get("location");
@@ -139,5 +176,5 @@ export async function safeFetch(
     }
     return res;
   }
-  throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
+  throw new Error(`Too many redirects (>${maxRedirects})`);
 }

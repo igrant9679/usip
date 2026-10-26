@@ -1,5 +1,6 @@
 import type { Express, Request, Response, NextFunction } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
+import crypto from "node:crypto";
 import { scimEvents, scimProviders, users, workspaceMembers } from "../drizzle/schema";
 import { getDb } from "./db";
 
@@ -71,8 +72,10 @@ export function registerScimRoutes(app: Express) {
     const members = await db.select({ userId: workspaceMembers.userId, role: workspaceMembers.role }).from(workspaceMembers).where(eq(workspaceMembers.workspaceId, provider.workspaceId));
     const userIds = members.map((m) => m.userId);
     if (userIds.length === 0) return res.json({ schemas: ["urn:ietf:params:scim:api:messages:2.0:ListResponse"], totalResults: 0, Resources: [] });
-    const allUsers = await db.select().from(users);
-    const byId = new Map(allUsers.map((u) => [u.id, u]));
+    // This workspace's members only — it used to load every user of every
+    // workspace to build the map (audit 2026-10-20).
+    const memberUsers = await db.select().from(users).where(inArray(users.id, userIds));
+    const byId = new Map(memberUsers.map((u) => [u.id, u]));
     const Resources = members
       .map((m) => byId.get(m.userId))
       .filter(Boolean)
@@ -87,8 +90,9 @@ export function registerScimRoutes(app: Express) {
     const db = await getDb();
     if (!db) return res.status(503).end();
     const id = Number(req.params.id);
-    const rows = await db.select().from(users).where(eq(users.id, id)).limit(1);
-    const u = rows[0];
+    // A provider sees ITS workspace's members only (audit 2026-10-20: any
+    // user of any workspace could be read by id).
+    const u = await scimMember(db, provider.workspaceId, id);
     if (!u) return res.status(404).json({ status: "404", detail: "Not found" });
     res.json(toScimUser(u));
   });
@@ -116,10 +120,20 @@ export function registerScimRoutes(app: Express) {
       });
       userId = Number((r as any)[0]?.insertId ?? 0);
     }
-    // Ensure workspace membership (rep)
+    // Ensure workspace membership (rep). An account that already exists
+    // elsewhere joins as a PENDING invitation (audit 2026-10-20, the C1 rule):
+    // a provider's token must not make a stranger's account a member of its
+    // workspace without them accepting. An account this call created is the
+    // provider's own, and starts active.
     const existingMem = await db.select().from(workspaceMembers).where(eq(workspaceMembers.userId, userId));
     if (!existingMem.find((m) => m.workspaceId === provider.workspaceId)) {
-      await db.insert(workspaceMembers).values({ workspaceId: provider.workspaceId, userId, role: "rep" });
+      const pending = !!existing[0] && existingMem.length > 0;
+      await db.insert(workspaceMembers).values({
+        workspaceId: provider.workspaceId,
+        userId,
+        role: "rep",
+        ...(pending ? { inviteToken: crypto.randomBytes(32).toString("hex") } : {}),
+      });
     }
     await db.insert(scimEvents).values({ workspaceId: provider.workspaceId, providerId: provider.id, resource: "Users", method: "POST", payload: body, responseStatus: 201 });
     const created = (await db.select().from(users).where(eq(users.id, userId)).limit(1))[0]!;
@@ -140,9 +154,9 @@ export function registerScimRoutes(app: Express) {
       await db.delete(workspaceMembers).where(and(eq(workspaceMembers.userId, id), eq(workspaceMembers.workspaceId, provider.workspaceId)));
       await db.insert(scimEvents).values({ workspaceId: provider.workspaceId, providerId: provider.id, resource: "Users", method: "PATCH", payload: body, responseStatus: 200 });
     }
-    const rows = await db.select().from(users).where(eq(users.id, id)).limit(1);
-    if (!rows[0]) return res.status(404).json({ status: "404" });
-    res.json(toScimUser(rows[0]));
+    const u = await scimMember(db, provider.workspaceId, id);
+    if (!u) return res.status(404).json({ status: "404" });
+    res.json(toScimUser(u));
   };
   app.put("/api/scim/v2/Users/:id", handleReplace);
   app.patch("/api/scim/v2/Users/:id", handleReplace);
@@ -172,6 +186,18 @@ export function registerScimRoutes(app: Express) {
       })),
     });
   });
+}
+
+/** The user, if they are (or were) a member of this provider's workspace. */
+async function scimMember(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, userId: number) {
+  if (!Number.isFinite(userId)) return null;
+  const [row] = await db
+    .select({ u: users })
+    .from(workspaceMembers)
+    .innerJoin(users, eq(users.id, workspaceMembers.userId))
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, userId)))
+    .limit(1);
+  return row?.u ?? null;
 }
 
 function toScimUser(u: { id: number; openId: string; email: string | null; name: string | null }) {

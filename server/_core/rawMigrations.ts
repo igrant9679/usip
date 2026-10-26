@@ -4735,6 +4735,21 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0209: Sessions that can be ended, and 2FA codes that work once ──────
+  // Audit 2026-10-20 (Phase 0): logout, a password reset or a 2FA change left
+  // every old session token valid for up to a year, and a TOTP code could be
+  // replayed for its whole ~90 s window. session_version ends every session
+  // of an account at once; revoked_sessions ends one (logout); mfa_last_step
+  // remembers the last code's time-step.
+  {
+    name: "0209_session_revocation.sql",
+    statements: [
+      "ALTER TABLE `users` ADD COLUMN `session_version` int NOT NULL DEFAULT 0",
+      "ALTER TABLE `users` ADD COLUMN `mfa_last_step` int NULL",
+      "CREATE TABLE IF NOT EXISTS `revoked_sessions` (`jti` varchar(32) NOT NULL PRIMARY KEY, `userId` int NOT NULL, `expiresAt` timestamp NOT NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX `ix_rs_expires` (`expiresAt`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

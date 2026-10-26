@@ -393,6 +393,12 @@ describe("team.finaliseAcceptance", () => {
 
 describe("team.getLoginHistoryFiltered", () => {
   const ADMIN = { id: 1, userId: 1, role: "admin" as const, deactivatedAt: null };
+  /**
+   * 2026-10-24 (audit): the history is scoped to this workspace, and the
+   * scope first asks where the account lives — one more select, queued here
+   * as "this workspace only, accepted".
+   */
+  const ONLY_HERE = [{ workspaceId: 1, inviteToken: null }];
 
   /** This one needs the workspace middleware satisfied as well. */
   function withMember(rows: unknown[][]) {
@@ -439,7 +445,7 @@ describe("team.getLoginHistoryFiltered", () => {
 
   it("returns the member's history", async () => {
     const rows = [{ id: 9, userId: 7, outcome: "success" }];
-    const { db } = withMember([[{ userId: 7 }], rows]);
+    const { db } = withMember([[{ userId: 7 }], ONLY_HERE, rows]);
     h.db = db;
     const out = await appRouter.createCaller(makeCtx(1, "admin@acme.com")).team.getLoginHistoryFiltered({
       memberId: 5,
@@ -472,14 +478,14 @@ describe("team.getLoginHistoryFiltered", () => {
   it("rejects a limit outside 1..500 rather than clamping it", async () => {
     const caller = appRouter.createCaller(makeCtx(1, "admin@acme.com"));
     for (const limit of [0, 501, 1000]) {
-      const { db } = withMember([[{ userId: 7 }], []]);
+      const { db } = withMember([[{ userId: 7 }], ONLY_HERE, []]);
       h.db = db;
       const e = await refusal(caller.team.getLoginHistoryFiltered({ memberId: 5, limit }));
       expect(e.code, `limit ${limit}`).toBe("BAD_REQUEST");
     }
     // …and the boundaries themselves are accepted.
     for (const limit of [1, 500]) {
-      const { db } = withMember([[{ userId: 7 }], []]);
+      const { db } = withMember([[{ userId: 7 }], ONLY_HERE, []]);
       h.db = db;
       await expect(caller.team.getLoginHistoryFiltered({ memberId: 5, limit })).resolves.toEqual([]);
     }
@@ -488,11 +494,11 @@ describe("team.getLoginHistoryFiltered", () => {
   it("only accepts the three real outcomes", async () => {
     const caller = appRouter.createCaller(makeCtx(1, "admin@acme.com"));
     for (const outcome of ["success", "failed", "expired_invite"] as const) {
-      const { db } = withMember([[{ userId: 7 }], []]);
+      const { db } = withMember([[{ userId: 7 }], ONLY_HERE, []]);
       h.db = db;
       await expect(caller.team.getLoginHistoryFiltered({ memberId: 5, outcome })).resolves.toEqual([]);
     }
-    const { db } = withMember([[{ userId: 7 }], []]);
+    const { db } = withMember([[{ userId: 7 }], ONLY_HERE, []]);
     h.db = db;
     const e = await refusal(
       caller.team.getLoginHistoryFiltered({ memberId: 5, outcome: "pending" as never }),
@@ -501,7 +507,7 @@ describe("team.getLoginHistoryFiltered", () => {
   });
 
   it("refuses a rep at the middleware", async () => {
-    const { db } = withMember([[{ userId: 7 }], []]);
+    const { db } = withMember([[{ userId: 7 }], ONLY_HERE, []]);
     h.db = {
       ...db,
       select: (f?: Record<string, unknown>) => {

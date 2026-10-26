@@ -10,6 +10,7 @@
  * the accumulated text and error.
  */
 import { useCallback, useRef, useState } from "react";
+import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
 
 export type StreamMessage = {
   role: "system" | "user" | "assistant";
@@ -65,10 +66,7 @@ export function useStreamLLM(options?: Options) {
 
       let accumulated = "";
 
-      const wsId =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem("usip:workspaceId")
-          : null;
+      const wsId = getActiveWorkspaceId();
 
       try {
         const headers: Record<string, string> = {

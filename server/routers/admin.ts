@@ -35,6 +35,7 @@ import {
 } from "../../drizzle/schema";
 import { checkPermission, getDb, resolvePermissionMap } from "../db";
 import { assertAccountEditableHere } from "../_core/accountScope";
+import { revokeAllSessions } from "../_core/sessionRevocation";
 import { settingsForMember } from "../_core/safeProjections";
 import { adminWsProcedure, isAdminRole, roleRank, workspaceProcedure } from "../_core/workspace";
 import { invalidateSecurityPolicyCache } from "../_core/securityPolicy";
@@ -241,6 +242,21 @@ export async function getOrSeedSettings(workspaceId: number) {
   });
   const [fresh] = await db.select().from(workspaceSettings).where(eq(workspaceSettings.workspaceId, workspaceId));
   return fresh!;
+}
+
+/**
+ * Which of a member's sign-ins this workspace's admins may see (audit
+ * 2026-10-20): those recorded against THIS workspace. The Team page used to
+ * show every sign-in of the account — when, from which address and browser —
+ * in every workspace the person belongs to. Rows recorded against no
+ * workspace (registration) are shown only when this is the account's only
+ * workspace.
+ */
+async function loginHistoryScope(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, userId: number) {
+  const { accountLivesOnlyHere } = await import("../_core/accountScope");
+  return (await accountLivesOnlyHere(db, workspaceId, userId))
+    ? or(eq(loginHistory.workspaceId, workspaceId), isNull(loginHistory.workspaceId))
+    : eq(loginHistory.workspaceId, workspaceId);
 }
 
 export const settingsRouter = router({
@@ -1043,11 +1059,50 @@ export const teamRouter = router({
       if (roleRank(input.role) > roleRank(ctx.member.role)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Cannot assign a role higher than your own" });
       }
+      /**
+       * The same rules as changeRole, for every member in the batch (audit
+       * 2026-10-20): the bulk path checked only the role being handed out, so
+       * an admin could select their fellow admins — or the workspace's only
+       * super_admin — and demote them all in one call.
+       */
+      const ids = Array.from(new Set(input.memberIds));
+      const targets = await db
+        .select({ id: workspaceMembers.id, userId: workspaceMembers.userId, role: workspaceMembers.role })
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), inArray(workspaceMembers.id, ids)));
+      if (targets.length !== ids.length) throw new TRPCError({ code: "NOT_FOUND", message: "Some of those members were not found" });
+      for (const t of targets) {
+        if (ctx.member.role !== "super_admin" && roleRank(t.role) >= roleRank(ctx.member.role) && t.userId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Cannot change role of a peer or higher" });
+        }
+      }
+      const demotedSupers = input.role === "super_admin" ? 0 : targets.filter((t) => t.role === "super_admin").length;
+      if (demotedSupers > 0) {
+        const [{ c }] = await db
+          .select({ c: count() })
+          .from(workspaceMembers)
+          .where(and(
+            eq(workspaceMembers.workspaceId, ctx.workspace.id),
+            eq(workspaceMembers.role, "super_admin"),
+            isNull(workspaceMembers.deactivatedAt),
+          ));
+        if (Number(c) - demotedSupers < 1) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot demote the sole super_admin" });
+        }
+      }
       await db
         .update(workspaceMembers)
         .set({ role: input.role })
-        .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), inArray(workspaceMembers.id, input.memberIds)));
-      return { ok: true, count: input.memberIds.length };
+        .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), inArray(workspaceMembers.id, ids)));
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_member",
+        entityId: 0,
+        after: { bulkRole: input.role, memberIds: ids },
+      });
+      return { ok: true, count: ids.length };
     }),
 
   /**
@@ -1175,6 +1230,8 @@ export const teamRouter = router({
       await assertAccountEditableHere(db, ctx.workspace.id, member.userId, "password");
       const hash = await bcrypt.hash(input.password, 12);
       await db.update(users).set({ passwordHash: hash }).where(eq(users.id, member.userId));
+      // The member's existing sessions end with the old password.
+      await revokeAllSessions(db, member.userId);
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,
@@ -1661,7 +1718,7 @@ export const teamRouter = router({
       return db
         .select()
         .from(loginHistory)
-        .where(eq(loginHistory.userId, member.userId))
+        .where(and(eq(loginHistory.userId, member.userId), await loginHistoryScope(db, ctx.workspace.id, member.userId)))
         .orderBy(desc(loginHistory.createdAt))
         .limit(50);
     }),
@@ -1895,7 +1952,7 @@ export const teamRouter = router({
         .from(workspaceMembers)
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
-      const conditions: ReturnType<typeof eq>[] = [eq(loginHistory.userId, member.userId) as any];
+      const conditions: ReturnType<typeof eq>[] = [eq(loginHistory.userId, member.userId) as any, (await loginHistoryScope(db, ctx.workspace.id, member.userId)) as any];
       if (input.outcome) conditions.push(eq(loginHistory.outcome, input.outcome) as any);
       if (input.from) conditions.push(gte(loginHistory.createdAt, input.from) as any);
       if (input.to) conditions.push(lte(loginHistory.createdAt, input.to) as any);
@@ -1937,6 +1994,8 @@ export const teamRouter = router({
         .update(users)
         .set({ mfaTotpSecret: null, mfaTotpEnabledAt: null })
         .where(eq(users.id, member.userId));
+      // Sessions minted under the old second factor end with it.
+      await revokeAllSessions(db, member.userId);
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,

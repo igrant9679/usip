@@ -34,6 +34,25 @@ export function decryptField(ciphertext: string): string {
   return decipher.update(Buffer.from(encHex, "hex")).toString("utf8") + decipher.final("utf8");
 }
 
+/**
+ * A stored mailbox secret, readable whether it was written encrypted or not.
+ *
+ * Mailbox passwords are encrypted when written from 2026-10-24 (audit
+ * 2026-10-20, C4: every SMTP and IMAP password sat in plaintext — the
+ * schema's "AES-256-GCM encrypted" note on imapPassword described the reader,
+ * not the writers). Rows saved before that stay readable as they are until
+ * they are next saved, which the owner's rotation of the exposed passwords
+ * will do.
+ */
+export function readStoredSecret(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    return decryptField(value);
+  } catch {
+    return value;
+  }
+}
+
 /* ─── Shared types ───────────────────────────────────────────────────────── */
 
 export interface EmailThread {
@@ -160,7 +179,7 @@ export class ImapSmtpAdapter implements EmailAdapter {
     const acc = this.account;
     if (!acc.imapHost || !acc.imapUsername || !acc.imapPassword) throw new Error("IMAP not configured for this account");
     let password: string;
-    try { password = decryptField(acc.imapPassword); } catch { password = acc.imapPassword; }
+    password = readStoredSecret(acc.imapPassword) ?? "";
     const client = new ImapFlow({
       host: acc.imapHost, port: acc.imapPort ?? 993, secure: acc.imapSecure ?? true,
       auth: { user: acc.imapUsername, pass: password }, logger: false,
@@ -240,7 +259,7 @@ export class ImapSmtpAdapter implements EmailAdapter {
     const acc = this.account;
     if (!acc.smtpHost || !acc.smtpUsername || !acc.smtpPassword) throw new Error("SMTP not configured");
     let smtpPassword: string;
-    try { smtpPassword = decryptField(acc.smtpPassword); } catch { smtpPassword = acc.smtpPassword; }
+    smtpPassword = readStoredSecret(acc.smtpPassword) ?? "";
     const transporter = nodemailer.createTransport({
       host: acc.smtpHost, port: acc.smtpPort ?? 587, secure: acc.smtpSecure ?? false,
       auth: { user: acc.smtpUsername, pass: smtpPassword },

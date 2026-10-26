@@ -173,6 +173,11 @@ export function makeSqlFakeDb(opts: {
           for (const [k, v] of Object.entries(projection ?? {})) r[k] = is(v, SQL) ? qs.length : pick(qs[0], v);
           return r;
         });
+      } else if (projection && Object.values(projection).some((v) => is(v, SQL))) {
+        // An aggregate with no GROUP BY (`select({ c: count() })`): one row.
+        const r: Row = {};
+        for (const [k, v] of Object.entries(projection)) r[k] = is(v, SQL) ? ctxs.length : pick(ctxs[0]?.q ?? {}, v);
+        out = [r];
       } else if (projection) {
         out = ctxs.map((c) => {
           const r: Row = {};
@@ -240,7 +245,10 @@ export function makeSqlFakeDb(opts: {
                   if (is(v, SQL)) {
                     const m = render(v).sql.match(/`(\w+)` \+ (\d+)$/);
                     if (!m) throw new Error(`fake db: unsupported SET ${render(v).sql}`);
-                    r[k] = Number(r[m[1]]) + Number(m[2]);
+                    // The SQL names the DB column (session_version); the row is
+                    // keyed by the JS name (sessionVersion).
+                    const src = Object.entries(getTableColumns(table)).find(([, c]) => (c as Column).name === m[1])?.[0] ?? m[1];
+                    r[k] = Number(r[src] ?? 0) + Number(m[2]);
                   } else r[k] = v;
                 }
                 r.updatedAt = new Date();

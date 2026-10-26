@@ -20,6 +20,8 @@ import { landingPages, landingPageSubmissions, leads, enrollments } from "../../
 import { resolveBookingUrl } from "../mergeVars";
 import { hostedPageChatSlug } from "../services/hostedChat";
 import { slugify } from "@shared/slugify";
+import { isAllowedRedirect, REDIRECT_URL_ERROR, safeRedirectUrl } from "@shared/safeRedirect";
+import { assertRowInWorkspace } from "../services/foreignIds";
 
 type FormField = { key: string; label: string; required?: boolean };
 const DEFAULT_FIELDS: FormField[] = [
@@ -54,7 +56,9 @@ const contentInput = z.object({
   autoCreateLead: z.boolean().optional(),
   autoRoute: z.boolean().optional(),
   autoEnrollSequenceId: z.number().int().positive().nullable().optional(),
-  redirectUrl: z.string().max(2048).nullable().optional(),
+  // http(s) or an in-app path only (audit 2026-10-20): a javascript: URL here
+  // ran on the app's origin for every visitor who submitted the page.
+  redirectUrl: z.string().max(2048).nullable().optional().refine(isAllowedRedirect, REDIRECT_URL_ERROR),
   showBookingCta: z.boolean().optional(),
 });
 
@@ -81,6 +85,7 @@ export const landingPagesRouter = router({
   create: adminWsProcedure.input(contentInput).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await assertRowInWorkspace(db, "sequence", input.autoEnrollSequenceId, ctx.workspace.id);
     const name = input.name ?? "Untitled landing page";
     const slug = `${slugify(name) || "page"}-${Date.now().toString(36).slice(-4)}`.slice(0, 80);
     const r = await db.insert(landingPages).values({
@@ -112,6 +117,7 @@ export const landingPagesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const { id, ...rest } = input;
+    await assertRowInWorkspace(db, "sequence", rest.autoEnrollSequenceId, ctx.workspace.id);
     const set: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(rest)) if (v !== undefined) set[k] = v;
     if (Object.keys(set).length === 0) return { ok: true as const };
@@ -373,6 +379,8 @@ export const landingPagesRouter = router({
           .where(eq(landingPages.id, page.id));
       } catch { /* metric only */ }
 
-      return { ok: true, redirectUrl: page.redirectUrl ?? null };
+      // Sanitised on the way out too: a row saved before the write check
+      // existed must not be followed (shared/safeRedirect.ts).
+      return { ok: true, redirectUrl: safeRedirectUrl(page.redirectUrl) };
     }),
 });

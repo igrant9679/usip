@@ -60,16 +60,27 @@ function hotp(secretB32: string, counter: number): string {
   return String(code).padStart(6, "0");
 }
 
-/** Verify a user-supplied code, allowing ±`window` 30s steps of clock drift. */
-export function verifyTotp(secretB32: string, code: string, window = 1, nowMs = Date.now()): boolean {
+/**
+ * The time-step counter a user-supplied code matches, allowing ±`window` 30s
+ * steps of clock drift, or null. Callers that sign someone in use the counter
+ * to refuse a code whose step was already spent (useTotpStep below): a code is
+ * valid for ~90 seconds, and without that it could be replayed for all of them
+ * (audit 2026-10-20).
+ */
+export function matchTotpStep(secretB32: string, code: string, window = 1, nowMs = Date.now()): number | null {
   const clean = String(code).replace(/\s+/g, "");
-  if (!/^\d{6}$/.test(clean)) return false;
+  if (!/^\d{6}$/.test(clean)) return null;
   const counter = Math.floor(nowMs / 1000 / 30);
   for (let i = -window; i <= window; i++) {
     const expected = hotp(secretB32, counter + i);
-    if (crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(clean))) return true;
+    if (crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(clean))) return counter + i;
   }
-  return false;
+  return null;
+}
+
+/** Verify a user-supplied code, allowing ±`window` 30s steps of clock drift. */
+export function verifyTotp(secretB32: string, code: string, window = 1, nowMs = Date.now()): boolean {
+  return matchTotpStep(secretB32, code, window, nowMs) !== null;
 }
 
 /** otpauth:// URL for one-tap add in authenticator apps. */

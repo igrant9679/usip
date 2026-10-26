@@ -14,6 +14,8 @@ import { getDb } from "../db";
 import { users, workspaceMembers } from "../../drizzle/schema";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
+import { revokeAllSessions, useTotpStep } from "../_core/sessionRevocation";
+import { reissueSessionCookie } from "../passwordAuth";
 
 export const profileRouter = router({
   /**
@@ -175,11 +177,16 @@ export const profileRouter = router({
         .limit(1);
       if (!u?.secret) throw new TRPCError({ code: "BAD_REQUEST", message: "Start enrollment first." });
       if (u.enabledAt) return { ok: true, alreadyConnected: true };
-      const { verifyTotp } = await import("../services/totp");
-      if (!verifyTotp(u.secret, input.code)) {
+      const { matchTotpStep } = await import("../services/totp");
+      const step = matchTotpStep(u.secret, input.code);
+      if (step === null || !(await useTotpStep(db, ctx.user.id, step))) {
         throw new TRPCError({ code: "FORBIDDEN", message: "That code didn't match — check the app and try again." });
       }
       await db.update(users).set({ mfaTotpEnabledAt: new Date() }).where(eq(users.id, ctx.user.id));
+      // Turning on 2FA ends every other session (audit 2026-10-20): a session
+      // minted before it was never asked for a code. This browser stays in.
+      await revokeAllSessions(db, ctx.user.id);
+      await reissueSessionCookie(db, ctx.req, ctx.res, ctx.user.id);
       return { ok: true };
     }),
 
@@ -202,13 +209,16 @@ export const profileRouter = router({
         await db.update(users).set({ mfaTotpSecret: null, mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
         return { ok: true };
       }
-      const { verifyTotp } = await import("../services/totp");
-      const codeOk = !!input.code && verifyTotp(u.secret, input.code);
+      const { matchTotpStep } = await import("../services/totp");
+      const step = input.code ? matchTotpStep(u.secret, input.code) : null;
+      const codeOk = step !== null && (await useTotpStep(db, ctx.user.id, step));
       const pwOk = !!input.currentPassword && !!u.passwordHash && (await bcrypt.compare(input.currentPassword, u.passwordHash));
       if (!codeOk && !pwOk) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Confirm with a current authenticator code or your password." });
       }
       await db.update(users).set({ mfaTotpSecret: null, mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
+      await revokeAllSessions(db, ctx.user.id);
+      await reissueSessionCookie(db, ctx.req, ctx.res, ctx.user.id);
       return { ok: true };
     }),
 
@@ -239,6 +249,10 @@ export const profileRouter = router({
       }
       const hash = await bcrypt.hash(input.newPassword, 12);
       await db.update(users).set({ passwordHash: hash }).where(eq(users.id, ctx.user.id));
+      // A new password ends every session minted under the old one (audit
+      // 2026-10-20) — except this browser's, which gets a fresh token.
+      await revokeAllSessions(db, ctx.user.id);
+      await reissueSessionCookie(db, ctx.req, ctx.res, ctx.user.id);
       return { ok: true };
     }),
 

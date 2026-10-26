@@ -18,6 +18,8 @@ import { publicProcedure } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { notifyLeadRouted } from "../services/policyNotify";
+import { assertRowInWorkspace } from "../services/foreignIds";
+import { isAllowedRedirect, REDIRECT_URL_ERROR, safeRedirectUrl } from "@shared/safeRedirect";
 
 const FIELD = z.object({ key: z.string(), label: z.string(), required: z.boolean().optional() });
 
@@ -46,7 +48,7 @@ export const formsRouter = router({
     if (!db) return null;
     const [row] = await db.select().from(forms).where(eq(forms.publicId, input.publicId));
     if (!row || row.status !== "active") return null;
-    return { id: row.id, publicId: row.publicId, title: row.title, description: row.description, fields: row.fields, redirectUrl: row.redirectUrl };
+    return { id: row.id, publicId: row.publicId, title: row.title, description: row.description, fields: row.fields, redirectUrl: safeRedirectUrl(row.redirectUrl) };
   }),
 
   create: repProcedure
@@ -57,11 +59,12 @@ export const formsRouter = router({
       autoCreateLead: z.boolean().optional(),
       autoRoute: z.boolean().optional(),
       autoEnrollSequenceId: z.number().nullish(),
-      redirectUrl: z.string().optional(),
+      redirectUrl: z.string().max(2048).optional().refine(isAllowedRedirect, REDIRECT_URL_ERROR),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertRowInWorkspace(db, "sequence", input.autoEnrollSequenceId, ctx.workspace.id);
       const publicId = nanoid(12);
       const r = await db.insert(forms).values({
         workspaceId: ctx.workspace.id,
@@ -81,12 +84,30 @@ export const formsRouter = router({
       return { id, publicId };
     }),
 
-  update: repProcedure.input(z.object({ id: z.number(), patch: z.record(z.string(), z.any()) })).mutation(async ({ ctx, input }) => {
+  /**
+   * Explicit fields (audit 2026-10-20): this took `patch: z.record(any)` and
+   * stripped three keys, so `createdByUserId` (who the leads are filed under)
+   * and `autoEnrollSequenceId` could point anywhere, and `redirectUrl` could
+   * be a javascript: URL that ran on the app's origin for every submitter.
+   * Status has its own procedure (toggle).
+   */
+  update: repProcedure.input(z.object({
+    id: z.number(),
+    patch: z.object({
+      title: z.string().min(1).max(200).optional(),
+      description: z.string().max(5000).nullable().optional(),
+      fields: z.array(FIELD).min(1).optional(),
+      autoCreateLead: z.boolean().optional(),
+      autoRoute: z.boolean().optional(),
+      autoEnrollSequenceId: z.number().int().positive().nullable().optional(),
+      redirectUrl: z.string().max(2048).nullable().optional().refine(isAllowedRedirect, REDIRECT_URL_ERROR),
+    }).strict(),
+  })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const patch: any = { ...input.patch };
-    delete patch.id; delete patch.publicId; delete patch.workspaceId; // immutable
-    await db.update(forms).set(patch).where(and(eq(forms.id, input.id), eq(forms.workspaceId, ctx.workspace.id)));
+    await assertRowInWorkspace(db, "sequence", input.patch.autoEnrollSequenceId, ctx.workspace.id);
+    if (Object.keys(input.patch).length === 0) return { ok: true };
+    await db.update(forms).set(input.patch as never).where(and(eq(forms.id, input.id), eq(forms.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 
@@ -247,6 +268,8 @@ export const formsRouter = router({
         await db.update(forms).set({ submitCount: sql`${forms.submitCount} + 1` } as never).where(eq(forms.id, form.id));
       } catch (e) { console.error("[FormSubmit] submission insert failed:", e); }
 
-      return { ok: true, redirectUrl: form.redirectUrl ?? null };
+      // Sanitised on the way out too: a row saved before the write check
+      // existed must not be followed (shared/safeRedirect.ts).
+      return { ok: true, redirectUrl: safeRedirectUrl(form.redirectUrl) };
     }),
 });
