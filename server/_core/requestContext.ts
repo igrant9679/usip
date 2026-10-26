@@ -14,8 +14,9 @@ type RequestStore = {
   workspaceId?: number;
   userId?: number;
   /**
-   * First hop of x-forwarded-for, else the socket address. The key the public
-   * LLM ceiling falls back to when there is no signed-in user.
+   * `req.ip` under the trusted hop count (_core/clientIp.ts), else the socket
+   * address. The key the public LLM ceiling falls back to when there is no
+   * signed-in user.
    */
   clientIp?: string;
 };

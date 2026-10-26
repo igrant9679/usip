@@ -21,7 +21,11 @@ const read = (p: string) => readFileSync(join(__dirname, p), "utf8");
 
 /** Table names imported from drizzle/schema by a module (CRLF-safe). */
 function schemaImports(src: string): Set<string> {
-  const m = src.match(/import \{([\s\S]*?)\} from "\.{1,2}\/(?:\.\.\/)?drizzle\/schema"/);
+  // `[^}]*`, not `[\s\S]*?`: the lazy form started at the FIRST `import {` in
+  // the file and ran across the drizzle-orm import to reach the schema one, so
+  // `and, eq, sql` counted as "tables" — and adding `isNull` to seed.ts's
+  // operators (2026-10-24) read as a table the remover had never heard of.
+  const m = src.match(/import \{([^}]*)\} from "\.{1,2}\/(?:\.\.\/)?drizzle\/schema"/);
   if (!m) return new Set();
   return new Set(
     m[1]

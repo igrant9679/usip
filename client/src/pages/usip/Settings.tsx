@@ -1571,7 +1571,7 @@ function WorkspaceMessagingSection({ isAdmin }: { isAdmin: boolean }) {
             value={slackUrl}
             onChange={(e) => setSlackUrl(e.target.value)}
             disabled={!isAdmin}
-            placeholder="https://hooks.slack.com/services/..."
+            placeholder={!isAdmin && (settingsQ.data as any)?.hasSlackWebhook ? "Configured — visible to admins only" : "https://hooks.slack.com/services/..."}
             type="url"
           />
           <p className="text-xs text-muted-foreground">Used by workflow &quot;Post to Slack&quot; actions. Create one in your Slack app&apos;s Incoming Webhooks settings.</p>
@@ -1582,7 +1582,7 @@ function WorkspaceMessagingSection({ isAdmin }: { isAdmin: boolean }) {
             value={teamsUrl}
             onChange={(e) => setTeamsUrl(e.target.value)}
             disabled={!isAdmin}
-            placeholder="https://outlook.office.com/webhook/..."
+            placeholder={!isAdmin && (settingsQ.data as any)?.hasTeamsWebhook ? "Configured — visible to admins only" : "https://outlook.office.com/webhook/..."}
             type="url"
           />
           <p className="text-xs text-muted-foreground">Used by workflow &quot;Notify Teams&quot; actions. Create one via Connectors in your Teams channel settings.</p>

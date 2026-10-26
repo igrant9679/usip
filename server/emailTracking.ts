@@ -147,7 +147,7 @@ export function registerEmailTrackingRoutes(app: Express) {
     const signal = {
       userAgent: req.headers["user-agent"] ?? null,
       method: req.method,
-      ip: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? null,
+      ip: req.ip || req.socket.remoteAddress || null,
     };
 
     try {
@@ -292,7 +292,7 @@ export function registerEmailTrackingRoutes(app: Express) {
         type: "click",
         url: safeUrl.slice(0, 2048),
         userAgent: req.headers["user-agent"]?.slice(0, 512) ?? null,
-        ip: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? null,
+        ip: req.ip || req.socket.remoteAddress || null,
       });
 
       await db

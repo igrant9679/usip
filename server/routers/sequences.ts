@@ -926,6 +926,26 @@ export const sequencesRouter = router({
     if (!input.contactId && !input.leadId) throw new TRPCError({ code: "BAD_REQUEST", message: "contactId or leadId required" });
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    /**
+     * 🔴 EVERY ID IS CHECKED AGAINST THE WORKSPACE (audit 2026-10-20, C9).
+     * None was: an enrolment row in THIS workspace could name another
+     * tenant's sequence, contact or lead, and the engine then read that
+     * person's email by id and wrote it onto a draft here, ready to send.
+     */
+    const [seq] = await db.select({ id: sequences.id, status: sequences.status }).from(sequences)
+      .where(and(eq(sequences.id, input.sequenceId), eq(sequences.workspaceId, ctx.workspace.id)));
+    if (!seq) throw new TRPCError({ code: "NOT_FOUND", message: "Sequence not found" });
+    if (seq.status === "archived") throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot enroll into an archived sequence." });
+    if (input.contactId) {
+      const [c] = await db.select({ id: contacts.id }).from(contacts)
+        .where(and(eq(contacts.id, input.contactId), eq(contacts.workspaceId, ctx.workspace.id)));
+      if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
+    }
+    if (input.leadId) {
+      const [l] = await db.select({ id: leads.id }).from(leads)
+        .where(and(eq(leads.id, input.leadId), eq(leads.workspaceId, ctx.workspace.id)));
+      if (!l) throw new TRPCError({ code: "NOT_FOUND", message: "Lead not found" });
+    }
     // Enrollment guard: block contacts with invalid email if workspace setting is enabled
     if (input.contactId) {
       const [settings] = await db.select().from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
@@ -994,6 +1014,23 @@ export const sequencesRouter = router({
       if (!seq) throw new TRPCError({ code: "NOT_FOUND", message: "Sequence not found" });
       if (seq.status === "archived") {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot enroll into an archived sequence." });
+      }
+
+      // ── Every id must be this workspace's (audit 2026-10-20, C9) ──
+      // Contact and lead ids were never checked unless the invalid-email
+      // setting happened to be on, so foreign ids went straight into
+      // enrollments and the engine mailed another tenant's people from here.
+      // Refused as a whole rather than trimmed: the UI only ever sends ids it
+      // listed, so a stranger in the batch is a crafted call, not a race.
+      const own = async (tbl: typeof contacts | typeof leads | typeof prospects, ids: number[]): Promise<number> => {
+        if (ids.length === 0) return 0;
+        const rows = await db.select({ id: tbl.id }).from(tbl)
+          .where(and(eq(tbl.workspaceId, ctx.workspace.id), inArray(tbl.id, ids)));
+        return ids.length - rows.length;
+      };
+      const foreign = (await own(contacts, contactIds)) + (await own(leads, leadIds)) + (await own(prospects, prospectIds));
+      if (foreign > 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: `${foreign} of the selected records were not found in this workspace — nothing was enrolled.` });
       }
 
       // ── Invalid-email guard (contacts + prospects) ──────────────

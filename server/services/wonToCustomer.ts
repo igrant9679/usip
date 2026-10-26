@@ -9,7 +9,7 @@
  * no-op if the account is already a customer (or has no account).
  */
 import { and, eq } from "drizzle-orm";
-import { customers } from "../../drizzle/schema";
+import { accounts, customers } from "../../drizzle/schema";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import type { getDb } from "../db";
 
@@ -22,6 +22,16 @@ export async function ensureCustomerForWonOpp(
   fallbackUserId: number,
 ): Promise<boolean> {
   if (!opp.accountId) return false;
+  // The account must be this workspace's (audit 2026-10-20, C8). A deal could
+  // carry another tenant's accountId (opportunities.create never checked it),
+  // and the customer row minted here then showed that tenant's account in
+  // cs.get. Refused quietly: the stage change itself still stands.
+  const [own] = await db
+    .select({ id: accounts.id })
+    .from(accounts)
+    .where(and(eq(accounts.id, opp.accountId), eq(accounts.workspaceId, workspaceId)))
+    .limit(1);
+  if (!own) return false;
   const [existing] = await db
     .select({ id: customers.id })
     .from(customers)

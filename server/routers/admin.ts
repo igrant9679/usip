@@ -34,7 +34,9 @@ import {
   workspaceSettings,
 } from "../../drizzle/schema";
 import { checkPermission, getDb, resolvePermissionMap } from "../db";
-import { adminWsProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
+import { assertAccountEditableHere } from "../_core/accountScope";
+import { settingsForMember } from "../_core/safeProjections";
+import { adminWsProcedure, isAdminRole, roleRank, workspaceProcedure } from "../_core/workspace";
 import { invalidateSecurityPolicyCache } from "../_core/securityPolicy";
 import { getRequestClientIp } from "../_core/requestContext";
 import { publicProcedure, protectedProcedure, router } from "../_core/trpc";
@@ -244,8 +246,11 @@ export async function getOrSeedSettings(workspaceId: number) {
 export const settingsRouter = router({
   get: workspaceProcedure.query(async ({ ctx }) => {
     const s = await getOrSeedSettings(ctx.workspace.id);
+    // Not a spread of the row (audit 2026-10-20): every member used to receive
+    // the Slack and Teams webhook URLs, the SendGrid inbound token and the
+    // ciphertext of every BYOK key. See _core/safeProjections.ts.
     return {
-      ...s,
+      ...settingsForMember(s, { isAdmin: isAdminRole(ctx.member.role) }),
       ipAllowlist: Array.isArray(s.ipAllowlist) ? s.ipAllowlist : [],
       /**
        * The address THIS request arrived from, shown read-only beside the IP
@@ -1165,6 +1170,9 @@ export const teamRouter = router({
       if (ctx.member.role !== "super_admin" && roleRank(member.role) >= roleRank(ctx.member.role)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Cannot set password for a member at or above your role" });
       }
+      // The password is the ACCOUNT's, shared by every workspace the person is
+      // in — see _core/accountScope.ts (audit 2026-10-20, C1).
+      await assertAccountEditableHere(db, ctx.workspace.id, member.userId, "password");
       const hash = await bcrypt.hash(input.password, 12);
       await db.update(users).set({ passwordHash: hash }).where(eq(users.id, member.userId));
       await recordAudit({
@@ -1175,6 +1183,43 @@ export const teamRouter = router({
         entityId: member.userId,
         after: { action: "password_set" },
       });
+      return { ok: true };
+    }),
+
+  /**
+   * Email a member a password-reset link at their OWN address.
+   *
+   * What an admin does instead of setMemberPassword when the account is not
+   * theirs to set (it lives in another workspace too, or the person has not
+   * accepted yet): the person chooses the password, from their own inbox.
+   * Same rank rule as the rest of the Team page.
+   */
+  sendPasswordReset: adminWsProcedure
+    .input(z.object({ memberId: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [member] = await db
+        .select({ userId: workspaceMembers.userId, role: workspaceMembers.role })
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+      if (ctx.member.role !== "super_admin" && roleRank(member.role) >= roleRank(ctx.member.role)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot reset the password of a member at or above your role" });
+      }
+      const { emailPasswordReset } = await import("../passwordAuth");
+      const sent = await emailPasswordReset(db, member.userId);
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_member",
+        entityId: member.userId,
+        after: { action: "password_reset_link_sent", sent },
+      });
+      if (!sent) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "The reset email could not be sent — check that a system sender is set in Settings → Messaging." });
+      }
       return { ok: true };
     }),
 
@@ -1292,6 +1337,17 @@ export const teamRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Member has not accepted yet — resend the invitation instead." });
       }
       if (!row.inviteToken) return { ok: true, alreadyClear: true };
+      // An account with a password elsewhere is a real person's, and clearing
+      // the token here would make them a member of this workspace without
+      // their saying so (audit 2026-10-20, C1). The heal is for the one case
+      // it was written for: someone whose only membership is this one.
+      const memberships = await db
+        .select({ id: workspaceMembers.id })
+        .from(workspaceMembers)
+        .where(eq(workspaceMembers.userId, row.userId));
+      if (memberships.length !== 1) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This person also belongs to another workspace — they accept with their invitation link. Resend the invitation instead." });
+      }
       await db.update(workspaceMembers)
         .set({ inviteToken: null, inviteExpiresAt: null })
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
@@ -1711,8 +1767,12 @@ export const teamRouter = router({
       if (row.inviteExpiresAt && row.inviteExpiresAt <= now) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation link has expired. Please ask an admin to resend your invitation." });
       }
-      // Verify the signed-in user's email matches the invite
-      if (ctx.user.email?.toLowerCase() !== row.userEmail?.toLowerCase()) {
+      // Verify the signed-in user IS the invitee — the same row, not merely
+      // the same email. Email is not unique on users, so an email match alone
+      // let another account accept on the invitee's behalf (and this procedure
+      // then rewrote the invitee's openId). With OAuth gone, the invitee only
+      // ever signs in as their own row.
+      if (ctx.user.id !== row.userId || ctx.user.email?.toLowerCase() !== row.userEmail?.toLowerCase()) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: `This invite was sent to ${row.userEmail}. Please sign in with that email address.`,
@@ -1792,7 +1852,9 @@ export const teamRouter = router({
       if (row.inviteExpiresAt && row.inviteExpiresAt <= now) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "This invitation link has expired." });
       }
-      if (ctx.user.email?.toLowerCase() !== row.userEmail?.toLowerCase()) {
+      // The same row, not merely the same email: this writes row.userId's
+      // password, and two accounts can carry one address (audit 2026-10-20).
+      if (ctx.user.id !== row.userId || ctx.user.email?.toLowerCase() !== row.userEmail?.toLowerCase()) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: `This invite was sent to ${row.userEmail}. Please sign in with that email address.`,
@@ -1868,6 +1930,9 @@ export const teamRouter = router({
       if (ctx.member.role !== "super_admin" && roleRank(member.role) >= roleRank(ctx.member.role)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Cannot reset 2FA for a member at or above your role" });
       }
+      // The second factor is the ACCOUNT's (audit 2026-10-20, C1): clearing it
+      // from a workspace the account merely visits strips it everywhere.
+      await assertAccountEditableHere(db, ctx.workspace.id, member.userId, "two-factor sign-in");
       await db
         .update(users)
         .set({ mfaTotpSecret: null, mfaTotpEnabledAt: null })
@@ -1937,8 +2002,9 @@ export const teamRouter = router({
 
       // Resolve the member row
       const [member] = await db
-        .select({ userId: workspaceMembers.userId, role: workspaceMembers.role })
+        .select({ userId: workspaceMembers.userId, role: workspaceMembers.role, name: users.name, email: users.email })
         .from(workspaceMembers)
+        .innerJoin(users, eq(workspaceMembers.userId, users.id))
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
 
@@ -1952,11 +2018,24 @@ export const teamRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Cannot promote a member to a role at or above your own" });
       }
 
-      // Update users table (name, email)
+      // Update users table (name, email) — ACCOUNT fields, shared with every
+      // other workspace the person is in. Changing the login email of an
+      // account reachable from another workspace and then asking for a reset
+      // link was a takeover (audit 2026-10-20, C1). Only an actual change
+      // counts: the Team dialog sends both fields on every save, and a role
+      // edit must not trip the account rule.
       const userPatch: Record<string, unknown> = {};
-      if (input.name !== undefined) userPatch.name = input.name;
-      if (input.email !== undefined) userPatch.email = input.email;
+      if (input.name !== undefined && input.name !== member.name) userPatch.name = input.name;
+      const newEmail = input.email?.trim().toLowerCase();
+      if (newEmail !== undefined && newEmail !== (member.email ?? "").trim().toLowerCase()) userPatch.email = newEmail;
       if (Object.keys(userPatch).length > 0) {
+        await assertAccountEditableHere(db, ctx.workspace.id, member.userId, "name or login email");
+        if (userPatch.email) {
+          const [taken] = await db.select({ id: users.id }).from(users).where(eq(users.email, newEmail!)).limit(1);
+          if (taken && taken.id !== member.userId) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "That email is already in use." });
+          }
+        }
         await db.update(users).set(userPatch).where(eq(users.id, member.userId));
       }
 

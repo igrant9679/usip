@@ -1009,6 +1009,9 @@ async function emitSeqLog(
  * and force=false, returns immediately with reused=true. Pass force=true
  * to bypass and regenerate (used by a future Regenerate action).
  */
+/** The prospect or campaign is not this workspace's (or not each other's). */
+export class SequenceTargetNotFound extends Error {}
+
 export async function runSequenceAgent(
   prospectId: number,
   workspaceId: number,
@@ -1019,12 +1022,24 @@ export async function runSequenceAgent(
   if (!db) throw new Error("Database unavailable");
 
   const startedAt = Date.now();
-  const [prospect] = await db.select().from(prospectQueue).where(eq(prospectQueue.id, prospectId)).limit(1);
-  let [intel] = await db.select().from(prospectIntelligence).where(eq(prospectIntelligence.prospectQueueId, prospectId)).limit(1);
-  const [campaign] = await db.select().from(areCampaigns).where(eq(areCampaigns.id, campaignId)).limit(1);
+  /**
+   * 🔴 EVERY READ AND WRITE HERE IS SCOPED TO THE WORKSPACE (audit 2026-10-20,
+   * C6). generateSequence passes a member's prospectId and campaignId
+   * straight in, and these three reads — and the dossier writes below — keyed
+   * on the bare ids. Copy written for one tenant's campaign could be planted
+   * on another tenant's prospect, and THEIR engine would then send it. The
+   * prospect must also belong to the campaign it is being written for.
+   * Throws SequenceTargetNotFound so the router can answer NOT_FOUND.
+   */
+  const [prospect] = await db.select().from(prospectQueue)
+    .where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, workspaceId))).limit(1);
+  let [intel] = await db.select().from(prospectIntelligence)
+    .where(and(eq(prospectIntelligence.prospectQueueId, prospectId), eq(prospectIntelligence.workspaceId, workspaceId))).limit(1);
+  const [campaign] = await db.select().from(areCampaigns)
+    .where(and(eq(areCampaigns.id, campaignId), eq(areCampaigns.workspaceId, workspaceId))).limit(1);
 
-  if (!prospect) throw new Error(`Prospect ${prospectId} not found`);
-  if (!campaign) throw new Error(`Campaign ${campaignId} not found`);
+  if (!prospect || prospect.campaignId !== campaignId) throw new SequenceTargetNotFound(`Prospect ${prospectId} not found in campaign ${campaignId}`);
+  if (!campaign) throw new SequenceTargetNotFound(`Campaign ${campaignId} not found`);
   if (!intel && !options.allowWithoutIntel) {
     // The prospect was never enriched (or enrichment failed). Without
     // intel there's nothing to personalize against. The AUTONOMOUS path keeps
@@ -1052,7 +1067,8 @@ export async function runSequenceAgent(
       workspaceId,
       enrichmentConfidence: 0,
     } as never);
-    [intel] = await db.select().from(prospectIntelligence).where(eq(prospectIntelligence.prospectQueueId, prospectId)).limit(1);
+    [intel] = await db.select().from(prospectIntelligence)
+      .where(and(eq(prospectIntelligence.prospectQueueId, prospectId), eq(prospectIntelligence.workspaceId, workspaceId))).limit(1);
     if (!intel) throw new Error("Could not create a dossier row for this prospect");
   }
 
@@ -1098,7 +1114,7 @@ export async function runSequenceAgent(
         ...researchUseColumns(await researchMatchFor(workspaceId, { campaignId, prospectTitle: prospect.title, industry: prospect.industry }), null, { hookType: "fixed", steps }),
       };
       await db.update(prospectIntelligence).set(fixedPatch as never)
-        .where(eq(prospectIntelligence.prospectQueueId, prospectId));
+        .where(and(eq(prospectIntelligence.prospectQueueId, prospectId), eq(prospectIntelligence.workspaceId, workspaceId)));
       const durationMs = Date.now() - startedAt;
       await emitSeqLog(db, workspaceId, campaignId, "info", "sequence.fixed",
         `Fixed-copy steps assigned to ${prospect.firstName} ${prospect.lastName} — ${steps.length} steps, no generation`, { prospectId, steps: steps.length, durationMs });
@@ -1157,7 +1173,7 @@ export async function runSequenceAgent(
       sequenceRewriteCount: 0,
       copyHoldReason,
       ...researchUseColumns(brief, brief, { hookType: primaryHookOf(intel).hookType, steps }),
-    }).where(eq(prospectIntelligence.prospectQueueId, prospectId));
+    }).where(and(eq(prospectIntelligence.prospectQueueId, prospectId), eq(prospectIntelligence.workspaceId, workspaceId)));
 
     // Refresh A/B Variants — opener-only (variant A, the only one that exists).
     // Campaign-level upsert so the tab picks up the new opener on next query;
@@ -1485,6 +1501,7 @@ export const prospectsRouter = router({
           allowWithoutIntel: input.allowWithoutEnrichment,
         });
       } catch (e) {
+        if (e instanceof SequenceTargetNotFound) throw new TRPCError({ code: "NOT_FOUND", message: e.message });
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: (e as Error)?.message ?? "Sequence generation failed",

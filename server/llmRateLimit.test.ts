@@ -171,41 +171,48 @@ describe("the authenticated ceiling still binds, and more generously", () => {
  * a value that never arrived, so these build probe routers out of the REAL
  * exported procedures and check what the middleware actually puts in the store.
  */
+/**
+ * 2026-10-24 (audit "also urgent"): the key is `req.ip` — the address Express
+ * derives from X-Forwarded-For under the trusted hop count set in
+ * _core/clientIp.ts — and no longer the FIRST X-Forwarded-For entry, which the
+ * caller writes. These probes hand the fake request an `ip`, as Express
+ * would, and a forged header beside it that must change nothing.
+ */
 describe("the request context is actually populated — the dead-wiring half", () => {
-  const reqWith = (headers: Record<string, unknown>) => ({
+  const reqWith = (ip: string | undefined, headers: Record<string, unknown> = {}, remoteAddress = "198.51.100.200") => ({
     user: { id: 7, openId: "o", email: "a@b.c", name: "A", loginMethod: "manus", role: "user",
       createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() },
-    req: { protocol: "https", headers, socket: { remoteAddress: "198.51.100.200" } },
+    req: { protocol: "https", ip, headers, socket: { remoteAddress } },
     res: { clearCookie: () => {} },
   } as any);
 
   it("publicProcedure puts the client IP in the store", async () => {
     const probe = router({ ip: publicProcedure.query(() => getRequestClientIp() ?? null) });
-    const out = await probe.createCaller(reqWith({ "x-forwarded-for": "203.0.113.9" })).ip();
+    const out = await probe.createCaller(reqWith("203.0.113.9")).ip();
     expect(out).toBe("203.0.113.9");
   });
 
-  it("takes the FIRST hop of x-forwarded-for, matching the express limiters", async () => {
+  it("ignores an X-Forwarded-For the caller wrote — rotating it must not mint a fresh bucket", async () => {
     const probe = router({ ip: publicProcedure.query(() => getRequestClientIp() ?? null) });
-    const out = await probe.createCaller(reqWith({ "x-forwarded-for": "203.0.113.9, 10.0.0.1, 10.0.0.2" })).ip();
-    expect(out, "a downstream proxy hop must not become the key").toBe("203.0.113.9");
+    const out = await probe.createCaller(reqWith("203.0.113.9", { "x-forwarded-for": "6.6.6.6, 203.0.113.9" })).ip();
+    expect(out, "the first, caller-written entry must not become the key").toBe("203.0.113.9");
   });
 
-  it("falls back to the socket address when there is no forwarding header", async () => {
+  it("falls back to the socket address when Express computed no ip", async () => {
     const probe = router({ ip: publicProcedure.query(() => getRequestClientIp() ?? null) });
-    const out = await probe.createCaller(reqWith({})).ip();
+    const out = await probe.createCaller(reqWith(undefined)).ip();
     expect(out).toBe("198.51.100.200");
   });
 
   it("never leaves the key empty — an empty string would bucket every visitor together", async () => {
     const probe = router({ ip: publicProcedure.query(() => getRequestClientIp() ?? null) });
-    const out = await probe.createCaller(reqWith({ "x-forwarded-for": "   " })).ip();
+    const out = await probe.createCaller(reqWith("   ", { "x-forwarded-for": "   " }, "")).ip();
     expect(out).toBe("unknown");
   });
 
   it("protectedProcedure inherits it, so an authenticated non-workspace call is covered too", async () => {
     const probe = router({ ip: protectedProcedure.query(() => getRequestClientIp() ?? null) });
-    const out = await probe.createCaller(reqWith({ "x-forwarded-for": "203.0.113.9" })).ip();
+    const out = await probe.createCaller(reqWith("203.0.113.9")).ip();
     expect(out, "protectedProcedure must build on publicProcedure, not on t.procedure").toBe("203.0.113.9");
   });
 });
@@ -281,7 +288,7 @@ describe("mergeRequestContext — the replace-vs-merge trap", () => {
     const out = await probe.createCaller({
       user: { id: 7, openId: "o", email: "a@b.c", name: "A", loginMethod: "manus", role: "user",
         createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() },
-      req: { protocol: "https", headers: { "x-forwarded-for": "203.0.113.9" }, socket: {} },
+      req: { protocol: "https", ip: "203.0.113.9", headers: { "x-forwarded-for": "6.6.6.6" }, socket: {} },
       res: { clearCookie: () => {} },
     } as any).ctx();
 

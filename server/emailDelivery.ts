@@ -52,6 +52,11 @@ export interface SendEmailOptions {
    * List-Unsubscribe pair; senders that never set it are unchanged.
    */
   headers?: Record<string, string>;
+  /**
+   * Logged instead of the body (see SendEmailInput.logPreview in emailAdapter):
+   * for mail whose body is a credential, such as a password-reset link.
+   */
+  logPreview?: string;
 }
 
 export interface SendEmailResult {
@@ -383,8 +388,8 @@ export async function sendWorkspaceEmail(
       fromName,
       to: opts.to,
       subject: opts.subject,
-      bodyHtml: opts.html,
-      bodyText: opts.text,
+      bodyHtml: opts.logPreview != null ? null : opts.html,
+      bodyText: opts.logPreview ?? opts.text,
       status: "sent",
     });
     return { ok: true };
@@ -397,8 +402,8 @@ export async function sendWorkspaceEmail(
       meta: { source: opts.logSource ?? "transactional", sourceLabel: opts.logLabel ?? null },
       to: opts.to,
       subject: opts.subject,
-      bodyHtml: opts.html,
-      bodyText: opts.text,
+      bodyHtml: opts.logPreview != null ? null : opts.html,
+      bodyText: opts.logPreview ?? opts.text,
       status: "failed",
       failureReason: msg,
     });
@@ -450,6 +455,7 @@ export async function sendSystemEmail(
             bodyText: opts.text,
             fromEmail: (account as any).fromEmail,
             fromName: (account as any).fromName ?? undefined,
+            logPreview: opts.logPreview,
           } as any);
           return { ok: true };
         } catch (e) {

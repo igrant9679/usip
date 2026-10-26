@@ -16,24 +16,23 @@
  * Scoped deliberately narrowly:
  *  - Only paths naming a public LLM procedure are limited. Authenticated app
  *    traffic shares `/api/trpc` and must not be throttled by this.
- *  - Keyed on the FIRST hop of x-forwarded-for, matching the existing auth
- *    limiters. That is the client as seen past our own proxy — it does NOT
- *    separate visitors sharing one corporate NAT, who share a bucket. The
- *    ceiling is set high enough that this only matters for a site sending
- *    hundreds of chat messages a minute from one egress IP, which is a nicer
- *    problem than the one being fixed.
+ *  - Keyed on `req.ip` (_core/clientIp.ts), matching the auth limiters. That
+ *    is the client as our own proxy saw it — it does NOT separate visitors
+ *    sharing one corporate NAT, who share a bucket. The ceiling is set high
+ *    enough that this only matters for a site sending hundreds of chat
+ *    messages a minute from one egress IP, which is a nicer problem than the
+ *    one being fixed. (Until 2026-10-24 this read the FIRST X-Forwarded-For
+ *    entry, which the caller writes, so a rotated header bypassed it.)
  *  - The ceiling is far above human use. A visitor types a message every ten
  *    or twenty seconds; nobody legitimately sends 20 in a minute. Hitting this
  *    means automation, and 429 is the correct answer to automation here.
  */
 import rateLimit from "express-rate-limit";
 import type { Express, Request, Response, NextFunction } from "express";
+import { rateLimitKey } from "./_core/clientIp";
 
-/** Same shape as the auth limiters — first hop of x-forwarded-for, else socket. */
-const ipKey = (req: Request) =>
-  ((req.headers["x-forwarded-for"] as string) ?? req.socket?.remoteAddress ?? "unknown")
-    .split(",")[0]
-    .trim();
+/** Same key as the auth limiters: `req.ip` under the trusted hop count. */
+const ipKey = (req: Request) => rateLimitKey(req);
 
 /**
  * Procedures that are BOTH public and cost money per call. Matched as a

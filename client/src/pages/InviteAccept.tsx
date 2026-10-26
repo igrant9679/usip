@@ -90,12 +90,17 @@ export default function InviteAccept() {
     }
     setRegistering(true);
     try {
-      const returnTo = `/invite/accept?token=${encodeURIComponent(token)}&setup=done`;
+      // The invite token goes with the registration: register only touches an
+      // existing (placeholder) account when it carries that account's own
+      // invite token, and doing so accepts the invitation and spends the token
+      // (audit 2026-10-20, C2). So this page's preview cannot load again
+      // afterwards — go straight into the workspace instead of back here.
+      const returnTo = "/";
       const res = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email: inviteEmail, password, returnPath: returnTo }),
+        body: JSON.stringify({ email: inviteEmail, password, returnPath: returnTo, inviteToken: token }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -492,7 +497,8 @@ export default function InviteAccept() {
             // Email already has a real account — they should sign in, not register.
             <div className="space-y-3">
               <p className="text-center text-sm text-muted-foreground">
-                You already have an account. Sign in to accept this invitation.
+                You already have an account. Sign in to accept this invitation. If you've never set a password,
+                choose "Forgot password?" on the sign-in page and we'll email you a link.
               </p>
               <Button className="w-full" onClick={() => navigate(`/?returnPath=${encodeURIComponent(returnPath)}`)}>
                 Sign in

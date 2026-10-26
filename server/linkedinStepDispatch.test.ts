@@ -152,7 +152,9 @@ describe("reviving the already-skipped steps is a decision, not a migration", ()
   // window, which is a slice drifting, not the behaviour changing.
   const proc = (() => {
     const from = execution.slice(execution.indexOf("reviveSkippedSteps:"));
-    const end = from.indexOf("/** Ingest an incoming signal");
+    // 2026-10-24: bounded by the next procedure's NAME — its doc comment was
+    // rewritten when ingestSignal became admin-only (audit C5).
+    const end = from.indexOf("ingestSignal:");
     return end > 0 ? from.slice(0, end) : from;
   })();
 

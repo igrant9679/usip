@@ -6,9 +6,10 @@
  *     Verifies bcrypt hash in users.passwordHash, issues JWT session cookie.
  *
  *   POST /api/auth/register
- *     Body: { email, password, name?, returnPath? }
- *     Creates a new user (or upgrades a pending invite placeholder), hashes
- *     the password, issues a JWT session cookie, and returns the redirect URL.
+ *     Body: { email, password, name?, returnPath?, inviteLinkToken?, inviteToken? }
+ *     Creates a NEW user, hashes the password, issues a JWT session cookie,
+ *     and returns the redirect URL. The one existing row it may touch is an
+ *     untouched invite placeholder presenting its own invite token.
  *
  * Both routes are rate-limited per IP. The in-memory rate-limit store resets
  * on restart — acceptable for a single-instance deployment, swap to a Redis
@@ -20,10 +21,12 @@ import { and, eq, isNull } from "drizzle-orm";
 import rateLimit from "express-rate-limit";
 import { nanoid } from "nanoid";
 import { getDb } from "./db";
-import { users, loginHistory, workspaceMembers, workspaceInviteLinks, workspaceSettings } from "../drizzle/schema";
+import { users, loginHistory, workspaceMembers, workspaceInviteLinks, workspaceSettings, workspaces } from "../drizzle/schema";
+import { rankOf } from "@shared/roleRank";
 import { sdk } from "./_core/sdk";
 import { sessionLifetimeMs } from "./_core/securityPolicy";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { clientIpOf, rateLimitKey } from "./_core/clientIp";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { escapeHtml } from "@shared/escapeHtml";
 import { safeReturnPath } from "@shared/returnPath";
@@ -35,10 +38,12 @@ import {
   resetTokenExpiry,
 } from "./services/passwordReset";
 
-const ipKey = (req: Request) =>
-  ((req.headers["x-forwarded-for"] as string) ?? req.socket?.remoteAddress ?? "unknown")
-    .split(",")[0]
-    .trim();
+/**
+ * The caller's address, from `req.ip` and the trusted hop count — NOT the
+ * first entry of X-Forwarded-For, which the caller writes (audit 2026-10-20:
+ * rotating that header gave every guess a fresh bucket). See _core/clientIp.ts.
+ */
+const ipKey = (req: Request) => clientIpOf(req);
 
 /**
  * How long this user's session may live, from Settings → Security.
@@ -87,7 +92,7 @@ const passwordLoginLimiter = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: ipKey,
+  keyGenerator: rateLimitKey,
   handler: (_req: Request, res: Response) => {
     res.status(429).json({
       error: "Too many login attempts from this IP address. Please wait 15 minutes and try again.",
@@ -101,7 +106,7 @@ const registerLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: ipKey,
+  keyGenerator: rateLimitKey,
   handler: (_req: Request, res: Response) => {
     res.status(429).json({
       error: "Too many registration attempts from this IP address. Please wait 15 minutes and try again.",
@@ -129,7 +134,7 @@ const forgotPasswordLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: ipKey,
+  keyGenerator: rateLimitKey,
   handler: (_req: Request, res: Response) => {
     res.status(429).json({
       error: "Too many reset requests from this IP address. Please wait 15 minutes and try again.",
@@ -137,6 +142,146 @@ const forgotPasswordLimiter = rateLimit({
   },
   skip: () => process.env.NODE_ENV === "test",
 });
+
+/**
+ * Mint a single-use reset token for this account and email the link to the
+ * account's OWN address. Returns false when there is nothing to send to — no
+ * email on the row, or no workspace to pick a system sender from.
+ *
+ * Shared by the forgot-password form and `team.sendPasswordReset`: it is the
+ * one way to put a new password on an account that lives in more than one
+ * workspace (audit 2026-10-20, C1), because the link goes to the person, not
+ * to whoever asked for it.
+ */
+type ResetSenderCandidate = {
+  workspaceId: number;
+  role: string;
+  inviteToken: string | null;
+  deactivatedAt: Date | null;
+  createdAt: Date | null;
+  ownerUserId: number | null;
+};
+
+/** Exported for the test; see the comment in emailPasswordReset. */
+export function pickResetSenderWorkspace(userId: number, rows: ResetSenderCandidate[]): ResetSenderCandidate | null {
+  const time = (d: Date | null) => (d ? new Date(d).getTime() : 0);
+  const accepted = rows.filter((r) => r.inviteToken == null && r.deactivatedAt == null);
+  if (accepted.length) {
+    return accepted.slice().sort((a, b) =>
+      Number(b.ownerUserId === userId) - Number(a.ownerUserId === userId)
+      || rankOf(b.role) - rankOf(a.role)
+      || time(a.createdAt) - time(b.createdAt))[0];
+  }
+  // Nothing accepted, and something accepted-then-deactivated: no channel.
+  if (rows.some((r) => r.inviteToken == null)) return null;
+  const pending = rows.filter((r) => r.deactivatedAt == null);
+  return pending.slice().sort((a, b) => time(a.createdAt) - time(b.createdAt))[0] ?? null;
+}
+
+export async function emailPasswordReset(db: LiveDb, userId: number): Promise<boolean> {
+  const [user] = await db
+    .select({ id: users.id, email: users.email, name: users.name })
+    .from(users)
+    .where(eq(users.id, userId));
+  if (!user?.email) return false;
+
+  /**
+   * WHICH workspace's sender carries the link matters (audit 2026-10-20, C1).
+   * The mail goes out through that workspace's own transport, which its
+   * admins configure — so it must be a workspace the person actually belongs
+   * to, not merely one that typed their email into an invite box. Accepted
+   * memberships first: the workspace they own, then where their role is
+   * highest, then the oldest. Only an account with no accepted membership at
+   * all (an invite placeholder nobody has claimed) falls back to the
+   * workspace that invited it — the one whose token can already claim it.
+   */
+  const memberships = await db
+    .select({
+      workspaceId: workspaceMembers.workspaceId,
+      role: workspaceMembers.role,
+      inviteToken: workspaceMembers.inviteToken,
+      deactivatedAt: workspaceMembers.deactivatedAt,
+      createdAt: workspaceMembers.createdAt,
+      ownerUserId: workspaces.ownerUserId,
+    })
+    .from(workspaceMembers)
+    .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+    .where(eq(workspaceMembers.userId, user.id));
+  const member = pickResetSenderWorkspace(user.id, memberships);
+  if (!member) return false;
+
+  const token = newResetToken();
+  await db
+    .update(users)
+    .set({
+      passwordResetTokenHash: hashResetToken(token),
+      passwordResetExpiresAt: resetTokenExpiry(Date.now()),
+    })
+    .where(eq(users.id, user.id));
+
+  const { sendSystemEmail } = await import("./emailDelivery");
+  const { appUrl } = await import("./appUrl");
+  const link = appUrl(`/reset-password?token=${encodeURIComponent(token)}`);
+  const who = user.name?.trim() || user.email.split("@")[0];
+  const sent = await sendSystemEmail(member.workspaceId, {
+    to: user.email,
+    subject: "Reset your Velocity password",
+    // The link is the credential: the sending workspace's Emails page shows
+    // that a reset went out, never the link itself.
+    logPreview: `Password reset link sent to ${user.email} (link withheld from the log).`,
+    html: `
+<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#0f172a">
+  <h2 style="margin:0 0 8px;font-size:18px">Reset your password</h2>
+  <p style="margin:0 0 16px;color:#475569;font-size:14px">Hi ${escapeHtml(who)}, we received a request to reset your password.</p>
+  <p style="margin:24px 0">
+<a href="${link}" style="display:inline-block;background:#0f766e;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">Choose a new password →</a>
+  </p>
+  <p style="margin:0 0 8px;color:#64748b;font-size:12px">This link works once and expires in 1 hour.</p>
+  <p style="margin:0;color:#64748b;font-size:12px"><strong>If you didn't ask for this, ignore this email</strong> — your password has not changed.</p>
+</div>`,
+  });
+  return sent.ok;
+}
+
+/**
+ * The ONE existing row register may touch: an invitation placeholder that has
+ * never been an account, claimed with the token of the invite that created it.
+ *
+ * Each condition closes a door:
+ *   · no password, an "invite:" openId, an invite loginMethod — the row was
+ *     made by team.invite and nobody has ever signed in as it. A SCIM user or
+ *     a former OAuth user fails here and must use forgot-password.
+ *   · exactly ONE membership, and it is the one the token names. The admin who
+ *     sent an invite can read its token (copyInviteLink, returnLink), so the
+ *     token proves only "this admin invited this address". When a second
+ *     workspace has also invited the same address, one admin's token must not
+ *     choose the password the other workspace's invitee will sign in with.
+ *   · live: not expired, not deactivated.
+ */
+async function claimableInvite(
+  db: LiveDb,
+  existing: { id: number; openId: string; passwordHash: string | null; loginMethod: string | null },
+  token: unknown,
+): Promise<{ memberId: number } | null> {
+  if (typeof token !== "string" || token.length < 32) return null;
+  if (existing.passwordHash) return null;
+  if (!existing.openId.startsWith("invite:")) return null;
+  if (existing.loginMethod !== "invite" && existing.loginMethod !== "expired_invite") return null;
+  const memberships = await db
+    .select({
+      id: workspaceMembers.id,
+      inviteToken: workspaceMembers.inviteToken,
+      inviteExpiresAt: workspaceMembers.inviteExpiresAt,
+      deactivatedAt: workspaceMembers.deactivatedAt,
+    })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.userId, existing.id));
+  if (memberships.length !== 1) return null;
+  const [m] = memberships;
+  if (m.inviteToken !== token || m.deactivatedAt) return null;
+  if (m.inviteExpiresAt && new Date(m.inviteExpiresAt).getTime() <= Date.now()) return null;
+  return { memberId: m.id };
+}
 
 export function registerPasswordAuthRoutes(app: Express) {
   /**
@@ -164,47 +309,11 @@ export function registerPasswordAuthRoutes(app: Express) {
       if (!db) return ok();
 
       const [user] = await db
-        .select({ id: users.id, email: users.email, name: users.name })
+        .select({ id: users.id })
         .from(users)
         .where(eq(users.email, normalizedEmail));
-      if (!user?.email) return ok();
-
-      // sendSystemEmail needs a workspace to pick the system sender from. A
-      // user with no membership has nothing to send through — still `ok`.
-      const [member] = await db
-        .select({ workspaceId: workspaceMembers.workspaceId })
-        .from(workspaceMembers)
-        .where(eq(workspaceMembers.userId, user.id))
-        .limit(1);
-      if (!member) return ok();
-
-      const token = newResetToken();
-      await db
-        .update(users)
-        .set({
-          passwordResetTokenHash: hashResetToken(token),
-          passwordResetExpiresAt: resetTokenExpiry(Date.now()),
-        })
-        .where(eq(users.id, user.id));
-
-      const { sendSystemEmail } = await import("./emailDelivery");
-      const { appUrl } = await import("./appUrl");
-      const link = appUrl(`/reset-password?token=${encodeURIComponent(token)}`);
-      const who = user.name?.trim() || user.email.split("@")[0];
-      await sendSystemEmail(member.workspaceId, {
-        to: user.email,
-        subject: "Reset your Velocity password",
-        html: `
-<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#0f172a">
-  <h2 style="margin:0 0 8px;font-size:18px">Reset your password</h2>
-  <p style="margin:0 0 16px;color:#475569;font-size:14px">Hi ${escapeHtml(who)}, we received a request to reset your password.</p>
-  <p style="margin:24px 0">
-    <a href="${link}" style="display:inline-block;background:#0f766e;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">Choose a new password →</a>
-  </p>
-  <p style="margin:0 0 8px;color:#64748b;font-size:12px">This link works once and expires in 1 hour.</p>
-  <p style="margin:0;color:#64748b;font-size:12px"><strong>If you didn't ask for this, ignore this email</strong> — your password has not changed.</p>
-</div>`,
-      });
+      if (!user) return ok();
+      await emailPasswordReset(db, user.id);
       return ok();
     } catch (e) {
       // A failure here must not become an oracle either.
@@ -363,15 +472,16 @@ export function registerPasswordAuthRoutes(app: Express) {
         await db.update(users).set({ lastSignedIn: new Date() }).where(eq(users.id, user.id));
       } catch (_) { /* non-fatal */ }
 
-      // A successful password login proves the account is accepted — clear any
-      // stale invite tokens (heals members who registered or set a password
-      // without completing finaliseAcceptance) and normalise a leftover
-      // "invite"/"expired_invite" loginMethod.
+      // Normalise a leftover "invite"/"expired_invite" loginMethod on an
+      // account that now signs in with a password.
+      //
+      // It used to clear EVERY invite token on the account as well, "healing"
+      // memberships that had skipped finaliseAcceptance. That made signing in
+      // anywhere an acceptance of every pending invitation, from any workspace
+      // that had typed this person's email (audit 2026-10-20, C1). An
+      // invitation is accepted with its own token, on the invite page, and
+      // nowhere else.
       try {
-        await db
-          .update(workspaceMembers)
-          .set({ inviteToken: null, inviteExpiresAt: null })
-          .where(eq(workspaceMembers.userId, user.id));
         if (user.loginMethod === "invite" || user.loginMethod === "expired_invite") {
           await db.update(users).set({ loginMethod: "password" }).where(eq(users.id, user.id));
         }
@@ -419,7 +529,7 @@ export function registerPasswordAuthRoutes(app: Express) {
     "/api/auth/register",
     registerLimiter,
     async (req: Request, res: Response) => {
-      const { email, password, name, returnPath, inviteLinkToken } = req.body ?? {};
+      const { email, password, name, returnPath, inviteLinkToken, inviteToken } = req.body ?? {};
 
       if (typeof email !== "string" || !isValidEmail(email.trim())) {
         res.status(400).json({ error: "Please enter a valid email address." });
@@ -481,12 +591,39 @@ export function registerPasswordAuthRoutes(app: Express) {
         .from(users)
         .where(eq(users.email, normalizedEmail));
 
-      // Existing real account → conflict.
-      if (existing && existing.passwordHash) {
-        res.status(409).json({
-          error: "An account with that email already exists. Try signing in instead.",
-        });
-        return;
+      /**
+       * 🔴 REGISTER CREATES NEW ACCOUNTS ONLY (audit 2026-10-20, C2).
+       *
+       * This used to "upgrade any password-less row in place": an invite
+       * placeholder, but equally a SCIM-provisioned user or an account that had
+       * only ever signed in through OAuth. Anyone who typed that person's email
+       * here chose their password, got a session, and had every invite token on
+       * the row cleared — a takeover of any account without a password.
+       *
+       * Every existing row now goes through a channel that proves something:
+       * a password sign-in, the forgot-password email, or — for the invitee
+       * who has never had an account at all — the invite link. That last door
+       * is deliberately narrow (claimableInvite above), because the admin who
+       * sent the invite can read its token too.
+       */
+      let claimedInvite: { memberId: number } | null = null;
+      if (existing) {
+        if (existing.passwordHash) {
+          res.status(409).json({
+            error: "An account with that email already exists. Try signing in instead.",
+          });
+          return;
+        }
+        claimedInvite = inviteLink ? null : await claimableInvite(db, existing, inviteToken);
+        if (!claimedInvite) {
+          const invited = existing.loginMethod === "invite" || existing.loginMethod === "expired_invite";
+          res.status(409).json({
+            error: invited
+              ? "You've been invited to Velocity. Open the invitation link in your email to set your password, or ask your admin to resend it."
+              : "An account with that email already exists. Sign in, or use Forgot password to get a reset link.",
+          });
+          return;
+        }
       }
 
       const passwordHash = await bcrypt.hash(password, 12);
@@ -495,9 +632,10 @@ export function registerPasswordAuthRoutes(app: Express) {
       let userId: number;
       let openId: string;
 
-      if (existing) {
-        // Upgrade an invite placeholder (or any password-less row) in place,
-        // preserving its workspaceMembers links.
+      if (existing && claimedInvite) {
+        // The invitee's own placeholder, claimed with its invite token. Setting
+        // the password here IS accepting that one invitation, so its token is
+        // spent — and only its token: the row has no other membership.
         userId = existing.id;
         openId = existing.openId;
         await db
@@ -509,13 +647,10 @@ export function registerPasswordAuthRoutes(app: Express) {
             lastSignedIn: now,
           })
           .where(eq(users.id, existing.id));
-        // Registering fulfils any outstanding email invite: clear the member
-        // rows' invite tokens, or the Team tab keeps showing "Pending" for an
-        // account that is fully active (register bypasses finaliseAcceptance).
         await db
           .update(workspaceMembers)
           .set({ inviteToken: null, inviteExpiresAt: null })
-          .where(eq(workspaceMembers.userId, existing.id));
+          .where(and(eq(workspaceMembers.id, claimedInvite.memberId), eq(workspaceMembers.userId, existing.id)));
       } else {
         openId = `local:${nanoid(24)}`;
         const [insertResult] = await db.insert(users).values({

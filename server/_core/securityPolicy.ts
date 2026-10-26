@@ -12,12 +12,13 @@
  *     token and the cookie at the two mint sites in `passwordAuth.ts`. That
  *     keeps the whole feature out of `sdk.ts` and `context.ts`.
  *
- * `ipAllowlist` is deliberately still inert: nothing in `server/` calls
- * `app.set('trust proxy', …)`, so `x-forwarded-for` is caller-controlled at
- * whichever hop we picked. First hop waves anyone through who sets a header
- * while the UI claims protection; last hop, behind two edge hops, compares
- * against an internal address and locks out every member including the admin
- * who would turn it off. Both are worse than the honest label, which is why
+ * `ipAllowlist` is deliberately still inert. Until 2026-10-24 nothing set
+ * `trust proxy`, so `x-forwarded-for` was caller-controlled at whichever hop
+ * we picked. `_core/clientIp.ts` now sets one trusted hop for the rate
+ * limiters, but a limiter that guesses the hop count wrong costs a shared
+ * bucket, while an allowlist that guesses wrong either waves anyone through or
+ * locks out every member including the admin who would turn it off. Enforcing
+ * it needs the hop count confirmed against live traffic first, which is why
  * the banner on that one field stays.
  *
  * Deliberately FAIL-OPEN, mirroring `_core/workspaceArchive`: a database fault

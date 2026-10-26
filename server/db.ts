@@ -115,7 +115,13 @@ export async function getUserWorkspaces(userId: number) {
      * narrowed to active-only, deactivating someone would hand them a brand new
      * workspace. Pinned in deactivationRevokesAccess.test.ts.
      */
-    .where(and(eq(workspaceMembers.userId, userId), isNull(workspaceMembers.deactivatedAt)));
+    // …and neither are invitations nobody has accepted (audit 2026-10-20,
+    // C1): resolveWorkspace refuses them, so the switcher must not offer them.
+    .where(and(
+      eq(workspaceMembers.userId, userId),
+      isNull(workspaceMembers.deactivatedAt),
+      isNull(workspaceMembers.inviteToken),
+    ));
 }
 
 export async function getWorkspaceMembers(workspaceId: number) {
