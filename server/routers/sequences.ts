@@ -384,10 +384,14 @@ function canvasNodeToStep(node: CanvasNode): ListStep | null {
     }
     case "action":
       return { type: "task", body: String(d.body ?? d.label ?? ""), ...retired };
+    // The canvas stores LinkedIn text as linkedinMessage / linkedinNote
+    // (NodeEditPanel); this read only body / note, so every DM and invite
+    // built on the canvas reached the engine EMPTY (audit 2026-10-20, O7).
+    // The bare names are still read for nodes written before.
     case "linkedin_dm":
-      return { type: "linkedin_dm", body: String(d.body ?? ""), ...retired };
+      return { type: "linkedin_dm", body: String(d.linkedinMessage ?? d.body ?? ""), ...retired };
     case "linkedin_invite":
-      return { type: "linkedin_invite", note: String(d.note ?? ""), ...retired };
+      return { type: "linkedin_invite", note: String(d.linkedinNote ?? d.note ?? ""), ...retired };
     default:
       return null;
   }
@@ -417,8 +421,10 @@ function stepsToCanvas(steps: ListStep[]): { nodes: CanvasNode[]; edges: CanvasE
         break;
       case "wait": data = { days: s.days, label: `Wait ${s.days}d` }; break;
       case "task": data = { body: s.body, label: "Task" }; break;
-      case "linkedin_dm": data = { body: s.body ?? "", label: "LinkedIn DM" }; break;
-      case "linkedin_invite": data = { note: s.note ?? "", label: "LinkedIn invite" }; break;
+      // The names the canvas editor reads (O7) — a list-built step opened on
+      // the canvas showed an empty message, and saving it there sent nothing.
+      case "linkedin_dm": data = { linkedinMessage: s.body ?? "", label: "LinkedIn DM" }; break;
+      case "linkedin_invite": data = { linkedinNote: s.note ?? "", label: "LinkedIn invite" }; break;
     }
     // Carry a retired step's flag into the canvas so a
     // steps → canvas → steps round-trip cannot silently re-enable it.
@@ -455,6 +461,56 @@ function canvasVersion(
   const n = nodes.map((x) => [x.id, x.type, x.positionX, x.positionY, x.data ?? null]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   const e = edges.map((x) => [x.id, x.source, x.target, x.sourceHandle ?? null, x.label ?? null]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   return createHash("sha1").update(JSON.stringify([n, e])).digest("hex").slice(0, 16);
+}
+
+/**
+ * One-shot heal for sequences saved before the O7 fix (audit 2026-10-20).
+ *
+ * Their canvas holds the LinkedIn text the person wrote (linkedinMessage /
+ * linkedinNote) while their stored steps — what the engine sends — say "".
+ * Re-derive from the canvas and copy the text in, ONLY where the stored step
+ * at that position is the same LinkedIn type with no text. Nothing else in
+ * the steps changes, and a second run finds nothing to do.
+ */
+export async function healCanvasLinkedInText(): Promise<{ sequences: number; steps: number }> {
+  const db = await getDb();
+  const out = { sequences: 0, steps: 0 };
+  if (!db) return out;
+  const liNodes = await db.select({ sequenceId: sequenceNodes.sequenceId, workspaceId: sequenceNodes.workspaceId, data: sequenceNodes.data })
+    .from(sequenceNodes)
+    .where(inArray(sequenceNodes.type, ["linkedin_dm", "linkedin_invite"]));
+  const keys = new Map<string, { sequenceId: number; workspaceId: number }>();
+  for (const n of liNodes) {
+    const d = (n.data ?? {}) as Record<string, unknown>;
+    if (String(d.linkedinMessage ?? d.linkedinNote ?? "").trim()) keys.set(`${n.workspaceId}:${n.sequenceId}`, n);
+  }
+  for (const { sequenceId, workspaceId } of Array.from(keys.values())) {
+    const [seq] = await db.select({ steps: sequences.steps }).from(sequences)
+      .where(and(eq(sequences.id, sequenceId), eq(sequences.workspaceId, workspaceId)));
+    if (!seq || !Array.isArray(seq.steps)) continue;
+    const [nodes, edges] = await Promise.all([
+      db.select().from(sequenceNodes).where(and(eq(sequenceNodes.sequenceId, sequenceId), eq(sequenceNodes.workspaceId, workspaceId))),
+      db.select().from(sequenceEdges).where(and(eq(sequenceEdges.sequenceId, sequenceId), eq(sequenceEdges.workspaceId, workspaceId))),
+    ]);
+    const derived = canvasToSteps(nodes as CanvasNode[], edges as CanvasEdge[]);
+    const stored = seq.steps as Array<Record<string, unknown>>;
+    if (derived.length !== stored.length) continue;
+    let changed = 0;
+    const next = stored.map((s, i) => {
+      const d = derived[i] as Record<string, unknown>;
+      if (s.type !== d.type) return s;
+      const field = s.type === "linkedin_dm" ? "body" : s.type === "linkedin_invite" ? "note" : null;
+      if (!field || String(s[field] ?? "").trim() || !String(d[field] ?? "").trim()) return s;
+      changed++;
+      return { ...s, [field]: d[field] };
+    });
+    if (changed === 0) continue;
+    await db.update(sequences).set({ steps: next }).where(and(eq(sequences.id, sequenceId), eq(sequences.workspaceId, workspaceId)));
+    out.sequences++;
+    out.steps += changed;
+  }
+  if (out.steps > 0) console.log(`[sequences] healed LinkedIn text on ${out.steps} step(s) in ${out.sequences} sequence(s) from their canvas`);
+  return out;
 }
 
 async function assertTemplateEditable(db: any, ctx: any, id: number): Promise<void> {
@@ -810,6 +866,19 @@ export const sequencesRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await assertTemplateEditable(db, ctx, input.id);
+    // A LinkedIn DM with no message cannot run (audit 2026-10-20, O7): refuse
+    // to START a sequence carrying one, rather than skip it at send time. Not
+    // checked on save — a canvas autosaves while a step is still being written.
+    if (input.status === "active") {
+      const [cur] = await db.select({ steps: sequences.steps }).from(sequences)
+        .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
+      const steps = Array.isArray(cur?.steps) ? (cur!.steps as Array<Record<string, unknown>>) : [];
+      const empty = steps.findIndex((s) => s.type === "linkedin_dm" && s.enabled !== false
+        && !String(s.body ?? s.linkedinMessage ?? "").trim());
+      if (empty >= 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Step ${empty + 1} is a LinkedIn message with no text — write it, or remove the step, before activating.` });
+      }
+    }
     await db.update(sequences).set({ status: input.status }).where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
     /**
      * Pausing (or returning to draft) HOLDS the enrolments: the engine leaves

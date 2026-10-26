@@ -17,6 +17,7 @@ import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { inSendWindow } from "./services/sendWindow";
 import { and, asc, eq, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import {
+  accounts,
   activities,
   contacts,
   emailDrafts,
@@ -29,6 +30,8 @@ import {
   unipileAccounts,
   unipileInvites,
   unipileMessages,
+  users,
+  workspaces,
 } from "../drizzle/schema";
 import { sendLinkedInInvitation, sendMessage } from "./lib/unipile";
 import { getDb } from "./db";
@@ -39,7 +42,8 @@ import { HUMAN_COPY_RULES, humanizeAiCopy } from "./services/humanCopy";
 import { describeSuppression, findSuppression, linkedinUrlVariants } from "./services/suppression";
 import { affected } from "./services/draftSend";
 import { getWorkspaceTimezone } from "./services/workspaceTimezone";
-import { pickLinkedInAccount } from "./services/are/linkedinStep";
+import { pickLinkedInAccount, toInviteNote } from "./services/are/linkedinStep";
+import { renderMergeFields, resolveBookingUrl, scrubForSend } from "./mergeVars";
 import { extractLinkedInIdentifier } from "./services/linkedinLookup";
 import { checkLinkedInAction, recordLinkedInAction } from "./services/linkedin/activityGate";
 
@@ -100,8 +104,10 @@ function normalizeStep(raw: Record<string, unknown>): Step {
   const step: Step = {
     type: raw.type as Step["type"],
     subject: str(raw.subject),
-    body: str(raw.body),
-    note: str(raw.note),
+    // The canvas names LinkedIn text linkedinMessage / linkedinNote; the step
+    // format says body / note (audit 2026-10-20, O7). Either is read.
+    body: str(raw.body) ?? (raw.type === "linkedin_dm" ? str(raw.linkedinMessage) : undefined),
+    note: str(raw.note) ?? (raw.type === "linkedin_invite" ? str(raw.linkedinNote) : undefined),
     // `days` is what the schema stores; `waitDays` is tolerated for safety.
     waitDays: num(raw.days) ?? num(raw.waitDays),
     taskDueOffsetDays: num(raw.taskDueOffsetDays),
@@ -310,6 +316,43 @@ function getDailyKey(workspaceId: number): string {
   // Per-SEQUENCE caps + send windows use the sequence's own timezone below.
   const today = new Date().toISOString().slice(0, 10);
   return `${workspaceId}:${today}`;
+}
+
+// ─── LinkedIn copy ────────────────────────────────────────────────────────────
+
+/** What both sequence editors allow for a connection note. */
+const LINKEDIN_NOTE_MAX = 300;
+
+type PersonFields = { firstName?: string | null; lastName?: string | null; title?: string | null; company?: string | null };
+
+/**
+ * The merge map for a LinkedIn step: the person, and the owner of the account
+ * the message goes from — the same keys the email path fills, so a template
+ * written once reads the same on both channels.
+ */
+async function linkedinMergeVars(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  person: PersonFields,
+  senderUserId: number | null,
+): Promise<Record<string, string>> {
+  const [sender] = senderUserId
+    ? await db.select({ name: users.name }).from(users).where(eq(users.id, senderUserId)).limit(1)
+    : [];
+  const [ws] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
+  const firstName = person.firstName ?? "";
+  const lastName = person.lastName ?? "";
+  return {
+    firstName,
+    lastName,
+    fullName: [firstName, lastName].filter(Boolean).join(" "),
+    title: person.title ?? "",
+    company: person.company ?? "",
+    accountName: person.company ?? "",
+    senderName: sender?.name ?? "",
+    senderCompany: ws?.name ?? "",
+    bookingLink: senderUserId ? await resolveBookingUrl(workspaceId, senderUserId) : "",
+  };
 }
 
 // ─── Core processor ───────────────────────────────────────────────────────────
@@ -686,16 +729,25 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
         let linkedinUrl: string | null | undefined;
         let email: string | null | undefined;
         let companyDomain: string | null | undefined;
+        let person: PersonFields = {};
         let relatedType: "contact" | "lead" | "prospect" = "contact";
         let relatedId: number | undefined;
         if (enrollment.contactId) {
           const [contact] = await db
-            .select({ linkedinUrl: contacts.linkedinUrl, email: contacts.email, companyDomain: contacts.companyDomain })
+            .select({
+              linkedinUrl: contacts.linkedinUrl, email: contacts.email, companyDomain: contacts.companyDomain,
+              firstName: contacts.firstName, lastName: contacts.lastName, title: contacts.title, accountId: contacts.accountId,
+            })
             .from(contacts)
             .where(and(eq(contacts.id, enrollment.contactId), eq(contacts.workspaceId, enrollment.workspaceId)));
           linkedinUrl = contact?.linkedinUrl;
           email = contact?.email;
           companyDomain = contact?.companyDomain;
+          const [acct] = contact?.accountId
+            ? await db.select({ name: accounts.name }).from(accounts)
+                .where(and(eq(accounts.id, contact.accountId), eq(accounts.workspaceId, enrollment.workspaceId))).limit(1)
+            : [];
+          person = { firstName: contact?.firstName, lastName: contact?.lastName, title: contact?.title, company: acct?.name };
           relatedType = "contact";
           relatedId = enrollment.contactId;
         } else if (enrollment.leadId) {
@@ -704,12 +756,16 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           // Leads don't have a linkedinUrl field — skip gracefully
         } else if (enrollment.prospectId) {
           const [prospect] = await db
-            .select({ linkedinUrl: prospects.linkedinUrl, email: prospects.email, companyDomain: prospects.companyDomain })
+            .select({
+              linkedinUrl: prospects.linkedinUrl, email: prospects.email, companyDomain: prospects.companyDomain,
+              firstName: prospects.firstName, lastName: prospects.lastName, title: prospects.title, company: prospects.company,
+            })
             .from(prospects)
             .where(and(eq(prospects.id, enrollment.prospectId), eq(prospects.workspaceId, enrollment.workspaceId)));
           linkedinUrl = prospect?.linkedinUrl;
           email = prospect?.email;
           companyDomain = prospect?.companyDomain;
+          person = { firstName: prospect?.firstName, lastName: prospect?.lastName, title: prospect?.title, company: prospect?.company };
           relatedType = "prospect";
           relatedId = enrollment.prospectId;
         }
@@ -720,7 +776,21 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
         // first, so a rep's sequence could invite people as a colleague.
         const account = await pickLinkedInAccount(enrollment.workspaceId, seq.assignedToUserId ?? seq.ownerUserId ?? null);
         const isInvite = step.type === "linkedin_invite";
-        const text = (isInvite ? step.note : step.body) ?? "";
+        /**
+         * The step's text is a TEMPLATE (audit 2026-10-20, O10): it went out
+         * raw, so a prospect read "Hi {{first_name}}" from {{company}}'s rep.
+         * Rendered for this person and the sending account's owner, then
+         * scrubbed, as every email path is — nothing in braces reaches
+         * LinkedIn. An invite note keeps to the 300 characters both editors
+         * allow once the fields are filled in.
+         */
+        const rendered = account
+          ? scrubForSend(
+              renderMergeFields((isInvite ? step.note : step.body) ?? "", await linkedinMergeVars(db, enrollment.workspaceId, person, account.userId)),
+              "sequenceEngine.linkedin",
+            )
+          : "";
+        const text = isInvite ? toInviteNote(rendered, LINKEDIN_NOTE_MAX) : rendered;
 
         let skip: string | null = null;
         if (!account) skip = "no Unipile LinkedIn account";

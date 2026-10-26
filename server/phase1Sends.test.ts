@@ -115,7 +115,7 @@ import { join } from "node:path";
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { appRouter } from "./routers";
 import { pauseEnrollmentsForSocialReply, processEnrollments, resumeDueEnrollments } from "./sequenceEngine";
-import { deliverEmailDraft } from "./routers/sequences";
+import { deliverEmailDraft, healCanvasLinkedInText } from "./routers/sequences";
 import { processInboundReply } from "./inboundReplyPoller";
 import { getEncKey } from "./routers/smtpConfig";
 import { registerEmailTrackingRoutes } from "./emailTracking";
@@ -1060,5 +1060,105 @@ describe("enrolling into a held sequence says so (O1)", () => {
       expect(src, p).toContain("r.heldUntilActive");
       expect(src, p).toContain("r.skippedSuppressed");
     }
+  });
+});
+
+/* ═══ LinkedIn steps send the text that was written (O7, O10) ══════════════ */
+
+describe("LinkedIn steps send the text that was written, for this person (O7, O10)", () => {
+  const dm = (body: string, over: Record<string, unknown> = {}) => ({ type: "linkedin_dm", body, ...over });
+  beforeEach(() => {
+    rows("accounts").push({ id: 900, workspaceId: LSI, name: "Acme Corp" });
+    row("contacts", 101).accountId = 900;
+  });
+
+  it("the canvas's LinkedIn text reaches the steps, and a list-built step opens on the canvas with its text (O7)", async () => {
+    seq(1, [email("one")], { status: "paused" });
+    const nodes = [
+      { id: "start-1", type: "start" as const, positionX: 0, positionY: 0, data: {} },
+      { id: "li-1", type: "linkedin_dm" as const, positionX: 0, positionY: 100, data: { linkedinMessage: "Hi {{firstName}}" } },
+      { id: "li-2", type: "linkedin_invite" as const, positionX: 0, positionY: 200, data: { linkedinNote: "Let's connect" } },
+    ];
+    const edges = [{ id: "e1", source: "start-1", target: "li-1" }, { id: "e2", source: "li-1", target: "li-2" }];
+    await caller(REP).sequences.saveCanvas({ id: 1, nodes, edges });
+    expect(row("sequences", 1).steps).toEqual([
+      { type: "linkedin_dm", body: "Hi {{firstName}}" },
+      { type: "linkedin_invite", note: "Let's connect" },
+    ]);
+
+    seq(2, [dm("From the list"), { type: "linkedin_invite", note: "Note from the list" }], { status: "paused" });
+    const view = await caller(REP).sequences.getCanvas({ id: 2 });
+    const data = view.nodes.filter((n: any) => n.type !== "start").map((n: any) => n.data);
+    expect(data[0]).toMatchObject({ linkedinMessage: "From the list" });
+    expect(data[1]).toMatchObject({ linkedinNote: "Note from the list" });
+  });
+
+  it("a DM is rendered for the person and the sender, and nothing in braces goes out (O10)", async () => {
+    seq(1, [dm("Hi {{first_name}}, {{senderName}} at {{senderCompany}} here about {{company}}. {{favouriteColour}}")]);
+    enr(11, 1, { contactId: 101 });
+    await processEnrollments();
+    expect(h.dms[0].text).toBe("Hi Ann, User 21 at LSI Media here about Acme Corp.");
+    // The record is what was sent.
+    expect(rows("unipile_messages")[0].text).toBe("Hi Ann, User 21 at LSI Media here about Acme Corp.");
+  });
+
+  it("an invite note is rendered and kept within 300 characters", async () => {
+    const long = "Hi {{firstName}}, " + "I enjoyed your post on revenue operations and would value connecting. ".repeat(6);
+    seq(1, [{ type: "linkedin_invite", note: long }, email()]);
+    enr(11, 1, { prospectId: 301 });
+    await processEnrollments();
+    expect(h.invites[0].message.startsWith("Hi Ann, I enjoyed")).toBe(true);
+    expect(h.invites[0].message.length).toBeLessThanOrEqual(300);
+    expect(h.invites[0].message).not.toContain("{{");
+  });
+
+  it("a DM whose text renders to nothing is skipped, not sent empty", async () => {
+    seq(1, [dm("{{favouriteColour}}"), email()]);
+    enr(11, 1, { contactId: 101 });
+    await processEnrollments();
+    expect(h.dms).toHaveLength(0);
+    expect(row("enrollments", 11).currentStep).toBe(1);
+  });
+
+  it("a stored step in the canvas's own names is read too", async () => {
+    seq(1, [{ type: "linkedin_dm", linkedinMessage: "Hello {{firstName}}" }]);
+    enr(11, 1, { contactId: 101 });
+    await processEnrollments();
+    expect(h.dms[0].text).toBe("Hello Ann");
+  });
+
+  it("a sequence with an empty LinkedIn message cannot be activated; a retired one does not count", async () => {
+    seq(1, [email("one"), dm("   ")], { status: "paused" });
+    const r = await refusal(caller(ADMIN).sequences.setStatus({ id: 1, status: "active" }));
+    expect(r.code).toBe("BAD_REQUEST");
+    expect(r.message).toMatch(/Step 2 is a LinkedIn message with no text/);
+    expect(row("sequences", 1).status).toBe("paused");
+    seq(2, [email("one"), dm("", { enabled: false })], { status: "paused" });
+    await caller(ADMIN).sequences.setStatus({ id: 2, status: "active" });
+    expect(row("sequences", 2).status).toBe("active");
+  });
+
+  it("the heal fills empty stored LinkedIn text from the canvas, once, and touches nothing else", async () => {
+    seq(1, [dm(""), wait(2), { type: "linkedin_invite", note: "Already written" }]);
+    const node = (id: string, type: string, data: Record<string, unknown>) => ({ id, sequenceId: 1, workspaceId: LSI, type, positionX: 0, positionY: 0, data });
+    rows("sequence_nodes").push(
+      node("start-1", "start", {}),
+      node("li-1", "linkedin_dm", { linkedinMessage: "Hi {{firstName}}" }),
+      node("w-1", "wait", { delayDays: 2 }),
+      node("li-2", "linkedin_invite", { linkedinNote: "Canvas note" }),
+    );
+    const edge = (id: string, source: string, target: string) => ({ id, sequenceId: 1, workspaceId: LSI, source, target, sourceHandle: null, label: null });
+    rows("sequence_edges").push(edge("e1", "start-1", "li-1"), edge("e2", "li-1", "w-1"), edge("e3", "w-1", "li-2"));
+
+    expect(await healCanvasLinkedInText()).toEqual({ sequences: 1, steps: 1 });
+    expect(row("sequences", 1).steps).toEqual([dm("Hi {{firstName}}"), wait(2), { type: "linkedin_invite", note: "Already written" }]);
+    expect(await healCanvasLinkedInText()).toEqual({ sequences: 0, steps: 0 });
+  });
+
+  it("the heal runs once, shortly after boot", () => {
+    const src = readFileSync(join(__dirname, "_core", "index.ts"), "utf8");
+    const at = src.indexOf("m.healCanvasLinkedInText()");
+    expect(at).toBeGreaterThan(-1);
+    expect(src.slice(at - 200, at)).toContain("setTimeout(() => {");
   });
 });
