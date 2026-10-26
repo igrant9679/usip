@@ -78,7 +78,12 @@ describe("nothing reaches LinkedIn without passing the gate", () => {
   it("stops the channel for the tick instead of re-asking per step", () => {
     // Three queries per step to be told the same thing is the cost this avoids.
     expect(engine).toContain("let linkedinHeld: string | null = null;");
-    expect(engine).toContain("if (linkedinHeld) continue;");
+    // Since 2026-10-26 (audit A5) a step behind a held one is also moved
+    // forward, so it stops heading the page — still without re-asking.
+    const held = engine.slice(engine.indexOf("if (linkedinHeld) {"));
+    expect(held.slice(0, 400)).toContain("LINKEDIN_HELD_MS");
+    expect(held.slice(0, 400)).toContain("continue;");
+    expect(held.slice(0, held.indexOf("continue;"))).not.toContain("checkLinkedInAction");
   });
 });
 

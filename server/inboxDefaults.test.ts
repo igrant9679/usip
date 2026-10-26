@@ -137,8 +137,11 @@ describe("the older sequence-blast path honours the inbox too", () => {
     expect(blast).toContain("const inboxOptOut = acct?.optOutEnabled === true");
     expect(blast).toContain("inboxOptOut || optOutEnabled");
     expect(blast).toContain("renderSequenceOptOut(effectiveOptOutMessage");
+    // 2026-10-26 (audit O15): the URL is named once, above, because the
+    // standard footer used when no wording is configured carries it too.
     const call = blast.slice(blast.indexOf("renderSequenceOptOut(effectiveOptOutMessage"));
-    expect(call.slice(0, 220)).toContain("/api/track/unsubscribe/");
+    expect(call.slice(0, 220)).toContain("{ unsubscribeUrl }");
+    expect(blast).toContain("const unsubscribeUrl = `${appBaseUrl}/api/track/unsubscribe/${encodeURIComponent(token)}`");
   });
 
   it("an inbox with nothing configured leaves the workspace behaviour alone", () => {

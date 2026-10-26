@@ -39,6 +39,13 @@ export const INVITE_NOTE_MAX = 195;
 /** A prospect with no LinkedIn URL yet — healable once enrichment finds one. */
 export const HEALABLE_NO_LINKEDIN = "Prospect has no LinkedIn profile";
 
+/**
+ * How long a step waits for its connection request to be accepted (audit
+ * 2026-10-20, A5). It used to wait for ever, and a step that never resolves
+ * keeps its place in the dispatcher's queue for ever too.
+ */
+export const INVITE_ACCEPT_TIMEOUT_DAYS = 21;
+
 export type LinkedInStepOutcome =
   | { kind: "sent"; via: "invite" | "message"; note: string }
   /** Terminal for this step. */
@@ -149,6 +156,13 @@ export async function dispatchLinkedInStep(input: {
     .limit(1);
 
   const wantsMessage = invite?.status === "accepted";
+  if (invite && invite.status === "pending" && invite.sentAt
+      && Date.now() - new Date(invite.sentAt).getTime() > INVITE_ACCEPT_TIMEOUT_DAYS * 86_400_000) {
+    return { kind: "skipped", reason: `Connection request not accepted within ${INVITE_ACCEPT_TIMEOUT_DAYS} days` };
+  }
+  if (invite && invite.status !== "pending" && !wantsMessage) {
+    return { kind: "skipped", reason: `Connection request ${invite.status}` };
+  }
   if (invite && !wantsMessage) {
     // Pending. Re-inviting is a duplicate request and a real risk signal, and
     // messaging is impossible until they accept — so the step waits for them.

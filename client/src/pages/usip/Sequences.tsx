@@ -136,7 +136,10 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
       const parts = [`Enrolled ${r.enrolled}`];
       if (r.skippedAlreadyEnrolled > 0) parts.push(`${r.skippedAlreadyEnrolled} already enrolled`);
       if (r.blockedInvalidEmail > 0) parts.push(`${r.blockedInvalidEmail} blocked (invalid email)`);
+      if (r.skippedSuppressed > 0) parts.push(`${r.skippedSuppressed} skipped (suppressed)`);
       toast.success(parts.join(" · "));
+      // A paused or draft sequence holds new enrolments (audit 2026-10-20, O1).
+      if (r.enrolled > 0 && r.heldUntilActive) toast.info("This sequence is not active — nothing is sent until it is activated");
       onEnrolled();
       onClose();
     },
@@ -835,7 +838,8 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [dailyCap, setDailyCap] = useState<string>("");
-  const [skipWeekends, setSkipWeekends] = useState(false);
+  // On unless switched off — the engine's default and the canvas panel's (O9).
+  const [skipWeekends, setSkipWeekends] = useState(true);
   const [replyDetection, setReplyDetection] = useState(true);
   const [sendWindowStart, setSendWindowStart] = useState("08:00");
   const [sendWindowEnd, setSendWindowEnd] = useState("18:00");
@@ -872,7 +876,7 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
     setDescription(liveSeq.description ?? "");
     setDailyCap(liveSeq.dailyCap != null ? String(liveSeq.dailyCap) : "");
     const s = liveSeq.settings ?? {};
-    setSkipWeekends(s.skipWeekends ?? false);
+    setSkipWeekends(s.skipWeekends ?? true);
     setReplyDetection(s.replyDetection ?? true);
     setSendWindowStart(s.sendWindowStart ?? "08:00");
     setSendWindowEnd(s.sendWindowEnd ?? "18:00");

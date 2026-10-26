@@ -27,6 +27,7 @@ import {
   sendingAccountDailyStats,
 } from "../drizzle/schema";
 import { getDb } from "./db";
+import { isDefinitelyNotSent } from "./services/draftSend";
 import { logEmailSend, type EmailLogMeta, type EmailLogSource } from "./services/email/logSend";
 import { recordEmailsSent } from "./usageCounters";
 import { buildTransporter, decrypt } from "./routers/smtpConfig";
@@ -158,45 +159,66 @@ export async function sendCampaignEmailViaPool(
     // 4. Send via the account's adapter (SMTP/IMAP/OAuth).
     const { createEmailAdapter } = await import("./emailAdapter");
     const adapter = createEmailAdapter(chosen as any);
-    await adapter.sendEmail({
-      to: Array.isArray(opts.to) ? opts.to[0] : opts.to,
-      subject: opts.subject,
-      bodyHtml: opts.html,
-      bodyText: opts.text,
-      fromEmail: (chosen as any).fromEmail,
-      // A mailbox linked by address has no fromName; the From header then
-      // showed a bare address. One rule (senderDisplayName) for the header
-      // and the signature, so they cannot disagree.
-      fromName: opts.fromName ?? (senderDisplayName(chosen) || undefined),
-      replyTo: opts.replyTo ?? (chosen as any).replyTo ?? undefined,
-      headers: opts.headers,
-      // Carried through to the email_log row the adapter writes, so campaign
-      // mail lands on the Emails page naming its campaign, step and prospect
-      // rather than as an anonymous "other".
-      logMeta: opts.logMeta ?? { source: opts.logSource ?? "campaign", sourceLabel: opts.logLabel ?? null },
-    } as any);
+    /**
+     * An error FROM THE SEND is classified, not assumed (audit 2026-10-20,
+     * A4). Every error here used to become "Pool send failed: …", which the
+     * engine's heal retries — so a timeout after the server had accepted the
+     * message sent it twice. Only an error that proves nothing left (a
+     * refused connection, login or recipient) keeps the retryable prefix; any
+     * other is "Send state unknown", which nothing retries by itself.
+     */
+    try {
+      await adapter.sendEmail({
+        to: Array.isArray(opts.to) ? opts.to[0] : opts.to,
+        subject: opts.subject,
+        bodyHtml: opts.html,
+        bodyText: opts.text,
+        fromEmail: (chosen as any).fromEmail,
+        // A mailbox linked by address has no fromName; the From header then
+        // showed a bare address. One rule (senderDisplayName) for the header
+        // and the signature, so they cannot disagree.
+        fromName: opts.fromName ?? (senderDisplayName(chosen) || undefined),
+        replyTo: opts.replyTo ?? (chosen as any).replyTo ?? undefined,
+        headers: opts.headers,
+        // Carried through to the email_log row the adapter writes, so campaign
+        // mail lands on the Emails page naming its campaign, step and prospect
+        // rather than as an anonymous "other".
+        logMeta: opts.logMeta ?? { source: opts.logSource ?? "campaign", sourceLabel: opts.logLabel ?? null },
+      } as any);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return isDefinitelyNotSent(err)
+        ? { ok: false, reason: `Pool send failed: ${msg}` }
+        : { ok: false, reason: `${SEND_STATE_UNKNOWN}: ${msg}` };
+    }
 
-    // 5. Record usage for REPORTING (no unique key on the table → read-then-write).
-    //    This is no longer the gate — sendLimits.accountsSentToday over
-    //    email_log is (audit 2026-09-20). The row survives because it is the
-    //    only per-day home for bounceCount/spamCount and the only multi-day
-    //    series behind sendingAccounts.getDailyStats.
-    const [existing] = await db
-      .select({ id: sendingAccountDailyStats.id, sentCount: sendingAccountDailyStats.sentCount })
-      .from(sendingAccountDailyStats)
-      .where(and(eq(sendingAccountDailyStats.accountId, chosen.id), eq(sendingAccountDailyStats.date, today)))
-      .limit(1);
-    if (existing) {
-      // Atomic in SQL. `existing.sentCount + 1` computed in JS is a lost-update
-      // race: two concurrent sends both read 5 and both write 6, so two sends
-      // are recorded as one — which, for the deliverability number the
-      // Mailboxes and Deliverability pages plot, is a silently wrong history.
-      await db.update(sendingAccountDailyStats)
-        .set({ sentCount: sql`${sendingAccountDailyStats.sentCount} + 1` } as never)
-        .where(eq(sendingAccountDailyStats.id, existing.id));
-    } else {
-      await db.insert(sendingAccountDailyStats)
-        .values({ workspaceId, accountId: chosen.id, date: today, sentCount: 1 });
+    // The email has gone. Nothing below may turn that into a failure: the
+    // caller would record it failed, and the heal would send it again (A4).
+    try {
+      // 5. Record usage for REPORTING (no unique key on the table → read-then-write).
+      //    This is no longer the gate — sendLimits.accountsSentToday over
+      //    email_log is (audit 2026-09-20). The row survives because it is the
+      //    only per-day home for bounceCount/spamCount and the only multi-day
+      //    series behind sendingAccounts.getDailyStats.
+      const [existing] = await db
+        .select({ id: sendingAccountDailyStats.id, sentCount: sendingAccountDailyStats.sentCount })
+        .from(sendingAccountDailyStats)
+        .where(and(eq(sendingAccountDailyStats.accountId, chosen.id), eq(sendingAccountDailyStats.date, today)))
+        .limit(1);
+      if (existing) {
+        // Atomic in SQL. `existing.sentCount + 1` computed in JS is a lost-update
+        // race: two concurrent sends both read 5 and both write 6, so two sends
+        // are recorded as one — which, for the deliverability number the
+        // Mailboxes and Deliverability pages plot, is a silently wrong history.
+        await db.update(sendingAccountDailyStats)
+          .set({ sentCount: sql`${sendingAccountDailyStats.sentCount} + 1` } as never)
+          .where(eq(sendingAccountDailyStats.id, existing.id));
+      } else {
+        await db.insert(sendingAccountDailyStats)
+          .values({ workspaceId, accountId: chosen.id, date: today, sentCount: 1 });
+      }
+    } catch (e) {
+      console.error(`[emailDelivery] sent via account ${chosen.id}; recording the daily stat failed:`, e);
     }
 
     return { ok: true, accountId: chosen.id, fromEmail: (chosen as any).fromEmail };
@@ -205,6 +227,9 @@ export async function sendCampaignEmailViaPool(
     return { ok: false, reason: `Pool send failed: ${msg}` };
   }
 }
+
+/** The failure reason for a send whose outcome is unknown — never healed by itself. */
+export const SEND_STATE_UNKNOWN = "Send state unknown";
 
 export type PoolPick =
   | { kind: "account"; account: typeof sendingAccounts.$inferSelect }

@@ -204,7 +204,8 @@ describe("every sender that goes out on its own waits for the window", () => {
   it("Revenue Engine dispatch", () => {
     const s = read("server/areEngine.ts");
     expect(s).toContain("const windowOpen = await inSendWindow(wsId);");
-    expect(s).toContain("const due = !windowOpen ? [] : await db");
+    // Two pages since 2026-10-26 (audit A5), both behind the window.
+    expect(s).toContain("const due = !windowOpen ? [] : [");
   });
   it("sequence auto-send and the sequence LinkedIn DM and invite steps", () => {
     expect(read("server/routers/sequences.ts")).toContain("if (!(await inSendWindow(ws.workspaceId))) continue;");
@@ -227,7 +228,8 @@ describe("every sender that goes out on its own waits for the window", () => {
     const s = read("server/services/replyClassifier.ts").replace(/\r\n/g, "\n");
     // The hold is decided by the window, on both paths.
     expect(s).toContain("        if (!(await inSendWindow(workspaceId))) {\n          // Outside the workspace send window (owner ask 2026-09-25): held,");
-    expect(s).toContain("        if (!(await inSendWindow(workspaceId))) {\n          // Held for the workspace send window, as the email path is.");
+    // …and since 2026-10-26 the DM also waits for the LinkedIn limits (O11).
+    expect(s).toContain("        if (!(await inSendWindow(workspaceId)) || !gate.allowed) {\n          // Held for the workspace send window, as the email path is, or for");
     expect(s).toContain("await db.update(emailReplies).set({ bookingLinkPendingAt: new Date() } as never)");
     expect(s).toContain("await db.update(unipileMessages).set({ bookingLinkPendingAt: new Date() } as never)");
     expect(s).toContain("const held = await sendHeldBookingLinks();");

@@ -4750,6 +4750,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0210: A draft is claimed before it is sent ───────────────────────────
+  // Audit 2026-10-20 (Phase 1, O14/O16/O17): four paths sent drafts without
+  // taking them first, so a second click or an overlapping tick sent twice,
+  // and a failed auto-send sat in 'approved' for good. 'sending' is the claim,
+  // 'failed' a send whose outcome is unknown; sendError says why. The index
+  // serves the sequence engine's per-tick "is a draft still waiting?" read.
+  {
+    name: "0210_draft_send_claim.sql",
+    statements: [
+      "ALTER TABLE `email_drafts` MODIFY COLUMN `status` enum('pending_review','approved','rejected','sent','ai_pending_review','sending','failed') NOT NULL DEFAULT 'pending_review'",
+      "ALTER TABLE `email_drafts` ADD COLUMN `sendError` varchar(500) NULL",
+      "ALTER TABLE `email_drafts` ADD COLUMN `sendClaimedAt` timestamp NULL",
+      "CREATE INDEX `ix_ed_enrollment` ON `email_drafts` (`enrollmentId`, `status`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

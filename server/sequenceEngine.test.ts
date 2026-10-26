@@ -1,14 +1,7 @@
 /**
  * Sequence Execution Engine — unit tests
  *
- * Tests cover:
- *  - processEnrollments: email step creates draft, advances step
- *  - processEnrollments: wait step advances without creating draft
- *  - processEnrollments: task step creates task, advances step
- *  - processEnrollments: last step marks enrollment finished
- *  - processEnrollments: an unsupported step type advances instead of stalling
- *  - processEnrollments: paused enrollment is skipped
- *  - processEnrollments: workspace daily cap enforcement
+ * Tests cover (processEnrollments is in phase1Sends.test.ts, on the SQL fake):
  *  - autoEnrollByTriggers: status_change trigger matches and enrolls
  *  - autoEnrollByTriggers: tag_applied trigger matches and enrolls
  *  - autoEnrollByTriggers: score_threshold trigger matches and enrolls
@@ -65,6 +58,11 @@ vi.mock("drizzle-orm", () => ({
   // at the call site if it is absent, so it is listed whether or not a test in
   // this file exercises that function.
   isNotNull: (col: any) => ({ type: "isNotNull", col }),
+  // Imported by the engine since 2026-10-26 (its due query and LinkedIn
+  // reply pause); listed so the module mock defines every name it imports.
+  asc: (col: any) => ({ type: "asc", col }),
+  inArray: (col: any, vals: any[]) => ({ type: "inArray", col, vals }),
+  notInArray: (col: any, vals: any[]) => ({ type: "notInArray", col, vals }),
   lte: (col: any, val: any) => ({ type: "lte", col, val }),
   or: (...args: any[]) => ({ type: "or", args }),
 }));
@@ -94,267 +92,13 @@ describe("Sequence Execution Engine", () => {
     mockSelect.mockReset();
   });
 
-  describe("processEnrollments", () => {
-    it("skips paused enrollments", async () => {
-      // Return empty due list (all paused)
-      mockSelect.mockReturnValueOnce(makeSelectChain([]));
-
-      const { processEnrollments } = await import("./sequenceEngine");
-      const result = await processEnrollments();
-
-      expect(result.processed).toBe(0);
-      expect(result.errors).toBe(0);
-    });
-
-    it("honours the configured wait duration (regression: days vs waitDays)", async () => {
-      // REGRESSION GUARD. The engine used to read `step.waitDays`, but the
-      // only schema that validates sequences.steps stores a wait as
-      // `{type:"wait", days:N}`. So `waitDays` was always undefined and every
-      // wait fell through to `?? 1` — a 3-day gap silently became 1 day, and a
-      // "day 1 / day 4 / day 10" sequence actually sent on days 1, 2 and 3.
-      // This asserts the real persisted field name is respected.
-      const enrollment = {
-        id: 1, workspaceId: 1, sequenceId: 1, contactId: 1, leadId: null,
-        status: "active", currentStep: 0, nextActionAt: new Date(Date.now() - 1000),
-      };
-      const sequence = {
-        id: 1, workspaceId: 1, status: "active",
-        steps: [
-          { type: "wait", days: 3 },
-          { type: "task", body: "Call them about the proposal. Mention pricing." },
-        ],
-        dailyCap: null,
-      };
-
-      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));
-      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));
-
-      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
-      mockUpdate.mockReturnValue({ set: updateSet });
-
-      const before = Date.now();
-      const { processEnrollments } = await import("./sequenceEngine");
-      await processEnrollments();
-
-      const call = updateSet.mock.calls.find((c) => c[0]?.nextActionAt);
-      expect(call).toBeDefined();
-      const scheduledInDays =
-        (call![0].nextActionAt.getTime() - before) / 86400000;
-      // ~3 days, not the old 1-day default.
-      expect(scheduledInDays).toBeGreaterThan(2.9);
-      expect(scheduledInDays).toBeLessThan(3.1);
-    });
-
-    it("derives a task title from the step body instead of a generic label", async () => {
-      // The task editor only ever persists `body`; the engine read `taskTitle`,
-      // so every sequence task became "Follow up" due tomorrow with the
-      // user's text thrown away entirely.
-      const enrollment = {
-        id: 2, workspaceId: 1, sequenceId: 1, contactId: 5, leadId: null,
-        status: "active", currentStep: 0, nextActionAt: new Date(Date.now() - 1000),
-      };
-      const sequence = {
-        id: 1, workspaceId: 1, status: "active",
-        steps: [{ type: "task", body: "Call about the renewal. Ask about seat count." }],
-        dailyCap: null,
-      };
-
-      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));
-      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));
-      const insertValues = vi.fn().mockResolvedValue(undefined);
-      mockInsert.mockReturnValue({ values: insertValues });
-
-      const { processEnrollments } = await import("./sequenceEngine");
-      await processEnrollments();
-
-      expect(insertValues).toHaveBeenCalled();
-      const task = insertValues.mock.calls[0][0];
-      expect(task.title).toBe("Call about the renewal");
-      expect(task.description).toBe("Call about the renewal. Ask about seat count.");
-    });
-
-    it("never queues an email with an empty body, and still advances", async () => {
-      // REGRESSION GUARD. Canvas "AI-dynamic" email steps persisted as
-      // subject:"" body:"" because canvasNodeToStep dropped emailMode/ai*.
-      // `step.subject ?? "Follow-up"` does not fire on "", so the engine
-      // queued a genuinely blank email to a real prospect. Blank content must
-      // never produce a draft — but the enrollment should still move on
-      // rather than retrying the same empty step every 5 minutes forever.
-      const enrollment = {
-        id: 7, workspaceId: 1, sequenceId: 1, contactId: 3, leadId: null,
-        status: "active", currentStep: 0, nextActionAt: new Date(Date.now() - 1000),
-      };
-      const sequence = {
-        id: 1, workspaceId: 1, status: "active",
-        steps: [{ type: "email", subject: "", body: "" }, { type: "wait", days: 2 }],
-        dailyCap: null,
-        // The send path enforces a send window (default 08:00-18:00 in the
-        // sequence's tz) before doing anything else, so a test running outside
-        // office hours would otherwise skip the enrollment and assert nothing.
-        settings: { sendWindowStart: "00:00", sendWindowEnd: "23:59", skipWeekends: false },
-      };
-
-      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));   // due enrollments
-      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));     // sequence
-      mockSelect.mockReturnValueOnce(makeSelectChain([{ email: "a@b.com" }])); // contact
-      mockSelect.mockReturnValueOnce(makeSelectChain([]));             // ab variants
-      // The engine now checks the suppression list before creating a draft
-      // (unsubscribe.isSuppressed shares this mocked db). Empty = not suppressed,
-      // so this test still exercises the empty-BODY path it was written for.
-      mockSelect.mockReturnValueOnce(makeSelectChain([]));             // suppression lookup
-
-      const insertValues = vi.fn().mockResolvedValue(undefined);
-      mockInsert.mockReturnValue({ values: insertValues });
-      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
-      mockUpdate.mockReturnValue({ set: updateSet });
-
-      const { processEnrollments } = await import("./sequenceEngine");
-      await processEnrollments();
-
-      // No draft created for the empty step...
-      expect(insertValues).not.toHaveBeenCalled();
-      // ...but the enrollment advanced past it.
-      expect(updateSet).toHaveBeenCalledWith(
-        expect.objectContaining({ currentStep: 1 }),
-      );
-    });
-
-    it("advances past a step type it cannot execute instead of stalling forever", async () => {
-      // 2026-09-20: the type chain (email / wait / task / linkedin_dm |
-      // linkedin_invite) had no terminal else, so a step it did not recognise
-      // wrote NOTHING — nextActionAt stayed in the past and the due query
-      // re-selected this enrollment on every 5-minute tick for the life of the
-      // row, while `processed++` made the log read as healthy work. Not
-      // reachable from the current stepSchema, which is exactly why it could
-      // sit there unnoticed; a legacy row or hand-written JSON reaches it.
-      const enrollment = {
-        id: 30, workspaceId: 1, sequenceId: 1, contactId: 1, leadId: null,
-        status: "active", currentStep: 0, nextActionAt: new Date(Date.now() - 1000),
-      };
-      const sequence = {
-        id: 1, workspaceId: 1, status: "active",
-        steps: [{ type: "sms", body: "Quick nudge" }, { type: "email", subject: "x", body: "y" }],
-        dailyCap: null,
-      };
-
-      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));
-      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));
-
-      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
-      mockUpdate.mockReturnValue({ set: updateSet });
-
-      const { processEnrollments } = await import("./sequenceEngine");
-      const result = await processEnrollments();
-
-      expect(result.processed).toBe(1);
-      const call = updateSet.mock.calls.find((c) => c[0]?.currentStep === 1);
-      expect(call).toBeDefined();
-      expect(call![0].nextActionAt).toBeInstanceOf(Date);
-    });
-
-    it("finishes the enrollment when the unexecutable step is the last one", async () => {
-      const enrollment = {
-        id: 31, workspaceId: 1, sequenceId: 1, contactId: 1, leadId: null,
-        status: "active", currentStep: 0, nextActionAt: new Date(Date.now() - 1000),
-      };
-      const sequence = {
-        id: 1, workspaceId: 1, status: "active",
-        steps: [{ type: "voice" }],
-        dailyCap: null,
-      };
-
-      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));
-      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));
-
-      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
-      mockUpdate.mockReturnValue({ set: updateSet });
-
-      const { processEnrollments } = await import("./sequenceEngine");
-      await processEnrollments();
-
-      expect(updateSet).toHaveBeenCalledWith({ status: "finished" });
-    });
-
-    it("advances past a step with no type at all", async () => {
-      // The shape a hand-edited sequences.steps JSON arrives in: `type` is
-      // undefined, every === comparison is false, and the old fall-through
-      // pinned the enrollment on it.
-      const enrollment = {
-        id: 32, workspaceId: 1, sequenceId: 1, contactId: 1, leadId: null,
-        status: "active", currentStep: 0, nextActionAt: new Date(Date.now() - 1000),
-      };
-      const sequence = {
-        id: 1, workspaceId: 1, status: "active",
-        steps: [{}, { type: "task", body: "Call them" }],
-        dailyCap: null,
-      };
-
-      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));
-      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));
-
-      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
-      mockUpdate.mockReturnValue({ set: updateSet });
-
-      const { processEnrollments } = await import("./sequenceEngine");
-      await processEnrollments();
-
-      expect(updateSet).toHaveBeenCalledWith(
-        expect.objectContaining({ currentStep: 1 }),
-      );
-    });
-
-    it("marks enrollment finished when all steps done", async () => {
-      const enrollment = {
-        id: 1, workspaceId: 1, sequenceId: 1, contactId: 1, leadId: null,
-        status: "active", currentStep: 2, nextActionAt: new Date(Date.now() - 1000),
-      };
-      const sequence = {
-        id: 1, workspaceId: 1, status: "active",
-        steps: [
-          { type: "email", subject: "Step 1", body: "Hello" },
-          // `days` is the real persisted field name (stepSchema in
-          // routers/sequences.ts). This fixture previously said `waitDays`,
-          // matching the engine's mistaken read rather than the storage
-          // format — which is why the engine's wait bug passed CI for so long.
-          { type: "wait", days: 2 },
-        ], // currentStep=2 >= steps.length=2 → finished
-        dailyCap: null,
-      };
-
-      // First select: due enrollments
-      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));
-      // Second select: sequence
-      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));
-
-      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
-      mockUpdate.mockReturnValue({ set: updateSet });
-
-      const { processEnrollments } = await import("./sequenceEngine");
-      const result = await processEnrollments();
-
-      expect(result.processed).toBe(1);
-      expect(updateSet).toHaveBeenCalledWith({ status: "finished" });
-    });
-
-    it("exits enrollment when sequence is not active", async () => {
-      const enrollment = {
-        id: 2, workspaceId: 1, sequenceId: 2, contactId: 1, leadId: null,
-        status: "active", currentStep: 0, nextActionAt: new Date(Date.now() - 1000),
-      };
-      const sequence = { id: 2, workspaceId: 1, status: "paused", steps: [], dailyCap: null };
-
-      mockSelect.mockReturnValueOnce(makeSelectChain([enrollment]));
-      mockSelect.mockReturnValueOnce(makeSelectChain([sequence]));
-
-      const updateSet = vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
-      mockUpdate.mockReturnValue({ set: updateSet });
-
-      const { processEnrollments } = await import("./sequenceEngine");
-      await processEnrollments();
-
-      expect(updateSet).toHaveBeenCalledWith({ status: "exited" });
-    });
-  });
+  // processEnrollments' tests moved to phase1Sends.test.ts on 2026-10-26
+  // (audit 2026-10-20, Phase 1). The engine now claims each step with a
+  // conditional UPDATE, reads its page through a join, and holds rows instead
+  // of skipping them; a queued chain of mocked selects can check none of
+  // that, so they run against __fakes__/sqlFakeDb, which evaluates the SQL.
+  // Every guarantee these tests held is held there ("the engine's older
+  // guarantees, on the real query").
 
   describe("autoEnrollByTriggers", () => {
     it("auto-enrolls on status_change trigger match", async () => {
@@ -566,11 +310,17 @@ describe("Sequence Execution Engine", () => {
     const src = readFileSync(join(__dirname, "sequenceEngine.ts"), "utf8");
 
     it("the last arm advances the enrollment and names the step type", () => {
-      expect(src).toMatch(/\}\s*else\s*\{[\s\S]{0,900}unsupported step type/);
-      const tail = src.slice(src.indexOf("unsupported step type"));
-      const window = tail.slice(0, 900);
-      expect(window).toContain("currentStep: nextStepIndex");
-      expect(window).toContain('status: "finished"');
+      // Since 2026-10-26 every branch ends in `continue`, so the terminal arm
+      // is the code after the last one rather than an `else`; it advances
+      // through the same conditional claim every step uses, and finishing
+      // happens at the top once currentStep runs past the last step.
+      const li = src.indexOf('if (step.type === "linkedin_dm" || step.type === "linkedin_invite") {');
+      const terminal = src.indexOf("unsupported step type", li);
+      expect(li).toBeGreaterThan(-1);
+      expect(terminal).toBeGreaterThan(li);
+      expect(src.slice(terminal, terminal + 400)).toContain("if (await claimNow()) processed++;");
+      expect(src).toMatch(/const claim = async[\s\S]{0,200}currentStep: nextStepIndex/);
+      expect(src).toMatch(/stepIndex >= steps\.length[\s\S]{0,300}status: "finished"/);
     });
 
     it("all four known branches still exist", () => {

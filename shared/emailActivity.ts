@@ -169,8 +169,10 @@ export function statusApplies(filters: EmailFeedFilters, kind: EmailFeedKind): b
       return kind === "log";
     case "failed":
       // A pool failure (no eligible account, daily cap) never reaches an
-      // adapter, so it exists only on the execution row.
-      return kind === "log" || kind === "queued";
+      // adapter, so it exists only on the execution row. A draft whose send
+      // failed (status 'failed', migration 0210) is on the draft row when no
+      // log row tells its story — the SMTP draft paths write none.
+      return kind === "log" || kind === "queued" || kind === "draft";
     case "awaiting":
       return kind === "draft";
     case "scheduled":

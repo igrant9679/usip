@@ -23,6 +23,7 @@ import { router } from "../../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
 import { runAreEngine } from "../../areEngine";
 import { promoteApprovedProspects } from "../../services/are/approvePromotion";
+import { respaceOverdueSteps } from "../../services/are/stepHold";
 import { campaignCapMessage, campaignHeadroom } from "../../services/are/campaignConcurrency";
 import { getAreHubFunnelTotals } from "../../services/performanceMetrics";
 import { recordAudit } from "../../audit";
@@ -726,6 +727,8 @@ export const campaignsRouter = router({
           if (!h.hasRoom) throw new TRPCError({ code: "FORBIDDEN", message: campaignCapMessage(h) });
         }
       }
+      const [prior] = await db.select({ status: areCampaigns.status }).from(areCampaigns)
+        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id))).limit(1);
       const updates: Partial<typeof areCampaigns.$inferInsert> = { status: input.status };
       if (input.status === "active") updates.startedAt = new Date();
       if (input.status === "completed") updates.completedAt = new Date();
@@ -733,6 +736,16 @@ export const campaignsRouter = router({
         .update(areCampaigns)
         .set(updates)
         .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
+      /**
+       * Back from pause: steps that fell due while it was paused are moved so
+       * each prospect's next one is due now and the rest keep their gaps
+       * (audit 2026-10-20, "pause → held, resume → spaced"). The engine ticks
+       * only active campaigns, so after a long pause a prospect otherwise had
+       * several steps due in the same minute.
+       */
+      if (input.status === "active" && prior?.status === "paused") {
+        await respaceOverdueSteps(db, ctx.workspace.id, input.id);
+      }
       return { success: true };
     }),
 

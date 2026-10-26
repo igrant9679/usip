@@ -102,7 +102,8 @@ describe("wiring", () => {
   it("enrolment schedules from the campaign cadence (or the 0170 prospect override), not the generated day offsets", () => {
     const enrol = engine.slice(engine.indexOf("async function enrollApprovedForCampaignUnlocked"), engine.indexOf("async function tickCampaign"));
     expect(enrol).toContain("effectiveStepGapDays(");
-    expect(enrol).toContain("dueAtForDay(anchor, dayOffsetForPosition(dayOffsets, positionOf.get(s.stepIndex)");
+    // Re-spaced from now since 2026-10-26 (audit A2), still from this cadence.
+    expect(enrol).toContain("anchor + dayOffsetForPosition(dayOffsets, positionOf.get(s.stepIndex)");
     expect(enrol).not.toMatch(/anchor \+ s\.dayOffset/);
   });
 

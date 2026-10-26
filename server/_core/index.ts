@@ -323,6 +323,14 @@ async function startServer() {
     backfillMicrosoftBridges().catch((e) => console.error("[microsoftBridge] backfill failed:", e));
   }, 90_000);
 
+  // One-shot heal: LinkedIn text written on the sequence canvas before the
+  // field-name fix never reached the stored steps (audit 2026-10-20, O7).
+  setTimeout(() => {
+    import("../routers/sequences")
+      .then((m) => m.healCanvasLinkedInText())
+      .catch((e) => console.error("[sequences] LinkedIn text heal failed:", e));
+  }, 100_000);
+
   // Scheduled report emails (daily/weekly/monthly via the system sender).
   const runReports = () => {
     runReportScheduler().catch((e: unknown) => console.error("[ReportScheduler] tick failed:", e));

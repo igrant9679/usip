@@ -161,7 +161,10 @@ export function SequenceMenu({ selectedIds, trigger }: { selectedIds: number[]; 
       if (r.enrolled > 0) toast.success(`Enrolled ${r.enrolled} in "${name}"`);
       else if (r.skippedAlreadyEnrolled > 0) toast.info(`Already enrolled in "${name}"`);
       else if (r.blockedInvalidEmail > 0) toast.error("Blocked — invalid email on file");
+      else if (r.skippedSuppressed > 0) toast.error("Skipped — on a suppression list");
       else toast.info("No one enrolled");
+      // A paused or draft sequence holds new enrolments (audit 2026-10-20, O1).
+      if (r.enrolled > 0 && r.heldUntilActive) toast.info(`"${name}" is not active — nothing is sent until it is activated`);
       utils.sequences.getEnrollmentStats.invalidate({ sequenceId: vars.sequenceId });
       setOpen(false);
     },

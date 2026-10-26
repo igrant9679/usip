@@ -23,6 +23,7 @@ import { workspaceProcedure, isAdminRole } from "../../_core/workspace";
 import { cleanScrapedField, isPlaceholderToken, usableDomainOrNull, usableEmailOrNull, usablePhoneOrNull } from "@shared/fieldHygiene";
 import { searchLinkedInProfiles } from "../../services/linkedinLookup";
 import { safeFetch } from "../../services/scraper/ssrfGuard";
+import { findSuppression } from "../../services/suppression";
 
 // isAdminRole comes from _core/workspace.ts — one rank map for the repo.
 
@@ -435,7 +436,7 @@ export async function saveScrapeJobAndQueue(
       return sourceTypeMap[sourceType] ?? "web_scrape";
     };
 
-    const rows = prospects.map((p) => {
+    const candidates = prospects.map((p) => {
       // Shape rules, not just token cleaning: an email without an @ or a
       // phone without a digit is scraper garbage whatever it says.
       const email = usableEmailOrNull(p.email) ?? undefined;
@@ -466,6 +467,20 @@ export async function saveScrapeJobAndQueue(
         sequenceStatus: (email ? "pending" : "sourcing") as "pending" | "sourcing",
       };
     });
+
+    /**
+     * The ONE suppression check, at DISCOVERY (audit 2026-10-20, A8): someone
+     * on either list — by address, LinkedIn profile or company domain — never
+     * enters the queue, so no enrichment, scoring or review is spent on them.
+     * A bounce alone does not keep them out; it stops their email steps.
+     */
+    const rows: typeof candidates = [];
+    for (const r of candidates) {
+      if (!(await findSuppression(workspaceId, { email: r.email, linkedinUrl: r.linkedinUrl, companyDomain: r.companyDomain }, "any"))) rows.push(r);
+    }
+    if (rows.length < candidates.length) {
+      console.log(`[saveScrapeJobAndQueue] ${candidates.length - rows.length} suppressed candidate(s) not queued (campaign ${campaignId})`);
+    }
 
     if (rows.length > 0) {
       try {

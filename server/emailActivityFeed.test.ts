@@ -241,12 +241,15 @@ describe("the source and status filters compose", () => {
     expect(feedSourceApplies(f("all", "all", "awaiting"), "queued")).toBe(false);
   });
 
-  it("routes a failure to both places one can be recorded", () => {
+  it("routes a failure to every place one can be recorded", () => {
     // Inside the adapter → email_log. Before it (no eligible account, daily
-    // cap) → only the execution row.
+    // cap) → only the execution row. A draft whose send failed (status
+    // 'failed' since migration 0210, 2026-10-26) → the draft row, when no log
+    // row tells its story: the SMTP draft paths write none.
     expect(feedSourceApplies(f("all", "all", "failed"), "log")).toBe(true);
     expect(feedSourceApplies(f("all", "all", "failed"), "queued")).toBe(true);
-    expect(feedSourceApplies(f("all", "all", "failed"), "draft")).toBe(false);
+    expect(feedSourceApplies(f("all", "all", "failed"), "draft")).toBe(true);
+    expect(feedSourceApplies(f("all", "all", "sent"), "draft")).toBe(false);
   });
 
   it("honours direction over everything else", () => {

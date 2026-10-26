@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useLocation, useParams, Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -1138,18 +1138,35 @@ function ScoreSparkline({ proposalId }: { proposalId: number }) {
     { proposalId },
     { enabled: !!current && proposalId > 0 },
   );
-  const snapshotMutation = trpc.proposals.snapshotScore.useMutation({ onError: (e) => toast.error(e.message) });
+  // Background bookkeeping, attempted once a day (below): a missed snapshot is a
+  // gap in a trend line, not something to interrupt the reader with.
+  const snapshotMutation = trpc.proposals.snapshotScore.useMutation({ meta: { silentError: true } });
 
-  // Auto-snapshot once per day (if no entry today)
-  const today = new Date().toDateString();
-  const lastEntry = history?.[0];
-  const lastEntryDate = lastEntry ? new Date(lastEntry.createdAt).toDateString() : null;
-  if (history !== undefined && lastEntryDate !== today) {
-    // Only trigger once per render cycle
-    if (!snapshotMutation.isPending && !snapshotMutation.isSuccess) {
-      snapshotMutation.mutate({ proposalId });
-    }
-  }
+  /**
+   * The day's score snapshot — at most ONE attempt per proposal per day per
+   * browser, from an effect (audit 2026-10-20, L1).
+   *
+   * This fired the write from inside render, and on a failure it fired again on
+   * every render: dozens of requests and error toasts per visit, on every tab of
+   * the page, for anyone who merely opened it (a viewer included). A failed
+   * attempt is not retried until tomorrow, and a missed snapshot is a gap in a
+   * trend line, so it fails quietly.
+   */
+  const attempted = useRef(false);
+  const lastEntryAt = history?.[0]?.createdAt;
+  useEffect(() => {
+    if (history === undefined || attempted.current) return;
+    const today = new Date().toDateString();
+    if (lastEntryAt && new Date(lastEntryAt).toDateString() === today) return;
+    const key = `usip:proposalScoreSnapshot:${proposalId}`;
+    try {
+      if (window.localStorage.getItem(key) === today) return;
+      window.localStorage.setItem(key, today);
+    } catch { /* no storage: the ref alone limits it to once per visit */ }
+    attempted.current = true;
+    snapshotMutation.mutate({ proposalId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history === undefined, lastEntryAt, proposalId]);
 
   if (!history || history.length < 2) return null;
 

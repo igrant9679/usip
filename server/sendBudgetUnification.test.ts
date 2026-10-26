@@ -224,7 +224,10 @@ describe("a capped pool DEFERS an ARE step, it does not kill it", () => {
   it("the pre-mark that makes an interrupted send visible is untouched", () => {
     // Reverting the pre-mark is only safe because the pool refuses BEFORE
     // adapter.sendEmail; the pre-mark itself still has to exist.
-    expect(engine).toContain("Dispatch interrupted — send state unknown");
+    // Since 2026-10-26 the pre-mark is the conditional claim (audit A30),
+    // services/are/stepHold.claimStepForDispatch, used by both channels.
+    expect(engine.split("claimStepForDispatch(db, step.id)").length - 1).toBe(2);
+    expect(readFileSync("server/services/are/stepHold.ts", "utf8")).toContain('DISPATCH_INTERRUPTED = "Dispatch interrupted — send state unknown"');
   });
 });
 

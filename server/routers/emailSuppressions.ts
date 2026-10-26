@@ -187,13 +187,28 @@ export async function isEmailSuppressed(workspaceId: number, email: string): Pro
   return isSuppressed(workspaceId, email);
 }
 
+/** Whose address a tracking token unsubscribes, without acting on it — for the confirmation page. */
+export async function unsubscribeTargetByToken(token: string): Promise<{ email: string } | null> {
+  const { emailDrafts } = await import("../../drizzle/schema");
+  const db = await getDb();
+  if (!db) return null;
+  const [draft] = await db
+    .select({ toEmail: emailDrafts.toEmail })
+    .from(emailDrafts)
+    .where(eq(emailDrafts.trackingToken, token))
+    .limit(1);
+  return draft?.toEmail ? { email: normalizeSuppressionEmail(draft.toEmail) } : null;
+}
+
 /**
  * Standalone helper — record an unsubscribe from a tracking token.
- * Called by the GET /api/track/unsubscribe/:token Express route.
+ * Called by the POST /api/track/unsubscribe/:token Express route: the
+ * confirmation form and RFC 8058 one-click both post there. GET only asks.
  */
 export async function recordUnsubscribeByToken(
   token: string,
-  userAgent?: string
+  userAgent?: string,
+  source: "link_confirmed" | "one_click_header" = "one_click_header",
 ): Promise<{ ok: boolean; email?: string }> {
   const { emailDrafts } = await import("../../drizzle/schema");
   const db = await getDb();
@@ -215,6 +230,7 @@ export async function recordUnsubscribeByToken(
     workspaceId: draft.workspaceId,
     email,
     reason: "unsubscribe",
+    source,
     draftId: draft.id,
     contactId: draft.toContactId ?? undefined,
     notes: userAgent ? `UA: ${userAgent.slice(0, 200)}` : undefined,
