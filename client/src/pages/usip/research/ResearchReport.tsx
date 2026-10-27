@@ -24,6 +24,7 @@ import {
 } from "@shared/researchReports";
 import { MIN_SAMPLE, pct } from "@shared/researchResults";
 import { formatUsd } from "@shared/researchModels";
+import { NotFoundState } from "@/components/usip/QueryState";
 
 type Report = RouterOutputs["research"]["reports"]["market"];
 
@@ -52,6 +53,9 @@ export default function ResearchReport() {
   const section: SectionKey = (SECTIONS.find((s) => s.key === params.section)?.key ?? "overview");
   const q = trpc.research.reports.market.useQuery({ id }, { enabled: Number.isFinite(id) && id > 0 });
 
+  // A non-numeric id never queried and showed a skeleton forever (audit
+  // 2026-10-20, P104).
+  if (!(Number.isFinite(id) && id > 0)) return <Shell title="Research"><NotFoundState what="market" backHref="/research" backLabel="Research" /></Shell>;
   if (q.error) return <Shell title="Market report"><div className="p-6"><QueryError message={q.error.message} onRetry={() => q.refetch()} /></div></Shell>;
   if (!q.data) return <Shell title="Market report"><div className="p-6"><TableSkeleton rows={6} /></div></Shell>;
   const r = q.data;

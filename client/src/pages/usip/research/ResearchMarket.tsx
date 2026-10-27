@@ -28,6 +28,7 @@ import {
   RESEARCH_PART_LABEL, RESEARCH_STATUSES, RESEARCH_STATUS_LABEL, SECTOR_SCORE_KEYS, SECTOR_SCORE_LABEL,
   type MarketContent, type ResearchStatus,
 } from "@shared/researchShape";
+import { NotFoundState } from "@/components/usip/QueryState";
 
 export default function ResearchMarket() {
   const params = useParams<{ id: string }>();
@@ -63,6 +64,9 @@ export default function ResearchMarket() {
   const openSector = (name = "") => { setSectorName(name); setSectorShort(""); setSectorOpen(true); };
   const [runTarget, setRunTarget] = useState<RunTarget | null>(null);
 
+  // A non-numeric id never queried and showed a skeleton forever (audit
+  // 2026-10-20, P104).
+  if (!(Number.isFinite(id) && id > 0)) return <Shell title="Research"><NotFoundState what="market" backHref="/research" backLabel="Research" /></Shell>;
   if (q.error) {
     return (
       <Shell title="Research">

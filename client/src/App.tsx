@@ -439,7 +439,11 @@ function PageLoading() {
 }
 
 function Router() {
+  // A page that breaks takes only itself down, and leaving it clears the
+  // error (audit 2026-10-20, G37); the boundary in App() is the last resort.
+  const [path] = useLocation();
   return (
+    <ErrorBoundary resetKey={path} inline>
     <Suspense fallback={<PageLoading />}>
     <Switch>
       <Route path="/"><AuthGate><Dashboard /></AuthGate></Route>
@@ -590,6 +594,7 @@ function Router() {
       <Route><NotFound /></Route>
     </Switch>
     </Suspense>
+    </ErrorBoundary>
   );
 }
 

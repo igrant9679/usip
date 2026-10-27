@@ -8,10 +8,11 @@ import superjson from "superjson";
 import App from "./App";
 import { getLoginUrl } from "./const";
 import { MFA_REQUIRED_EVENT, isMfaRequiredError, shouldRedirectToLogin } from "./lib/authRedirect";
+import { shouldRetryQuery } from "./lib/queryRetry";
 import "./index.css";
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
+  defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false, retry: shouldRetryQuery } },
 });
 
 const redirectToLoginIfUnauthorized = (error: unknown) => {

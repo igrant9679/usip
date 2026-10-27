@@ -9,7 +9,7 @@
  */
 import { useMemo, useState } from "react";
 import { useLocation, useSearch } from "wouter";
-import { Shell, useAccentColor } from "@/components/usip/Shell";
+import { QueryError, Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -140,7 +140,7 @@ export default function Lists() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
 
-  const { data, isLoading } = trpc.recordLists.list.useQuery();
+  const { data, isLoading, error, refetch } = trpc.recordLists.list.useQuery();
   const lists = (data ?? []) as RecordList[];
 
   const createMut = trpc.recordLists.create.useMutation({
@@ -239,6 +239,8 @@ export default function Lists() {
           <Section title="People" icon={Users} count={peopleLists.length} accent={accent} open={openSections.has("People")} onToggle={() => toggleSection("People")}>
             {isLoading ? (
               <div className="p-3 space-y-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-12 rounded bg-muted/50 animate-pulse" />)}</div>
+            ) : error && !data ? (
+              <QueryError compact what="lists" message={error.message} onRetry={() => refetch()} />
             ) : peopleLists.length === 0 ? (
               <SectionEmpty object="People" hasQuery={!!search} onReset={() => setSearch("")} onCreate={() => openCreate("People")} />
             ) : (
@@ -249,6 +251,8 @@ export default function Lists() {
           <Section title="Companies" icon={Building2} count={companyLists.length} accent={accent} open={openSections.has("Companies")} onToggle={() => toggleSection("Companies")}>
             {isLoading ? (
               <div className="p-3 space-y-2">{Array.from({ length: 2 }).map((_, i) => <div key={i} className="h-12 rounded bg-muted/50 animate-pulse" />)}</div>
+            ) : error && !data ? (
+              <QueryError compact what="lists" message={error.message} onRetry={() => refetch()} />
             ) : companyLists.length === 0 ? (
               <SectionEmpty object="Companies" hasQuery={!!search} onReset={() => setSearch("")} onCreate={() => openCreate("Companies")} />
             ) : (

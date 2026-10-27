@@ -17,6 +17,7 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Globe, Copy, Check, Eye, Building2, Flame, Users } from "lucide-react";
+import { QueryError } from "@/components/usip/Shell";
 
 const INTENT_TONE: Record<string, string> = {
   high: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300",
@@ -119,6 +120,8 @@ export default function WebsiteVisitors() {
                 <tbody>
                   {known.isLoading ? (
                     <tr><td colSpan={4} className="px-3 py-8 text-center text-muted-foreground text-xs">Loading…</td></tr>
+                  ) : known.error && !known.data ? (
+                    <tr><td colSpan={4}><QueryError what="visits" message={known.error.message} onRetry={() => known.refetch()} /></td></tr>
                   ) : rows.length === 0 ? (
                     <tr><td colSpan={4}>
                       <div className="text-center py-14 px-4">

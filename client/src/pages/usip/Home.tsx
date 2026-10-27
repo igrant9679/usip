@@ -25,6 +25,7 @@ import {
   ListChecks, Mail, MessageSquare, Lightbulb, DollarSign, Activity, BarChart3,
   Phone, ArrowRight, Inbox,
 } from "lucide-react";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 const LS_KEY = "velocity_home_layout_v1";
 const LS_HEIGHTS = "velocity_home_heights_v1";
@@ -304,6 +305,8 @@ export default function Home() {
             </button>
           </div>
         )}
+
+        <div className="shrink-0 px-4 md:px-6 empty:hidden"><FailedLoadsBanner /></div>
 
         <div className="flex flex-1 min-h-0">
           {/* canvas */}

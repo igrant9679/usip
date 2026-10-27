@@ -19,6 +19,7 @@ import { Loader2, Sparkles, Trash2 } from "lucide-react";
 import { confirmAction } from "@/components/usip/Common";
 import { Section, useResearchRoles } from "./ResearchFields";
 import { RESEARCH_MODELS, formatUsd, researchModelOf } from "@shared/researchModels";
+import { QueryError } from "@/components/usip/Shell";
 
 export type RunTarget =
   | { kind: "market" }
@@ -147,6 +148,8 @@ export function RecentRuns() {
     },
   });
   const runs = q.data?.runs ?? [];
+  // A failed load said nothing at all (audit 2026-10-20, P113).
+  if (q.error && !q.data) return <Section title="AI research runs"><QueryError compact what="recent runs" message={q.error.message} onRetry={() => q.refetch()} /></Section>;
   if (!q.data || runs.length === 0) return null;
   // Its starter or an admin, once it has stopped.
   const removable = (r: (typeof runs)[number]) => canEdit && (r.mine || isAdmin) && r.status !== "queued" && r.status !== "running";

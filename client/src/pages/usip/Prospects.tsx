@@ -12,9 +12,9 @@
  * Contact info (emails / phones / social URLs) is found via the company-site
  * scraper + Reoon email pattern verification — see server/services/scraper.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
-import { PageHeader, Shell } from "@/components/usip/Shell";
+import { PageHeader, QueryError, Shell } from "@/components/usip/Shell";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -276,7 +276,11 @@ export default function ProspectsPage() {
     emailStatus: emailStatusFilter !== "all" ? emailStatusFilter : undefined,
     promoted: promotedFilter === "promoted" ? true : promotedFilter === "not_promoted" ? false : undefined,
   };
-  const { data, isLoading, refetch } = trpc.prospects.list.useQuery(listQuery);
+  const { data, isLoading, error, refetch } = trpc.prospects.list.useQuery(listQuery);
+  const filtered = emailStatusFilter !== "all" || promotedFilter !== "not_promoted";
+  // After a delete or a narrower result, stay on a page that exists (R88).
+  const lastPage = Math.max(1, Math.ceil(Number((data as { total?: number } | undefined)?.total ?? 0) / perPage));
+  useEffect(() => { if (data && page > lastPage) setPage(lastPage); }, [data, page, lastPage]);
   // Selection belongs to the rows it was made on (R4).
   useClearOnChange(listQuery, () => setSelectedIds(new Set()));
 
@@ -543,7 +547,21 @@ export default function ProspectsPage() {
                   </TableCell>
                 </TableRow>
               )}
-              {!isLoading && data?.data?.length === 0 && (
+              {!isLoading && error && !data && (
+                <TableRow>
+                  <TableCell colSpan={10}>
+                    <QueryError what="prospects" message={error.message} onRetry={() => refetch()} />
+                  </TableCell>
+                </TableRow>
+              )}
+              {!isLoading && data?.data?.length === 0 && filtered && (
+                <TableRow>
+                  <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">
+                    <p className="text-sm">No prospects match these filters.</p>
+                  </TableCell>
+                </TableRow>
+              )}
+              {!isLoading && data?.data?.length === 0 && !filtered && (
                 <TableRow>
                   <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">
                     <div className="flex flex-col items-center gap-3">

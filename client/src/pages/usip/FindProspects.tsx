@@ -41,6 +41,7 @@ import {
   Sparkles,
   RefreshCw,
 } from "lucide-react";
+import { QueryError } from "@/components/usip/Shell";
 
 /* ─── Chip-input shared between the two forms ───────────────────────── */
 function ChipInput({ value, onChange, placeholder }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
@@ -699,8 +700,9 @@ function RecentRuns({ activeRunId, onOpen }: { activeRunId: number | null; onOpe
 
 /* ─── Saved prospect queue ───────────────────────────────────────────── */
 function ProspectQueue({ status, emptyText }: { status: "verified" | "needs_review"; emptyText: string }) {
-  const { data, isLoading } = trpc.prospects.list.useQuery({ verificationStatus: status, perPage: 50, page: 1 });
+  const { data, isLoading, error, refetch } = trpc.prospects.list.useQuery({ verificationStatus: status, perPage: 50, page: 1 });
   if (isLoading) return <div className="text-sm text-muted-foreground p-6 text-center">Loading…</div>;
+  if (error && !data) return <QueryError what="these prospects" message={error.message} onRetry={() => refetch()} />;
   if (!data || data.data.length === 0) {
     return <div className="text-sm text-muted-foreground p-6 text-center border rounded-lg border-dashed">{emptyText}</div>;
   }

@@ -34,6 +34,7 @@ import {
   RESEARCH_STATUSES, RESEARCH_STATUS_LABEL, SECTOR_SCORE_KEYS, SECTOR_SCORE_LABEL,
   type ResearchStatus, type SectorContent, type SectorScoreKey,
 } from "@shared/researchShape";
+import { NotFoundState } from "@/components/usip/QueryState";
 
 const SCORE_HINT: Record<SectorScoreKey, string> = {
   reach: "How many organizations you could reach",
@@ -86,6 +87,9 @@ export default function ResearchSector() {
     onSuccess: async () => { setPOpen(false); setLinkOpen(false); await afterPersona(); },
   });
 
+  // A non-numeric id never queried and showed a skeleton forever (audit
+  // 2026-10-20, P104).
+  if (!(Number.isFinite(id) && id > 0)) return <Shell title="Research"><NotFoundState what="sector" backHref="/research" backLabel="Research" /></Shell>;
   if (q.error) {
     return (
       <Shell title="Research">

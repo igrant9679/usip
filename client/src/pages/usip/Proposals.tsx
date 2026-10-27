@@ -1,4 +1,4 @@
-import { Shell, PageHeader, SubNav } from "@/components/usip/Shell";
+import { Shell, PageHeader, QueryError, SubNav } from "@/components/usip/Shell";
 import { useState, useMemo, useEffect } from "react";
 import { localDayOf } from "@/lib/localDay";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
@@ -469,7 +469,7 @@ export default function Proposals() {
     },
     onError: (e) => toast.error("Failed to delete proposal", { description: e.message }),
   });
-  const { data: list, isLoading, refetch } = trpc.proposals.list.useQuery(undefined, {
+  const { data: list, isLoading, error: listError, refetch } = trpc.proposals.list.useQuery(undefined, {
     enabled: !!current,
   });
   const bulkSetExpiryMutation = trpc.proposals.bulkSetExpiry.useMutation({
@@ -785,6 +785,8 @@ export default function Proposals() {
               <Skeleton key={i} className="h-20 w-full rounded-lg" />
             ))}
           </div>
+        ) : listError && !list ? (
+          <QueryError what="proposals" message={listError.message} onRetry={() => refetch()} />
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-center">
             <ClipboardList className="size-12 text-muted-foreground/30 mb-3" />

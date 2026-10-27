@@ -1157,14 +1157,33 @@ export function TableSkeleton({ rows = 6, className }: { rows?: number; classNam
 }
 
 /** Error state for a failed query, distinct from "empty", with a Retry. */
-export function QueryError({ message, onRetry }: { message?: string; onRetry?: () => void }) {
-  return (
-    <div className="text-center py-16 px-4">
-      <div className="mx-auto size-12 rounded-full bg-destructive/10 flex items-center justify-center mb-3">
-        <AlertTriangle className="size-5 text-destructive" />
+/**
+ * A load that failed — never shown as the empty state, which reads as "there
+ * is nothing here" (audit 2026-10-20, X1.6). `what` names it ("routing
+ * rules"); `compact` is the one-line form for a panel, or for a refresh that
+ * failed while the data is still on screen. See QueryState.tsx.
+ */
+export function QueryError({ message, onRetry, what, compact }: { message?: string; onRetry?: () => void; what?: string; compact?: boolean }) {
+  const title = `Couldn’t load ${what ?? "this"}`;
+  const body = message?.trim() ? message.trim().slice(0, 300) : "Something went wrong fetching this data.";
+  if (compact) {
+    return (
+      <div role="alert" className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+        <AlertTriangle className="size-4 text-destructive shrink-0 mt-0.5" aria-hidden="true" />
+        <div className="flex-1 min-w-0">
+          <span className="font-medium">{title}.</span> <span className="text-muted-foreground break-words">{body}</span>
+        </div>
+        {onRetry && <Button variant="outline" size="sm" className="h-7 shrink-0" onClick={onRetry}>Retry</Button>}
       </div>
-      <h3 className="text-sm font-semibold">Couldn’t load this</h3>
-      <p className="text-sm text-muted-foreground mt-1 max-w-sm mx-auto break-words">{message ?? "Something went wrong fetching this data."}</p>
+    );
+  }
+  return (
+    <div role="alert" className="text-center py-16 px-4">
+      <div className="mx-auto size-12 rounded-full bg-destructive/10 flex items-center justify-center mb-3">
+        <AlertTriangle className="size-5 text-destructive" aria-hidden="true" />
+      </div>
+      <h3 className="text-sm font-semibold">{title}</h3>
+      <p className="text-sm text-muted-foreground mt-1 max-w-sm mx-auto break-words">{body}</p>
       {onRetry && <div className="mt-4"><Button variant="outline" size="sm" onClick={onRetry}>Retry</Button></div>}
     </div>
   );

@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PageHeader, Shell } from "@/components/usip/Shell";
+import { PageHeader, QueryError, Shell } from "@/components/usip/Shell";
 import { confirmAction } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
 import { Loader2, RefreshCw, Save, Sparkles, Target, Gauge } from "lucide-react";
@@ -37,7 +37,7 @@ const DEFAULTS: Cfg = {
 };
 
 export default function LeadScoring() {
-  const { data: serverCfg, isLoading } = trpc.leadScoring.getConfig.useQuery();
+  const { data: serverCfg, isLoading, error: cfgError, refetch: refetchCfg } = trpc.leadScoring.getConfig.useQuery();
   const [cfg, setCfg] = useState<Cfg>(DEFAULTS);
   const utils = trpc.useUtils();
 
@@ -134,6 +134,9 @@ export default function LeadScoring() {
       )}
       {isLoading ? (
         <div className="p-4 md:p-5 flex items-center gap-2 text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading…</div>
+      ) : !serverCfg ? (
+        // Not the defaults: saving them would overwrite the real weights.
+        <QueryError what="the scoring weights" message={cfgError?.message} onRetry={() => refetchCfg()} />
       ) : (
         <div className="p-4 md:p-5 grid gap-6 lg:grid-cols-3">
           {/* Firmographic */}
@@ -220,7 +223,7 @@ function BreakdownPreview() {
   useEffect(() => {
     if (!selected && leads && leads.length) setSelected(leads[0].id);
   }, [leads, selected]);
-  const { data: bd, isFetching } = trpc.leadScoring.breakdown.useQuery(
+  const { data: bd, isFetching, error: bdError, refetch: refetchBd } = trpc.leadScoring.breakdown.useQuery(
     { leadId: selected ?? 0 },
     { enabled: !!selected },
   );
@@ -250,6 +253,8 @@ function BreakdownPreview() {
 
       {!selected ? (
         <div className="text-xs text-muted-foreground py-6 text-center">Select a lead to view breakdown.</div>
+      ) : bdError && !isFetching ? (
+        <QueryError compact what="this lead's breakdown" message={bdError.message} onRetry={() => refetchBd()} />
       ) : isFetching || !bd ? (
         <div className="text-xs text-muted-foreground py-6 text-center"><Loader2 className="size-4 animate-spin inline" /> Loading…</div>
       ) : (

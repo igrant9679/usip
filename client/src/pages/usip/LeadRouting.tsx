@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, QueryError, Shell, SubNav, TableSkeleton } from "@/components/usip/Shell";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { ArrowDown, ArrowUp, Pencil, Plus, Sparkles, Trash2, GitMerge } from "lucide-react";
@@ -42,7 +42,8 @@ const OPS = [
 
 export default function LeadRouting() {
   const utils = trpc.useUtils();
-  const { data: rules } = trpc.leadRouting.list.useQuery();
+  const rulesQ = trpc.leadRouting.list.useQuery();
+  const rules = rulesQ.data;
   const { data: members } = trpc.workspace.members.useQuery();
   const [editing, setEditing] = useState<Rule | null>(null);
 
@@ -74,7 +75,11 @@ export default function LeadRouting() {
       ]} />
 
       <div className="p-4 md:p-5">
-        {!rules || rules.length === 0 ? (
+        {rulesQ.error && !rules ? (
+          <QueryError what="routing rules" message={rulesQ.error.message} onRetry={() => rulesQ.refetch()} />
+        ) : !rules ? (
+          <TableSkeleton rows={4} />
+        ) : rules.length === 0 ? (
           <EmptyState icon={Sparkles} title="No routing rules yet" description="Add a rule to auto-assign new leads on creation." />
         ) : (
           <div className="rounded-lg border bg-card overflow-hidden">

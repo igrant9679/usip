@@ -28,6 +28,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { confirmAction } from "@/components/usip/Common";
 import { FILTER_LABELS, activeFilters, emptyCriteria, filterUnion, type FilterType, type ProspectSourceSlug, type SearchCriteria } from "@shared/prospectSources";
 import { Loader2, Search, ShieldCheck, AlertTriangle, EyeOff, Sparkles } from "lucide-react";
+import { QueryError } from "@/components/usip/Shell";
 
 function Chips({ value, onChange, placeholder }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
   const [text, setText] = useState("");
@@ -119,6 +120,8 @@ export function SourceSearchPanel() {
   useEffect(() => { setSelected(new Set()); }, [runId]);
 
   if (describe.isLoading) return <div className="text-[12.5px] text-muted-foreground flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> Loading sources…</div>;
+  // A failed load is not "no vendor connected" (audit 2026-10-20, P148).
+  if (describe.error && !describe.data) return <QueryError what="your data sources" message={describe.error.message} onRetry={() => describe.refetch()} />;
 
   if (connected.length === 0) {
     return (

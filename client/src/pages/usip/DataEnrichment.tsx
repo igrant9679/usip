@@ -46,6 +46,7 @@ import {
   ArrowRight,
   ExternalLink,
 } from "lucide-react";
+import { QueryError } from "@/components/usip/Shell";
 
 /* ── inline donut chart ── */
 function Donut({ pct, color, sub }: { pct: number; color: string; sub?: string }) {
@@ -377,6 +378,8 @@ export default function DataEnrichment() {
               {/* feed */}
               {jobChangesQ.isLoading ? (
                 <div className="text-center text-sm text-muted-foreground py-16">Loading job changes…</div>
+              ) : jobChangesQ.error && !jobChangesQ.data ? (
+                <QueryError what="job changes" message={jobChangesQ.error.message} onRetry={() => jobChangesQ.refetch()} />
               ) : jobChanges.length === 0 ? (
                 <div className="max-w-md mx-auto text-center py-16">
                   <div className="mx-auto size-12 rounded-full bg-secondary flex items-center justify-center mb-3">

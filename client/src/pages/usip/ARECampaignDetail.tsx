@@ -25,6 +25,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Checkbox } from "@/components/ui/checkbox";
 import { AreBulkActionBar, useRowSelection, type BulkActionDef } from "@/components/usip/AreBulkActionBar";
 import { describeEnrichmentError, type EnrichmentErrorTone } from "@shared/enrichmentErrorLabel";
+import { QueryError } from "@/components/usip/Shell";
+import { NotFoundState, isNotFoundError } from "@/components/usip/QueryState";
 
 /** Tone → colour for an enrichment reason line: brown for information
  *  ("Not in QuickEnrich"), amber for transient, red for a real failure.
@@ -1990,7 +1992,9 @@ export default function ARECampaignDetail() {
   const campaignId = parseInt(id ?? "0");
   const utils = trpc.useUtils();
 
-  const { data: campaign, isLoading: loadingCampaign } = trpc.are.campaigns.get.useQuery({ id: campaignId });
+  const validId = Number.isInteger(campaignId) && campaignId > 0;
+  const campaignQ = trpc.are.campaigns.get.useQuery({ id: campaignId }, { enabled: validId });
+  const { data: campaign, isLoading: loadingCampaign } = campaignQ;
   const { data: prospects, isLoading: loadingProspects } = trpc.are.prospects.list.useQuery({ campaignId, limit: 100 });
   // The no-email door (2026-09-16): staged candidates the email-finder is
   // still working. Hidden from the list above by the server; surfaced only
@@ -2288,10 +2292,14 @@ export default function ARECampaignDetail() {
     );
   }
 
+  // Not found, or a load that failed: two different answers (audit
+  // 2026-10-20, L4). A link to another workspace's campaign spun for 15 s.
   if (!campaign) {
     return (
       <Shell title="Campaign">
-        <div className="p-4 md:p-5 text-muted-foreground">Campaign not found.</div>
+        {validId && campaignQ.error && !isNotFoundError(campaignQ.error)
+          ? <QueryError what="this campaign" message={campaignQ.error.message} onRetry={() => campaignQ.refetch()} />
+          : <NotFoundState what="campaign" backHref="/are/campaigns" backLabel="All campaigns" />}
       </Shell>
     );
   }
