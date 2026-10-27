@@ -132,7 +132,6 @@ const ROUTE_PAGE_KEYS: Array<[string, string]> = [
   ["/v2/emails", "emails"],
   ["/v2/calls", "calls"],
   ["/email-builder", "email-builder"],
-  ["/campaigns", "campaigns"],
   ["/segments", "segments"],
   ["/v2/conversations", "conversations"],
   ["/pipeline-alerts", "pipeline-alerts"],

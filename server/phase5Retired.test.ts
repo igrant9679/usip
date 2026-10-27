@@ -54,7 +54,7 @@ describe("the retired v1 paths redirect (phase 5 item 2)", () => {
   });
 
   it("the pages are deleted and nothing imports them", () => {
-    for (const page of ["Prospects", "DashboardHome2", "Contacts"]) {
+    for (const page of ["Prospects", "DashboardHome2", "Contacts", "Campaigns"]) {
       expect(existsSync(join(ROOT, "client/src/pages/usip", `${page}.tsx`)), `${page}.tsx should be gone`).toBe(false);
       expect(APP, page).not.toContain(`@/pages/usip/${page}"`);
     }
@@ -110,5 +110,121 @@ describe("the detail page keeps its guidance", () => {
    * page silent. */
   it("Elsie still keys the /prospects prefix, which serves /prospects/:id", () => {
     expect(read("client/src/components/usip/Elsie.tsx")).toContain('["/prospects", "prospects"],');
+  });
+});
+
+describe("the legacy Broadcasts page is retired without a fold (2026-10-27)", () => {
+  const help = read("server/seedHelpContent.ts");
+
+  /* Deleting a TourSeed is NOT enough: seedHelpContent's own comment says a
+   * dropped seed leaves its row, and its steps, alive in every workspace
+   * already seeded — naming it in RETIRED_LEGACY_TOURS is the only thing that
+   * removes it. The Campaigns tour spotlighted `page-campaigns`, an anchor
+   * that only existed on the deleted page, so leaving it seeded would strand
+   * a tour that routes to /campaigns and is redirected straight back out. */
+  it("the Campaigns tour is named as retired, not merely deleted", () => {
+    const retiredList = help.slice(help.indexOf("const RETIRED_LEGACY_TOURS = ["), help.indexOf("];", help.indexOf("const RETIRED_LEGACY_TOURS = [")));
+    expect(retiredList).toContain('"Campaigns",');
+    expect(help).not.toContain('    name: "Campaigns",');
+    // The engine's own tour is a different tour and must survive.
+    expect(help).toContain('name: "ARE: Autonomous Campaigns"');
+  });
+
+  it("no page help, palette row or sidebar item offers Broadcasts", () => {
+    expect(read("client/src/lib/toolRegistry.ts")).not.toContain('label: "Broadcasts"');
+    expect(read("client/src/lib/helpText.ts")).not.toContain('"/campaigns"');
+    expect(read("client/src/components/usip/Shell.tsx")).not.toContain('label: "Campaigns"');
+  });
+
+  /* The asymmetry with /prospects is deliberate: that prefix keeps its Elsie
+   * entry because /prospects/:id still renders. /campaigns had no detail route
+   * at all — selection was component state, never a URL — so nothing survives
+   * under this prefix and the entry would only key guidance to a redirect. */
+  it("Elsie drops the /campaigns prefix, having no page left under it", () => {
+    const elsie = read("client/src/components/usip/Elsie.tsx");
+    expect(elsie).not.toContain('["/campaigns", "campaigns"]');
+    expect(elsie).toContain('["/prospects", "prospects"],');
+  });
+
+  /* The rows were deliberately NOT migrated and NOT deleted. Two things have
+   * to stay true for that to be recoverable rather than merely invisible: the
+   * tables still exist, and the sample-data remover can still find the seeded
+   * ones by name. */
+  it("the legacy rows are left in place and still findable", () => {
+    const schema = read("drizzle/schema.ts");
+    for (const t of ["campaigns", "campaignComponents", "campaignStepStats"]) {
+      expect(schema, t).toContain(`export const ${t} = mysqlTable(`);
+    }
+    const seed = read("server/seed.ts");
+    expect(seed).toContain('const SEED_CAMPAIGN_NAMES = ["Q2 Renewal Push", "Mid-market expansion", "Spring brand refresh"] as const;');
+    expect(seed).toContain("campaignNames: [...SEED_CAMPAIGN_NAMES],");
+    expect(read("server/services/sampleData.ts")).toContain("inArray(campaigns.name, SEED_FINGERPRINT.campaignNames as unknown as string[])");
+  });
+
+  it("the demo seeder no longer creates rows nothing can display", () => {
+    const seed = read("server/seed.ts");
+    expect(seed).not.toMatch(/db\.insert\(campaigns\)/);
+  });
+});
+
+describe("the assistant and the manuals do not name a retired path", () => {
+  /* The 2026-10-27 retirement was caught here by productKnowledge.test.ts:
+   * knowledgeHrefs() still named /campaigns, so the assistant would describe
+   * a page and then `navigate` straight into a redirect out of it. That check
+   * only covers the digest, and this knowledge lives in three homes that
+   * "can only drift apart silently" (productKnowledge.test.ts's own words).
+   * So pin all three against every retired path, not just the digest. */
+  const HOMES = [
+    "server/productKnowledge.ts",
+    "server/seedHelpOperatorManual.ts",
+    ".claude/skills/velocity-operator/SKILL.md",
+    ".claude/skills/velocity-operator/references/pages.md",
+    ".claude/skills/velocity-operator/references/revenue-engine.md",
+    ".claude/skills/velocity-operator/references/data-model.md",
+    ".claude/skills/velocity-operator/references/routines.md",
+  ];
+
+  // The path as its own token: "/are/campaigns" must not count as "/campaigns",
+  // and "/prospects/${id}" is the live detail route, not the retired list.
+  // Index logic rather than an escaped character class — the class is the kind
+  // of thing that silently loses a backslash on its way into this file and
+  // then matches nothing.
+  const PATHISH = /[A-Za-z0-9_/-]/;
+  const names = (src: string, path: string) => {
+    for (let i = src.indexOf(path); i !== -1; i = src.indexOf(path, i + 1)) {
+      const before = i === 0 ? "\n" : src[i - 1];
+      const after = src[i + path.length] ?? "\n";
+      if (!PATHISH.test(before) && !PATHISH.test(after)) return true;
+    }
+    return false;
+  };
+
+  /* A retirement note is allowed to name the path; live prose is not. The
+   * granularity matters: an earlier version of this check skipped whole LINES
+   * that said "retired", which let a re-added live mention hide on the same
+   * line as the note — a mutant walked straight through it. So the unit is the
+   * SENTENCE: wherever a retired path appears, that sentence has to be the one
+   * saying it is retired. */
+  const sentences = (src: string) => src.split(/\n|(?<=\.)\s+/);
+
+  it("no retired path is presented as a live page in any knowledge home", () => {
+    const offenders: string[] = [];
+    for (const f of HOMES) {
+      for (const chunk of sentences(read(f))) {
+        if (/retired|Retired/.test(chunk)) continue;
+        for (const path of retired) if (names(chunk, path)) offenders.push(`${f} → ${path}: ${chunk.trim().slice(0, 80)}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("the token match is strict enough to be worth trusting", () => {
+    // Guards the regex itself: the live ARE path and the live detail route must
+    // not read as retired, or this whole check passes by being blind.
+    expect(names("Campaigns /are/campaigns, Sequences", "/campaigns")).toBe(false);
+    expect(names("resolves to /prospects/${id} always", "/prospects")).toBe(false);
+    expect(names("Find Prospects /find-prospects here", "/prospects")).toBe(false);
+    expect(names("Marketing → Broadcasts /campaigns, Segments", "/campaigns")).toBe(true);
+    expect(names("Broadcasts (/campaigns) prepare one message", "/campaigns")).toBe(true);
   });
 });

@@ -209,10 +209,10 @@ export const TOOLS: Tool[] = [
     description: "Sequence drafts waiting for review — a filter of Emails.", keywords: ["drafts", "review"] },
 
   /* ── Marketing — one message to a segment ────────────────────────────── */
-  // Not on the rail: the Campaigns product does not send yet (Launch flips a
-  // status; nothing dispatches). It comes back to the rail the day it sends.
-  { href: "/campaigns", label: "Broadcasts", icon: Megaphone, group: "Marketing",
-    description: "Broadcast one message to a segment. Not yet sending — audiences and copy can be prepared.", keywords: ["broadcast", "bulk", "newsletter", "campaigns"] },
+  // Broadcasts was kept off the rail but in the palette while it was unfinished
+  // ("it comes back the day it sends"). It never sent, and the page is retired
+  // (phase 5 item 2, 2026-10-27), so the entry goes too — a palette row whose
+  // href only redirects is a promise of a page that is not there.
   { href: "/segments", label: "Segments", icon: Filter, group: "Marketing",
     description: "Saved audience filters for broadcasts and auto-enroll rules." },
   // Live but unregistered until phase 4: the rules that auto-enroll matching

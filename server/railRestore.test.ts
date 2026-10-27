@@ -45,10 +45,11 @@ describe("what came back to the rail", () => {
       expect(primaryHrefs.has(href), href).toBe(true);
       expect(NAV_HELP[href]?.body, href).toBeTruthy();
     }
-    // One "Campaigns" in the palette: the engine's list. The unfinished
-    // Marketing product is "Broadcasts".
+    // One "Campaigns" in the palette: the engine's list. There used to be a
+    // second entry, "Broadcasts" (/campaigns) — retired on 2026-10-27 (phase 5
+    // item 2), which is why only the engine's row is asserted now. The
+    // one-and-only-one check below is the guarantee that outlives it.
     expect(tool("/are/campaigns").label).toBe("Campaigns");
-    expect(tool("/campaigns").label).toBe("Broadcasts");
     expect(TOOLS.filter((t) => t.label === "Campaigns")).toHaveLength(1);
   });
 
@@ -96,8 +97,13 @@ describe("what stayed off, on purpose", () => {
     expect(primaryHrefs.has("/email-analytics")).toBe(false);
     expect(tool("/email-analytics").description).toContain("drafts only");
   });
-  it("Broadcasts stays off the rail until it sends", () => {
+  it("Broadcasts is gone from the palette entirely, not merely off the rail", () => {
+    // It was off the rail "until it sends". It never sent; the page is retired
+    // (2026-10-27, phase 5 item 2). Asserting only that it is off the RAIL
+    // would now pass vacuously, so assert the stronger, true thing.
     expect(primaryHrefs.has("/campaigns")).toBe(false);
+    expect(TOOLS.some((t) => t.href === "/campaigns")).toBe(false);
+    expect(TOOLS.some((t) => t.label === "Broadcasts")).toBe(false);
   });
   it("the rail is still a budget: under 40 entries, every one from the registry", () => {
     expect(PRIMARY_TOOLS.length).toBeLessThan(40);

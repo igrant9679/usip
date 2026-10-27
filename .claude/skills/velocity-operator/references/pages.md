@@ -118,8 +118,12 @@ LinkedIn outreach: search, invites (capped, warmed), DMs, opener on accept, repl
 
 ## Marketing
 
-### Broadcasts — `/campaigns`
-One message to a segment. **Not yet sending** — prepare audiences and copy here; live outreach runs as Revenue Engine campaigns or sequences.
+<!-- Broadcasts (/campaigns) was retired on 2026-10-27 (audit phase 5 item 2).
+     It never sent — Launch only ticked a checklist — and the fold into
+     fixed-copy ARE campaigns it was meant to get (F21) could not be built:
+     no row had any copy, and are_campaigns has no column for a budget,
+     objective or checklist. The path redirects to /are/campaigns. The legacy
+     rows are still in `campaigns` / `campaign_components`, behind no UI. -->
 
 ### Segments — `/segments` · Segment Rules — `/segment-rules`
 Saved rule-based audiences that stay current (match all/any, rules over person and company fields); Segment Rules auto-enroll matching people into a sequence hourly.

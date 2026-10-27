@@ -77,7 +77,6 @@ A name enters as a **Person** (CRM → People). When it engages it becomes a **L
 - **Sequences** (Outreach → Sequences): fixed multi-step flows; the same steps go to everyone you enroll; a reply pauses that person.
 - **Revenue Engine campaigns** (Outreach → Campaigns): autonomous outbound that finds people, writes to each one from a dossier, sends, and works replies.
 - A campaign's **Sequences tab**: the written steps for that campaign's people.
-- **Broadcasts** (Marketing → Broadcasts): one message to a segment; audiences and copy only, not sending yet.
 
 When someone says "add them to the sequence", ask which page they mean.
 
@@ -153,7 +152,7 @@ When someone says "add them to the sequence", ask which page they mean.
 
 ## Marketing, Proposals, Dialer, Customer Success
 
-**Broadcasts** (/campaigns) prepare one message to a segment (not yet sending). **Segments** (/segments) are saved audiences that stay current; **Segment Rules** auto-enroll matches into a sequence. Segments are built from Contacts; to put a lead into outreach use Add to… on the Leads page.
+**Segments** (/segments) are saved audiences that stay current; **Segment Rules** auto-enroll matches into a sequence. Segments are built from Contacts; to put a lead into outreach use Add to… on the Leads page. (The Broadcasts page that prepared one message to a segment was retired on 2026-10-27; a fixed-copy Revenue Engine campaign does that job.)
 
 **Proposals** (/proposals) are client-facing documents with sections, milestones, a portal link and e-sign; **Quotes** (/quotes) price a deal from the **Products** (/products) catalog.
 

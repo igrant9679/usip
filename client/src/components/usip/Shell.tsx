@@ -30,7 +30,6 @@ import {
   LayoutTemplate,
   ListChecks,
   LogOut,
-  Megaphone,
   Mic2,
   Network,
   Package,
@@ -224,7 +223,6 @@ const _LEGACY_NAV: NavGroup[] = [
     //   - /email-suppressions   → opens from /sending-accounts
     items: [
       { href: "/sequences", label: "Sequences", icon: Activity },
-      { href: "/campaigns", label: "Campaigns", icon: Megaphone },
       { href: "/segments", label: "Segments", icon: Filter },
       { href: "/sending-accounts", label: "Sending Accounts", icon: Mail },
       { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },

@@ -116,7 +116,6 @@ describe("deleteDef keeps it", () => {
  */
 describe("campaigns.delete removes the setup it promises to", () => {
   const ops = strip(readFileSync(join(ROOT, "server/routers/operations.ts"), "utf8"));
-  const campaignsUi = readFileSync(join(ROOT, "client/src/pages/usip/Campaigns.tsx"), "utf8");
 
   const del = (() => {
     const router = ops.slice(ops.indexOf("campaignsRouter = router("));
@@ -127,9 +126,11 @@ describe("campaigns.delete removes the setup it promises to", () => {
     return router.slice(at, next);
   })();
 
-  it("the dialog still promises the setup goes too", () => {
-    expect(campaignsUi).toMatch(/removes the campaign and its setup/i);
-  });
+  // The dialog that made the promise was deleted with the Broadcasts page on
+  // 2026-10-27 (phase 5 item 2), so there is no copy left to check. The
+  // procedure it was paired with is still here and still pinned below:
+  // campaigns.delete remains callable, and the orphan rows it would leave are
+  // the reason this file exists.
 
   it("deletes campaign_components — the setup — in an executed statement", () => {
     expect(
