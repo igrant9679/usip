@@ -381,7 +381,7 @@ export default function Dashboard() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {[
-              { label: "Prospects", href: "/prospects", count: prospectsTotal },
+              { label: "Prospects", href: "/v2/people", count: prospectsTotal },
               { label: "Leads", href: "/leads", count: stats?.activeLeads ?? 0 },
               { label: "Opportunities", href: "/pipeline", count: stats?.openOppsCount ?? 0 },
               { label: "Customers", href: "/customers", count: stats?.customerCount ?? 0 },

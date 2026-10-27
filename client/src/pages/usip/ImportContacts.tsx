@@ -962,12 +962,13 @@ export function ImportContactsPanel() {
               </div>
 
               <div className="flex justify-center gap-3 pt-2">
-                {/* The CTA follows the DESTINATION — "View Contacts" after a
-                    prospects import pointed at a page the rows are not on. */}
-                <Link href={destination === "prospects" ? "/prospects" : "/v2/people"}>
+                {/* The CTA lands where the rows are. Both destinations end up
+                    on People now that the /prospects list is retired (phase 5
+                    item 2, 2026-10-27), so there is one link, not two. */}
+                <Link href="/v2/people">
                   <Button className="gap-2">
                     <Users className="h-4 w-4" />
-                    {destination === "prospects" ? "View Prospects" : "View People"}
+                    View People
                   </Button>
                 </Link>
                 <Button

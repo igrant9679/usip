@@ -423,13 +423,14 @@ describe("the client fixes", () => {
       ["client/src/pages/usip/People.tsx", "useClearOnChange(listQuery, () => setChecked(new Set()));"],
       ["client/src/pages/usip/Companies.tsx", "useClearOnChange({ filters, sort, page }, () => setChecked(new Set()));"],
       ["client/src/pages/usip/Leads.tsx", "useClearOnChange({ search }, () => setSelectedIds(new Set()));"],
-      ["client/src/pages/usip/Prospects.tsx", "useClearOnChange(listQuery, () => setSelectedIds(new Set()));"],
+      // The /prospects list was retired on 2026-10-27 (phase 5 item 2); its
+      // pin is gone because the page is, not because R4 relaxed — People.tsx
+      // above is the surviving list over the same prospects.list query.
       ["client/src/pages/usip/Proposals.tsx", "useClearOnChange({ search, statusFilter, sortBy, expiryWindow }, () => setSelectedIds(new Set()));"],
     ];
     for (const [f, call] of pins) expect(read(f), f).toContain(call);
     // The list query is the scope, so a new filter cannot be left out of it.
     expect(read("client/src/pages/usip/People.tsx")).toContain("trpc.prospects.list.useQuery(listQuery)");
-    expect(read("client/src/pages/usip/Prospects.tsx")).toContain("trpc.prospects.list.useQuery(listQuery)");
     const hook = read("client/src/hooks/useClearOnChange.ts");
     expect(hook).toContain("if (seen.current === key) return;");
   });

@@ -30,7 +30,6 @@ const Campaigns = lazyChunk(() => import("@/pages/usip/Campaigns"));
 const ContactRedirect = lazyChunk(() => import("@/pages/usip/ContactRedirect"));
 const Customers = lazyChunk(() => import("@/pages/usip/Customers"));
 const Dashboard = lazyChunk(() => import("@/pages/usip/Dashboard"));
-const DashboardHome2 = lazyChunk(() => import("@/pages/usip/DashboardHome2"));
 const Dashboards = lazyChunk(() => import("@/pages/usip/Dashboards"));
 const Reports = lazyChunk(() => import("@/pages/usip/Reports"));
 const EmailAnalytics = lazyChunk(() => import("@/pages/usip/EmailAnalytics"));
@@ -41,7 +40,6 @@ const Inbox = lazyChunk(() => import("@/pages/usip/Inbox"));
 const Mailbox = lazyChunk(() => import("@/pages/usip/Mailbox"));
 const CalendarPage = lazyChunk(() => import("@/pages/usip/Calendar"));
 const Leads = lazyChunk(() => import("@/pages/usip/Leads"));
-const Prospects = lazyChunk(() => import("@/pages/usip/Prospects"));
 const People = lazyChunk(() => import("@/pages/usip/People"));
 const Companies = lazyChunk(() => import("@/pages/usip/Companies"));
 const CompanyProfile = lazyChunk(() => import("@/pages/usip/CompanyProfile"));
@@ -83,6 +81,7 @@ const WorkflowsV2 = lazyChunk(() => import("@/pages/usip/WorkflowsV2"));
 const AnalyticsV2 = lazyChunk(() => import("@/pages/usip/AnalyticsV2"));
 const EmailsV2 = lazyChunk(() => import("@/pages/usip/EmailsV2"));
 const SavedRedirect = lazyChunk(() => import("@/pages/usip/SavedRedirect"));
+const RetiredRedirect = lazyChunk(() => import("@/pages/usip/RetiredRedirect"));
 const FormsV2 = lazyChunk(() => import("@/pages/usip/FormsV2"));
 const PublicForm = lazyChunk(() => import("@/pages/PublicForm"));
 const BookingPage = lazyChunk(() => import("@/pages/BookingPage"));
@@ -453,7 +452,11 @@ function Router() {
       <Route path="/mailbox"><AuthGate><Mailbox /></AuthGate></Route>
       <Route path="/calendar"><AuthGate><CalendarPage /></AuthGate></Route>
       <Route path="/leads"><AuthGate><Leads /></AuthGate></Route>
-      <Route path="/prospects"><AuthGate><Prospects /></AuthGate></Route>
+      {/* The Prospects LIST is retired (phase 5 item 2, 2026-10-27): it and
+          People both listed prospects.list, and People is the superset. The
+          DETAIL page stays — every person deep link, ContactRedirect
+          included, resolves to /prospects/:id. See lib/retiredRoutes. */}
+      <Route path="/prospects"><AuthGate><RetiredRedirect from="/prospects" /></AuthGate></Route>
       <Route path="/prospects/:id"><AuthGate><ProspectDetail /></AuthGate></Route>
       <Route path="/find-prospects"><AuthGate><FindProspects /></AuthGate></Route>
       {/* Retired 2026-08-17 (owner: one location for every person record).
@@ -487,7 +490,9 @@ function Router() {
       <Route path="/workflows"><AuthGate><Workflows /></AuthGate></Route>
       <Route path="/dashboards"><AuthGate><Dashboards /></AuthGate></Route>
       <Route path="/reports"><AuthGate><Reports /></AuthGate></Route>
-      <Route path="/dashboard-home2"><AuthGate><DashboardHome2 /></AuthGate></Route>
+      {/* "Home 2" was a second home page over workspace.summary; the v2 home
+          at /v2/home replaces it (phase 5 item 2, 2026-10-27). */}
+      <Route path="/dashboard-home2"><AuthGate><RetiredRedirect from="/dashboard-home2" /></AuthGate></Route>
       <Route path="/products"><AuthGate><Products /></AuthGate></Route>
       <Route path="/quotes"><AuthGate><Quotes /></AuthGate></Route>
       <Route path="/territories"><AuthGate><Territories /></AuthGate></Route>

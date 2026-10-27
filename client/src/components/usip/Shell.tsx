@@ -174,14 +174,17 @@ const _LEGACY_NAV: NavGroup[] = [
         // created along the way (see the "Records" sub-head), not stages.
         kind: "miniPipeline",
         stages: [
-          { href: "/prospects", label: "Prospects", short: "P", icon: Radar },
+          { href: "/v2/people", label: "Prospects", short: "P", icon: Radar },
           { href: "/leads", label: "Leads", short: "L", icon: Target },
           { href: "/pipeline", label: "Pipeline", short: "Π", icon: KanbanSquare },
           { href: "/customers", label: "Customers", short: "★", icon: Heart },
         ],
       },
       { kind: "subhead", label: "Prospect and enrich", color: "#0891B2", darkColor: "#22D3EE" },
-      { href: "/prospects", label: "Prospects", icon: Radar },
+      // The "Prospects" item here was the People item under Records with a
+      // different name over the same prospects.list rows; retired with the
+      // /prospects list (phase 5 item 2, 2026-10-27). The funnel stage above
+      // keeps the Prospect name — it is a stage, not a second page.
       { href: "/leads", label: "Leads", icon: Target },
       { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
       // "Records" are People and Companies — the two sitewide sources of truth

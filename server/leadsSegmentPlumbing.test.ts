@@ -100,15 +100,21 @@ describe("a broadcast audience cannot be handed a lead id, and cannot silently d
   });
 });
 
-describe("Contacts keeps its legitimate use", () => {
-  // The regression anchor: these two calls pass REAL contact ids and must keep
-  // working. An over-eager sweep of "addAudience"/"addContacts" would take them
-  // out with the leads ones.
-  const contactsPage = read("client/src/pages/usip/Contacts.tsx");
-
-  it("still adds contacts to campaigns and segments from the Contacts page", () => {
-    expect(contactsPage).toContain("trpc.campaigns.addAudience.useMutation");
-    expect(contactsPage).toContain("trpc.segments.addContacts.useMutation");
-    expect(contactsPage).toContain("addMut.mutate({ campaignId: Number(campaignId), contactIds })");
+describe("the contact-keyed audience adds keep their legitimate use", () => {
+  /* The regression anchor: these two procedures take REAL contact ids and
+   * must keep working. An over-eager sweep of "addAudience"/"addContacts"
+   * would take them out with the leads ones.
+   *
+   * It used to be pinned on the Contacts PAGE, which was the only client
+   * caller. That page was deleted on 2026-10-27 (phase 5 item 2) and nothing
+   * calls either mutation from the client now, so the anchor sits where the
+   * guarantee actually lives: the procedures themselves, contact-keyed. */
+  it("campaigns.addAudience and segments.addContacts still take contact ids", () => {
+    const ops = read("server/routers/operations.ts");
+    expect(ops).toContain("addAudience: workspaceProcedure");
+    expect(ops).toMatch(/addAudience: workspaceProcedure[\s\S]{0,200}contactIds: z\.array\(z\.number\(\)\.int\(\)\.positive\(\)\)\.min\(1\)/);
+    const segs = read("server/routers/segments.ts");
+    expect(segs).toContain("addContacts: workspaceProcedure");
+    expect(segs).toMatch(/addContacts: workspaceProcedure[\s\S]{0,200}contactIds: z\.array\(z\.number\(\)\)\.min\(1\)/);
   });
 });

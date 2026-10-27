@@ -181,8 +181,11 @@ describe("rows, cards and tab strips work from the keyboard (X5.2, X5.3)", () =>
 });
 
 describe("checkbox cells: the checkbox toggles, once (X5.3)", () => {
-  it("Leads and Contacts: the box has the change handler and a name; the cell only stops the row", () => {
-    for (const f of ["client/src/pages/usip/Leads.tsx", "client/src/pages/usip/Contacts.tsx"]) {
+  // Contacts.tsx was deleted on 2026-10-27 (phase 5 item 2, the dead page the
+  // audit names). It was orphaned already — nothing imported it — so the box
+  // it declared never reached a reader. Leads is the reachable one.
+  it("Leads: the box has the change handler and a name; the cell only stops the row", () => {
+    for (const f of ["client/src/pages/usip/Leads.tsx"]) {
       const s = read(f);
       expect(s, f).toMatch(/type="checkbox"[\s\S]{0,120}aria-label=\{`Select \$\{\w\.firstName\} \$\{\w\.lastName\}`\}[\s\S]{0,200}onChange=\{\(\) => toggleOne\(\w\.id\)\}/);
       expect(s, f).not.toMatch(/readOnly\s*className="rounded border-gray-300 cursor-pointer"/);
