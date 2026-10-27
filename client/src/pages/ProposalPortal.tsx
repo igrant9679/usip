@@ -33,7 +33,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { Streamdown } from "streamdown";
+import { Streamdown } from "@/components/usip/LazyStreamdown";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 
 /**

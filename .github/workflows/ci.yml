@@ -82,3 +82,11 @@ jobs:
       - name: Tests
         if: always()
         run: pnpm test
+
+      # Phase 4 gate (audit 2026-10-20): what a first visit downloads. The
+      # sign-in page loads the entry alone (budget 600 KB); a signed-in first
+      # visit to any page loads the entry plus that page's chunks (1.5 MB).
+      # It was one 10 MB script before pages were split by route.
+      - name: Build + bundle budget
+        if: always()
+        run: pnpm exec vite build && node scripts/bundleBudget.mjs dist/public
