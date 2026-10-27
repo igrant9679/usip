@@ -289,8 +289,8 @@ function LinkSettingsDialog({ link, onClose, onSaved }: { link: any; onClose: ()
         <div className="space-y-4">
           <TagInput label="Territory" hint="Where you sell. When set, it replaces each segment's places." value={territory} onChange={setTerritory} placeholder="Kentucky, Tennessee…" />
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-2"><Label>Min employees</Label><Input type="number" min={1} value={min} onChange={(e) => setMin(e.target.value)} /></div>
-            <div className="space-y-2"><Label>Max employees</Label><Input type="number" min={1} value={max} onChange={(e) => setMax(e.target.value)} /></div>
+            <div className="space-y-2"><Label>Min employees</Label><Input aria-label="Min employees" type="number" min={1} value={min} onChange={(e) => setMin(e.target.value)} /></div>
+            <div className="space-y-2"><Label>Max employees</Label><Input aria-label="Max employees" type="number" min={1} value={max} onChange={(e) => setMax(e.target.value)} /></div>
           </div>
           <TagInput label="Add titles" value={addTitles} onChange={setAddTitles} />
           <TagInput label="Remove titles" value={removeTitles} onChange={setRemoveTitles} />

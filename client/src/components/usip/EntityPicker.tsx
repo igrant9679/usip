@@ -232,7 +232,7 @@ export function EntityPicker({
         {/* Search */}
         <div className="flex items-center gap-2 border-b px-3 py-2">
           <Search className="h-4 w-4 text-muted-foreground shrink-0" />
-          <Input
+          <Input aria-label={`Search ${config.label.toLowerCase()}`}
             placeholder={`Search ${config.label.toLowerCase()}…`}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -246,7 +246,7 @@ export function EntityPicker({
             {selectedItems.map((item) => (
               <Badge key={item.id} variant="secondary" className="gap-1 pr-1 text-xs">
                 {item.label}
-                <button
+                <button aria-label={`Remove ${item.label}`}
                   onClick={(e) => { e.stopPropagation(); remove(item.id); }}
                   className="ml-0.5 rounded-full hover:bg-muted"
                 >
@@ -276,7 +276,7 @@ export function EntityPicker({
                     }`}
                   >
                     {mode === "multi" ? (
-                      <Checkbox checked={selected} className="shrink-0" />
+                      <Checkbox aria-label={`Select ${item.label}`} checked={selected} className="shrink-0" />
                     ) : (
                       <span className="w-4 shrink-0">
                         {selected && <Check className="h-4 w-4 text-primary" />}

@@ -115,8 +115,8 @@ export default function LeadRouting() {
                     <td className="px-3 py-2">
                       <div className="flex gap-1 items-center">
                         <span className="cursor-grab text-muted-foreground select-none" title="Drag to reorder">⋮⋮</span>
-                        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => move(i, -1)} disabled={i === 0}><ArrowUp className="size-3" /></Button>
-                        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => move(i, +1)} disabled={i === rules.length - 1}><ArrowDown className="size-3" /></Button>
+                        <Button aria-label="Move rule up" size="icon" variant="ghost" className="h-6 w-6" onClick={() => move(i, -1)} disabled={i === 0}><ArrowUp className="size-3" /></Button>
+                        <Button aria-label="Move rule down" size="icon" variant="ghost" className="h-6 w-6" onClick={() => move(i, +1)} disabled={i === rules.length - 1}><ArrowDown className="size-3" /></Button>
                       </div>
                     </td>
                     <td className="px-3 py-2 font-medium">{r.name}<div className="text-xs text-muted-foreground">priority {r.priority}</div></td>
@@ -131,7 +131,7 @@ export default function LeadRouting() {
                         strategy: r.strategy as any,
                         targetUserIds: (r.targetUserIds as number[] | null) ?? [],
                       })}><Pencil className="size-3.5" /> Edit</Button>
-                      <Button size="sm" variant="ghost" className="text-rose-600" onClick={() => { confirmAction({ title: `Delete rule "${r.name}"?`, description: "This routing rule will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { remove.mutate({ id: r.id }); }); }}><Trash2 className="size-3.5" /></Button>
+                      <Button aria-label={`Delete rule ${r.name}`} size="sm" variant="ghost" className="text-rose-600" onClick={() => { confirmAction({ title: `Delete rule "${r.name}"?`, description: "This routing rule will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { remove.mutate({ id: r.id }); }); }}><Trash2 className="size-3.5" /></Button>
                     </td>
                   </tr>
                 ))}
@@ -160,12 +160,12 @@ function RuleEditor({ rule, members, onClose, onSaved }: { rule: Rule | null; me
 
         <div className="space-y-3">
           <div className="grid grid-cols-3 gap-3">
-            <div className="col-span-2 space-y-1"><Label>Name</Label><Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></div>
-            <div className="space-y-1"><Label>Priority</Label><Input type="number" value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: Number(e.target.value) })} /></div>
+            <div className="col-span-2 space-y-1"><Label>Name</Label><Input aria-label="Name" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></div>
+            <div className="space-y-1"><Label>Priority</Label><Input aria-label="Priority" type="number" value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: Number(e.target.value) })} /></div>
           </div>
 
           <div className="space-y-1"><Label>Strategy</Label>
-            <select className="w-full h-9 border rounded bg-background px-2 text-sm" value={draft.strategy} onChange={(e) => setDraft({ ...draft, strategy: e.target.value as any })}>
+            <select aria-label="Strategy" className="w-full h-9 border rounded bg-background px-2 text-sm" value={draft.strategy} onChange={(e) => setDraft({ ...draft, strategy: e.target.value as any })}>
               <option value="round_robin">Round Robin (cycle through targets)</option>
               <option value="direct">Direct (always assign to first target)</option>
               <option value="geography">Geography (first match by geo conditions, fallback to first target)</option>
@@ -200,14 +200,14 @@ function RuleEditor({ rule, members, onClose, onSaved }: { rule: Rule | null; me
             {conds.length === 0 && <div className="text-xs text-muted-foreground">No conditions = matches every lead. Use priority to pick a fallback rule.</div>}
             {conds.map((c, i) => (
               <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                <select className="col-span-4 h-8 border rounded bg-background px-2 text-sm" value={c.field} onChange={(e) => updateCond(i, { ...c, field: e.target.value })}>
+                <select aria-label="Field" className="col-span-4 h-8 border rounded bg-background px-2 text-sm" value={c.field} onChange={(e) => updateCond(i, { ...c, field: e.target.value })}>
                   {FIELDS.map((f) => <option key={f.v} value={f.v}>{f.l}</option>)}
                 </select>
-                <select className="col-span-3 h-8 border rounded bg-background px-2 text-sm" value={c.op} onChange={(e) => updateCond(i, { ...c, op: e.target.value })}>
+                <select aria-label="Operator" className="col-span-3 h-8 border rounded bg-background px-2 text-sm" value={c.op} onChange={(e) => updateCond(i, { ...c, op: e.target.value })}>
                   {OPS.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
                 </select>
-                <Input className="col-span-4 h-8" value={String(c.value ?? "")} onChange={(e) => updateCond(i, { ...c, value: c.op === "gt" || c.op === "gte" || c.op === "lt" || c.op === "lte" ? Number(e.target.value) : e.target.value })} />
-                <Button size="icon" variant="ghost" className="h-7 w-7 col-span-1 text-rose-600" onClick={() => setDraft({ ...draft, conditions: { all: conds.filter((_, j) => j !== i) } })}><Trash2 className="size-3.5" /></Button>
+                <Input aria-label="Value" className="col-span-4 h-8" value={String(c.value ?? "")} onChange={(e) => updateCond(i, { ...c, value: c.op === "gt" || c.op === "gte" || c.op === "lt" || c.op === "lte" ? Number(e.target.value) : e.target.value })} />
+                <Button aria-label="Remove condition" size="icon" variant="ghost" className="h-7 w-7 col-span-1 text-rose-600" onClick={() => setDraft({ ...draft, conditions: { all: conds.filter((_, j) => j !== i) } })}><Trash2 className="size-3.5" /></Button>
               </div>
             ))}
           </div>

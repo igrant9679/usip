@@ -45,10 +45,10 @@ function QueueCard({
           {icon}
         </span>
         <span className="text-sm font-semibold text-foreground">{title}</span>
-        <span className="ml-auto text-lg font-bold tabular-nums" style={{ color: tint }}>{count}</span>
+        <span className="ml-auto text-lg font-bold tabular-nums" style={{ color: `color-mix(in srgb, ${tint} 55%, var(--foreground))` }}>{count}</span>
       </div>
       {children}
-      <Link href={href} className="inline-flex items-center gap-1 text-xs font-medium hover:underline" style={{ color: tint }}>
+      <Link href={href} className="inline-flex items-center gap-1 text-xs font-medium hover:underline" style={{ color: `color-mix(in srgb, ${tint} 55%, var(--foreground))` }}>
         {cta} <ChevronRight className="size-3" />
       </Link>
     </div>
@@ -91,7 +91,7 @@ export function AttentionPanel() {
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 className="text-sm font-semibold text-foreground">
           Needs your attention
-          <span className="ml-2 inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 text-xs font-bold tabular-nums">
+          <span className="ml-2 inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full bg-amber-500/15 text-amber-800 dark:text-amber-300 text-xs font-bold tabular-nums">
             {s.totalNeedingYou}
           </span>
         </h2>

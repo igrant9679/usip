@@ -86,7 +86,7 @@ export function ReoonVerifierCard({
 
       <div className="space-y-1.5">
         <Label>Reoon API key</Label>
-        <Input
+        <Input aria-label="Reoon API key"
           type="password"
           value={key}
           onChange={(e) => setKey(e.target.value)}

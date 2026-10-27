@@ -55,7 +55,7 @@ export default function Audit() {
         <div className="flex flex-wrap items-center gap-2">
           {/* Entity type filter */}
           <label className="text-xs text-muted-foreground">Entity:</label>
-          <select
+          <select aria-label="Entity"
             className="text-sm border rounded h-9 px-2 bg-background"
             value={entityType}
             onChange={(e) => setEntityType(e.target.value)}
@@ -71,7 +71,7 @@ export default function Audit() {
             <User className="size-3 inline-block mr-1 align-middle" />
             Member:
           </label>
-          <select
+          <select aria-label="Member"
             className="text-sm border rounded h-9 px-2 bg-background"
             value={actorUserId ?? ""}
             onChange={(e) => setActorUserId(e.target.value ? Number(e.target.value) : undefined)}

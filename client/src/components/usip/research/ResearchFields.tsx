@@ -7,7 +7,7 @@
  * (shared/researchShape.ts) trims, deduplicates and drops personal data, so
  * these stay simple and typing is never fought by a cleaner mid-keystroke.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { Link } from "wouter";
 import { SubNav } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -88,6 +88,7 @@ export function TagInput({ label, hint, value, onChange, placeholder, disabled }
   label: string; hint?: string; value: string[]; onChange: (v: string[]) => void; placeholder?: string; disabled?: boolean;
 }) {
   const [text, setText] = useState("");
+  const id = useId();
   const add = () => {
     const parts = text.split(",").map((t) => t.trim()).filter(Boolean);
     const lower = new Set(value.map((v) => v.toLowerCase()));
@@ -98,7 +99,7 @@ export function TagInput({ label, hint, value, onChange, placeholder, disabled }
   };
   return (
     <div className="space-y-2">
-      <Label>{label}</Label>
+      <Label htmlFor={id}>{label}</Label>
       {hint && <p className="text-xs text-muted-foreground -mt-1">{hint}</p>}
       {value.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
@@ -115,6 +116,7 @@ export function TagInput({ label, hint, value, onChange, placeholder, disabled }
       {!disabled && (
         <div className="flex gap-2">
           <Input
+            id={id}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(); } }}
@@ -136,7 +138,7 @@ export function LinesInput({ label, hint, value, onChange, placeholder, rows = 4
     <div className="space-y-2">
       <Label>{label}</Label>
       {hint && <p className="text-xs text-muted-foreground -mt-1">{hint}</p>}
-      <Textarea
+      <Textarea aria-label={label}
         value={value.join("\n")}
         onChange={(e) => onChange(e.target.value.split("\n"))}
         placeholder={placeholder}
@@ -168,9 +170,9 @@ export function RowsEditor<T extends Record<string, string>>({ label, hint, fiel
                 <div key={f.key} className={f.wide || f.multiline ? "sm:col-span-2 space-y-1" : "space-y-1"}>
                   <span className="text-[11px] text-muted-foreground">{f.label}</span>
                   {f.multiline ? (
-                    <Textarea rows={2} value={row[f.key] ?? ""} placeholder={f.placeholder} disabled={disabled} onChange={(e) => set(i, f.key, e.target.value)} />
+                    <Textarea aria-label={`${f.label}, ${label} ${i + 1}`} rows={2} value={row[f.key] ?? ""} placeholder={f.placeholder} disabled={disabled} onChange={(e) => set(i, f.key, e.target.value)} />
                   ) : (
-                    <Input value={row[f.key] ?? ""} placeholder={f.placeholder} disabled={disabled} onChange={(e) => set(i, f.key, e.target.value)} />
+                    <Input aria-label={`${f.label}, ${label} ${i + 1}`} value={row[f.key] ?? ""} placeholder={f.placeholder} disabled={disabled} onChange={(e) => set(i, f.key, e.target.value)} />
                   )}
                 </div>
               ))}

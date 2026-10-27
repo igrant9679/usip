@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CheckCircle2, Loader2, CalendarCheck } from "lucide-react";
 import ChatLauncher from "@/components/ChatLauncher";
+import { usePageTitle } from "@/lib/usePageTitle";
 
 type Field = { key: string; label: string; required?: boolean };
 
@@ -28,6 +29,7 @@ export default function LandingPage() {
   const [done, setDone] = useState(false);
 
   const accent = page.data?.themeColor || "#14B89A";
+  usePageTitle(page.data?.headline);
   const fields: Field[] = useMemo(() => {
     const f = page.data?.formFields;
     return Array.isArray(f) && f.length ? (f as Field[]) : [];

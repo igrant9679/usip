@@ -149,7 +149,7 @@ export function CustomFieldsPanel({
                       Yes
                     </label>
                   ) : f.fieldType === "select" ? (
-                    <select
+                    <select aria-label={f.label}
                       value={String(v ?? "")}
                       onChange={(e) => set(f.fieldKey, e.target.value)}
                       className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]"
@@ -184,7 +184,7 @@ export function CustomFieldsPanel({
                       )}
                     </div>
                   ) : (
-                    <Input
+                    <Input aria-label={f.label}
                       type={
                         f.fieldType === "number" ? "number"
                         : f.fieldType === "date" ? "date"

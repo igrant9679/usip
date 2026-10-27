@@ -293,14 +293,14 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
                     ))}
                   </div>
                 )}
-                <Textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} className="text-sm" placeholder="Or type a custom reason…" />
+                <Textarea aria-label="Reason (optional — recorded on each prospect)" value={reason} onChange={(e) => setReason(e.target.value)} rows={3} className="text-sm" placeholder="Or type a custom reason…" />
               </div>
             )}
             {pending?.params === "list" && (
               <>
                 <div className="space-y-1.5">
                   <Label className="text-xs">Existing list</Label>
-                  <select className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+                  <select aria-label="Existing list" className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
                     value={listId ?? ""} onChange={(e) => { setListId(e.target.value ? Number(e.target.value) : null); if (e.target.value) setNewListName(""); }}>
                     <option value="">— create a new list —</option>
                     {((lists.data ?? []) as Array<{ id: number; name: string; entityType?: string }>).filter((l) => !l.entityType || l.entityType === "people").map((l) => (
@@ -311,7 +311,7 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
                 {!listId && (
                   <div className="space-y-1.5">
                     <Label className="text-xs">New list name</Label>
-                    <Input value={newListName} onChange={(e) => setNewListName(e.target.value)} placeholder="e.g. CF — higher-ed CFOs, warm" className="h-8 text-sm" />
+                    <Input aria-label="New list name" value={newListName} onChange={(e) => setNewListName(e.target.value)} placeholder="e.g. CF — higher-ed CFOs, warm" className="h-8 text-sm" />
                   </div>
                 )}
                 <p className="text-[11px] text-muted-foreground">Prospects not yet on People are linked there first, so the list is visible site-wide.</p>
@@ -321,24 +321,24 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
               <>
                 <div className="space-y-1.5">
                   <Label className="text-xs">Title</Label>
-                  <Input value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} className="h-8 text-sm" />
+                  <Input aria-label="Title" value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} className="h-8 text-sm" />
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   <div className="space-y-1.5">
                     <Label className="text-xs">Type</Label>
-                    <select className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm" value={taskType} onChange={(e) => setTaskType(e.target.value as typeof taskType)}>
+                    <select aria-label="Type" className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm" value={taskType} onChange={(e) => setTaskType(e.target.value as typeof taskType)}>
                       {(["follow_up", "call", "manual_email", "social_touch", "meeting_prep", "todo"] as const).map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
                     </select>
                   </div>
                   <div className="space-y-1.5">
                     <Label className="text-xs">Priority</Label>
-                    <select className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm" value={taskPriority} onChange={(e) => setTaskPriority(e.target.value as typeof taskPriority)}>
+                    <select aria-label="Priority" className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm" value={taskPriority} onChange={(e) => setTaskPriority(e.target.value as typeof taskPriority)}>
                       {(["low", "normal", "high", "urgent"] as const).map((t) => <option key={t} value={t}>{t}</option>)}
                     </select>
                   </div>
                   <div className="space-y-1.5">
                     <Label className="text-xs">Due in (days)</Label>
-                    <Input type="number" min={0} max={60} value={dueInDays} onChange={(e) => setDueInDays(Math.max(0, Math.min(60, Number(e.target.value) || 0)))} className="h-8 text-sm" />
+                    <Input aria-label="Due in (days)" type="number" min={0} max={60} value={dueInDays} onChange={(e) => setDueInDays(Math.max(0, Math.min(60, Number(e.target.value) || 0)))} className="h-8 text-sm" />
                   </div>
                 </div>
                 <p className="text-[11px] text-muted-foreground">One task per person, on their People record — shows in Tasks and on the person.</p>
@@ -348,7 +348,7 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
               <>
                 <div className="space-y-1.5">
                   <Label className="text-xs">Why</Label>
-                  <select className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm" value={suppressionReason} onChange={(e) => setSuppressionReason(e.target.value as typeof suppressionReason)}>
+                  <select aria-label="Why" className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm" value={suppressionReason} onChange={(e) => setSuppressionReason(e.target.value as typeof suppressionReason)}>
                     <option value="do_not_contact">Do not contact</option>
                     <option value="unsubscribe">Unsubscribed</option>
                     <option value="competitor">Competitor</option>
@@ -358,7 +358,7 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs">Note (optional)</Label>
-                  <Input value={reason} onChange={(e) => setReason(e.target.value)} className="h-8 text-sm" />
+                  <Input aria-label="Note (optional)" value={reason} onChange={(e) => setReason(e.target.value)} className="h-8 text-sm" />
                 </div>
                 <p className="text-[11px] text-amber-600">Adds each email to the ARE suppression list AND the site-wide email suppressions, and cancels anything scheduled for them in this campaign. No sender in Velocity will email them again.</p>
               </>
@@ -395,13 +395,13 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
                   <div className="grid grid-cols-2 gap-2">
                     <div className="space-y-1.5">
                       <Label className="text-xs">Start delay (days before step 1)</Label>
-                      <Input type="number" min={0} max={60} value={tlStart}
+                      <Input aria-label="Start delay (days before step 1)" type="number" min={0} max={60} value={tlStart}
                         onChange={(e) => setTlStart(Math.max(0, Math.min(60, Math.round(Number(e.target.value) || 0))))}
                         className="h-8 text-sm" />
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-xs">Days between steps</Label>
-                      <Input type="number" min={1} max={30} value={tlGap}
+                      <Input aria-label="Days between steps" type="number" min={1} max={30} value={tlGap}
                         onChange={(e) => setTlGap(Math.max(1, Math.min(30, Math.round(Number(e.target.value) || 1))))}
                         className="h-8 text-sm" />
                     </div>

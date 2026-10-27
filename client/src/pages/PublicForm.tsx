@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CheckCircle2, Loader2 } from "lucide-react";
+import { usePageTitle } from "@/lib/usePageTitle";
 
 type Field = { key: string; label: string; required?: boolean };
 
@@ -22,6 +23,7 @@ export default function PublicForm() {
   const publicId = params?.publicId ?? "";
 
   const form = trpc.forms.getByPublicId.useQuery({ publicId }, { enabled: !!publicId, retry: false });
+  usePageTitle(form.data?.title);
   const submit = trpc.forms.submit.useMutation();
   const [values, setValues] = useState<Record<string, string>>({});
   const [done, setDone] = useState(false);

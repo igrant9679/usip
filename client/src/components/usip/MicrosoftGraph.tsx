@@ -152,7 +152,7 @@ function OneDrivePicker({
         </DialogHeader>
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           {stack.length > 1 && (
-            <button type="button" className="p-1 rounded hover:bg-muted"
+            <button aria-label="Back" type="button" className="p-1 rounded hover:bg-muted"
               onClick={() => setStack((s) => s.slice(0, -1))}>
               <ChevronLeft className="size-3.5" />
             </button>
@@ -291,12 +291,12 @@ export function RecordFiles({
               {f.name}
             </button>
             {f.webUrl && (
-              <a href={f.webUrl} target="_blank" rel="noopener noreferrer" className="p-1 rounded hover:bg-muted opacity-0 group-hover:opacity-100">
+              <a href={f.webUrl} target="_blank" rel="noopener noreferrer" className="p-1 rounded hover:bg-muted opacity-0 group-hover:opacity-100 group-focus-within:opacity-100">
                 <ExternalLink className="size-3 text-muted-foreground" />
               </a>
             )}
             <button type="button" title="Unlink (keeps the file in OneDrive)"
-              className="p-1 rounded hover:bg-muted opacity-0 group-hover:opacity-100"
+              className="p-1 rounded hover:bg-muted opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
               onClick={() => remove.mutate({ id: f.id })}>
               <X className="size-3 text-muted-foreground" />
             </button>

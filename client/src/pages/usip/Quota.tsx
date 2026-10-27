@@ -187,15 +187,15 @@ export default function Quota() {
               <div className="grid grid-cols-3 gap-3">
                 <div className="space-y-1.5">
                   <Label>Revenue ($)</Label>
-                  <Input type="number" min="0" step="0.01" inputMode="decimal" value={form.revenueTarget} onChange={(e) => setForm((f) => ({ ...f, revenueTarget: e.target.value }))} placeholder="0" />
+                  <Input aria-label="Revenue ($)" type="number" min="0" step="0.01" inputMode="decimal" value={form.revenueTarget} onChange={(e) => setForm((f) => ({ ...f, revenueTarget: e.target.value }))} placeholder="0" />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Deals</Label>
-                  <Input type="number" min="0" value={form.dealsTarget} onChange={(e) => setForm((f) => ({ ...f, dealsTarget: e.target.value }))} placeholder="0" />
+                  <Input aria-label="Deals" type="number" min="0" value={form.dealsTarget} onChange={(e) => setForm((f) => ({ ...f, dealsTarget: e.target.value }))} placeholder="0" />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Activities</Label>
-                  <Input type="number" min="0" value={form.activitiesTarget} onChange={(e) => setForm((f) => ({ ...f, activitiesTarget: e.target.value }))} placeholder="0" />
+                  <Input aria-label="Activities" type="number" min="0" value={form.activitiesTarget} onChange={(e) => setForm((f) => ({ ...f, activitiesTarget: e.target.value }))} placeholder="0" />
                 </div>
               </div>
             </div>
@@ -221,8 +221,8 @@ function QuotaCard({ target, name, workspaceId, period, onEdit, onRemove }: any)
         <div className="flex items-center justify-between">
           <CardTitle className="text-base truncate">{name}</CardTitle>
           <div className="flex gap-1 shrink-0">
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onEdit}><Pencil className="h-3.5 w-3.5" /></Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:text-red-600" onClick={onRemove}><Trash2 className="h-3.5 w-3.5" /></Button>
+            <Button aria-label="Edit quota" variant="ghost" size="icon" className="h-7 w-7" onClick={onEdit}><Pencil className="h-3.5 w-3.5" /></Button>
+            <Button aria-label="Delete quota" variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:text-red-600" onClick={onRemove}><Trash2 className="h-3.5 w-3.5" /></Button>
           </div>
         </div>
         <div className="flex items-center gap-2">

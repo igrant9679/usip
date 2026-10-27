@@ -668,7 +668,7 @@ export default function ConnectedAccounts() {
                             </Button>
                             <AlertDialog>
                               <AlertDialogTrigger asChild>
-                                <Button variant="outline" size="sm" className="text-red-500 hover:text-red-600 hover:border-red-300">
+                                <Button aria-label="Disconnect account" variant="outline" size="sm" className="text-red-500 hover:text-red-600 hover:border-red-300">
                                   <Trash2 className="h-3 w-3" />
                                 </Button>
                               </AlertDialogTrigger>

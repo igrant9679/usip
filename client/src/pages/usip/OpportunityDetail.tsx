@@ -109,7 +109,7 @@ export default function OpportunityDetail() {
           <div className="pt-3 border-t mt-3 space-y-1">
             <div className="text-xs font-medium">{isClosedWon ? "Win reason" : "Loss reason"}</div>
             <div className="flex gap-2">
-              <Input value={reason} placeholder={isClosedWon ? "Why did we win?" : "Why did we lose?"}
+              <Input aria-label={isClosedWon ? "Win reason" : "Loss reason"} value={reason} placeholder={isClosedWon ? "Why did we win?" : "Why did we lose?"}
                 onChange={(e) => setReason(e.target.value)} />
               <Button size="sm" disabled={update.isPending} className="gap-1.5"
                 onClick={() => update.mutate({ id: o.id, patch: isClosedWon ? { winReason: reason } : { lostReason: reason } })}>

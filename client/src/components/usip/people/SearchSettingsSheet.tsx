@@ -43,6 +43,7 @@ import {
   COMPANY_FIELD_GROUPS,
   type ColumnKey,
 } from "./peopleShared";
+import { tablistProps, tabProps } from "@/lib/tabs";
 
 export type AppliedFilter = { id: string; group: string; label: string };
 
@@ -133,7 +134,7 @@ function MainView({
             <label className="text-[13px] font-medium">
               Saved search name <span className="text-rose-500">*</span>
             </label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Choose a search name" className="h-9" />
+            <Input aria-label="Saved search name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Choose a search name" className="h-9" />
           </div>
         )}
 
@@ -302,12 +303,12 @@ function FieldsView({
               <div className="p-2 border-b">
                 <div className="flex items-center gap-2 px-2 h-8 rounded-md border bg-background">
                   <Search className="size-3.5 text-muted-foreground shrink-0" />
-                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" className="flex-1 bg-transparent outline-none text-[13px] min-w-0" />
+                  <input aria-label="Search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search" className="flex-1 bg-transparent outline-none text-[13px] min-w-0" />
                 </div>
               </div>
-              <div className="flex items-center gap-4 px-3 pt-2 border-b text-[13px]">
+              <div {...tablistProps("Record type")} className="flex items-center gap-4 px-3 pt-2 border-b text-[13px]">
                 {(["person", "company"] as const).map((t) => (
-                  <button
+                  <button {...tabProps(tab === t)}
                     key={t}
                     type="button"
                     onClick={() => setTab(t)}

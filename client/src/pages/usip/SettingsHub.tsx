@@ -87,6 +87,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { isAdminRole } from "@shared/roleRank";
+import { tablistProps, tabProps } from "@/lib/tabs";
 
 /* ───────────────────────── section registry ───────────────────────────── */
 
@@ -198,7 +199,7 @@ export default function SettingsHub() {
         <div className="shrink-0 px-3 pb-2">
           <div className="flex h-8 items-center gap-2 rounded-md border border-border bg-background px-2">
             <Search className="size-3.5 shrink-0 text-muted-foreground" />
-            <input
+            <input aria-label="Search settings"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search settings"
@@ -404,9 +405,9 @@ function ProfileSection() {
       </div>
 
       {/* tab strip */}
-      <div className="shrink-0 px-6 mt-2 border-b border-border flex items-center gap-5 overflow-x-auto">
+      <div {...tablistProps("Profile sections")} className="shrink-0 px-6 mt-2 border-b border-border flex items-center gap-5 overflow-x-auto">
         {PROFILE_TABS.map((t) => (
-          <button
+          <button {...tabProps(tab === t.id)}
             key={t.id}
             type="button"
             onClick={() => setTab(t.id)}
@@ -497,21 +498,21 @@ function GeneralTab(props: {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-1.5">
             <Label>First name</Label>
-            <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="First name" />
+            <Input aria-label="First name" value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="First name" />
           </div>
           <div className="space-y-1.5">
             <Label>Last name</Label>
-            <Input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Last name" />
+            <Input aria-label="Last name" value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Last name" />
           </div>
         </div>
         <div className="space-y-1.5">
           <Label>Title</Label>
-          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" />
+          <Input aria-label="Title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" />
         </div>
         <div className="space-y-1.5">
           <Label>Login email</Label>
           <div className="flex items-center gap-2">
-            <Input value={me?.email ?? ""} disabled className="bg-muted/50" />
+            <Input aria-label="Login email" value={me?.email ?? ""} disabled className="bg-muted/50" />
             <Button variant="outline" size="sm" className="shrink-0 gap-1.5" onClick={onEditEmail}>
               <Pencil className="size-3.5" /> Edit
             </Button>
@@ -520,7 +521,7 @@ function GeneralTab(props: {
         <div className="space-y-1.5">
           <Label>Password</Label>
           <div className="flex items-center gap-2">
-            <Input value={me?.hasPassword ? "••••••••••" : ""} placeholder="No password set" disabled className="bg-muted/50" />
+            <Input aria-label="Password" value={me?.hasPassword ? "••••••••••" : ""} placeholder="No password set" disabled className="bg-muted/50" />
             <Button variant="outline" size="sm" className="shrink-0 gap-1.5" onClick={onEditPassword}>
               <Pencil className="size-3.5" /> Edit
             </Button>
@@ -552,7 +553,7 @@ function GeneralTab(props: {
       <SettingsCard title="Restrictions">
         <div className="space-y-1.5 max-w-sm">
           <Label>Credit Limit</Label>
-          <Input
+          <Input aria-label="Credit Limit"
             type="number"
             min={0}
             value={quotaStr}
@@ -730,7 +731,7 @@ function TotpDisconnectDialog({ open, onClose, hasPassword }: { open: boolean; o
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label>Authenticator code</Label>
-            <Input
+            <Input aria-label="Authenticator code"
               inputMode="numeric"
               placeholder="6-digit code"
               value={code}
@@ -741,7 +742,7 @@ function TotpDisconnectDialog({ open, onClose, hasPassword }: { open: boolean; o
           {hasPassword && (
             <div className="space-y-1.5">
               <Label>… or your password</Label>
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+              <Input aria-label="… or your password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
             </div>
           )}
         </div>
@@ -860,7 +861,7 @@ function EmailSettingsTab({
             />
             Append a sequences opt-out message after my signature
           </label>
-          <textarea
+          <textarea aria-label="Append a sequences opt-out message after my signature"
             rows={4}
             disabled={!isAdmin || !optOut.enabled}
             value={optOut.message}
@@ -920,16 +921,16 @@ function ChangePasswordDialog({ open, onClose, hasPassword }: { open: boolean; o
           {hasPassword && (
             <div className="space-y-1.5">
               <Label>Current password</Label>
-              <Input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" />
+              <Input aria-label="Current password" type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" />
             </div>
           )}
           <div className="space-y-1.5">
             <Label>New password</Label>
-            <Input type="password" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" />
+            <Input aria-label="New password" type="password" value={next} onChange={(e) => setNext(e.target.value)} autoComplete="new-password" />
           </div>
           <div className="space-y-1.5">
             <Label>Confirm new password</Label>
-            <Input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" />
+            <Input aria-label="Confirm new password" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" />
             {confirm && next !== confirm && <p className="text-xs text-rose-600">Passwords don't match.</p>}
           </div>
         </div>
@@ -980,11 +981,11 @@ function ChangeEmailDialog({ open, onClose, hasPassword, currentEmail }: { open:
             <div className="space-y-3">
               <div className="space-y-1.5">
                 <Label>New email</Label>
-                <Input type="email" value={next} onChange={(e) => setNext(e.target.value)} placeholder="you@company.com" autoComplete="email" />
+                <Input aria-label="New email" type="email" value={next} onChange={(e) => setNext(e.target.value)} placeholder="you@company.com" autoComplete="email" />
               </div>
               <div className="space-y-1.5">
                 <Label>Current password</Label>
-                <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+                <Input aria-label="Current password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-1">

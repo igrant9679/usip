@@ -120,7 +120,7 @@ export function WarmySenderSourceCard({ variant = "standalone" }: { variant?: "s
                 : " — campaigns and searches skip this source; the key and ledger history are kept."}
             </span>
           </div>
-          <Switch checked={enabled} disabled={!isAdmin || setEnabled.isPending}
+          <Switch aria-label="Use WarmySender" checked={enabled} disabled={!isAdmin || setEnabled.isPending}
             onCheckedChange={(v) => setEnabled.mutate({ slug: "warmysender", enabled: v })} />
         </div>
       )}
@@ -134,7 +134,7 @@ export function WarmySenderSourceCard({ variant = "standalone" }: { variant?: "s
 
       <div className="space-y-1.5">
         <Label>WarmySender API key</Label>
-        <Input type="password" value={key} onChange={(e) => setKey(e.target.value)} disabled={!isAdmin} autoComplete="off"
+        <Input aria-label="WarmySender API key" type="password" value={key} onChange={(e) => setKey(e.target.value)} disabled={!isAdmin} autoComplete="off"
           placeholder={configured ? "Enter a new key to replace the saved one" : "Paste a ws_… key with leads:read, leads:write and verification:read"} />
         <p className="text-[12px] text-muted-foreground">Create it in WarmySender → Settings → API Keys. Grant <code>leads:read</code>, <code>leads:write</code> and <code>verification:read</code>; other scopes are never used.</p>
       </div>
@@ -142,17 +142,17 @@ export function WarmySenderSourceCard({ variant = "standalone" }: { variant?: "s
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="space-y-1.5">
           <Label>Billing anniversary day</Label>
-          <Input type="number" min={1} max={28} value={anniv} onChange={(e) => setAnniv(e.target.value)} disabled={!isAdmin} placeholder="1–28" />
+          <Input aria-label="Billing anniversary day" type="number" min={1} max={28} value={anniv} onChange={(e) => setAnniv(e.target.value)} disabled={!isAdmin} placeholder="1–28" />
           <p className="text-[11px] text-muted-foreground">The plan's lead allowance resets on this day each month.</p>
         </div>
         <div className="space-y-1.5">
           <Label>Monthly lead allowance</Label>
-          <Input type="number" min={0} value={monthly} onChange={(e) => setMonthly(e.target.value)} disabled={!isAdmin} placeholder={config.tier ? "from plan" : "e.g. 2000"} />
+          <Input aria-label="Monthly lead allowance" type="number" min={0} value={monthly} onChange={(e) => setMonthly(e.target.value)} disabled={!isAdmin} placeholder={config.tier ? "from plan" : "e.g. 2000"} />
           <p className="text-[11px] text-muted-foreground">Leave blank to use the plan tier's default. Daily pace is a thirtieth of this.</p>
         </div>
         <div className="space-y-1.5">
           <Label>Purchased lead credits</Label>
-          <Input type="number" min={0} value={credits} onChange={(e) => setCredits(e.target.value)} disabled={!isAdmin} placeholder="0" />
+          <Input aria-label="Purchased lead credits" type="number" min={0} value={credits} onChange={(e) => setCredits(e.target.value)} disabled={!isAdmin} placeholder="0" />
           <p className="text-[11px] text-muted-foreground">Top-up credits never expire and skip the daily pace; they spend after plan leads.</p>
         </div>
       </div>

@@ -14,8 +14,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Eye, EyeOff, Loader2, KeyRound } from "lucide-react";
+import { usePageTitle } from "@/lib/usePageTitle";
 
 export default function ResetPassword() {
+  usePageTitle("Choose a new password");
   const token = new URLSearchParams(window.location.search).get("token") ?? "";
 
   const [password, setPassword] = useState("");
@@ -62,8 +64,8 @@ export default function ResetPassword() {
       <div className="w-full max-w-sm space-y-6">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <svg className="size-6 text-[#60A5FA] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z" /></svg>
-            <span className="text-3xl font-bold tracking-tight text-white">Velocity</span>
+            <svg aria-hidden="true" className="size-6 text-[#60A5FA] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z" /></svg>
+            <h1 className="text-3xl font-bold tracking-tight text-white">Velocity</h1>
           </div>
           <p className="text-[#A5B4FC] text-sm tracking-wide">Choose a new password</p>
         </div>
@@ -100,11 +102,10 @@ export default function ResetPassword() {
                   disabled={loading}
                   autoFocus
                 />
-                <button
+                <button aria-label={show ? "Hide password" : "Show password"}
                   type="button"
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/70"
                   onClick={() => setShow((v) => !v)}
-                  tabIndex={-1}
                 >
                   {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>

@@ -366,7 +366,7 @@ export default function LinkedInEnrichmentImport() {
         {!batchId && (
           <div className="rounded-lg border bg-card p-4 space-y-3">
             <div className="text-[13px] font-semibold">Add LinkedIn URLs</div>
-            <Textarea
+            <Textarea aria-label="LinkedIn URLs, one per line"
               value={paste}
               onChange={(e) => setPaste(e.target.value)}
               placeholder={"One LinkedIn profile URL per line\nhttps://www.linkedin.com/in/jane-smith\nhttps://www.linkedin.com/in/john-doe, John Doe, Acme"}

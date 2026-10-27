@@ -359,7 +359,7 @@ function OutlookMobileFrame({ subject, bodyHtml, sender, persona }: {
           <button type="button" className="flex-1 flex items-center justify-center gap-1.5 text-[12px] font-medium text-white bg-[#0f6cbd] rounded-full py-2">
             <ReplyAll className="size-3.5" /> Reply all
           </button>
-          <button type="button" className="flex items-center justify-center text-[#0f6cbd] border border-[#e1dfdd] rounded-full px-3">
+          <button aria-label="Forward" type="button" className="flex items-center justify-center text-[#0f6cbd] border border-[#e1dfdd] rounded-full px-3">
             <Forward className="size-3.5" />
           </button>
         </div>
@@ -500,7 +500,7 @@ export function EmailClientPreview({ open, onClose, steps, sequenceName }: {
                 ] as const).map(([label, key]) => (
                   <div key={key} className="space-y-1">
                     <Label className="text-[10px] text-muted-foreground">{label}</Label>
-                    <Input
+                    <Input aria-label={label}
                       value={persona[key]}
                       onChange={(e) => setP({ [key]: e.target.value })}
                       className="h-7 text-xs"

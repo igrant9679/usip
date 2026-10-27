@@ -137,7 +137,7 @@ export function MailboxesSection() {
                 <div className="flex-1" />
                 <div className="flex h-9 w-56 items-center gap-2 rounded-md border border-border bg-background px-2.5">
                   <Search className="size-4 shrink-0 text-muted-foreground" />
-                  <input
+                  <input aria-label="Search mailboxes"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="Search"

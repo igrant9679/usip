@@ -169,7 +169,7 @@ export default function CustomFields() {
                     </div>
                   </div>
                   <div className="flex gap-1 shrink-0">
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(def)}><Pencil className="h-3.5 w-3.5" /></Button>
+                    <Button aria-label="Edit field" variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(def)}><Pencil className="h-3.5 w-3.5" /></Button>
                     <ConfirmButton variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:text-red-600" ariaLabel="Delete field"
                       title={`Delete field "${def.label}"?`}
                       description="Deleting a custom field definition removes its stored values from every record of this type. This cannot be undone."
@@ -204,11 +204,11 @@ export default function CustomFields() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label>Label</Label>
-                  <Input value={form.label} onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))} placeholder="e.g. Contract Value" />
+                  <Input aria-label="Label" value={form.label} onChange={(e) => setForm((f) => ({ ...f, label: e.target.value }))} placeholder="e.g. Contract Value" />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Field Key <span className="text-muted-foreground text-xs">(snake_case)</span></Label>
-                  <Input
+                  <Input aria-label="Field Key"
                     value={form.fieldKey}
                     onChange={(e) => setForm((f) => ({ ...f, fieldKey: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_") }))}
                     placeholder="e.g. contract_value"
@@ -229,7 +229,7 @@ export default function CustomFields() {
                 <div className="space-y-1.5">
                   <Label>Options</Label>
                   <div className="flex gap-2">
-                    <Input
+                    <Input aria-label="Options"
                       value={form.optionInput}
                       onChange={(e) => setForm((f) => ({ ...f, optionInput: e.target.value }))}
                       placeholder="Option label"
@@ -241,7 +241,7 @@ export default function CustomFields() {
                     {form.options.map((o, i) => (
                       <span key={i} className="flex items-center gap-1 text-xs bg-muted px-2 py-1 rounded-full">
                         {o.label}
-                        <button onClick={() => removeOption(i)} className="text-muted-foreground hover:text-foreground"><X className="h-3 w-3" /></button>
+                        <button aria-label="Remove option" onClick={() => removeOption(i)} className="text-muted-foreground hover:text-foreground"><X className="h-3 w-3" /></button>
                       </span>
                     ))}
                   </div>
@@ -259,7 +259,7 @@ export default function CustomFields() {
               </div>
               <div className="space-y-1.5">
                 <Label>Sort Order</Label>
-                <Input type="number" value={form.sortOrder} onChange={(e) => setForm((f) => ({ ...f, sortOrder: Number(e.target.value) }))} className="w-24" />
+                <Input aria-label="Sort Order" type="number" value={form.sortOrder} onChange={(e) => setForm((f) => ({ ...f, sortOrder: Number(e.target.value) }))} className="w-24" />
               </div>
             </div>
             <DialogFooter>

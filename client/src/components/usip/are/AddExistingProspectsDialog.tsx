@@ -40,6 +40,7 @@ import {
   Activity, AlertTriangle, Bot, CheckCircle2, ChevronLeft, ChevronRight, Copy, ExternalLink,
   ListChecks, Loader2, Search, UserPlus, Users, XCircle,
 } from "lucide-react";
+import { pressable } from "@/lib/pressable";
 
 const PAGE_SIZE = 50;
 /** The preview procedure's cap — one verify pass, one table. */
@@ -441,7 +442,7 @@ function SelectStep(props: {
           <>
             <div className="flex h-8 min-w-[220px] flex-1 items-center gap-2 rounded-md border border-border bg-background px-2.5">
               <Search className="size-3.5 shrink-0 text-muted-foreground" />
-              <input
+              <input aria-label="Search prospects"
                 autoFocus
                 value={props.searchInput}
                 onChange={(e) => props.setSearchInput(e.target.value)}
@@ -449,7 +450,7 @@ function SelectStep(props: {
                 className="min-w-0 flex-1 bg-transparent text-[13px] outline-none"
               />
             </div>
-            <select
+            <select aria-label="Email status"
               value={props.emailFilter}
               onChange={(e) => props.setEmailFilter(e.target.value as "any" | "yes" | "no")}
               className="h-8 rounded-md border border-border bg-background px-2 text-[12.5px]"
@@ -464,7 +465,7 @@ function SelectStep(props: {
             </label>
           </>
         ) : (
-          <select
+          <select aria-label="List"
             value={props.listId ?? ""}
             onChange={(e) => props.setListId(e.target.value ? Number(e.target.value) : null)}
             className="h-8 min-w-[240px] rounded-md border border-border bg-background px-2 text-[12.5px]"
@@ -509,7 +510,7 @@ function SelectStep(props: {
               {!loading && rows.map((p) => {
                 const on = selected.has(p.id);
                 return (
-                  <TableRow key={p.id} className={`cursor-pointer ${on ? "bg-primary/5" : "hover:bg-muted/50"}`} onClick={() => props.toggle(p)}>
+                  <TableRow key={p.id} className={`cursor-pointer ${on ? "bg-primary/5" : "hover:bg-muted/50"}`} {...pressable(() => props.toggle(p), { row: true })}>
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <Checkbox checked={on} onCheckedChange={() => props.toggle(p)} aria-label={`Select ${nameOf(p)}`} />
                     </TableCell>
@@ -546,8 +547,8 @@ function SelectStep(props: {
           <span>{props.total.toLocaleString()} {props.total === 1 ? "person" : "people"}{source === "search" ? ` · page ${props.page} of ${props.totalPages}` : ""}</span>
           {source === "search" && props.totalPages > 1 && (
             <div className="ml-auto flex items-center gap-1">
-              <Button size="sm" variant="ghost" className="h-7 px-2" disabled={props.page <= 1} onClick={() => props.setPage(props.page - 1)}><ChevronLeft className="size-4" /></Button>
-              <Button size="sm" variant="ghost" className="h-7 px-2" disabled={props.page >= props.totalPages} onClick={() => props.setPage(props.page + 1)}><ChevronRight className="size-4" /></Button>
+              <Button aria-label="Previous page" size="sm" variant="ghost" className="h-7 px-2" disabled={props.page <= 1} onClick={() => props.setPage(props.page - 1)}><ChevronLeft className="size-4" /></Button>
+              <Button aria-label="Next page" size="sm" variant="ghost" className="h-7 px-2" disabled={props.page >= props.totalPages} onClick={() => props.setPage(props.page + 1)}><ChevronRight className="size-4" /></Button>
             </div>
           )}
         </div>

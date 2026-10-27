@@ -33,6 +33,7 @@ import {
 import { Streamdown } from "@/components/usip/LazyStreamdown";
 import { confirmAction } from "@/components/usip/Common";
 import { rankOf, ROLE_RANK } from "@shared/roleRank";
+import { pressable } from "@/lib/pressable";
 
 // ─── Connect Calendar Dialog ───────────────────────────────────────────────────
 
@@ -109,11 +110,11 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
           </div>
           <div className="space-y-1">
             <Label>Label (optional)</Label>
-            <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Work Calendar" />
+            <Input aria-label="Label (optional)" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Work Calendar" />
           </div>
           <div className="space-y-1">
             <Label>Email (optional)</Label>
-            <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+            <Input aria-label="Email (optional)" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
           </div>
 
           {isOAuth && (
@@ -123,15 +124,15 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
               </div>
               <div className="space-y-1">
                 <Label>Access Token</Label>
-                <Input value={accessToken} onChange={(e) => setAccessToken(e.target.value)} placeholder="ya29.a0AfH6SMB..." />
+                <Input aria-label="Access Token" value={accessToken} onChange={(e) => setAccessToken(e.target.value)} placeholder="ya29.a0AfH6SMB..." />
               </div>
               <div className="space-y-1">
                 <Label>Refresh Token</Label>
-                <Input value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} placeholder="1//0gLd..." />
+                <Input aria-label="Refresh Token" value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} placeholder="1//0gLd..." />
               </div>
               <div className="space-y-1">
                 <Label>Calendar ID (optional)</Label>
-                <Input value={calendarId} onChange={(e) => setCalendarId(e.target.value)} placeholder="primary" />
+                <Input aria-label="Calendar ID (optional)" value={calendarId} onChange={(e) => setCalendarId(e.target.value)} placeholder="primary" />
                 <p className="text-xs text-muted-foreground">Use &quot;primary&quot; for the default calendar, or a specific calendar ID from your provider.</p>
               </div>
             </>
@@ -141,7 +142,7 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
             <>
               <div className="space-y-1">
                 <Label>CalDAV URL</Label>
-                <Input value={caldavUrl} onChange={(e) => setCaldavUrl(e.target.value)} placeholder="https://..." />
+                <Input aria-label="CalDAV URL" value={caldavUrl} onChange={(e) => setCaldavUrl(e.target.value)} placeholder="https://..." />
                 {provider === "outlook_caldav" && (
                   <p className="text-xs text-muted-foreground">Outlook Web App → Settings → Calendar → Shared calendars → Publish a calendar → copy the ICS/CalDAV URL</p>
                 )}
@@ -151,11 +152,11 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
               </div>
               <div className="space-y-1">
                 <Label>Username</Label>
-                <Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="your@email.com" />
+                <Input aria-label="Username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="your@email.com" />
               </div>
               <div className="space-y-1">
                 <Label>Password / App Password</Label>
-                <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+                <Input aria-label="Password / App Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
               </div>
             </>
           )}
@@ -290,16 +291,16 @@ function EventDialog({
         <div className="space-y-3 py-2">
           <div className="space-y-1">
             <Label>Title *</Label>
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Meeting title" autoFocus />
+            <Input aria-label="Title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Meeting title" autoFocus />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label>Start</Label>
-              <Input type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} disabled={allDay} />
+              <Input aria-label="Start" type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} disabled={allDay} />
             </div>
             <div className="space-y-1">
               <Label>End</Label>
-              <Input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} disabled={allDay} />
+              <Input aria-label="End" type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} disabled={allDay} />
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -308,19 +309,19 @@ function EventDialog({
           </div>
           <div className="space-y-1">
             <Label>Location</Label>
-            <Input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Conference room, address…" />
+            <Input aria-label="Location" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Conference room, address…" />
           </div>
           <div className="space-y-1">
             <Label>Meeting URL</Label>
-            <Input value={meetingUrl} onChange={(e) => setMeetingUrl(e.target.value)} placeholder="https://meet.google.com/…" />
+            <Input aria-label="Meeting URL" value={meetingUrl} onChange={(e) => setMeetingUrl(e.target.value)} placeholder="https://meet.google.com/…" />
           </div>
           <div className="space-y-1">
             <Label>Attendees (comma-separated emails)</Label>
-            <Input value={attendees} onChange={(e) => setAttendees(e.target.value)} placeholder="alice@co.com, bob@co.com" />
+            <Input aria-label="Attendees (comma-separated emails)" value={attendees} onChange={(e) => setAttendees(e.target.value)} placeholder="alice@co.com, bob@co.com" />
           </div>
           <div className="space-y-1">
             <Label>Description</Label>
-            <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
+            <Textarea aria-label="Description" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
           </div>
 
           {/* AI Meeting Summary panel — only shown for existing events */}
@@ -617,7 +618,7 @@ export default function CalendarPage() {
                       "flex items-center gap-2 px-2 py-1.5 rounded-md text-xs cursor-pointer transition-colors group",
                       selectedAccountId === acc.id ? "bg-primary/10 text-primary" : "hover:bg-muted text-muted-foreground"
                     )}
-                    onClick={() => setSelectedAccountId(acc.id)}
+                    {...pressable(() => setSelectedAccountId(acc.id))}
                   >
                     <CalendarDays className="size-3 shrink-0" />
                     <div className="flex-1 min-w-0">
@@ -626,7 +627,7 @@ export default function CalendarPage() {
                     </div>
                     {!repUserId && (
                       <button
-                        className="opacity-0 group-hover:opacity-100 hover:text-destructive"
+                        className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 hover:text-destructive"
                         onClick={(e) => {
                           e.stopPropagation();
                           const label = acc.label ?? acc.email ?? acc.provider;

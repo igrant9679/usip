@@ -137,7 +137,7 @@ export function AiCallQueue({ accent }: { accent: string }) {
               <tr>
                 {tab !== "done" && (
                   <th className="w-8 px-3 py-2 text-left">
-                    <Checkbox checked={allChecked} onCheckedChange={() => setChecked(allChecked ? new Set() : new Set(shown.map((r) => r.id)))} className="size-3.5" />
+                    <Checkbox aria-label="Select all" checked={allChecked} onCheckedChange={() => setChecked(allChecked ? new Set() : new Set(shown.map((r) => r.id)))} className="size-3.5" />
                   </th>
                 )}
                 <th className="px-3 py-2 text-left font-medium">Person</th>
@@ -154,7 +154,7 @@ export function AiCallQueue({ accent }: { accent: string }) {
                 return (
                   <tr key={r.id} className="border-b border-border/40 last:border-0 align-top">
                     {tab !== "done" && (
-                      <td className="px-3 py-2"><Checkbox checked={checked.has(r.id)} onCheckedChange={() => toggle(r.id)} className="size-3.5" /></td>
+                      <td className="px-3 py-2"><Checkbox aria-label={`Select ${r.personName ?? "call"}`} checked={checked.has(r.id)} onCheckedChange={() => toggle(r.id)} className="size-3.5" /></td>
                     )}
                     <td className="px-3 py-2">
                       <Link href={`/prospects/${r.prospectId}`} className="font-medium hover:underline">{r.personName}</Link>
@@ -235,7 +235,7 @@ export function AiCallQueue({ accent }: { accent: string }) {
             <DialogTitle>Notes for the agent</DialogTitle>
             <DialogDescription>What the agent should know or mention on this call. The person's name, title and company come from their record.</DialogDescription>
           </DialogHeader>
-          <Textarea rows={6} maxLength={1500} value={editing?.notes ?? ""} onChange={(e) => setEditing((x) => (x ? { ...x, notes: e.target.value } : x))} />
+          <Textarea aria-label="Notes for the agent" rows={6} maxLength={1500} value={editing?.notes ?? ""} onChange={(e) => setEditing((x) => (x ? { ...x, notes: e.target.value } : x))} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
             <Button disabled={update.isPending} onClick={() => editing && update.mutate({ id: editing.id, callNotes: editing.notes })}>Save</Button>

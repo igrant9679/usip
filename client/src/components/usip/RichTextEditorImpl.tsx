@@ -353,7 +353,7 @@ function AiAssistButton({
           ))}
         </div>
         <div className="flex items-center gap-1.5 pt-1 border-t">
-          <input
+          <input aria-label="Instruction for the AI"
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !busy) apply("generate", instruction); }}

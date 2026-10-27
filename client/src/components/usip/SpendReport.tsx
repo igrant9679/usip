@@ -136,7 +136,7 @@ function SharedKeyCell({
   return (
     <div className="space-y-1">
       <div className="flex items-center gap-2">
-        <Switch
+        <Switch aria-label="Allow shared key"
           checked={allowed}
           disabled={!configured || save.isPending}
           onCheckedChange={(v) => save.mutate({ workspaceId, vendor, allowed: v, dailyCap: capValue })}
@@ -145,7 +145,7 @@ function SharedKeyCell({
       </div>
       {allowed && (
         <div className="flex items-center gap-1">
-          <Input
+          <Input aria-label="Monthly cap"
             className="h-7 w-24 text-xs"
             type="number"
             min={0}

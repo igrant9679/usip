@@ -85,7 +85,7 @@ export function PersonaFormFields({ form, setForm, categories, sectors }: {
     <div className="space-y-4">
       <div className="space-y-2">
         <Label>Name</Label>
-        <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Director of Federal Programs" />
+        <Input aria-label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Director of Federal Programs" />
       </div>
       {(categories || sectors) && (
         <div className="grid gap-3 sm:grid-cols-2">
@@ -123,7 +123,7 @@ export function PersonaFormFields({ form, setForm, categories, sectors }: {
       )}
       <div className="space-y-2">
         <Label>Description</Label>
-        <Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2} />
+        <Textarea aria-label="Description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2} />
       </div>
 
       <div className="rounded-md border p-3 space-y-4">
@@ -137,11 +137,11 @@ export function PersonaFormFields({ form, setForm, categories, sectors }: {
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-2">
             <Label>Min employees</Label>
-            <Input type="number" value={form.employeeMin ?? ""} onChange={(e) => setForm({ ...form, employeeMin: e.target.value ? Number(e.target.value) : null })} />
+            <Input aria-label="Min employees" type="number" value={form.employeeMin ?? ""} onChange={(e) => setForm({ ...form, employeeMin: e.target.value ? Number(e.target.value) : null })} />
           </div>
           <div className="space-y-2">
             <Label>Max employees</Label>
-            <Input type="number" value={form.employeeMax ?? ""} onChange={(e) => setForm({ ...form, employeeMax: e.target.value ? Number(e.target.value) : null })} />
+            <Input aria-label="Max employees" type="number" value={form.employeeMax ?? ""} onChange={(e) => setForm({ ...form, employeeMax: e.target.value ? Number(e.target.value) : null })} />
           </div>
         </div>
         <TagInput label="Keywords" value={form.keywords} onChange={(v) => setForm({ ...form, keywords: v })} placeholder="revenue ops, salesforce…" />
@@ -154,13 +154,13 @@ export function PersonaFormFields({ form, setForm, categories, sectors }: {
         </div>
         <div className="space-y-2">
           <Label>What they care about</Label>
-          <Textarea rows={2} value={form.cares} onChange={(e) => setForm({ ...form, cares: e.target.value })} placeholder="Keeping funds compliant and spent on time." />
+          <Textarea aria-label="What they care about" rows={2} value={form.cares} onChange={(e) => setForm({ ...form, cares: e.target.value })} placeholder="Keeping funds compliant and spent on time." />
         </div>
         <LinesInput label="Pains" hint="One per line." value={form.pains} onChange={(v) => setForm({ ...form, pains: v })} rows={3} placeholder="Late allocations" />
         <LinesInput label="Objections" hint="One per line." value={form.objections} onChange={(v) => setForm({ ...form, objections: v })} rows={3} placeholder="Another system to learn" />
         <div className="space-y-2">
           <Label>Angle that works</Label>
-          <Textarea rows={2} value={form.angle} onChange={(e) => setForm({ ...form, angle: e.target.value })} placeholder="Show the audit trail." />
+          <Textarea aria-label="Angle that works" rows={2} value={form.angle} onChange={(e) => setForm({ ...form, angle: e.target.value })} placeholder="Show the audit trail." />
         </div>
       </div>
     </div>

@@ -233,7 +233,7 @@ export default function ComponentsShowcase() {
           <h2 className="text-3xl font-bold tracking-tight mb-6">
             Shadcn/ui Component Library
           </h2>
-          <Button variant="outline" size="icon" onClick={toggleTheme}>
+          <Button aria-label="Toggle theme" variant="outline" size="icon" onClick={toggleTheme}>
             {theme === "light" ? (
               <Moon className="h-5 w-5" />
             ) : (
@@ -395,7 +395,7 @@ export default function ComponentsShowcase() {
                   <Button variant="link">Link</Button>
                   <Button size="sm">Small</Button>
                   <Button size="lg">Large</Button>
-                  <Button size="icon">
+                  <Button aria-label="Confirm" size="icon">
                     <Check className="h-4 w-4" />
                   </Button>
                 </div>
@@ -455,7 +455,7 @@ export default function ComponentsShowcase() {
                 </div>
                 <div className="space-y-2">
                   <Label>Slider</Label>
-                  <Slider defaultValue={[50]} max={100} step={1} />
+                  <Slider aria-label="Slider" defaultValue={[50]} max={100} step={1} />
                 </div>
                 <div className="space-y-2">
                   <Label>Input OTP</Label>
@@ -501,7 +501,7 @@ export default function ComponentsShowcase() {
                             Time
                           </Label>
                           <div className="flex gap-2">
-                            <Input
+                            <Input aria-label="Time"
                               type="time"
                               value={
                                 datePickerDate

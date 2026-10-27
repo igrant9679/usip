@@ -24,6 +24,7 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { usePageTitle } from "@/lib/usePageTitle";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,6 +38,7 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 export default function InviteAccept() {
+  usePageTitle("Accept invitation");
   const [, navigate] = useLocation();
   const { user, loading: authLoading } = useAuth();
 
@@ -186,7 +188,7 @@ export default function InviteAccept() {
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <XCircle className="mx-auto h-12 w-12 text-destructive mb-2" />
-            <CardTitle>Invalid Invite Link</CardTitle>
+            <CardTitle role="heading" aria-level={1}>Invalid Invite Link</CardTitle>
             <CardDescription>This invite link is missing a token. Please use the link from your invitation email.</CardDescription>
           </CardHeader>
         </Card>
@@ -209,7 +211,7 @@ export default function InviteAccept() {
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <XCircle className="mx-auto h-12 w-12 text-destructive mb-2" />
-            <CardTitle>Invite Link Problem</CardTitle>
+            <CardTitle role="heading" aria-level={1}>Invite Link Problem</CardTitle>
             <CardDescription>{msg}</CardDescription>
           </CardHeader>
           <CardContent className="text-center text-sm text-muted-foreground">
@@ -227,7 +229,7 @@ export default function InviteAccept() {
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <CheckCircle2 className="mx-auto h-12 w-12 text-green-500 mb-2" />
-            <CardTitle>
+            <CardTitle role="heading" aria-level={1}>
               {passwordSetupOnly ? "Password saved!" : `Welcome to ${finalResult.workspaceName}!`}
             </CardTitle>
             <CardDescription>
@@ -256,7 +258,7 @@ export default function InviteAccept() {
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <XCircle className="mx-auto h-12 w-12 text-destructive mb-2" />
-            <CardTitle>Could Not Accept Invitation</CardTitle>
+            <CardTitle role="heading" aria-level={1}>Could Not Accept Invitation</CardTitle>
             <CardDescription>{finaliseError}</CardDescription>
           </CardHeader>
           <CardContent className="text-center">
@@ -306,7 +308,7 @@ export default function InviteAccept() {
             <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
               <Lock className="h-7 w-7 text-primary" />
             </div>
-            <CardTitle className="text-2xl">
+            <CardTitle role="heading" aria-level={1} className="text-2xl">
               {passwordSetupOnly ? "Set Your Password" : "Create Your Password"}
             </CardTitle>
             <CardDescription className="text-base mt-1">
@@ -329,11 +331,10 @@ export default function InviteAccept() {
                   className="pr-10"
                   autoComplete="new-password"
                 />
-                <button
+                <button aria-label={showPassword ? "Hide password" : "Show password"}
                   type="button"
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   onClick={() => setShowPassword((v) => !v)}
-                  tabIndex={-1}
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -422,7 +423,7 @@ export default function InviteAccept() {
               <Building2 className="h-7 w-7 text-primary" />
             )}
           </div>
-          <CardTitle className="text-2xl">
+          <CardTitle role="heading" aria-level={1} className="text-2xl">
             {passwordSetupOnly ? "Set Your Password" : "You're Invited!"}
           </CardTitle>
           <CardDescription className="text-base mt-1">
@@ -519,11 +520,10 @@ export default function InviteAccept() {
                     className="pr-10"
                     autoComplete="new-password"
                   />
-                  <button
+                  <button aria-label={showPassword ? "Hide password" : "Show password"}
                     type="button"
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                     onClick={() => setShowPassword((v) => !v)}
-                    tabIndex={-1}
                   >
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>

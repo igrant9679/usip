@@ -75,20 +75,21 @@ function WordChips({
         {words.map((w) => (
           <Badge key={w} variant="secondary" className={`${colorClass} text-xs gap-1`}>
             {w}
-            <button onClick={() => onChange(words.filter((x) => x !== w))} className="ml-0.5 hover:opacity-70">×</button>
+            <button type="button" aria-label={`Remove ${w}`} onClick={() => onChange(words.filter((x) => x !== w))} className="ml-0.5 hover:opacity-70">×</button>
           </Badge>
         ))}
         {words.length === 0 && <span className="text-xs text-muted-foreground italic">None added yet</span>}
       </div>
       <div className="flex gap-2">
         <Input
+          aria-label={label}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
           placeholder={placeholder}
           className="h-8 text-sm flex-1"
         />
-        <Button size="sm" variant="outline" className="h-8 px-2" onClick={add} disabled={!input.trim()}>
+        <Button aria-label="Add" size="sm" variant="outline" className="h-8 px-2" onClick={add} disabled={!input.trim()}>
           <Plus size={12} />
         </Button>
       </div>
@@ -247,7 +248,7 @@ export default function BrandVoicePage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <Label>From Name</Label>
-                  <Input
+                  <Input aria-label="From Name"
                     value={form.fromName}
                     onChange={(e) => setField("fromName", e.target.value)}
                     placeholder="e.g. Alex from USIP"
@@ -255,7 +256,7 @@ export default function BrandVoicePage() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>From Email</Label>
-                  <Input
+                  <Input aria-label="From Email"
                     type="email"
                     value={form.fromEmail}
                     onChange={(e) => setField("fromEmail", e.target.value)}
@@ -265,7 +266,7 @@ export default function BrandVoicePage() {
               </div>
               <div className="space-y-1.5">
                 <Label>Email Signature (HTML)</Label>
-                <Textarea
+                <Textarea aria-label="Email Signature (HTML)"
                   value={form.signatureHtml}
                   onChange={(e) => setField("signatureHtml", e.target.value)}
                   placeholder="<p>Best,<br/>Alex Johnson<br/>Account Executive</p>"
@@ -290,13 +291,13 @@ export default function BrandVoicePage() {
               <div className="space-y-1.5">
                 <Label>Primary Color</Label>
                 <div className="flex items-center gap-3">
-                  <input
+                  <input aria-label="Primary Color"
                     type="color"
                     value={form.primaryColor}
                     onChange={(e) => setField("primaryColor", e.target.value)}
                     className="h-9 w-12 rounded border cursor-pointer"
                   />
-                  <Input
+                  <Input aria-label="Primary Color"
                     value={form.primaryColor}
                     onChange={(e) => {
                       if (/^#[0-9a-fA-F]{0,6}$/.test(e.target.value)) {
@@ -311,13 +312,13 @@ export default function BrandVoicePage() {
               <div className="space-y-1.5">
                 <Label>Secondary Color</Label>
                 <div className="flex items-center gap-3">
-                  <input
+                  <input aria-label="Secondary Color"
                     type="color"
                     value={form.secondaryColor}
                     onChange={(e) => setField("secondaryColor", e.target.value)}
                     className="h-9 w-12 rounded border cursor-pointer"
                   />
-                  <Input
+                  <Input aria-label="Secondary Color"
                     value={form.secondaryColor}
                     onChange={(e) => {
                       if (/^#[0-9a-fA-F]{0,6}$/.test(e.target.value)) {

@@ -43,6 +43,7 @@ import { useEnrichJob } from "./LinkedInEnrichment";
 import { confirmAction } from "@/components/usip/Common";
 import { formatPhone } from "@shared/phoneFormat";
 import { agentNumbers } from "@shared/voiceCapacity";
+import { tablistProps, tabProps } from "@/lib/tabs";
 
 const CSV_COLS: Array<{ key: string; label: string }> = [
   { key: "firstName", label: "First name" }, { key: "lastName", label: "Last name" },
@@ -257,10 +258,10 @@ function QueueAiCallMenu({ selectedIds }: { selectedIds: number[] }) {
           </div>
         ) : (
           <>
-            <select value={chosen ?? ""} onChange={(e) => setAgentId(Number(e.target.value))} className="h-8 w-full rounded-md border bg-background px-2 text-[13px]">
+            <select aria-label="Agent" value={chosen ?? ""} onChange={(e) => setAgentId(Number(e.target.value))} className="h-8 w-full rounded-md border bg-background px-2 text-[13px]">
               {callers.map((a) => { const nums = agentNumbers(a); return <option key={a.id} value={a.id}>{a.name} · {formatPhone(nums[0])}{nums.length > 1 ? ` + ${nums.length - 1} more` : ""}</option>; })}
             </select>
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={1500} rows={3}
+            <textarea aria-label="Notes for the agent" value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={1500} rows={3}
               placeholder="Notes for the agent (optional), e.g. mention our October webinar"
               className="w-full rounded-md border bg-background px-2 py-1.5 text-[13px] outline-none" />
             <p className="text-[11.5px] text-muted-foreground">
@@ -300,9 +301,9 @@ function CreateTasksMenu({ selectedIds }: { selectedIds: number[] }) {
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 p-3 space-y-2.5">
         <div className="text-[13px] font-medium">New task for {n} {n === 1 ? "person" : "people"}</div>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" className="h-8 w-full rounded-md border bg-background px-2 text-[13px] outline-none" />
+        <input aria-label="Task title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" className="h-8 w-full rounded-md border bg-background px-2 text-[13px] outline-none" />
         <div className="grid grid-cols-2 gap-2">
-          <select value={type} onChange={(e) => setType(e.target.value)} className={sel}>
+          <select aria-label="Task type" value={type} onChange={(e) => setType(e.target.value)} className={sel}>
             <option value="follow_up">Follow up</option>
             <option value="call">Call</option>
             <option value="manual_email">Email</option>
@@ -310,7 +311,7 @@ function CreateTasksMenu({ selectedIds }: { selectedIds: number[] }) {
             <option value="meeting_prep">Meeting prep</option>
             <option value="todo">To-do</option>
           </select>
-          <select value={priority} onChange={(e) => setPriority(e.target.value)} className={sel}>
+          <select aria-label="Priority" value={priority} onChange={(e) => setPriority(e.target.value)} className={sel}>
             <option value="low">Low</option>
             <option value="normal">Normal</option>
             <option value="high">High</option>
@@ -410,12 +411,12 @@ export function AddToListMenu({ selectedIds, trigger }: { selectedIds: number[];
         <div className="p-2.5 border-b">
           <div className="flex items-center gap-2 px-2 h-8 rounded-md border bg-background">
             <Search className="size-3.5 text-muted-foreground shrink-0" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="flex-1 bg-transparent outline-none text-[13px] min-w-0" />
+            <input aria-label="Search lists" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className="flex-1 bg-transparent outline-none text-[13px] min-w-0" />
           </div>
         </div>
-        <div className="flex items-center gap-4 px-3 pt-2 border-b text-[13px]">
+        <div {...tablistProps("Lists")} className="flex items-center gap-4 px-3 pt-2 border-b text-[13px]">
           {LIST_TABS.map((t) => (
-            <button
+            <button {...tabProps(tab === t.id)}
               key={t.id}
               type="button"
               onClick={() => setTab(t.id)}
@@ -452,7 +453,7 @@ export function AddToListMenu({ selectedIds, trigger }: { selectedIds: number[];
         </div>
         {naming ? (
           <div className="border-t p-2 space-y-2">
-            <Input
+            <Input aria-label="New list name"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder="Name the new list"
@@ -586,7 +587,7 @@ function MoreMenu({ selectedIds, onClear, onPick }: { selectedIds: number[]; onC
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="px-2">
+        <Button aria-label="More actions" variant="ghost" size="sm" className="px-2">
           <MoreHorizontal className="size-4" />
         </Button>
       </DropdownMenuTrigger>

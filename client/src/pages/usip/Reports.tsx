@@ -216,7 +216,7 @@ export default function Reports() {
                         type="button"
                         aria-label={`Schedule ${r.name}`}
                         title={r.scheduleFreq && r.scheduleFreq !== "none" ? `Emailed ${r.scheduleFreq}` : "Schedule email"}
-                        className={cn("shrink-0 rounded p-0.5", r.scheduleFreq && r.scheduleFreq !== "none" ? "text-sky-600" : "text-muted-foreground opacity-0 group-hover:opacity-100")}
+                        className={cn("shrink-0 rounded p-0.5", r.scheduleFreq && r.scheduleFreq !== "none" ? "text-sky-600" : "text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100")}
                         onClick={() => setSchedFor(r)}
                       >
                         <Clock className="size-3" />
@@ -224,7 +224,7 @@ export default function Reports() {
                       <button
                         type="button"
                         aria-label={`Delete ${r.name}`}
-                        className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:text-rose-600 group-hover:opacity-100"
+                        className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:text-rose-600 group-hover:opacity-100 group-focus-within:opacity-100"
                         onClick={() => { confirmAction({ title: `Delete report "${r.name}"?`, description: "This saved report and its schedule will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { remove.mutate({ id: r.id }); }); }}
                       >
                         <Trash2 className="size-3" />
@@ -238,7 +238,7 @@ export default function Reports() {
             {/* object */}
             <section>
               <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Report on</h2>
-              <select value={spec.object} onChange={(e) => setObject(e.target.value)} className={cn(selectCls, "w-full")}>
+              <select aria-label="Report on" value={spec.object} onChange={(e) => setObject(e.target.value)} className={cn(selectCls, "w-full")}>
                 {Object.entries(OBJECT_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
             </section>
@@ -276,7 +276,7 @@ export default function Reports() {
                   return (
                     <div key={i} className="space-y-1 rounded-md border border-border/70 p-1.5">
                       <div className="flex items-center gap-1">
-                        <select value={f.field} onChange={(e) => patch({ field: e.target.value })} className={cn(selectCls, "min-w-0 flex-1")}>
+                        <select aria-label={`Filter ${i + 1} field`} value={f.field} onChange={(e) => patch({ field: e.target.value })} className={cn(selectCls, "min-w-0 flex-1")}>
                           {columnsMeta.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
                         </select>
                         <button type="button" aria-label="Remove filter" className="shrink-0 rounded p-1 text-muted-foreground hover:text-rose-600" onClick={() => setSpec((s) => ({ ...s, filters: s.filters.filter((_, j) => j !== i) }))}>
@@ -284,11 +284,11 @@ export default function Reports() {
                         </button>
                       </div>
                       <div className="flex items-center gap-1">
-                        <select value={f.op} onChange={(e) => patch({ op: e.target.value })} className={cn(selectCls, "w-28 shrink-0")}>
+                        <select aria-label={`Filter ${i + 1} operator`} value={f.op} onChange={(e) => patch({ op: e.target.value })} className={cn(selectCls, "w-28 shrink-0")}>
                           {OPS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                         </select>
                         {op?.needsValue !== false && (
-                          <Input value={f.value ?? ""} onChange={(e) => patch({ value: e.target.value })} placeholder="value" className="h-8 min-w-0 flex-1 text-[12.5px]" />
+                          <Input aria-label={`Filter ${i + 1} value`} value={f.value ?? ""} onChange={(e) => patch({ value: e.target.value })} placeholder="value" className="h-8 min-w-0 flex-1 text-[12.5px]" />
                         )}
                       </div>
                     </div>
@@ -301,7 +301,7 @@ export default function Reports() {
             {/* group by */}
             <section>
               <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Group by</h2>
-              <select
+              <select aria-label="Group by"
                 value={spec.groupBy ?? ""}
                 onChange={(e) => setSpec((s) => ({ ...s, groupBy: e.target.value || undefined, aggregate: e.target.value ? (s.aggregate ?? "count") : undefined }))}
                 className={cn(selectCls, "w-full")}
@@ -311,7 +311,7 @@ export default function Reports() {
               </select>
               {spec.groupBy && (
                 <div className="mt-1.5 flex items-center gap-1.5">
-                  <select
+                  <select aria-label="Aggregate"
                     value={spec.aggregate ?? "count"}
                     onChange={(e) => setSpec((s) => ({ ...s, aggregate: e.target.value as Spec["aggregate"] }))}
                     className={cn(selectCls, "flex-1")}
@@ -321,7 +321,7 @@ export default function Reports() {
                     <option value="avg_value">Average of…</option>
                   </select>
                   {spec.aggregate && spec.aggregate !== "count" && (
-                    <select
+                    <select aria-label="Aggregate field"
                       value={spec.aggregateField ?? numericFields[0]?.key ?? ""}
                       onChange={(e) => setSpec((s) => ({ ...s, aggregateField: e.target.value }))}
                       className={cn(selectCls, "flex-1")}
@@ -338,7 +338,7 @@ export default function Reports() {
               <section>
                 <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Sort & limit</h2>
                 <div className="flex items-center gap-1.5">
-                  <select
+                  <select aria-label="Sort by"
                     value={spec.sort?.field ?? ""}
                     onChange={(e) => setSpec((s) => ({ ...s, sort: e.target.value ? { field: e.target.value, dir: s.sort?.dir ?? "desc" } : undefined }))}
                     className={cn(selectCls, "min-w-0 flex-1")}
@@ -347,7 +347,7 @@ export default function Reports() {
                     {columnsMeta.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
                   </select>
                   {spec.sort && (
-                    <select value={spec.sort.dir} onChange={(e) => setSpec((s) => ({ ...s, sort: s.sort ? { ...s.sort, dir: e.target.value as "asc" | "desc" } : undefined }))} className={cn(selectCls, "w-20 shrink-0")}>
+                    <select aria-label="Sort direction" value={spec.sort.dir} onChange={(e) => setSpec((s) => ({ ...s, sort: s.sort ? { ...s.sort, dir: e.target.value as "asc" | "desc" } : undefined }))} className={cn(selectCls, "w-20 shrink-0")}>
                       <option value="desc">Desc</option>
                       <option value="asc">Asc</option>
                     </select>
@@ -355,7 +355,7 @@ export default function Reports() {
                 </div>
                 <div className="mt-1.5 flex items-center gap-2 text-[12.5px] text-muted-foreground">
                   Max rows
-                  <select value={spec.limit} onChange={(e) => setSpec((s) => ({ ...s, limit: Number(e.target.value) }))} className={cn(selectCls, "w-24")}>
+                  <select aria-label="Max rows" value={spec.limit} onChange={(e) => setSpec((s) => ({ ...s, limit: Number(e.target.value) }))} className={cn(selectCls, "w-24")}>
                     {[50, 200, 500, 1000].map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </div>
@@ -465,7 +465,7 @@ function SaveForm({
   const [name, setName] = useState(initialName);
   return (
     <div className="space-y-3">
-      <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Open deals by stage" autoFocus />
+      <Input aria-label="Report name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Open deals by stage" autoFocus />
       <div className="flex justify-end gap-2">
         {canUpdate && (
           <Button variant="outline" size="sm" disabled={!name.trim() || saving} onClick={() => onSave(name.trim(), true)}>
@@ -506,7 +506,7 @@ function ScheduleDialog({ report, onClose }: { report: Record<string, any> | nul
         <div className="space-y-3">
           <div className="space-y-1.5">
             <div className="text-[12px] font-medium">Frequency</div>
-            <select value={freq} onChange={(e) => setFreq(e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
+            <select aria-label="Frequency" value={freq} onChange={(e) => setFreq(e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
               <option value="none">Not scheduled</option>
               <option value="daily">Daily (mornings, UTC)</option>
               <option value="weekly">Weekly (Monday mornings)</option>
@@ -515,7 +515,7 @@ function ScheduleDialog({ report, onClose }: { report: Record<string, any> | nul
           </div>
           <div className="space-y-1.5">
             <div className="text-[12px] font-medium">Recipients</div>
-            <Input value={recipients} onChange={(e) => setRecipients(e.target.value)} placeholder="alice@company.com, bob@company.com" />
+            <Input aria-label="Recipients" value={recipients} onChange={(e) => setRecipients(e.target.value)} placeholder="alice@company.com, bob@company.com" />
           </div>
           <div className="flex items-center justify-between gap-2 pt-1">
             <Button

@@ -222,7 +222,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
           <div className="space-y-4">
             <div>
               <Label>Proposal Title *</Label>
-              <Input
+              <Input aria-label="Proposal Title"
                 placeholder="e.g. Q3 Digital Marketing Campaign"
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
@@ -233,7 +233,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
             {/* Contact search pre-fill */}
             <div>
               <Label>Search Existing Contact (optional)</Label>
-              <Input
+              <Input aria-label="Search Existing Contact (optional)"
                 placeholder="Type name or email to search contacts..."
                 value={contactSearch}
                 onChange={(e) => setContactSearch(e.target.value)}
@@ -259,7 +259,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Client / Org Name *</Label>
-                <Input
+                <Input aria-label="Client / Org Name"
                   placeholder="Acme Corp"
                   value={form.clientName}
                   onChange={(e) => setForm((f) => ({ ...f, clientName: e.target.value }))}
@@ -268,7 +268,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
               </div>
               <div>
                 <Label>Org Abbreviation</Label>
-                <Input
+                <Input aria-label="Org Abbreviation"
                   placeholder="ACME"
                   maxLength={32}
                   value={form.orgAbbr}
@@ -281,7 +281,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Client Email</Label>
-                <Input
+                <Input aria-label="Client Email"
                   type="email"
                   placeholder="client@example.com"
                   value={form.clientEmail}
@@ -291,7 +291,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
               </div>
               <div>
                 <Label>Client Website</Label>
-                <Input
+                <Input aria-label="Client Website"
                   placeholder="https://example.com"
                   value={form.clientWebsite}
                   onChange={(e) => setForm((f) => ({ ...f, clientWebsite: e.target.value }))}
@@ -324,7 +324,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>RFP Deadline</Label>
-                <Input
+                <Input aria-label="RFP Deadline"
                   type="date"
                   value={form.rfpDeadline}
                   onChange={(e) => setForm((f) => ({ ...f, rfpDeadline: e.target.value }))}
@@ -333,7 +333,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
               </div>
               <div>
                 <Label>Completion Date</Label>
-                <Input
+                <Input aria-label="Completion Date"
                   type="date"
                   value={form.completionDate}
                   onChange={(e) => setForm((f) => ({ ...f, completionDate: e.target.value }))}
@@ -343,7 +343,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
             </div>
             <div>
               <Label>Proposal Expiry Date <span className="text-muted-foreground font-normal">(optional)</span></Label>
-              <Input
+              <Input aria-label="Proposal Expiry Date"
                 type="date"
                 value={form.expiresAt}
                 onChange={(e) => setForm((f) => ({ ...f, expiresAt: e.target.value }))}
@@ -354,7 +354,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
 
             <div>
               <Label>Estimated Budget ($)</Label>
-              <Input
+              <Input aria-label="Estimated Budget ($)"
                 type="number"
                 placeholder="50000"
                 value={form.budget}
@@ -365,7 +365,7 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
 
             <div>
               <Label>Project Description</Label>
-              <Textarea
+              <Textarea aria-label="Project Description"
                 placeholder="Brief overview of the project scope and goals..."
                 value={form.description}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
@@ -508,8 +508,7 @@ export default function Proposals() {
     const label = diffD >= 1 ? `${diffD}d ago` : `${diffH}h ago`;
     return { label, isOverdue };
   }
-  function toggleSelect(id: number, e: React.MouseEvent) {
-    e.stopPropagation();
+  function toggleSelect(id: number) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -605,7 +604,7 @@ export default function Proposals() {
             onClick={toggleSelectAll}
             className="gap-1.5 text-xs"
           >
-            <Checkbox
+            <Checkbox aria-label="Select all"
               checked={filtered.length > 0 && selectedIds.size === filtered.length}
               className="size-3.5 pointer-events-none"
             />
@@ -684,7 +683,7 @@ export default function Proposals() {
       <div className="flex flex-col gap-2 px-6 py-3 border-b border-border shrink-0">
         <div className="relative max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-          <Input
+          <Input aria-label="Search proposals"
             placeholder="Search by title or client..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -816,10 +815,12 @@ export default function Proposals() {
               >
                 <div
                   className="mt-1 shrink-0"
-                  onClick={(e) => toggleSelect(p.id, e)}
+                  onClick={(e) => e.stopPropagation()}
                 >
                   <Checkbox
+                    aria-label={`Select ${p.title}`}
                     checked={selectedIds.has(p.id)}
+                    onCheckedChange={() => toggleSelect(p.id)}
                     className="size-4"
                   />
                 </div>
@@ -900,7 +901,7 @@ export default function Proposals() {
                 {/* span stops the click reaching the row behind it. */}
                 <span onClick={(e) => e.stopPropagation()} className="contents">
                   <ConfirmButton
-                    className="ml-1 text-muted-foreground hover:text-destructive p-1.5 h-auto rounded opacity-0 group-hover:opacity-100 transition-opacity self-center"
+                    className="ml-1 text-muted-foreground hover:text-destructive p-1.5 h-auto rounded opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity self-center"
                     ariaLabel="Delete proposal"
                     title="Delete this proposal?"
                     description={`"${p.title}" will be permanently deleted. This cannot be undone.`}
@@ -932,7 +933,7 @@ export default function Proposals() {
             </p>
             <div>
               <Label>Expiry Date</Label>
-              <Input
+              <Input aria-label="Expiry Date"
                 type="date"
                 value={bulkExpiryDate}
                 onChange={(e) => setBulkExpiryDate(e.target.value)}
@@ -1056,7 +1057,7 @@ export default function Proposals() {
             <div className="space-y-3 py-2">
               <div>
                 <Label>New Expiry Date</Label>
-                <Input
+                <Input aria-label="New Expiry Date"
                   type="date"
                   value={approveDialogState.newDate}
                   onChange={(e) => setApproveDialogState({ ...approveDialogState, newDate: e.target.value })}
@@ -1066,7 +1067,7 @@ export default function Proposals() {
               </div>
               <div>
                 <Label>Note to client (optional)</Label>
-                <Textarea
+                <Textarea aria-label="Note to client (optional)"
                   value={approveDialogState.note}
                   onChange={(e) => setApproveDialogState({ ...approveDialogState, note: e.target.value })}
                   placeholder="We've extended your proposal deadline..."
@@ -1107,7 +1108,7 @@ export default function Proposals() {
             <div className="space-y-3 py-2">
               <div>
                 <Label>Reason (optional)</Label>
-                <Textarea
+                <Textarea aria-label="Reason (optional)"
                   value={denyDialogState.reason}
                   onChange={(e) => setDenyDialogState({ ...denyDialogState, reason: e.target.value })}
                   placeholder="Unfortunately, we cannot extend this proposal..."

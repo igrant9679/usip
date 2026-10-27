@@ -124,7 +124,7 @@ export default function Mindmaps() {
 
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="size-7 shrink-0">
+                      <Button aria-label="Mind map actions" variant="ghost" size="icon" className="size-7 shrink-0">
                         <MoreHorizontal className="size-4" />
                       </Button>
                     </DropdownMenuTrigger>
@@ -155,7 +155,7 @@ export default function Mindmaps() {
           <DialogHeader>
             <DialogTitle>New Mindmap</DialogTitle>
           </DialogHeader>
-          <Input
+          <Input aria-label="Mind map name"
             placeholder="Mindmap name…"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
@@ -177,7 +177,7 @@ export default function Mindmaps() {
           <DialogHeader>
             <DialogTitle>Rename Mindmap</DialogTitle>
           </DialogHeader>
-          <Input
+          <Input aria-label="Mind map name"
             value={renameValue}
             onChange={(e) => setRenameValue(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleRename()}

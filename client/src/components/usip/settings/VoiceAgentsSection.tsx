@@ -256,7 +256,7 @@ function ConnectionCard({
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_220px]">
         <div className="space-y-1.5">
           <Label>xAI API key</Label>
-          <Input
+          <Input aria-label="xAI API key"
             type="password"
             value={key}
             onChange={(e) => setKey(e.target.value)}
@@ -267,7 +267,7 @@ function ConnectionCard({
         </div>
         <div className="space-y-1.5">
           <Label>Voice model</Label>
-          <select
+          <select aria-label="Voice model"
             value={effectiveModel}
             onChange={(e) => setModelSel(e.target.value)}
             disabled={!isAdmin}
@@ -425,11 +425,11 @@ function PlivoCard({ isAdmin }: { isAdmin: boolean }) {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Auth ID</Label>
-              <Input value={authId} onChange={(e) => setAuthId(e.target.value)} placeholder={status.data?.authId ?? "MA…"} autoComplete="off" />
+              <Input aria-label="Auth ID" value={authId} onChange={(e) => setAuthId(e.target.value)} placeholder={status.data?.authId ?? "MA…"} autoComplete="off" />
             </div>
             <div className="space-y-1.5">
               <Label>Auth Token</Label>
-              <Input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={configured ? "Saved: enter a new one to replace it" : "Auth Token"} autoComplete="off" />
+              <Input aria-label="Auth Token" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={configured ? "Saved: enter a new one to replace it" : "Auth Token"} autoComplete="off" />
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -503,7 +503,7 @@ function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent;
         </DialogHeader>
         <div className="space-y-1.5">
           <Label>Your phone number</Label>
-          <Input value={number} onChange={(e) => setNumber(e.target.value)} placeholder="+1 571 555 0100" autoFocus />
+          <Input aria-label="Your phone number" value={number} onChange={(e) => setNumber(e.target.value)} placeholder="+1 571 555 0100" autoFocus />
           <p className="text-[11.5px] text-muted-foreground">
             Only call your own phone. On Plivo's free trial, the number must be verified in Plivo first. Up to 10 test calls a day.
           </p>
@@ -511,7 +511,7 @@ function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent;
         {numbers.length > 1 && (
           <div className="space-y-1.5">
             <Label>Call from</Label>
-            <select value={from} onChange={(e) => setFrom(e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
+            <select aria-label="Call from" value={from} onChange={(e) => setFrom(e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
               {numbers.map((n, i) => <option key={n} value={n}>{formatPhone(n)}{i === 0 ? " (main)" : ""}</option>)}
             </select>
             <p className="text-[11.5px] text-muted-foreground">Try each number to hear how it shows on your phone.</p>
@@ -526,7 +526,7 @@ function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent;
             </div>
           ) : (
             <>
-              <Input value={personQuery} onChange={(e) => setPersonQuery(e.target.value)} placeholder="Search People by name or company" />
+              <Input aria-label="Search People" value={personQuery} onChange={(e) => setPersonQuery(e.target.value)} placeholder="Search People by name or company" />
               {peopleRows.length > 0 && (
                 <div className="max-h-40 overflow-y-auto rounded-md border border-border">
                   {peopleRows.map((p) => (
@@ -632,7 +632,7 @@ function CallingCapacityCard({ isAdmin, agents }: { isAdmin: boolean; agents: Ag
         {LIMIT_FIELDS.map(({ key, label, hint }) => (
           <div key={key} className="space-y-1.5">
             <Label>{label}</Label>
-            <Input
+            <Input aria-label={label}
               type="number"
               min={1}
               max={VOICE_LIMIT_CEILINGS[key]}
@@ -771,11 +771,11 @@ function AgentDialog({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Name</Label>
-              <Input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Velocity Receptionist" autoFocus />
+              <Input aria-label="Name" value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Velocity Receptionist" autoFocus />
             </div>
             <div className="space-y-1.5">
               <Label>Purpose</Label>
-              <select
+              <select aria-label="Purpose"
                 value={f.purpose}
                 onChange={(e) => set("purpose", e.target.value)}
                 disabled={!isAdmin}
@@ -791,7 +791,7 @@ function AgentDialog({
             <div className="space-y-1.5">
               <Label>Answers on behalf of</Label>
               {isAdmin ? (
-                <select
+                <select aria-label="Answers on behalf of"
                   value={f.ownerUserId ?? ""}
                   onChange={(e) => set("ownerUserId", e.target.value ? Number(e.target.value) : null)}
                   className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]"
@@ -810,13 +810,13 @@ function AgentDialog({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="space-y-1.5">
               <Label>Voice</Label>
-              <select value={f.voice} onChange={(e) => set("voice", e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px] capitalize">
+              <select aria-label="Voice" value={f.voice} onChange={(e) => set("voice", e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px] capitalize">
                 {[...new Set([f.voice, ...voices])].map((v) => <option key={v} value={v}>{v}</option>)}
               </select>
             </div>
             <div className="space-y-1.5 sm:col-span-2">
               <Label>Model</Label>
-              <select value={f.model} onChange={(e) => set("model", e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
+              <select aria-label="Model" value={f.model} onChange={(e) => set("model", e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
                 {[...new Set([f.model, ...MODELS])].map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
             </div>
@@ -824,7 +824,7 @@ function AgentDialog({
 
           <div className="space-y-1.5">
             <Label>Instructions <span className="font-normal text-muted-foreground">(optional: extra guidance. Who is calling, that it is an AI, and how to book are built in)</span></Label>
-            <textarea
+            <textarea aria-label="Instructions"
               value={f.instructions}
               onChange={(e) => set("instructions", e.target.value)}
               rows={4}
@@ -858,7 +858,7 @@ function AgentDialog({
                     </div>
                   )}
                   {f.plivoNumbers.length < MAX_NUMBERS_PER_AGENT && (
-                    <select value="" onChange={(e) => addNumber(e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
+                    <select aria-label="Add a number" value="" onChange={(e) => addNumber(e.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[13px]">
                       <option value="">
                         {plivoNumbers.isLoading ? "Loading your Plivo numbers…" : available.length === 0 ? "No other numbers on your Plivo account" : f.plivoNumbers.length ? "Add another number…" : "Add a number…"}
                       </option>
@@ -882,12 +882,12 @@ function AgentDialog({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>xAI phone number <span className="font-normal text-muted-foreground">(optional)</span></Label>
-              <Input value={f.phoneNumber} onChange={(e) => set("phoneNumber", e.target.value)} placeholder="+1 555 0100" />
+              <Input aria-label="xAI phone number" value={f.phoneNumber} onChange={(e) => set("phoneNumber", e.target.value)} placeholder="+1 555 0100" />
               <p className="text-[11.5px] text-muted-foreground">Only for a number registered in xAI's console. Leave blank when using Plivo.</p>
             </div>
             <div className="space-y-1.5">
               <Label>Webhook signing secret</Label>
-              <Input
+              <Input aria-label="Webhook signing secret"
                 type="password"
                 value={f.secret}
                 onChange={(e) => set("secret", e.target.value)}
@@ -901,7 +901,7 @@ function AgentDialog({
           {f.purpose === "outbound_outreach" && (
             <div className="space-y-1.5">
               <Label>Discovery questions <span className="font-normal text-muted-foreground">(optional, one per line, up to 8)</span></Label>
-              <textarea
+              <textarea aria-label="Discovery questions"
                 value={f.discoveryQuestions}
                 onChange={(e) => set("discoveryQuestions", e.target.value)}
                 rows={4}
@@ -917,7 +917,7 @@ function AgentDialog({
 
           <div className="space-y-1.5 sm:w-1/2">
             <Label>Language hint <span className="font-normal text-muted-foreground">(optional)</span></Label>
-            <Input value={f.languageHint} onChange={(e) => set("languageHint", e.target.value)} placeholder="en" />
+            <Input aria-label="Language hint" value={f.languageHint} onChange={(e) => set("languageHint", e.target.value)} placeholder="en" />
           </div>
         </div>
 

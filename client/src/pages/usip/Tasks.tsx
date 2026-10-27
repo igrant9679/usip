@@ -72,7 +72,7 @@ function TaskItem({ t, onToggle, onCancel, members }: { t: TaskRow; onToggle: ()
   const href = entityHref(t);
   return (
     <li className="p-3 flex items-center gap-3">
-      <button onClick={onToggle} className="size-5 rounded border flex items-center justify-center shrink-0">
+      <button aria-label={t.status === "done" ? "Mark not done" : "Mark done"} onClick={onToggle} className="size-5 rounded border flex items-center justify-center shrink-0">
         {t.status === "done" && <Check className="size-3" />}
       </button>
       <div className="flex-1 min-w-0">
@@ -194,14 +194,14 @@ export default function Tasks() {
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2 text-xs">
             <span className="text-muted-foreground">Assignee</span>
-            <select className="bg-secondary rounded px-2 py-1" value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
+            <select aria-label="Assignee" className="bg-secondary rounded px-2 py-1" value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
               <option value="">Any</option>
               {memberOpts.map((m) => <option key={m.userId} value={String(m.userId)}>{m.name ?? `User ${m.userId}`}</option>)}
             </select>
           </div>
           <div className="flex items-center gap-2 text-xs">
             <span className="text-muted-foreground">Related</span>
-            <select className="bg-secondary rounded px-2 py-1" value={relTypeFilter} onChange={(e) => setRelTypeFilter(e.target.value)}>
+            <select aria-label="Related" className="bg-secondary rounded px-2 py-1" value={relTypeFilter} onChange={(e) => setRelTypeFilter(e.target.value)}>
               <option value="">Any</option>
               {["account", "contact", "lead", "opportunity", "prospect"].map((t) => <option key={t} value={t}>{t}</option>)}
             </select>

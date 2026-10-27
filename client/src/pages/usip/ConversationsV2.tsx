@@ -556,7 +556,7 @@ function ReplyDialog({ reply, onClose, onChanged }: { reply: Reply | null; onClo
                 )}
               </div>
             </div>
-            <Textarea value={replyText} onChange={(e) => setReplyText(e.target.value)} rows={4} className="text-[13px]" placeholder="Draft a reply with AI, or write your own…" />
+            <Textarea aria-label="Reply" value={replyText} onChange={(e) => setReplyText(e.target.value)} rows={4} className="text-[13px]" placeholder="Draft a reply with AI, or write your own…" />
           </div>
         </div>
 

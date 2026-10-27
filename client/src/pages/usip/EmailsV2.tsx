@@ -40,6 +40,7 @@ import {
 import { EMAIL_SOURCES, emailSourceLabel, type EmailFeedRow } from "@shared/emailActivity";
 import { ConfirmButton } from "@/components/usip/Common";
 import { AiComposeDialog, DraftEditorTools } from "@/components/usip/emails/DraftEditorTools";
+import { pressable } from "@/lib/pressable";
 
 /* ─── vocabulary ───────────────────────────────────────────────────────────── */
 
@@ -403,7 +404,7 @@ export default function EmailsV2() {
                   : "Off — AI drafts wait for your approval before sending."}
               </div>
             </div>
-            <Switch checked={!!s?.aiAutoSendEnabled} onCheckedChange={toggleAutoSend} disabled={updateSettings.isPending || !settings.data} />
+            <Switch aria-label="AI auto-send" checked={!!s?.aiAutoSendEnabled} onCheckedChange={toggleAutoSend} disabled={updateSettings.isPending || !settings.data} />
           </div>
 
           {/* Stats — every one of them clickable into the matching filter. */}
@@ -469,7 +470,7 @@ export default function EmailsV2() {
             <div className="flex-1 min-w-[140px]" />
             <div className="relative w-full sm:w-72">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-              <Input
+              <Input aria-label="Search emails"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search subject, recipient or body…"
@@ -506,7 +507,7 @@ export default function EmailsV2() {
                   <div
                     key={row.key}
                     className="flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40 cursor-pointer"
-                    onClick={() => setSelected(row)}
+                    {...pressable(() => setSelected(row))}
                   >
                     <span
                       className="shrink-0 size-7 rounded-full flex items-center justify-center"

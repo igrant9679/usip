@@ -80,7 +80,8 @@ export function InitialsAvatar({
       )}
       style={{
         backgroundColor: `hsl(${hue} 45% 92%)`,
-        color: `hsl(${hue} 55% 32%)`,
+        // 28%, not 32%: at least 4.7:1 on the 92% tint for every hue.
+        color: `hsl(${hue} 55% 28%)`,
       }}
     >
       {initialsFromName(name)}
@@ -267,7 +268,7 @@ export function ProfileImageUploader({
           disabled={busy}
           className={cn(
             "absolute inset-0 flex items-center justify-center rounded-full bg-foreground/45 text-[10px] font-medium text-background transition-opacity",
-            busy ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+            busy ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
           )}
           aria-label={`Upload a profile photo for ${name}`}
         >

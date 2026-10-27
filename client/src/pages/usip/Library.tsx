@@ -33,7 +33,7 @@ export default function Library() {
 
         <div className="relative max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-          <Input
+          <Input aria-label="Search tools"
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}

@@ -147,7 +147,7 @@ function GoalBar({
         </span>
         {editing ? (
           <div className="flex items-center gap-1">
-            <input
+            <input aria-label="Name"
               ref={inputRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -155,7 +155,7 @@ function GoalBar({
               onKeyDown={(e) => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") setEditing(false); }}
               className="w-20 border rounded px-1 py-0 text-[10px] bg-background text-foreground"
             />
-            <button
+            <button aria-label="Save"
               onClick={(e) => { e.preventDefault(); e.stopPropagation(); commitEdit(); }}
               className="text-emerald-500 hover:text-emerald-600"
             >
@@ -653,7 +653,7 @@ export default function Dashboard() {
                         <div className="text-right flex items-center gap-1">
                           <span className="font-mono font-semibold text-xs">{fmt$(rep.value)}</span>
                           <span className="text-muted-foreground text-xs">· {rep.count} deals</span>
-                          <ArrowRight className="size-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                          <ArrowRight className="size-3 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity" />
                         </div>
                       </div>
                       <div className="h-1.5 rounded-full bg-secondary overflow-hidden">

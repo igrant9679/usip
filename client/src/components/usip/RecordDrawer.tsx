@@ -17,6 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
+import { tablistProps, tabProps } from "@/lib/tabs";
 
 type RelatedType = "lead" | "contact" | "account" | "opportunity" | "customer";
 
@@ -861,7 +862,7 @@ function RecordDrawerForRecord({
           {subtitle && <div className="text-xs text-muted-foreground">{subtitle}</div>}
         </SheetHeader>
 
-        <div className="flex gap-1 border-b text-xs mt-2 overflow-x-auto">
+        <div {...tablistProps("Record sections")} className="flex gap-1 border-b text-xs mt-2 overflow-x-auto">
           {[
             ...(HAS_OVERVIEW.includes(relatedType) ? [{ k: "overview", label: "Overview" }] : []),
             { k: "timeline", label: "Timeline" },
@@ -878,7 +879,7 @@ function RecordDrawerForRecord({
             ...(relatedType === "contact" ? [{ k: "enrich", label: "AI Enrich" }] : []),
             ...(relatedType === "account" ? [{ k: "brief", label: "AI Brief" }] : []),
           ].map((t) => (
-            <button
+            <button {...tabProps(tab === t.k)}
               key={t.k}
               onClick={() => setTab(t.k as any)}
               className={`px-3 py-2 ${tab === t.k ? "border-b-2 border-[#14B89A] font-semibold" : "text-muted-foreground"}`}
@@ -902,7 +903,7 @@ function RecordDrawerForRecord({
                     <span className="ml-auto text-muted-foreground">{fmtDate(a.createdAt)}</span>
                     <ConfirmButton
                       ariaLabel="Delete activity"
-                      className="text-muted-foreground hover:text-destructive p-0.5 h-auto rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="text-muted-foreground hover:text-destructive p-0.5 h-auto rounded opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
                       title="Delete this activity?"
                       description="This activity will be permanently removed from the timeline. This cannot be undone."
                       confirmLabel="Delete"
@@ -963,23 +964,23 @@ function RecordDrawerForRecord({
             }} className="space-y-3">
               <div>
                 <div className="text-xs font-semibold mb-1">Disposition</div>
-                <select name="disposition" className="w-full border rounded-md px-3 py-2 text-sm h-10" defaultValue="connected">
+                <select aria-label="Disposition" name="disposition" className="w-full border rounded-md px-3 py-2 text-sm h-10" defaultValue="connected">
                   {DISPOSITIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <div className="text-xs font-semibold mb-1">Duration (seconds)</div>
-                  <input name="durationSec" type="number" min={0} defaultValue={120} className="w-full border rounded-md px-3 py-2 text-sm h-10" />
+                  <input aria-label="Duration (seconds)" name="durationSec" type="number" min={0} defaultValue={120} className="w-full border rounded-md px-3 py-2 text-sm h-10" />
                 </div>
                 <div>
                   <div className="text-xs font-semibold mb-1">Outcome (one line)</div>
-                  <input name="outcome" placeholder="Booked next meeting" className="w-full border rounded-md px-3 py-2 text-sm h-10" />
+                  <input aria-label="Outcome" name="outcome" placeholder="Booked next meeting" className="w-full border rounded-md px-3 py-2 text-sm h-10" />
                 </div>
               </div>
               <div>
                 <div className="text-xs font-semibold mb-1">Notes</div>
-                <textarea name="notes" rows={5} className="w-full border rounded-md px-3 py-2 text-sm" />
+                <textarea aria-label="Notes" name="notes" rows={5} className="w-full border rounded-md px-3 py-2 text-sm" />
               </div>
               <Button type="submit" disabled={logCall.isPending}>{logCall.isPending ? "Saving…" : "Log call"}</Button>
             </form>
@@ -999,19 +1000,19 @@ function RecordDrawerForRecord({
             }} className="space-y-3">
               <div>
                 <div className="text-xs font-semibold mb-1">Subject</div>
-                <input name="subject" required defaultValue="Discovery" className="w-full border rounded-md px-3 py-2 text-sm h-10" />
+                <input aria-label="Subject" name="subject" required defaultValue="Discovery" className="w-full border rounded-md px-3 py-2 text-sm h-10" />
               </div>
               <div>
                 <div className="text-xs font-semibold mb-1">Attendees (comma separated)</div>
-                <input name="attendees" placeholder="Alice, Bob, …" className="w-full border rounded-md px-3 py-2 text-sm h-10" />
+                <input aria-label="Attendees (comma separated)" name="attendees" placeholder="Alice, Bob, …" className="w-full border rounded-md px-3 py-2 text-sm h-10" />
               </div>
               <div>
                 <div className="text-xs font-semibold mb-1">Agenda</div>
-                <textarea name="agenda" rows={3} className="w-full border rounded-md px-3 py-2 text-sm" />
+                <textarea aria-label="Agenda" name="agenda" rows={3} className="w-full border rounded-md px-3 py-2 text-sm" />
               </div>
               <div>
                 <div className="text-xs font-semibold mb-1">Meeting notes</div>
-                <textarea name="notes" rows={6} className="w-full border rounded-md px-3 py-2 text-sm" />
+                <textarea aria-label="Meeting notes" name="notes" rows={6} className="w-full border rounded-md px-3 py-2 text-sm" />
               </div>
               <Button type="submit" disabled={logMeeting.isPending}>{logMeeting.isPending ? "Saving…" : "Log meeting"}</Button>
             </form>
@@ -1028,7 +1029,7 @@ function RecordDrawerForRecord({
               });
             }} className="space-y-3">
               <div className="text-xs text-muted-foreground">Use <code className="bg-secondary px-1 rounded">@[Name](user:1)</code> to @-mention a teammate. They'll get an in-app notification.</div>
-              <textarea name="body" required rows={6} placeholder="Quick update on this account…" className="w-full border rounded-md px-3 py-2 text-sm" />
+              <textarea aria-label="Update" name="body" required rows={6} placeholder="Quick update on this account…" className="w-full border rounded-md px-3 py-2 text-sm" />
               <Button type="submit" disabled={addNote.isPending}>{addNote.isPending ? "Saving…" : "Add note"}</Button>
             </form>
           )}
@@ -1162,7 +1163,7 @@ function RecordDrawerForRecord({
                     <Paperclip className="size-3 text-muted-foreground" />
                     <a href={f.url} target="_blank" rel="noreferrer" className="text-sm font-medium hover:underline flex-1 truncate">{f.fileName}</a>
                     <span className="text-[11px] text-muted-foreground">{Math.round(((f.sizeBytes ?? 0) / 1024))} KB</span>
-                    <button onClick={() => delAtt.mutate({ id: f.id })} className="text-muted-foreground hover:text-rose-600">
+                    <button aria-label="Delete attachment" onClick={() => delAtt.mutate({ id: f.id })} className="text-muted-foreground hover:text-rose-600">
                       <Trash2 className="size-3" />
                     </button>
                   </div>
@@ -1237,7 +1238,7 @@ function LeadEmailTab({
       </div>
       {aiMode && (
         <div className="space-y-2">
-          <Textarea
+          <Textarea aria-label="Describe the email"
             placeholder="Describe the email (e.g. 'Follow up on our demo last week, offer a free trial')"
             value={aiPrompt}
             onChange={(e) => onAiPromptChange(e.target.value)}
@@ -1251,7 +1252,7 @@ function LeadEmailTab({
       )}
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-muted-foreground">Subject</label>
-        <Input placeholder="Email subject…" value={subject} onChange={(e) => onSubjectChange(e.target.value)} />
+        <Input aria-label="Subject" placeholder="Email subject…" value={subject} onChange={(e) => onSubjectChange(e.target.value)} />
       </div>
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-muted-foreground">Body</label>
@@ -1330,7 +1331,7 @@ function ContactEmailTab({
       </div>
       {aiMode && (
         <div className="space-y-2">
-          <Textarea
+          <Textarea aria-label="Describe the email"
             placeholder="Describe the email (e.g. 'Follow up on our demo last week, offer a free trial')"
             value={aiPrompt}
             onChange={(e) => onAiPromptChange(e.target.value)}
@@ -1344,7 +1345,7 @@ function ContactEmailTab({
       )}
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-muted-foreground">Subject</label>
-        <Input placeholder="Email subject…" value={subject} onChange={(e) => onSubjectChange(e.target.value)} />
+        <Input aria-label="Subject" placeholder="Email subject…" value={subject} onChange={(e) => onSubjectChange(e.target.value)} />
       </div>
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-muted-foreground">Body</label>
@@ -1416,7 +1417,7 @@ function LinkedInActionsPanel({
       {/* Account selector */}
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-muted-foreground">Send from LinkedIn account</label>
-        <select
+        <select aria-label="Send from LinkedIn account"
           className="w-full border rounded-md px-3 py-2 text-sm h-10 bg-background"
           value={selectedAccountId}
           onChange={(e) => setSelectedAccountId(e.target.value)}
@@ -1432,7 +1433,7 @@ function LinkedInActionsPanel({
       {/* Profile ID / URL */}
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-muted-foreground">LinkedIn Profile URL or ID</label>
-        <input
+        <input aria-label="LinkedIn Profile URL or ID"
           className="w-full border rounded-md px-3 py-2 text-sm h-10 bg-background"
           placeholder="https://linkedin.com/in/username or profile_id"
           value={profileId}
@@ -1447,7 +1448,7 @@ function LinkedInActionsPanel({
           <UserPlus className="size-4 text-[#0A66C2]" />
           Send Connection Request
         </div>
-        <Textarea
+        <Textarea aria-label="Personal note"
           placeholder="Add a personal note (optional, max 300 chars)…"
           value={inviteMessage}
           onChange={(e) => setInviteMessage(e.target.value.slice(0, 300))}
@@ -1480,7 +1481,7 @@ function LinkedInActionsPanel({
           <MessageSquare className="size-4 text-[#0A66C2]" />
           Send Direct Message
         </div>
-        <Textarea
+        <Textarea aria-label={`Message to ${name}`}
           placeholder={`Write a message to ${name}…`}
           value={dmText}
           onChange={(e) => setDmText(e.target.value)}

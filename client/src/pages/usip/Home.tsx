@@ -278,7 +278,7 @@ export default function Home() {
           ) : (
             <>
               <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={startEdit}><Pencil className="size-3.5" /> Edit layout</Button>
-              <Button size="sm" className="h-8 gap-1.5" style={{ backgroundColor: accent }} onClick={() => setLocation("/are")}><Sparkles className="size-3.5" /> Generate Pipeline <ChevronDown className="size-3 opacity-70" /></Button>
+              <Button size="sm" className="h-8 gap-1.5" style={{ backgroundColor: `color-mix(in srgb, ${accent} 85%, black)` }} onClick={() => setLocation("/are")}><Sparkles className="size-3.5" /> Generate Pipeline <ChevronDown className="size-3 opacity-70" /></Button>
             </>
           )}
         </div>
@@ -372,7 +372,7 @@ export default function Home() {
             <aside className="w-80 shrink-0 border-l border-border bg-card flex flex-col min-h-0">
               <div className="flex items-center justify-between px-4 h-11 border-b border-border">
                 <h2 className="text-sm font-semibold">Widget library</h2>
-                <button onClick={() => setLibOpen(false)} className="p-1 text-muted-foreground hover:text-foreground"><X className="size-4" /></button>
+                <button aria-label="Close" onClick={() => setLibOpen(false)} className="p-1 text-muted-foreground hover:text-foreground"><X className="size-4" /></button>
               </div>
               <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5">
                 {CATEGORIES.map((cat) => {
@@ -404,7 +404,7 @@ export default function Home() {
                       {draft.map((k) => (
                         <span key={k} className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full bg-secondary text-muted-foreground">
                           {WIDGETS[k]?.title}
-                          <button onClick={() => removeWidget(k)} className="hover:text-destructive"><X className="size-3" /></button>
+                          <button aria-label="Remove widget" onClick={() => removeWidget(k)} className="hover:text-destructive"><X className="size-3" /></button>
                         </span>
                       ))}
                     </div>
@@ -440,8 +440,8 @@ function HeroChip({ label, value, series, color, onClick }: { label: string; val
       className="flex items-center gap-2.5 rounded-lg border bg-card px-3 py-1.5 shadow-sm transition-colors hover:bg-muted/60"
       style={{ borderColor: `${color}55` }}
     >
-      <span className="text-lg font-semibold tabular-nums" style={{ color }}>{value}</span>
-      <span className="text-[11.5px] leading-tight text-muted-foreground text-left">{label}<br /><span className="opacity-70">7-day trend</span></span>
+      <span className="text-lg font-semibold tabular-nums" style={{ color: `color-mix(in srgb, ${color} 60%, var(--foreground))` }}>{value}</span>
+      <span className="text-[11.5px] leading-tight text-muted-foreground text-left">{label}<br /><span>7-day trend</span></span>
       <Sparkline series={series} color={color} />
     </button>
   );

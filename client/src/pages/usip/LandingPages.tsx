@@ -4,7 +4,7 @@
  * it, and share the public /l/:slug URL. Management is Admin-only (the router
  * enforces it too); non-admins see a gate.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -12,6 +12,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { FieldLabelContext } from "@/components/ui/field-label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { confirmAction } from "@/components/usip/Common";
@@ -159,7 +160,7 @@ export default function LandingPages() {
             <div className="max-w-2xl mx-auto p-6 space-y-6">
               {/* Header actions */}
               <div className="flex items-center gap-2">
-                <Input value={form.name} onChange={(e) => patch("name", e.target.value)} className="h-9 text-base font-semibold flex-1" />
+                <Input aria-label="Page name" value={form.name} onChange={(e) => patch("name", e.target.value)} className="h-9 text-base font-semibold flex-1" />
                 {form.status === "published" ? (
                   <Button variant="outline" size="sm" className="h-8" onClick={() => setStatus.mutate({ id: form.id, status: "draft" })}>Unpublish</Button>
                 ) : (
@@ -185,7 +186,7 @@ export default function LandingPages() {
                 <Field label="Hero image URL"><Input value={form.heroImageUrl ?? ""} onChange={(e) => patch("heroImageUrl", e.target.value)} placeholder="https://…" /></Field>
                 <Field label="Theme color">
                   <div className="flex items-center gap-2">
-                    <input type="color" value={form.themeColor ?? "#14B89A"} onChange={(e) => patch("themeColor", e.target.value)} className="h-9 w-14 rounded border" />
+                    <input aria-label="Accent color" type="color" value={form.themeColor ?? "#14B89A"} onChange={(e) => patch("themeColor", e.target.value)} className="h-9 w-14 rounded border" />
                     <Input value={form.themeColor ?? ""} onChange={(e) => patch("themeColor", e.target.value)} className="w-32" />
                   </div>
                 </Field>
@@ -197,10 +198,10 @@ export default function LandingPages() {
                   <div key={i} className="rounded-lg border p-3 space-y-2 relative">
                     <div className="flex items-center gap-2">
                       <GripVertical className="size-4 text-muted-foreground" />
-                      <Input placeholder="Section heading" value={s.heading} onChange={(e) => { const n = [...form.sections]; n[i] = { ...s, heading: e.target.value }; patch("sections", n); }} className="flex-1" />
-                      <Button variant="ghost" size="icon" className="size-8 text-muted-foreground" onClick={() => patch("sections", form.sections.filter((_: any, j: number) => j !== i))}><Trash2 className="size-4" /></Button>
+                      <Input aria-label={`Section ${i + 1} heading`} placeholder="Section heading" value={s.heading} onChange={(e) => { const n = [...form.sections]; n[i] = { ...s, heading: e.target.value }; patch("sections", n); }} className="flex-1" />
+                      <Button aria-label="Remove section" variant="ghost" size="icon" className="size-8 text-muted-foreground" onClick={() => patch("sections", form.sections.filter((_: any, j: number) => j !== i))}><Trash2 className="size-4" /></Button>
                     </div>
-                    <Textarea rows={3} placeholder="Section body" value={s.body} onChange={(e) => { const n = [...form.sections]; n[i] = { ...s, body: e.target.value }; patch("sections", n); }} />
+                    <Textarea aria-label={`Section ${i + 1} body`} rows={3} placeholder="Section body" value={s.body} onChange={(e) => { const n = [...form.sections]; n[i] = { ...s, body: e.target.value }; patch("sections", n); }} />
                   </div>
                 ))}
                 <Button variant="outline" size="sm" className="gap-1" onClick={() => patch("sections", [...form.sections, { heading: "", body: "" }])}><Plus className="size-3.5" /> Add section</Button>
@@ -224,14 +225,14 @@ export default function LandingPages() {
                 </Field>
                 <div className="flex items-center justify-between">
                   <Label className="text-sm">Auto-create lead on submit</Label>
-                  <Switch checked={!!form.autoCreateLead} onCheckedChange={(v) => patch("autoCreateLead", v)} />
+                  <Switch aria-label="Auto-create lead on submit" checked={!!form.autoCreateLead} onCheckedChange={(v) => patch("autoCreateLead", v)} />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label className="text-sm">Auto-route to an owner</Label>
-                  <Switch checked={!!form.autoRoute} onCheckedChange={(v) => patch("autoRoute", v)} />
+                  <Switch aria-label="Auto-route to an owner" checked={!!form.autoRoute} onCheckedChange={(v) => patch("autoRoute", v)} />
                 </div>
                 <Field label="Auto-enroll new leads into a sequence">
-                  <select
+                  <select aria-label="Auto-enroll new leads"
                     className="h-9 w-full rounded-md border bg-background px-2 text-sm"
                     value={form.autoEnrollSequenceId ?? ""}
                     onChange={(e) => patch("autoEnrollSequenceId", e.target.value ? Number(e.target.value) : null)}
@@ -248,7 +249,7 @@ export default function LandingPages() {
                     <Label className="text-sm">Show "Book a meeting" button</Label>
                     <p className="text-[11px] text-muted-foreground">Adds a CTA linking to your self-serve booking page.</p>
                   </div>
-                  <Switch checked={!!form.showBookingCta} onCheckedChange={(v) => patch("showBookingCta", v)} />
+                  <Switch aria-label={`Show "Book a meeting" button`} checked={!!form.showBookingCta} onCheckedChange={(v) => patch("showBookingCta", v)} />
                 </div>
                 <Field label="Redirect URL after submit (optional)"><Input value={form.redirectUrl ?? ""} onChange={(e) => patch("redirectUrl", e.target.value)} placeholder="https://… (leave blank for a thank-you message)" /></Field>
               </Section>
@@ -321,10 +322,11 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  const id = useId();
   return (
     <div className="space-y-1.5">
-      <Label className="text-[13px]">{label}</Label>
-      {children}
+      <Label id={id} className="text-[13px]">{label}</Label>
+      <FieldLabelContext.Provider value={id}>{children}</FieldLabelContext.Provider>
     </div>
   );
 }

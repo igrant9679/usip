@@ -47,6 +47,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { QueryError } from "@/components/usip/Shell";
+import { tablistProps, tabProps } from "@/lib/tabs";
 
 /* ── inline donut chart ── */
 function Donut({ pct, color, sub }: { pct: number; color: string; sub?: string }) {
@@ -185,9 +186,9 @@ export default function DataEnrichment() {
         </div>
 
         {/* tabs */}
-        <div className="shrink-0 border-b border-border px-4 flex items-center gap-1 bg-card/40 overflow-x-auto">
+        <div {...tablistProps("Data enrichment")} className="shrink-0 border-b border-border px-4 flex items-center gap-1 bg-card/40 overflow-x-auto">
           {DATA_ENRICHMENT_TABS.map((t) => (
-            <button
+            <button {...tabProps(tab === t)}
               key={t}
               onClick={() => setTab(t)}
               className={cn("relative px-3 py-2 text-[13px] whitespace-nowrap transition-colors", tab === t ? "font-semibold" : "text-muted-foreground hover:text-foreground")}

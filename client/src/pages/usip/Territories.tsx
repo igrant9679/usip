@@ -40,7 +40,7 @@ export default function Territories() {
                     <div className="font-medium">{t.name}</div>
                     <div className="text-xs text-muted-foreground mt-0.5">Rules: {JSON.stringify(t.rules ?? {})}</div>
                   </div>
-                  <Button size="sm" variant="ghost" onClick={() => del.mutate({ id: t.id })}><Trash2 className="size-3.5" /></Button>
+                  <Button aria-label="Delete territory" size="sm" variant="ghost" onClick={() => del.mutate({ id: t.id })}><Trash2 className="size-3.5" /></Button>
                 </li>
               ))}
             </ul>
@@ -69,7 +69,7 @@ export default function Territories() {
                     <div className="text-xs text-muted-foreground text-right">
                       → {terr?.name ?? "(no territory)"} / {(owner as any)?.name ?? "(no owner)"}
                     </div>
-                    <Button size="sm" variant="ghost" onClick={() => delRule.mutate({ id: r.id })}><Trash2 className="size-3.5" /></Button>
+                    <Button aria-label="Delete rule" size="sm" variant="ghost" onClick={() => delRule.mutate({ id: r.id })}><Trash2 className="size-3.5" /></Button>
                   </li>
                 );
               })}

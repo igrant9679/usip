@@ -31,6 +31,7 @@ import {
   RefreshCw, Archive, ArrowLeft, Sparkles, Calendar, Gauge, BadgeCheck, Lock,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { pressable } from "@/lib/pressable";
 
 const RATING_STYLE: Record<string, string> = {
   excellent: "bg-emerald-100 text-emerald-800", good: "bg-blue-100 text-blue-800",
@@ -110,7 +111,7 @@ export default function CompanyProfile() {
                 <AddToMenu contactIds={(contacts ?? []).map((x: any) => x.id)} label={`Add ${(contacts ?? []).length} people to…`} />
               )}
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setLocation(`/v2/people?q=${encodeURIComponent(c.name ?? "")}`)}><Sparkles className="size-3.5" /> Find people</Button>
-              {isAdmin && <Button size="sm" variant="outline" className="gap-1.5 text-red-600" onClick={() => { confirmAction({ title: `Archive ${c.name}?`, description: "The company is hidden from active views. You can restore it later.", confirmLabel: "Archive", destructive: false }, () => { archive.mutate({ accountId: id }); }); }}><Archive className="size-3.5" /></Button>}
+              {isAdmin && <Button aria-label="Archive company" size="sm" variant="outline" className="gap-1.5 text-red-600" onClick={() => { confirmAction({ title: `Archive ${c.name}?`, description: "The company is hidden from active views. You can restore it later.", confirmLabel: "Archive", destructive: false }, () => { archive.mutate({ accountId: id }); }); }}><Archive className="size-3.5" /></Button>}
             </div>
           </div>
         </div>
@@ -150,7 +151,7 @@ export default function CompanyProfile() {
                 </thead>
                 <tbody>
                   {contacts.map((p: any) => (
-                    <tr key={`${p.kind}-${p.id}`} className="border-b border-border/50 hover:bg-muted/40 cursor-pointer" onClick={() => setLocation(p.kind === "prospect" ? `/prospects/${p.id}` : `/contacts/${p.id}`)}>
+                    <tr key={`${p.kind}-${p.id}`} className="border-b border-border/50 hover:bg-muted/40 cursor-pointer" {...pressable(() => setLocation(p.kind === "prospect" ? `/prospects/${p.id}` : `/contacts/${p.id}`), { row: true })}>
                       <td className="px-4 py-1.5 font-medium">{p.firstName} {p.lastName}</td>
                       <td className="px-2 py-1.5 text-muted-foreground max-w-[220px] truncate">{p.title || "—"}</td>
                       <td className="px-2 py-1.5 text-muted-foreground">{p.email || "—"}</td>
@@ -303,11 +304,11 @@ function BrandIdentityCard({ accountId, account, isAdmin }: {
         <div className="mb-3 flex items-end gap-2 flex-wrap rounded-md bg-muted/40 p-2.5">
           <div className="min-w-[180px]">
             <div className="text-[11px] text-muted-foreground mb-1">Name</div>
-            <Input className="h-7 text-[12px]" value={ovName} onChange={(e) => setOvName(e.target.value)} placeholder={account.name} />
+            <Input aria-label="Name" className="h-7 text-[12px]" value={ovName} onChange={(e) => setOvName(e.target.value)} placeholder={account.name} />
           </div>
           <div className="min-w-[180px]">
             <div className="text-[11px] text-muted-foreground mb-1">Domain</div>
-            <Input className="h-7 text-[12px]" value={ovDomain} onChange={(e) => setOvDomain(e.target.value)} placeholder="acme.com" />
+            <Input aria-label="Domain" className="h-7 text-[12px]" value={ovDomain} onChange={(e) => setOvDomain(e.target.value)} placeholder="acme.com" />
           </div>
           <Button size="sm" className="h-7 text-[12px]" disabled={setOverride.isPending || (!ovName.trim() && !ovDomain.trim())}
             onClick={() => setOverride.mutate({ accountId, ...(ovName.trim() ? { name: ovName.trim() } : {}), ...(ovDomain.trim() ? { domain: ovDomain.trim() } : {}) })}>

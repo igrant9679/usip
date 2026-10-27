@@ -253,7 +253,7 @@ function OverrideDialog({
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label className="text-xs font-medium">Target Industries</Label>
-            <Textarea
+            <Textarea aria-label="Target Industries"
               value={industries}
               onChange={(e) => setIndustries(e.target.value)}
               placeholder="e.g. SaaS, Fintech, Healthcare IT"
@@ -262,7 +262,7 @@ function OverrideDialog({
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs font-medium">Target Job Titles</Label>
-            <Textarea
+            <Textarea aria-label="Target Job Titles"
               value={titles}
               onChange={(e) => setTitles(e.target.value)}
               placeholder="e.g. VP Sales, Head of Revenue, CRO"
@@ -271,7 +271,7 @@ function OverrideDialog({
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs font-medium">Target Geographies <span className="font-normal text-muted-foreground">(one per line)</span></Label>
-            <Textarea
+            <Textarea aria-label="Target Geographies"
               value={geos}
               onChange={(e) => setGeos(e.target.value)}
               placeholder={"e.g.\nUnited States\nKentucky, United States\nGermany"}
@@ -280,7 +280,7 @@ function OverrideDialog({
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs font-medium">Target Tech Stack</Label>
-            <Input
+            <Input aria-label="Target Tech Stack"
               value={tech}
               onChange={(e) => setTech(e.target.value)}
               placeholder="e.g. Salesforce, HubSpot, Outreach"
@@ -290,7 +290,7 @@ function OverrideDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs font-medium">Company Size Min (employees)</Label>
-              <Input
+              <Input aria-label="Company Size Min (employees)"
                 value={sizeMin}
                 onChange={(e) => setSizeMin(e.target.value)}
                 placeholder="e.g. 50"
@@ -300,7 +300,7 @@ function OverrideDialog({
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs font-medium">Company Size Max</Label>
-              <Input
+              <Input aria-label="Company Size Max"
                 value={sizeMax}
                 onChange={(e) => setSizeMax(e.target.value)}
                 placeholder="e.g. 500"
@@ -313,7 +313,7 @@ function OverrideDialog({
             <Label className="text-xs font-medium text-destructive">
               Anti-patterns (disqualifiers)
             </Label>
-            <Textarea
+            <Textarea aria-label="Anti-patterns (disqualifiers)"
               value={antiPatterns}
               onChange={(e) => setAntiPatterns(e.target.value)}
               placeholder="e.g. Early-stage startups, Government, Non-profit"

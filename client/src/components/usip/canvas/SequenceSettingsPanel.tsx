@@ -7,6 +7,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { FieldLabelContext } from "@/components/ui/field-label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
@@ -89,10 +90,11 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  const id = React.useId();
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs">{label}</Label>
-      {children}
+      <Label id={id} className="text-xs">{label}</Label>
+      <FieldLabelContext.Provider value={id}>{children}</FieldLabelContext.Provider>
     </div>
   );
 }
@@ -144,7 +146,7 @@ export function SequenceSettingsPanel({ open, readOnly, name, description, exitC
         <Settings2 className="size-4 text-muted-foreground" />
         <span className="font-semibold text-sm">Sequence settings</span>
         {readOnly && <Badge variant="secondary" className="text-[10px] ml-1">read-only</Badge>}
-        <button onClick={onClose} className="ml-auto text-muted-foreground hover:text-foreground transition">
+        <button aria-label="Close" onClick={onClose} className="ml-auto text-muted-foreground hover:text-foreground transition">
           <X className="size-4" />
         </button>
       </div>
@@ -180,7 +182,7 @@ export function SequenceSettingsPanel({ open, readOnly, name, description, exitC
             {draftExit.map((cond) => (
               <div key={cond.type} className="flex items-center justify-between gap-2">
                 <span className="text-xs">{EXIT_LABELS[cond.type]}</span>
-                <Switch
+                <Switch aria-label={EXIT_LABELS[cond.type]}
                   checked={cond.enabled}
                   disabled={readOnly}
                   onCheckedChange={() => toggleExit(cond.type)}
@@ -230,7 +232,7 @@ export function SequenceSettingsPanel({ open, readOnly, name, description, exitC
           </div>
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs">Skip weekends</span>
-            <Switch
+            <Switch aria-label="Skip weekends"
               checked={draftSettings.skipWeekends ?? true}
               disabled={readOnly}
               onCheckedChange={(v) => patchSettings({ skipWeekends: v })}
@@ -246,7 +248,7 @@ export function SequenceSettingsPanel({ open, readOnly, name, description, exitC
               <div className="text-xs">Reply detection</div>
               <div className="text-[11px] text-muted-foreground">Auto-exit when a reply is detected</div>
             </div>
-            <Switch
+            <Switch aria-label="Reply detection"
               checked={draftSettings.replyDetection ?? true}
               disabled={readOnly}
               onCheckedChange={(v) => patchSettings({ replyDetection: v })}

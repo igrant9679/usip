@@ -16,6 +16,7 @@ import { trpc } from "../../lib/trpc";
 import { useTourEngine, type Tour } from "./TourEngine";
 import { toast } from "sonner";
 import { ChatMarkdown } from "@/components/usip/ChatMarkdown";
+import { tablistProps, tabProps } from "@/lib/tabs";
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
 
@@ -76,7 +77,7 @@ function SearchTab({ pageKey }: { pageKey: string }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="relative">
-        <input
+        <input aria-label="Search help articles"
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -240,7 +241,7 @@ function AskAITab({ pageKey }: { pageKey: string }) {
 
       {/* Input */}
       <div className="flex gap-2 pt-2 border-t border-border">
-        <input
+        <input aria-label="Ask a question"
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -386,6 +387,12 @@ export function HelpDrawer({ onClose }: { onClose: () => void }) {
   const [location] = useLocation();
   const pageKey = routeToPageKey(location);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const tabs: { id: Tab; label: string; icon: string }[] = [
     { id: "search", label: "Search", icon: "🔍" },
     { id: "ask", label: "Ask AI", icon: "🤖" },
@@ -395,20 +402,20 @@ export function HelpDrawer({ onClose }: { onClose: () => void }) {
   return (
     <>
       {/* Backdrop */}
-      <div
+      <div aria-hidden="true"
         className="fixed inset-0 z-[9970] bg-black/20"
         onClick={onClose}
       />
 
       {/* Drawer */}
-      <div className="fixed right-0 top-0 bottom-0 z-[9975] w-[380px] bg-card shadow-2xl flex flex-col">
+      <div role="dialog" aria-label="Help Center" className="fixed right-0 top-0 bottom-0 z-[9975] w-[380px] bg-card shadow-2xl flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <div className="flex items-center gap-2">
             <span className="text-violet-600 font-bold text-sm">Help Center</span>
             <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{pageKey}</span>
           </div>
-          <button
+          <button aria-label="Close"
             onClick={onClose}
             className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-muted text-muted-foreground hover:text-muted-foreground"
           >
@@ -417,9 +424,9 @@ export function HelpDrawer({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-border">
+        <div {...tablistProps("Help Center")} className="flex border-b border-border">
           {tabs.map((tab) => (
-            <button
+            <button {...tabProps(activeTab === tab.id)}
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors ${

@@ -141,7 +141,7 @@ function AchievementToast({ badge, onDismiss }: { badge: string; onDismiss: () =
         <p className="text-xs font-medium opacity-80">Achievement Unlocked</p>
         <p className="text-sm font-semibold">{badge.split(" ").slice(1).join(" ")}</p>
       </div>
-      <button onClick={onDismiss} className="ml-2 opacity-60 hover:opacity-100 text-lg">×</button>
+      <button aria-label="Dismiss tour" onClick={onDismiss} className="ml-2 opacity-60 hover:opacity-100 text-lg">×</button>
     </div>
   );
 }

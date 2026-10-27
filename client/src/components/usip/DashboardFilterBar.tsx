@@ -174,7 +174,7 @@ export function DashboardFilterBar({ filters, onChange, members = [] }: Dashboar
             <p className="text-xs font-medium">Custom date range</p>
             <div className="flex flex-col gap-1.5">
               <label className="text-[10px] text-muted-foreground uppercase tracking-wide">From</label>
-              <Input
+              <Input aria-label="From"
                 type="date"
                 className="h-7 text-xs"
                 value={filters.dateFrom ?? ""}
@@ -183,7 +183,7 @@ export function DashboardFilterBar({ filters, onChange, members = [] }: Dashboar
             </div>
             <div className="flex flex-col gap-1.5">
               <label className="text-[10px] text-muted-foreground uppercase tracking-wide">To</label>
-              <Input
+              <Input aria-label="To"
                 type="date"
                 className="h-7 text-xs"
                 value={filters.dateTo ?? ""}

@@ -722,7 +722,7 @@ function OauthLinkDialog({
         </DialogHeader>
         <div className="space-y-1.5">
           <Label>Email address</Label>
-          <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" autoFocus />
+          <Input aria-label="Email address" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" autoFocus />
         </div>
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="outline" size="sm" onClick={onBack}>Back</Button>
@@ -821,12 +821,12 @@ function EncryptionPicker({ value, onChange }: { value: string; onChange: (v: st
   );
 }
 
-function PasswordInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+function PasswordInput({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
   const [show, setShow] = useState(false);
   return (
     <div className="relative">
-      <Input type={show ? "text" : "password"} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="pr-9" autoComplete="new-password" />
-      <button type="button" tabIndex={-1} onClick={() => setShow((s) => !s)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" aria-label={show ? "Hide password" : "Show password"}>
+      <Input aria-label={label} type={show ? "text" : "password"} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="pr-9" autoComplete="new-password" />
+      <button type="button" onClick={() => setShow((s) => !s)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" aria-label={show ? "Hide password" : "Show password"}>
         {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
       </button>
     </div>
@@ -992,7 +992,7 @@ function SmtpImapFormDialog({
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label>Email Provider</Label>
-                  <select
+                  <select aria-label="Email Provider"
                     value={f.espProvider}
                     onChange={(e) => {
                       const v = e.target.value;
@@ -1020,33 +1020,33 @@ function SmtpImapFormDialog({
                 </div>
                 <div className="space-y-1.5">
                   <Label>Email Address</Label>
-                  <Input type="email" value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="email@address.com" />
+                  <Input aria-label="Email Address" type="email" value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="email@address.com" />
                 </div>
                 <div className="space-y-1.5">
                   <Label>First Name</Label>
-                  <Input value={f.firstName} onChange={(e) => set("firstName", e.target.value)} placeholder="First name" />
+                  <Input aria-label="First Name" value={f.firstName} onChange={(e) => set("firstName", e.target.value)} placeholder="First name" />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Last Name</Label>
-                  <Input value={f.lastName} onChange={(e) => set("lastName", e.target.value)} placeholder="Last name" />
+                  <Input aria-label="Last Name" value={f.lastName} onChange={(e) => set("lastName", e.target.value)} placeholder="Last name" />
                 </div>
                 {f.diffUsername && (
                   <div className="space-y-1.5">
                     <Label>SMTP Username</Label>
-                    <Input value={f.username} onChange={(e) => set("username", e.target.value)} placeholder="username" />
+                    <Input aria-label="SMTP Username" value={f.username} onChange={(e) => set("username", e.target.value)} placeholder="username" />
                   </div>
                 )}
                 <div className="space-y-1.5">
                   <Label>Password</Label>
-                  <PasswordInput value={f.password} onChange={(v) => set("password", v)} placeholder="App password" />
+                  <PasswordInput label="Password" value={f.password} onChange={(v) => set("password", v)} placeholder="App password" />
                 </div>
                 <div className="space-y-1.5">
                   <Label>SMTP Host</Label>
-                  <Input value={f.smtpHost} onChange={(e) => set("smtpHost", e.target.value)} placeholder="host.email.com" />
+                  <Input aria-label="SMTP Host" value={f.smtpHost} onChange={(e) => set("smtpHost", e.target.value)} placeholder="host.email.com" />
                 </div>
                 <div className="space-y-1.5">
                   <Label>SMTP Port</Label>
-                  <Input inputMode="numeric" value={f.smtpPort} onChange={(e) => set("smtpPort", e.target.value.replace(/\D/g, ""))} placeholder="123" />
+                  <Input aria-label="SMTP Port" inputMode="numeric" value={f.smtpPort} onChange={(e) => set("smtpPort", e.target.value.replace(/\D/g, ""))} placeholder="123" />
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1086,21 +1086,21 @@ function SmtpImapFormDialog({
                   <>
                     <div className="space-y-1.5">
                       <Label>Email Address</Label>
-                      <Input type="email" value={f.imapEmail} onChange={(e) => set("imapEmail", e.target.value)} placeholder="email@address.com" />
+                      <Input aria-label="Email Address" type="email" value={f.imapEmail} onChange={(e) => set("imapEmail", e.target.value)} placeholder="email@address.com" />
                     </div>
                     <div className="space-y-1.5">
                       <Label>Password</Label>
-                      <PasswordInput value={f.imapPassword} onChange={(v) => set("imapPassword", v)} />
+                      <PasswordInput label="IMAP password" value={f.imapPassword} onChange={(v) => set("imapPassword", v)} />
                     </div>
                   </>
                 )}
                 <div className="space-y-1.5">
                   <Label>IMAP Host</Label>
-                  <Input value={f.imapHost} onChange={(e) => set("imapHost", e.target.value)} placeholder="imap.email.com" />
+                  <Input aria-label="IMAP Host" value={f.imapHost} onChange={(e) => set("imapHost", e.target.value)} placeholder="imap.email.com" />
                 </div>
                 <div className="space-y-1.5">
                   <Label>IMAP Port</Label>
-                  <Input inputMode="numeric" value={f.imapPort} onChange={(e) => set("imapPort", e.target.value.replace(/\D/g, ""))} placeholder="993" />
+                  <Input aria-label="IMAP Port" inputMode="numeric" value={f.imapPort} onChange={(e) => set("imapPort", e.target.value.replace(/\D/g, ""))} placeholder="993" />
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1372,7 +1372,7 @@ function SignatureStep({ acct, save }: { acct: MailboxAccount; save: (p: Record<
         Email signatures add credibility and professionalism to your messages.
       </p>
       <div className="mt-5 rounded-xl border border-border bg-card">
-        <textarea
+        <textarea aria-label="Email signature"
           value={sig}
           onChange={(e) => setSig(e.target.value)}
           rows={9}
@@ -1490,7 +1490,7 @@ function LimitsStep({ acct, save }: { acct: MailboxAccount; save: (p: Record<str
               Emails sent per day (24-hour-period)
               <InfoTip text="The emails sent per day (daily limit) is the maximum number of emails you can send per mailbox within a 24-hour period. This calculation may vary depending on your email service provider (ESP)." />
             </Label>
-            <Input inputMode="numeric" value={daily} onChange={(e) => setDaily(e.target.value.replace(/\D/g, ""))} />
+            <Input aria-label="Emails sent per day (24-hour-period)" inputMode="numeric" value={daily} onChange={(e) => setDaily(e.target.value.replace(/\D/g, ""))} />
             <p className="text-xs text-muted-foreground">
               Recommended daily limit: 50, or 50+ if you're sending campaigns with a &gt; 5% reply rate and have a high domain reputation.
             </p>
@@ -1500,7 +1500,7 @@ function LimitsStep({ acct, save }: { acct: MailboxAccount; save: (p: Record<str
               Email sent per hour (optional)
               <InfoTip text="The emails sent per hour (hourly limit) is the maximum number of emails you can send per mailbox within a single hour. This limit helps prevent spam and keeps accounts safe." />
             </Label>
-            <Input inputMode="numeric" value={hourly} onChange={(e) => setHourly(e.target.value.replace(/\D/g, ""))} />
+            <Input aria-label="Email sent per hour (optional)" inputMode="numeric" value={hourly} onChange={(e) => setHourly(e.target.value.replace(/\D/g, ""))} />
             <p className="text-xs text-muted-foreground">Recommended hourly limit: 6 emails.</p>
           </div>
           <div className="space-y-1.5">
@@ -1508,7 +1508,7 @@ function LimitsStep({ acct, save }: { acct: MailboxAccount; save: (p: Record<str
               Delay between emails in seconds (optional)
               <InfoTip text="This is the time (in seconds) between sending consecutive emails. This helps ensure compliance, prevent spam, and maintain a good sender reputation." />
             </Label>
-            <Input inputMode="numeric" value={delay} onChange={(e) => setDelay(e.target.value.replace(/\D/g, ""))} />
+            <Input aria-label="Delay between emails in seconds (optional)" inputMode="numeric" value={delay} onChange={(e) => setDelay(e.target.value.replace(/\D/g, ""))} />
             <p className="text-xs text-muted-foreground">
               Recommended delay: 600 sec. The current delay will allow you to send at most {Number(delay) > 0 ? Math.max(1, Math.floor(3600 / Number(delay))) : "—"} emails/hour.
             </p>
@@ -1544,7 +1544,7 @@ function OptOutStep({ acct, save }: { acct: MailboxAccount; save: (p: Record<str
       </label>
       <div className="mt-4 space-y-1.5">
         <Label className={cn(!enabled && "text-muted-foreground/60")}>Message for your opt-out link</Label>
-        <textarea
+        <textarea aria-label="Message for your opt-out link"
           value={msg}
           onChange={(e) => setMsg(e.target.value)}
           onBlur={() => enabled && commit(enabled, msg)}

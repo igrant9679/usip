@@ -87,7 +87,7 @@ export function QuickEnrichSourceCard({
 
       <div className="space-y-1.5">
         <Label>QuickEnrich API key</Label>
-        <Input
+        <Input aria-label="QuickEnrich API key"
           type="password"
           value={key}
           onChange={(e) => setKey(e.target.value)}
@@ -113,7 +113,7 @@ export function QuickEnrichSourceCard({
 
       <div className="space-y-1.5">
         <Label>Daily pull cap</Label>
-        <Input
+        <Input aria-label="Daily pull cap"
           type="number"
           min={1}
           max={10000}

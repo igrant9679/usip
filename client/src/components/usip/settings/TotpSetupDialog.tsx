@@ -101,7 +101,7 @@ export function TotpSetupDialog({
             </div>
             <div className="space-y-1.5">
               <Label>Verification code</Label>
-              <Input
+              <Input aria-label="Verification code"
                 inputMode="numeric"
                 autoComplete="one-time-code"
                 placeholder="6-digit code"

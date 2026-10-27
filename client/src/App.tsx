@@ -16,6 +16,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import { WorkspaceBrandingSync } from "@/components/usip/WorkspaceBrandingSync";
 import { ConfirmProvider } from "@/components/usip/Common";
 import { safeReturnPath } from "@shared/returnPath";
+import { usePageTitle } from "@/lib/usePageTitle";
 import { lazyChunk } from "@/lib/lazyChunk";
 
 /*
@@ -146,6 +147,7 @@ function Landing() {
   const returnPath = safeReturnPath(params.get("returnPath"));
 
   const [mode, setMode] = useState<"signin" | "signup" | "forgot">("signin");
+  usePageTitle(mode === "signup" ? "Create account" : mode === "forgot" ? "Reset password" : "Sign in");
   /** Forgot-password confirmation. Deliberately shown for ANY address — see below. */
   const [resetSent, setResetSent] = useState(false);
   const [name, setName] = useState("");
@@ -251,8 +253,8 @@ function Landing() {
       <div className="w-full max-w-sm space-y-6">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <svg className="size-6 text-[#60A5FA] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
-            <span className="text-3xl font-bold tracking-tight text-white">Velocity</span>
+            <svg aria-hidden="true" className="size-6 text-[#60A5FA] shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L4.09 12.97 12 12l-1 9 8.91-10.97L12 11l1-9z"/></svg>
+            <h1 className="text-3xl font-bold tracking-tight text-white">Velocity</h1>
           </div>
           <p className="text-[#A5B4FC] text-sm tracking-wide">The Unified Revenue Intelligence Platform</p>
         </div>
@@ -300,11 +302,10 @@ function Landing() {
                 className="bg-white/10 border-white/20 text-white placeholder:text-white/30 focus:border-[#14B89A] pr-10"
                 disabled={loading}
               />
-              <button
+              <button aria-label={showPassword ? "Hide password" : "Show password"}
                 type="button"
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/70"
                 onClick={() => setShowPassword((v) => !v)}
-                tabIndex={-1}
               >
                 {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>

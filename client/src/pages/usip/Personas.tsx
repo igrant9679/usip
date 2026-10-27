@@ -256,10 +256,10 @@ export default function Personas() {
         </div>
       </div>
       <div className="flex gap-1 shrink-0">
-        <Button size="sm" variant="ghost" onClick={() => startEdit(p)}>
+        <Button aria-label="Edit persona" size="sm" variant="ghost" onClick={() => startEdit(p)}>
           <Pencil className="size-3.5" />
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => remove(p.id)}>
+        <Button aria-label="Delete persona" size="sm" variant="ghost" onClick={() => remove(p.id)}>
           <Trash2 className="size-3.5 text-destructive" />
         </Button>
       </div>
@@ -410,7 +410,7 @@ export default function Personas() {
           </DialogHeader>
           <div className="space-y-2">
             <Label>Name</Label>
-            <Input
+            <Input aria-label="Name"
               value={catName}
               onChange={(e) => setCatName(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveCategory(); } }}

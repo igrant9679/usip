@@ -330,7 +330,7 @@ export default function UnifiedInbox() {
             <div className="p-3 border-b space-y-2 shrink-0">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
+                <Input aria-label="Search conversations"
                   placeholder="Search conversations..."
                   className="pl-9 h-8 text-sm"
                   value={search}
@@ -401,7 +401,7 @@ export default function UnifiedInbox() {
                       <ProviderBadge provider={selectedChat.provider} />
                     </div>
                   </div>
-                  <Button variant="ghost" size="sm" onClick={() => refetchMessages()}>
+                  <Button aria-label="Refresh" variant="ghost" size="sm" onClick={() => refetchMessages()}>
                     <RefreshCw className="h-4 w-4" />
                   </Button>
                 </div>
@@ -440,7 +440,7 @@ export default function UnifiedInbox() {
                         compact
                       />
                     </div>
-                    <Button
+                    <Button aria-label="Send"
                       onClick={handleSend}
                       disabled={!replyText.trim() || isSending}
                       className="h-10 px-4"

@@ -29,7 +29,7 @@ export function AssistantDrawer() {
   if (!open) return null;
   return (
     <>
-      <div className="fixed inset-0 z-[9970] bg-black/20" onClick={() => assistantStore.close()} />
+      <div aria-hidden="true" className="fixed inset-0 z-[9970] bg-black/20" onClick={() => assistantStore.close()} />
       <div role="dialog" aria-label="AI Assistant" data-tour-id="assistant-drawer" className="fixed right-0 top-0 bottom-0 z-[9975] w-[440px] max-w-[100vw] bg-card shadow-2xl flex flex-col">
         <div className="flex items-center justify-between px-4 h-11 border-b border-border shrink-0">
           <div className="flex items-center gap-2">

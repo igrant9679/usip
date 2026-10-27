@@ -220,7 +220,7 @@ export default function PromptTemplatesPage() {
                             </span>
                           </div>
                         </div>
-                        <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0">
                           {!t.isActive && (
                             <Button
                               size="icon"
@@ -232,13 +232,13 @@ export default function PromptTemplatesPage() {
                               <Star size={12} />
                             </Button>
                           )}
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(t)}>
+                          <Button aria-label="Edit template" size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(t)}>
                             <Edit2 size={12} />
                           </Button>
-                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleDuplicate(t)}>
+                          <Button aria-label="Duplicate template" size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleDuplicate(t)}>
                             <Copy size={12} />
                           </Button>
-                          <Button
+                          <Button aria-label="Delete template"
                             size="icon"
                             variant="ghost"
                             className="h-7 w-7 hover:text-destructive"
@@ -278,7 +278,7 @@ export default function PromptTemplatesPage() {
             <div className="grid grid-cols-3 gap-3">
               <div className="col-span-2 space-y-1.5">
                 <Label>Template Name *</Label>
-                <Input
+                <Input aria-label="Template Name"
                   value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   placeholder="e.g. Warm Intro v2"
@@ -310,7 +310,7 @@ export default function PromptTemplatesPage() {
             )}
             <div className="space-y-1.5">
               <Label>Prompt Text *</Label>
-              <Textarea
+              <Textarea aria-label="Prompt Text"
                 value={form.promptText}
                 onChange={(e) => setForm((f) => ({ ...f, promptText: e.target.value }))}
                 placeholder="Write a {{goal}} email to {{firstName}} at {{company}}…"

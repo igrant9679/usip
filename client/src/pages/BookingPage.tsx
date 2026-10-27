@@ -15,12 +15,14 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CalendarCheck, CheckCircle2, Clock, Loader2, ChevronLeft } from "lucide-react";
 import ChatLauncher from "@/components/ChatLauncher";
+import { usePageTitle } from "@/lib/usePageTitle";
 
 export default function BookingPage() {
   const [, params] = useRoute("/b/:slug");
   const slug = params?.slug ?? "";
 
   const link = trpc.bookingLinks.getPublic.useQuery({ slug }, { enabled: !!slug, retry: false });
+  usePageTitle(link.data?.title);
   const book = trpc.bookingLinks.book.useMutation();
 
   const [selected, setSelected] = useState<string | null>(null);

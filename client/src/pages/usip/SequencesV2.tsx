@@ -35,6 +35,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { isAdminRole } from "@shared/roleRank";
+import { pressable } from "@/lib/pressable";
+import { tablistProps, tabProps } from "@/lib/tabs";
 
 const AI_STEPS = [
   { type: "email", subject: "Quick question, {{first_name}}", body: "Hi {{first_name}},\n\nNoticed {{company}} is scaling — wanted to share how teams like yours speed up pipeline. Worth a quick chat?\n\nBest," },
@@ -219,9 +221,9 @@ export default function SequencesV2() {
             <div className="flex-1" />
             {can("manage_sequences") && <Button size="sm" className="h-7 gap-1.5" style={{ backgroundColor: accent }} onClick={() => setChoiceOpen(true)}><Plus className="size-3.5" /> Create sequence</Button>}
           </div>
-          <div className="flex items-center gap-1 mt-1.5">
+          <div {...tablistProps("Sequences")} className="flex items-center gap-1 mt-1.5">
             {TABS.map((t) => (
-              <button key={t} onClick={() => setTab(t)} className={cn("relative px-3 py-2 text-[13px] transition-colors", tab === t ? "font-semibold" : "text-muted-foreground hover:text-foreground")} style={tab === t ? { color: accent } : undefined}>
+              <button {...tabProps(tab === t)} key={t} onClick={() => setTab(t)} className={cn("relative px-3 py-2 text-[13px] transition-colors", tab === t ? "font-semibold" : "text-muted-foreground hover:text-foreground")} style={tab === t ? { color: accent } : undefined}>
                 {t}
                 {tab === t && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full" style={{ backgroundColor: accent }} />}
               </button>
@@ -240,8 +242,8 @@ export default function SequencesV2() {
               <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => setHideFilters((v) => !v)}><Filter className="size-4" /> {hideFilters ? "Show" : "Hide"} filters{activeCount ? ` (${activeCount})` : ""}</Button>
               <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-sm min-w-0 flex-1 max-w-xs">
                 <Search className="size-4 text-muted-foreground shrink-0" />
-                <input value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search sequences…" />
-                {search && <button onClick={() => setSearch("")}><X className="size-3.5 text-muted-foreground" /></button>}
+                <input aria-label="Search sequences" value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search sequences…" />
+                {search && <button aria-label="Clear search" onClick={() => setSearch("")}><X className="size-3.5 text-muted-foreground" /></button>}
               </div>
               <div className="flex-1" />
               <Button variant="ghost" size="sm" className="gap-1.5"><Save className="size-4" /> Save as new view</Button>
@@ -312,7 +314,7 @@ export default function SequencesV2() {
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 z-10 bg-card border-b border-border">
                       <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                        <th className="w-10 px-3 py-1.5"><Checkbox checked={allChecked} onCheckedChange={toggleAll} className="size-3.5" /></th>
+                        <th className="w-10 px-3 py-1.5"><Checkbox aria-label="Select all" checked={allChecked} onCheckedChange={toggleAll} className="size-3.5" /></th>
                         <th className="px-2 py-1.5 font-medium">Name</th>
                         <th className="px-2 py-1.5 font-medium">Status</th>
                         <th className="px-2 py-1.5 font-medium text-right">Steps</th>
@@ -323,9 +325,9 @@ export default function SequencesV2() {
                     </thead>
                     <tbody>
                       {rows.map((s) => (
-                        <tr key={s.id} className="border-b border-border/60 hover:bg-muted/40 cursor-pointer" onClick={() => setLocation(`/v2/sequences/${s.id}`)}>
+                        <tr key={s.id} className="border-b border-border/60 hover:bg-muted/40 cursor-pointer" {...pressable(() => setLocation(`/v2/sequences/${s.id}`), { row: true })}>
                           <td className="px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
-                            <Checkbox checked={checked.has(s.id)} onCheckedChange={() => setChecked((p) => { const n = new Set(p); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; })} className="size-3.5" />
+                            <Checkbox aria-label={`Select ${s.name}`} checked={checked.has(s.id)} onCheckedChange={() => setChecked((p) => { const n = new Set(p); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; })} className="size-3.5" />
                           </td>
                           <td className="px-2 py-1.5 font-medium">
                             <div className="max-w-[280px] truncate" title={s.name}>{s.name}</div>
@@ -337,7 +339,7 @@ export default function SequencesV2() {
                           <td className="px-2 py-1.5 text-xs text-muted-foreground">{fmtWhen(s.updatedAt)}</td>
                           <td className="px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
                             <DropdownMenu>
-                              <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
+                              <DropdownMenuTrigger asChild><Button aria-label="Sequence actions" variant="ghost" size="icon-sm"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
                                 <DropdownMenuItem onClick={() => setLocation(`/v2/sequences/${s.id}`)}><ExternalLink className="size-4 mr-2" /> Open in builder</DropdownMenuItem>
                                 {/* Phase 6: a sequence is a fixed-copy campaign in the one engine. */}
@@ -413,11 +415,11 @@ export default function SequencesV2() {
           <div className="space-y-3 py-1">
             <div>
               <div className="text-[13px] font-medium mb-1.5">Sequence name</div>
-              <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Q3 outbound — VPs of Sales" autoFocus onKeyDown={(e) => { if (e.key === "Enter" && newName.trim()) createMut.mutate({ name: newName.trim(), description: newDesc.trim() || undefined, steps: [] }); }} />
+              <Input aria-label="Sequence name" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Q3 outbound — VPs of Sales" autoFocus onKeyDown={(e) => { if (e.key === "Enter" && newName.trim()) createMut.mutate({ name: newName.trim(), description: newDesc.trim() || undefined, steps: [] }); }} />
             </div>
             <div>
               <div className="text-[13px] font-medium mb-1.5">Description <span className="text-muted-foreground font-normal">(optional)</span></div>
-              <textarea value={newDesc} onChange={(e) => setNewDesc(e.target.value)} rows={3} className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2" style={{ ["--tw-ring-color" as any]: `${accent}55` }} />
+              <textarea aria-label="Description" value={newDesc} onChange={(e) => setNewDesc(e.target.value)} rows={3} className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2" style={{ ["--tw-ring-color" as any]: `${accent}55` }} />
             </div>
           </div>
           <DialogFooter>

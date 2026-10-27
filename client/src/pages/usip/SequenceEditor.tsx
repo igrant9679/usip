@@ -27,6 +27,8 @@ import {
   PauseCircle, PlayCircle,
   Loader2, Users, Activity as ActivityIcon, BarChart3, Settings2, X,
 } from "lucide-react";
+import { pressable } from "@/lib/pressable";
+import { tablistProps, tabProps } from "@/lib/tabs";
 
 /**
  * `enabled: false` marks a RETIRED step: the send engine skips it entirely.
@@ -155,9 +157,9 @@ export default function SequenceEditor() {
             </Button>
           </div>
           {/* tabs */}
-          <div className="flex items-center gap-1">
+          <div {...tablistProps("Sequence sections")} className="flex items-center gap-1">
             {TABS.map((t) => (
-              <button key={t} onClick={() => setTab(t)} className={cn("relative px-3 py-2 text-[13px] transition-colors", tab === t ? "font-semibold" : "text-muted-foreground hover:text-foreground")} style={tab === t ? { color: accent } : undefined}>
+              <button {...tabProps(tab === t)} key={t} onClick={() => setTab(t)} className={cn("relative px-3 py-2 text-[13px] transition-colors", tab === t ? "font-semibold" : "text-muted-foreground hover:text-foreground")} style={tab === t ? { color: accent } : undefined}>
                 {t}{tab === t && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full" style={{ backgroundColor: accent }} />}
               </button>
             ))}
@@ -191,7 +193,7 @@ export default function SequenceEditor() {
                     const retired = (s as any).enabled === false;
                     return (
                       <div key={i} className={cn("rounded-xl border bg-card shadow-sm", retired && "border-dashed opacity-70")}>
-                        <div className="flex items-center gap-3 px-3 py-2.5 cursor-pointer" onClick={() => setExpanded(open ? null : i)}>
+                        <div className="flex items-center gap-3 px-3 py-2.5 cursor-pointer" {...pressable(() => setExpanded(open ? null : i))}>
                           <GripVertical className="size-4 text-muted-foreground/50 shrink-0" />
                           <span
                             className="shrink-0 size-7 rounded-lg flex items-center justify-center text-[11px] font-bold"
@@ -220,9 +222,9 @@ export default function SequenceEditor() {
                             >
                               {retired ? <PlayCircle className="size-3.5" /> : <PauseCircle className="size-3.5" />}
                             </Button>
-                            <Button variant="ghost" size="icon-sm" disabled={i === 0} onClick={() => moveStep(i, -1)}><ArrowUp className="size-3.5" /></Button>
-                            <Button variant="ghost" size="icon-sm" disabled={i === steps.length - 1} onClick={() => moveStep(i, 1)}><ArrowDown className="size-3.5" /></Button>
-                            <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => removeStep(i)}><Trash2 className="size-3.5" /></Button>
+                            <Button aria-label="Move step up" variant="ghost" size="icon-sm" disabled={i === 0} onClick={() => moveStep(i, -1)}><ArrowUp className="size-3.5" /></Button>
+                            <Button aria-label="Move step down" variant="ghost" size="icon-sm" disabled={i === steps.length - 1} onClick={() => moveStep(i, 1)}><ArrowDown className="size-3.5" /></Button>
+                            <Button aria-label="Delete step" variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => removeStep(i)}><Trash2 className="size-3.5" /></Button>
                             <ChevronDown className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-180")} />
                           </div>
                         </div>
@@ -301,11 +303,11 @@ export default function SequenceEditor() {
                 <h2 className="text-sm font-semibold flex items-center gap-2"><Settings2 className="size-4" style={{ color: accent }} /> Sequence settings</h2>
                 <div>
                   <div className="text-[12px] font-medium mb-1">Sequence name</div>
-                  <Input value={name} onChange={(e) => setName(e.target.value)} />
+                  <Input aria-label="Sequence name" value={name} onChange={(e) => setName(e.target.value)} />
                 </div>
                 <div>
                   <div className="text-[12px] font-medium mb-1">Description</div>
-                  <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2" style={{ ["--tw-ring-color" as any]: `${accent}55` }} />
+                  <textarea aria-label="Description" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2" style={{ ["--tw-ring-color" as any]: `${accent}55` }} />
                 </div>
                 <div className="flex items-center gap-2"><span className="text-[12px] text-muted-foreground">Status:</span> {statusBadge}</div>
                 <div className="flex justify-end">
@@ -348,7 +350,7 @@ function StepEditor({ step, onChange, accent }: { step: Step; onChange: (patch: 
   if (step.type === "email") {
     return (
       <>
-        <Input value={step.subject} placeholder="Subject line" onChange={(e) => onChange({ subject: e.target.value } as any)} />
+        <Input aria-label="Subject" value={step.subject} placeholder="Subject line" onChange={(e) => onChange({ subject: e.target.value } as any)} />
         <RichTextEditor
           value={step.body ?? ""}
           placeholder="Write your email… Use {{first_name}} for personalization."
@@ -368,10 +370,10 @@ function StepEditor({ step, onChange, accent }: { step: Step; onChange: (patch: 
     );
   }
   if (step.type === "task") {
-    return <textarea value={step.body} placeholder="What should the rep do? (e.g. Call and reference their recent funding)" rows={3} className={ta} style={ring} onChange={(e) => onChange({ body: e.target.value } as any)} />;
+    return <textarea aria-label="Task instructions" value={step.body} placeholder="What should the rep do? (e.g. Call and reference their recent funding)" rows={3} className={ta} style={ring} onChange={(e) => onChange({ body: e.target.value } as any)} />;
   }
   if (step.type === "linkedin_invite") {
-    return <textarea value={step.note ?? ""} placeholder="Connection request note (optional, 300 char max)" rows={3} maxLength={300} className={ta} style={ring} onChange={(e) => onChange({ note: e.target.value } as any)} />;
+    return <textarea aria-label="Connection request note" value={step.note ?? ""} placeholder="Connection request note (optional, 300 char max)" rows={3} maxLength={300} className={ta} style={ring} onChange={(e) => onChange({ note: e.target.value } as any)} />;
   }
-  return <textarea value={step.body ?? ""} placeholder="LinkedIn message…" rows={4} className={ta} style={ring} onChange={(e) => onChange({ body: e.target.value } as any)} />;
+  return <textarea aria-label="LinkedIn message" value={step.body ?? ""} placeholder="LinkedIn message…" rows={4} className={ta} style={ring} onChange={(e) => onChange({ body: e.target.value } as any)} />;
 }

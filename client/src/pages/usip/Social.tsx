@@ -129,7 +129,7 @@ export default function Social() {
 
         <Section title="Publish a LinkedIn post">
           <div className="p-3 space-y-2">
-            <textarea
+            <textarea aria-label="Post"
               value={postBody}
               onChange={(e) => setPostBody(e.target.value)}
               rows={4}
@@ -149,7 +149,7 @@ export default function Social() {
         <Section title="Engage a prospect's posts">
           <div className="p-3 space-y-3">
             <div className="flex gap-1.5">
-              <input
+              <input aria-label="LinkedIn profile URL or public id"
                 value={engageId}
                 onChange={(e) => setEngageId(e.target.value)}
                 placeholder="LinkedIn profile URL or public id (e.g. john-doe)"
@@ -175,7 +175,7 @@ export default function Social() {
                       </div>
                       {commentFor === String(sid) && (
                         <div className="flex gap-1.5 pt-1">
-                          <input value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Write a comment…" className="flex-1 rounded-md border bg-background px-2 h-8 text-sm" onKeyDown={(e) => { if (e.key === "Enter" && commentText.trim()) commentPost.mutate({ socialId: String(sid), text: commentText.trim() }); }} />
+                          <input aria-label="Comment" value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Write a comment…" className="flex-1 rounded-md border bg-background px-2 h-8 text-sm" onKeyDown={(e) => { if (e.key === "Enter" && commentText.trim()) commentPost.mutate({ socialId: String(sid), text: commentText.trim() }); }} />
                           <Button size="sm" className="h-8" disabled={!commentText.trim() || commentPost.isPending} onClick={() => commentPost.mutate({ socialId: String(sid), text: commentText.trim() })}>Post</Button>
                         </div>
                       )}
