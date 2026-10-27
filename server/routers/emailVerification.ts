@@ -3,10 +3,12 @@
  * VER-001..VER-005 + Auto Re-Verify Scheduler + Health Snapshots + Trend
  */
 import { z } from "zod";
-import { and, desc, eq, gt, inArray, isNotNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, lt, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
-import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
+import { BULK_VERIFY_MAX, VERIFY_JOB_STALE_MS } from "@shared/verificationLimits";
+import { keySourceOf, sharedKeyPolicy, sharedUsedToday } from "../services/spend";
 import { getDb } from "../db";
 import {
   contacts,
@@ -47,6 +49,53 @@ async function getApiKey(workspaceId: number): Promise<string> {
     });
   }
   return key;
+}
+
+/* ─── Spend guards (audit 2026-10-20, P10) ───────────────────────────────── */
+
+type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+/** The workspace's verification job still in flight, if any: one at a time. */
+async function runningJobFor(db: Db, workspaceId: number) {
+  const [job] = await db
+    .select({ id: emailVerificationJobs.id, totalEmails: emailVerificationJobs.totalEmails, progressPct: emailVerificationJobs.progressPct })
+    .from(emailVerificationJobs)
+    .where(
+      and(
+        eq(emailVerificationJobs.workspaceId, workspaceId),
+        eq(emailVerificationJobs.status, "running"),
+        gt(emailVerificationJobs.createdAt, new Date(Date.now() - VERIFY_JOB_STALE_MS)),
+      ),
+    )
+    .limit(1);
+  return job ?? null;
+}
+
+/** Workspaces between "no job running" and the job row existing (two clicks, or a click and the cron). */
+const jobStarting = new Set<number>();
+
+/**
+ * How many more addresses the shared key's daily cap allows this workspace,
+ * or Infinity when it is on its own key or no cap is set.
+ */
+async function sharedHeadroom(workspaceId: number, apiKey: string): Promise<number> {
+  if (keySourceOf(apiKey, process.env.REOON_API_KEY) !== "shared") return Infinity;
+  const policy = await sharedKeyPolicy(workspaceId, "reoon");
+  if (policy.dailyCap === null) return Infinity;
+  return Math.max(0, policy.dailyCap - (await sharedUsedToday(workspaceId, "reoon")));
+}
+
+/** One address once, whatever case it was stored in. */
+function uniqueEmails(rows: Array<{ email: string | null }>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of rows) {
+    const e = (r.email ?? "").trim();
+    if (!e || seen.has(e.toLowerCase())) continue;
+    seen.add(e.toLowerCase());
+    out.push(e);
+  }
+  return out;
 }
 
 /* ─── Scheduler helpers (called server-side, not via tRPC) ──────────────── */
@@ -98,13 +147,22 @@ export async function snapshotHealthMetrics(workspaceId: number): Promise<void> 
   });
 }
 
-/** Trigger re-verification of stale risky/accept_all contacts for a workspace */
-export async function triggerScheduledReverify(workspaceId: number): Promise<void> {
+/**
+ * Trigger re-verification of stale risky/accept_all contacts for a workspace.
+ *
+ * Bounded (audit P10): at most BULK_VERIFY_MAX addresses, the longest-unchecked
+ * first, never while another job runs, and within the shared key's daily cap.
+ * Says what it did, so "Run Now" can too.
+ */
+export async function triggerScheduledReverify(
+  workspaceId: number,
+  triggeredByUserId: number | null = null,
+): Promise<{ started: boolean; emails: number; reason?: string }> {
   const db = await getDb();
-  if (!db) return;
+  if (!db) return { started: false, emails: 0, reason: "no database" };
 
   const apiKey = await getReoonKey(workspaceId);
-  if (!apiKey) return;
+  if (!apiKey) return { started: false, emails: 0, reason: "no Reoon key for this workspace" };
 
   const [settings] = await db
     .select()
@@ -112,14 +170,17 @@ export async function triggerScheduledReverify(workspaceId: number): Promise<voi
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
 
-  if (!settings?.reverifyIntervalDays) return; // Disabled
+  if (!settings?.reverifyIntervalDays) return { started: false, emails: 0, reason: "the re-verify schedule is off" };
 
   const intervalDays = settings.reverifyIntervalDays;
   const statuses = Array.isArray(settings.reverifyStatuses)
     ? (settings.reverifyStatuses as string[])
     : ["risky", "accept_all"];
 
-  if (statuses.length === 0) return;
+  if (statuses.length === 0) return { started: false, emails: 0, reason: "no statuses are selected for re-verify" };
+  if (jobStarting.has(workspaceId) || (await runningJobFor(db, workspaceId))) {
+    return { started: false, emails: 0, reason: "a verification job is already running" };
+  }
 
   // Cutoff: contacts verified more than N days ago (or never verified)
   const cutoff = new Date();
@@ -138,23 +199,32 @@ export async function triggerScheduledReverify(workspaceId: number): Promise<voi
           sql`${contacts.emailVerifiedAt} IS NULL`,
         ),
       ),
-    );
+    )
+    .orderBy(asc(contacts.emailVerifiedAt))
+    .limit(BULK_VERIFY_MAX);
 
-  const emailRows = staleContacts.filter((r) => r.email);
-  if (emailRows.length === 0) return;
+  const headroom = await sharedHeadroom(workspaceId, apiKey);
+  const emails = uniqueEmails(staleContacts).slice(0, Math.min(BULK_VERIFY_MAX, headroom));
+  if (emails.length === 0) {
+    return { started: false, emails: 0, reason: headroom === 0 ? "the shared Reoon key's daily cap is used up" : "no contacts are due for re-verify" };
+  }
 
-  const emails = emailRows.map((r) => r.email as string);
-  const task = await reoonCreateBulkTask(emails, apiKey);
-
-  await db.insert(emailVerificationJobs).values({
-    workspaceId,
-    reoonTaskId: String(task.task_id),
-    status: "running",
-    totalEmails: task.count_processing,
-    checkedEmails: 0,
-    progressPct: "0",
-    triggeredByUserId: null,
-  });
+  jobStarting.add(workspaceId);
+  try {
+    const task = await reoonCreateBulkTask(emails, apiKey, { workspaceId, feature: "emailVerification.reverify" });
+    await db.insert(emailVerificationJobs).values({
+      workspaceId,
+      reoonTaskId: String(task.task_id),
+      status: "running",
+      totalEmails: task.count_processing,
+      checkedEmails: 0,
+      progressPct: "0",
+      triggeredByUserId,
+    });
+    return { started: true, emails: Number(task.count_processing ?? emails.length) };
+  } finally {
+    jobStarting.delete(workspaceId);
+  }
 }
 
 /** Run daily maintenance for all workspaces with reverify enabled */
@@ -163,13 +233,14 @@ export async function runDailyVerificationMaintenance(): Promise<void> {
   if (!db) return;
 
   const allWorkspaces = await db
-    .select({ id: workspaces.id })
+    .select({ id: workspaces.id, archivedAt: workspaces.archivedAt })
     .from(workspaces);
 
   for (const ws of allWorkspaces) {
     try {
       await snapshotHealthMetrics(ws.id);
-      await triggerScheduledReverify(ws.id);
+      // An archived workspace is frozen: its schedule spends nothing (P10).
+      if (!ws.archivedAt) await triggerScheduledReverify(ws.id);
     } catch (e) {
       console.error(`[VerifyMaintenance] workspace ${ws.id} error:`, e);
     }
@@ -274,7 +345,7 @@ export const emailVerificationRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Contact has no email address." });
       }
 
-      const result = await reoonVerifySingle(contact.email, apiKey);
+      const result = await reoonVerifySingle(contact.email, apiKey, "power", { workspaceId: ctx.workspace.id, feature: "emailVerification.verifySingle" });
       const usipStatus = reoonStatusToUsip(result.status);
 
       await db
@@ -289,52 +360,86 @@ export const emailVerificationRouter = router({
       return { status: usipStatus, badge: VERIFICATION_BADGE[usipStatus], raw: result };
     }),
 
-  /** Start a bulk verification job for a list of contact IDs */
+  /**
+   * Start a bulk verification job.
+   *
+   * Audit P10: with no ids this verified EVERY contact in the workspace, for
+   * any member, on every click. Now: selected ids (up to BULK_VERIFY_MAX) for
+   * anyone; the whole workspace only for admins, and then the
+   * BULK_VERIFY_MAX longest-unchecked addresses; one job at a time; and never
+   * past the shared Reoon key's daily cap for this workspace.
+   */
   verifyBulk: workspaceProcedure
     .input(
       z.object({
-        contactIds: z.array(z.number()).optional(),
+        contactIds: z.array(z.number()).max(BULK_VERIFY_MAX, `Select at most ${BULK_VERIFY_MAX.toLocaleString()} contacts per verification job.`).optional(),
       }),
     )
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const wholeWorkspace = !input.contactIds || input.contactIds.length === 0;
+      if (wholeWorkspace && roleRank(ctx.member.role) < roleRank("admin")) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Select the contacts to verify. Only admins can verify the whole workspace." });
+      }
       const apiKey = await getApiKey(ctx.workspace.id);
-
-      const rows = await db
-        .select({ id: contacts.id, email: contacts.email })
-        .from(contacts)
-        .where(
-          input.contactIds && input.contactIds.length > 0
-            ? and(
-                eq(contacts.workspaceId, ctx.workspace.id),
-                inArray(contacts.id, input.contactIds),
-              )
-            : eq(contacts.workspaceId, ctx.workspace.id),
-        );
-
-      const emailRows = rows.filter((r) => r.email);
-      if (emailRows.length === 0) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "No contacts with email addresses found." });
+      const running = await runningJobFor(db, ctx.workspace.id);
+      if (running || jobStarting.has(ctx.workspace.id)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: running
+            ? `A verification job is already running (${running.totalEmails.toLocaleString()} addresses, ${Math.round(Number(running.progressPct ?? 0))}% done). Start the next one when it finishes.`
+            : "A verification job is starting. Try again in a moment.",
+        });
       }
 
-      const emails = emailRows.map((r) => r.email as string);
-      const task = await reoonCreateBulkTask(emails, apiKey);
+      const rows = wholeWorkspace
+        ? await db
+            .select({ id: contacts.id, email: contacts.email })
+            .from(contacts)
+            .where(and(eq(contacts.workspaceId, ctx.workspace.id), isNotNull(contacts.email)))
+            .orderBy(asc(contacts.emailVerifiedAt))
+            .limit(BULK_VERIFY_MAX)
+        : await db
+            .select({ id: contacts.id, email: contacts.email })
+            .from(contacts)
+            .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, input.contactIds!)));
 
-      const [job] = await db
-        .insert(emailVerificationJobs)
-        .values({
-          workspaceId: ctx.workspace.id,
-          reoonTaskId: String(task.task_id),
-          status: "running",
-          totalEmails: task.count_processing,
-          checkedEmails: 0,
-          progressPct: "0",
-          triggeredByUserId: ctx.user.id,
-        })
-        .$returningId();
+      const emails = uniqueEmails(rows);
+      if (emails.length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "No contacts with email addresses found." });
+      }
+      const headroom = await sharedHeadroom(ctx.workspace.id, apiKey);
+      if (emails.length > headroom) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: headroom === 0
+            ? "This workspace has used today's allowance on the shared Reoon key."
+            : `Today's allowance on the shared Reoon key has room for ${headroom.toLocaleString()} more addresses; this job has ${emails.length.toLocaleString()}. Select fewer, or try again tomorrow.`,
+        });
+      }
 
-      return { jobId: job.id, reoonTaskId: task.task_id, totalEmails: task.count_processing };
+      jobStarting.add(ctx.workspace.id);
+      try {
+        const task = await reoonCreateBulkTask(emails, apiKey, { workspaceId: ctx.workspace.id, feature: "emailVerification.verifyBulk" });
+
+        const [job] = await db
+          .insert(emailVerificationJobs)
+          .values({
+            workspaceId: ctx.workspace.id,
+            reoonTaskId: String(task.task_id),
+            status: "running",
+            totalEmails: task.count_processing,
+            checkedEmails: 0,
+            progressPct: "0",
+            triggeredByUserId: ctx.user.id,
+          })
+          .$returningId();
+
+        return { jobId: job.id, reoonTaskId: task.task_id, totalEmails: task.count_processing };
+      } finally {
+        jobStarting.delete(ctx.workspace.id);
+      }
     }),
 
   /** Poll a bulk verification job for progress and apply results when done */
@@ -468,10 +573,13 @@ export const emailVerificationRouter = router({
       return { ok: true };
     }),
 
-  /** Manually trigger a scheduled re-verify run for the workspace */
-  triggerReverifyNow: workspaceProcedure.mutation(async ({ ctx }) => {
-    await triggerScheduledReverify(ctx.workspace.id);
-    return { ok: true };
+  /**
+   * Manually trigger a scheduled re-verify run for the workspace. Admin-only,
+   * like the schedule it runs (P10: any member could start a workspace-wide
+   * paid job), and it says what it did instead of always "ok".
+   */
+  triggerReverifyNow: adminWsProcedure.mutation(async ({ ctx }) => {
+    return triggerScheduledReverify(ctx.workspace.id, ctx.user.id);
   }),
 
   /** Get historical trend data for the Email Health widget */

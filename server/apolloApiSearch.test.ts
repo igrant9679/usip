@@ -226,12 +226,14 @@ describe("the engine's Apollo source", () => {
     expect(fn).toContain("currentApolloPage(apPageState, apKey)");
     expect(fn).toContain("perPage: APOLLO_PAGE_SIZE");
     expect(fn).toContain("keywords: relaxed ? [] : targeting.keywords");
-    expect(fn).toMatch(/apolloSearchPeople\(campaign\.workspaceId, \{[\s\S]*?\bpage,\s*\}\)/);
+    // 2026-10-27 (audit Phase 3): the search names what spent it, for the spend report.
+    expect(fn).toMatch(/apolloSearchPeople\(campaign\.workspaceId, \{[\s\S]*?\bpage,\s*\}, "are\.discovery"\)/);
   });
 
   it("queues only rows the email lookup can use, within the record cap, and says why the rest were not", () => {
     expect(fn).toContain("res.prospects.filter(apolloEmailReady)");
-    expect(fn).toContain("ready.slice(0, headroom)");
+    // 2026-10-27 (audit A32): within the record cap AND this tick's open slots.
+    expect(fn).toContain("ready.slice(0, Math.max(0, Math.min(headroom, remaining)))");
     expect(fn).toContain("not queued: no LinkedIn URL, and no full name with a company domain");
     expect(fn).toContain("raw: kept.map(");
   });
@@ -243,7 +245,7 @@ describe("the engine's Apollo source", () => {
   });
 
   it("persists the cursor next to QuickEnrich's", () => {
-    expect(engine).toContain("discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size }, persistedState.ap ?? null)");
+    expect(engine).toContain("discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size }, persistedState.ap ?? null, remaining)");
     expect(engine).toContain("apolloNextPage = nextAp;");
     expect(engine).toContain("ap: apolloNextPage ?? persistedState.ap ?? null,");
   });

@@ -96,6 +96,13 @@ export function ReoonVerifierCard({
         />
       </div>
 
+      {status.data?.sharedKeyNote && (
+        <p className="text-[12px] text-muted-foreground">
+          The platform's shared key is not available here: {status.data.sharedKeyNote}. Paste this
+          workspace's own key, or ask the platform owner to allow the shared one.
+        </p>
+      )}
+
       {source === "env" && (
         <p className="text-[12px] text-muted-foreground">
           This workspace is running on the key set in the server environment. Saving a key

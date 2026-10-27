@@ -1977,6 +1977,16 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // endpoint; credits are spent later by the sweep's lookup pass, only on
   // delivery. Consumed by discoverViaQuickenrich in areEngine.
   quickenrichDailyPullCap: int("quickenrichDailyPullCap").default(50).notNull(),
+  // ── Shared deployment keys (migration 0215; owner decision 2026-10-27) ──
+  // The env REOON_API_KEY / QUICKENRICH_API_KEY are the platform's accounts.
+  // A workspace without its own key may use them only when the platform owner
+  // has switched this on (routers/spend.ts); getReoonKey/getQuickEnrichKey
+  // honour it. The daily caps bound that workspace's use of the shared key,
+  // counted from spend_ledger; NULL = no cap beyond the vendor's own.
+  sharedReoonKey: boolean("sharedReoonKey").default(false).notNull(),
+  sharedQuickenrichKey: boolean("sharedQuickenrichKey").default(false).notNull(),
+  sharedReoonDailyCap: int("sharedReoonDailyCap"),
+  sharedQuickenrichDailyCap: int("sharedQuickenrichDailyCap"),
   // Per-workspace ARE source checking ORDER (Migration 0172): AreSourceId[].
   // Read ONLY through @shared/areSources.resolveSourceOrder together with
   // areScraperSources (the EXISTING enable mask — one vocabulary, runtime-
@@ -2368,6 +2378,36 @@ export const usageCounters = mysqlTable(
   }),
 );
 export type UsageCounter = typeof usageCounters.$inferSelect;
+
+/**
+ * Every paid call, per workspace per UTC day (migration 0215, audit Phase 3).
+ * One row per (workspace, day, vendor, meter, model, keySource, feature),
+ * incremented atomically by services/spend.ts and nowhere else. workspaceId 0
+ * = a call no workspace could be found for. `meter` names the vendor's billing
+ * unit (input_tokens, power_credits, email_hits…), `keySource` whose account
+ * paid ("workspace" = its own key, "shared" = the deployment's).
+ */
+export const spendLedger = mysqlTable(
+  "spend_ledger",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    day: varchar("day", { length: 10 }).notNull(),
+    vendor: varchar("vendor", { length: 24 }).notNull(),
+    meter: varchar("meter", { length: 32 }).notNull(),
+    model: varchar("model", { length: 96 }).default("").notNull(),
+    keySource: varchar("keySource", { length: 12 }).notNull(),
+    feature: varchar("feature", { length: 96 }).default("").notNull(),
+    quantity: bigint("quantity", { mode: "number" }).default(0).notNull(),
+    calls: int("calls").default(0).notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    ux: uniqueIndex("ux_spend_row").on(t.workspaceId, t.day, t.vendor, t.meter, t.model, t.keySource, t.feature),
+    byDay: index("ix_spend_day").on(t.day),
+  }),
+);
+export type SpendLedgerRow = typeof spendLedger.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
    Visual Canvas Sequence Builder (Sprint 2 — Tier 1)

@@ -108,8 +108,11 @@ describe("the mechanism", () => {
     expect(callAt).toBeGreaterThan(brandAt);
     const stream = read("server/_core/llmStream.ts");
     const s = stream.slice(stream.indexOf("export async function* streamLLM("));
-    expect(s.indexOf("if (params.sendersBrand && params.workspaceId)")).toBeGreaterThan(-1);
-    expect(s.indexOf("if (params.sendersBrand && params.workspaceId)")).toBeLessThan(s.indexOf("switch (provider)"));
+    // 2026-10-27 (audit Phase 3): the stream resolves its workspace first, as invokeLLM does.
+    const streamResolveAt = s.indexOf("const workspaceId = params.workspaceId ?? getRequestWorkspaceId();");
+    expect(streamResolveAt).toBeGreaterThan(-1);
+    expect(s.indexOf("if (params.sendersBrand && workspaceId)")).toBeGreaterThan(streamResolveAt);
+    expect(s.indexOf("if (params.sendersBrand && workspaceId)")).toBeLessThan(s.indexOf("switch (provider)"));
   });
 
   it("appends to the first string system message", () => {

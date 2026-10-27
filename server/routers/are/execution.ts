@@ -49,7 +49,6 @@ import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../../_core/activeMembers";
 import { notifyOwner } from "../../_core/notification";
 import { areNotify } from "./notify";
-import { runSignalEnhancement } from "./signalEnhancement";
 import { isSendableChannel, unsendableReason } from "@shared/areSequenceSteps";
 import { markAreProspectReplied } from "../../services/are/stepHold";
 import { normaliseAreSuppression } from "../../services/suppression";
@@ -364,6 +363,9 @@ export async function processSignal(
     const replyText = String(rawPayload.body ?? rawPayload.text ?? rawPayload.message ?? "");
     if (replyText) {
       const sentResult = await invokeLLM({
+        // Signals arrive from webhooks and pollers, outside any request.
+        workspaceId,
+        feature: "are.processSignal",
         messages: [
           {
             role: "system",
@@ -537,8 +539,11 @@ export async function processSignal(
     }
   }
 
-  // Run Signal Enhancement Agent for positive engagement signals (non-blocking)
-  runSignalEnhancement(workspaceId, prospectQueueId, campaignId, signalType).catch(() => {/* non-fatal */});
+  // The Signal Enhancement Agent is OFF (audit 2026-10-20, A38): every open
+  // spent a model call on the platform key, unmetered, to write
+  // prospect_intelligence.enhancedHook, which nothing reads, plus a second
+  // notification. runSignalEnhancement stays in ./signalEnhancement for the
+  // day the sequence writer uses the hook; call it from here again then.
 
   // Fire ARE in-app notification for key events
   if (signalType === "email_open" || signalType === "email_click" || signalType === "linkedin_accepted") {
@@ -549,7 +554,7 @@ export async function processSignal(
         workspaceId,
         eventType: "signal_classified",
         title: "ARE: Engagement signal received",
-        body: `${p.firstName ?? ""} ${p.lastName ?? ""} at ${p.companyName ?? "unknown"} ${label}. Hook enhancement is running.`,
+        body: `${p.firstName ?? ""} ${p.lastName ?? ""} at ${p.companyName ?? "unknown"} ${label}.`,
         relatedId: campaignId,
         relatedType: "are_campaign",
       });

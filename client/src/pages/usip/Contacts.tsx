@@ -10,6 +10,7 @@ import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/comp
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { isEmptyEmailBody } from "@shared/emailBody";
+import { BULK_VERIFY_MAX } from "@shared/verificationLimits";
 import { EmailVerificationBadge } from "@/components/usip/EmailVerificationBadge";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -121,6 +122,9 @@ function BulkVerifyModal({
   }
 
   const emailCount = contactIds.length;
+  // One job carries at most BULK_VERIFY_MAX addresses (audit P10); say so
+  // before the click instead of failing after it.
+  const overCap = emailCount > BULK_VERIFY_MAX;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -154,8 +158,14 @@ function BulkVerifyModal({
               </div>
               <p className="text-xs text-muted-foreground">
                 Results will be applied to each contact record automatically. You can close this dialog and check back later.
+                Each address uses one Reoon credit.
               </p>
-              <Button onClick={handleStart} className="w-full gap-2">
+              {overCap && (
+                <p className="text-xs text-red-600 dark:text-red-400">
+                  One verification job can check at most {BULK_VERIFY_MAX.toLocaleString()} contacts. Select fewer and run it in parts.
+                </p>
+              )}
+              <Button onClick={handleStart} disabled={overCap} className="w-full gap-2">
                 <ShieldCheck className="h-4 w-4" />
                 Start Verification
               </Button>

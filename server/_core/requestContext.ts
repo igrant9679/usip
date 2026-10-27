@@ -19,6 +19,12 @@ type RequestStore = {
    * signed-in user.
    */
   clientIp?: string;
+  /**
+   * What the request is doing, for the spend report (services/spend): the
+   * tRPC path, set by the base middleware. Background engines have none and
+   * name themselves on each paid call.
+   */
+  feature?: string;
 };
 
 const als = new AsyncLocalStorage<RequestStore>();
@@ -68,4 +74,8 @@ export function getRequestUserId(): number | undefined {
 
 export function getRequestClientIp(): string | undefined {
   return als.getStore()?.clientIp;
+}
+
+export function getRequestFeature(): string | undefined {
+  return als.getStore()?.feature;
 }

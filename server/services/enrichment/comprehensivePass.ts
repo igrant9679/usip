@@ -228,12 +228,12 @@ export async function runComprehensiveEnrichment(opts: {
     // 3a. QuickEnrich (LinkedIn-keyed database; bills only on a hit).
     const qeKey = await getQuickEnrichKey(opts.workspaceId).catch(() => "");
     if (qeKey && p.linkedinUrl) {
-      const hit = await quickenrichFindEmailByLinkedIn(qeKey, p.linkedinUrl);
+      const hit = await quickenrichFindEmailByLinkedIn(qeKey, p.linkedinUrl, { workspaceId: opts.workspaceId, feature: "enrichFully" });
       if (hit.email) {
         let verification: string | undefined;
         try {
           const reoonKey = await getReoonKey(opts.workspaceId);
-          if (reoonKey) { verification = reoonStatusToUsip((await reoonVerifySingle(hit.email, reoonKey, "power")).status); credits.power += 1; }
+          if (reoonKey) { verification = reoonStatusToUsip((await reoonVerifySingle(hit.email, reoonKey, "power", { workspaceId: opts.workspaceId, feature: "enrichFully" })).status); credits.power += 1; }
         } catch { /* verification unavailable — candidate carries no verdict */ }
         const { conf, verification: v } = emailConfidence(verification, CONFIDENCE.quickenrichVerified);
         if (conf > 0) {

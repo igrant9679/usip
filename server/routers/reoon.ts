@@ -24,6 +24,7 @@ import { encryptSecret, maskSecret, tryDecryptSecret } from "../_core/crypto";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { getReoonKey, reoonCheckBalance } from "../services/reoon";
+import { sharedKeyUsable } from "../services/spend";
 
 async function ensureSettingsRow(workspaceId: number): Promise<void> {
   const db = await getDb();
@@ -51,13 +52,18 @@ export const reoonRouter = router({
 
     const workspaceKey = tryDecryptSecret(row?.enc);
     const envKey = process.env.REOON_API_KEY ?? "";
-    const effective = workspaceKey || envKey;
+    // The deployment's key counts only where getReoonKey would hand it out:
+    // the platform owner allowed this workspace, and today's cap has room.
+    const shared = !workspaceKey && envKey ? await sharedKeyUsable(ctx.workspace.id, "reoon") : null;
+    const effective = workspaceKey || (shared?.ok ? envKey : "");
 
     return {
       configured: effective.length > 0,
       masked: maskSecret(effective),
-      /** "workspace" = this workspace's own key, "env" = the deploy-wide fallback. */
-      source: workspaceKey ? ("workspace" as const) : envKey ? ("env" as const) : ("none" as const),
+      /** "workspace" = this workspace's own key, "env" = the deployment's, which the platform owner allowed here. */
+      source: workspaceKey ? ("workspace" as const) : shared?.ok ? ("env" as const) : ("none" as const),
+      /** Why the deployment's key is not in use, when it exists and this workspace has none of its own. */
+      sharedKeyNote: shared && !shared.ok ? shared.detail : null,
       /** Reoon = the optional FINAL verification step (migration 0157). */
       verificationEnabled: row?.enabled !== false,
     };
@@ -80,8 +86,9 @@ export const reoonRouter = router({
 
   /**
    * Set or clear the key. Admins only.
-   * - apiKey="" clears the column, which falls the workspace BACK to the env
-   *   var if the deployment sets one (it does not disable verification).
+   * - apiKey="" clears the column, which falls the workspace back to the
+   *   deployment's key only if the platform owner allowed it the shared key
+   *   (it does not disable verification).
    */
   upsert: adminWsProcedure
     .input(z.object({ apiKey: z.string() }))

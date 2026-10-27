@@ -276,7 +276,8 @@ describe("sweepWorkspace pass ordering", () => {
     expect(r.quickenrichCredits).toBeGreaterThanOrEqual(1);
     expect(r.emailsFound, "QE finds must count in the shared total the card and cron report").toBe(r.quickenrichFound);
     // The hit was Reoon POWER-verified before being written — never their word.
-    expect(mocks.reoonVerifySingle).toHaveBeenCalledWith("ada@acme.io", "rk", "power");
+    // …and billed to the workspace (2026-10-27, audit Phase 3).
+    expect(mocks.reoonVerifySingle).toHaveBeenCalledWith("ada@acme.io", "rk", "power", { workspaceId: 1, feature: "enrichmentSweep" });
     expect(writes.some((w) => w.table === prospectQueue && w.payload.email === "ada@acme.io")).toBe(true);
   });
 

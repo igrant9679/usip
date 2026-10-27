@@ -657,7 +657,7 @@ export async function sweepWorkspace(
         break;
       }
       try {
-        const found = await quickenrichFindEmailByLinkedIn(qeKey, q.linkedinUrl ?? "");
+        const found = await quickenrichFindEmailByLinkedIn(qeKey, q.linkedinUrl ?? "", { workspaceId, feature: "enrichmentSweep" });
         result.attempted++;
         result.fromQueue++;
         result.quickenrichAttempted++;
@@ -678,7 +678,7 @@ export async function sweepWorkspace(
           // guess, a wrong database entry looks exactly like a right one.
           let status = "unknown";
           try {
-            const v = await reoonVerifySingle(found.email, key, "power");
+            const v = await reoonVerifySingle(found.email, key, "power", { workspaceId, feature: "enrichmentSweep" });
             result.creditsPower++;
             dailyCreditsLeft--;
             status = reoonStatusToUsip(v.status);

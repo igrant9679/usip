@@ -51,7 +51,7 @@ export function createApolloSource(): ProspectSource & { acquisition: "none"; re
         employeeMin: criteria.headcountRange?.min, employeeMax: criteria.headcountRange?.max,
         page: ctx.cursor ? Math.max(1, Number(ctx.cursor) || 1) : 1,
         perPage: Math.min(limit, headroom, 100),
-      });
+      }, "sourceSearch");
       if (!res.ok) {
         const msg = res.error ?? "Apollo search failed";
         return { ok: false, reason: /No Apollo API key/i.test(msg) ? "no_credentials" : /429|rate/i.test(msg) ? "rate_limited" : /401|403/.test(msg) ? "unauthorized" : "unavailable", message: msg };

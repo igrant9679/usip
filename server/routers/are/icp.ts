@@ -37,7 +37,26 @@ const icpLabelList = z.array(z.string().trim().min(1).max(120)).max(50);
 
 /* ─── ICP Inference Engine ───────────────────────────────────────────────── */
 
+/**
+ * One inference per workspace at a time (audit 2026-10-20, A39). A second
+ * click, or the daily cron landing on a manual run, would pay for a second
+ * model call and race the first to the version number.
+ */
+const icpRunning = new Set<number>();
+
 export async function runIcpInference(workspaceId: number): Promise<void> {
+  if (icpRunning.has(workspaceId)) {
+    throw new TRPCError({ code: "CONFLICT", message: "The ICP is already being updated for this workspace. Try again in a minute." });
+  }
+  icpRunning.add(workspaceId);
+  try {
+    await inferIcp(workspaceId);
+  } finally {
+    icpRunning.delete(workspaceId);
+  }
+}
+
+async function inferIcp(workspaceId: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
 
@@ -308,7 +327,11 @@ Based on this data, produce a comprehensive ICP with:
     },
   };
 
+  // workspaceId: the cron runs outside any request, so without it this call
+  // used the platform key and was counted nowhere (A39).
   const result = await invokeLLM({
+    workspaceId,
+    feature: "are.icpInference",
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
@@ -320,41 +343,45 @@ Based on this data, produce a comprehensive ICP with:
   if (!content) throw new Error("ICP inference returned no content");
   const icp = JSON.parse(typeof content === "string" ? content : JSON.stringify(content));
 
-  // 6. Get current max version
-  const [latest] = await db
-    .select({ version: icpProfiles.version })
-    .from(icpProfiles)
-    .where(eq(icpProfiles.workspaceId, workspaceId))
-    .orderBy(desc(icpProfiles.version))
-    .limit(1);
-  const nextVersion = (latest?.version ?? 0) + 1;
+  // 6–8 in ONE transaction (A39): deactivating the old versions and then
+  // failing the insert left the workspace with no active ICP at all.
+  await db.transaction(async (tx) => {
+    // 6. Get current max version
+    const [latest] = await tx
+      .select({ version: icpProfiles.version })
+      .from(icpProfiles)
+      .where(eq(icpProfiles.workspaceId, workspaceId))
+      .orderBy(desc(icpProfiles.version))
+      .limit(1);
+    const nextVersion = (latest?.version ?? 0) + 1;
 
-  // 7. Mark all previous as inactive
-  await db
-    .update(icpProfiles)
-    .set({ isActive: false })
-    .where(eq(icpProfiles.workspaceId, workspaceId));
+    // 7. Mark all previous as inactive
+    await tx
+      .update(icpProfiles)
+      .set({ isActive: false })
+      .where(eq(icpProfiles.workspaceId, workspaceId));
 
-  // 8. Insert new ICP version
-  await db.insert(icpProfiles).values({
-    workspaceId,
-    version: nextVersion,
-    targetIndustries: icp.targetIndustries,
-    targetCompanySizeMin: icp.targetCompanySizeMin,
-    targetCompanySizeMax: icp.targetCompanySizeMax,
-    targetRevenueMin: String(icp.targetRevenueMin),
-    targetRevenueMax: String(icp.targetRevenueMax),
-    targetTitles: icp.targetTitles,
-    targetGeographies: icp.targetGeographies,
-    targetTechStack: icp.targetTechStack,
-    antiPatterns: icp.antiPatterns,
-    avgDealValue: String(avgDealValue),
-    avgSalesCycleDays,
-    topConversionSignals: icp.topConversionSignals,
-    confidenceScore,
-    sampleWonDeals: sampleCount,
-    aiRationale: icp.aiRationale,
-    isActive: true,
+    // 8. Insert new ICP version
+    await tx.insert(icpProfiles).values({
+      workspaceId,
+      version: nextVersion,
+      targetIndustries: icp.targetIndustries,
+      targetCompanySizeMin: icp.targetCompanySizeMin,
+      targetCompanySizeMax: icp.targetCompanySizeMax,
+      targetRevenueMin: String(icp.targetRevenueMin),
+      targetRevenueMax: String(icp.targetRevenueMax),
+      targetTitles: icp.targetTitles,
+      targetGeographies: icp.targetGeographies,
+      targetTechStack: icp.targetTechStack,
+      antiPatterns: icp.antiPatterns,
+      avgDealValue: String(avgDealValue),
+      avgSalesCycleDays,
+      topConversionSignals: icp.topConversionSignals,
+      confidenceScore,
+      sampleWonDeals: sampleCount,
+      aiRationale: icp.aiRationale,
+      isActive: true,
+    });
   });
 }
 
@@ -612,9 +639,12 @@ export const icpRouter = router({
         .limit(1);
       if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "ICP version not found." });
       if (target.isActive) return { success: true, message: "Already active." };
-      // Deactivate all versions, then activate the target
-      await db.update(icpProfiles).set({ isActive: false }).where(eq(icpProfiles.workspaceId, ctx.workspace.id));
-      await db.update(icpProfiles).set({ isActive: true }).where(and(eq(icpProfiles.id, input.id), eq(icpProfiles.workspaceId, ctx.workspace.id)));
+      // Deactivate all versions, then activate the target — together, so a
+      // failure between the two cannot leave no active version (A39).
+      await db.transaction(async (tx) => {
+        await tx.update(icpProfiles).set({ isActive: false }).where(eq(icpProfiles.workspaceId, ctx.workspace.id));
+        await tx.update(icpProfiles).set({ isActive: true }).where(and(eq(icpProfiles.id, input.id), eq(icpProfiles.workspaceId, ctx.workspace.id)));
+      });
       await areNotify({
         workspaceId: ctx.workspace.id,
         eventType: "icp_updated",

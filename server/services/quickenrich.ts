@@ -36,28 +36,55 @@ import { canonicalText } from "@shared/canonicalText";
 export const QUICKENRICH_BASE = "https://app.quickenrich.io";
 
 /**
- * Workspace key first, env fallback, "" when neither — the exact contract of
- * getReoonKey/getApolloKey, so every integration answers "which key am I on?"
- * the same way and the settings card can honestly report the source.
+ * Workspace key first; then the deployment's env key ONLY if the platform
+ * owner allowed this workspace the shared key and its daily cap is not used
+ * up; "" otherwise — the exact contract of getReoonKey, so every integration
+ * answers "which key am I on?" the same way and the settings card can
+ * honestly report the source.
+ *
+ * The env key used to be a silent fallback for every workspace (audit A58);
+ * it is opt-in per workspace since 2026-10-27 (owner decision, migration 0215).
  */
 export async function getQuickEnrichKey(workspaceId?: number | null): Promise<string> {
-  if (workspaceId) {
-    try {
-      const db = await getDb();
-      if (db) {
-        const [row] = await db
-          .select({ enc: workspaceSettings.quickenrichApiKeyEnc })
-          .from(workspaceSettings)
-          .where(eq(workspaceSettings.workspaceId, workspaceId))
-          .limit(1);
-        const key = tryDecryptSecret(row?.enc);
-        if (key) return key;
-      }
-    } catch (e) {
-      console.error("[quickenrich] key lookup failed, falling back to env:", (e as Error).message);
+  if (!workspaceId) return "";
+  try {
+    const db = await getDb();
+    if (db) {
+      const [row] = await db
+        .select({ enc: workspaceSettings.quickenrichApiKeyEnc })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, workspaceId))
+        .limit(1);
+      const key = tryDecryptSecret(row?.enc);
+      if (key) return key;
     }
+  } catch (e) {
+    // A failed read grants nothing: the shared key is opt-in.
+    console.error("[quickenrich] key lookup failed:", (e as Error).message);
+    return "";
   }
-  return process.env.QUICKENRICH_API_KEY ?? "";
+  const shared = process.env.QUICKENRICH_API_KEY ?? "";
+  if (!shared) return "";
+  const { sharedKeyUsable } = await import("./spend");
+  return (await sharedKeyUsable(workspaceId, "quickenrich")).ok ? shared : "";
+}
+
+/**
+ * Who a QuickEnrich call is billed to in the spend ledger (services/spend).
+ * Required on every call, so a new call site cannot spend uncounted.
+ */
+export type QuickEnrichMeter = { workspaceId: number | null | undefined; feature: string };
+
+async function meterQuickEnrich(meter: QuickEnrichMeter, apiKey: string, unit: "email_hits" | "searches"): Promise<void> {
+  const { recordSpend, keySourceOf } = await import("./spend");
+  await recordSpend({
+    workspaceId: meter.workspaceId,
+    vendor: "quickenrich",
+    meter: unit,
+    quantity: 1,
+    keySource: keySourceOf(apiKey, process.env.QUICKENRICH_API_KEY),
+    feature: meter.feature,
+  });
 }
 
 /* ─── Sourcing (migration 0148) ──────────────────────────────────────────── */
@@ -420,7 +447,10 @@ export type QuickEnrichDiscoveredPerson = {
 export async function quickenrichContactFinder(
   apiKey: string,
   body: Record<string, unknown>,
+  meter: QuickEnrichMeter,
 ): Promise<{ ok: true; people: QuickEnrichDiscoveredPerson[] } | { ok: false; error: string }> {
+  // Free, but counted, so the report shows how hard each workspace leans on it.
+  await meterQuickEnrich(meter, apiKey, "searches");
   try {
     const res = await fetch(`${QUICKENRICH_BASE}/api/employees/contact-finder`, {
       method: "POST",
@@ -538,6 +568,18 @@ let loggedUnrecognisedShape = false;
  * read instead of trusting a guessed schema.
  */
 export async function quickenrichFindEmailByLinkedIn(
+  apiKey: string,
+  linkedinUrl: string,
+  meter: QuickEnrichMeter,
+): Promise<QuickEnrichLookup> {
+  const r = await findEmailByLinkedIn(apiKey, linkedinUrl);
+  // 1 credit, charged only when an address comes back (audit P84: these
+  // were billed and counted nowhere).
+  if (r.reason === "found") await meterQuickEnrich(meter, apiKey, "email_hits");
+  return r;
+}
+
+async function findEmailByLinkedIn(
   apiKey: string,
   linkedinUrl: string,
 ): Promise<QuickEnrichLookup> {

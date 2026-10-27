@@ -30,7 +30,8 @@ describe("campaigns skip QuickEnrich when it cannot apply their places (owner de
 
   it("a state campaign searches by the person's area, falls back to the country, and keeps only people inside", () => {
     const fn = engine.slice(engine.indexOf("async function discoverViaQuickenrich"), engine.indexOf("async function discoverViaInternalCrm"));
-    const first = fn.indexOf("let res = await quickenrichContactFinder(apiKey, body)");
+    // 2026-10-27 (audit Phase 3): every search names who pays (qeMeter).
+    const first = fn.indexOf("let res = await quickenrichContactFinder(apiKey, body, qeMeter)");
     // The states go out as the person's area, before the first search.
     const area = fn.indexOf("body.locality = { include: states.map((s) => s.name) }");
     expect(area).toBeGreaterThan(-1);
@@ -40,7 +41,7 @@ describe("campaigns skip QuickEnrich when it cannot apply their places (owner de
     expect(fallback).toContain("delete body.locality");
     expect(fallback).toContain("body.per_page = 100");
     expect(fallback).toContain("qeKey = keyOf(body)");
-    expect(fallback).toContain("res = await quickenrichContactFinder(apiKey, body)");
+    expect(fallback).toContain("res = await quickenrichContactFinder(apiKey, body, qeMeter)");
     // Every other campaign keeps its cursor: the key grows only when locality/per_page are sent.
     expect(fn).toContain("if (b.locality) parts.push(b.locality)");
     // Only the people inside are ranked, kept and queued.

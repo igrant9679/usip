@@ -31,7 +31,7 @@ const EXCLUDED: Record<string, string> = {
   "server/services/research/avoidCheck.ts::checkBrief": "The brief check: it is given the avoid rules, pains and lead-with points themselves, not the selling block.",
   "server/routers/assistant.ts::chat": "The assistant answers the rep through its tools; research reaches it through them, not a prompt block.",
   "server/routers/assistant.ts::chat#2": "The assistant answers the rep through its tools; research reaches it through them, not a prompt block.",
-  "server/routers/are/icp.ts::runIcpInference": "Takes ALL the workspace's researched sectors as prior knowledge through its own prompt section (phase 4), not the per-prospect block.",
+  "server/routers/are/icp.ts::inferIcp": "Takes ALL the workspace's researched sectors as prior knowledge through its own prompt section (phase 4), not the per-prospect block.",
   "server/routers/are/campaigns.ts::generateTargeting": "Turns a typed description into targeting before any campaign or prospect exists; a sector's targeting is used directly by Create campaign from sector instead.",
   "server/services/campaignProposals.ts::proposeForCluster": "Proposes campaigns from clusters of existing people; follow-up: suggest the matching research sector.",
   "server/services/campaignRouter.ts::routeProspects": INTERNAL + " (Picks which campaign a person belongs in.)",
@@ -147,9 +147,12 @@ describe("the research option itself", () => {
     const fn = llm.slice(llm.indexOf("export async function invokeLLM("));
     expect(fn).toContain("if (params.research && workspaceId) {");
     expect(fn).toContain("messages: await withResearch(workspaceId, params.research, params.messages)");
+    // 2026-10-27 (audit Phase 3): streamLLM resolves the workspace like
+    // invokeLLM (params, else the request), for the meter and the budget too.
     const stream = read("server/_core/llmStream.ts");
-    expect(stream).toContain("if (params.research && params.workspaceId) {");
-    expect(stream).toContain("messages: await withResearch(params.workspaceId, params.research, params.messages)");
+    expect(stream).toContain("const workspaceId = params.workspaceId ?? getRequestWorkspaceId();");
+    expect(stream).toContain("if (params.research && workspaceId) {");
+    expect(stream).toContain("messages: await withResearch(workspaceId, params.research, params.messages)");
   });
 
   it("the phone agent gets the short spoken brief", () => {

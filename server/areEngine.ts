@@ -2214,7 +2214,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // scraper sources ignore it and stay bounded per call as before.
   const taskFactories: Record<AreSourceId, (remaining: number) => Promise<SourceResult>> = {
     warmysender: (remaining) =>
-      discoverViaRegistrySource(campaign, "warmysender", { titles, industries, geos, keywords }, remaining, persistedState.ws ?? null).then(({ raw, nextCursor }) => {
+      discoverViaRegistrySource(campaign, "warmysender", { titles, industries, geos, keywords }, remaining, persistedState.ws ?? null, neverTarget).then(({ raw, nextCursor }) => {
         warmysenderNextCursor = nextCursor;
         return {
           sourceType: "warmysender" as const,
@@ -2228,8 +2228,8 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
         query,
         raw,
       })),
-    quickenrich: () =>
-      discoverViaQuickenrich(campaign, { titles, industries, geos }, persistedState.qe ?? null).then(({ raw, nextQe }) => {
+    quickenrich: (remaining) =>
+      discoverViaQuickenrich(campaign, { titles, industries, geos }, persistedState.qe ?? null, remaining).then(({ raw, nextQe }) => {
         quickenrichNextPage = nextQe;
         return {
           sourceType: "quickenrich" as const,
@@ -2243,8 +2243,8 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
         query,
         raw,
       })),
-    apollo: () =>
-      discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size }, persistedState.ap ?? null).then(({ raw, nextAp }) => {
+    apollo: (remaining) =>
+      discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size }, persistedState.ap ?? null, remaining).then(({ raw, nextAp }) => {
         apolloNextPage = nextAp;
         return {
           sourceType: "apollo" as const,
@@ -2537,6 +2537,8 @@ async function discoverViaRegistrySource(
   remaining: number,
   /** Where the last tick's search left off (WarmySender walks titles, then pages). */
   cursor: string | null,
+  /** The campaign's never-target words: applied to the free previews BEFORE the paid export (A33). */
+  neverTarget: Awaited<ReturnType<typeof campaignNeverTarget>>,
 ): Promise<{ raw: Array<Record<string, unknown>>; nextCursor?: string | null }> {
   const { eligibleFor } = await import("./services/prospectSources/registry");
   const { runWaterfall } = await import("./services/prospectSources/executor");
@@ -2567,6 +2569,15 @@ async function discoverViaRegistrySource(
     cursors: { [slug]: cursor },
     ctx: { campaignId: campaign.id },
     queryLabel: `campaign ${campaign.id}`,
+    // The same free filters runDiscovery applies after a source returns, run
+    // on the masked preview so nobody they would drop is paid for (A33).
+    screen: (rec) => {
+      const row = recordToQueueRow(rec);
+      const hit = neverTargetHit(neverTarget, { title: row.title as string | null, company: row.companyName as string | null, industry: row.industry as string | null });
+      if (hit) return neverTargetReason(hit);
+      const anchored = String(row.companyDomain ?? "").trim() !== "" || String(row.title ?? "").trim() !== "";
+      return anchored ? null : "no company domain or title";
+    },
   });
   const outcome = result.perSource[0];
   if (outcome) {
@@ -2574,7 +2585,7 @@ async function discoverViaRegistrySource(
     await emitLog(campaign.workspaceId, campaign.id, "discovery", level,
       outcome.error
         ? `${slug}: ${outcome.error}`
-        : `${slug} returned ${outcome.searched} masked previews, ${outcome.netNew} net-new after dedupe, acquired ${outcome.acquired} (${outcome.unitsSpent} unit${outcome.unitsSpent === 1 ? "" : "s"}${outcome.fundedBy ? `, ${outcome.fundedBy}` : ""}) toward ${target} open slot${target === 1 ? "" : "s"}${outcome.note ? ` — ${outcome.note}` : ""}.`,
+        : `${slug} returned ${outcome.searched} masked previews, ${outcome.netNew} net-new after dedupe${outcome.screened ? ` (${outcome.screened} more dropped before export: never-target words or no domain and no title)` : ""}, acquired ${outcome.acquired} (${outcome.unitsSpent} unit${outcome.unitsSpent === 1 ? "" : "s"}${outcome.fundedBy ? `, ${outcome.fundedBy}` : ""}) toward ${target} open slot${target === 1 ? "" : "s"}${outcome.note ? ` — ${outcome.note}` : ""}.`,
       { perSource: result.perSource, duplicates: result.duplicates.length });
   }
   // A failed search or acquisition keeps the cursor (the same people next
@@ -2596,6 +2607,8 @@ async function discoverViaApollo(
     overrides: { employeeMin?: number; employeeMax?: number };
   },
   apPageState: ApolloPageState | null,
+  /** Open slots this tick; rows past them cost later lookups for people nobody will mail (A32). */
+  remaining: number,
 ): Promise<{ raw: Array<Record<string, unknown>>; nextAp: ApolloPageState | null }> {
   const cap = await getApolloDailyCap(campaign.workspaceId);
   const used = await apolloPulledToday(campaign.workspaceId);
@@ -2625,7 +2638,7 @@ async function discoverViaApollo(
     industries: targeting.industries,
     keywords: relaxed ? [] : targeting.keywords,
     page,
-  });
+  }, "are.discovery");
 
   if (!res.ok) {
     // No key is a configuration CHOICE, not a failure (owner decision
@@ -2645,9 +2658,11 @@ async function discoverViaApollo(
   // with neither (api_search masks the last name and sends no domain or
   // LinkedIn URL) can only be rejected after enrichment, so it is not queued.
   const ready = res.prospects.filter(apolloEmailReady);
-  const kept = ready.slice(0, headroom);
-  // The cap cut this page short: stay on it, and the next tick's dedup skips
-  // the people already kept.
+  // The daily cap, and this tick's open slots (A32: the whole page was kept
+  // whatever the slots, and each extra row cost an enrichment lookup later).
+  const kept = ready.slice(0, Math.max(0, Math.min(headroom, remaining)));
+  // The cap or the slots cut this page short: stay on it, and the next
+  // tick's dedup skips the people already kept.
   const keywordsDropped = res.keywordsDropped === true;
   const nextAp: ApolloPageState = kept.length < ready.length
     ? { key: apKey, page, ...(relaxed || keywordsDropped ? { relaxed: true } : {}) }
@@ -2687,6 +2702,8 @@ async function discoverViaQuickenrich(
   campaign: Campaign,
   targeting: { titles: string[]; industries: string[]; geos: string[] },
   qePageState: QuickenrichPageState | null,
+  /** Open slots this tick; rows past them cost later lookups for people nobody will mail (A32). */
+  remaining: number,
 ): Promise<{ raw: Array<Record<string, unknown>>; nextQe: QuickenrichPageState | null }> {
   // Owner decisions 2026-10-18: QuickEnrich's only exact place filter is
   // country, so a campaign aimed at places it cannot apply goes without it —
@@ -2754,7 +2771,8 @@ async function discoverViaQuickenrich(
   let qeKey = keyOf(body);
   body.page = currentQuickenrichPage(qePageState, qeKey);
 
-  let res = await quickenrichContactFinder(apiKey, body);
+  const qeMeter = { workspaceId: campaign.workspaceId, feature: "are.discovery" };
+  let res = await quickenrichContactFinder(apiKey, body, qeMeter);
   // `locality` is free text and their docs do not say how it matches. When
   // the first page by area finds nobody, search the states' country instead
   // and let the check below keep the people inside them (100 a page, since
@@ -2766,7 +2784,7 @@ async function discoverViaQuickenrich(
     byArea = false;
     qeKey = keyOf(body);
     body.page = currentQuickenrichPage(qePageState, qeKey);
-    res = await quickenrichContactFinder(apiKey, body);
+    res = await quickenrichContactFinder(apiKey, body, qeMeter);
   }
   if (!res.ok) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "error",
@@ -2775,8 +2793,6 @@ async function discoverViaQuickenrich(
     // cursor where it was rather than advancing past people we never saw.
     return { raw: [], nextQe: null };
   }
-  const nextQe = nextQuickenrichPage(qePageState, qeKey, res.people.length);
-
   // A state campaign keeps only the people whose LinkedIn area puts them in
   // one of its states: nobody else reaches the queue or the paid lookup.
   let found = res.people;
@@ -2793,8 +2809,13 @@ async function discoverViaQuickenrich(
   // has_email first: those rows are the ones the paid lookup will convert, so
   // they get the pull headroom before the maybes.
   const ranked = [...found].sort((a, b) => Number(b.hasEmail) - Number(a.hasEmail));
-  const kept = ranked.slice(0, headroom);
+  // The daily cap, and this tick's open slots (A32).
+  const kept = ranked.slice(0, Math.max(0, Math.min(headroom, remaining)));
   const withEmailFlag = kept.filter((p) => p.hasEmail).length;
+  // Cut short: stay on this page; the next tick's dedup skips who was kept.
+  const nextQe: QuickenrichPageState = kept.length < ranked.length
+    ? { key: qeKey, page: Number(body.page) || 1 }
+    : nextQuickenrichPage(qePageState, qeKey, res.people.length);
 
   await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
     `QuickEnrich returned ${res.people.length} people (page ${body.page}, kept ${kept.length}, ${withEmailFlag} flagged has_email). `

@@ -146,7 +146,7 @@ async function discoverViaApollo(
     locations: location ? [location] : [],
     keywords,
     perPage: Math.min(headroom, 25),
-  });
+  }, "findProspects");
   if (!res.ok) return [];
   await recordPullLedger(workspaceId, "apollo", buildQuery(mode, input), res.prospects.length);
   return res.prospects.map((x) => ({ ...x }));
@@ -183,7 +183,7 @@ async function discoverViaQuickEnrich(
     geos: input.location ? [input.location] : [],
   }, allowedIndustries);
   if (!body) return [];
-  const res = await quickenrichContactFinder(apiKey, body);
+  const res = await quickenrichContactFinder(apiKey, body, { workspaceId, feature: "findProspects" });
   // A real API failure surfaces as this source's error in perSource + the
   // run log, exactly like every other source in the fan-out.
   if (!res.ok) throw new Error(`QuickEnrich contact-finder failed: ${res.error}`);

@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Section, StatusPill, fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell, StatCard, SubNav } from "@/components/usip/Shell";
+import { SpendSection } from "@/components/usip/SpendReport";
 import { Link, Redirect, useSearch } from "wouter";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
@@ -1623,7 +1624,9 @@ function EmailVerificationSettingsSection({ isAdmin }: { isAdmin: boolean }) {
     onError: (e) => toast.error(e.message),
   });
   const triggerNowMut = trpc.emailVerification.triggerReverifyNow.useMutation({
-    onSuccess: () => toast.success("Re-verify job started — check the Contacts page for progress"),
+    onSuccess: (r) => r.started
+      ? toast.success(`Re-verify started for ${r.emails.toLocaleString()} addresses. Results land on each contact as Reoon finishes.`)
+      : toast.info(`Nothing started: ${r.reason ?? "no contacts are due"}.`),
     onError: (e) => toast.error(e.message),
   });
   const [blockInvalid, setBlockInvalid] = useState(false);
@@ -1900,6 +1903,7 @@ function BillingTab({ usage, canEdit }: { usage: any; canEdit: boolean }) {
           <StatCard label="Month" value={usage?.month ?? "—"} />
         </div>
       </Section>
+      <SpendSection />
       <Section
         title="Monthly AI budget"
         description="Caps this workspace's LLM token spend for the calendar month. Leave blank for no limit."

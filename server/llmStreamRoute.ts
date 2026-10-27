@@ -32,7 +32,7 @@ export function registerLLMStreamRoutes(app: Express) {
     // could drive arbitrary provider/model/messages that way.
     const auth = await resolveStreamAuth(req, res);
     if (!auth) return;
-    const { workspaceId } = auth;
+    const { workspaceId, userId } = auth;
 
     // ── Validate body ─────────────────────────────────────────────────────
     const body = (req.body ?? {}) as Partial<InvokeParams>;
@@ -75,7 +75,7 @@ export function registerLLMStreamRoutes(app: Express) {
     }, 15_000);
 
     try {
-      for await (const delta of streamLLM({ ...params, signal: abort.signal })) {
+      for await (const delta of streamLLM({ ...params, userId, feature: "stream /api/llm/stream", signal: abort.signal })) {
         if (res.writableEnded) break;
         send({ type: "delta", text: delta });
       }

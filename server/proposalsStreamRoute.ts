@@ -63,7 +63,7 @@ export function registerProposalsStreamRoutes(app: Express) {
       // One rule for all five streaming routes — see resolveStreamAuth.
       const auth = await resolveStreamAuth(req, res);
       if (!auth) return;
-      const { workspaceId, db } = auth;
+      const { workspaceId, userId, db } = auth;
 
       // ── Proposal access check ───────────────────────────────────────────
       const proposalId = Number(req.params.id);
@@ -128,6 +128,8 @@ export function registerProposalsStreamRoutes(app: Express) {
           ],
           research,
           workspaceId,
+          userId,
+          feature: "stream proposals.section",
           signal: abort.signal,
         })) {
           if (res.writableEnded) break;

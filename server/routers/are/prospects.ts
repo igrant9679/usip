@@ -439,7 +439,7 @@ Produce:
         if (!effCompanyDomain && prospect.linkedinUrl) {
           const qeKey = await getQuickEnrichKey(workspaceId);
           if (qeKey) {
-            const qe = await quickenrichFindEmailByLinkedIn(qeKey, prospect.linkedinUrl);
+            const qe = await quickenrichFindEmailByLinkedIn(qeKey, prospect.linkedinUrl, { workspaceId, feature: "are.enrichAgent" });
             if (qe.companyDomain) {
               effCompanyDomain = qe.companyDomain;
               qeFilledDomain = true;
@@ -450,7 +450,7 @@ Produce:
               try {
                 const reoonKey = await getReoonKey(workspaceId);
                 if (reoonKey) {
-                  const v = await reoonVerifySingle(qe.email, reoonKey, "power");
+                  const v = await reoonVerifySingle(qe.email, reoonKey, "power", { workspaceId, feature: "are.enrichAgent" });
                   status = reoonStatusToUsip(v.status);
                 }
               } catch {

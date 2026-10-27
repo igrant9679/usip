@@ -254,6 +254,8 @@ export interface ApolloSearchResult {
 export async function apolloSearchPeople(
   workspaceId: number,
   input: ApolloSearchInput,
+  /** What searched, for the spend report (services/spend). */
+  feature: string,
 ): Promise<ApolloSearchResult> {
   const key = await getApolloKey(workspaceId);
   if (!key) {
@@ -288,8 +290,12 @@ export async function apolloSearchPeople(
       : [{ ...baseBody, q_keywords: kw }];
 
   let last: ApolloSearchResult = { ok: false, prospects: [], totalAvailable: 0, error: "No search attempted" };
+  const { recordSpend } = await import("./spend");
   for (const body of attempts) {
     last = { ...(await runApolloSearch(key, body)), keywordsDropped: !!kw && !("q_keywords" in body) };
+    // No credits on this path, but each request counts against Apollo's
+    // per-day API limits, which is what their usage page shows.
+    await recordSpend({ workspaceId, vendor: "apollo", meter: "searches", quantity: 1, keySource: "workspace", feature });
     // Stop on hard failure (auth/rate-limit/network) or on anyone on the
     // page; only an ok-but-empty page falls through to the relaxed retry.
     if (!last.ok || (last.pageCount ?? last.prospects.length) > 0) return last;
@@ -540,7 +546,7 @@ export async function apolloTestKey(workspaceId: number): Promise<ApolloTestResu
   const probe = await apolloSearchPeople(workspaceId, {
     titles: ["Executive Director"],
     perPage: 1,
-  });
+  }, "apollo.test");
   if (!probe.ok) {
     return { ok: false, message: probe.error ?? "Apollo search failed.", sampleCount: 0, totalAvailable: 0, rateLimit: probe.rateLimit };
   }

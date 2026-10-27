@@ -4821,6 +4821,31 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0215: What every paid call cost, per workspace per day ──────────────
+  // Audit 2026-10-20 (Phase 3): AI calls outside a request, every streamed
+  // reply, Reoon verifications and QuickEnrich hits were spent but never
+  // counted, so no report could match a vendor's dashboard. spend_ledger is
+  // one row per workspace, UTC day, vendor, meter, model, key source and
+  // feature, incremented atomically (services/spend.ts). workspaceId 0 holds
+  // calls no workspace could be found for.
+  //
+  // Shared deployment keys are opt-in per workspace (owner decision
+  // 2026-10-27): the platform owner switches them on, and they start ON only
+  // for Reoon in workspaces 2, 4 and 5, which verify through the shared Reoon
+  // key today. All three have their own QuickEnrich key. The caps are NULL
+  // (none) until the owner sets them from a week of this ledger.
+  {
+    name: "0215_spend_ledger.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `spend_ledger` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `day` varchar(10) NOT NULL, `vendor` varchar(24) NOT NULL, `meter` varchar(32) NOT NULL, `model` varchar(96) NOT NULL DEFAULT '', `keySource` varchar(12) NOT NULL, `feature` varchar(96) NOT NULL DEFAULT '', `quantity` bigint NOT NULL DEFAULT 0, `calls` int NOT NULL DEFAULT 0, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY `ux_spend_row` (`workspaceId`, `day`, `vendor`, `meter`, `model`, `keySource`, `feature`), INDEX `ix_spend_day` (`day`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `sharedReoonKey` boolean NOT NULL DEFAULT false",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `sharedQuickenrichKey` boolean NOT NULL DEFAULT false",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `sharedReoonDailyCap` int NULL",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `sharedQuickenrichDailyCap` int NULL",
+      "UPDATE `workspace_settings` SET `sharedReoonKey` = true WHERE `workspaceId` IN (2, 4, 5) AND (`reoonApiKeyEnc` IS NULL OR `reoonApiKeyEnc` = '')",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
