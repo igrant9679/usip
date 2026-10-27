@@ -12,6 +12,9 @@ export default defineConfig({
       "@assets": path.resolve(templateRoot, "attached_assets"),
     },
   },
+  // Client components rendered in tests (react-dom/server) use the same JSX
+  // runtime as the app build.
+  esbuild: { jsx: "automatic" },
   test: {
     environment: "node",
     include: ["server/**/*.test.ts", "server/**/*.spec.ts"],

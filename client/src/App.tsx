@@ -4,124 +4,11 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import NotFound from "@/pages/NotFound";
-import AccountRedirect from "@/pages/usip/AccountRedirect";
-import Audit from "@/pages/usip/Audit";
-import Campaigns from "@/pages/usip/Campaigns";
-import ContactRedirect from "@/pages/usip/ContactRedirect";
-import Customers from "@/pages/usip/Customers";
-import Dashboard from "@/pages/usip/Dashboard";
-import DashboardHome2 from "@/pages/usip/DashboardHome2";
-import Dashboards from "@/pages/usip/Dashboards";
-import Reports from "@/pages/usip/Reports";
-import EmailAnalytics from "@/pages/usip/EmailAnalytics";
-import { EmailSuppressions } from "@/pages/usip/EmailSuppressions";
-import SendingAccounts from "@/pages/usip/SendingAccounts";
-import SenderPools from "@/pages/usip/SenderPools";
-import Inbox from "@/pages/usip/Inbox";
-import Mailbox from "@/pages/usip/Mailbox";
-import CalendarPage from "@/pages/usip/Calendar";
-import Leads from "@/pages/usip/Leads";
-import Prospects from "@/pages/usip/Prospects";
-import People from "@/pages/usip/People";
-import Companies from "@/pages/usip/Companies";
-import CompanyProfile from "@/pages/usip/CompanyProfile";
-import AIAssistant from "@/pages/usip/AIAssistant";
-import Deliverability from "@/pages/usip/Deliverability";
-import Calls from "@/pages/usip/Calls";
-import WebsiteVisitors from "@/pages/usip/WebsiteVisitors";
-import Lists from "@/pages/usip/Lists";
-import ListDetail from "@/pages/usip/ListDetail";
-import DataEnrichment from "@/pages/usip/DataEnrichment";
-import LinkedInEnrichmentImport from "@/pages/usip/LinkedInEnrichmentImport";
-import SequencesV2 from "@/pages/usip/SequencesV2";
-import SequenceEditor from "@/pages/usip/SequenceEditor";
-import Home from "@/pages/usip/Home";
-import Library from "@/pages/usip/Library";
-import ProspectDetail from "@/pages/usip/ProspectDetail";
-import LeadDetail from "@/pages/usip/LeadDetail";
-import OpportunityDetail from "@/pages/usip/OpportunityDetail";
-import SettingsPipelines from "@/pages/usip/SettingsPipelines";
-import LinkedInLimits from "@/pages/usip/LinkedInLimits";
-import Forecast from "@/pages/usip/Forecast";
-import FindProspects from "@/pages/usip/FindProspects";
-import Pipeline from "@/pages/usip/Pipeline";
-import Products from "@/pages/usip/Products";
-import QBRs from "@/pages/usip/QBRs";
-import Quotes from "@/pages/usip/Quotes";
-import Renewals from "@/pages/usip/Renewals";
-import SCIM from "@/pages/usip/SCIM";
-import Sequences from "@/pages/usip/Sequences";
-import Settings from "@/pages/usip/Settings";
-import SettingsHub from "@/pages/usip/SettingsHub";
-import Social from "@/pages/usip/Social";
-import Tasks from "@/pages/usip/Tasks";
-import TasksV2 from "@/pages/usip/TasksV2";
-import MeetingsV2 from "@/pages/usip/MeetingsV2";
-import ConversationsV2 from "@/pages/usip/ConversationsV2";
-import DealsV2 from "@/pages/usip/DealsV2";
-import WorkflowsV2 from "@/pages/usip/WorkflowsV2";
-import AnalyticsV2 from "@/pages/usip/AnalyticsV2";
-import EmailsV2 from "@/pages/usip/EmailsV2";
-import SavedRedirect from "@/pages/usip/SavedRedirect";
-import FormsV2 from "@/pages/usip/FormsV2";
-import PublicForm from "@/pages/PublicForm";
-import BookingPage from "@/pages/BookingPage";
-import MeetingPickPage from "@/pages/MeetingPickPage";
-import LandingPage from "@/pages/LandingPage";
-import ResetPassword from "@/pages/ResetPassword";
-import LandingPages from "@/pages/usip/LandingPages";
-import ChatPage from "@/pages/ChatPage";
-import ChatAgents from "@/pages/usip/ChatAgents";
-import Team from "@/pages/usip/Team";
-import Territories from "@/pages/usip/Territories";
-import Workflows from "@/pages/usip/Workflows";
-import NotificationPrefs from "@/pages/usip/NotificationPrefs";
-import LeadScoring from "@/pages/usip/LeadScoring";
-import LeadRouting from "@/pages/usip/LeadRouting";
-import SequenceCanvas from "@/pages/usip/SequenceCanvas";
-import ResearchPipeline from "@/pages/usip/ResearchPipeline";
-import Quota from "@/pages/usip/Quota";
-import CustomFields from "@/pages/usip/CustomFields";
-import EmailBuilder from "@/pages/usip/EmailBuilder";
-import Snippets from "@/pages/usip/Snippets";
-import BrandVoice from "@/pages/usip/BrandVoice";
-import Personas from "@/pages/usip/Personas";
-import ResearchHome from "@/pages/usip/research/ResearchHome";
-import ResearchMarket from "@/pages/usip/research/ResearchMarket";
-import ResearchSector from "@/pages/usip/research/ResearchSector";
-import ResearchRun from "@/pages/usip/research/ResearchRun";
-import ResearchReport from "@/pages/usip/research/ResearchReport";
-import ResearchSectorReport from "@/pages/usip/research/ResearchSectorReport";
-import PromptTemplates from "@/pages/usip/PromptTemplates";
-import ImportContacts from "@/pages/usip/ImportContacts";
-import DataHealth from "@/pages/usip/DataHealth";
-import Segments from "@/pages/usip/Segments";
-import PipelineAlerts from "@/pages/usip/PipelineAlerts";
-import SegmentRules from "@/pages/usip/SegmentRules";
-import ConnectedAccounts from "@/pages/usip/ConnectedAccounts";
-import UnifiedInbox from "@/pages/usip/UnifiedInbox";
-import InviteAccept from "@/pages/InviteAccept";
-import JoinViaLink from "@/pages/JoinViaLink";
-import Placeholder from "@/pages/Placeholder";
-import Proposals from "@/pages/usip/Proposals";
-import ProposalDetail from "@/pages/usip/ProposalDetail";
-import ProposalPortal from "@/pages/ProposalPortal";
-import AREHub from "@/pages/usip/AREHub";
-import AREPerformance from "@/pages/usip/AREPerformance";
-import AREIcpAgent from "@/pages/usip/AREIcpAgent";
-import ARECampaigns from "@/pages/usip/ARECampaigns";
-import ARECampaignDetail from "@/pages/usip/ARECampaignDetail";
-import ARESettings from "@/pages/usip/ARESettings";
-import HelpCenter from "@/pages/usip/HelpCenter";
-import HelpArticle from "@/pages/usip/HelpArticle";
-import TourBuilder from "@/pages/usip/TourBuilder";
-import Mindmaps from "@/pages/usip/Mindmaps";
-import MindmapCanvas from "@/pages/usip/MindmapCanvas";
 import { TourEngineProvider } from "@/components/usip/TourEngine";
 import { ElsieController } from "@/components/usip/Elsie";
 import { Loader2, Eye, EyeOff, LogIn } from "lucide-react";
 import { Route, Switch, useLocation } from "wouter";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -129,6 +16,125 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import { WorkspaceBrandingSync } from "@/components/usip/WorkspaceBrandingSync";
 import { ConfirmProvider } from "@/components/usip/Common";
 import { safeReturnPath } from "@shared/returnPath";
+import { lazyChunk } from "@/lib/lazyChunk";
+
+/*
+ * Every page is its own chunk, loaded when its route first renders (audit
+ * 2026-10-20, Phase 4, X2.4). They were all imported up front, so the sign-in
+ * page alone downloaded the whole app. See lib/lazyChunk.ts.
+ */
+const AccountRedirect = lazyChunk(() => import("@/pages/usip/AccountRedirect"));
+const Audit = lazyChunk(() => import("@/pages/usip/Audit"));
+const Campaigns = lazyChunk(() => import("@/pages/usip/Campaigns"));
+const ContactRedirect = lazyChunk(() => import("@/pages/usip/ContactRedirect"));
+const Customers = lazyChunk(() => import("@/pages/usip/Customers"));
+const Dashboard = lazyChunk(() => import("@/pages/usip/Dashboard"));
+const DashboardHome2 = lazyChunk(() => import("@/pages/usip/DashboardHome2"));
+const Dashboards = lazyChunk(() => import("@/pages/usip/Dashboards"));
+const Reports = lazyChunk(() => import("@/pages/usip/Reports"));
+const EmailAnalytics = lazyChunk(() => import("@/pages/usip/EmailAnalytics"));
+const EmailSuppressions = lazyChunk(() => import("@/pages/usip/EmailSuppressions").then((m) => ({ default: m.EmailSuppressions })));
+const SendingAccounts = lazyChunk(() => import("@/pages/usip/SendingAccounts"));
+const SenderPools = lazyChunk(() => import("@/pages/usip/SenderPools"));
+const Inbox = lazyChunk(() => import("@/pages/usip/Inbox"));
+const Mailbox = lazyChunk(() => import("@/pages/usip/Mailbox"));
+const CalendarPage = lazyChunk(() => import("@/pages/usip/Calendar"));
+const Leads = lazyChunk(() => import("@/pages/usip/Leads"));
+const Prospects = lazyChunk(() => import("@/pages/usip/Prospects"));
+const People = lazyChunk(() => import("@/pages/usip/People"));
+const Companies = lazyChunk(() => import("@/pages/usip/Companies"));
+const CompanyProfile = lazyChunk(() => import("@/pages/usip/CompanyProfile"));
+const AIAssistant = lazyChunk(() => import("@/pages/usip/AIAssistant"));
+const Deliverability = lazyChunk(() => import("@/pages/usip/Deliverability"));
+const Calls = lazyChunk(() => import("@/pages/usip/Calls"));
+const WebsiteVisitors = lazyChunk(() => import("@/pages/usip/WebsiteVisitors"));
+const Lists = lazyChunk(() => import("@/pages/usip/Lists"));
+const ListDetail = lazyChunk(() => import("@/pages/usip/ListDetail"));
+const DataEnrichment = lazyChunk(() => import("@/pages/usip/DataEnrichment"));
+const LinkedInEnrichmentImport = lazyChunk(() => import("@/pages/usip/LinkedInEnrichmentImport"));
+const SequencesV2 = lazyChunk(() => import("@/pages/usip/SequencesV2"));
+const SequenceEditor = lazyChunk(() => import("@/pages/usip/SequenceEditor"));
+const Home = lazyChunk(() => import("@/pages/usip/Home"));
+const Library = lazyChunk(() => import("@/pages/usip/Library"));
+const ProspectDetail = lazyChunk(() => import("@/pages/usip/ProspectDetail"));
+const LeadDetail = lazyChunk(() => import("@/pages/usip/LeadDetail"));
+const OpportunityDetail = lazyChunk(() => import("@/pages/usip/OpportunityDetail"));
+const SettingsPipelines = lazyChunk(() => import("@/pages/usip/SettingsPipelines"));
+const LinkedInLimits = lazyChunk(() => import("@/pages/usip/LinkedInLimits"));
+const Forecast = lazyChunk(() => import("@/pages/usip/Forecast"));
+const FindProspects = lazyChunk(() => import("@/pages/usip/FindProspects"));
+const Pipeline = lazyChunk(() => import("@/pages/usip/Pipeline"));
+const Products = lazyChunk(() => import("@/pages/usip/Products"));
+const QBRs = lazyChunk(() => import("@/pages/usip/QBRs"));
+const Quotes = lazyChunk(() => import("@/pages/usip/Quotes"));
+const Renewals = lazyChunk(() => import("@/pages/usip/Renewals"));
+const SCIM = lazyChunk(() => import("@/pages/usip/SCIM"));
+const Sequences = lazyChunk(() => import("@/pages/usip/Sequences"));
+const Settings = lazyChunk(() => import("@/pages/usip/Settings"));
+const SettingsHub = lazyChunk(() => import("@/pages/usip/SettingsHub"));
+const Social = lazyChunk(() => import("@/pages/usip/Social"));
+const Tasks = lazyChunk(() => import("@/pages/usip/Tasks"));
+const TasksV2 = lazyChunk(() => import("@/pages/usip/TasksV2"));
+const MeetingsV2 = lazyChunk(() => import("@/pages/usip/MeetingsV2"));
+const ConversationsV2 = lazyChunk(() => import("@/pages/usip/ConversationsV2"));
+const DealsV2 = lazyChunk(() => import("@/pages/usip/DealsV2"));
+const WorkflowsV2 = lazyChunk(() => import("@/pages/usip/WorkflowsV2"));
+const AnalyticsV2 = lazyChunk(() => import("@/pages/usip/AnalyticsV2"));
+const EmailsV2 = lazyChunk(() => import("@/pages/usip/EmailsV2"));
+const SavedRedirect = lazyChunk(() => import("@/pages/usip/SavedRedirect"));
+const FormsV2 = lazyChunk(() => import("@/pages/usip/FormsV2"));
+const PublicForm = lazyChunk(() => import("@/pages/PublicForm"));
+const BookingPage = lazyChunk(() => import("@/pages/BookingPage"));
+const MeetingPickPage = lazyChunk(() => import("@/pages/MeetingPickPage"));
+const LandingPage = lazyChunk(() => import("@/pages/LandingPage"));
+const ResetPassword = lazyChunk(() => import("@/pages/ResetPassword"));
+const LandingPages = lazyChunk(() => import("@/pages/usip/LandingPages"));
+const ChatPage = lazyChunk(() => import("@/pages/ChatPage"));
+const ChatAgents = lazyChunk(() => import("@/pages/usip/ChatAgents"));
+const Team = lazyChunk(() => import("@/pages/usip/Team"));
+const Territories = lazyChunk(() => import("@/pages/usip/Territories"));
+const Workflows = lazyChunk(() => import("@/pages/usip/Workflows"));
+const NotificationPrefs = lazyChunk(() => import("@/pages/usip/NotificationPrefs"));
+const LeadScoring = lazyChunk(() => import("@/pages/usip/LeadScoring"));
+const LeadRouting = lazyChunk(() => import("@/pages/usip/LeadRouting"));
+const SequenceCanvas = lazyChunk(() => import("@/pages/usip/SequenceCanvas"));
+const ResearchPipeline = lazyChunk(() => import("@/pages/usip/ResearchPipeline"));
+const Quota = lazyChunk(() => import("@/pages/usip/Quota"));
+const CustomFields = lazyChunk(() => import("@/pages/usip/CustomFields"));
+const EmailBuilder = lazyChunk(() => import("@/pages/usip/EmailBuilder"));
+const Snippets = lazyChunk(() => import("@/pages/usip/Snippets"));
+const BrandVoice = lazyChunk(() => import("@/pages/usip/BrandVoice"));
+const Personas = lazyChunk(() => import("@/pages/usip/Personas"));
+const ResearchHome = lazyChunk(() => import("@/pages/usip/research/ResearchHome"));
+const ResearchMarket = lazyChunk(() => import("@/pages/usip/research/ResearchMarket"));
+const ResearchSector = lazyChunk(() => import("@/pages/usip/research/ResearchSector"));
+const ResearchRun = lazyChunk(() => import("@/pages/usip/research/ResearchRun"));
+const ResearchReport = lazyChunk(() => import("@/pages/usip/research/ResearchReport"));
+const ResearchSectorReport = lazyChunk(() => import("@/pages/usip/research/ResearchSectorReport"));
+const PromptTemplates = lazyChunk(() => import("@/pages/usip/PromptTemplates"));
+const ImportContacts = lazyChunk(() => import("@/pages/usip/ImportContacts"));
+const DataHealth = lazyChunk(() => import("@/pages/usip/DataHealth"));
+const Segments = lazyChunk(() => import("@/pages/usip/Segments"));
+const PipelineAlerts = lazyChunk(() => import("@/pages/usip/PipelineAlerts"));
+const SegmentRules = lazyChunk(() => import("@/pages/usip/SegmentRules"));
+const ConnectedAccounts = lazyChunk(() => import("@/pages/usip/ConnectedAccounts"));
+const UnifiedInbox = lazyChunk(() => import("@/pages/usip/UnifiedInbox"));
+const InviteAccept = lazyChunk(() => import("@/pages/InviteAccept"));
+const JoinViaLink = lazyChunk(() => import("@/pages/JoinViaLink"));
+const Proposals = lazyChunk(() => import("@/pages/usip/Proposals"));
+const ProposalDetail = lazyChunk(() => import("@/pages/usip/ProposalDetail"));
+const ProposalPortal = lazyChunk(() => import("@/pages/ProposalPortal"));
+const AREHub = lazyChunk(() => import("@/pages/usip/AREHub"));
+const AREPerformance = lazyChunk(() => import("@/pages/usip/AREPerformance"));
+const AREIcpAgent = lazyChunk(() => import("@/pages/usip/AREIcpAgent"));
+const ARECampaigns = lazyChunk(() => import("@/pages/usip/ARECampaigns"));
+const ARECampaignDetail = lazyChunk(() => import("@/pages/usip/ARECampaignDetail"));
+const ARESettings = lazyChunk(() => import("@/pages/usip/ARESettings"));
+const HelpCenter = lazyChunk(() => import("@/pages/usip/HelpCenter"));
+const HelpArticle = lazyChunk(() => import("@/pages/usip/HelpArticle"));
+const TourBuilder = lazyChunk(() => import("@/pages/usip/TourBuilder"));
+const Mindmaps = lazyChunk(() => import("@/pages/usip/Mindmaps"));
+const MindmapCanvas = lazyChunk(() => import("@/pages/usip/MindmapCanvas"));
 
 const INVITE_RETURN_KEY = "usip_invite_return";
 
@@ -421,15 +427,24 @@ function InviteReturnRedirect() {
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
-  if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>;
+  if (loading) return <PageLoading />;
   if (!user) return <Landing />;
   // WorkspaceBrandingSync sits here, not in Shell — the settings hub renders
   // without Shell, so brand colours would otherwise never reach it.
   return <WorkspaceProvider><InviteReturnRedirect /><WorkspaceBrandingSync />{children}</WorkspaceProvider>;
 }
 
+function PageLoading() {
+  return <div className="min-h-screen flex items-center justify-center"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>;
+}
+
 function Router() {
+  // A page that breaks takes only itself down, and leaving it clears the
+  // error (audit 2026-10-20, G37); the boundary in App() is the last resort.
+  const [path] = useLocation();
   return (
+    <ErrorBoundary resetKey={path} inline>
+    <Suspense fallback={<PageLoading />}>
     <Switch>
       <Route path="/"><AuthGate><Dashboard /></AuthGate></Route>
       <Route path="/dashboard"><AuthGate><Dashboard /></AuthGate></Route>
@@ -578,6 +593,8 @@ function Router() {
       <Route path="/404"><NotFound /></Route>
       <Route><NotFound /></Route>
     </Switch>
+    </Suspense>
+    </ErrorBoundary>
   );
 }
 

@@ -30,7 +30,7 @@ import { cn } from "@/lib/utils";
 import {
   CalendarDays, Plus, RefreshCw, Settings, Loader2, Users, Trash2, Link2, Sparkles, ArrowUpRight
 } from "lucide-react";
-import { Streamdown } from "streamdown";
+import { Streamdown } from "@/components/usip/LazyStreamdown";
 import { confirmAction } from "@/components/usip/Common";
 import { rankOf, ROLE_RANK } from "@shared/roleRank";
 

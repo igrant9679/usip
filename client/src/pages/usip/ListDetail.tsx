@@ -62,6 +62,8 @@ import {
   Pencil,
   Check,
 } from "lucide-react";
+import { QueryError } from "@/components/usip/Shell";
+import { NotFoundState, isNotFoundError } from "@/components/usip/QueryState";
 
 function fmtMoney(n: number) {
   if (!n) return "—";
@@ -148,6 +150,18 @@ export default function ListDetail() {
     }
     return out;
   }, [members, search, sort, isCompanies]);
+
+  // A missing or another workspace's list (or a non-numeric id) said
+  // "Loading…" forever and still offered Add (audit 2026-10-20, P51).
+  if (!Number.isFinite(id) || listQ.error || (listQ.isFetched && !list)) {
+    return (
+      <Shell title="List">
+        {listQ.error && !isNotFoundError(listQ.error)
+          ? <QueryError what="this list" message={listQ.error.message} onRetry={() => listQ.refetch()} />
+          : <NotFoundState what="list" backHref="/v2/lists" backLabel="All lists" />}
+      </Shell>
+    );
+  }
 
   return (
     <Shell title={list?.name ?? "List"}>

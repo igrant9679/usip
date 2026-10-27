@@ -25,6 +25,7 @@ import {
   ListChecks, Mail, MessageSquare, Lightbulb, DollarSign, Activity, BarChart3,
   Phone, ArrowRight, Inbox,
 } from "lucide-react";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 const LS_KEY = "velocity_home_layout_v1";
 const LS_HEIGHTS = "velocity_home_heights_v1";
@@ -226,7 +227,8 @@ export default function Home() {
   // screenshot 2026-08-26). A filter either narrows the view or it lies —
   // and so does a silently-defaulted error.
   const people = ((trpc.prospects.list.useQuery({ page: 1, perPage: 10 }).data as any)?.data ?? []) as any[];
-  const companies = (trpc.accounts.list.useQuery().data ?? []) as any[];
+  // The "Top companies" card shows five.
+  const companies = (trpc.accounts.list.useQuery({ limit: 5 }).data ?? []) as any[];
   const tasks = (trpc.tasks.list.useQuery({}).data ?? []) as any[];
   // The one definition of open/dueToday/overdue, in the workspace's timezone.
   const taskStats = trpc.tasks.stats.useQuery().data as any;
@@ -303,6 +305,8 @@ export default function Home() {
             </button>
           </div>
         )}
+
+        <div className="shrink-0 px-4 md:px-6 empty:hidden"><FailedLoadsBanner /></div>
 
         <div className="flex flex-1 min-h-0">
           {/* canvas */}

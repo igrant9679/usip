@@ -26,6 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { BarChart3, Check, History, Info, Lightbulb, Loader2, MailOpen, Radar, TrendingUp, Undo2, X } from "lucide-react";
 import { ConfirmButton } from "@/components/usip/Common";
+import { QueryError } from "@/components/usip/Shell";
 
 /** Below this many sends a per-row rate is noise; we show the count, not a verdict. */
 const MIN_ROW_SAMPLE = 20;
@@ -162,10 +163,13 @@ export default function AREPerformance() {
     .sort((a, b) => b.meetingRate - a.meetingRate)[0];
 
   const loading = steps.isLoading || sources.isLoading || replies.isLoading;
+  // "An empty page means nothing has happened yet" is only true when the
+  // metrics loaded (audit 2026-10-20, A63).
+  const metricsError = steps.error ?? sources.error ?? replies.error;
   // Recommendations count as content: with metrics empty but a proposal pending,
   // the full-page empty state would hide the only actionable thing here.
   const nothingYet =
-    !loading && stepRows.length === 0 && sourceRows.length === 0 && replyRows.length === 0
+    !loading && !metricsError && stepRows.length === 0 && sourceRows.length === 0 && replyRows.length === 0
     && recRows.length === 0 && appliedRows.length === 0;
 
   return (
@@ -185,6 +189,14 @@ export default function AREPerformance() {
       ]} />
 
       <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
+        {metricsError && !loading && (
+          <QueryError
+            compact
+            what="the engine's measurements"
+            message={metricsError.message}
+            onRetry={() => { void steps.refetch(); void sources.refetch(); void replies.refetch(); }}
+          />
+        )}
         {loading ? (
           <div className="flex justify-center py-16"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>
         ) : nothingYet ? (

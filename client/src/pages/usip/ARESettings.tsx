@@ -8,7 +8,7 @@
  *  4. Capacity — max concurrent campaigns
  *  5. Notification preferences — which ARE events trigger in-app notifications
  */
-import { Shell, PageHeader } from "@/components/usip/Shell";
+import { Shell, PageHeader, QueryError } from "@/components/usip/Shell";
 import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
 import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
@@ -150,7 +150,7 @@ function Toggle({ checked, onChange, color = "bg-primary" }: { checked: boolean;
 /* --- Main page ------------------------------------------------------------ */
 export default function ARESettings() {
   const utils = trpc.useUtils();
-  const { data: settings, isLoading } = trpc.settings.getAreSettings.useQuery();
+  const { data: settings, isLoading, error: loadError, refetch } = trpc.settings.getAreSettings.useQuery();
 
   // Local draft state — mirrors the actual schema columns
   const [autonomyMode, setAutonomyMode] = useState<AutonomyMode>("batch_approval");
@@ -251,6 +251,15 @@ export default function ARESettings() {
         <div className="flex items-center justify-center py-32">
           <Loader2 className="size-6 animate-spin text-muted-foreground" />
         </div>
+      </Shell>
+    );
+  }
+  // A failed load showed the defaults, and Save wrote them over the real
+  // settings (audit 2026-10-20, A60). No form until the settings are here.
+  if (!settings) {
+    return (
+      <Shell title="ARE Settings">
+        <QueryError what="ARE settings" message={loadError?.message} onRetry={() => refetch()} />
       </Shell>
     );
   }

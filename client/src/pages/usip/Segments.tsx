@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Shell, PageHeader, EmptyState, SubNav } from "@/components/usip/Shell";
+import { Shell, PageHeader, EmptyState, QueryError, SubNav } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -416,7 +416,7 @@ export default function Segments() {
   const [editing, setEditing] = useState<any>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
 
-  const { data: segments, isLoading, refetch } = trpc.segments.list.useQuery();
+  const { data: segments, isLoading, error, refetch } = trpc.segments.list.useQuery();
   const utils = trpc.useUtils();
 
   const deleteMut = trpc.segments.delete.useMutation({
@@ -453,6 +453,8 @@ export default function Segments() {
               <Skeleton key={i} className="h-36 rounded-xl" />
             ))}
           </div>
+        ) : error && !segments ? (
+          <QueryError what="segments" message={error.message} onRetry={() => refetch()} />
         ) : !segments || segments.length === 0 ? (
           <EmptyState
             icon={Filter}

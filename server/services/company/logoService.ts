@@ -18,12 +18,27 @@ const PERMITTED = new Set([
 
 export interface ResolvedLogo { url: string | null; sourceType: string | null; status: string; }
 
+/**
+ * Where the browser fetches an account's inline logo (audit 2026-10-20, Phase 4,
+ * L6). Processed logos are stored as data: URIs, about 28 KB each, and sending
+ * them inside list responses made accounts.list 83 MB for 4,215 accounts and a
+ * 50-row company search 810 KB. Lists send this short URL instead; the image
+ * itself comes from _core/mediaRoutes.ts, cached by the browser. `v` changes
+ * when the logo does (updateCompanyLogo stamps logoLastVerifiedAt).
+ */
+export function accountLogoPath(accountId: number, verifiedAt: Date | string | null | undefined): string {
+  const v = verifiedAt ? new Date(verifiedAt).getTime() || 0 : 0;
+  return `/api/media/account-logo/${accountId}?v=${v}`;
+}
+
 /** The logo to display for an account (permitted stored URL, else null). */
 export function resolveCompanyLogo(account: {
-  logoUrl?: string | null; logoSourceType?: string | null; logoStatus?: string | null;
+  id?: number; logoUrl?: string | null; logoSourceType?: string | null; logoStatus?: string | null;
+  logoLastVerifiedAt?: Date | string | null;
 }): ResolvedLogo {
   if (account.logoUrl && account.logoStatus === "available" && account.logoSourceType && PERMITTED.has(account.logoSourceType)) {
-    return { url: account.logoUrl, sourceType: account.logoSourceType, status: "available" };
+    const url = account.id && /^data:/i.test(account.logoUrl) ? accountLogoPath(account.id, account.logoLastVerifiedAt) : account.logoUrl;
+    return { url, sourceType: account.logoSourceType, status: "available" };
   }
   return { url: null, sourceType: null, status: account.logoStatus ?? "unknown" };
 }

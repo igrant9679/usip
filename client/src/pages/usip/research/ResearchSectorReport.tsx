@@ -14,6 +14,7 @@ import { MoneyFlow } from "@/components/usip/research/MoneyFlow";
 import { RunsForRecord } from "@/components/usip/research/ResearchRuns";
 import { ScoreDots } from "@/components/usip/research/ReportBits";
 import { SECTOR_SCORE_KEYS, SECTOR_SCORE_LABEL } from "@shared/researchShape";
+import { NotFoundState } from "@/components/usip/QueryState";
 
 const List = ({ items }: { items: string[] }) =>
   items.length ? <ul className="list-disc pl-5 space-y-1 text-sm">{items.map((x, i) => <li key={i}>{x}</li>)}</ul> : <p className="text-sm text-muted-foreground">Nothing recorded yet.</p>;
@@ -28,6 +29,9 @@ export default function ResearchSectorReport() {
   const id = Number(useParams<{ id: string }>().id);
   const q = trpc.research.sectors.get.useQuery({ id }, { enabled: Number.isFinite(id) && id > 0 });
 
+  // A non-numeric id never queried and showed a skeleton forever (audit
+  // 2026-10-20, P104).
+  if (!(Number.isFinite(id) && id > 0)) return <Shell title="Research"><NotFoundState what="sector" backHref="/research" backLabel="Research" /></Shell>;
   if (q.error) return <Shell title="Sector report"><div className="p-6"><QueryError message={q.error.message} onRetry={() => q.refetch()} /></div></Shell>;
   if (!q.data) return <Shell title="Sector report"><div className="p-6"><TableSkeleton rows={6} /></div></Shell>;
   const { sector, market, personas } = q.data;

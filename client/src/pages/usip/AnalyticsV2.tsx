@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import {
   BarChart3, TrendingUp, Users, Mail, MessageSquare, CalendarCheck, Trophy, ArrowDown, Share2,
 } from "lucide-react";
+import { FailedLoadsBanner } from "@/components/usip/QueryState";
 
 /**
  * `email_log.source` values that are OUTREACH. The rest — proposal,
@@ -154,6 +155,7 @@ export default function AnalyticsV2() {
         </div>
 
         <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-6">
+          <FailedLoadsBanner />
           {/* Headline stats */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <Stat label="Pipeline value" value={money(d.pipelineValue)} sub={`${d.openOppsCount ?? 0} open deals`} />

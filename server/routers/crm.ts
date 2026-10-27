@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, isNull, isNotNull, lt, lte, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, isNotNull, like, lt, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { invokeLLM } from "../_core/llm";
 import {
@@ -348,18 +348,33 @@ export const TERRITORY_RULE_PATCH = z.object({
 }).strict();
 
 export const accountsRouter = router({
+  /**
+   * Account pickers and short lists: the fields they show, newest first.
+   *
+   * It returned every column of every account, and processed logos are
+   * stored inline, so LSI Media's list was 83 MB and took 11 s; Companies,
+   * Pipeline and Home each loaded it (audit 2026-10-20, L6, L7). Logos come
+   * from companies.search and the company page; the search runs in SQL.
+   */
   list: workspaceProcedure
-    .input(z.object({ search: z.string().optional() }).optional())
+    .input(z.object({ search: z.string().optional(), limit: z.number().int().min(1).max(10_000).optional() }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
-      const rows = await db
-        .select()
+      const q = input?.search?.trim();
+      const where = q
+        ? and(eq(accounts.workspaceId, ctx.workspace.id), or(like(accounts.name, `%${q}%`), like(accounts.domain, `%${q}%`)))
+        : eq(accounts.workspaceId, ctx.workspace.id);
+      const rows = db
+        .select({
+          id: accounts.id, name: accounts.name, domain: accounts.domain, industry: accounts.industry,
+          region: accounts.region, hqState: accounts.hqState, hqCountry: accounts.hqCountry,
+          archivedAt: accounts.archivedAt, updatedAt: accounts.updatedAt,
+        })
         .from(accounts)
-        .where(eq(accounts.workspaceId, ctx.workspace.id))
-        .orderBy(desc(accounts.updatedAt));
-      const q = input?.search?.toLowerCase().trim();
-      return q ? rows.filter((r) => r.name.toLowerCase().includes(q) || (r.domain ?? "").toLowerCase().includes(q)) : rows;
+        .where(where)
+        .orderBy(desc(accounts.updatedAt), desc(accounts.id));
+      return input?.limit ? rows.limit(input.limit) : rows;
     }),
 
   get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
@@ -1854,7 +1869,9 @@ export const opportunitiesRouter = router({
       ? and(eq(opportunities.workspaceId, ctx.workspace.id), eq(opportunities.ownerUserId, input.ownerUserId))
       : eq(opportunities.workspaceId, ctx.workspace.id);
     const rows = await db.select().from(opportunities).where(where);
-    const acctRows = await db.select().from(accounts).where(eq(accounts.workspaceId, ctx.workspace.id));
+    // Names only: every account's every column (inline logos included) made
+    // this 2 s for a board with a handful of deals (audit 2026-10-20, L7).
+    const acctRows = await db.select({ id: accounts.id, name: accounts.name }).from(accounts).where(eq(accounts.workspaceId, ctx.workspace.id));
     const accMap = new Map(acctRows.map((a) => [a.id, a.name]));
     return rows.map((r) => ({ ...r, accountName: accMap.get(r.accountId) ?? "?" }));
   }),

@@ -103,12 +103,40 @@ async function workspaceOrder(workspaceId: number): Promise<{ order: AreSourceId
  * Everything the UI needs per source: manifest, credential status, circuit,
  * live budget and — given criteria — the capability verdict.
  */
+/**
+ * A vendor's allowance answer, kept a few minutes for display (audit
+ * 2026-10-20, L9): Settings → Data sources, ARE Settings and the source strip
+ * asked the vendor on every load, and Find Prospects again on every change of
+ * criteria. Only sources whose allowance comes from the vendor (credential
+ * table); Apollo and QuickEnrich count their own ledger, which is current.
+ * Never used to gate a pull: eligibleFor asks fresh.
+ */
+const DISPLAY_BUDGET_TTL_MS = 3 * 60_000;
+const displayBudgetCache = new Map<string, { at: number; value: BudgetSnapshot[] }>();
+
+async function displayBudget(workspaceId: number, s: ProspectSource, creds: SourceCredentials): Promise<BudgetSnapshot[]> {
+  if (s.credentialMode !== "table") return s.remainingBudget(creds);
+  const key = `${workspaceId}:${s.slug}`;
+  const hit = displayBudgetCache.get(key);
+  if (hit && Date.now() - hit.at < DISPLAY_BUDGET_TTL_MS) return hit.value;
+  const value = await s.remainingBudget(creds);
+  displayBudgetCache.set(key, { at: Date.now(), value });
+  return value;
+}
+
+/** New credentials, new allowance: drop what was shown for the old ones. */
+export function forgetDisplayBudget(workspaceId: number, slug: string): void {
+  displayBudgetCache.delete(`${workspaceId}:${slug}`);
+}
+
+export function __clearDisplayBudgetsForTests(): void {
+  displayBudgetCache.clear();
+}
+
 export async function describeSources(workspaceId: number, criteria?: SearchCriteria | null): Promise<SourceStatus[]> {
   const { order, mask } = await workspaceOrder(workspaceId);
-  const out: SourceStatus[] = [];
-  const sources = listSources();
-  for (let i = 0; i < sources.length; i++) {
-    const s = sources[i];
+  // Each source's reads and vendor call run side by side; they took turns.
+  return Promise.all(listSources().map(async (s): Promise<SourceStatus> => {
     const cred = await credentialView(workspaceId, s);
     const creds = cred.configured ? await loadCredentials(workspaceId, s) : null;
     const caps = s.capabilities(creds);
@@ -116,7 +144,7 @@ export async function describeSources(workspaceId: number, criteria?: SearchCrit
     let budget: BudgetSnapshot[] = [];
     let leadsRemaining: number | null = null;
     if (creds) {
-      try { budget = await s.remainingBudget(creds); } catch { budget = []; }
+      try { budget = await displayBudget(workspaceId, s, creds); } catch { budget = []; }
       const periods = s.budgetPeriods({ now: new Date(), credentials: creds });
       if (periods.length > 0) {
         leadsRemaining = (await remainingUnits(workspaceId, s.slug, "leads", periods)).total;
@@ -126,16 +154,15 @@ export async function describeSources(workspaceId: number, criteria?: SearchCrit
       }
     }
     const idx = order.indexOf(s.slug as AreSourceId);
-    out.push({
+    return {
       slug: s.slug, displayName: s.displayName, docsUrl: s.docsUrl, capabilities: caps,
       acquisition: s.acquisition, implemented: isImplemented(s),
       enabled: mask[s.slug] !== false,
       order: idx === -1 ? null : idx,
       credential: cred, circuit, budget, leadsRemaining,
       match: criteria ? matchCapabilities(caps, criteria) : null,
-    });
-  }
-  return out;
+    };
+  }));
 }
 
 export interface EligibleSource {

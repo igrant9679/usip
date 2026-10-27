@@ -26,7 +26,7 @@ import { checkPermission, getDb } from "../db";
 import { getOrSeedSettings } from "./admin";
 import { recordAudit } from "../audit";
 import { PROSPECT_SOURCE_SLUGS } from "@shared/prospectSources";
-import { describeSources, getSource } from "../services/prospectSources/registry";
+import { describeSources, forgetDisplayBudget, getSource } from "../services/prospectSources/registry";
 import { credentialView, loadCredentials, recordValidation, saveCredentials } from "../services/prospectSources/credentials";
 import { ledgerView } from "../services/prospectSources/ledger";
 import {
@@ -91,6 +91,7 @@ export const prospectSourcesRouter = router({
         ...(input.apiKey !== undefined ? { secrets: { apiKey: input.apiKey.trim() } } : {}),
         config,
       });
+      forgetDisplayBudget(ctx.workspace.id, input.slug);
       await recordAudit({
         workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update",
         entityType: "prospect_source_credentials", entityId: ctx.workspace.id,
@@ -119,6 +120,7 @@ export const prospectSourcesRouter = router({
       const s = getSource(input.slug);
       if (s.credentialMode !== "table") throw new TRPCError({ code: "BAD_REQUEST", message: "Managed on its own card." });
       await saveCredentials(ctx.workspace.id, input.slug, { secrets: { apiKey: "" } });
+      forgetDisplayBudget(ctx.workspace.id, input.slug);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "prospect_source_credentials", entityId: ctx.workspace.id, after: { slug: input.slug, cleared: true } });
       return { ok: true as const };
     }),

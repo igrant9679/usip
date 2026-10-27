@@ -3543,6 +3543,8 @@ export const emailReplies = mysqlTable(
     byDraft: index("ix_er_draft").on(t.draftId),
     byMsgId: index("ix_er_msgid").on(t.messageId),
     byCampaign: index("ix_er_campaign").on(t.campaignId),
+    // The reply that booked a meeting (migration 0218).
+    byMeeting: index("ix_er_ws_meeting").on(t.workspaceId, t.meetingId),
   }),
 );
 export type EmailReply = typeof emailReplies.$inferSelect;
@@ -4474,6 +4476,8 @@ export const areScrapeJobs = mysqlTable(
   (t) => ({
     byWs: index("ix_asj_ws").on(t.workspaceId),
     byCampaign: index("ix_asj_campaign").on(t.campaignId),
+    // "Pulled today" per source (migration 0218).
+    byWsSourceDay: index("ix_asj_ws_src_at").on(t.workspaceId, t.sourceType, t.scrapedAt),
   }),
 );
 export type AreScrapeJob = typeof areScrapeJobs.$inferSelect;

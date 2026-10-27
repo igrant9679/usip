@@ -64,6 +64,18 @@ export function useEnrichJob() {
   );
 
   useEffect(() => {
+    // A job that failed or was canceled, or a poll that keeps failing, ends
+    // the spinner with the reason (audit 2026-10-20, R62).
+    if (jobQ.data?.status === "failed" || jobQ.data?.status === "canceled") {
+      toast.error(`LinkedIn enrichment ${jobQ.data.status}${(jobQ.data as { errorMessage?: string | null }).errorMessage ? `: ${(jobQ.data as { errorMessage?: string | null }).errorMessage}` : "."}`);
+      setJobId(null);
+      return;
+    }
+    if (jobQ.error && !jobQ.isFetching) {
+      toast.error(`Lost track of the LinkedIn enrichment: ${jobQ.error.message}. It keeps running; refresh to see results.`);
+      setJobId(null);
+      return;
+    }
     // Held by the LinkedIn limits (audit P7): the job waits and the queue
     // resumes it, so stop polling and say so rather than spin forever.
     if (jobQ.data?.status === "waiting") {
@@ -91,7 +103,7 @@ export function useEnrichJob() {
       utils.prospects.get.invalidate();
       setJobId(null);
     }
-  }, [jobQ.data?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [jobQ.data?.status, jobQ.error, jobQ.isFetching]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const running = !!jobId || runMut.isPending || runListMut.isPending;
   return {
