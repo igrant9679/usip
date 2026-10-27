@@ -2,8 +2,14 @@
  * CompanySearchService — server-side workspace-account search: text + firmographic
  * filters, score filter, sorting, pagination, and per-row contact counts. Powers
  * the Apollo-style company table. Only filters on data Velocity actually has.
+ *
+ * Two steps (audit 2026-10-20, X4.1): the filter, sort and page run over
+ * account ids alone, then the page's rows are read by id. Sorting whole rows
+ * carried every column of every match through the sort — the inline logo
+ * images (about 20 KB an account, 76 MB in LSI Media), notes, custom fields —
+ * and the first search after a quiet spell took 2.7–5 s for 50 rows.
  */
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, like, lte, or, sql, exists } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, like, lte, or, sql, exists, type SQL } from "drizzle-orm";
 import { getDb } from "../../db";
 import { accounts, contactAccountLinks, scoreResults } from "../../../drizzle/schema";
 import { RESEARCH_SOURCES } from "@shared/researchSource";
@@ -26,6 +32,45 @@ export interface CompanyFilters {
   researchSectorIds?: number[];
 }
 export interface CompanySort { field: "name" | "employeeCount" | "revenue" | "score" | "lastEnriched" | "createdAt" | "contactCount"; direction: "asc" | "desc"; }
+
+/** What one row of the company table shows; the page reads only these. */
+const PAGE_COLUMNS = {
+  id: accounts.id, name: accounts.name, domain: accounts.domain, normalizedDomain: accounts.normalizedDomain,
+  websiteUrl: accounts.websiteUrl, linkedinCompanyUrl: accounts.linkedinCompanyUrl,
+  industry: accounts.industry, employeeCount: accounts.employeeCount, employeeBand: accounts.employeeBand,
+  revenue: accounts.revenue, revenueBand: accounts.revenueBand,
+  region: accounts.region, hqCity: accounts.hqCity, hqState: accounts.hqState, hqCountry: accounts.hqCountry,
+  ownerUserId: accounts.ownerUserId, accountStage: accounts.accountStage,
+  accountScore: accounts.accountScore, accountRating: accounts.accountRating,
+  lastEnrichedAt: accounts.lastEnrichedAt, dataStatus: accounts.dataStatus,
+  sourceType: accounts.sourceType, researchSectorId: accounts.researchSectorId,
+  logoUrl: accounts.logoUrl, logoSourceType: accounts.logoSourceType, logoStatus: accounts.logoStatus,
+  logoLastVerifiedAt: accounts.logoLastVerifiedAt,
+};
+
+/**
+ * ORDER BY for a search: the chosen field, then the id the same way, so rows
+ * that tie (most accounts have no contacts, many share a created date) keep
+ * one order and a row is never on two pages or on none.
+ *
+ * "Most contacts" is ordered in SQL across every match, not after fetching:
+ * it once sorted only the 50 newest accounts among themselves, so page 1
+ * never showed the workspace's top companies by contact count.
+ */
+export function searchOrder(ws: number, sort?: CompanySort): SQL[] {
+  const dir = sort?.direction === "asc" ? asc : desc;
+  const field = sort?.field ?? "createdAt";
+  const col = field === "contactCount"
+    ? sql<number>`(
+        SELECT COUNT(*) FROM \`contact_account_links\` cal
+        WHERE cal.\`workspaceId\` = ${ws} AND cal.\`account_id\` = \`accounts\`.\`id\`
+      )`
+    : ({
+        name: accounts.name, employeeCount: accounts.employeeCount, revenue: accounts.revenue,
+        score: accounts.accountScore, lastEnriched: accounts.lastEnrichedAt, createdAt: accounts.createdAt,
+      }[field] ?? accounts.createdAt);
+  return [dir(col), dir(accounts.id)];
+}
 
 export async function searchWorkspaceAccounts(ws: number, opts: {
   filters?: CompanyFilters; sort?: CompanySort; page?: number; perPage?: number;
@@ -70,48 +115,30 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
         eq(scoreResults.objectId, accounts.id), inArray(scoreResults.rating, set)))));
   }
 
-  const dir = opts.sort?.direction === "asc" ? asc : desc;
+  const where = and(...conds);
+  // The page's ids in order, and the total, side by side.
+  const [pageIds, [{ total }]] = await Promise.all([
+    db.select({ id: accounts.id }).from(accounts).where(where)
+      .orderBy(...searchOrder(ws, opts.sort)).limit(perPage).offset((page - 1) * perPage),
+    db.select({ total: sql<number>`count(*)` }).from(accounts).where(where),
+  ]);
+  const ids = pageIds.map((r) => r.id);
+  if (!ids.length) return { data: [], total: Number(total), page, perPage };
 
-  // "Most contacts" has to be ordered in SQL, not after fetching.
-  //
-  // It used to map to accounts.createdAt with the comment "handled post-fetch",
-  // and the post-fetch sort below only reordered the 50 rows this page had
-  // already selected BY CREATION DATE. Since contactCount is the page's own
-  // DEFAULT sort, page 1 showed the 50 newest accounts ranked among
-  // themselves — never the workspace's actual top companies by contact count.
-  // A company with 40 contacts created last year simply never appeared.
-  //
-  // Correlated subquery keeps the existing single-table select shape (no
-  // GROUP BY, so the row mapping and the separate count query stay valid).
-  const contactCountExpr = sql<number>`(
-    SELECT COUNT(*) FROM \`contact_account_links\` cal
-    WHERE cal.\`workspaceId\` = ${ws} AND cal.\`account_id\` = \`accounts\`.\`id\`
-  )`;
-
-  const sortField = opts.sort?.field ?? "createdAt";
-  const sortCol = sortField === "contactCount"
-    ? contactCountExpr
-    : ({
-        name: accounts.name, employeeCount: accounts.employeeCount, revenue: accounts.revenue,
-        score: accounts.accountScore, lastEnriched: accounts.lastEnrichedAt, createdAt: accounts.createdAt,
-      }[sortField] ?? accounts.createdAt);
-
-  const rows = await db.select().from(accounts).where(and(...conds))
-    .orderBy(dir(sortCol)).limit(perPage).offset((page - 1) * perPage);
-  const [{ total }] = await db.select({ total: sql<number>`count(*)` }).from(accounts).where(and(...conds));
-
-  // Contact counts for the page.
-  const ids = rows.map((r) => r.id);
-  const counts = new Map<number, number>();
-  if (ids.length) {
-    const cc = await db.select({ accountId: contactAccountLinks.accountId, n: sql<number>`count(*)` })
+  // Those rows, and their contact counts.
+  const [rows, cc] = await Promise.all([
+    db.select(PAGE_COLUMNS).from(accounts).where(and(eq(accounts.workspaceId, ws), inArray(accounts.id, ids))),
+    db.select({ accountId: contactAccountLinks.accountId, n: sql<number>`count(*)` })
       .from(contactAccountLinks)
       .where(and(eq(contactAccountLinks.workspaceId, ws), inArray(contactAccountLinks.accountId, ids)))
-      .groupBy(contactAccountLinks.accountId);
-    for (const r of cc) counts.set(r.accountId, Number(r.n));
-  }
+      .groupBy(contactAccountLinks.accountId),
+  ]);
+  const counts = new Map<number, number>();
+  for (const r of cc) counts.set(r.accountId, Number(r.n));
+  const byId = new Map(rows.map((r) => [r.id, r]));
 
-  const data = rows.map((a) => {
+  // In the order the sort chose; a row archived or moved in between drops out.
+  const data = ids.flatMap((id) => byId.get(id) ?? []).map((a) => {
     const logo = resolveCompanyLogo(a);
     return {
       id: a.id, name: a.name, domain: a.domain, websiteUrl: a.websiteUrl, linkedinCompanyUrl: a.linkedinCompanyUrl,
@@ -126,11 +153,6 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
       contactCount: counts.get(a.id) ?? 0,
     };
   });
-
-  // No post-fetch re-sort: ordering now happens in SQL above, across the whole
-  // result set rather than within one page. Re-sorting here would be a no-op at
-  // best and, on page 2+, would reshuffle rows into an order inconsistent with
-  // the pagination that produced them.
 
   return { data, total: Number(total), page, perPage };
 }
