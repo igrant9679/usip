@@ -7,11 +7,11 @@
  * credits, QuickEnrich hits, WarmySender leads, Apollo API requests. So the
  * report does too, one line per vendor, unit, model and paying key, with a
  * column per day. Dollars are an ESTIMATE, shown only for models whose list
- * price is on file (shared/researchModels.ts, read from Anthropic's pricing
- * page): a made-up price would be worse than none, and the units are what a
- * vendor dashboard is checked against.
+ * price is on file (shared/researchModels.ts and OTHER_MODEL_PRICES below,
+ * read from Anthropic's pricing page): a made-up price would be worse than
+ * none, and the units are what a vendor dashboard is checked against.
  */
-import { RESEARCH_MODELS, WEB_SEARCH_USD, type ResearchModelId } from "./researchModels";
+import { RESEARCH_MODELS, WEB_SEARCH_USD, type Price } from "./researchModels";
 
 export type SpendRowIn = {
   workspaceId: number;
@@ -58,11 +58,26 @@ export function dayRange(fromDay: string, toDay: string): string[] {
   return out;
 }
 
+/**
+ * List prices for models the platform calls that are not Research choices,
+ * USD per million tokens. claude-haiku-4-5 is the deployment's default model
+ * (_core/llm.ts, _core/llmStream.ts): a call that names no model runs on it.
+ * Read from Anthropic's pricing on 2026-10-27: $1 in, $5 out; a 5-minute cache
+ * write is 1.25x input and a cache read 0.1x.
+ */
+const OTHER_MODEL_PRICES: Record<string, Price> = {
+  "claude-haiku-4-5": { input: 1, output: 5, cacheWrite5m: 1.25, cacheRead: 0.1 },
+};
+
+const PRICES: Record<string, Price> = {
+  ...Object.fromEntries(Object.entries(RESEARCH_MODELS).map(([id, m]) => [id, m.price])),
+  ...OTHER_MODEL_PRICES,
+};
+
 /** The price-table model a reported model id belongs to ("claude-opus-5-5-20261001" → "claude-opus-5-5"). */
-export function pricedModel(model: string): ResearchModelId | null {
+export function pricedModel(model: string): string | null {
   const m = model.toLowerCase();
-  const ids = Object.keys(RESEARCH_MODELS) as ResearchModelId[];
-  return ids.find((id) => m === id || m.startsWith(`${id}-`)) ?? null;
+  return Object.keys(PRICES).find((id) => m === id || m.startsWith(`${id}-`)) ?? null;
 }
 
 /** USD for `quantity` of one meter, or null when there is no price on file for it. */
@@ -71,7 +86,7 @@ export function unitCostUsd(vendor: string, meter: string, model: string, quanti
   if (meter === "web_searches") return quantity * WEB_SEARCH_USD;
   const id = pricedModel(model);
   if (!id) return null;
-  const p = RESEARCH_MODELS[id].price;
+  const p = PRICES[id];
   const perMillion =
     meter === "input_tokens" ? p.input
       : meter === "output_tokens" ? p.output
