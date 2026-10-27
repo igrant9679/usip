@@ -357,7 +357,7 @@ function AccountFormDialog({
             {/* Name */}
             <div className="space-y-1.5">
               <Label>Account name</Label>
-              <Input
+              <Input aria-label="Account name"
                 placeholder="e.g. Sales outreach — Outlook"
                 value={form.name}
                 onChange={(e) => set("name", e.target.value)}
@@ -383,7 +383,7 @@ function AccountFormDialog({
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>From email</Label>
-                <Input
+                <Input aria-label="From email"
                   type="email"
                   placeholder="you@company.com"
                   value={form.fromEmail}
@@ -392,7 +392,7 @@ function AccountFormDialog({
               </div>
               <div className="space-y-1.5">
                 <Label>From name</Label>
-                <Input
+                <Input aria-label="From name"
                   placeholder="Your Name"
                   value={form.fromName}
                   onChange={(e) => set("fromName", e.target.value)}
@@ -403,7 +403,7 @@ function AccountFormDialog({
             {/* Reply-to */}
             <div className="space-y-1.5">
               <Label className="inline-flex items-center gap-1.5">Reply-to <span className="text-muted-foreground text-xs">(optional)</span><HelpTip id="sending.replyTo" /></Label>
-              <Input
+              <Input aria-label="Reply-to"
                 type="email"
                 placeholder="replies@company.com"
                 value={form.replyTo}
@@ -426,7 +426,7 @@ function AccountFormDialog({
                 )}
                 <div className="space-y-1.5">
                   <Label>Access token</Label>
-                  <Input
+                  <Input aria-label="Access token"
                     type="password"
                     placeholder={editId ? "••••••• (unchanged)" : "ya29.xxx or EwA..."}
                     value={form.oauthAccessToken}
@@ -435,7 +435,7 @@ function AccountFormDialog({
                 </div>
                 <div className="space-y-1.5">
                   <Label>Refresh token</Label>
-                  <Input
+                  <Input aria-label="Refresh token"
                     type="password"
                     placeholder={editId ? "••••••• (unchanged)" : "1//xxx or M.C..."}
                     value={form.oauthRefreshToken}
@@ -451,7 +451,7 @@ function AccountFormDialog({
                 <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">SendGrid</p>
                 <div className="space-y-1.5">
                   <Label>API key</Label>
-                  <Input
+                  <Input aria-label="API key"
                     type="password"
                     placeholder={editId ? "••••••• (leave blank to keep the current key)" : "SG.xxxxxxxx"}
                     value={form.sendgridApiKey}
@@ -493,7 +493,7 @@ function AccountFormDialog({
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label>SMTP username</Label>
-                    <Input
+                    <Input aria-label="SMTP username"
                       placeholder="AKIAIOSFODNN7EXAMPLE"
                       value={form.smtpUsername}
                       onChange={(e) => set("smtpUsername", e.target.value)}
@@ -501,7 +501,7 @@ function AccountFormDialog({
                   </div>
                   <div className="space-y-1.5">
                     <Label>SMTP password</Label>
-                    <Input
+                    <Input aria-label="SMTP password"
                       type="password"
                       placeholder={editId ? "••••••• (unchanged)" : "SES SMTP password"}
                       value={form.smtpPassword}
@@ -519,7 +519,7 @@ function AccountFormDialog({
                 <div className="grid grid-cols-3 gap-3">
                   <div className="col-span-2 space-y-1.5">
                     <Label>Host</Label>
-                    <Input
+                    <Input aria-label="Host"
                       placeholder="smtp.office365.com"
                       value={form.smtpHost}
                       onChange={(e) => set("smtpHost", e.target.value)}
@@ -527,7 +527,7 @@ function AccountFormDialog({
                   </div>
                   <div className="space-y-1.5">
                     <Label>Port</Label>
-                    <Input
+                    <Input aria-label="Port"
                       type="number"
                       placeholder="587"
                       value={form.smtpPort}
@@ -546,7 +546,7 @@ function AccountFormDialog({
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label>Username</Label>
-                    <Input
+                    <Input aria-label="Username"
                       placeholder="you@example.com"
                       value={form.smtpUsername}
                       onChange={(e) => set("smtpUsername", e.target.value)}
@@ -554,7 +554,7 @@ function AccountFormDialog({
                   </div>
                   <div className="space-y-1.5">
                     <Label>Password / App password</Label>
-                    <Input
+                    <Input aria-label="Password / App password"
                       type="password"
                       placeholder={editId ? "••••••• (unchanged)" : "App password"}
                       value={form.smtpPassword}
@@ -580,7 +580,7 @@ function AccountFormDialog({
               <div className="grid grid-cols-3 gap-3">
                 <div className="col-span-2 space-y-1.5">
                   <Label>IMAP host</Label>
-                  <Input
+                  <Input aria-label="IMAP host"
                     placeholder={IMAP_DEFAULTS[form.provider].host || "imap.example.com"}
                     value={form.imapHost}
                     onChange={(e) => set("imapHost", e.target.value)}
@@ -588,7 +588,7 @@ function AccountFormDialog({
                 </div>
                 <div className="space-y-1.5">
                   <Label>Port</Label>
-                  <Input
+                  <Input aria-label="Port"
                     type="number"
                     placeholder="993"
                     value={form.imapPort}
@@ -607,7 +607,7 @@ function AccountFormDialog({
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label>IMAP username</Label>
-                  <Input
+                  <Input aria-label="IMAP username"
                     placeholder="you@company.com"
                     value={form.imapUsername}
                     onChange={(e) => set("imapUsername", e.target.value)}
@@ -615,7 +615,7 @@ function AccountFormDialog({
                 </div>
                 <div className="space-y-1.5">
                   <Label>IMAP password / App password</Label>
-                  <Input
+                  <Input aria-label="IMAP password / App password"
                     type="password"
                     placeholder={editId ? "••••••• (unchanged)" : "App password"}
                     value={form.imapPassword}
@@ -629,7 +629,7 @@ function AccountFormDialog({
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="inline-flex items-center gap-1.5">Daily send limit<HelpTip id="sending.dailyLimit" /></Label>
-                <Input
+                <Input aria-label="Daily send limit"
                   type="number"
                   placeholder="500"
                   value={form.dailySendLimit}
@@ -884,7 +884,7 @@ function InboundRepliesCard() {
           fill up. Enter a subdomain you can add DNS records for (e.g. <code>reply.yourcompany.com</code>).
         </p>
         <div className="flex gap-2 max-w-xl">
-          <Input
+          <Input aria-label="Reply subdomain"
             placeholder="reply.yourcompany.com"
             value={domain}
             onChange={(e) => setDomainInput(e.target.value)}

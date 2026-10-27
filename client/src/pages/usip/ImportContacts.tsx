@@ -36,6 +36,7 @@ import {
   missingRequiredMappings,
   requiredFieldsFor,
 } from "@shared/importFields";
+import { pressable } from "@/lib/pressable";
 
 /* ─── System fields ──────────────────────────────────────────────────────────
  * Imported, not mirrored. This file used to declare its own copy under a comment
@@ -342,7 +343,7 @@ export function ImportContactsPanel() {
                 onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
                 onDragLeave={() => setIsDragging(false)}
                 onDrop={handleDrop}
-                onClick={() => fileInputRef.current?.click()}
+                {...pressable(() => fileInputRef.current?.click())}
               >
                 <input
                   ref={fileInputRef}
@@ -695,7 +696,7 @@ export function ImportContactsPanel() {
                         counts above are computed WITH this setting, so leaving it
                         out left "Valid" and "Duplicates found" describing an
                         import the button would no longer perform. */}
-                    <Switch
+                    <Switch aria-label="Skip duplicates"
                       checked={skipDuplicates}
                       onCheckedChange={(v) => { setSkipDuplicates(v); void handleValidate({ skipDuplicates: v }); }}
                     />
@@ -746,7 +747,7 @@ export function ImportContactsPanel() {
                           loses a real contact. Only rows with a company are matched.
                         </p>
                       </div>
-                      <Switch
+                      <Switch aria-label="Match on name and company"
                         checked={matchOnNameCompany}
                         disabled={validateRowsMutation.isPending}
                         onCheckedChange={(v) => {

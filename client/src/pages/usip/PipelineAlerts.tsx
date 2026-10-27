@@ -39,6 +39,7 @@ import {
 import { toast } from "sonner";
 import { Link } from "wouter";
 import { ConfirmButton } from "@/components/usip/Common";
+import { pressable } from "@/lib/pressable";
 
 const ALERT_CONFIG: Record<
   string,
@@ -93,7 +94,7 @@ function LogActivityDialog({
         <DialogHeader><DialogTitle>Log Activity — {deal?.name}</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
           <p className="text-sm text-muted-foreground">Add a note to this deal's activity timeline.</p>
-          <Textarea placeholder="e.g. Called prospect — left voicemail" value={note} onChange={(e) => setNote(e.target.value)} rows={3} />
+          <Textarea aria-label="Activity note" placeholder="e.g. Called prospect — left voicemail" value={note} onChange={(e) => setNote(e.target.value)} rows={3} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
@@ -397,7 +398,7 @@ export default function PipelineAlerts() {
           <Card
             key={type}
             className={`cursor-pointer transition-all ${filterType === type ? "ring-2 ring-primary" : "hover:shadow-md"}`}
-            onClick={() => setFilterType(filterType === type ? "all" : type)}
+            {...pressable(() => setFilterType(filterType === type ? "all" : type))}
           >
             <CardContent className="p-4 flex items-center gap-3">
               <Icon className={`h-8 w-8 ${color} shrink-0`} />

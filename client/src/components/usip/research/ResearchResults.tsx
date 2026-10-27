@@ -166,8 +166,10 @@ export function PersonaResultsBadge({ personaId, name, tally }: { personaId: num
   if (!tally || tally.written === 0) return null;
   return (
     <>
-      <Badge variant="outline" className="text-[10px] gap-1 cursor-pointer hover:bg-accent" onClick={() => setOpen(true)} title="See this persona's results">
-        <BarChart3 className="size-3" /> {tally.contacted ? replyLabel(tally) : `${tally.written} written, none sent yet`}
+      <Badge asChild variant="outline" className="text-[10px] gap-1 cursor-pointer hover:bg-accent">
+        <button type="button" onClick={() => setOpen(true)} title="See this persona's results">
+          <BarChart3 className="size-3" /> {tally.contacted ? replyLabel(tally) : `${tally.written} written, none sent yet`}
+        </button>
       </Badge>
       {open && <PersonaResultsDialog personaId={personaId} name={name} onClose={() => setOpen(false)} />}
     </>

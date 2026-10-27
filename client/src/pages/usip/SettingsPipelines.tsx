@@ -176,19 +176,19 @@ export default function SettingsPipelines() {
                 {stages.map((s, idx) => (
                   <li key={s.id} className="p-3 flex items-center gap-3">
                     <div className="flex flex-col">
-                      <button className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      <button aria-label="Move stage up" className="text-muted-foreground hover:text-foreground disabled:opacity-30"
                         disabled={idx === 0} onClick={() => move(s.id, -1)}><ChevronUp className="size-3.5" /></button>
-                      <button className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      <button aria-label="Move stage down" className="text-muted-foreground hover:text-foreground disabled:opacity-30"
                         disabled={idx === stages.length - 1} onClick={() => move(s.id, 1)}><ChevronDown className="size-3.5" /></button>
                     </div>
                     <div className="flex-1 min-w-0">
                       {editingId === s.id ? (
                         <div className="flex gap-2">
-                          <Input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} autoFocus />
-                          <Button size="sm" onClick={() => { updateStage.mutate({ id: s.id, patch: { label: editLabel } }); setEditingId(null); }}>
+                          <Input aria-label="Stage name" value={editLabel} onChange={(e) => setEditLabel(e.target.value)} autoFocus />
+                          <Button aria-label="Save" size="sm" onClick={() => { updateStage.mutate({ id: s.id, patch: { label: editLabel } }); setEditingId(null); }}>
                             <Check className="size-3.5" />
                           </Button>
-                          <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}><X className="size-3.5" /></Button>
+                          <Button aria-label="Cancel" size="sm" variant="ghost" onClick={() => setEditingId(null)}><X className="size-3.5" /></Button>
                         </div>
                       ) : (
                         <button className="text-sm font-medium text-left hover:underline" onClick={() => { setEditingId(s.id); setEditLabel(s.label); }}>
@@ -199,7 +199,7 @@ export default function SettingsPipelines() {
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-muted-foreground">Win %</span>
-                      <Input type="number" min={0} max={100} className="w-16 h-7 text-xs"
+                      <Input aria-label="Win %" type="number" min={0} max={100} className="w-16 h-7 text-xs"
                         defaultValue={s.defaultWinProb}
                         onBlur={(e) => {
                           const v = Number(e.target.value);
@@ -213,7 +213,7 @@ export default function SettingsPipelines() {
                         <input type="checkbox" checked={s.isLost} onChange={(e) => setFlags(s, { isLost: e.target.checked, isWon: e.target.checked ? false : s.isWon })} />
                         Lost
                       </label>
-                      <Button size="icon" variant="ghost" className="size-7 text-destructive"
+                      <Button aria-label="Delete stage" size="icon" variant="ghost" className="size-7 text-destructive"
                         onClick={() => askDeleteStage(s)}>
                         <Trash2 className="size-3.5" />
                       </Button>

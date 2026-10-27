@@ -7,6 +7,7 @@ import { actionSupportsEntity, CONDITION_OPS, isDeadTrigger, LIVE_TRIGGERS, RECO
 import { Play, Plus, Save, Trash2, Workflow, GitBranch, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { pressable } from "@/lib/pressable";
 
 /**
  * Trigger and operator vocabularies both come from @shared/workflowTriggers, so
@@ -134,9 +135,9 @@ export default function Workflows() {
             {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={6} /> : (data ?? []).length === 0 ? <EmptyState icon={Workflow} title="None yet" /> : (
               <ul className="divide-y">
                 {data!.map((r) => (
-                  <li key={r.id} className={`p-3 cursor-pointer hover:bg-secondary/40 ${selected === r.id ? "bg-secondary/60" : ""}`} onClick={() => setSelected(r.id)}>
+                  <li key={r.id} className={`p-3 cursor-pointer hover:bg-secondary/40 ${selected === r.id ? "bg-secondary/60" : ""}`} {...pressable(() => setSelected(r.id))}>
                     <div className="flex items-center gap-2">
-                      <Switch checked={r.enabled} onCheckedChange={(v) => toggle.mutate({ id: r.id, enabled: v })} onClick={(e) => e.stopPropagation()} />
+                      <Switch aria-label={`${r.name} enabled`} checked={r.enabled} onCheckedChange={(v) => toggle.mutate({ id: r.id, enabled: v })} onClick={(e) => e.stopPropagation()} />
                       <div className="text-sm font-medium flex-1 truncate">{r.name}</div>
                       <span className="text-xs text-muted-foreground font-mono tabular-nums">{r.fireCount}x</span>
                       {/* span stops the click reaching the row behind it. */}
@@ -268,7 +269,7 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
               another trigger is meaningless here, and a leftover `daysInStage`
               on a record rule is a condition that can never match. The entity
               is seeded so the editor shows the scope the engine will use. */}
-          <select
+          <select aria-label="Trigger"
             value={trigger}
             onChange={(e) => {
               const t = e.target.value;
@@ -284,7 +285,7 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
             <div className="mt-2 grid grid-cols-2 gap-2">
               <div className="space-y-1">
                 <label className="text-xs text-muted-foreground">Stage (leave blank for any)</label>
-                <input
+                <input aria-label="Stage (leave blank for any)"
                   value={triggerConfig.stage ?? ""}
                   onChange={(e) => setTriggerConfig({ ...triggerConfig, stage: e.target.value })}
                   placeholder="e.g. Proposal"
@@ -293,7 +294,7 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-muted-foreground">Days stuck (minimum)</label>
-                <input
+                <input aria-label="Days stuck (minimum)"
                   type="number"
                   value={triggerConfig.days ?? "7"}
                   onChange={(e) => setTriggerConfig({ ...triggerConfig, days: e.target.value })}
@@ -306,7 +307,7 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
           {isRecordTrigger && (
             <div className="mt-2 space-y-1">
               <label className="text-xs text-muted-foreground">Which records</label>
-              <select
+              <select aria-label="Which records"
                 value={entity ?? "lead"}
                 onChange={(e) => { setTriggerConfig({ ...triggerConfig, entity: e.target.value }); setConds([]); }}
                 className="w-full border rounded px-2 py-1.5 text-xs bg-card"
@@ -332,18 +333,18 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
             <div className="space-y-2">
               {conds.map((c, i) => (
                 <div key={i} className="grid grid-cols-12 gap-2">
-                  <select value={c.field} onChange={(e) => setConds(conds.map((x, j) => j === i ? { ...x, field: e.target.value } : x))} className="col-span-4 border rounded px-2 py-1.5 text-xs bg-card">
+                  <select aria-label={`Condition ${i + 1} field`} value={c.field} onChange={(e) => setConds(conds.map((x, j) => j === i ? { ...x, field: e.target.value } : x))} className="col-span-4 border rounded px-2 py-1.5 text-xs bg-card">
                     {/* A field saved before this vocabulary narrowed is kept as
                         its own option — dropping it would render the select
                         blank and silently rewrite the rule on the next save. */}
                     {fieldOptions.indexOf(c.field) < 0 && c.field ? <option value={c.field}>{c.field} (not carried by this event)</option> : null}
                     {fieldOptions.map((f) => <option key={f} value={f}>{f}</option>)}
                   </select>
-                  <select value={c.op} onChange={(e) => setConds(conds.map((x, j) => j === i ? { ...x, op: e.target.value } : x))} className="col-span-3 border rounded px-2 py-1.5 text-xs bg-card">
+                  <select aria-label={`Condition ${i + 1} operator`} value={c.op} onChange={(e) => setConds(conds.map((x, j) => j === i ? { ...x, op: e.target.value } : x))} className="col-span-3 border rounded px-2 py-1.5 text-xs bg-card">
                     {OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>
-                  <input value={c.value} onChange={(e) => setConds(conds.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value" className="col-span-4 border rounded px-2 py-1.5 text-xs bg-card" />
-                  <button onClick={() => setConds(conds.filter((_, j) => j !== i))} className="col-span-1 text-muted-foreground hover:text-rose-600 flex items-center justify-center"><Trash2 className="size-3.5" /></button>
+                  <input aria-label={`Condition ${i + 1} value`} value={c.value} onChange={(e) => setConds(conds.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value" className="col-span-4 border rounded px-2 py-1.5 text-xs bg-card" />
+                  <button aria-label="Remove condition" onClick={() => setConds(conds.filter((_, j) => j !== i))} className="col-span-1 text-muted-foreground hover:text-rose-600 flex items-center justify-center"><Trash2 className="size-3.5" /></button>
                 </div>
               ))}
             </div>
@@ -365,16 +366,16 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
                       that looks built and never works. Saved rules keep their
                       action so the label explains the failures they already
                       have (2026-09-20). */}
-                  <select value={a.type} onChange={(e) => setActs(acts.map((x, j) => j === i ? { ...x, type: e.target.value, params: defaultParams(e.target.value) } : x))} className="flex-1 border rounded px-2 py-1.5 text-xs bg-card">
+                  <select aria-label={`Action ${i + 1}`} value={a.type} onChange={(e) => setActs(acts.map((x, j) => j === i ? { ...x, type: e.target.value, params: defaultParams(e.target.value) } : x))} className="flex-1 border rounded px-2 py-1.5 text-xs bg-card">
                     {ACTION_TYPES.map(([v, l]) => (
                       <option key={v} value={v}>{actionSupportsEntity(v, entity) ? l : `${l} — not supported on a ${entity}`}</option>
                     ))}
                   </select>
-                  <button onClick={() => setActs(acts.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-rose-600"><Trash2 className="size-3.5" /></button>
+                  <button aria-label="Remove action" onClick={() => setActs(acts.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-rose-600"><Trash2 className="size-3.5" /></button>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   {Object.entries(a.params).map(([k, v]) => (
-                    <input key={k} value={v} onChange={(e) => setActs(acts.map((x, j) => j === i ? { ...x, params: { ...x.params, [k]: e.target.value } } : x))} placeholder={k} className="border rounded px-2 py-1.5 text-xs bg-card" />
+                    <input aria-label={k} key={k} value={v} onChange={(e) => setActs(acts.map((x, j) => j === i ? { ...x, params: { ...x.params, [k]: e.target.value } } : x))} placeholder={k} className="border rounded px-2 py-1.5 text-xs bg-card" />
                   ))}
                 </div>
               </div>

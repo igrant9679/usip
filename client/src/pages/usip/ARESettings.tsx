@@ -130,9 +130,11 @@ function Section({ icon: Icon, title, description, children }: {
 }
 
 /* --- Toggle switch -------------------------------------------------------- */
-function Toggle({ checked, onChange, color = "bg-primary" }: { checked: boolean; onChange: () => void; color?: string }) {
+function Toggle({ checked, onChange, label, color = "bg-primary" }: { checked: boolean; onChange: () => void; label: string; color?: string }) {
   return (
     <button
+      type="button"
+      aria-label={label}
       onClick={onChange}
       className={`relative inline-flex shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? color : "bg-muted"}`}
       role="switch"
@@ -333,7 +335,7 @@ export default function ARESettings() {
             </div>
             {autoApproveThreshold !== null && (
               <div className="space-y-1.5">
-                <input
+                <input aria-label="Auto-approve threshold"
                   type="range" min={0} max={100} step={5}
                   value={autoApproveThreshold}
                   onChange={(e) => { setAutoApproveThreshold(parseInt(e.target.value)); mark(); }}
@@ -370,7 +372,7 @@ export default function ARESettings() {
               </div>
               <span className="text-sm font-bold tabular-nums text-primary">{dailySendCap}</span>
             </div>
-            <input
+            <input aria-label="Daily send cap"
               type="range" min={10} max={500} step={10}
               value={dailySendCap}
               onChange={(e) => { setDailySendCap(parseInt(e.target.value)); mark(); }}
@@ -451,7 +453,7 @@ export default function ARESettings() {
                 When a <code className="bg-muted px-1 rounded text-[10px]">meeting_booked</code> signal is received, the AI automatically creates a CRM account, contact, and discovery-stage opportunity pre-filled with the intelligence dossier.
               </div>
             </div>
-            <Toggle checked={signalToOpportunity} onChange={() => { setSignalToOpportunity(!signalToOpportunity); mark(); }} color="bg-violet-500" />
+            <Toggle label="Auto-create opportunity on meeting booked" checked={signalToOpportunity} onChange={() => { setSignalToOpportunity(!signalToOpportunity); mark(); }} color="bg-violet-500" />
           </div>
         </Section>
 
@@ -473,7 +475,7 @@ export default function ARESettings() {
               </div>
               <span className="text-sm font-bold tabular-nums text-primary">{maxConcurrent}</span>
             </div>
-            <input
+            <input aria-label="Maximum concurrent campaigns"
               type="range" min={1} max={50} step={1}
               value={maxConcurrent}
               onChange={(e) => { setMaxConcurrent(parseInt(e.target.value)); mark(); }}
@@ -510,7 +512,7 @@ export default function ARESettings() {
                   <Icon className={`size-3.5 ${color}`} />
                   <span className="font-medium">{label}</span>
                 </div>
-                <Toggle checked={checked} onChange={toggle} />
+                <Toggle label={label} checked={checked} onChange={toggle} />
               </div>
             ))}
           </div>
@@ -566,7 +568,7 @@ export default function ARESettings() {
               </div>
               <span className="text-sm font-bold tabular-nums" style={{ color: sequenceQualityThreshold >= 70 ? "#34D399" : sequenceQualityThreshold >= 50 ? "#F59E0B" : "#F87171" }}>{sequenceQualityThreshold}</span>
             </div>
-            <input type="range" min={0} max={100} step={5} value={sequenceQualityThreshold}
+            <input aria-label="Sequence quality threshold" type="range" min={0} max={100} step={5} value={sequenceQualityThreshold}
               onChange={(e) => { setSequenceQualityThreshold(parseInt(e.target.value)); mark(); }}
               className="w-full accent-amber-500" />
             <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -662,7 +664,7 @@ export default function ARESettings() {
                     <div className="text-xs font-medium">{meta.label}</div>
                     <div className="text-[10px] text-muted-foreground">{ARE_SOURCE_DESC[key]}</div>
                   </div>
-                  <Toggle checked={active} onChange={() => { setScraperSources(prev => ({ ...prev, [key]: !prev[key] })); mark(); }} />
+                  <Toggle label={meta.label} checked={active} onChange={() => { setScraperSources(prev => ({ ...prev, [key]: !prev[key] })); mark(); }} />
                 </div>
               );
             })}

@@ -34,6 +34,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { Zap, ChevronDown, Search, User, Users } from "lucide-react";
+import { tablistProps, tabProps } from "@/lib/tabs";
 
 const OPTIONS = [
   { id: "sequence", label: "Auto-add to sequence", blurb: "Automatically enroll matching people into a sequence as they enter this view." },
@@ -112,7 +113,7 @@ export function WorkflowSelectionMenu({ trigger }: { trigger: React.ReactNode })
         <div className="p-2.5 border-b">
           <div className="flex items-center gap-2 px-2 h-8 rounded-md border bg-background">
             <Search className="size-3.5 text-muted-foreground shrink-0" />
-            <input
+            <input aria-label="Search active workflows"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search active workflows"
@@ -120,9 +121,9 @@ export function WorkflowSelectionMenu({ trigger }: { trigger: React.ReactNode })
             />
           </div>
         </div>
-        <div className="flex items-center gap-4 px-3 pt-2 border-b text-[13px]">
+        <div {...tablistProps("Workflows")} className="flex items-center gap-4 px-3 pt-2 border-b text-[13px]">
           {WF_TABS.map((t) => (
-            <button
+            <button {...tabProps(tab === t.id)}
               key={t.id}
               type="button"
               onClick={() => setTab(t.id)}

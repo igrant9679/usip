@@ -160,41 +160,41 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
         </div>
         <div>
           <Label>Title</Label>
-          <Input value={form.title} onChange={(e) => setForm(f => ({ ...f, title: e.target.value }))} className="mt-1" />
+          <Input aria-label="Title" value={form.title} onChange={(e) => setForm(f => ({ ...f, title: e.target.value }))} className="mt-1" />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label>Client Name</Label>
-            <Input value={form.clientName} onChange={(e) => setForm(f => ({ ...f, clientName: e.target.value }))} className="mt-1" />
+            <Input aria-label="Client Name" value={form.clientName} onChange={(e) => setForm(f => ({ ...f, clientName: e.target.value }))} className="mt-1" />
           </div>
           <div>
             <Label>Org Abbreviation</Label>
-            <Input value={form.orgAbbr} maxLength={32} onChange={(e) => setForm(f => ({ ...f, orgAbbr: e.target.value }))} className="mt-1" />
+            <Input aria-label="Org Abbreviation" value={form.orgAbbr} maxLength={32} onChange={(e) => setForm(f => ({ ...f, orgAbbr: e.target.value }))} className="mt-1" />
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label>Client Email</Label>
-            <Input type="email" value={form.clientEmail} onChange={(e) => setForm(f => ({ ...f, clientEmail: e.target.value }))} className="mt-1" />
+            <Input aria-label="Client Email" type="email" value={form.clientEmail} onChange={(e) => setForm(f => ({ ...f, clientEmail: e.target.value }))} className="mt-1" />
           </div>
           <div>
             <Label>Client Website</Label>
-            <Input value={form.clientWebsite} onChange={(e) => setForm(f => ({ ...f, clientWebsite: e.target.value }))} className="mt-1" />
+            <Input aria-label="Client Website" value={form.clientWebsite} onChange={(e) => setForm(f => ({ ...f, clientWebsite: e.target.value }))} className="mt-1" />
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label>RFP Deadline</Label>
-            <Input type="date" value={form.rfpDeadline} onChange={(e) => setForm(f => ({ ...f, rfpDeadline: e.target.value }))} className="mt-1" />
+            <Input aria-label="RFP Deadline" type="date" value={form.rfpDeadline} onChange={(e) => setForm(f => ({ ...f, rfpDeadline: e.target.value }))} className="mt-1" />
           </div>
           <div>
             <Label>Completion Date</Label>
-            <Input type="date" value={form.completionDate} onChange={(e) => setForm(f => ({ ...f, completionDate: e.target.value }))} className="mt-1" />
+            <Input aria-label="Completion Date" type="date" value={form.completionDate} onChange={(e) => setForm(f => ({ ...f, completionDate: e.target.value }))} className="mt-1" />
           </div>
         </div>
         <div>
           <Label>Proposal Expiry Date <span className="text-muted-foreground font-normal text-xs">(optional)</span></Label>
-          <Input type="date" value={form.expiresAt} onChange={(e) => setForm(f => ({ ...f, expiresAt: e.target.value }))} className="mt-1" />
+          <Input aria-label="Proposal Expiry Date" type="date" value={form.expiresAt} onChange={(e) => setForm(f => ({ ...f, expiresAt: e.target.value }))} className="mt-1" />
           <p className="text-xs text-muted-foreground mt-1">Auto-marks as Not Accepted when this date passes.</p>
         </div>
         <div className="flex items-center gap-2 mt-1">
@@ -212,11 +212,11 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
         </div>
         <div>
           <Label>Budget ($)</Label>
-          <Input type="number" value={form.budget} onChange={(e) => setForm(f => ({ ...f, budget: e.target.value }))} className="mt-1" />
+          <Input aria-label="Budget ($)" type="number" value={form.budget} onChange={(e) => setForm(f => ({ ...f, budget: e.target.value }))} className="mt-1" />
         </div>
         <div>
           <Label>Description</Label>
-          <Textarea value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} className="mt-1 min-h-[80px]" />
+          <Textarea aria-label="Description" value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} className="mt-1 min-h-[80px]" />
         </div>
         <Button
           onClick={() => updateMutation.mutate({ id: proposal.id, ...form, budget: form.budget ? parseFloat(form.budget) : null, rfpDeadline: form.rfpDeadline || null, completionDate: form.completionDate || null, expiresAt: form.expiresAt || null, skipAutoExtend: form.skipAutoExtend })}
@@ -767,10 +767,10 @@ function TimelineTab({ proposal, milestones, onRefetch }: { proposal: any; miles
                 {m.description && <p className="text-xs text-muted-foreground mt-0.5">{m.description}</p>}
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                <Button variant="ghost" size="icon" className="size-7" onClick={() => openEdit(m)}>
+                <Button aria-label="Edit milestone" variant="ghost" size="icon" className="size-7" onClick={() => openEdit(m)}>
                   <Edit2 className="size-3.5" />
                 </Button>
-                <Button
+                <Button aria-label="Delete milestone"
                   variant="ghost"
                   size="icon"
                   className="size-7 text-red-400 hover:text-red-300"
@@ -793,11 +793,11 @@ function TimelineTab({ proposal, milestones, onRefetch }: { proposal: any; miles
           <div className="space-y-3">
             <div>
               <Label>Milestone Name *</Label>
-              <Input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} className="mt-1" placeholder="e.g. Kickoff Meeting" />
+              <Input aria-label="Milestone Name" value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} className="mt-1" placeholder="e.g. Kickoff Meeting" />
             </div>
             <div>
               <Label>Date</Label>
-              <Input type="date" value={form.milestoneDate} onChange={(e) => setForm(f => ({ ...f, milestoneDate: e.target.value }))} className="mt-1" />
+              <Input aria-label="Date" type="date" value={form.milestoneDate} onChange={(e) => setForm(f => ({ ...f, milestoneDate: e.target.value }))} className="mt-1" />
             </div>
             <div>
               <Label>Owner</Label>
@@ -812,7 +812,7 @@ function TimelineTab({ proposal, milestones, onRefetch }: { proposal: any; miles
             </div>
             <div>
               <Label>Description</Label>
-              <Textarea value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} className="mt-1" placeholder="Optional notes..." />
+              <Textarea aria-label="Description" value={form.description} onChange={(e) => setForm(f => ({ ...f, description: e.target.value }))} className="mt-1" placeholder="Optional notes..." />
             </div>
           </div>
           <DialogFooter>
@@ -947,8 +947,8 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
       {shareUrl ? (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <Input value={shareUrl} readOnly className="font-mono text-xs" />
-            <Button
+            <Input aria-label="Share link" value={shareUrl} readOnly className="font-mono text-xs" />
+            <Button aria-label={copied ? "Copied" : "Copy link"}
               variant="outline"
               size="icon"
               onClick={handleCopy}
@@ -1343,7 +1343,7 @@ export default function ProposalDetail() {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center gap-3 px-6 py-4 border-b border-border shrink-0">
-        <Button
+        <Button aria-label="Back to proposals"
           variant="ghost"
           size="icon"
           onClick={() => navigate("/proposals")}
@@ -1581,7 +1581,7 @@ function PipelinePanel({ proposal, onRefetch }: { proposal: any; onRefetch: () =
             <DialogTitle>Link Pipeline Opportunity</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
-            <Input
+            <Input aria-label="Search opportunities"
               placeholder="Search opportunities..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -1830,11 +1830,11 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
         <div className="space-y-3 py-2">
           <div>
             <Label>New Expiry Date</Label>
-            <Input type="date" value={approveDate} onChange={(e) => setApproveDate(e.target.value)} className="mt-1" />
+            <Input aria-label="New Expiry Date" type="date" value={approveDate} onChange={(e) => setApproveDate(e.target.value)} className="mt-1" />
           </div>
           <div>
             <Label>Note to Client <span className="text-muted-foreground font-normal text-xs">(optional)</span></Label>
-            <Textarea
+            <Textarea aria-label="Note to Client"
               value={approveNote}
               onChange={(e) => setApproveNote(e.target.value)}
               placeholder="e.g. We have extended the deadline to accommodate your review timeline."
@@ -1862,7 +1862,7 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
         </DialogHeader>
         <div className="py-2">
           <Label>Reason <span className="text-muted-foreground font-normal text-xs">(optional)</span></Label>
-          <Textarea
+          <Textarea aria-label="Reason"
             value={denyReason}
             onChange={(e) => setDenyReason(e.target.value)}
             placeholder="e.g. The proposal terms are time-sensitive and cannot be extended."

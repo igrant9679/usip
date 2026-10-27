@@ -132,15 +132,15 @@ function CampaignDialog({ open, onClose, initial }: CampaignDialogProps) {
           {/* Basic info */}
           <div className="space-y-2">
             <Label>Campaign name *</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Q3 Outreach — Enterprise SaaS" />
+            <Input aria-label="Campaign name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Q3 Outreach — Enterprise SaaS" />
           </div>
           <div className="space-y-2">
             <Label>Objective</Label>
-            <Input value={objective} onChange={(e) => setObjective(e.target.value)} placeholder="Book 20 demos" />
+            <Input aria-label="Objective" value={objective} onChange={(e) => setObjective(e.target.value)} placeholder="Book 20 demos" />
           </div>
           <div className="space-y-2">
             <Label>Description</Label>
-            <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="Optional notes…" />
+            <Textarea aria-label="Description" value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="Optional notes…" />
           </div>
 
           <Separator />
@@ -212,11 +212,11 @@ function CampaignDialog({ open, onClose, initial }: CampaignDialogProps) {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-xs">Emails / hour</Label>
-              <Input type="number" value={throttlePerHour} onChange={(e) => setThrottlePerHour(e.target.value)} min={1} max={1000} />
+              <Input aria-label="Emails / hour" type="number" value={throttlePerHour} onChange={(e) => setThrottlePerHour(e.target.value)} min={1} max={1000} />
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Emails / day</Label>
-              <Input type="number" value={throttlePerDay} onChange={(e) => setThrottlePerDay(e.target.value)} min={1} max={10000} />
+              <Input aria-label="Emails / day" type="number" value={throttlePerDay} onChange={(e) => setThrottlePerDay(e.target.value)} min={1} max={10000} />
             </div>
           </div>
         </div>

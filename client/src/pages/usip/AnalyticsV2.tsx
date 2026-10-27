@@ -154,7 +154,7 @@ export default function AnalyticsV2() {
           <span className="text-[11px] text-muted-foreground hidden sm:inline">· how the autonomous pipeline is performing</span>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-6">
+        <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-6" tabIndex={0} role="region" aria-label="Analytics">
           <FailedLoadsBanner />
           {/* Headline stats */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

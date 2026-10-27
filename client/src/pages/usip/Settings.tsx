@@ -316,11 +316,11 @@ function SmtpTab({ canEdit }: { canEdit: boolean }) {
         <div className="grid grid-cols-2 gap-3">
           <div className="col-span-2">
             <Label>SMTP Host</Label>
-            <Input placeholder="mail.yourdomain.com" value={host} onChange={(e) => setHost(e.target.value)} disabled={!canEdit} />
+            <Input aria-label="SMTP Host" placeholder="mail.yourdomain.com" value={host} onChange={(e) => setHost(e.target.value)} disabled={!canEdit} />
           </div>
           <div>
             <Label>Port</Label>
-            <Input type="number" placeholder="587" value={port} onChange={(e) => setPort(e.target.value)} disabled={!canEdit} />
+            <Input aria-label="Port" type="number" placeholder="587" value={port} onChange={(e) => setPort(e.target.value)} disabled={!canEdit} />
           </div>
           <div className="flex items-end gap-2">
             <label className="flex items-center gap-2 text-sm cursor-pointer">
@@ -330,23 +330,23 @@ function SmtpTab({ canEdit }: { canEdit: boolean }) {
           </div>
           <div className="col-span-2">
             <Label>Username / Email</Label>
-            <Input placeholder="you@example.com" value={username} onChange={(e) => setUsername(e.target.value)} disabled={!canEdit} />
+            <Input aria-label="Username / Email" placeholder="you@example.com" value={username} onChange={(e) => setUsername(e.target.value)} disabled={!canEdit} />
           </div>
           <div className="col-span-2">
             <Label>Password {cfg.data ? "(leave blank to keep existing)" : ""}</Label>
-            <Input type="password" placeholder={cfg.data ? "••••••••" : "App password"} value={password} onChange={(e) => setPassword(e.target.value)} disabled={!canEdit} />
+            <Input aria-label="Password" type="password" placeholder={cfg.data ? "••••••••" : "App password"} value={password} onChange={(e) => setPassword(e.target.value)} disabled={!canEdit} />
           </div>
           <div>
             <Label>From Name</Label>
-            <Input placeholder="Acme Sales" value={fromName} onChange={(e) => setFromName(e.target.value)} disabled={!canEdit} />
+            <Input aria-label="From Name" placeholder="Acme Sales" value={fromName} onChange={(e) => setFromName(e.target.value)} disabled={!canEdit} />
           </div>
           <div>
             <Label>From Email</Label>
-            <Input placeholder="sales@acme.com" value={fromEmail} onChange={(e) => setFromEmail(e.target.value)} disabled={!canEdit} />
+            <Input aria-label="From Email" placeholder="sales@acme.com" value={fromEmail} onChange={(e) => setFromEmail(e.target.value)} disabled={!canEdit} />
           </div>
           <div className="col-span-2">
             <Label>Reply-To (optional)</Label>
-            <Input placeholder="replies@acme.com" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} disabled={!canEdit} />
+            <Input aria-label="Reply-To (optional)" placeholder="replies@acme.com" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} disabled={!canEdit} />
           </div>
         </div>
         {canEdit && (
@@ -361,7 +361,7 @@ function SmtpTab({ canEdit }: { canEdit: boolean }) {
             </Button>
             {cfg.data && (
               <div className="flex items-center gap-2">
-                <Input placeholder="Test recipient email" value={testEmail} onChange={(e) => setTestEmail(e.target.value)} className="w-52" />
+                <Input aria-label="Test recipient email" placeholder="Test recipient email" value={testEmail} onChange={(e) => setTestEmail(e.target.value)} className="w-52" />
                 <Button
                   size="sm" variant="outline"
                   onClick={() => test.mutate({ toEmail: testEmail })}
@@ -439,7 +439,7 @@ function GeneralTab({
         <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-1">
             <Label>Company / workspace name</Label>
-            <Input value={wsName} onChange={(e) => setWsName(e.target.value)} disabled={!canEdit} placeholder="Acme Inc." maxLength={120} />
+            <Input aria-label="Company / workspace name" value={wsName} onChange={(e) => setWsName(e.target.value)} disabled={!canEdit} placeholder="Acme Inc." maxLength={120} />
             <div className="text-xs text-muted-foreground">Shown to your prospects and clients — keep it your real company name.</div>
           </div>
         </div>
@@ -459,7 +459,7 @@ function GeneralTab({
         <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-1">
             <Label>Timezone</Label>
-            <Input value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={!canEdit} placeholder="UTC" />
+            <Input aria-label="Timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={!canEdit} placeholder="UTC" />
             <div className="text-xs text-muted-foreground">Use an IANA zone (e.g. UTC, America/New_York, Europe/London).</div>
           </div>
         </div>
@@ -495,7 +495,7 @@ function GeneralTab({
               <Label>Minimum lead score to include</Label>
               <span className="text-sm font-semibold tabular-nums">{nightlyThreshold}</span>
             </div>
-            <Slider
+            <Slider aria-label="Minimum lead score to include"
               min={0}
               max={100}
               step={5}
@@ -633,7 +633,7 @@ function MyProfileTab({ workspaceSignature }: { workspaceSignature: string }) {
       <div className="p-4 space-y-3">
         <div className="space-y-1">
           <Label>Your signature</Label>
-          <textarea
+          <textarea aria-label="Your signature"
             className="w-full min-h-32 rounded-md border bg-transparent px-3 py-2 text-sm font-mono"
             value={sig}
             onChange={(e) => setSig(e.target.value)}
@@ -764,11 +764,11 @@ function BrandingTab({ settings, save, canEdit }: { settings: any; save: (v: any
       <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="space-y-1 md:col-span-2">
           <Label>Email From-name</Label>
-          <Input value={fromName} onChange={(e) => setFromName(e.target.value)} disabled={!canEdit} placeholder="Acme Inc. Sales" />
+          <Input aria-label="Email From-name" value={fromName} onChange={(e) => setFromName(e.target.value)} disabled={!canEdit} placeholder="Acme Inc. Sales" />
         </div>
         <div className="space-y-1 md:col-span-2">
           <Label>Default signature</Label>
-          <textarea
+          <textarea aria-label="Default signature"
             className="w-full min-h-28 rounded-md border bg-transparent px-3 py-2 text-sm"
             value={sig}
             onChange={(e) => setSig(e.target.value)}
@@ -842,7 +842,7 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
             supplies. That is infrastructure, not a missing if-statement. */}
         <div className="space-y-1">
           <Label>Session timeout (minutes)</Label>
-          <Input
+          <Input aria-label="Session timeout (minutes)"
             type="number"
             value={timeout_}
             onChange={(e) => setTimeout_(Number(e.target.value))}
@@ -875,7 +875,7 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
         </div>
         <div className="space-y-1 md:col-span-2 opacity-60">
           <Label>IP allowlist (one per line, CIDR supported)</Label>
-          <textarea
+          <textarea aria-label="IP allowlist (one per line, CIDR supported)"
             className="w-full min-h-28 rounded-md border bg-transparent px-3 py-2 text-sm font-mono"
             value={ip}
             onChange={(e) => setIp(e.target.value)}
@@ -938,7 +938,7 @@ function NotificationsTab({ settings, save, canEdit }: { settings: any; save: (v
               <tr key={ev.key} className="border-t">
                 <td className="py-2">{ev.label}</td>
                 <td className="py-2 text-center">
-                  <input
+                  <input aria-label={`${ev.label} in app`}
                     type="checkbox"
                     checked={policy[ev.key]?.inApp ?? false}
                     onChange={(e) => setPolicy((p) => ({ ...p, [ev.key]: { ...p[ev.key], inApp: e.target.checked } }))}
@@ -946,7 +946,7 @@ function NotificationsTab({ settings, save, canEdit }: { settings: any; save: (v
                   />
                 </td>
                 <td className="py-2 text-center">
-                  <input
+                  <input aria-label={`${ev.label} by email`}
                     type="checkbox"
                     checked={policy[ev.key]?.email ?? false}
                     onChange={(e) => setPolicy((p) => ({ ...p, [ev.key]: { ...p[ev.key], email: e.target.checked } }))}
@@ -1103,7 +1103,7 @@ function IntegrationsTab() {
                       <>
                         <Button size="sm" variant="outline" onClick={() => openConfig(provider)}>Configure</Button>
                         {row && (
-                          <Button size="sm" variant="ghost" className="text-destructive" onClick={() => removeMut.mutate({ provider })}>
+                          <Button aria-label={`Remove ${provider}`} size="sm" variant="ghost" className="text-destructive" onClick={() => removeMut.mutate({ provider })}>
                             <Trash2 className="size-3.5" />
                           </Button>
                         )}
@@ -1118,7 +1118,7 @@ function IntegrationsTab() {
                     {(meta.configFields ?? []).map((f) => (
                       <div key={f.key} className="space-y-1">
                         <Label className="text-xs">{f.label}</Label>
-                        <Input
+                        <Input aria-label={f.label}
                           type={f.type ?? "text"}
                           value={configDraft[f.key] ?? ""}
                           onChange={(e) => setConfigDraft((d) => ({ ...d, [f.key]: e.target.value }))}
@@ -1403,7 +1403,7 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
                   <div className="mt-3 ml-7 grid grid-cols-1 md:grid-cols-2 gap-2">
                     <div className="space-y-1">
                       <Label className="text-xs">API Key</Label>
-                      <Input
+                      <Input aria-label="API Key"
                         type="password"
                         value={draft.apiKey}
                         onChange={(e) => setDraft(p.id, { apiKey: e.target.value })}
@@ -1413,7 +1413,7 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
                     </div>
                     <div className="space-y-1">
                       <Label className="text-xs">Model (optional)</Label>
-                      <Input
+                      <Input aria-label="Model (optional)"
                         value={draft.model}
                         onChange={(e) => setDraft(p.id, { model: e.target.value })}
                         placeholder={p.modelPlaceholder}
@@ -1475,7 +1475,7 @@ function ProposalsTab({ settings, save, canEdit }: { settings: any; save: (patch
               When enabled, if a client opens the proposal email and the expiry date is within 7 days (but not yet expired), the expiry date is automatically extended by the number of days below. This prevents active proposals from silently expiring on engaged clients.
             </div>
           </div>
-          <Switch
+          <Switch aria-label="Auto-extend expiry"
             checked={autoExtend}
             onCheckedChange={(v) => {
               if (!canEdit) return;
@@ -1496,7 +1496,7 @@ function ProposalsTab({ settings, save, canEdit }: { settings: any; save: (patch
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Input
+              <Input aria-label="Days to extend"
                 type="number"
                 min={1}
                 max={365}
@@ -1568,7 +1568,7 @@ function WorkspaceMessagingSection({ isAdmin }: { isAdmin: boolean }) {
       <div className="p-4 space-y-5">
         <div className="space-y-1">
           <Label>Slack Incoming Webhook URL</Label>
-          <Input
+          <Input aria-label="Slack Incoming Webhook URL"
             value={slackUrl}
             onChange={(e) => setSlackUrl(e.target.value)}
             disabled={!isAdmin}
@@ -1579,7 +1579,7 @@ function WorkspaceMessagingSection({ isAdmin }: { isAdmin: boolean }) {
         </div>
         <div className="space-y-1">
           <Label>Microsoft Teams Incoming Webhook URL</Label>
-          <Input
+          <Input aria-label="Microsoft Teams Incoming Webhook URL"
             value={teamsUrl}
             onChange={(e) => setTeamsUrl(e.target.value)}
             disabled={!isAdmin}
@@ -1590,7 +1590,7 @@ function WorkspaceMessagingSection({ isAdmin }: { isAdmin: boolean }) {
         </div>
         <div className="space-y-1">
           <Label>System Sender Account</Label>
-          <select
+          <select aria-label="System Sender Account"
             className="w-full rounded-md border bg-transparent px-3 py-2 text-sm"
             value={systemSenderId}
             onChange={(e) => setSystemSenderId(e.target.value)}
@@ -1747,7 +1747,7 @@ function EmailVerificationSettingsSection({ isAdmin }: { isAdmin: boolean }) {
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Re-verify interval</label>
-              <select
+              <select aria-label="Re-verify interval"
                 value={reverifyInterval}
                 onChange={(e) => setReverifyInterval(e.target.value)}
                 disabled={!isAdmin}
@@ -2100,7 +2100,7 @@ function DangerTab({ canEdit, isSuperAdmin }: { canEdit: boolean; isSuperAdmin: 
           </div>
           {showTransfer && (
             <div className="flex gap-2 pl-0">
-              <select
+              <select aria-label="Transfer ownership to"
                 className="flex-1 border rounded-md px-2 py-1 text-sm bg-background"
                 value={transferUserId}
                 onChange={(e) => setTransferUserId(e.target.value)}
@@ -2160,7 +2160,7 @@ function DangerTab({ canEdit, isSuperAdmin }: { canEdit: boolean; isSuperAdmin: 
             <div className="space-y-2 border border-rose-200 rounded-md p-3 bg-rose-50 dark:bg-rose-950/20">
               <p className="text-xs text-rose-700">Type <strong>ARCHIVE</strong> to confirm:</p>
               <div className="flex gap-2">
-                <Input
+                <Input aria-label="Type ARCHIVE to confirm"
                   className="flex-1 text-sm"
                   placeholder="ARCHIVE"
                   value={archiveConfirm}

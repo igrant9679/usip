@@ -358,7 +358,7 @@ function Glossary({ r }: { r: Report }) {
   }, [r.market.content.glossary, find]);
   return (
     <Section title="Glossary" description={`${r.market.content.glossary.length} terms this market uses.`}>
-      <Input placeholder="Find a term…" value={find} onChange={(e) => setFind(e.target.value)} className="max-w-sm h-8 text-sm" />
+      <Input aria-label="Find a term" placeholder="Find a term…" value={find} onChange={(e) => setFind(e.target.value)} className="max-w-sm h-8 text-sm" />
       {terms.length === 0 ? <Empty>{r.market.content.glossary.length ? "No term matches." : "No terms yet. Add them on the market's page."}</Empty> : (
         <dl className="divide-y rounded-md border">
           {terms.map((g, i) => (

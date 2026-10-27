@@ -37,10 +37,10 @@ function Chips({ value, onChange, placeholder }: { value: string[]; onChange: (v
     <div className="space-y-1">
       {value.length > 0 && (
         <div className="flex flex-wrap gap-1">
-          {value.map((v) => <Badge key={v} variant="secondary" className="text-[11px] gap-1">{v}<button type="button" onClick={() => onChange(value.filter((x) => x !== v))} className="hover:opacity-70">×</button></Badge>)}
+          {value.map((v) => <Badge key={v} variant="secondary" className="text-[11px] gap-1">{v}<button aria-label={`Remove ${v}`} type="button" onClick={() => onChange(value.filter((x) => x !== v))} className="hover:opacity-70">×</button></Badge>)}
         </div>
       )}
-      <Input value={text} onChange={(e) => setText(e.target.value)} placeholder={placeholder}
+      <Input aria-label={placeholder} value={text} onChange={(e) => setText(e.target.value)} placeholder={placeholder}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(); } }} onBlur={add} className="h-8 text-[12.5px]" />
     </div>
   );
@@ -160,8 +160,8 @@ export function SourceSearchPanel() {
             <div className="space-y-1">
               <Label className="text-[11.5px]">{FILTER_LABELS.headcountRange}</Label>
               <div className="flex gap-2">
-                <Input type="number" placeholder="min" className="h-8 text-[12.5px]" value={criteria.headcountRange?.min ?? ""} onChange={(e) => setCriteria((c) => ({ ...c, headcountRange: { ...(c.headcountRange ?? {}), min: e.target.value === "" ? undefined : Number(e.target.value) } }))} />
-                <Input type="number" placeholder="max" className="h-8 text-[12.5px]" value={criteria.headcountRange?.max ?? ""} onChange={(e) => setCriteria((c) => ({ ...c, headcountRange: { ...(c.headcountRange ?? {}), max: e.target.value === "" ? undefined : Number(e.target.value) } }))} />
+                <Input aria-label={FILTER_LABELS.headcountRange} type="number" placeholder="min" className="h-8 text-[12.5px]" value={criteria.headcountRange?.min ?? ""} onChange={(e) => setCriteria((c) => ({ ...c, headcountRange: { ...(c.headcountRange ?? {}), min: e.target.value === "" ? undefined : Number(e.target.value) } }))} />
+                <Input aria-label={FILTER_LABELS.headcountRange} type="number" placeholder="max" className="h-8 text-[12.5px]" value={criteria.headcountRange?.max ?? ""} onChange={(e) => setCriteria((c) => ({ ...c, headcountRange: { ...(c.headcountRange ?? {}), max: e.target.value === "" ? undefined : Number(e.target.value) } }))} />
               </div>
             </div>
           )}
@@ -204,7 +204,7 @@ export function SourceSearchPanel() {
       <div className="flex flex-wrap items-end gap-4 rounded-xl border border-border/70 bg-card p-4">
         <div className="space-y-1">
           <Label className="text-[11.5px]">Batch target</Label>
-          <Input type="number" min={1} max={200} value={target} onChange={(e) => setTarget(e.target.value)} className="h-8 w-28 text-[12.5px]" />
+          <Input aria-label="Batch target" type="number" min={1} max={200} value={target} onChange={(e) => setTarget(e.target.value)} className="h-8 w-28 text-[12.5px]" />
         </div>
         <div className="text-[12px] text-muted-foreground pb-2">
           Combined remaining allowance: <span className="font-medium text-foreground tabular-nums">{combinedRemaining.sum.toLocaleString()}{combinedRemaining.uncapped ? "+" : ""}</span>
@@ -259,7 +259,7 @@ export function SourceSearchPanel() {
               <table className="w-full text-[12px]">
                 <thead className="text-[10.5px] uppercase tracking-wide text-muted-foreground">
                   <tr className="text-left">
-                    <th className="px-3 py-2 w-8"><Checkbox checked={selIds.length > 0 && selIds.length === results.filter((r) => r.isNetNew && !r.promotedProspectId).length} onCheckedChange={(v) => setSelected(v ? new Set(results.filter((r) => r.isNetNew && !r.promotedProspectId).map((r) => r.id)) : new Set())} /></th>
+                    <th className="px-3 py-2 w-8"><Checkbox aria-label="Select all" checked={selIds.length > 0 && selIds.length === results.filter((r) => r.isNetNew && !r.promotedProspectId).length} onCheckedChange={(v) => setSelected(v ? new Set(results.filter((r) => r.isNetNew && !r.promotedProspectId).map((r) => r.id)) : new Set())} /></th>
                     <th className="px-3 py-2 font-medium">Person</th>
                     <th className="px-3 py-2 font-medium">Company</th>
                     <th className="px-3 py-2 font-medium">Email</th>
@@ -274,7 +274,7 @@ export function SourceSearchPanel() {
                     const selectable = r.isNetNew && !r.promotedProspectId;
                     return (
                       <tr key={r.id} className={cn("border-t border-border/50", !r.isNetNew && "opacity-60")}>
-                        <td className="px-3 py-1.5"><Checkbox disabled={!selectable} checked={checked} onCheckedChange={(v) => setSelected((s) => { const n2 = new Set(s); if (v) n2.add(r.id); else n2.delete(r.id); return n2; })} /></td>
+                        <td className="px-3 py-1.5"><Checkbox aria-label="Select result" disabled={!selectable} checked={checked} onCheckedChange={(v) => setSelected((s) => { const n2 = new Set(s); if (v) n2.add(r.id); else n2.delete(r.id); return n2; })} /></td>
                         <td className="px-3 py-1.5"><div className="font-medium">{n?.firstName} {n?.lastName}</div><div className="text-[10.5px] text-muted-foreground">{n?.jobTitle ?? "—"}</div></td>
                         <td className="px-3 py-1.5"><div>{n?.companyName ?? "—"}</div><div className="text-[10.5px] text-muted-foreground">{n?.companyDomain ?? [n?.city, n?.stateProvince].filter(Boolean).join(", ")}</div></td>
                         <td className="px-3 py-1.5">{r.emailIsMasked ? <span className="inline-flex items-center gap-1 text-muted-foreground"><EyeOff className="size-3" /> masked until acquired</span> : n?.email ? <span>{n.email}</span> : <span className="text-muted-foreground">— (found in enrichment)</span>}</td>

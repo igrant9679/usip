@@ -4,7 +4,7 @@
  * Center: canvas (vertical block stack, drag-to-reorder, click-to-select)
  * Right: block property editor + merge-tag picker
  */
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useId } from "react";
 import { useRoute, useLocation, Link } from "wouter";
 import { Shell, PageHeader, SubNav } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
@@ -12,6 +12,7 @@ import { ResearchSectorPicker, rememberSector, useRememberedSector } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { FieldLabelContext } from "@/components/ui/field-label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -38,6 +39,7 @@ import {
 } from "lucide-react";
 import { confirmAction, ConfirmButton } from "@/components/usip/Common";
 import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
+import { pressable } from "@/lib/pressable";
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
 type BlockType = "header" | "text" | "image" | "button" | "divider" | "spacer" | "two_column" | "footer";
@@ -140,10 +142,11 @@ function normalizeBlock(raw: any, index: number): Block {
 
 /* ─── Block property editors ─────────────────────────────────────────────── */
 function PropField({ label, children }: { label: string; children: React.ReactNode }) {
+  const id = useId();
   return (
     <div className="space-y-1">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      {children}
+      <Label id={id} className="text-xs text-muted-foreground">{label}</Label>
+      <FieldLabelContext.Provider value={id}>{children}</FieldLabelContext.Provider>
     </div>
   );
 }
@@ -194,13 +197,13 @@ function BlockPropsEditor({
           <div className="grid grid-cols-2 gap-2">
             <PropField label="Background">
               <div className="flex gap-1.5 items-center">
-                <input type="color" value={p.bgColor} onChange={(e) => set("bgColor", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
+                <input aria-label="Background color" type="color" value={p.bgColor} onChange={(e) => set("bgColor", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
                 <Input value={p.bgColor} onChange={(e) => set("bgColor", e.target.value)} className="h-8 text-xs font-mono" />
               </div>
             </PropField>
             <PropField label="Text Color">
               <div className="flex gap-1.5 items-center">
-                <input type="color" value={p.textColor} onChange={(e) => set("textColor", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
+                <input aria-label="Text color" type="color" value={p.textColor} onChange={(e) => set("textColor", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
                 <Input value={p.textColor} onChange={(e) => set("textColor", e.target.value)} className="h-8 text-xs font-mono" />
               </div>
             </PropField>
@@ -225,7 +228,7 @@ function BlockPropsEditor({
             </PropField>
             <PropField label="Color">
               <div className="flex gap-1.5 items-center">
-                <input type="color" value={p.color} onChange={(e) => set("color", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
+                <input aria-label="Color" type="color" value={p.color} onChange={(e) => set("color", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
                 <Input value={p.color} onChange={(e) => set("color", e.target.value)} className="h-8 text-xs font-mono" />
               </div>
             </PropField>
@@ -276,13 +279,13 @@ function BlockPropsEditor({
           <div className="grid grid-cols-2 gap-2">
             <PropField label="Background">
               <div className="flex gap-1.5 items-center">
-                <input type="color" value={p.bgColor} onChange={(e) => set("bgColor", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
+                <input aria-label="Background color" type="color" value={p.bgColor} onChange={(e) => set("bgColor", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
                 <Input value={p.bgColor} onChange={(e) => set("bgColor", e.target.value)} className="h-8 text-xs font-mono" />
               </div>
             </PropField>
             <PropField label="Text Color">
               <div className="flex gap-1.5 items-center">
-                <input type="color" value={p.textColor} onChange={(e) => set("textColor", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
+                <input aria-label="Text color" type="color" value={p.textColor} onChange={(e) => set("textColor", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
                 <Input value={p.textColor} onChange={(e) => set("textColor", e.target.value)} className="h-8 text-xs font-mono" />
               </div>
             </PropField>
@@ -311,7 +314,7 @@ function BlockPropsEditor({
         <div className="space-y-3">
           <PropField label="Color">
             <div className="flex gap-1.5 items-center">
-              <input type="color" value={p.color} onChange={(e) => set("color", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
+              <input aria-label="Color" type="color" value={p.color} onChange={(e) => set("color", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
               <Input value={p.color} onChange={(e) => set("color", e.target.value)} className="h-8 text-xs font-mono" />
             </div>
           </PropField>
@@ -370,13 +373,13 @@ function BlockPropsEditor({
           <div className="grid grid-cols-2 gap-2">
             <PropField label="Background">
               <div className="flex gap-1.5 items-center">
-                <input type="color" value={p.bgColor} onChange={(e) => set("bgColor", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
+                <input aria-label="Background color" type="color" value={p.bgColor} onChange={(e) => set("bgColor", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
                 <Input value={p.bgColor} onChange={(e) => set("bgColor", e.target.value)} className="h-8 text-xs font-mono" />
               </div>
             </PropField>
             <PropField label="Text Color">
               <div className="flex gap-1.5 items-center">
-                <input type="color" value={p.textColor} onChange={(e) => set("textColor", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
+                <input aria-label="Text color" type="color" value={p.textColor} onChange={(e) => set("textColor", e.target.value)} className="w-8 h-8 rounded cursor-pointer border" />
                 <Input value={p.textColor} onChange={(e) => set("textColor", e.target.value)} className="h-8 text-xs font-mono" />
               </div>
             </PropField>
@@ -504,7 +507,7 @@ function CanvasBlock({
       onDragStart={onDragStart}
       onDragOver={onDragOver}
       onDrop={onDrop}
-      onClick={onSelect}
+      {...pressable(onSelect)}
       className={`group relative border-2 rounded-lg p-3 cursor-pointer transition-all ${
         isSelected
           ? "border-primary bg-primary/5 shadow-md"
@@ -514,7 +517,7 @@ function CanvasBlock({
       {/* Block type label */}
       <div className="flex items-center gap-1.5 mb-2 text-xs text-muted-foreground">
         {!isReadOnly && (
-          <GripVertical size={12} className="cursor-grab opacity-40 group-hover:opacity-100" />
+          <GripVertical size={12} className="cursor-grab opacity-40 group-hover:opacity-100 group-focus-within:opacity-100" />
         )}
         <Icon size={12} />
         <span className="capitalize">{block.type.replace("_", " ")}</span>
@@ -527,7 +530,7 @@ function CanvasBlock({
 
       {/* Action toolbar (visible on hover/select) */}
       {!isReadOnly && (
-        <div className={`absolute top-1 right-1 flex gap-0.5 ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"} transition-opacity`}>
+        <div className={`absolute top-1 right-1 flex gap-0.5 ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"} transition-opacity`}>
           <button onClick={(e) => { e.stopPropagation(); onMoveUp(); }} className="p-1 rounded hover:bg-muted" title="Move up"><ArrowUp size={11} /></button>
           <button onClick={(e) => { e.stopPropagation(); onMoveDown(); }} className="p-1 rounded hover:bg-muted" title="Move down"><ArrowDown size={11} /></button>
           <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }} className="p-1 rounded hover:bg-muted" title="Duplicate"><Copy size={11} /></button>
@@ -572,7 +575,7 @@ function AIGenerateDialog({
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label className="text-sm">Describe the email</Label>
-            <Textarea
+            <Textarea aria-label="Describe the email"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               rows={4}
@@ -698,7 +701,7 @@ function TemplateList({ onOpen }: { onOpen: (id: number) => void }) {
                   has no onClick of its own to call stopPropagation in. */}
               <span onClick={(e) => e.stopPropagation()} className="contents">
                 <ConfirmButton
-                  className="px-2 py-2 h-auto text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive transition-opacity"
+                  className="px-2 py-2 h-auto text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 hover:text-destructive transition-opacity"
                   ariaLabel="Delete template"
                   title="Delete this template?"
                   description={`"${t.name}" will be permanently deleted. This cannot be undone.`}
@@ -751,7 +754,7 @@ function SavedSectionsPanel({
   return (
     <div className="flex flex-col h-full">
       <div className="p-2 border-b space-y-1.5">
-        <Input
+        <Input aria-label="Search sections"
           placeholder="Search sections…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -864,7 +867,7 @@ function SaveSectionDialog({
         <div className="space-y-3 py-1">
           <div className="space-y-1">
             <Label className="text-xs">Section Name <span className="text-destructive">*</span></Label>
-            <Input
+            <Input aria-label="Section Name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Product intro with CTA"
@@ -873,7 +876,7 @@ function SaveSectionDialog({
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Description (optional)</Label>
-            <Input
+            <Input aria-label="Description (optional)"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Short note about when to use this section"
@@ -1346,7 +1349,7 @@ function Builder({ templateId }: { templateId: number }) {
       <div className="flex items-center gap-3 px-4 py-2 border-b bg-card shrink-0">
         {/* Template name — click-to-edit with pencil affordance */}
         {editingName && !isReadOnly ? (
-          <Input
+          <Input aria-label="Template name"
             autoFocus
             value={templateName}
             onChange={(e) => { setTemplateName(e.target.value); markDirty(); }}
@@ -1361,12 +1364,12 @@ function Builder({ templateId }: { templateId: number }) {
             title={isReadOnly ? undefined : "Click to rename template"}
           >
             <span className="truncate">{templateName || "Untitled Template"}</span>
-            {!isReadOnly && <Pencil size={11} className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />}
+            {!isReadOnly && <Pencil size={11} className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity" />}
           </button>
         )}
         <div className="flex-1 flex items-center gap-2">
           <Label className="text-xs text-muted-foreground shrink-0">Subject:</Label>
-          <Input
+          <Input aria-label="Subject"
             value={subject}
             onChange={(e) => { setSubject(e.target.value); markDirty(); }}
             className="h-8 text-sm"
@@ -1410,7 +1413,7 @@ function Builder({ templateId }: { templateId: number }) {
               <PopoverContent align="end" className="w-[420px] p-0">
                 <div className="p-3 border-b flex items-center justify-between">
                   <span className="text-sm font-medium">AI Subject Suggestions</span>
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => {
+                  <Button aria-label="Suggest again" variant="ghost" size="icon" className="h-6 w-6" onClick={() => {
                     const bodyText = blocks
                       .map((b) => {
                         if (b.type === "text" || b.type === "footer") return String(b.props.content ?? "").replace(/<[^>]+>/g, " ");
@@ -1633,7 +1636,7 @@ function Builder({ templateId }: { templateId: number }) {
             <div className="mb-3 px-3 py-2 bg-primary/5 border border-primary/20 rounded-lg text-xs text-primary flex items-center gap-2">
               <Info size={12} className="shrink-0" />
               <span className="flex-1"><strong>Tip:</strong> Click <strong>Select</strong> in the toolbar to choose multiple blocks and save them as a reusable section — perfect for headers, footers, and CTAs you use often.</span>
-              <button
+              <button aria-label="Dismiss tip"
                 onClick={() => { setShowTipBanner(false); try { localStorage.setItem("usip_builder_tip_dismissed", "1"); } catch {} }}
                 className="shrink-0 text-primary/60 hover:text-primary"
               >
@@ -1687,7 +1690,7 @@ function Builder({ templateId }: { templateId: number }) {
                 {multiSelectMode ? (
                   // Multi-select overlay: click to toggle, show checkbox
                   <div
-                    onClick={() => toggleBlockSelection(block.id)}
+                    {...pressable(() => toggleBlockSelection(block.id))}
                     className={`relative border-2 rounded-lg p-3 cursor-pointer transition-all ${
                       selectedIds.has(block.id)
                         ? "border-primary bg-primary/10 shadow-md"
@@ -1774,7 +1777,7 @@ function Builder({ templateId }: { templateId: number }) {
             <>
               <div className="px-3 py-2 border-b flex items-center justify-between shrink-0">
                 <p className="text-xs font-semibold capitalize">{selectedBlock.type.replace("_", " ")} Properties</p>
-                <button onClick={() => setSelectedId(null)} className="text-muted-foreground hover:text-foreground">
+                <button aria-label="Close" onClick={() => setSelectedId(null)} className="text-muted-foreground hover:text-foreground">
                   <X size={13} />
                 </button>
               </div>

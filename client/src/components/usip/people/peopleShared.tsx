@@ -356,7 +356,7 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
       p.phone ? (
         <span className="text-[12px] tabular-nums">{p.phone}</span>
       ) : (
-        <span className="whitespace-nowrap text-[12px] text-muted-foreground/80">Request phone number</span>
+        <span className="whitespace-nowrap text-[12px] text-muted-foreground">Request phone number</span>
       ),
   },
   actions: {

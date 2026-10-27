@@ -177,7 +177,7 @@ export default function SnippetsPage() {
       <div className="flex items-center gap-3 mb-5">
         <div className="relative flex-1 max-w-sm">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input
+          <Input aria-label="Search snippets"
             placeholder="Search snippets…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -237,14 +237,14 @@ export default function SnippetsPage() {
                       )}
                     </div>
                   </div>
-                  <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleCopy(snippet)}>
+                  <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0">
+                    <Button aria-label={copiedId === snippet.id ? "Copied" : "Copy snippet"} size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleCopy(snippet)}>
                       {copiedId === snippet.id ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}
                     </Button>
-                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(snippet)}>
+                    <Button aria-label="Edit snippet" size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(snippet)}>
                       <Edit2 size={12} />
                     </Button>
-                    <Button
+                    <Button aria-label="Delete snippet"
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7 hover:text-destructive"
@@ -275,7 +275,7 @@ export default function SnippetsPage() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Name *</Label>
-                <Input
+                <Input aria-label="Name"
                   value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   placeholder="e.g. Warm Intro Opener"

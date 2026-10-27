@@ -158,7 +158,7 @@ export function AssistantChat({ pageKey, compact = false }: { pageKey?: string; 
       </div>
       <div className="shrink-0 border-t border-border bg-card/40 px-3 py-2.5">
         <div className={`${compact ? "" : "max-w-2xl mx-auto"} flex items-end gap-2`}>
-          <textarea
+          <textarea aria-label="Message the assistant"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}

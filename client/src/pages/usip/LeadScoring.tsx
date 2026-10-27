@@ -212,7 +212,7 @@ function NumField({ label, value, onChange }: { label: string; value: number; on
   return (
     <div className="space-y-1">
       <Label className="text-xs">{label}</Label>
-      <Input type="number" value={value} onChange={(e) => onChange(Number(e.target.value))} className="h-8" />
+      <Input aria-label={label} type="number" value={value} onChange={(e) => onChange(Number(e.target.value))} className="h-8" />
     </div>
   );
 }
@@ -241,7 +241,7 @@ function BreakdownPreview() {
           <div className="text-xs text-muted-foreground">Pick a lead to inspect each component &amp; recent score history.</div>
         </div>
         <div className="flex items-center gap-2">
-          <select className="h-9 rounded border bg-background px-2 text-sm" value={selected ?? ""} onChange={(e) => setSelected(Number(e.target.value))}>
+          <select aria-label="Lead" className="h-9 rounded border bg-background px-2 text-sm" value={selected ?? ""} onChange={(e) => setSelected(Number(e.target.value))}>
             <option value="">Select a lead…</option>
             {(leads ?? []).map((l) => <option key={l.id} value={l.id}>{l.firstName} {l.lastName} — {l.company ?? ""}</option>)}
           </select>

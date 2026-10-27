@@ -12,7 +12,7 @@
  *      source link clickable.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { confirmAction } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
@@ -21,6 +21,7 @@ import { StartFromSector } from "@/components/usip/research/StartFromSector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { FieldLabelContext } from "@/components/ui/field-label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -57,12 +58,12 @@ function ChipInput({ value, onChange, placeholder }: { value: string[]; onChange
         {value.map((v) => (
           <Badge key={v} variant="secondary" className="text-xs gap-1">
             {v}
-            <button onClick={() => onChange(value.filter((x) => x !== v))} className="ml-0.5 hover:opacity-70">×</button>
+            <button aria-label={`Remove ${v}`} onClick={() => onChange(value.filter((x) => x !== v))} className="ml-0.5 hover:opacity-70">×</button>
           </Badge>
         ))}
       </div>
       <div className="flex gap-2">
-        <Input
+        <Input aria-label={placeholder}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(); } }}
@@ -164,10 +165,11 @@ function AccountForm({ value, onChange }: { value: AccountForm; onChange: (v: Ac
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  const id = useId();
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs">{label}</Label>
-      {children}
+      <Label id={id} className="text-xs">{label}</Label>
+      <FieldLabelContext.Provider value={id}>{children}</FieldLabelContext.Provider>
     </div>
   );
 }
@@ -343,7 +345,7 @@ function LinkedInSearchCard() {
 
         <div className="space-y-1.5">
           <Label className="text-xs">Keywords</Label>
-          <Input value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder='e.g. "VP Marketing SaaS" or a name/title' onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }} />
+          <Input aria-label="Keywords" value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder='e.g. "VP Marketing SaaS" or a name/title' onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }} />
         </div>
 
         {api === "sales_navigator" && (
@@ -351,22 +353,22 @@ function LinkedInSearchCard() {
             <div className="space-y-1.5">
               <Label className="text-xs">Location</Label>
               <div className="flex gap-1.5">
-                <Input value={locTerm} onChange={(e) => setLocTerm(e.target.value)} placeholder="e.g. New York" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); resolveTerm("location"); } }} />
+                <Input aria-label="Location" value={locTerm} onChange={(e) => setLocTerm(e.target.value)} placeholder="e.g. New York" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); resolveTerm("location"); } }} />
                 <Button type="button" variant="outline" size="sm" disabled={resolving === "location"} onClick={() => resolveTerm("location")}>{resolving === "location" ? <Loader2 className="size-3.5 animate-spin" /> : "Add"}</Button>
               </div>
-              {locations.length > 0 && <div className="flex flex-wrap gap-1">{locations.map((c) => <Badge key={c.id} variant="secondary" className="gap-1 cursor-pointer" onClick={() => setLocations((p) => p.filter((x) => x.id !== c.id))}>{c.title} ✕</Badge>)}</div>}
+              {locations.length > 0 && <div className="flex flex-wrap gap-1">{locations.map((c) => <Badge key={c.id} asChild variant="secondary" className="gap-1 cursor-pointer"><button type="button" aria-label={`Remove ${c.title}`} onClick={() => setLocations((p) => p.filter((x) => x.id !== c.id))}>{c.title} ✕</button></Badge>)}</div>}
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Industry</Label>
               <div className="flex gap-1.5">
-                <Input value={indTerm} onChange={(e) => setIndTerm(e.target.value)} placeholder="e.g. Software" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); resolveTerm("industry"); } }} />
+                <Input aria-label="Industry" value={indTerm} onChange={(e) => setIndTerm(e.target.value)} placeholder="e.g. Software" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); resolveTerm("industry"); } }} />
                 <Button type="button" variant="outline" size="sm" disabled={resolving === "industry"} onClick={() => resolveTerm("industry")}>{resolving === "industry" ? <Loader2 className="size-3.5 animate-spin" /> : "Add"}</Button>
               </div>
-              {industries.length > 0 && <div className="flex flex-wrap gap-1">{industries.map((c) => <Badge key={c.id} variant="secondary" className="gap-1 cursor-pointer" onClick={() => setIndustries((p) => p.filter((x) => x.id !== c.id))}>{c.title} ✕</Badge>)}</div>}
+              {industries.length > 0 && <div className="flex flex-wrap gap-1">{industries.map((c) => <Badge key={c.id} asChild variant="secondary" className="gap-1 cursor-pointer"><button type="button" aria-label={`Remove ${c.title}`} onClick={() => setIndustries((p) => p.filter((x) => x.id !== c.id))}>{c.title} ✕</button></Badge>)}</div>}
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Min years in role</Label>
-              <Input type="number" min={0} value={tenureMin} onChange={(e) => setTenureMin(e.target.value)} placeholder="Any" className="max-w-[120px]" />
+              <Input aria-label="Min years in role" type="number" min={0} value={tenureMin} onChange={(e) => setTenureMin(e.target.value)} placeholder="Any" className="max-w-[120px]" />
             </div>
           </div>
         )}

@@ -195,7 +195,7 @@ function PoolFormDialog({
           {/* Name */}
           <div className="space-y-1.5">
             <Label>Pool name</Label>
-            <Input
+            <Input aria-label="Pool name"
               placeholder="e.g. Enterprise outreach pool"
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -205,7 +205,7 @@ function PoolFormDialog({
           {/* Description */}
           <div className="space-y-1.5">
             <Label>Description <span className="text-muted-foreground text-xs">(optional)</span></Label>
-            <Input
+            <Input aria-label="Description"
               placeholder="What is this pool used for?"
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
@@ -267,7 +267,7 @@ function PoolFormDialog({
                           <p className="text-xs text-muted-foreground">{acct.fromEmail}</p>
                         </div>
                         <div className="flex items-center gap-1">
-                          <Button
+                          <Button aria-label="Move up"
                             size="icon"
                             variant="ghost"
                             className="h-6 w-6"
@@ -276,7 +276,7 @@ function PoolFormDialog({
                           >
                             <ChevronUp className="w-3 h-3" />
                           </Button>
-                          <Button
+                          <Button aria-label="Move down"
                             size="icon"
                             variant="ghost"
                             className="h-6 w-6"
@@ -285,7 +285,7 @@ function PoolFormDialog({
                           >
                             <ChevronDown className="w-3 h-3" />
                           </Button>
-                          <Button
+                          <Button aria-label="Remove from pool"
                             size="icon"
                             variant="ghost"
                             className="h-6 w-6 text-destructive hover:text-destructive"
@@ -303,7 +303,7 @@ function PoolFormDialog({
                             <span>Weight: {m.weight}</span>
                             <span>{pct}% of sends</span>
                           </div>
-                          <Slider
+                          <Slider aria-label="Sending weight"
                             min={1}
                             max={10}
                             step={1}

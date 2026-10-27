@@ -246,7 +246,7 @@ function EditDraftDialog({ draft, open, onClose, onChanged }: { draft: any | nul
         <div className="space-y-3 py-2">
           <div className="space-y-1.5">
             <Label className="text-sm">Subject</Label>
-            <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Email subject" />
+            <Input aria-label="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Email subject" />
           </div>
           <div className="space-y-1.5">
             <Label className="text-sm">Body</Label>
@@ -372,7 +372,7 @@ function AiDraftTools({ draft, onChanged }: { draft: any; onChanged: () => void 
     <div className="space-y-3">
       {editMode ? (
         <div className="space-y-2">
-          <Input value={subject} onChange={(e) => setSubject(e.target.value)} className="text-sm font-medium" placeholder="Subject line" />
+          <Input aria-label="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} className="text-sm font-medium" placeholder="Subject line" />
           <RichTextEditor value={body} onChange={setBody} minHeight="140px" compact aiContext={{ subject, emailDraftId: draft.id }} />
           <div className="flex items-center gap-2">
             <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
@@ -481,7 +481,7 @@ export function AiComposeDialog({ open, onClose }: { open: boolean; onClose: () 
           <p className="text-xs text-muted-foreground">
             The AI pipeline researches each contact's organization and fit, then writes a personalized draft for your review — nothing sends without approval.
           </p>
-          <Input value={contactSearch} onChange={(e) => setContactSearch(e.target.value)} placeholder="Search contacts…" className="h-8 text-xs" />
+          <Input aria-label="Search contacts" value={contactSearch} onChange={(e) => setContactSearch(e.target.value)} placeholder="Search contacts…" className="h-8 text-xs" />
           <div className="rounded-md border max-h-64 overflow-y-auto divide-y">
             {isLoading ? (
               <div className="p-3 text-xs text-muted-foreground">Loading contacts…</div>

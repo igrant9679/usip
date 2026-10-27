@@ -119,7 +119,7 @@ export default function ResearchPipeline() {
             <CardContent className="space-y-4">
               <div className="space-y-1.5">
                 <Label>Outreach Goal</Label>
-                <Textarea
+                <Textarea aria-label="Outreach Goal"
                   placeholder="e.g. Book a discovery call to discuss how USIP can improve their sales pipeline visibility"
                   value={goal}
                   onChange={(e) => setGoal(e.target.value)}

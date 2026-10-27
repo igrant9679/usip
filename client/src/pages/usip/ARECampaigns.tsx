@@ -143,7 +143,7 @@ function TagInput({
         </div>
       )}
       <div className="flex gap-1">
-        <Input
+        <Input aria-label={placeholder}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -155,7 +155,7 @@ function TagInput({
           placeholder={placeholder}
           className="text-sm h-8"
         />
-        <Button type="button" size="sm" variant="outline" onClick={add} disabled={!input.trim()}>
+        <Button aria-label="Add" type="button" size="sm" variant="outline" onClick={add} disabled={!input.trim()}>
           <Plus className="size-3" />
         </Button>
       </div>
@@ -399,7 +399,7 @@ export default function ARECampaigns() {
                       <Play className="size-3" /> Activate
                     </Button>
                   ) : null}
-                  <Button
+                  <Button aria-label="Delete campaign"
                     size="sm"
                     variant="ghost"
                     className="text-destructive/60 hover:text-destructive gap-1 text-xs"
@@ -465,7 +465,7 @@ export default function ARECampaigns() {
             <div className="space-y-4 py-2">
               <div>
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Campaign Name *</Label>
-                <Input
+                <Input aria-label="Campaign Name"
                   value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   placeholder="e.g. Q2 SaaS RevOps VPs"
@@ -511,7 +511,7 @@ export default function ARECampaigns() {
                   <Sparkles className="size-3.5 text-primary" /> Describe your ideal audience — AI fills the targeting
                 </Label>
                 <div className="flex gap-2">
-                  <Input
+                  <Input aria-label="Describe your ideal audience — AI fills the targeting"
                     value={aiAudience}
                     onChange={(e) => setAiAudience(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter" && aiAudience.trim() && !genTargeting.isPending) { e.preventDefault(); genTargeting.mutate({ description: aiAudience.trim() }); } }}
@@ -634,7 +634,7 @@ export default function ARECampaigns() {
                 <Label className="text-xs text-muted-foreground mb-1.5 block">
                   Auto-approve ICP score floor: <span className="font-semibold text-foreground">{form.autoApproveThreshold}</span>
                 </Label>
-                <input
+                <input aria-label="Auto-approve ICP score floor"
                   type="range"
                   min={1}
                   max={100}
@@ -649,7 +649,7 @@ export default function ARECampaigns() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label className="text-xs text-muted-foreground mb-1.5 block">Target prospects</Label>
-                  <Input
+                  <Input aria-label="Target prospects"
                     type="number"
                     value={form.targetProspectCount}
                     onChange={(e) => setForm((f) => ({ ...f, targetProspectCount: parseInt(e.target.value) || 100 }))}
@@ -657,7 +657,7 @@ export default function ARECampaigns() {
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground mb-1.5 block">Daily send cap</Label>
-                  <Input
+                  <Input aria-label="Daily send cap"
                     type="number"
                     value={form.dailySendCap}
                     onChange={(e) => setForm((f) => ({ ...f, dailySendCap: parseInt(e.target.value) || 50 }))}

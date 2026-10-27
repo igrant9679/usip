@@ -41,6 +41,7 @@ import {
   stopRecording,
   type RecordedStep,
 } from "@/lib/tourRecorder";
+import { pressable } from "@/lib/pressable";
 
 /* ─── Record Mode ────────────────────────────────────────────────────────── */
 
@@ -107,7 +108,7 @@ function RecorderPanel() {
             Avoid clicking destructive buttons while recording — clicks fire normally.
           </p>
           {steps.length > 0 && (
-            <Textarea
+            <Textarea aria-label="Recorded steps (JSON)"
               readOnly
               value={json}
               className="mt-3 font-mono text-[11px] h-40 bg-card"
@@ -172,7 +173,7 @@ function StepCard({
       {/* Step header */}
       <div
         className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted"
-        onClick={() => setExpanded(!expanded)}
+        {...pressable(() => setExpanded(!expanded))}
       >
         <div className="w-6 h-6 rounded-full bg-violet-100 text-violet-700 text-xs font-bold flex items-center justify-center flex-shrink-0">
           {index + 1}
@@ -181,21 +182,21 @@ function StepCard({
           {step.title || <span className="text-muted-foreground italic">Untitled step</span>}
         </p>
         <div className="flex gap-1">
-          <button
+          <button aria-label="Move step up"
             onClick={(e) => { e.stopPropagation(); onMoveUp(); }}
             disabled={index === 0}
             className="p-1 text-muted-foreground hover:text-muted-foreground disabled:opacity-30"
           >
             <ArrowUp className="h-3.5 w-3.5" />
           </button>
-          <button
+          <button aria-label="Move step down"
             onClick={(e) => { e.stopPropagation(); onMoveDown(); }}
             disabled={index === total - 1}
             className="p-1 text-muted-foreground hover:text-muted-foreground disabled:opacity-30"
           >
             <ArrowDown className="h-3.5 w-3.5" />
           </button>
-          <button
+          <button aria-label="Delete step"
             onClick={(e) => { e.stopPropagation(); onDelete(); }}
             className="p-1 text-muted-foreground hover:text-red-500"
           >
@@ -210,7 +211,7 @@ function StepCard({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">data-tour-id (preferred)</Label>
-              <Input
+              <Input aria-label="data-tour-id (preferred)"
                 value={step.targetDataTourId}
                 onChange={(e) => onChange({ ...step, targetDataTourId: e.target.value })}
                 placeholder="e.g. new-contact-button"
@@ -219,7 +220,7 @@ function StepCard({
             </div>
             <div>
               <Label className="text-xs">CSS Selector (fallback)</Label>
-              <Input
+              <Input aria-label="CSS Selector (fallback)"
                 value={step.targetSelector}
                 onChange={(e) => onChange({ ...step, targetSelector: e.target.value })}
                 placeholder="e.g. #new-contact-btn"
@@ -229,7 +230,7 @@ function StepCard({
           </div>
           <div>
             <Label className="text-xs">Step Title</Label>
-            <Input
+            <Input aria-label="Step Title"
               value={step.title}
               onChange={(e) => onChange({ ...step, title: e.target.value })}
               placeholder="What to tell the user at this step"
@@ -238,7 +239,7 @@ function StepCard({
           </div>
           <div>
             <Label className="text-xs">Body (Markdown)</Label>
-            <Textarea
+            <Textarea aria-label="Body (Markdown)"
               value={step.bodyMarkdown}
               onChange={(e) => onChange({ ...step, bodyMarkdown: e.target.value })}
               rows={3}
@@ -380,7 +381,7 @@ function TourForm({
         <div className="grid grid-cols-2 gap-4">
           <div>
             <Label>Tour Name</Label>
-            <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Getting Started with Sequences" />
+            <Input aria-label="Tour Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Getting Started with Sequences" />
           </div>
           <div>
             <Label>Type</Label>
@@ -397,16 +398,16 @@ function TourForm({
         </div>
         <div>
           <Label>Description</Label>
-          <Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Brief description shown in the tour list" />
+          <Input aria-label="Description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Brief description shown in the tour list" />
         </div>
         <div className="grid grid-cols-3 gap-4">
           <div>
             <Label>Trigger Page Key</Label>
-            <Input value={form.triggerPageKey} onChange={(e) => setForm({ ...form, triggerPageKey: e.target.value })} placeholder="e.g. sequences" />
+            <Input aria-label="Trigger Page Key" value={form.triggerPageKey} onChange={(e) => setForm({ ...form, triggerPageKey: e.target.value })} placeholder="e.g. sequences" />
           </div>
           <div>
             <Label>Est. Minutes</Label>
-            <Input type="number" value={form.estimatedMinutes} onChange={(e) => setForm({ ...form, estimatedMinutes: e.target.value })} placeholder="5" />
+            <Input aria-label="Est. Minutes" type="number" value={form.estimatedMinutes} onChange={(e) => setForm({ ...form, estimatedMinutes: e.target.value })} placeholder="5" />
           </div>
           <div>
             <Label>Status</Label>
@@ -423,7 +424,7 @@ function TourForm({
         <div className="grid grid-cols-2 gap-4">
           <div>
             <Label>Achievement Badge (emoji + text)</Label>
-            <Input value={form.achievementBadge} onChange={(e) => setForm({ ...form, achievementBadge: e.target.value })} placeholder="🎓 Sequences Master" />
+            <Input aria-label="Achievement Badge (emoji + text)" value={form.achievementBadge} onChange={(e) => setForm({ ...form, achievementBadge: e.target.value })} placeholder="🎓 Sequences Master" />
           </div>
           <div className="flex items-end pb-1">
             <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
@@ -578,7 +579,7 @@ export default function TourBuilderPage() {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <p className="text-sm font-semibold text-foreground">{tour.name}</p>
-                  <span className="text-xs text-violet-500">{typeLabel[tour.type] ?? tour.type}</span>
+                  <span className="text-xs text-violet-700 dark:text-violet-400">{typeLabel[tour.type] ?? tour.type}</span>
                   <span className={`text-xs px-1.5 py-0.5 rounded-full ${
                     tour.status === "published" ? "bg-green-100 text-green-700" :
                     tour.status === "draft" ? "bg-amber-100 text-amber-700" :
@@ -601,7 +602,7 @@ export default function TourBuilderPage() {
                 </div>
               </div>
               <div className="flex gap-1">
-                <Button
+                <Button aria-label="Edit tour"
                   size="sm"
                   variant="ghost"
                   className="h-8 w-8 p-0 text-muted-foreground hover:text-violet-600"
@@ -609,7 +610,7 @@ export default function TourBuilderPage() {
                 >
                   <Edit className="h-3.5 w-3.5" />
                 </Button>
-                <Button
+                <Button aria-label="Delete tour"
                   size="sm"
                   variant="ghost"
                   className="h-8 w-8 p-0 text-muted-foreground hover:text-red-500"

@@ -10,6 +10,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { FieldLabelContext } from "@/components/ui/field-label";
 import { Textarea } from "@/components/ui/textarea";
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -34,7 +35,7 @@ import {
   Zap,
   CheckCircle2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { Node } from "@xyflow/react";
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
@@ -88,10 +89,11 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  const id = useId();
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs">{label}</Label>
-      {children}
+      <Label id={id} className="text-xs">{label}</Label>
+      <FieldLabelContext.Provider value={id}>{children}</FieldLabelContext.Provider>
     </div>
   );
 }
@@ -696,7 +698,7 @@ export function NodeEditPanel({ node, readOnly, onClose, onSave }: Props) {
         <Icon className="size-4 shrink-0" style={{ color: meta.color }} />
         <span className="font-semibold text-sm">{meta.label} step</span>
         {readOnly && <Badge variant="secondary" className="text-[10px] ml-1">read-only</Badge>}
-        <button onClick={onClose} className="ml-auto text-muted-foreground hover:text-foreground transition">
+        <button aria-label="Close" onClick={onClose} className="ml-auto text-muted-foreground hover:text-foreground transition">
           <X className="size-4" />
         </button>
       </div>

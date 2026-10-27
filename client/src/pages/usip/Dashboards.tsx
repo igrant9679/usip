@@ -249,7 +249,7 @@ function AddWidgetDialog({ open, onOpenChange, onAdd, isPending }: AddWidgetDial
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label className="text-xs">Title</Label>
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Pipeline value" className="h-8 text-sm" />
+            <Input aria-label="Title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Pipeline value" className="h-8 text-sm" />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Widget type</Label>
@@ -284,7 +284,7 @@ function AddWidgetDialog({ open, onOpenChange, onAdd, isPending }: AddWidgetDial
           {isGoal && (
             <div className="space-y-1.5">
               <Label className="text-xs">Revenue target ($)</Label>
-              <Input type="number" value={goalTarget} onChange={(e) => setGoalTarget(e.target.value)} className="h-8 text-sm" min={0} />
+              <Input aria-label="Revenue target ($)" type="number" value={goalTarget} onChange={(e) => setGoalTarget(e.target.value)} className="h-8 text-sm" min={0} />
             </div>
           )}
         </div>
@@ -425,7 +425,7 @@ export default function Dashboards() {
         <div className="lg:col-span-1 space-y-4">
           <Section
             title="Dashboards"
-            right={<Button size="sm" variant="ghost" onClick={() => setOpenNew(true)}><Plus className="h-3.5 w-3.5" /></Button>}
+            right={<Button aria-label="New dashboard" size="sm" variant="ghost" onClick={() => setOpenNew(true)}><Plus className="h-3.5 w-3.5" /></Button>}
           >
             <ul className="space-y-0.5">
               {/* Pinned system dashboards */}
@@ -448,7 +448,7 @@ export default function Dashboards() {
                       {!isCurrentHome && (
                         <button
                           title="Set as home"
-                          className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-secondary text-muted-foreground hover:text-amber-400"
+                          className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity p-1 rounded hover:bg-secondary text-muted-foreground hover:text-amber-400"
                           onClick={() => {
                             localStorage.setItem(HOME_DASHBOARD_KEY, p.href);
                             setHomeDashboard(p.href);
@@ -495,7 +495,7 @@ export default function Dashboards() {
                     <div className="text-muted-foreground mt-0.5 truncate">{(s.recipients as string[]).join(", ")}</div>
                     <div className="mt-1 flex gap-1">
                       <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => sendNow.mutate({ id: s.id })}>Send now</Button>
-                      <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={() => delSched.mutate({ id: s.id })}>
+                      <Button aria-label="Delete schedule" size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={() => delSched.mutate({ id: s.id })}>
                         <Trash2 className="h-3 w-3" />
                       </Button>
                     </div>

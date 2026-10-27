@@ -223,9 +223,10 @@
 
 /* Rose */
 [data-theme="rose"] {
-  --primary: oklch(0.6 0.19 10); --primary-foreground: oklch(0.98 0.01 10);
+  /* 0.56, not 0.6: white text on the primary needs 4.5:1 (audit X5, 2026-10-27) */
+  --primary: oklch(0.56 0.19 10); --primary-foreground: oklch(0.98 0.01 10);
   --accent: oklch(0.93 0.03 10); --accent-foreground: oklch(0.34 0.1 10);
-  --ring: oklch(0.6 0.19 10); --chart-1: oklch(0.6 0.19 10);
+  --ring: oklch(0.56 0.19 10); --chart-1: oklch(0.56 0.19 10);
   --sidebar: oklch(0.24 0.035 5); --sidebar-primary: oklch(0.66 0.17 10);
   --sidebar-primary-foreground: oklch(0.98 0.01 10);
   --sidebar-accent: oklch(0.295 0.04 5); --sidebar-border: oklch(0.35 0.04 5);

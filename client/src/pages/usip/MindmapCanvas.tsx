@@ -412,7 +412,7 @@ export default function MindmapCanvas() {
       <div className="flex items-center justify-between px-4 py-2 border-b bg-background shrink-0 gap-3">
         <div className="flex items-center gap-2 min-w-0">
           <Link href="/mindmaps">
-            <Button variant="ghost" size="icon" className="size-8">
+            <Button aria-label="Back" variant="ghost" size="icon" className="size-8">
               <ArrowLeft className="size-4" />
             </Button>
           </Link>
@@ -482,7 +482,7 @@ export default function MindmapCanvas() {
           <div className="w-72 shrink-0 border-l bg-background flex flex-col overflow-y-auto">
             <div className="flex items-center justify-between px-4 py-3 border-b">
               <span className="font-semibold text-sm">Node Properties</span>
-              <Button variant="ghost" size="icon" className="size-7" onClick={() => setSelectedNode(null)}>
+              <Button aria-label="Close" variant="ghost" size="icon" className="size-7" onClick={() => setSelectedNode(null)}>
                 <X className="size-4" />
               </Button>
             </div>
@@ -499,7 +499,7 @@ export default function MindmapCanvas() {
               {/* Label */}
               <div className="space-y-1">
                 <Label className="text-xs">Label</Label>
-                <Input
+                <Input aria-label="Label"
                   value={editLabel}
                   onChange={(e) => setEditLabel(e.target.value)}
                   onBlur={applyNodeEdits}
@@ -510,7 +510,7 @@ export default function MindmapCanvas() {
               {/* Notes */}
               <div className="space-y-1">
                 <Label className="text-xs">Notes</Label>
-                <Textarea
+                <Textarea aria-label="Notes"
                   value={editNotes}
                   onChange={(e) => setEditNotes(e.target.value)}
                   onBlur={applyNodeEdits}
@@ -524,7 +524,7 @@ export default function MindmapCanvas() {
               <div className="space-y-1">
                 <Label className="text-xs">Custom Color</Label>
                 <div className="flex items-center gap-2">
-                  <input
+                  <input aria-label="Custom Color"
                     type="color"
                     value={editColor || TYPE_COLORS[selectedNode.data.nodeType]?.bg}
                     onChange={(e) => { setEditColor(e.target.value); }}
@@ -587,16 +587,16 @@ export default function MindmapCanvas() {
           <div className="space-y-3">
             <div className="space-y-1">
               <Label className="text-xs">Title *</Label>
-              <Input value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} placeholder="Task title…" />
+              <Input aria-label="Title" value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} placeholder="Task title…" />
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Description</Label>
-              <Textarea value={taskDesc} onChange={(e) => setTaskDesc(e.target.value)} rows={2} placeholder="Optional description…" className="resize-none" />
+              <Textarea aria-label="Description" value={taskDesc} onChange={(e) => setTaskDesc(e.target.value)} rows={2} placeholder="Optional description…" className="resize-none" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label className="text-xs">Due Date</Label>
-                <Input type="date" value={taskDue} onChange={(e) => setTaskDue(e.target.value)} />
+                <Input aria-label="Due Date" type="date" value={taskDue} onChange={(e) => setTaskDue(e.target.value)} />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Priority</Label>
@@ -633,7 +633,7 @@ export default function MindmapCanvas() {
           </DialogHeader>
           <div className="space-y-1">
             <Label className="text-xs">Note Content *</Label>
-            <Textarea
+            <Textarea aria-label="Note Content"
               value={noteBody}
               onChange={(e) => setNoteBody(e.target.value)}
               rows={5}

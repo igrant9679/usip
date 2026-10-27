@@ -209,14 +209,14 @@ function RuleRow({
               </SelectContent>
             </Select>
           ) : fieldMeta?.type === "date" ? (
-            <Input
+            <Input aria-label="Value"
               type="date"
               value={rule.value}
               onChange={(e) => onChange({ ...rule, value: e.target.value })}
               className="h-8 w-36 text-xs"
             />
           ) : (
-            <Input
+            <Input aria-label="Value"
               value={rule.value}
               onChange={(e) => onChange({ ...rule, value: e.target.value })}
               placeholder="Value…"
@@ -226,7 +226,7 @@ function RuleRow({
         </>
       )}
 
-      <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={onRemove}>
+      <Button aria-label="Remove condition" variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={onRemove}>
         <X className="size-3.5" />
       </Button>
     </div>
@@ -318,7 +318,7 @@ function SegmentBuilderModal({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Segment Name *</Label>
-              <Input
+              <Input aria-label="Segment Name"
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                 placeholder="e.g. High-value SaaS contacts"
@@ -344,7 +344,7 @@ function SegmentBuilderModal({
 
           <div className="space-y-1.5">
             <Label className="text-xs">Description</Label>
-            <Textarea
+            <Textarea aria-label="Description"
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               placeholder="Optional description…"
@@ -478,8 +478,8 @@ export default function Segments() {
                       <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{seg.description}</p>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                    <Button
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0">
+                    <Button aria-label="Edit segment"
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7"
@@ -491,7 +491,7 @@ export default function Segments() {
                     >
                       <Edit2 className="size-3.5" />
                     </Button>
-                    <Button
+                    <Button aria-label="Delete segment"
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7 text-destructive hover:text-destructive"

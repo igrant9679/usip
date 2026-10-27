@@ -14,6 +14,7 @@ import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { usePageTitle } from "@/lib/usePageTitle";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,6 +35,7 @@ const INVALID_REASON: Record<string, string> = {
 };
 
 export default function JoinViaLink() {
+  usePageTitle("Join workspace");
   const params = new URLSearchParams(window.location.search);
   const token = params.get("token") ?? "";
 
@@ -97,7 +99,7 @@ export default function JoinViaLink() {
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <XCircle className="size-10 text-rose-500 mx-auto mb-2" />
-            <CardTitle>Invalid link</CardTitle>
+            <CardTitle role="heading" aria-level={1}>Invalid link</CardTitle>
             <CardDescription>This activation link is missing a token.</CardDescription>
           </CardHeader>
         </Card>
@@ -127,7 +129,7 @@ export default function JoinViaLink() {
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <XCircle className="size-10 text-rose-500 mx-auto mb-2" />
-            <CardTitle>Link unavailable</CardTitle>
+            <CardTitle role="heading" aria-level={1}>Link unavailable</CardTitle>
             <CardDescription>{INVALID_REASON[reason] ?? INVALID_REASON.not_found}</CardDescription>
           </CardHeader>
           <CardContent className="text-center">
@@ -145,7 +147,7 @@ export default function JoinViaLink() {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <Building2 className="size-9 text-primary mx-auto mb-2" />
-          <CardTitle>Join {workspaceName}</CardTitle>
+          <CardTitle role="heading" aria-level={1}>Join {workspaceName}</CardTitle>
           <CardDescription className="flex items-center justify-center gap-1.5">
             You're joining as
             <Badge variant="secondary">{ROLE_LABELS[role] ?? role}</Badge>
@@ -176,11 +178,10 @@ export default function JoinViaLink() {
                   placeholder="At least 8 characters"
                   className="pr-9"
                 />
-                <button
+                <button aria-label={showPassword ? "Hide password" : "Show password"}
                   type="button"
                   onClick={() => setShowPassword((s) => !s)}
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"
-                  tabIndex={-1}
                 >
                   {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                 </button>

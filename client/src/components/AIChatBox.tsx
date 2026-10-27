@@ -308,7 +308,7 @@ export function AIChatBox({
         onSubmit={handleSubmit}
         className="flex gap-2 p-4 border-t bg-background/50 items-end"
       >
-        <Textarea
+        <Textarea aria-label="Message"
           ref={textareaRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -317,7 +317,7 @@ export function AIChatBox({
           className="flex-1 max-h-32 resize-none min-h-9"
           rows={1}
         />
-        <Button
+        <Button aria-label="Send message"
           type="submit"
           size="icon"
           disabled={!input.trim() || isLoading}

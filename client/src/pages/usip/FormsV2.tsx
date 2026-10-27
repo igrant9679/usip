@@ -117,7 +117,7 @@ export default function FormsV2() {
                       </div>
                       <div className="text-[11px] text-muted-foreground mt-0.5">{f.submitCount ?? 0} submissions</div>
                     </div>
-                    <Switch checked={f.status === "active"} onCheckedChange={(v) => toggle.mutate({ id: f.id, status: v ? "active" : "inactive" })} />
+                    <Switch aria-label={`${f.title} active`} checked={f.status === "active"} onCheckedChange={(v) => toggle.mutate({ id: f.id, status: v ? "active" : "inactive" })} />
                   </div>
                   <div className="flex items-center gap-1.5 mt-2 text-[10px] text-muted-foreground">
                     {f.autoCreateLead && <span className="inline-flex items-center gap-0.5 rounded bg-secondary px-1.5 py-0.5"><UserPlus className="size-3" /> lead</span>}

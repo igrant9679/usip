@@ -6,6 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { AlertTriangle, FolderOpen, Heart, TrendingUp, HeartHandshake, Trash2, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { pressable } from "@/lib/pressable";
 
 const TIER_TONE: Record<string, "success" | "info" | "warning" | "danger"> = {
   thriving: "success", healthy: "info", neutral: "info", at_risk: "warning", critical: "danger",
@@ -95,7 +96,7 @@ export default function Customers() {
                   </tr></thead>
                   <tbody className="divide-y">
                     {list!.map((c: any) => (
-                      <tr key={c.id} onClick={() => setSelected(c.id)} className={`cursor-pointer hover:bg-secondary/30 ${selected === c.id ? "bg-secondary/40" : ""}`}>
+                      <tr key={c.id} {...pressable(() => setSelected(c.id), { row: true })} className={`cursor-pointer hover:bg-secondary/30 ${selected === c.id ? "bg-secondary/40" : ""}`}>
                         <td className="px-3 py-2 font-medium">{c.account?.name ?? "—"}</td>
                         <td className="px-3 py-2"><StatusPill tone={TIER_TONE[c.healthTier] ?? "muted"}>{c.healthTier}</StatusPill></td>
                         <td className="px-3 py-2 text-right font-mono tabular-nums">{c.healthScore}</td>
@@ -155,7 +156,7 @@ export default function Customers() {
                 </Section>
                 <Section title="Submit NPS">
                   <form className="p-3 flex gap-2" onSubmit={(e) => { e.preventDefault(); const v = Number(new FormData(e.currentTarget).get("nps")); submitNps.mutate({ id: detail.data!.id, score: v }); e.currentTarget.reset(); }}>
-                    <input name="nps" type="number" min={-100} max={100} placeholder="-100 to 100" className="flex-1 border rounded px-2 py-1.5 text-sm" />
+                    <input aria-label="NPS score" name="nps" type="number" min={-100} max={100} placeholder="-100 to 100" className="flex-1 border rounded px-2 py-1.5 text-sm" />
                     <Button size="sm" type="submit">Submit</Button>
                   </form>
                 </Section>
@@ -221,7 +222,7 @@ function SliderRow({ label, value, onChange }: { label: string; value: number; o
   return (
     <div className="flex items-center gap-2">
       <div className="w-20">{label}</div>
-      <input type="range" min={0} max={100} value={value} onChange={(e) => onChange(Number(e.target.value))} className="flex-1" />
+      <input aria-label={label} type="range" min={0} max={100} value={value} onChange={(e) => onChange(Number(e.target.value))} className="flex-1" />
       <div className="w-10 text-right font-mono tabular-nums">{value}</div>
     </div>
   );

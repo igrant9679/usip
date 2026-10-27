@@ -40,6 +40,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { toast } from "sonner";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { pressable } from "@/lib/pressable";
 
 type VerifFilter = "all" | "valid" | "accept_all" | "risky" | "invalid" | "unknown";
 
@@ -439,7 +440,7 @@ function SendEmailModal({
             </div>
             {aiMode && (
               <div className="space-y-2">
-                <Textarea
+                <Textarea aria-label="Describe the email"
                   placeholder="Describe the email you want to send (e.g. 'Follow up on our product demo last week, offer a free trial')"
                   value={aiPrompt}
                   onChange={(e) => setAiPrompt(e.target.value)}
@@ -458,7 +459,7 @@ function SendEmailModal({
             )}
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Subject</label>
-              <Input
+              <Input aria-label="Subject"
                 placeholder="Email subject..."
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
@@ -668,7 +669,7 @@ export default function Contacts() {
       <PageHeader title="Contacts" pageKey="contacts" description={`${(data ?? []).length} contact${(data ?? []).length !== 1 ? "s" : ""}${verifFilter !== "all" ? " · filtered" : " · all"}`}
         icon={<Users className="size-5" />}
       >
-        <Input
+        <Input aria-label="Search contacts"
           placeholder="Search…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -817,25 +818,22 @@ export default function Contacts() {
                   <tr
                     key={c.id}
                     className={`hover:bg-secondary/30 cursor-pointer ${selectedIds.has(c.id) ? "bg-primary/5" : ""}`}
-                    onClick={() =>
+                    {...pressable(() =>
                       setDrawer({
                         id: c.id,
                         name: `${c.firstName} ${c.lastName}`,
                         subtitle: `${c.title ?? ""} · ${(c as any).accountName ?? ""}`,
-                      })
-                    }
+                      }), { row: true })}
                   >
                     <td
                       className="px-3 py-2"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleOne(c.id);
-                      }}
+                      onClick={(e) => e.stopPropagation()}
                     >
                       <input
                         type="checkbox"
+                        aria-label={`Select ${c.firstName} ${c.lastName}`}
                         checked={selectedIds.has(c.id)}
-                        readOnly
+                        onChange={() => toggleOne(c.id)}
                         className="rounded border-gray-300 cursor-pointer"
                       />
                     </td>
@@ -889,7 +887,7 @@ export default function Contacts() {
                     <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="size-7">
+                          <Button aria-label="More actions" variant="ghost" size="icon" className="size-7">
                             <MoreHorizontal className="size-4" />
                           </Button>
                         </DropdownMenuTrigger>

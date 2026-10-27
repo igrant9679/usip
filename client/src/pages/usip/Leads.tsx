@@ -23,6 +23,7 @@ import { confirmAction } from "@/components/usip/Common";
 import { leadTierLabel, tierForGrade, type LeadTier } from "@shared/leadTier";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { ConvertLeadDialog } from "@/components/usip/ConvertLeadDialog";
+import { pressable } from "@/lib/pressable";
 
 const NEUTRAL_TONE = "bg-slate-200 text-slate-700";
 const GRADE_TONE: Record<string, string> = { A: "bg-emerald-100 text-emerald-800", B: "bg-blue-100 text-blue-800", C: "bg-amber-100 text-amber-800", D: "bg-rose-100 text-rose-800" };
@@ -84,14 +85,14 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
               </Button>
               {useAi && (
                 <>
-                  <Input placeholder="Describe the email…" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} className="flex-1 h-8 text-sm" />
+                  <Input aria-label="Describe the email" placeholder="Describe the email…" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} className="flex-1 h-8 text-sm" />
                   <Button size="sm" onClick={() => compose.mutate({ prompt: aiPrompt, contactIds: [] })} disabled={!aiPrompt || compose.isPending}>
                     {compose.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Generate"}
                   </Button>
                 </>
               )}
             </div>
-            <Input placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
+            <Input aria-label="Subject" placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
             <RichTextEditor placeholder="Body…" value={body} onChange={setBody} minHeight="160px" compact aiContext={{ subject, leadId: leadIds.length === 1 ? leadIds[0] : undefined }} />
             <div className="flex gap-2 justify-end">
               <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
@@ -214,7 +215,7 @@ export default function Leads() {
       <PageHeader title="Leads" description="Capture, score, and route inbound leads before they enter the CRM pipeline. Leads are automatically enriched, scored A–D, and assigned to reps based on your routing rules." pageKey="leads"
         icon={<UserPlus className="size-5" />}
       >
-        <Input placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-56" />
+        <Input aria-label="Search leads" placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-56" />
         {someSelected && (
           <>
             <Button variant="outline" onClick={() => setSendEmailOpen(true)} className="gap-2">
@@ -287,9 +288,9 @@ export default function Leads() {
               <tbody className="divide-y">
                 {data!.map((l) => (
                   <tr key={l.id} className={`hover:bg-secondary/30 cursor-pointer ${selectedIds.has(l.id) ? "bg-primary/5" : ""}`}
-                    onClick={() => setDrawer({ id: l.id, name: `${l.firstName} ${l.lastName}`, subtitle: `${l.title ?? ""} · ${l.company ?? ""}` })}>
-                    <td className="px-3 py-2" onClick={(e) => { e.stopPropagation(); toggleOne(l.id); }}>
-                      <input type="checkbox" checked={selectedIds.has(l.id)} readOnly className="rounded border-gray-300 cursor-pointer" />
+                    {...pressable(() => setDrawer({ id: l.id, name: `${l.firstName} ${l.lastName}`, subtitle: `${l.title ?? ""} · ${l.company ?? ""}` }), { row: true })}>
+                    <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" aria-label={`Select ${l.firstName} ${l.lastName}`} checked={selectedIds.has(l.id)} onChange={() => toggleOne(l.id)} className="rounded border-gray-300 cursor-pointer" />
                     </td>
                     <td className="px-3 py-2 font-medium" onClick={(e) => e.stopPropagation()}>
                       <Link href={`/leads/${l.id}`} className="underline-offset-2 hover:underline">{l.firstName} {l.lastName}</Link>
@@ -336,7 +337,7 @@ export default function Leads() {
                       )}
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="size-7">
+                          <Button aria-label="Lead actions" variant="ghost" size="icon" className="size-7">
                             <MoreHorizontal className="size-4" />
                           </Button>
                         </DropdownMenuTrigger>

@@ -112,6 +112,7 @@ import { SelectionToolbar } from "@/components/usip/people/SelectionToolbar";
 import { SearchSettingsSheet, type AppliedFilter } from "@/components/usip/people/SearchSettingsSheet";
 import { LinkedInEnrichmentSummaryCard, EnrichButton } from "@/components/usip/people/LinkedInEnrichment";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
+import { pressable } from "@/lib/pressable";
 
 /* ─────────────────────────── filter rail ──────────────────────────────── */
 
@@ -680,7 +681,7 @@ export default function People() {
       case "quick":
         return (
           <FilterGroup key={id} {...common} label="Quick search" icon={Search} onPin={undefined}>
-            <Input
+            <Input aria-label="Quick search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Name, title, company, email…"
@@ -767,7 +768,7 @@ export default function People() {
       case "jobTitles":
         return (
           <FilterGroup key={id} {...common} label="Job titles" icon={Briefcase} count={titleQ ? 1 : 0}>
-            <Input value={titleQ} onChange={(e) => setTitleQ(e.target.value)} placeholder="e.g. VP of Sales" className="h-7 text-[13px]" />
+            <Input aria-label="Job titles" value={titleQ} onChange={(e) => setTitleQ(e.target.value)} placeholder="e.g. VP of Sales" className="h-7 text-[13px]" />
           </FilterGroup>
         );
       case "seniority":
@@ -783,25 +784,25 @@ export default function People() {
       case "company":
         return (
           <FilterGroup key={id} {...common} label="Company" icon={Building2} count={companyQ ? 1 : 0}>
-            <Input value={companyQ} onChange={(e) => setCompanyQ(e.target.value)} placeholder="Company name…" className="h-7 text-[13px]" />
+            <Input aria-label="Company" value={companyQ} onChange={(e) => setCompanyQ(e.target.value)} placeholder="Company name…" className="h-7 text-[13px]" />
           </FilterGroup>
         );
       case "location":
         return (
           <FilterGroup key={id} {...common} label="Location" icon={MapPin} count={locationQ ? 1 : 0}>
-            <Input value={locationQ} onChange={(e) => setLocationQ(e.target.value)} placeholder="City, state, or country…" className="h-7 text-[13px]" />
+            <Input aria-label="Location" value={locationQ} onChange={(e) => setLocationQ(e.target.value)} placeholder="City, state, or country…" className="h-7 text-[13px]" />
           </FilterGroup>
         );
       case "industry":
         return (
           <FilterGroup key={id} {...common} label="Industry & keywords" icon={Globe} count={industryQ ? 1 : 0}>
-            <Input value={industryQ} onChange={(e) => setIndustryQ(e.target.value)} placeholder="e.g. SaaS, Fintech…" className="h-7 text-[13px]" />
+            <Input aria-label="Industry and keywords" value={industryQ} onChange={(e) => setIndustryQ(e.target.value)} placeholder="e.g. SaaS, Fintech…" className="h-7 text-[13px]" />
           </FilterGroup>
         );
       case "education":
         return (
           <FilterGroup key={id} {...common} label="Education" icon={GraduationCap} count={educationQ ? 1 : 0}>
-            <Input value={educationQ} onChange={(e) => setEducationQ(e.target.value)} placeholder="School or university…" className="h-7 text-[13px]" />
+            <Input aria-label="Education" value={educationQ} onChange={(e) => setEducationQ(e.target.value)} placeholder="School or university…" className="h-7 text-[13px]" />
             <p className="text-[11px] text-muted-foreground">Matches the prospect's school/university. Populated as prospects are enriched.</p>
           </FilterGroup>
         );
@@ -841,7 +842,7 @@ export default function People() {
       case "linkedinUrl":
         return (
           <FilterGroup key={id} {...common} label="Work URLs" icon={ExternalLink} count={linkedinQ ? 1 : 0}>
-            <Input value={linkedinQ} onChange={(e) => setLinkedinQ(e.target.value)} placeholder="LinkedIn / work URL…" className="h-7 text-[13px]" />
+            <Input aria-label="Work URLs" value={linkedinQ} onChange={(e) => setLinkedinQ(e.target.value)} placeholder="LinkedIn / work URL…" className="h-7 text-[13px]" />
           </FilterGroup>
         );
       case "contactInfo":
@@ -963,13 +964,13 @@ export default function People() {
 
               <div className="flex items-center gap-1.5 px-2 h-7 rounded-md border bg-background text-[11px] min-w-[104px] flex-1 max-w-[160px]">
                 <Search className="size-4 text-muted-foreground shrink-0" />
-                <input
+                <input aria-label="Search people"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="bg-transparent outline-none flex-1 min-w-0 text-[13px]"
                   placeholder="Search people"
                 />
-                {search && <button onClick={() => setSearch("")}><X className="size-3.5 text-muted-foreground" /></button>}
+                {search && <button aria-label="Clear search" onClick={() => setSearch("")}><X className="size-3.5 text-muted-foreground" /></button>}
               </div>
 
               <div className="flex-1" />
@@ -1033,7 +1034,7 @@ export default function People() {
                   <thead>
                     <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                       <th className="sticky left-0 top-0 z-30 w-10 min-w-10 border-b border-border bg-card px-3 py-2">
-                        <Checkbox checked={allOnPageChecked} onCheckedChange={toggleAll} className="size-3.5" />
+                        <Checkbox aria-label="Select all on this page" checked={allOnPageChecked} onCheckedChange={toggleAll} className="size-3.5" />
                       </th>
                       {visibleColumns.map((key) => (
                         <th
@@ -1061,7 +1062,7 @@ export default function People() {
                     {rows.map((p) => (
                       <tr
                         key={p.id}
-                        onClick={() => setSelectedId(p.id)}
+                        {...pressable(() => setSelectedId(p.id), { row: true })}
                         className={cn(
                           "cursor-pointer bg-background transition-colors hover:bg-muted",
                           selectedId === p.id && "bg-muted",
@@ -1071,7 +1072,7 @@ export default function People() {
                           {selectedId === p.id && (
                             <span aria-hidden className="absolute inset-y-0 left-0 w-[3px]" style={{ backgroundColor: "var(--people-accent, hsl(var(--foreground)))" }} />
                           )}
-                          <Checkbox
+                          <Checkbox aria-label="Select person"
                             checked={checked.has(p.id)}
                             onCheckedChange={() =>
                               setChecked((prev) => {
@@ -1469,7 +1470,7 @@ function AiEmptyState({
 
       <div className="mt-5 flex items-center gap-2 rounded-xl border bg-background p-2 shadow-sm">
         <Wand2 className="size-4 text-muted-foreground ml-1 shrink-0" />
-        <input
+        <input aria-label="Describe who to find"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           placeholder="e.g. VPs of Sales at SaaS companies in the US with a verified email"

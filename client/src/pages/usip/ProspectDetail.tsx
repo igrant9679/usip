@@ -278,7 +278,7 @@ export default function ProspectDetail() {
               {(["firstName","lastName","title","company","companyDomain","industry","email","phone","linkedinUrl","city","state","country"] as const).map((k) => (
                 <div key={k} className="space-y-1.5">
                   <Label className="text-xs capitalize">{k.replace(/([A-Z])/g, " $1")}</Label>
-                  <Input value={(editing as any)[k]} onChange={(e) => setEditing({ ...editing, [k]: e.target.value })} />
+                  <Input aria-label={k.replace(/([A-Z])/g, " $1")} value={(editing as any)[k]} onChange={(e) => setEditing({ ...editing, [k]: e.target.value })} />
                 </div>
               ))}
             </div>

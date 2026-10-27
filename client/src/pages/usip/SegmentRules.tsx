@@ -171,7 +171,7 @@ export default function SegmentRules() {
                       <Button size="sm" variant="ghost" onClick={() => save.mutate({ id: rule.id, segmentId: rule.segmentId, sequenceId: rule.sequenceId, enabled: !rule.enabled })} className="text-xs">
                         {rule.enabled ? "Pause" : "Enable"}
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => del.mutate({ id: rule.id })} className="text-destructive hover:text-destructive">
+                      <Button aria-label="Delete rule" size="sm" variant="ghost" onClick={() => del.mutate({ id: rule.id })} className="text-destructive hover:text-destructive">
                         <Trash2 className="size-3.5" />
                       </Button>
                     </div>

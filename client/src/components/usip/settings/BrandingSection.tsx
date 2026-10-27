@@ -46,11 +46,13 @@ function Card({ title, description, children }: { title: string; description?: s
 
 /** Chip input: type + Enter/comma to add, click × to remove. */
 function TagInput({
+  label,
   value,
   onChange,
   placeholder,
   disabled,
 }: {
+  label: string;
   value: string[];
   onChange: (v: string[]) => void;
   placeholder?: string;
@@ -82,7 +84,7 @@ function TagInput({
           )}
         </span>
       ))}
-      <input
+      <input aria-label={label}
         value={draft}
         disabled={disabled}
         onChange={(e) => setDraft(e.target.value)}
@@ -111,7 +113,7 @@ function ColorField({ label, value, onChange, disabled, hint }: { label: string;
           className="h-9 w-12 shrink-0 cursor-pointer rounded-md border border-border bg-background disabled:cursor-not-allowed"
           aria-label={label}
         />
-        <Input value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} placeholder="#14B89A" className="font-mono" />
+        <Input aria-label={label} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} placeholder="#14B89A" className="font-mono" />
       </div>
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
@@ -272,7 +274,7 @@ export function BrandingSection() {
                   </div>
                   <div className="flex-1 space-y-1.5">
                     <Label>Logo URL</Label>
-                    <Input value={logoUrl} disabled={!isAdmin} onChange={(e) => setLogoUrl(e.target.value)} placeholder="https://…/logo.png" />
+                    <Input aria-label="Logo URL" value={logoUrl} disabled={!isAdmin} onChange={(e) => setLogoUrl(e.target.value)} placeholder="https://…/logo.png" />
                   </div>
                 </div>
               </Card>
@@ -289,7 +291,7 @@ export function BrandingSection() {
               <Card title="Company profile" description="Who you are and what you offer. This feeds the AI outreach writers so emails describe your company accurately — no invented claims.">
                 <div className="space-y-1.5">
                   <Label>What your company does</Label>
-                  <textarea
+                  <textarea aria-label="What your company does"
                     rows={3}
                     value={description}
                     disabled={!isAdmin}
@@ -300,7 +302,7 @@ export function BrandingSection() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>Value proposition</Label>
-                  <textarea
+                  <textarea aria-label="Value proposition"
                     rows={2}
                     value={valueProp}
                     disabled={!isAdmin}
@@ -312,20 +314,20 @@ export function BrandingSection() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label>Industry</Label>
-                    <Input value={industry} disabled={!isAdmin} onChange={(e) => setIndustry(e.target.value)} placeholder="e.g. Marketing technology" />
+                    <Input aria-label="Industry" value={industry} disabled={!isAdmin} onChange={(e) => setIndustry(e.target.value)} placeholder="e.g. Marketing technology" />
                   </div>
                   <div className="space-y-1.5">
                     <Label>Website</Label>
-                    <Input value={website} disabled={!isAdmin} onChange={(e) => setWebsite(e.target.value)} placeholder="lsi-media.com" />
+                    <Input aria-label="Website" value={website} disabled={!isAdmin} onChange={(e) => setWebsite(e.target.value)} placeholder="lsi-media.com" />
                   </div>
                 </div>
                 <div className="space-y-1.5">
                   <Label>Keywords <span className="text-muted-foreground font-normal">— words that describe your company</span></Label>
-                  <TagInput value={keywords} onChange={setKeywords} disabled={!isAdmin} placeholder="Type a keyword and press Enter" />
+                  <TagInput label="Keywords" value={keywords} onChange={setKeywords} disabled={!isAdmin} placeholder="Type a keyword and press Enter" />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Topics <span className="text-muted-foreground font-normal">— themes to emphasise in outreach</span></Label>
-                  <TagInput value={topics} onChange={setTopics} disabled={!isAdmin} placeholder="Type a topic and press Enter" />
+                  <TagInput label="Topics" value={topics} onChange={setTopics} disabled={!isAdmin} placeholder="Type a topic and press Enter" />
                 </div>
               </Card>
 
@@ -336,11 +338,11 @@ export function BrandingSection() {
                     <div className="text-[13px] font-medium">Apply brand voice to AI</div>
                     <div className="text-[12px] text-muted-foreground">When off, AI writers ignore the voice + company profile above.</div>
                   </div>
-                  <Switch checked={applyToAI} disabled={!isAdmin} onCheckedChange={setApplyToAI} />
+                  <Switch aria-label="Apply brand voice to AI" checked={applyToAI} disabled={!isAdmin} onCheckedChange={setApplyToAI} />
                 </div>
                 <div className="space-y-1.5 max-w-xs">
                   <Label>Tone</Label>
-                  <select
+                  <select aria-label="Tone"
                     value={tone}
                     disabled={!isAdmin}
                     onChange={(e) => setTone(e.target.value as Tone)}
@@ -351,11 +353,11 @@ export function BrandingSection() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>Preferred words / phrases</Label>
-                  <TagInput value={vocabulary} onChange={setVocabulary} disabled={!isAdmin} placeholder="Words the AI should favour" />
+                  <TagInput label="Preferred words or phrases" value={vocabulary} onChange={setVocabulary} disabled={!isAdmin} placeholder="Words the AI should favour" />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Words to avoid</Label>
-                  <TagInput value={avoidWords} onChange={setAvoidWords} disabled={!isAdmin} placeholder="Words the AI should never use" />
+                  <TagInput label="Words to avoid" value={avoidWords} onChange={setAvoidWords} disabled={!isAdmin} placeholder="Words the AI should never use" />
                 </div>
               </Card>
 

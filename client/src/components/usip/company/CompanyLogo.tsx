@@ -21,9 +21,10 @@ import { trpc } from "@/lib/trpc";
 import { useTheme } from "@/contexts/ThemeContext";
 import { brandfetchLogoUrl, type BrandLogoOptions } from "@shared/brandfetch";
 
+// The 700 shades: white initials need 4.5:1 (the 600s went down to 2.9:1).
 const PALETTE = [
-  "#2563eb", "#7c3aed", "#db2777", "#dc2626", "#ea580c", "#ca8a04",
-  "#16a34a", "#0d9488", "#0284c7", "#4f46e5", "#9333ea", "#c026d3",
+  "#1d4ed8", "#6d28d9", "#be185d", "#b91c1c", "#c2410c", "#a16207",
+  "#15803d", "#0f766e", "#0369a1", "#4338ca", "#7e22ce", "#a21caf",
 ];
 function colorFor(name: string): string {
   let h = 0;

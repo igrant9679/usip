@@ -176,7 +176,7 @@ export default function ResearchSector() {
           <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem_10rem]">
             <div className="space-y-2">
               <Label>Name</Label>
-              <Input value={c.name} maxLength={160} disabled={ro} onChange={(e) => draft.patch({ name: e.target.value })} />
+              <Input aria-label="Name" value={c.name} maxLength={160} disabled={ro} onChange={(e) => draft.patch({ name: e.target.value })} />
             </div>
             <div className="space-y-2">
               <Label>Status</Label>
@@ -189,22 +189,22 @@ export default function ResearchSector() {
             </div>
             <div className="space-y-2">
               <Label>As of</Label>
-              <Input type="date" value={c.asOf} disabled={ro} onChange={(e) => draft.patch({ asOf: e.target.value })} />
+              <Input aria-label="As of" type="date" value={c.asOf} disabled={ro} onChange={(e) => draft.patch({ asOf: e.target.value })} />
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)]">
             <div className="space-y-2">
               <Label>Short name</Label>
-              <Input value={c.shortName} maxLength={60} disabled={ro} onChange={(e) => draft.patch({ shortName: e.target.value })} />
+              <Input aria-label="Short name" value={c.shortName} maxLength={60} disabled={ro} onChange={(e) => draft.patch({ shortName: e.target.value })} />
             </div>
             <div className="space-y-2">
               <Label>Tagline</Label>
-              <Input value={c.tagline} maxLength={300} disabled={ro} onChange={(e) => draft.patch({ tagline: e.target.value })} />
+              <Input aria-label="Tagline" value={c.tagline} maxLength={300} disabled={ro} onChange={(e) => draft.patch({ tagline: e.target.value })} />
             </div>
           </div>
           <div className="space-y-2">
             <Label>Summary</Label>
-            <Textarea rows={5} value={c.summary} disabled={ro} onChange={(e) => draft.patch({ summary: e.target.value })} placeholder="Who these organizations are, what they do, and why they would buy." />
+            <Textarea aria-label="Summary" rows={5} value={c.summary} disabled={ro} onChange={(e) => draft.patch({ summary: e.target.value })} placeholder="Who these organizations are, what they do, and why they would buy." />
           </div>
           <div className="space-y-2">
             <Label>Scores</Label>
@@ -298,11 +298,11 @@ export default function ResearchSector() {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               <Label>Min employees</Label>
-              <Input type="number" min={1} value={t.employeeMin ?? ""} disabled={ro} onChange={(e) => setT({ employeeMin: e.target.value ? Number(e.target.value) : null })} />
+              <Input aria-label="Min employees" type="number" min={1} value={t.employeeMin ?? ""} disabled={ro} onChange={(e) => setT({ employeeMin: e.target.value ? Number(e.target.value) : null })} />
             </div>
             <div className="space-y-2">
               <Label>Max employees</Label>
-              <Input type="number" min={1} value={t.employeeMax ?? ""} disabled={ro} onChange={(e) => setT({ employeeMax: e.target.value ? Number(e.target.value) : null })} />
+              <Input aria-label="Max employees" type="number" min={1} value={t.employeeMax ?? ""} disabled={ro} onChange={(e) => setT({ employeeMax: e.target.value ? Number(e.target.value) : null })} />
             </div>
           </div>
           <TagInput label="Never target" hint="Short words. A title, company name or industry containing one is off target." value={t.exclude} disabled={ro} onChange={(v) => setT({ exclude: v })} placeholder="student, intern, vendor…" />
@@ -314,7 +314,7 @@ export default function ResearchSector() {
           <TagInput label="Vocabulary" hint="Words this sector uses." value={m.vocabulary} disabled={ro} onChange={(v) => setM({ vocabulary: v })} />
           <div className="space-y-2">
             <Label>Sample opening line</Label>
-            <Textarea rows={3} value={m.sampleOpening} disabled={ro} onChange={(e) => setM({ sampleOpening: e.target.value })} placeholder="An example to adapt, never to copy word for word." />
+            <Textarea aria-label="Sample opening line" rows={3} value={m.sampleOpening} disabled={ro} onChange={(e) => setM({ sampleOpening: e.target.value })} placeholder="An example to adapt, never to copy word for word." />
           </div>
         </Section>
 

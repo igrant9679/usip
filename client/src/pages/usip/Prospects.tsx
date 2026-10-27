@@ -523,7 +523,7 @@ export default function ProspectsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead className="w-8">
-                  <Checkbox
+                  <Checkbox aria-label="Select all on this page"
                     checked={!!data?.data?.length && selectedIds.size === data.data.length}
                     onCheckedChange={toggleAll}
                   />
@@ -582,7 +582,7 @@ export default function ProspectsPage() {
                 return (
                   <TableRow key={p.id} className="hover:bg-muted/50">
                     <TableCell onClick={(e) => e.stopPropagation()}>
-                      <Checkbox
+                      <Checkbox aria-label={`Select ${p.firstName} ${p.lastName}`}
                         checked={selectedIds.has(p.id)}
                         onCheckedChange={() => toggleSelect(p.id)}
                       />
@@ -678,7 +678,7 @@ export default function ProspectsPage() {
                     <TableCell>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="h-7 w-7">
+                          <Button aria-label="Prospect actions" variant="ghost" size="icon" className="h-7 w-7">
                             <MoreHorizontal className="h-4 w-4" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -753,10 +753,10 @@ export default function ProspectsPage() {
               Page {page} of {Math.ceil(data.total / perPage)}
             </div>
             <div className="flex gap-1">
-              <Button variant="outline" size="sm" onClick={() => setPage((p) => p - 1)} disabled={page <= 1}>
+              <Button aria-label="Previous page" variant="outline" size="sm" onClick={() => setPage((p) => p - 1)} disabled={page <= 1}>
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              <Button
+              <Button aria-label="Next page"
                 variant="outline"
                 size="sm"
                 onClick={() => setPage((p) => p + 1)}

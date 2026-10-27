@@ -34,6 +34,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { isAdminRole, rankOf, ROLES, type Role } from "@shared/roleRank";
+import { tablistProps, tabProps } from "@/lib/tabs";
 
 
 function roleTone(r: Role) {
@@ -488,9 +489,9 @@ export default function Team() {
       ]} />
 
       {/* Tab bar */}
-      <div className="px-6 border-b flex shrink-0 items-center gap-1">
+      <div {...tablistProps("Team sections")} className="px-6 border-b flex shrink-0 items-center gap-1">
         {TABS.map((t) => (
-          <button
+          <button {...tabProps(activeTab === t.id)}
             key={t.id}
             onClick={() => setActiveTab(t.id)}
             className={`px-3 py-2.5 text-sm font-medium border-b-2 transition-colors ${
@@ -509,7 +510,7 @@ export default function Team() {
         <div className="p-4 md:p-5 space-y-4">
           {/* Filter bar */}
           <div className="flex items-center gap-2 flex-wrap">
-            <Input
+            <Input aria-label="Search members"
               placeholder="Search name, email, title…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
@@ -614,7 +615,7 @@ export default function Team() {
                         <tr key={m.memberId} className={`border-b ${isInactive ? "opacity-60" : ""}`}>
                           {isAdmin && (
                             <td className="px-3 py-2">
-                              <input
+                              <input aria-label="Select member"
                                 type="checkbox"
                                 checked={selected.has(m.memberId)}
                                 onChange={() => toggleSelect(m.memberId)}
@@ -657,7 +658,7 @@ export default function Team() {
                           <td className="px-3 py-2 text-xs text-muted-foreground">{m.title ?? "—"}</td>
                           <td className="px-3 py-2">
                             {editable ? (
-                              <select
+                              <select aria-label="Role"
                                 className="text-xs border rounded px-1.5 py-1 bg-background"
                                 value={m.role}
                                 onChange={(e) => changeRole.mutate({ memberId: m.memberId, role: e.target.value as Role })}
@@ -855,7 +856,7 @@ export default function Team() {
                   {historyTarget ? (historyTarget.name ?? historyTarget.email) : <span className="text-muted-foreground italic">All members</span>}
                 </span>
                 {historyTarget && (
-                  <Button size="sm" variant="ghost" className="h-6 px-1.5 text-xs" onClick={() => setHistoryTarget(null)}>
+                  <Button aria-label="Clear member filter" size="sm" variant="ghost" className="h-6 px-1.5 text-xs" onClick={() => setHistoryTarget(null)}>
                     ✕
                   </Button>
                 )}
@@ -863,7 +864,7 @@ export default function Team() {
             </div>
             <div className="space-y-1">
               <label className="text-xs font-medium text-muted-foreground">Outcome</label>
-              <select
+              <select aria-label="Outcome"
                 className="h-8 rounded-md border bg-background px-2 text-sm"
                 value={historyOutcome}
                 onChange={(e) => setHistoryOutcome(e.target.value as any)}
@@ -876,7 +877,7 @@ export default function Team() {
             </div>
             <div className="space-y-1">
               <label className="text-xs font-medium text-muted-foreground">From</label>
-              <Input
+              <Input aria-label="From"
                 type="date"
                 className="h-8 w-36 text-sm"
                 value={historyFrom}
@@ -885,7 +886,7 @@ export default function Team() {
             </div>
             <div className="space-y-1">
               <label className="text-xs font-medium text-muted-foreground">To</label>
-              <Input
+              <Input aria-label="To"
                 type="date"
                 className="h-8 w-36 text-sm"
                 value={historyTo}
@@ -1186,7 +1187,7 @@ export default function Team() {
                           <div className="text-sm font-medium">{label}</div>
                           <div className="text-xs text-muted-foreground">{description}</div>
                         </div>
-                        <Switch
+                        <Switch aria-label={label}
                           checked={getPermValue(key)}
                           onCheckedChange={(v) => togglePerm(key, v)}
                         />
@@ -1381,7 +1382,7 @@ export default function Team() {
                     <CheckCircle2 className="size-3.5" /> Link generated &amp; copied
                   </div>
                   <div className="flex items-center gap-2">
-                    <Input readOnly value={activationUrl} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />
+                    <Input aria-label="Activation link" readOnly value={activationUrl} onFocus={(e) => e.currentTarget.select()} className="font-mono text-xs" />
                     <Button
                       size="sm"
                       variant="outline"
@@ -1488,7 +1489,7 @@ export default function Team() {
             </p>
             <div className="space-y-1">
               <Label>Reassign owned work to</Label>
-              <select
+              <select aria-label="Reassign owned work to"
                 className="w-full border rounded-md px-2 py-1.5 bg-background"
                 value={reassignTo ?? ""}
                 onChange={(e) => setReassignTo(e.target.value ? Number(e.target.value) : null)}
@@ -1537,7 +1538,7 @@ export default function Team() {
             </div>
             <div className="space-y-1">
               <Label>Reassign owned work to <span className="text-muted-foreground font-normal">(required if they own any {ownedWorkNounPhrase()})</span></Label>
-              <select
+              <select aria-label="Reassign owned work to"
                 className="w-full border rounded-md px-2 py-1.5 bg-background"
                 value={deleteReassignTo ?? ""}
                 onChange={(e) => setDeleteReassignTo(e.target.value ? Number(e.target.value) : null)}
@@ -1584,7 +1585,7 @@ export default function Team() {
             </p>
             <div>
               <label className="text-sm font-medium">Reassign work to</label>
-              <select
+              <select aria-label="Reassign work to"
                 className="mt-1 w-full border rounded-md px-2 py-1.5 text-sm bg-background"
                 value={bulkReassignTo ?? ""}
                 onChange={(e) => setBulkReassignTo(Number(e.target.value) || null)}

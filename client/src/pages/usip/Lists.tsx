@@ -50,6 +50,7 @@ import {
   Pencil,
   X,
 } from "lucide-react";
+import { pressable } from "@/lib/pressable";
 
 type RecordList = {
   id: number;
@@ -76,7 +77,7 @@ function fmtWhen(d?: string | Date | null): string {
 function ListRow({ l, accent, onOpen, onRename, onDelete }: { l: RecordList; accent: string; onOpen: () => void; onRename: () => void; onDelete: () => void }) {
   const Icon = l.entityType === "companies" ? Building2 : ListChecks;
   return (
-    <div className="group/row flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40 cursor-pointer" onClick={onOpen}>
+    <div className="group/row flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40 cursor-pointer" {...pressable(onOpen)}>
       <span className="shrink-0 size-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${accent}1f`, color: accent }}>
         <Icon className="size-4" />
       </span>
@@ -89,7 +90,7 @@ function ListRow({ l, accent, onOpen, onRename, onDelete }: { l: RecordList; acc
       <div onClick={(e) => e.stopPropagation()}>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm" className="opacity-0 group-hover/row:opacity-100"><MoreHorizontal className="size-4" /></Button>
+            <Button aria-label="List actions" variant="ghost" size="icon-sm" className="opacity-0 group-hover/row:opacity-100"><MoreHorizontal className="size-4" /></Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem onClick={onOpen}><ExternalLink className="size-4 mr-2" /> Open list</DropdownMenuItem>
@@ -216,8 +217,8 @@ export default function Lists() {
               Search and Sort below both work. */}
           <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-sm min-w-0 flex-1 max-w-xs">
             <Search className="size-4 text-muted-foreground shrink-0" />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search lists" />
-            {search && <button onClick={() => setSearch("")}><X className="size-3.5 text-muted-foreground" /></button>}
+            <input aria-label="Search lists" value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search lists" />
+            {search && <button type="button" aria-label="Clear search" onClick={() => setSearch("")}><X className="size-3.5 text-muted-foreground" /></button>}
           </div>
           <div className="flex-1" />
           <DropdownMenu>
@@ -293,7 +294,7 @@ export default function Lists() {
             </div>
             <div>
               <div className="text-[13px] font-medium mb-1.5">List name</div>
-              <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Name this list" autoFocus onKeyDown={(e) => { if (e.key === "Enter") create(); }} />
+              <Input aria-label="List name" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Name this list" autoFocus onKeyDown={(e) => { if (e.key === "Enter") create(); }} />
             </div>
           </div>
           <DialogFooter>
@@ -310,7 +311,7 @@ export default function Lists() {
           <DialogHeader><DialogTitle>Rename list</DialogTitle></DialogHeader>
           <div className="py-1">
             <div className="text-[13px] font-medium mb-1.5">List name</div>
-            <Input value={renameTo} onChange={(e) => setRenameTo(e.target.value)} maxLength={200} autoFocus onKeyDown={(e) => { if (e.key === "Enter") rename(); }} />
+            <Input aria-label="List name" value={renameTo} onChange={(e) => setRenameTo(e.target.value)} maxLength={200} autoFocus onKeyDown={(e) => { if (e.key === "Enter") rename(); }} />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRenaming(null)}>Cancel</Button>

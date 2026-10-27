@@ -21,6 +21,8 @@ import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
+import { pressable } from "@/lib/pressable";
+import { tablistProps, tabProps } from "@/lib/tabs";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type StepType = "email" | "wait" | "task";
@@ -209,13 +211,13 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
           <DialogTitle>Enroll prospects into sequence</DialogTitle>
         </DialogHeader>
 
-        <div className="flex border-b shrink-0">
+        <div {...tablistProps("Recipients")} className="flex border-b shrink-0">
           {([
             { k: "contacts", label: "Contacts", count: filteredContacts.length },
             { k: "leads", label: "Leads", count: filteredLeads.length },
             { k: "prospects", label: "Prospects", count: filteredProspects.length },
           ] as const).map((t) => (
-            <button key={t.k} onClick={() => setTab(t.k)}
+            <button {...tabProps(tab === t.k)} key={t.k} onClick={() => setTab(t.k)}
               className={`px-4 py-2 text-sm ${tab === t.k ? "border-b-2 border-[#14B89A] font-semibold" : "text-muted-foreground"}`}>
               {t.label} <span className="text-xs text-muted-foreground">({t.count})</span>
             </button>
@@ -223,7 +225,7 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
         </div>
 
         <div className="flex items-center gap-2 pt-3 shrink-0">
-          <Input
+          <Input aria-label={`Search ${tab}`}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={`Search ${tab}…`}
@@ -258,8 +260,8 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
                   const already = alreadyContactIds.has(c.id);
                   const checked = selectedContactIds.has(c.id);
                   return (
-                    <li key={c.id} className={`flex items-center gap-3 p-2.5 text-sm ${already ? "opacity-50" : "hover:bg-muted/40 cursor-pointer"}`} onClick={() => toggleContact(c.id)}>
-                      <input
+                    <li key={c.id} className={`flex items-center gap-3 p-2.5 text-sm ${already ? "opacity-50" : "hover:bg-muted/40 cursor-pointer"}`} {...pressable(() => toggleContact(c.id))}>
+                      <input aria-label={`Select ${c.firstName} ${c.lastName}`}
                         type="checkbox"
                         checked={checked || already}
                         disabled={already}
@@ -294,8 +296,8 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
                   const already = alreadyLeadIds.has(l.id);
                   const checked = selectedLeadIds.has(l.id);
                   return (
-                    <li key={l.id} className={`flex items-center gap-3 p-2.5 text-sm ${already ? "opacity-50" : "hover:bg-muted/40 cursor-pointer"}`} onClick={() => toggleLead(l.id)}>
-                      <input
+                    <li key={l.id} className={`flex items-center gap-3 p-2.5 text-sm ${already ? "opacity-50" : "hover:bg-muted/40 cursor-pointer"}`} {...pressable(() => toggleLead(l.id))}>
+                      <input aria-label={`Select ${l.firstName} ${l.lastName}`}
                         type="checkbox"
                         checked={checked || already}
                         disabled={already}
@@ -338,8 +340,8 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
                   const company = p.companyName ?? p.company ?? "";
                   const status = p.verificationStatus as string | undefined;
                   return (
-                    <li key={p.id} className={`flex items-center gap-3 p-2.5 text-sm ${disabled ? "opacity-50" : "hover:bg-muted/40 cursor-pointer"}`} onClick={() => !disabled && toggleProspect(p)}>
-                      <input
+                    <li key={p.id} className={`flex items-center gap-3 p-2.5 text-sm ${disabled ? "opacity-50" : "hover:bg-muted/40 cursor-pointer"}`} {...pressable(() => !disabled && toggleProspect(p))}>
+                      <input aria-label={`Select ${p.firstName} ${p.lastName}`}
                         type="checkbox"
                         checked={checked || already}
                         disabled={disabled}
@@ -674,9 +676,9 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
               )}
             </button>
             <div className="ml-auto flex gap-1 shrink-0">
-              <Button size="sm" variant="ghost" className="h-6 w-6 p-0" disabled={disabled || i === 0} onClick={() => moveStep(i, -1)}><ArrowUp className="h-3 w-3" /></Button>
-              <Button size="sm" variant="ghost" className="h-6 w-6 p-0" disabled={disabled || i === steps.length - 1} onClick={() => moveStep(i, 1)}><ArrowDown className="h-3 w-3" /></Button>
-              <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" disabled={disabled} onClick={() => removeStep(i)}><Trash2 className="h-3 w-3" /></Button>
+              <Button aria-label="Move step up" size="sm" variant="ghost" className="h-6 w-6 p-0" disabled={disabled || i === 0} onClick={() => moveStep(i, -1)}><ArrowUp className="h-3 w-3" /></Button>
+              <Button aria-label="Move step down" size="sm" variant="ghost" className="h-6 w-6 p-0" disabled={disabled || i === steps.length - 1} onClick={() => moveStep(i, 1)}><ArrowDown className="h-3 w-3" /></Button>
+              <Button aria-label="Delete step" size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" disabled={disabled} onClick={() => removeStep(i)}><Trash2 className="h-3 w-3" /></Button>
             </div>
           </div>
 
@@ -766,7 +768,7 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
                   </>
                 ) : (
                   <>
-                    <Input
+                    <Input aria-label="Subject"
                       placeholder="Subject"
                       value={step.subject}
                       disabled={disabled}
@@ -791,7 +793,7 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
           {!isCollapsed && step.type === "wait" && (
             <div className="flex items-center gap-2">
               <Label className="text-xs text-muted-foreground shrink-0">Wait days</Label>
-              <Input
+              <Input aria-label="Wait days"
                 type="number"
                 min={0}
                 max={60}
@@ -959,9 +961,9 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
         )}
 
         {/* Tab bar */}
-        <div className="flex border-b shrink-0">
+        <div {...tablistProps("Sequence sections")} className="flex border-b shrink-0">
           {(["settings", "steps"] as const).map((t) => (
-            <button key={t} onClick={() => setTab(t)}
+            <button {...tabProps(tab === t)} key={t} onClick={() => setTab(t)}
               className={`px-4 py-2 text-sm capitalize ${tab === t ? "border-b-2 border-[#14B89A] font-semibold" : "text-muted-foreground"}`}>
               {t}
             </button>
@@ -973,15 +975,15 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
             <>
               <div className="space-y-1.5">
                 <Label className="text-sm">Name</Label>
-                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Sequence name" />
+                <Input aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Sequence name" />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-sm">Description</Label>
-                <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional description" rows={2} className="resize-none" />
+                <Textarea aria-label="Description" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional description" rows={2} className="resize-none" />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-sm">Daily send cap</Label>
-                <Input type="number" min={1} max={10000} value={dailyCap} onChange={(e) => setDailyCap(e.target.value)} placeholder="Unlimited" className="w-36" />
+                <Input aria-label="Daily send cap" type="number" min={1} max={10000} value={dailyCap} onChange={(e) => setDailyCap(e.target.value)} placeholder="Unlimited" className="w-36" />
                 <p className="text-xs text-muted-foreground">Maximum emails sent per day across all enrollments. Leave blank for unlimited.</p>
               </div>
               <div className="border rounded-md p-3 space-y-3">
@@ -989,11 +991,11 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
                 <div className="flex items-center gap-3">
                   <div className="space-y-1">
                     <Label className="text-xs text-muted-foreground">Start</Label>
-                    <Input type="time" value={sendWindowStart} onChange={(e) => setSendWindowStart(e.target.value)} className="w-32 h-8 text-sm" />
+                    <Input aria-label="Start" type="time" value={sendWindowStart} onChange={(e) => setSendWindowStart(e.target.value)} className="w-32 h-8 text-sm" />
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs text-muted-foreground">End</Label>
-                    <Input type="time" value={sendWindowEnd} onChange={(e) => setSendWindowEnd(e.target.value)} className="w-32 h-8 text-sm" />
+                    <Input aria-label="End" type="time" value={sendWindowEnd} onChange={(e) => setSendWindowEnd(e.target.value)} className="w-32 h-8 text-sm" />
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1102,7 +1104,7 @@ function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Label className="text-xs text-muted-foreground">Email step:</Label>
-          <select
+          <select aria-label="Email step"
             className="text-sm border rounded px-2 py-1 bg-background"
             value={selectedStep}
             onChange={(e) => setSelectedStep(Number(e.target.value))}
@@ -1186,7 +1188,7 @@ function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any
                       <td className="py-1.5 px-2 text-right">
                         {minSendsEditing === v.id ? (
                           <div className="flex items-center gap-1 justify-end">
-                            <Input
+                            <Input aria-label="Minimum sends"
                               type="number"
                               className="h-5 w-16 text-xs px-1"
                               value={minSendsValue}
@@ -1194,7 +1196,7 @@ function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any
                               onChange={(e) => setMinSendsValue(Number(e.target.value))}
                             />
                             <Button size="sm" className="h-5 px-1.5 text-[10px]" onClick={() => setMinSends.mutate({ id: v.id, minSendsForPromotion: minSendsValue })} disabled={setMinSends.isPending}>Save</Button>
-                            <Button size="sm" variant="ghost" className="h-5 px-1" onClick={() => setMinSendsEditing(null)}>✕</Button>
+                            <Button aria-label="Cancel" size="sm" variant="ghost" className="h-5 px-1" onClick={() => setMinSendsEditing(null)}>✕</Button>
                           </div>
                         ) : (
                           <button
@@ -1218,8 +1220,8 @@ function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any
                               <Trophy className="size-3 mr-0.5" />Promote
                             </Button>
                           )}
-                          <Button size="sm" variant="ghost" className="h-6 px-1.5" onClick={() => setEditVariant(variants!.find((vv) => vv.id === v.id))}><Pencil className="size-3" /></Button>
-                          <Button size="sm" variant="ghost" className="h-6 px-1.5 text-destructive" onClick={() => deleteVariant.mutate({ id: v.id })}><Trash2 className="size-3" /></Button>
+                          <Button aria-label="Edit variant" size="sm" variant="ghost" className="h-6 px-1.5" onClick={() => setEditVariant(variants!.find((vv) => vv.id === v.id))}><Pencil className="size-3" /></Button>
+                          <Button aria-label="Delete variant" size="sm" variant="ghost" className="h-6 px-1.5 text-destructive" onClick={() => deleteVariant.mutate({ id: v.id })}><Trash2 className="size-3" /></Button>
                         </div>
                       </td>
                     </tr>
@@ -1253,9 +1255,9 @@ function SequenceAbPanel({ sequenceId, steps }: { sequenceId: number; steps: any
           <DialogContent className="sm:max-w-md">
             <DialogHeader><DialogTitle>Edit Variant {editVariant.variantLabel}</DialogTitle></DialogHeader>
             <div className="space-y-3 py-2">
-              <div className="space-y-1"><Label>Subject</Label><Input defaultValue={editVariant.subject} id="ev-subject" /></div>
-              <div className="space-y-1"><Label>Body</Label><Textarea defaultValue={editVariant.body} id="ev-body" rows={5} /></div>
-              <div className="space-y-1"><Label>Split %</Label><Input type="number" defaultValue={editVariant.splitPct} id="ev-split" /></div>
+              <div className="space-y-1"><Label>Subject</Label><Input aria-label="Subject" defaultValue={editVariant.subject} id="ev-subject" /></div>
+              <div className="space-y-1"><Label>Body</Label><Textarea aria-label="Body" defaultValue={editVariant.body} id="ev-body" rows={5} /></div>
+              <div className="space-y-1"><Label>Split %</Label><Input aria-label="Split %" type="number" defaultValue={editVariant.splitPct} id="ev-split" /></div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditVariant(null)}>Cancel</Button>
@@ -1320,7 +1322,7 @@ function SequencePerformancePanel({ sequenceId }: { sequenceId: number }) {
       <div className="flex flex-wrap items-end gap-3 p-3 bg-muted/40 rounded-lg border">
         <div className="flex flex-col gap-1">
           <label className="text-xs text-muted-foreground font-medium">From</label>
-          <input
+          <input aria-label="From"
             type="date"
             value={dateFrom}
             onChange={(e) => setDateFrom(e.target.value)}
@@ -1329,7 +1331,7 @@ function SequencePerformancePanel({ sequenceId }: { sequenceId: number }) {
         </div>
         <div className="flex flex-col gap-1">
           <label className="text-xs text-muted-foreground font-medium">To</label>
-          <input
+          <input aria-label="To"
             type="date"
             value={dateTo}
             onChange={(e) => setDateTo(e.target.value)}
@@ -1544,7 +1546,7 @@ export default function Sequences() {
                 {data!.map((s) => (
                   <li key={s.id}
                     className={`p-3 cursor-pointer hover:bg-secondary/40 ${selected === s.id ? "bg-secondary/60" : ""}`}
-                    onClick={() => { setSelected(s.id); setActiveTab("steps"); }}>
+                    {...pressable(() => { setSelected(s.id); setActiveTab("steps"); })}>
                     <div className="flex items-center gap-2">
                       <div className="flex-1 text-sm font-medium truncate">{s.name}</div>
                       <StatusPill tone={s.status === "active" ? "success" : s.status === "paused" ? "warning" : "muted"}>{s.status}</StatusPill>
@@ -1600,14 +1602,14 @@ export default function Sequences() {
                   </div>
                 }>
                 {/* Tab bar */}
-                <div className="flex border-b mb-3 px-3">
+                <div {...tablistProps("Sequence sections")} className="flex border-b mb-3 px-3">
                   {[
                     { k: "steps", label: "Steps", icon: Activity },
                     { k: "stats", label: "Stats & Enrollments", icon: BarChart3 },
                     { k: "analytics", label: "Performance", icon: TrendingUp },
                     { k: "ab", label: "A/B Testing", icon: FlaskConical },
                   ].map(({ k, label, icon: Icon }) => (
-                    <button key={k}
+                    <button {...tabProps(activeTab === k)} key={k}
                       onClick={() => setActiveTab(k as any)}
                       className={`flex items-center gap-1.5 px-3 py-2 text-sm ${activeTab === k ? "border-b-2 border-[#14B89A] font-semibold" : "text-muted-foreground"}`}>
                       <Icon className="h-3.5 w-3.5" />

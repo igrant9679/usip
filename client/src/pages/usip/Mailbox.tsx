@@ -176,7 +176,7 @@ function SnoozePopover({ accountId, thread, onSnoozed }: {
           ))}
           <div className="pt-1 border-t mt-1">
             <p className="text-[10px] text-muted-foreground px-1 mb-1">Custom date</p>
-            <input type="datetime-local" value={customDate} onChange={(e) => setCustomDate(e.target.value)}
+            <input aria-label="Custom date" type="datetime-local" value={customDate} onChange={(e) => setCustomDate(e.target.value)}
               className="w-full text-xs border rounded px-2 py-1 bg-background" />
             <Button size="sm" className="w-full mt-1.5" disabled={!customDate || createTask.isPending}
               onClick={() => customDate && snooze(new Date(customDate))}>
@@ -434,15 +434,15 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
         <div className="space-y-3">
           <div className="grid grid-cols-[60px_1fr] items-center gap-2">
             <Label className="text-right">To</Label>
-            <Input value={to} onChange={(e) => setTo(e.target.value)} placeholder="recipient@example.com" />
+            <Input aria-label="To" value={to} onChange={(e) => setTo(e.target.value)} placeholder="recipient@example.com" />
           </div>
           <div className="grid grid-cols-[60px_1fr] items-center gap-2">
             <Label className="text-right">CC</Label>
-            <Input value={cc} onChange={(e) => setCc(e.target.value)} placeholder="Optional" />
+            <Input aria-label="CC" value={cc} onChange={(e) => setCc(e.target.value)} placeholder="Optional" />
           </div>
           <div className="grid grid-cols-[60px_1fr] items-center gap-2">
             <Label className="text-right">Subject</Label>
-            <Input value={subject} onChange={(e) => setSubject(e.target.value)} />
+            <Input aria-label="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
           </div>
           <div className="relative">
             <RichTextEditor
@@ -486,7 +486,7 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
                     <Paperclip className="size-3 text-muted-foreground" />
                     <span className="max-w-[140px] truncate">{att.filename}</span>
                     <span className="text-muted-foreground">({Math.round(att.size / 1024)}KB)</span>
-                    <button onClick={() => removeAttachment(idx)} className="ml-1 text-muted-foreground hover:text-destructive">
+                    <button aria-label="Remove attachment" onClick={() => removeAttachment(idx)} className="ml-1 text-muted-foreground hover:text-destructive">
                       <X className="size-3" />
                     </button>
                   </div>
@@ -546,13 +546,14 @@ function AttachmentBadge({ accountId, messageId, attachment, index }: {
 
   return (
     <Badge
+      asChild
       variant="secondary"
-      className="gap-1 text-xs cursor-pointer hover:bg-secondary/80 transition-colors"
-      onClick={handleDownload}
-      title="Click to download">
-      {loading ? <Loader2 className="size-3 animate-spin" /> : <Download className="size-3" />}
-      {attachment.filename}
-      {attachment.size > 0 && <span className="text-muted-foreground ml-1">({Math.round(attachment.size / 1024)}KB)</span>}
+      className="gap-1 text-xs cursor-pointer hover:bg-secondary/80 transition-colors">
+      <button type="button" onClick={handleDownload} title="Click to download">
+        {loading ? <Loader2 className="size-3 animate-spin" /> : <Download className="size-3" />}
+        {attachment.filename}
+        {attachment.size > 0 && <span className="text-muted-foreground ml-1">({Math.round(attachment.size / 1024)}KB)</span>}
+      </button>
     </Badge>
   );
 }
@@ -622,7 +623,7 @@ function ThreadView({
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="px-4 py-2.5 border-b flex items-center gap-2 shrink-0 bg-background">
-        <Button variant="ghost" size="icon" onClick={onBack} className="md:hidden shrink-0">
+        <Button aria-label="Back" variant="ghost" size="icon" onClick={onBack} className="md:hidden shrink-0">
           <ChevronLeft className="size-4" />
         </Button>
         <div className="flex-1 min-w-0">
@@ -820,11 +821,11 @@ function SingleAccountThreadList({ accountId, folder, selectedId, onSelect, init
       <div className="px-3 py-2 border-b space-y-2 shrink-0">
         <div className="flex items-center justify-between">
           <span className="text-xs text-muted-foreground">{threads.length} thread{threads.length !== 1 ? "s" : ""}</span>
-          <Button variant="ghost" size="icon" onClick={() => refetch()} className="size-7"><RefreshCw className="size-3.5" /></Button>
+          <Button aria-label="Refresh" variant="ghost" size="icon" onClick={() => refetch()} className="size-7"><RefreshCw className="size-3.5" /></Button>
         </div>
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-          <Input value={searchQuery} onChange={(e) => handleSearch(e.target.value)}
+          <Input aria-label="Search messages" value={searchQuery} onChange={(e) => handleSearch(e.target.value)}
             placeholder="Search messages..." className="pl-7 h-7 text-xs" />
         </div>
       </div>
@@ -903,11 +904,11 @@ function CentralInboxThreadList({ accounts, selectedId, onSelect }: {
       <div className="px-3 py-2 border-b space-y-2 shrink-0">
         <div className="flex items-center justify-between">
           <span className="text-xs text-muted-foreground">{allThreads.length} thread{allThreads.length !== 1 ? "s" : ""}</span>
-          <Button variant="ghost" size="icon" onClick={() => qs.forEach((q) => q.refetch())} className="size-7"><RefreshCw className="size-3.5" /></Button>
+          <Button aria-label="Refresh" variant="ghost" size="icon" onClick={() => qs.forEach((q) => q.refetch())} className="size-7"><RefreshCw className="size-3.5" /></Button>
         </div>
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-          <Input value={searchQuery} onChange={(e) => handleSearch(e.target.value)}
+          <Input aria-label="Search all inboxes" value={searchQuery} onChange={(e) => handleSearch(e.target.value)}
             placeholder="Search all inboxes..." className="pl-7 h-7 text-xs" />
         </div>
       </div>

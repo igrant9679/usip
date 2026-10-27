@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Loader2, Send, CalendarCheck, CheckCircle2, MessageSquare } from "lucide-react";
 import { ChatMarkdown } from "@/components/usip/ChatMarkdown";
+import { usePageTitle } from "@/lib/usePageTitle";
 
 type Msg = { role: "visitor" | "agent"; text: string };
 
@@ -30,6 +31,7 @@ export default function ChatPage() {
   const embedded = isEmbedded();
 
   const agent = trpc.chatAgents.getPublic.useQuery({ slug }, { enabled: !!slug, retry: false });
+  usePageTitle(agent.data?.displayName ?? "Chat");
   const send = trpc.chatAgents.send.useMutation();
   const book = trpc.chatAgents.book.useMutation();
 
@@ -122,7 +124,7 @@ export default function ChatPage() {
       <div className="min-h-screen flex items-center justify-center p-6 text-center">
         <div>
           <MessageSquare className="size-8 mx-auto text-muted-foreground opacity-40 mb-3" />
-          <div className="text-base font-semibold">Chat unavailable</div>
+          <h1 className="text-base font-semibold">Chat unavailable</h1>
           <p className="text-sm text-muted-foreground mt-1">This chat may be turned off or removed.</p>
         </div>
       </div>
@@ -137,14 +139,14 @@ export default function ChatPage() {
             <MessageSquare className="size-4" />
           </div>
           <div className="min-w-0">
-            <div className="text-sm font-semibold truncate">{agent.data.displayName}</div>
+            <h1 className="text-sm font-semibold truncate">{agent.data.displayName}</h1>
             <div className="text-[11px] text-muted-foreground">Usually replies instantly</div>
           </div>
         </header>
       )}
 
       {/* Transcript */}
-      <div className="flex-1 min-h-0 overflow-auto px-4 py-4 space-y-3">
+      <div role="log" aria-live="polite" aria-label="Conversation" className="flex-1 min-h-0 overflow-auto px-4 py-4 space-y-3">
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === "visitor" ? "justify-end" : "justify-start"}`}>
             <div
@@ -190,8 +192,8 @@ export default function ChatPage() {
             </div>
             {picked && (
               <div className="space-y-2 pt-1">
-                <Input placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} className="h-9" />
-                <Input placeholder="Work email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="h-9" />
+                <Input aria-label="Your name" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} className="h-9" />
+                <Input aria-label="Work email" placeholder="Work email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="h-9" />
                 <Button
                   className="w-full h-9 text-white"
                   style={{ backgroundColor: accent }}
@@ -227,14 +229,14 @@ export default function ChatPage() {
 
       {/* Composer */}
       <form onSubmit={submit} className="shrink-0 border-t border-border p-3 flex items-center gap-2">
-        <Input
+        <Input aria-label="Message"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder={bookedAt ? "Anything else?" : "Type your message…"}
           className="h-10"
           autoFocus={!embedded}
         />
-        <Button type="submit" size="icon" className="size-10 shrink-0 text-white" style={{ backgroundColor: accent }} disabled={send.isPending || !draft.trim()}>
+        <Button aria-label="Send message" type="submit" size="icon" className="size-10 shrink-0 text-white" style={{ backgroundColor: accent }} disabled={send.isPending || !draft.trim()}>
           <Send className="size-4" />
         </Button>
       </form>

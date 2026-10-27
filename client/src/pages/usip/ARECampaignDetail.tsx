@@ -132,6 +132,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useLocation } from "wouter";
 import { toast } from "sonner";
+import { pressable } from "@/lib/pressable";
 
 /* ─── CSV import helper ────────────────────────────────────────────────────── */
 export type ImportRow = {
@@ -223,6 +224,9 @@ const ENRICH_COLOR: Record<string, string> = {
   complete: "#34D399",
   failed: "#F87171",
 };
+
+/** Readable text on a chip tinted with its own colour (4.5:1 in either theme). */
+const chipText = (c: string) => `color-mix(in srgb, ${c} 40%, var(--foreground))`;
 
 const SEQ_COLOR: Record<string, string> = {
   pending: "#94A3B8",
@@ -468,7 +472,7 @@ function ProspectRow({
           ? "border-primary/50 bg-primary/5 shadow-sm"
           : "border-border bg-card hover:border-primary/20 hover:shadow-sm"
       }`}
-      onClick={() => onSelect(p.id)}
+      {...pressable(() => onSelect(p.id))}
     >
       {/* ICP ring or source icon */}
       {p.icpMatchScore != null ? (
@@ -554,7 +558,7 @@ function ProspectRow({
         {Number(p.intentSignals ?? 0) > 0 && (
           <Badge
             variant="outline"
-            className="text-[10px] px-1.5 py-0 h-5 border-0 bg-amber-500/15 text-amber-600 cursor-help"
+            className="text-[10px] px-1.5 py-0 h-5 border-0 bg-amber-500/15 text-amber-800 dark:text-amber-300 cursor-help"
             title={`${p.intentSignals} intent signal${Number(p.intentSignals) === 1 ? "" : "s"} found by enrichment (trigger events + pain signals). Ranks ahead of an equally-matched prospect with none.`}
           >
             ⚡ {p.intentSignals}
@@ -563,13 +567,13 @@ function ProspectRow({
         <Badge
           variant="outline"
           className={`text-[10px] px-1.5 py-0 h-5 border-0 ${p.enrichmentStatus === "failed" ? "cursor-help" : ""}`}
-          style={{ backgroundColor: enrichColor + "22", color: enrichColor }}
+          style={{ backgroundColor: enrichColor + "22", color: chipText(enrichColor) }}
           title={p.enrichmentStatus === "failed" ? (p.enrichmentError ?? "No reason recorded") : undefined}
         >
           {p.enrichmentStatus}
         </Badge>
         <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 border-0"
-          style={{ backgroundColor: seqColor + "22", color: seqColor }}>
+          style={{ backgroundColor: seqColor + "22", color: chipText(seqColor) }}>
           {p.sequenceStatus}
         </Badge>
       </div>
@@ -607,18 +611,18 @@ function ProspectRow({
           </Button>
         )}
         {p.enrichmentStatus === "complete" && (p.sequenceStatus === "pending" || p.sequenceStatus === "canceled") && (
-          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-emerald-600 hover:text-emerald-700"
+          <Button aria-label="Approve" size="sm" variant="ghost" className="h-7 px-2 text-xs text-emerald-600 hover:text-emerald-700"
             onClick={() => approve.mutate({ prospectId: p.id })} disabled={approve.isPending}>
             {approve.isPending ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />}
           </Button>
         )}
-        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
+        <Button aria-label="Skip" size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
           onClick={() => skip.mutate({ prospectId: p.id })} disabled={skip.isPending}>
           <X className="size-3" />
         </Button>
       </div>
 
-      <ChevronRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+      <ChevronRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0" />
     </div>
   );
 }
@@ -683,14 +687,14 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
-          <input
+          <input aria-label="Search notes"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search notes..."
             className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border bg-background focus:outline-none focus:ring-1 focus:ring-primary/50"
           />
         </div>
-        <select
+        <select aria-label="Category"
           value={filterCategory}
           onChange={(e) => setFilterCategory(e.target.value)}
           className="text-xs rounded-lg border bg-background px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/50"
@@ -718,7 +722,7 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
           ))}
         </div>
         <div className="relative">
-          <Textarea
+          <Textarea aria-label="New note"
             value={draft}
             onChange={(e) => {
               const val = e.target.value;
@@ -810,7 +814,7 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
             }`}>
               {editingId === note.id ? (
                 <div className="space-y-2">
-                  <Textarea
+                  <Textarea aria-label="Edit note"
                     value={editBody}
                     onChange={(e) => setEditBody(e.target.value)}
                     className="text-xs min-h-[72px] resize-none"
@@ -988,7 +992,7 @@ function SequencePromptCard({ campaignId, campaign }: { campaignId: number; camp
                 <span className="text-[10px] text-muted-foreground ml-auto tabular-nums">{v.length}/{f.max}</span>
               </div>
               <p className="text-[10px] text-muted-foreground leading-snug">{f.help}</p>
-              <Textarea
+              <Textarea aria-label={f.label}
                 rows={f.rows}
                 maxLength={f.max}
                 placeholder={f.placeholder}
@@ -1191,7 +1195,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
 
       {/* Summary + filters + search — single dense strip */}
       <div className="flex flex-wrap items-center gap-2">
-        <Input
+        <Input aria-label="Search prospects"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search name, company, title…"
@@ -1245,7 +1249,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
               <div key={r.prospectId} className="group">
               <div
                 className="px-3 py-2 hover:bg-muted/40 transition-colors cursor-pointer flex items-center gap-2 text-xs"
-                onClick={() => setDrawerProspectId(r.prospectId)}
+                {...pressable(() => setDrawerProspectId(r.prospectId))}
               >
                 <span onClick={(e) => e.stopPropagation()} className="shrink-0">
                   <Checkbox checked={seqSel.isSelected(r.prospectId)} onCheckedChange={() => seqSel.toggle(r.prospectId)} aria-label="Select" />
@@ -1480,7 +1484,7 @@ function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; 
             <div className="space-y-3">
               <div className="space-y-1.5">
                 <Label className="text-xs">Subject</Label>
-                <Input value={editing.subject} onChange={(e) => setEditing({ ...editing, subject: e.target.value })} />
+                <Input aria-label="Subject" value={editing.subject} onChange={(e) => setEditing({ ...editing, subject: e.target.value })} />
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Body</Label>
@@ -1871,7 +1875,7 @@ function SignalRow({ s, onOpen, selected, onToggleSelect }: { s: SignalFeedRow; 
         : {})}
     >
       {onToggleSelect && (
-        <span onClick={(e) => { e.stopPropagation(); onToggleSelect(); }} onKeyDown={(e) => e.stopPropagation()} className="mt-0.5 shrink-0">
+        <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} className="mt-0.5 shrink-0">
           <Checkbox checked={!!selected} onCheckedChange={() => onToggleSelect()} aria-label="Select" />
         </span>
       )}
@@ -2399,7 +2403,7 @@ export default function ARECampaignDetail() {
               <Users className="size-3.5" />
               Prospects
               {(prospects?.length ?? 0) > 0 && (
-                <span className="ml-1 text-[10px] bg-primary/20 text-primary rounded-full px-1.5 py-0.5 font-medium">
+                <span className="ml-1 text-[10px] bg-primary/20 text-foreground rounded-full px-1.5 py-0.5 font-medium">
                   {prospects?.length}
                 </span>
               )}
@@ -2435,7 +2439,7 @@ export default function ARECampaignDetail() {
             <TabsTrigger value="rejections" className="text-xs gap-1.5">
               <XCircle className="size-3.5" /> Rejections
               {(rejectionStats?.total ?? 0) > 0 && (
-                <span className="ml-1 text-[10px] bg-destructive/15 text-destructive rounded-full px-1.5 py-0.5 font-medium">
+                <span className="ml-1 text-[10px] bg-destructive/15 text-red-800 dark:text-red-300 rounded-full px-1.5 py-0.5 font-medium">
                   {rejectionStats?.total}
                 </span>
               )}
@@ -2551,7 +2555,7 @@ export default function ARECampaignDetail() {
               <div className="space-y-2">
                 {prospects.map((p) => (
                   <div key={p.id} className="flex items-center gap-2">
-                    <Checkbox
+                    <Checkbox aria-label="Select prospect"
                       checked={selectedIds.has(p.id)}
                       onCheckedChange={() => toggleSelect(p.id)}
                       className="size-3.5 shrink-0"
@@ -2613,7 +2617,7 @@ export default function ARECampaignDetail() {
               <div>
                 <div className="text-xs font-medium text-muted-foreground mb-2">Search Query</div>
                 <div className="flex gap-2">
-                  <input
+                  <input aria-label="Search query"
                     value={scrapeQuery}
                     onChange={(e) => setScrapeQuery(e.target.value)}
                     onKeyDown={(e) => {
@@ -2959,7 +2963,7 @@ export default function ARECampaignDetail() {
               <div className="flex-1 min-w-[160px]" />
               <div className="relative w-full sm:w-64">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-                <Input
+                <Input aria-label="Find a person, company or email"
                   value={signalSearch}
                   onChange={(e) => setSignalSearch(e.target.value)}
                   placeholder="Find a person, company or email…"
@@ -3090,12 +3094,12 @@ export default function ARECampaignDetail() {
                           <div className="flex items-center gap-2">
                             <span className="text-[11px] font-medium">Step {i + 1}</span>
                             <span className="text-[11px] text-muted-foreground">· day</span>
-                            <Input type="number" min={0} max={365} value={s.day} onChange={(e) => setFixedStep(i, { day: Math.max(0, Number(e.target.value) || 0) })} className="h-7 w-20 text-xs" />
+                            <Input aria-label={`Step ${i + 1} day`} type="number" min={0} max={365} value={s.day} onChange={(e) => setFixedStep(i, { day: Math.max(0, Number(e.target.value) || 0) })} className="h-7 w-20 text-xs" />
                             <div className="flex-1" />
                             <Button size="sm" variant="ghost" className="h-7 text-[11px] text-destructive" onClick={() => removeFixedStep(i)}>Remove</Button>
                           </div>
-                          <Input value={s.subject} placeholder="Subject — merge tags like {{firstName}} work here" onChange={(e) => setFixedStep(i, { subject: e.target.value })} className="h-8 text-xs" />
-                          <Textarea value={s.body} placeholder="Body" rows={4} onChange={(e) => setFixedStep(i, { body: e.target.value })} className="text-xs" />
+                          <Input aria-label={`Step ${i + 1} subject`} value={s.subject} placeholder="Subject — merge tags like {{firstName}} work here" onChange={(e) => setFixedStep(i, { subject: e.target.value })} className="h-8 text-xs" />
+                          <Textarea aria-label={`Step ${i + 1} body`} value={s.body} placeholder="Body" rows={4} onChange={(e) => setFixedStep(i, { body: e.target.value })} className="text-xs" />
                         </div>
                       ))}
                       <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={addFixedStep}>+ Add step</Button>
@@ -3122,7 +3126,7 @@ export default function ARECampaignDetail() {
                   </p>
                   <div className="flex items-center gap-3">
                     <span className="text-xs font-medium">Days between steps</span>
-                    <input
+                    <input aria-label="Days between steps"
                       type="number" min={1} max={30} step={1}
                       value={gapActive}
                       onChange={(e) => setGapDraft(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
@@ -3193,7 +3197,7 @@ export default function ARECampaignDetail() {
                     </div>
                     {autoThreshold !== null && (
                       <div className="space-y-2">
-                        <input
+                        <input aria-label="Auto-approve threshold"
                           type="range" min={0} max={100} step={5}
                           value={autoThreshold}
                           onChange={(e) => setThresholdDraft(parseInt(e.target.value))}
@@ -3236,7 +3240,7 @@ export default function ARECampaignDetail() {
                       {minConfidence}
                     </span>
                   </div>
-                  <input
+                  <input aria-label="Minimum confidence"
                     type="range" min={0} max={100} step={5}
                     value={minConfidence}
                     onChange={(e) => setMinConfDraft(parseInt(e.target.value))}
@@ -3267,7 +3271,7 @@ export default function ARECampaignDetail() {
                       <div className="text-xs font-medium">Auto-create opportunity on meeting booked</div>
                       <div className="text-[11px] text-muted-foreground">Creates account + contact + opportunity in the CRM pipeline</div>
                     </div>
-                    <button
+                    <button aria-label="Auto-create opportunity on meeting booked"
                       onClick={() => setS2oEnabled(!s2oActive)}
                       className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
                         s2oActive ? "bg-violet-500" : "bg-muted"
@@ -3811,7 +3815,7 @@ export default function ARECampaignDetail() {
                   return (
                     <div key={r.id}
                       className={`px-3 py-2 flex items-center gap-2 text-xs hover:bg-muted/40 cursor-pointer ${funnelSel.isSelected(r.id) ? "bg-primary/5" : ""}`}
-                      onClick={() => { setSelectedProspectId(r.id); setDossierOpen(true); setDossierTab("intel"); }}
+                      {...pressable(() => { setSelectedProspectId(r.id); setDossierOpen(true); setDossierTab("intel"); })}
                     >
                       <span onClick={(e) => e.stopPropagation()} className="shrink-0">
                         <Checkbox checked={funnelSel.isSelected(r.id)} onCheckedChange={() => funnelSel.toggle(r.id)} aria-label="Select" />
@@ -3855,7 +3859,7 @@ export default function ARECampaignDetail() {
               <span className="block">
                 <span className="text-xs text-muted-foreground">Override threshold for this run only (0–100):</span>
                 <span className="flex items-center gap-2 mt-1">
-                  <Input
+                  <Input aria-label="Override threshold for this run"
                     type="number"
                     min={0}
                     max={100}

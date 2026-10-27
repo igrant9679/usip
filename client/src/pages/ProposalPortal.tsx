@@ -35,6 +35,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Streamdown } from "@/components/usip/LazyStreamdown";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
+import { usePageTitle } from "@/lib/usePageTitle";
 
 /**
  * A proposal section as the client should see it (audit 2026-10-20, R22).
@@ -79,6 +80,7 @@ export default function ProposalPortal() {
     { enabled: !!token },
   );
 
+  usePageTitle(data?.proposal.title ?? "Proposal");
   const [feedbackForm, setFeedbackForm] = useState({ name: "", email: "", message: "" });
   const [submitted, setSubmitted] = useState(false);
 
@@ -374,7 +376,7 @@ export default function ProposalPortal() {
                 <div className="space-y-4 max-w-md">
                   <div>
                     <Label className="text-gray-700">Your Name *</Label>
-                    <Input
+                    <Input aria-label="Your Name"
                       value={feedbackForm.name}
                       onChange={(e) => setFeedbackForm(f => ({ ...f, name: e.target.value }))}
                       placeholder="Jane Smith"
@@ -383,7 +385,7 @@ export default function ProposalPortal() {
                   </div>
                   <div>
                     <Label className="text-gray-700">Email (optional)</Label>
-                    <Input
+                    <Input aria-label="Email (optional)"
                       type="email"
                       value={feedbackForm.email}
                       onChange={(e) => setFeedbackForm(f => ({ ...f, email: e.target.value }))}
@@ -393,7 +395,7 @@ export default function ProposalPortal() {
                   </div>
                   <div>
                     <Label className="text-gray-700">Message *</Label>
-                    <Textarea
+                    <Textarea aria-label="Message"
                       value={feedbackForm.message}
                       onChange={(e) => setFeedbackForm(f => ({ ...f, message: e.target.value }))}
                       placeholder="Your questions or comments about this proposal..."

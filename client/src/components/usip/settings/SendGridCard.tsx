@@ -115,7 +115,7 @@ export function SendGridCard({
       <div className="grid gap-2 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label className="text-[12px]">From address</Label>
-          <Input
+          <Input aria-label="From address"
             className="h-9"
             placeholder="hello@yourdomain.com"
             value={fromEmail}
@@ -125,7 +125,7 @@ export function SendGridCard({
         </div>
         <div className="space-y-1.5">
           <Label className="text-[12px]">From name</Label>
-          <Input
+          <Input aria-label="From name"
             className="h-9"
             placeholder="LSI Media"
             value={fromName}
@@ -137,7 +137,7 @@ export function SendGridCard({
 
       <div className="space-y-1.5">
         <Label className="text-[12px]">Reply-To</Label>
-        <Input
+        <Input aria-label="Reply-To"
           className="h-9"
           placeholder="you@yourdomain.com"
           value={replyTo}
@@ -148,7 +148,7 @@ export function SendGridCard({
 
       <div className="space-y-1.5">
         <Label className="text-[12px]">API key</Label>
-        <Input
+        <Input aria-label="API key"
           className="h-9"
           type="password"
           placeholder={existing?.hasSendgridKey ? "••••••• (leave blank to keep the current key)" : "SG.xxxxxxxx"}

@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { usePageTitle } from "@/lib/usePageTitle";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -504,6 +505,7 @@ export const HOME_DASHBOARD_KEY = "velocity_home_dashboard";
 
 export function Shell({ children, title, actions }: { children: ReactNode; title?: string; actions?: ReactNode }) {
   const [location] = useLocation();
+  usePageTitle(title);
   // The AI Assistant sends "the page the user came from" with each turn.
   useEffect(() => { rememberPage(location); }, [location]);
   const { user, logout } = useAuth();
@@ -877,7 +879,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 
           <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-secondary text-sm w-72">
             <Search className="size-4 text-muted-foreground" />
-            <input className="bg-transparent outline-none flex-1 text-sm" placeholder="Search…" />
+            <input aria-label="Search" className="bg-transparent outline-none flex-1 text-sm" placeholder="Search…" />
             <kbd className="text-[10px] text-muted-foreground border px-1 rounded">⌘K</kbd>
           </div>
 
@@ -1056,7 +1058,7 @@ export function PageHeader({ title, description: defaultDescription, pageKey, ic
         <div className="flex items-center gap-1.5 mt-0.5 group/desc">
           {editing ? (
             <>
-              <input
+              <input aria-label="Page description"
                 ref={inputRef}
                 value={draft}
                 onChange={e => setDraft(e.target.value)}
@@ -1278,7 +1280,7 @@ function NewWorkspaceDialog({
         <div className="space-y-4">
           <div className="space-y-1.5">
             <Label>Workspace name</Label>
-            <Input
+            <Input aria-label="Workspace name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Acme Nonprofit"
@@ -1298,7 +1300,7 @@ function NewWorkspaceDialog({
                 off for a real client workspace.
               </p>
             </div>
-            <Switch checked={seedDemoData} onCheckedChange={setSeedDemoData} />
+            <Switch aria-label="Seed demo data" checked={seedDemoData} onCheckedChange={setSeedDemoData} />
           </div>
         </div>
         <DialogFooter>

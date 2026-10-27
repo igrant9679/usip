@@ -9,7 +9,7 @@
  * The mode selector here is the real control; the Autonomy Control Center's
  * single "Inbound Chat" row is a bulk shortcut over the same field.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -17,6 +17,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { FieldLabelContext } from "@/components/ui/field-label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { confirmAction } from "@/components/usip/Common";
@@ -187,7 +188,7 @@ export default function ChatAgents() {
           ) : (
             <div className="max-w-2xl mx-auto p-6 space-y-6">
               <div className="flex items-center gap-2">
-                <Input value={form.name} onChange={(e) => patch("name", e.target.value)} className="h-9 text-base font-semibold flex-1" />
+                <Input aria-label="Agent name" value={form.name} onChange={(e) => patch("name", e.target.value)} className="h-9 text-base font-semibold flex-1" />
                 {form.status === "published" ? (
                   <Button variant="outline" size="sm" className="h-8" onClick={() => setField("status", "draft")}>Unpublish</Button>
                 ) : (
@@ -208,7 +209,7 @@ export default function ChatAgents() {
                   ))}
                 </div>
                 <Field label="Whose calendar it books" help="chat.bookingUser">
-                  <select className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                  <select aria-label="Whose calendar it books" className="h-9 w-full rounded-md border bg-background px-2 text-sm"
                     value={form.bookingUserId ?? ""}
                     onChange={(e) => setField("bookingUserId", e.target.value ? Number(e.target.value) : null)}>
                     <option value="">Nobody — the agent cannot book</option>
@@ -242,7 +243,7 @@ export default function ChatAgents() {
                 <div className="rounded-lg border bg-card p-3 space-y-2">
                   <div className="flex items-center justify-between gap-3">
                     <Label className="text-sm">Show on my Velocity-hosted pages</Label>
-                    <Switch checked={!!form.showOnHostedPages} onCheckedChange={(v) => setField("showOnHostedPages", v)} />
+                    <Switch aria-label="Show on my Velocity-hosted pages" checked={!!form.showOnHostedPages} onCheckedChange={(v) => setField("showOnHostedPages", v)} />
                   </div>
                   <p className="text-[11px] text-muted-foreground">
                     Adds the chat bubble to your landing pages (<b>/l/…</b>) and every rep's booking page (<b>/b/…</b>). No snippet, nothing to paste.
@@ -316,7 +317,7 @@ export default function ChatAgents() {
                 </Field>
                 <Field label="Accent color">
                   <div className="flex items-center gap-2">
-                    <input type="color" value={form.themeColor ?? "#14B89A"} onChange={(e) => patch("themeColor", e.target.value)} className="h-9 w-14 rounded border" />
+                    <input aria-label="Accent color" type="color" value={form.themeColor ?? "#14B89A"} onChange={(e) => patch("themeColor", e.target.value)} className="h-9 w-14 rounded border" />
                     <Input value={form.themeColor ?? ""} onChange={(e) => patch("themeColor", e.target.value)} className="w-32" />
                   </div>
                 </Field>
@@ -329,7 +330,7 @@ export default function ChatAgents() {
                     {(form.qualifyingQuestions as string[]).map((q, i) => (
                       <div key={i} className="flex items-center gap-2">
                         <Input value={q} onChange={(e) => { const n = [...form.qualifyingQuestions]; n[i] = e.target.value; patch("qualifyingQuestions", n); }} />
-                        <Button variant="ghost" size="icon" className="size-8 shrink-0 text-muted-foreground"
+                        <Button aria-label="Remove question" variant="ghost" size="icon" className="size-8 shrink-0 text-muted-foreground"
                           onClick={() => patch("qualifyingQuestions", form.qualifyingQuestions.filter((_: string, j: number) => j !== i))}>
                           <Trash2 className="size-4" />
                         </Button>
@@ -341,7 +342,7 @@ export default function ChatAgents() {
                   </div>
                 </Field>
                 <Field label={`Qualified at score ${form.qualifyThreshold ?? 60} and above`} help="chat.qualifyThreshold">
-                  <input type="range" min={0} max={100} step={5} value={form.qualifyThreshold ?? 60}
+                  <input aria-label="Qualifying score" type="range" min={0} max={100} step={5} value={form.qualifyThreshold ?? 60}
                     onChange={(e) => patch("qualifyThreshold", Number(e.target.value))} className="w-full" />
                   <p className="text-[11px] text-muted-foreground">Lower captures more meetings and more noise. A visitor who explicitly asks for a meeting is offered one from 40 regardless.</p>
                 </Field>
@@ -351,14 +352,14 @@ export default function ChatAgents() {
               <Section title="What happens to a visitor">
                 <div className="flex items-center justify-between">
                   <Label className="text-sm">Create a lead once we have an email</Label>
-                  <Switch checked={!!form.autoCreateLead} onCheckedChange={(v) => patch("autoCreateLead", v)} />
+                  <Switch aria-label="Create a lead once we have an email" checked={!!form.autoCreateLead} onCheckedChange={(v) => patch("autoCreateLead", v)} />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label className="text-sm">Auto-route to an owner</Label>
-                  <Switch checked={!!form.autoRoute} onCheckedChange={(v) => patch("autoRoute", v)} />
+                  <Switch aria-label="Auto-route to an owner" checked={!!form.autoRoute} onCheckedChange={(v) => patch("autoRoute", v)} />
                 </div>
                 <Field label="Auto-enroll captured leads into a sequence">
-                  <select className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                  <select aria-label="Auto-enroll captured leads" className="h-9 w-full rounded-md border bg-background px-2 text-sm"
                     value={form.autoEnrollSequenceId ?? ""}
                     onChange={(e) => patch("autoEnrollSequenceId", e.target.value ? Number(e.target.value) : null)}>
                     <option value="">None — capture only</option>
@@ -611,13 +612,14 @@ function Section({ title, children, tourId, help }: { title: string; children: R
   );
 }
 function Field({ label, children, help }: { label: string; children: React.ReactNode; help?: string }) {
+  const id = useId();
   return (
     <div className="space-y-1.5">
       <Label className="text-[13px] inline-flex items-center gap-1.5">
-        {label}
+        <span id={id}>{label}</span>
         {help && <HelpTip id={help} />}
       </Label>
-      {children}
+      <FieldLabelContext.Provider value={id}>{children}</FieldLabelContext.Provider>
     </div>
   );
 }

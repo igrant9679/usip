@@ -52,6 +52,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { pressable } from "@/lib/pressable";
 
 const REASON_LABELS: Record<string, { label: string; color: string }> = {
   unsubscribe: { label: "Unsubscribed", color: "bg-yellow-500/15 text-yellow-700 border-yellow-300" },
@@ -129,7 +130,7 @@ export function EmailSuppressions() {
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         {summaryCards.map((c) => (
-          <Card key={c.key} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => { setReasonFilter(c.key === "total" ? "all" : c.key); setOffset(0); }}>
+          <Card key={c.key} className="cursor-pointer hover:shadow-md transition-shadow" {...pressable(() => { setReasonFilter(c.key === "total" ? "all" : c.key); setOffset(0); })}>
             <CardContent className="pt-4 pb-4">
               <div className="flex items-center gap-3">
                 <c.icon className={`w-5 h-5 ${c.color}`} />
@@ -147,7 +148,7 @@ export function EmailSuppressions() {
       <div className="flex flex-wrap gap-3 mb-4">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input
+          <Input aria-label="Search by email"
             placeholder="Search by email..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -258,7 +259,7 @@ export function EmailSuppressions() {
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
               <Label>Email Address</Label>
-              <Input
+              <Input aria-label="Email Address"
                 type="email"
                 placeholder="user@example.com"
                 value={addEmail}
@@ -281,7 +282,7 @@ export function EmailSuppressions() {
             </div>
             <div className="space-y-1.5">
               <Label>Notes (optional)</Label>
-              <Textarea
+              <Textarea aria-label="Notes (optional)"
                 placeholder="Reason for manual suppression..."
                 value={addNotes}
                 onChange={(e) => setAddNotes(e.target.value)}

@@ -31,6 +31,7 @@ import {
 import { isAdminRole } from "@shared/roleRank";
 import { companySourceLabel, isResearchSource } from "@shared/researchSource";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
+import { pressable } from "@/lib/pressable";
 
 const RATING_STYLE: Record<string, string> = {
   excellent: "bg-emerald-100 text-emerald-800", good: "bg-blue-100 text-blue-800",
@@ -63,7 +64,7 @@ function FacetList({ options, selected, onToggle, empty, labelOf }: { options: [
   const filtered = q ? options.filter(([v]) => label(v).toLowerCase().includes(q.toLowerCase())) : options;
   return (
     <div className="space-y-1.5">
-      {options.length > 6 && <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…" className="h-7 text-[13px]" />}
+      {options.length > 6 && <Input aria-label="Filter options" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…" className="h-7 text-[13px]" />}
       <div className="max-h-44 overflow-y-auto space-y-0.5 pr-0.5">
         {filtered.map(([v, c]) => (
           <label key={v} className="flex items-center gap-2 cursor-pointer text-[13px] py-0.5">
@@ -373,7 +374,7 @@ export default function Companies() {
               </div>
               <div className="flex-1 min-h-0 overflow-y-auto">
                 <FilterGroup label="Quick search" icon={Search} open={openGroups.has("quick")} onToggle={() => toggleGroup("quick")}>
-                  <Input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Company name or domain…" className="h-7 text-[13px]" />
+                  <Input aria-label="Company name or domain" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Company name or domain…" className="h-7 text-[13px]" />
                 </FilterGroup>
                 <FilterGroup label="Industry" icon={Briefcase} count={industries.size} open={openGroups.has("industry")} onToggle={() => toggleGroup("industry")}>
                   <FacetList options={industryFacet} selected={industries} onToggle={(v) => toggleIn(industries, setIndustries, v)} empty="No industries yet." />
@@ -390,9 +391,9 @@ export default function Companies() {
                 </FilterGroup>
                 <FilterGroup label="# Employees" icon={Users} count={(empMin ? 1 : 0) + (empMax ? 1 : 0)} open={openGroups.has("emp")} onToggle={() => toggleGroup("emp")}>
                   <div className="flex items-center gap-2">
-                    <Input value={empMin} onChange={(e) => { setEmpMin(e.target.value.replace(/[^0-9]/g, "")); setPage(1); }} placeholder="Min" inputMode="numeric" className="h-7 text-[13px]" />
+                    <Input aria-label="Minimum employees" value={empMin} onChange={(e) => { setEmpMin(e.target.value.replace(/[^0-9]/g, "")); setPage(1); }} placeholder="Min" inputMode="numeric" className="h-7 text-[13px]" />
                     <span className="text-muted-foreground text-xs">–</span>
-                    <Input value={empMax} onChange={(e) => { setEmpMax(e.target.value.replace(/[^0-9]/g, "")); setPage(1); }} placeholder="Max" inputMode="numeric" className="h-7 text-[13px]" />
+                    <Input aria-label="Maximum employees" value={empMax} onChange={(e) => { setEmpMax(e.target.value.replace(/[^0-9]/g, "")); setPage(1); }} placeholder="Max" inputMode="numeric" className="h-7 text-[13px]" />
                   </div>
                 </FilterGroup>
                 <FilterGroup label="Research" icon={Telescope} count={(research ? 1 : 0) + researchSectors.size} open={openGroups.has("research")} onToggle={() => toggleGroup("research")}>
@@ -431,8 +432,8 @@ export default function Companies() {
               <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => setHideFilters((v) => !v)}><Filter className="size-4" /> {hideFilters ? "Show" : "Hide"} filters{activeCount ? ` (${activeCount})` : ""}</Button>
               <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-sm min-w-0 flex-1 max-w-xs">
                 <Search className="size-4 text-muted-foreground shrink-0" />
-                <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search companies" />
-                {searchInput && <button onClick={() => setSearchInput("")}><X className="size-3.5 text-muted-foreground" /></button>}
+                <input aria-label="Search companies" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search companies" />
+                {searchInput && <button aria-label="Clear search" onClick={() => setSearchInput("")}><X className="size-3.5 text-muted-foreground" /></button>}
               </div>
               <div className="flex-1" />
               <DropdownMenu>
@@ -479,7 +480,7 @@ export default function Companies() {
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 z-10 bg-card border-b border-border">
                     <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                      <th className="w-10 px-3 py-1.5"><Checkbox checked={allChecked} onCheckedChange={toggleAll} className="size-3.5" /></th>
+                      <th className="w-10 px-3 py-1.5"><Checkbox aria-label="Select all on this page" checked={allChecked} onCheckedChange={toggleAll} className="size-3.5" /></th>
                       <th className="px-2 py-1.5 font-medium">Company</th>
                       <th className="px-2 py-1.5 font-medium">Links</th>
                       <th className="px-2 py-1.5 font-medium text-right">Contacts</th>
@@ -493,9 +494,9 @@ export default function Companies() {
                     {rows.map((a) => {
                       const loc = [a.hqCity, a.hqState, a.hqCountry].filter(Boolean).join(", ") || a.region;
                       return (
-                        <tr key={a.id} className="border-b border-border/60 hover:bg-muted/50 cursor-pointer" onClick={() => setLocation(`/v2/companies/${a.id}`)}>
+                        <tr key={a.id} className="border-b border-border/60 hover:bg-muted/50 cursor-pointer" {...pressable(() => setLocation(`/v2/companies/${a.id}`), { row: true })}>
                           <td className="px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
-                            <Checkbox checked={checked.has(a.id)} onCheckedChange={() => setChecked((p) => { const n = new Set(p); n.has(a.id) ? n.delete(a.id) : n.add(a.id); return n; })} className="size-3.5" />
+                            <Checkbox aria-label={`Select ${a.name}`} checked={checked.has(a.id)} onCheckedChange={() => setChecked((p) => { const n = new Set(p); n.has(a.id) ? n.delete(a.id) : n.add(a.id); return n; })} className="size-3.5" />
                           </td>
                           <td className="px-2 py-1.5">
                             <div className="flex items-center gap-2 min-w-0">

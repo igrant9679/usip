@@ -41,6 +41,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
 import { isAdminRole } from "@shared/roleRank";
+import { tablistProps, tabProps } from "@/lib/tabs";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
@@ -98,7 +99,7 @@ function BrowseTab() {
       {/* Search bar */}
       <div className="relative max-w-xl">
         <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-        <Input
+        <Input aria-label="Search all articles"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search all articles…"
@@ -296,7 +297,7 @@ function AskAITab() {
       </div>
 
       <div className="flex gap-2 pt-3 border-t border-border">
-        <Input
+        <Input aria-label="Ask a question"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
@@ -474,9 +475,9 @@ function AdminTab() {
   return (
     <div className="flex flex-col gap-4">
       {/* Sub-nav */}
-      <div className="flex gap-1 border-b border-border pb-1">
+      <div {...tablistProps("Help Center view")} className="flex gap-1 border-b border-border pb-1">
         {(["articles", "categories", "insights"] as const).map((v) => (
-          <button
+          <button {...tabProps(view === v)}
             key={v}
             onClick={() => setView(v)}
             className={`px-3 py-1.5 text-xs font-medium rounded-lg capitalize transition-colors ${
@@ -521,7 +522,7 @@ function AdminTab() {
                 </div>
               </div>
               <div className="flex gap-1">
-                <Button
+                <Button aria-label="Edit article"
                   size="sm"
                   variant="ghost"
                   className="h-7 w-7 p-0 text-muted-foreground hover:text-violet-600"
@@ -529,7 +530,7 @@ function AdminTab() {
                 >
                   <Edit className="h-3.5 w-3.5" />
                 </Button>
-                <Button
+                <Button aria-label="Delete article"
                   size="sm"
                   variant="ghost"
                   className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600"
@@ -680,20 +681,20 @@ function ArticleForm({ editArticle, isNew, categories, onCancel, onSaved }: Arti
       <div className="grid grid-cols-2 gap-4">
         <div>
           <Label>Title</Label>
-          <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Article title" />
+          <Input aria-label="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Article title" />
         </div>
         <div>
           <Label>Slug</Label>
-          <Input value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} placeholder="auto-generated-from-title" />
+          <Input aria-label="Slug" value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} placeholder="auto-generated-from-title" />
         </div>
       </div>
       <div>
         <Label>Summary</Label>
-        <Input value={form.summary} onChange={(e) => setForm({ ...form, summary: e.target.value })} placeholder="One-line description shown in search results" />
+        <Input aria-label="Summary" value={form.summary} onChange={(e) => setForm({ ...form, summary: e.target.value })} placeholder="One-line description shown in search results" />
       </div>
       <div>
         <Label>Body (Markdown)</Label>
-        <Textarea
+        <Textarea aria-label="Body (Markdown)"
           value={form.bodyMarkdown}
           onChange={(e) => setForm({ ...form, bodyMarkdown: e.target.value })}
           rows={12}
@@ -726,7 +727,7 @@ function ArticleForm({ editArticle, isNew, categories, onCancel, onSaved }: Arti
         </div>
         <div>
           <Label>Reading time (min)</Label>
-          <Input
+          <Input aria-label="Reading time (min)"
             type="number"
             value={form.readingTimeMinutes}
             onChange={(e) => setForm({ ...form, readingTimeMinutes: e.target.value })}
@@ -778,9 +779,9 @@ export default function HelpCenterPage() {
       />
 
       {/* Tab bar */}
-      <div className="flex shrink-0 gap-1 border-b border-border mb-6 px-6">
+      <div {...tablistProps("Help Center sections")} className="flex shrink-0 gap-1 border-b border-border mb-6 px-6">
         {visibleTabs.map((tab) => (
-          <button
+          <button {...tabProps(activeTab === tab.id)}
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${

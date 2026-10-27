@@ -109,7 +109,7 @@ function AgentCard({ name, description, icon: Icon, color, href, stat, statLabel
             >
               <Icon className="size-4" style={{ color }} />
             </div>
-            <ChevronRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity mt-0.5" />
+            <ChevronRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity mt-0.5" />
           </div>
           <CardTitle className="text-sm font-semibold mt-2">{name}</CardTitle>
         </CardHeader>
@@ -180,7 +180,7 @@ function CampaignRow({ c }: { c: any }) {
           </div>
         </div>
 
-        <ArrowRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+        <ArrowRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0" />
       </div>
     </Link>
   );
@@ -511,7 +511,7 @@ export default function AREHub() {
                               <a.icon className="size-3.5" style={{ color: a.color }} />
                             </div>
                             <div className="text-[11px] font-medium leading-tight truncate flex-1">{a.name.replace(" Agent", "")}</div>
-                            <ChevronRight className="size-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                            <ChevronRight className="size-3 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0" />
                           </div>
                           {a.stat && (
                             <div className="flex items-baseline gap-1.5">

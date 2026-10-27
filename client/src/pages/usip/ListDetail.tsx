@@ -237,8 +237,8 @@ export default function ListDetail() {
               left as decoration; the controls that remain all work. */}
           <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-sm min-w-0 flex-1 max-w-xs">
             <Search className="size-4 text-muted-foreground shrink-0" />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search this list" />
-            {search && <button onClick={() => setSearch("")}><X className="size-3.5 text-muted-foreground" /></button>}
+            <input aria-label="Search this list" value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search this list" />
+            {search && <button aria-label="Clear search" onClick={() => setSearch("")}><X className="size-3.5 text-muted-foreground" /></button>}
           </div>
           <div className="flex-1" />
           {!isCompanies && (
@@ -442,7 +442,7 @@ function AddRecordsDialog({
         </DialogHeader>
         <div className="flex items-center gap-2 px-2.5 h-9 rounded-md border bg-background">
           <Search className="size-4 text-muted-foreground shrink-0" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} autoFocus placeholder={`Search ${isCompanies ? "companies" : "people"}…`} className="bg-transparent outline-none flex-1 text-sm" />
+          <input aria-label={`Search ${isCompanies ? "companies" : "people"}`} value={q} onChange={(e) => setQ(e.target.value)} autoFocus placeholder={`Search ${isCompanies ? "companies" : "people"}…`} className="bg-transparent outline-none flex-1 text-sm" />
         </div>
         <div className="h-80 overflow-y-auto -mx-1 px-1 rounded-md border">
           {loading ? (

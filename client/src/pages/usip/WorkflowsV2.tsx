@@ -377,7 +377,7 @@ export default function WorkflowsV2() {
                 <Link href="/v2/emails" className="text-sm font-medium hover:underline">Email auto-send</Link>
                 <div className="text-[11px] text-muted-foreground">AI drafts send themselves when the recipient's lead score clears the threshold</div>
               </div>
-              <Switch checked={!!(emailAuto.data as any)?.aiAutoSendEnabled} onCheckedChange={setEmailAutoEnabled} disabled={setEmailAuto.isPending || !emailAuto.data} />
+              <Switch aria-label="Email auto-send" checked={!!(emailAuto.data as any)?.aiAutoSendEnabled} onCheckedChange={setEmailAutoEnabled} disabled={setEmailAuto.isPending || !emailAuto.data} />
             </div>
           </Section>
 
@@ -464,7 +464,7 @@ export default function WorkflowsV2() {
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <Button size="sm" variant="outline" className="h-7 gap-1" disabled={applySuggestion.isPending} onClick={() => applySuggestion.mutate({ id: sug.id })}><Check className="size-3.5" /> Add</Button>
-                      <Button size="icon" variant="ghost" className="size-7 text-muted-foreground" onClick={() => dismissSuggestion.mutate({ id: sug.id })}><X className="size-4" /></Button>
+                      <Button aria-label="Dismiss suggestion" size="icon" variant="ghost" className="size-7 text-muted-foreground" onClick={() => dismissSuggestion.mutate({ id: sug.id })}><X className="size-4" /></Button>
                     </div>
                   </div>
                 ))}
@@ -494,7 +494,7 @@ export default function WorkflowsV2() {
               ) : (
                 ruleList.map((r: any) => (
                   <div key={r.id} className="flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0">
-                    <Switch checked={!!r.enabled} onCheckedChange={(v) => toggleRule.mutate({ id: r.id, enabled: v })} />
+                    <Switch aria-label={`${r.name} enabled`} checked={!!r.enabled} onCheckedChange={(v) => toggleRule.mutate({ id: r.id, enabled: v })} />
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium truncate">{r.name}</div>
                       {/* Same "never fires" flag the editor shows: this surface
@@ -521,7 +521,7 @@ export default function WorkflowsV2() {
               ) : (
                 segList.map((r: any) => (
                   <div key={r.id} className="flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0">
-                    <Switch checked={!!r.enabled} onCheckedChange={(v) => saveSegRule.mutate({ id: r.id, segmentId: r.segmentId, sequenceId: r.sequenceId, enabled: v })} />
+                    <Switch aria-label={`${r.name} enabled`} checked={!!r.enabled} onCheckedChange={(v) => saveSegRule.mutate({ id: r.id, segmentId: r.segmentId, sequenceId: r.sequenceId, enabled: v })} />
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium truncate">{r.segmentName ?? `Segment #${r.segmentId}`} → {r.sequenceName ?? `Sequence #${r.sequenceId}`}</div>
                       <div className="text-[11px] text-muted-foreground">{r.enrolledCount ?? 0} enrolled · last run {fmtWhen(r.lastRunAt)}</div>

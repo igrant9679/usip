@@ -13,6 +13,7 @@ import { useRoute, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { CalendarCheck, CheckCircle2, Clock, Loader2, Video } from "lucide-react";
+import { usePageTitle } from "@/lib/usePageTitle";
 
 export default function MeetingPickPage() {
   const [, params] = useRoute("/m/:token");
@@ -27,6 +28,7 @@ export default function MeetingPickPage() {
   const [error, setError] = useState<string | null>(null);
 
   const times = view.data?.times ?? [];
+  usePageTitle(view.data?.title ?? "Pick a time");
   const linked = useMemo(() => {
     const i = Number(new URLSearchParams(search).get("t"));
     return Number.isInteger(i) && i >= 0 && i < times.length ? times[i]?.iso ?? null : null;

@@ -76,7 +76,7 @@ function NumField({ label, hint, value, bounds, onChange }: {
   return (
     <div className="space-y-1">
       <Label className="text-xs font-medium">{label}</Label>
-      <Input
+      <Input aria-label={label}
         type="number"
         className="h-8 text-xs"
         min={bounds.min}
@@ -124,7 +124,7 @@ function PolicyEditor({
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span className="text-xs text-muted-foreground">{draft.enabled ? "Active" : "Paused"}</span>
-          <Switch checked={draft.enabled} onCheckedChange={(v) => set("enabled", v)} />
+          <Switch aria-label="Limits active" checked={draft.enabled} onCheckedChange={(v) => set("enabled", v)} />
         </div>
       </div>
 

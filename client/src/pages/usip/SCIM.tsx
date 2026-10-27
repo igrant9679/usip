@@ -47,7 +47,7 @@ export default function SCIM() {
               <ul className="divide-y">
                 {providers.data!.map((p) => (
                   <li key={p.id} className="p-3 flex items-center text-sm gap-2">
-                    <Switch checked={p.enabled} onCheckedChange={(v) => tog.mutate({ id: p.id, enabled: v })} />
+                    <Switch aria-label={`${p.name} enabled`} checked={p.enabled} onCheckedChange={(v) => tog.mutate({ id: p.id, enabled: v })} />
                     <div className="flex-1">
                       <div className="font-medium">{p.name}</div>
                       <div className="text-xs text-muted-foreground">created {fmtDate(p.createdAt)}</div>

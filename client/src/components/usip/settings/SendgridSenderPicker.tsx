@@ -156,7 +156,7 @@ export function SendgridSenderPicker({
               {" "}— any address there can send. Enter the one to link.
             </p>
             <div className="flex gap-2">
-              <textarea
+              <textarea aria-label="Sender address"
                 autoFocus
                 rows={3}
                 placeholder={`you@${domains[0]}

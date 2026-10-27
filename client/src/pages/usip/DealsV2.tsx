@@ -206,7 +206,7 @@ export default function DealsV2() {
           {o.accountName && <div className="text-[11px] text-muted-foreground truncate flex items-center gap-1"><ColorAvatar name={o.accountName} size="size-3.5" className="text-[7px]" /> {o.accountName}</div>}
         </div>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="size-6 shrink-0"><MoreHorizontal className="size-3.5" /></Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button aria-label="Deal actions" variant="ghost" size="icon" className="size-6 shrink-0"><MoreHorizontal className="size-3.5" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-44">
             <DropdownMenuLabel className="text-[10px] uppercase text-muted-foreground">Move to stage</DropdownMenuLabel>
             {stages.filter((st) => st.key !== o.stage).map((st) => (

@@ -12,6 +12,7 @@ import { ArrowRight, Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X,
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link, useLocation } from "wouter";
+import { tablistProps, tabProps } from "@/lib/tabs";
 
 type StageItem = { id: string; label: string; isWon: boolean; isLost: boolean };
 
@@ -117,10 +118,10 @@ function DealCard({
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
+              <button aria-label={isAnalyzing ? "Analyzing..." : "Run AI analysis"}
                 onClick={onAnalyze}
                 disabled={isAnalyzing}
-                className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-muted"
+                className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity p-1 rounded hover:bg-muted"
               >
                 {isAnalyzing ? (
                   <Loader2 className="size-3 animate-spin text-muted-foreground" />
@@ -199,7 +200,7 @@ function DealCard({
 
       {/* Keyboard/click stage moves — board isn't drag-only. Shown on hover/focus. */}
       <div
-        className="mt-2 pt-2 border-t border-dashed flex items-center justify-between opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
+        className="mt-2 pt-2 border-t border-dashed flex items-center justify-between opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-focus-within:opacity-100 transition-opacity"
         onClick={(e) => e.stopPropagation()}
       >
         <button
@@ -573,9 +574,9 @@ export default function Pipeline() {
           Configure
         </Button>
         {/* View toggle */}
-        <div className="flex items-center border rounded-md overflow-hidden text-sm" data-tour-id="pipeline-view-toggle">
+        <div {...tablistProps("Pipeline view")} className="flex items-center border rounded-md overflow-hidden text-sm" data-tour-id="pipeline-view-toggle">
           {(["board", "forecast"] as const).map((v) => (
-            <button
+            <button {...tabProps(view === v)}
               key={v}
               onClick={() => setView(v)}
               className={`px-3 py-1.5 capitalize transition-colors ${
@@ -606,7 +607,7 @@ export default function Pipeline() {
       {view === "forecast" ? (
         <ForecastView />
       ) : (
-        <div className="p-4 overflow-x-auto">
+        <div className="p-4 overflow-x-auto" tabIndex={0} role="region" aria-label="Pipeline board">
           <div className="flex gap-3 min-w-max" data-tour-id="pipeline-board">
             {STAGES.map((s) => {
               const items = grouped[s.id] ?? [];

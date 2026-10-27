@@ -254,6 +254,31 @@ export function StepFunnelSankey({
         </ResponsiveContainer>
       </div>
 
+      {/* The chart answers only the mouse (audit 2026-10-20, A64). The same
+          boxes as a list, for the keyboard and screen readers; it shows when
+          a key reaches it. */}
+      <ul aria-label="Where prospects went, box by box" className="sr-only focus-within:not-sr-only focus-within:mt-2 focus-within:flex focus-within:flex-wrap focus-within:gap-1.5">
+        {data.nodes.filter((n) => !n.passthrough).map((n) => {
+          const sel = selectionFor(funnel, { payload: n }, "node");
+          if (!sel) return null;
+          const count = sel.prospectIds.length;
+          return (
+            <li key={n.id}>
+              <button
+                type="button"
+                className="rounded-md border px-2 py-0.5 text-xs hover:bg-muted"
+                onClick={() => {
+                  if (onSelectMembers) onSelectMembers(sel);
+                  else if (sel.stepIndex !== null && onSelectStep) onSelectStep(sel.stepIndex);
+                }}
+              >
+                {n.name}: {count.toLocaleString()} prospect{count === 1 ? "" : "s"}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+
       <div className="mt-2 flex flex-wrap items-center gap-3">
         {kindsPresent.map((k) => (
           <span key={k} className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">

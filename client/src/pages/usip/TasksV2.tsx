@@ -254,7 +254,7 @@ export default function TasksV2() {
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-7 shrink-0"><MoreHorizontal className="size-4" /></Button>
+            <Button aria-label="Task actions" variant="ghost" size="icon" className="size-7 shrink-0"><MoreHorizontal className="size-4" /></Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
             <DropdownMenuItem onClick={() => complete.mutate({ id: t.id })}><Check className="size-3.5 mr-2" /> Complete</DropdownMenuItem>
@@ -506,7 +506,7 @@ export default function TasksV2() {
                     </span>
                     <TypeIcon type={t.type} />
                     <div className="min-w-0 flex-1"><div className="text-sm truncate line-through text-muted-foreground">{t.title}</div></div>
-                    {cancelled && <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-secondary text-muted-foreground">Dismissed</span>}
+                    {cancelled && <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground">Dismissed</span>}
                     {t.disposition && <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-secondary text-muted-foreground capitalize">{t.disposition.replace(/_/g, " ")}</span>}
                   </div>
                   );

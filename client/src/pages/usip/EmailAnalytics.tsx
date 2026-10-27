@@ -428,7 +428,7 @@ export default function EmailAnalytics() {
         <div className="rounded-xl border bg-card overflow-hidden">
           <div className="flex items-center gap-3 px-4 py-3 border-b bg-muted/30">
             <span className="text-sm font-medium flex-1">Sent Emails</span>
-            <input
+            <input aria-label="Search sent emails"
               type="search"
               placeholder="Search subject or recipient…"
               value={search}

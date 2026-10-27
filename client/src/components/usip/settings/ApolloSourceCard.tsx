@@ -79,7 +79,7 @@ export function ApolloSourceCard({
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_180px]">
         <div className="space-y-1.5">
           <Label>Apollo API key</Label>
-          <Input
+          <Input aria-label="Apollo API key"
             type="password"
             value={key}
             onChange={(e) => setKey(e.target.value)}
@@ -90,7 +90,7 @@ export function ApolloSourceCard({
         </div>
         <div className="space-y-1.5">
           <Label>Daily record cap</Label>
-          <Input
+          <Input aria-label="Daily record cap"
             type="number"
             min={1}
             max={10000}

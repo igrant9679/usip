@@ -61,7 +61,7 @@ export function DefaultViewMenu({
         <div className="p-2.5 border-b">
           <div className="flex items-center gap-2 px-2 h-8 rounded-md border bg-background">
             <Search className="size-3.5 text-muted-foreground shrink-0" />
-            <input
+            <input aria-label="Search views"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search…"

@@ -521,7 +521,7 @@ export default function MeetingsV2() {
                       {m.scheduledAt ? fmtDateTime(m.scheduledAt) : m.proposedTimes?.length ? `${m.proposedTimes.length} time${m.proposedTimes.length === 1 ? "" : "s"} offered` : fmtDateTime(m.scheduledAt)}
                     </div>
                     <DropdownMenu>
-                      <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="size-7 shrink-0"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
+                      <DropdownMenuTrigger asChild><Button aria-label="Meeting actions" variant="ghost" size="icon" className="size-7 shrink-0"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-44">
                         {m.scheduledAt && <DropdownMenuItem onClick={() => complete.mutate({ id: m.id })}><Check className="size-3.5 mr-2" /> Mark completed</DropdownMenuItem>}
                         {m.scheduledAt && <DropdownMenuItem onClick={() => complete.mutate({ id: m.id, disposition: "no_show" })}>Mark no-show</DropdownMenuItem>}
@@ -689,23 +689,23 @@ function ProposalCard({
             <div className="mt-2 space-y-2 rounded-md border bg-muted/30 p-2.5">
               <div className="space-y-1">
                 <Label className="text-[11px]">Title</Label>
-                <Input value={draftTitle} onChange={(e) => setDraftTitle(e.target.value)} className="h-8 text-[12.5px]" />
+                <Input aria-label="Title" value={draftTitle} onChange={(e) => setDraftTitle(e.target.value)} className="h-8 text-[12.5px]" />
               </div>
               <div className="space-y-1">
                 <Label className="text-[11px]">Invite text</Label>
-                <Textarea value={draftMessage} onChange={(e) => setDraftMessage(e.target.value)} rows={4} className="text-[12.5px]" />
+                <Textarea aria-label="Invite text" value={draftMessage} onChange={(e) => setDraftMessage(e.target.value)} rows={4} className="text-[12.5px]" />
                 <div className="text-[10.5px] text-muted-foreground">The invite quotes the times in words. If you change a time below, change it here too.</div>
               </div>
               <div className="space-y-1">
                 <Label className="text-[11px]">Meeting link (optional)</Label>
-                <Input value={draftLink} onChange={(e) => setDraftLink(e.target.value)} placeholder="https://zoom.us/j/… or any meeting link" className="h-8 text-[12.5px]" />
+                <Input aria-label="Meeting link (optional)" value={draftLink} onChange={(e) => setDraftLink(e.target.value)} placeholder="https://zoom.us/j/… or any meeting link" className="h-8 text-[12.5px]" />
                 <div className="text-[10.5px] text-muted-foreground">Leave blank to include a Microsoft Teams link automatically. A link here is used instead, and added to the invite text.</div>
               </div>
               <div className="space-y-1">
                 <Label className="text-[11px]">Offered times (your local time)</Label>
                 {draftTimes.map((v, i) => (
                   <div key={i} className="flex items-center gap-1.5">
-                    <Input type="datetime-local" value={v} className="h-8 w-[220px] text-[12.5px]"
+                    <Input aria-label={`Offered time ${i + 1}`} type="datetime-local" value={v} className="h-8 w-[220px] text-[12.5px]"
                       onChange={(e) => setDraftTimes((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))} />
                     <Button size="icon" variant="ghost" className="size-7 text-muted-foreground" title="Remove this time"
                       disabled={draftTimes.length <= 1}

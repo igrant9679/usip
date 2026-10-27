@@ -177,7 +177,7 @@ export default function ResearchMarket() {
           <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
             <div className="space-y-2">
               <Label>Name</Label>
-              <Input value={c.name} maxLength={160} disabled={ro} onChange={(e) => draft.patch({ name: e.target.value })} />
+              <Input aria-label="Name" value={c.name} maxLength={160} disabled={ro} onChange={(e) => draft.patch({ name: e.target.value })} />
             </div>
             <div className="space-y-2">
               <Label>Status</Label>
@@ -191,15 +191,15 @@ export default function ResearchMarket() {
           </div>
           <div className="space-y-2">
             <Label>Tagline</Label>
-            <Input value={c.tagline} maxLength={300} disabled={ro} onChange={(e) => draft.patch({ tagline: e.target.value })} />
+            <Input aria-label="Tagline" value={c.tagline} maxLength={300} disabled={ro} onChange={(e) => draft.patch({ tagline: e.target.value })} />
           </div>
           <div className="space-y-2">
             <Label>Headline</Label>
-            <Input value={c.overview.headline} disabled={ro} onChange={(e) => draft.patch({ overview: { ...c.overview, headline: e.target.value } })} placeholder="The one thing to know about this market" />
+            <Input aria-label="Headline" value={c.overview.headline} disabled={ro} onChange={(e) => draft.patch({ overview: { ...c.overview, headline: e.target.value } })} placeholder="The one thing to know about this market" />
           </div>
           <div className="space-y-2">
             <Label>Overview</Label>
-            <Textarea rows={5} value={c.overview.lede} disabled={ro} onChange={(e) => draft.patch({ overview: { ...c.overview, lede: e.target.value } })} placeholder="How the market works, who is in it, where the money comes from." />
+            <Textarea aria-label="Overview" rows={5} value={c.overview.lede} disabled={ro} onChange={(e) => draft.patch({ overview: { ...c.overview, lede: e.target.value } })} placeholder="How the market works, who is in it, where the money comes from." />
           </div>
           <LinesInput label="Open questions" hint="What is still unknown. One per line." value={c.openQuestions} disabled={ro} onChange={(v) => draft.patch({ openQuestions: v })} rows={3} />
         </Section>

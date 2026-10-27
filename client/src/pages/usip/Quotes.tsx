@@ -107,7 +107,7 @@ export default function Quotes() {
                       <div className="text-xs text-muted-foreground whitespace-nowrap shrink-0">{fmtDate(q.expiresAt)}</div>
                       <div className="flex gap-1">
                         {!q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => genPdf.mutate({ id: q.id })}>Generate</Button>}
-                        {q.pdfUrl && <Button size="sm" variant="ghost" onClick={() => window.open(q.pdfUrl!, "_blank")}><ExternalLink className="size-3.5" /></Button>}
+                        {q.pdfUrl && <Button aria-label="Open PDF" size="sm" variant="ghost" onClick={() => window.open(q.pdfUrl!, "_blank")}><ExternalLink className="size-3.5" /></Button>}
                         {/* Says what it does. It marks the quote sent; it does
                             NOT email anyone — there is no send path here, the
                             rep delivers the PDF themselves. The old copy
@@ -165,7 +165,7 @@ export default function Quotes() {
         }}>
         <div className="space-y-1">
           <label className="text-sm font-medium">Opportunity</label>
-          <select className="w-full text-sm rounded-md border bg-background px-3 py-2 h-10" value={oppId} onChange={(e) => setOppId(e.target.value)}>
+          <select aria-label="Opportunity" className="w-full text-sm rounded-md border bg-background px-3 py-2 h-10" value={oppId} onChange={(e) => setOppId(e.target.value)}>
             <option value="">— Select —</option>
             {(opps.data ?? []).map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
           </select>
@@ -175,7 +175,7 @@ export default function Quotes() {
           <ul className="space-y-2">
             {lis.map((li, i) => (
               <li key={i} className="grid grid-cols-12 gap-1.5 items-center">
-                <select className="col-span-3 text-xs border rounded h-9 px-2"
+                <select aria-label={`Line ${i + 1} product`} className="col-span-3 text-xs border rounded h-9 px-2"
                   value={li.productId ?? ""}
                   onChange={(e) => {
                     const pid = e.target.value ? Number(e.target.value) : undefined;
@@ -185,11 +185,11 @@ export default function Quotes() {
                   <option value="">— Custom —</option>
                   {(products.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
-                <input className="col-span-3 text-sm border rounded h-9 px-2" placeholder="Item name" value={li.name} onChange={(e) => updLi(i, { name: e.target.value })} />
-                <input type="number" className="col-span-1 text-sm border rounded h-9 px-2" value={li.quantity} onChange={(e) => updLi(i, { quantity: Number(e.target.value) })} />
-                <input type="number" step="0.01" min="0" inputMode="decimal" className="col-span-2 text-sm border rounded h-9 px-2" value={li.unitPrice} onChange={(e) => updLi(i, { unitPrice: Number(e.target.value) })} />
-                <input type="number" className="col-span-2 text-sm border rounded h-9 px-2" value={li.discountPct} onChange={(e) => updLi(i, { discountPct: Number(e.target.value) })} />
-                <Button type="button" size="sm" variant="ghost" className="col-span-1" onClick={() => setLis((arr) => arr.filter((_, k) => k !== i))}><Trash2 className="size-3.5" /></Button>
+                <input aria-label={`Line ${i + 1} item name`} className="col-span-3 text-sm border rounded h-9 px-2" placeholder="Item name" value={li.name} onChange={(e) => updLi(i, { name: e.target.value })} />
+                <input aria-label={`Line ${i + 1} quantity`} type="number" className="col-span-1 text-sm border rounded h-9 px-2" value={li.quantity} onChange={(e) => updLi(i, { quantity: Number(e.target.value) })} />
+                <input aria-label={`Line ${i + 1} unit price`} type="number" step="0.01" min="0" inputMode="decimal" className="col-span-2 text-sm border rounded h-9 px-2" value={li.unitPrice} onChange={(e) => updLi(i, { unitPrice: Number(e.target.value) })} />
+                <input aria-label={`Line ${i + 1} discount %`} type="number" className="col-span-2 text-sm border rounded h-9 px-2" value={li.discountPct} onChange={(e) => updLi(i, { discountPct: Number(e.target.value) })} />
+                <Button aria-label="Remove line item" type="button" size="sm" variant="ghost" className="col-span-1" onClick={() => setLis((arr) => arr.filter((_, k) => k !== i))}><Trash2 className="size-3.5" /></Button>
               </li>
             ))}
           </ul>

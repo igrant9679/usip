@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import {
   Activity,
@@ -90,14 +91,12 @@ function ActivitiesTab({ entityType, entityId }: { entityType: CrmEntityType; en
           ))}
         </ul>
       }
-      {callOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setCallOpen(false)}>
-          <div className="bg-card rounded-lg border p-4 w-[420px] max-w-[90vw] space-y-3" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-medium">Log call</h3>
-            <CallLogForm onSubmit={(payload) => logCall.mutate({ relatedType: entityType, relatedId: entityId, ...payload })} isPending={logCall.isPending} onCancel={() => setCallOpen(false)} />
-          </div>
-        </div>
-      )}
+      <Dialog open={callOpen} onOpenChange={setCallOpen}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader><DialogTitle>Log call</DialogTitle></DialogHeader>
+          <CallLogForm onSubmit={(payload) => logCall.mutate({ relatedType: entityType, relatedId: entityId, ...payload })} isPending={logCall.isPending} onCancel={() => setCallOpen(false)} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -114,23 +113,23 @@ function CallLogForm({ onSubmit, isPending, onCancel }: {
     <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); onSubmit({ disposition: disposition as any, durationSec: Math.round(Number(duration) * 60), outcome: outcome || undefined, notes: notes || undefined }); }}>
       <div>
         <label className="text-xs text-muted-foreground">Disposition</label>
-        <select className="w-full bg-secondary rounded px-2 py-1.5 text-sm mt-1" value={disposition} onChange={(e) => setDisposition(e.target.value)}>
+        <select aria-label="Disposition" className="w-full bg-secondary rounded px-2 py-1.5 text-sm mt-1" value={disposition} onChange={(e) => setDisposition(e.target.value)}>
           {["connected", "voicemail", "no_answer", "bad_number", "gatekeeper", "callback_requested", "not_interested"].map((d) => <option key={d} value={d}>{d.replace(/_/g, " ")}</option>)}
         </select>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="text-xs text-muted-foreground">Duration (minutes)</label>
-          <input type="number" min={0} className="w-full bg-secondary rounded px-2 py-1.5 text-sm mt-1" value={duration} onChange={(e) => setDuration(e.target.value)} />
+          <input aria-label="Duration (minutes)" type="number" min={0} className="w-full bg-secondary rounded px-2 py-1.5 text-sm mt-1" value={duration} onChange={(e) => setDuration(e.target.value)} />
         </div>
         <div>
           <label className="text-xs text-muted-foreground">Outcome (optional)</label>
-          <input type="text" className="w-full bg-secondary rounded px-2 py-1.5 text-sm mt-1" value={outcome} onChange={(e) => setOutcome(e.target.value)} placeholder="next steps…" />
+          <input aria-label="Outcome (optional)" type="text" className="w-full bg-secondary rounded px-2 py-1.5 text-sm mt-1" value={outcome} onChange={(e) => setOutcome(e.target.value)} placeholder="next steps…" />
         </div>
       </div>
       <div>
         <label className="text-xs text-muted-foreground">Notes</label>
-        <Textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
+        <Textarea aria-label="Notes" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
       </div>
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
@@ -154,7 +153,7 @@ function NotesTab({ entityType, entityId }: { entityType: CrmEntityType; entityI
     <div className="space-y-3">
       <Card>
         <CardContent className="pt-4 space-y-2">
-          <Textarea value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add a note…" rows={3} />
+          <Textarea aria-label="New note" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add a note…" rows={3} />
           <div className="flex justify-end">
             <Button size="sm" disabled={!draft.trim() || create.isPending}
               onClick={() => create.mutate({ entityType, entityId, body: draft.trim() })}>
@@ -171,11 +170,11 @@ function NotesTab({ entityType, entityId }: { entityType: CrmEntityType; entityI
               <div className="flex justify-between items-start gap-2">
                 <div className="text-sm whitespace-pre-wrap flex-1">{n.body}</div>
                 <div className="flex gap-1 shrink-0">
-                  <Button variant="ghost" size="icon" className="size-7"
+                  <Button aria-label={n.pinned ? "Unpin note" : "Pin note"} variant="ghost" size="icon" className="size-7"
                     onClick={() => update.mutate({ id: n.id, pinned: !n.pinned })}>
                     {n.pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
                   </Button>
-                  <Button variant="ghost" size="icon" className="size-7 text-destructive"
+                  <Button aria-label="Delete note" variant="ghost" size="icon" className="size-7 text-destructive"
                     onClick={() => { confirmAction({ title: "Delete this note?", description: "This note will be permanently removed. This cannot be undone.", confirmLabel: "Delete" }, () => { del.mutate({ id: n.id }); }); }}>
                     <Trash2 className="size-3.5" />
                   </Button>
@@ -245,7 +244,7 @@ function FilesTab({ entityType, entityId }: { entityType: CrmEntityType; entityI
                   <Download className="size-4" />
                 </a>
               )}
-              <Button variant="ghost" size="icon" className="size-7 text-destructive"
+              <Button aria-label="Delete file" variant="ghost" size="icon" className="size-7 text-destructive"
                 onClick={() => { confirmAction({ title: "Delete this file?", description: "This attachment will be permanently removed. This cannot be undone.", confirmLabel: "Delete" }, () => { del.mutate({ id: f.id }); }); }}>
                 <Trash2 className="size-3.5" />
               </Button>

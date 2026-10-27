@@ -128,7 +128,7 @@ export function KnowledgeSection() {
                   <div className="text-[11.5px] text-muted-foreground">PDF, .txt or .md, up to 20 MB each, {data?.limits.maxDocuments ?? 100} documents in all.</div>
                 </div>
                 <div className="flex gap-2">
-                  <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://yourcompany.com/pricing" />
+                  <Input aria-label="Page URL" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://yourcompany.com/pricing" />
                   <Button size="sm" variant="outline" className="gap-1.5 shrink-0" disabled={!/^https?:\/\/\S+\.\S+/.test(url.trim()) || addUrl.isPending}
                     onClick={() => addUrl.mutate({ url: url.trim() })}>
                     <Globe className="size-3.5" /> Add web page
@@ -191,7 +191,7 @@ export function KnowledgeSection() {
             title="Overview"
             sub="A short summary every AI prompt and every call carries: what you offer, to whom, prices and key terms. Drafted from your documents when the first one is added; edit it, or redraft it after adding documents. Details beyond it are looked up from the documents as needed."
           >
-            <textarea
+            <textarea aria-label="Overview"
               value={summaryText}
               onChange={(e) => setSummary(e.target.value)}
               readOnly={!isAdmin}
@@ -219,7 +219,7 @@ export function KnowledgeSection() {
 
           <Card title="Try it" sub="Ask a question the way a prospect would. These are the passages an email writer or the phone agent would be given.">
             <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); setAsked(query.trim()); }}>
-              <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="How much is the enterprise plan?" />
+              <Input aria-label="Question" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="How much is the enterprise plan?" />
               <Button size="sm" type="submit" variant="outline" className="gap-1.5 shrink-0" disabled={!query.trim()}><Search className="size-3.5" /> Search</Button>
             </form>
             {asked && (
