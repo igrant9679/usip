@@ -10,7 +10,7 @@
  */
 import { AsyncLocalStorage } from "async_hooks";
 
-type RequestStore = {
+export type RequestStore = {
   workspaceId?: number;
   userId?: number;
   /**
@@ -57,6 +57,20 @@ export function mergeRequestContext<T>(
   fn: () => Promise<T> | T
 ): Promise<T> | T {
   return als.run({ ...(als.getStore() ?? {}), ...patch }, fn);
+}
+
+/**
+ * mergeRequestContext, handing `fn` the store it installs, so a run that moves
+ * through steps can rename `feature` as it goes (areEngine's tick): every paid
+ * call in a step, however deep, is then recorded under that step. The store
+ * is this run's own copy; a request the run was started from keeps its own.
+ */
+export function mergeOwnRequestContext<T>(
+  patch: RequestStore,
+  fn: (store: RequestStore) => Promise<T>
+): Promise<T> {
+  const store = { ...(als.getStore() ?? {}), ...patch };
+  return als.run(store, () => fn(store));
 }
 
 /**

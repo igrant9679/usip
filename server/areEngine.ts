@@ -83,6 +83,7 @@ import {
   type ApolloPageState,
 } from "./services/apollo";
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
+import { mergeOwnRequestContext } from "./_core/requestContext";
 import { queueIdentityKeys } from "./services/are/queueIdentity";
 import { promoteApprovedProspects } from "./services/are/approvePromotion";
 import { areNotify } from "./routers/are/notify";
@@ -376,6 +377,14 @@ export async function purgeOldEngineLogs(now: Date = new Date()): Promise<number
 /** In-flight guard — a slow tick must never overlap the next cron firing. */
 let engineRunning = false;
 
+/**
+ * The steps of a tick, as the spend report names them (`are.<step>`). A tick
+ * runs in one request context of its own and renames it at each step, so a
+ * model call or lookup made anywhere below a step is recorded under it
+ * rather than as "background". A call that names itself keeps its name.
+ */
+type EngineStep = (name: "enrich" | "screen" | "sequence" | "enroll" | "dispatch" | "complete" | "counters" | "discovery") => void;
+
 export async function runAreEngine(): Promise<AreEngineResult> {
   const result: AreEngineResult = {
     campaignsProcessed: 0,
@@ -396,29 +405,36 @@ export async function runAreEngine(): Promise<AreEngineResult> {
 
   engineRunning = true;
   try {
-    // Global, serial, bounded enrichment FIRST — active campaigns only, one
-    // LLM call at a time. Paused campaigns spend nothing until resumed.
-    try {
-      await enrichPendingGlobally(result);
-    } catch (e) {
-      console.error("[AreEngine] global enrich pass failed:", e);
-    }
+    await mergeOwnRequestContext({ feature: "are.engine" }, async (ctx) => {
+      const step: EngineStep = (name) => {
+        ctx.feature = `are.${name}`;
+      };
 
-    const active = await db
-      .select()
-      .from(areCampaigns)
-      .where(eq(areCampaigns.status, "active"));
-
-    const archivedWs = await archivedWorkspaceIds();
-    for (const campaign of active) {
-      if (archivedWs.has(campaign.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
+      // Global, serial, bounded enrichment FIRST — active campaigns only, one
+      // LLM call at a time. Paused campaigns spend nothing until resumed.
+      step("enrich");
       try {
-        await tickCampaign(campaign, result);
-        result.campaignsProcessed++;
+        await enrichPendingGlobally(result);
       } catch (e) {
-        console.error(`[AreEngine] campaign ${campaign.id} tick failed:`, e);
+        console.error("[AreEngine] global enrich pass failed:", e);
       }
-    }
+
+      const active = await db
+        .select()
+        .from(areCampaigns)
+        .where(eq(areCampaigns.status, "active"));
+
+      const archivedWs = await archivedWorkspaceIds();
+      for (const campaign of active) {
+        if (archivedWs.has(campaign.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
+        try {
+          await tickCampaign(campaign, result, step);
+          result.campaignsProcessed++;
+        } catch (e) {
+          console.error(`[AreEngine] campaign ${campaign.id} tick failed:`, e);
+        }
+      }
+    });
   } finally {
     engineRunning = false;
   }
@@ -1001,7 +1017,7 @@ async function enrollApprovedForCampaignUnlocked(
   }
 }
 
-async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promise<void> {
+async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: EngineStep): Promise<void> {
   const db = await getDb();
   if (!db) return;
   const wsId = campaign.workspaceId;
@@ -1012,6 +1028,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
   // only, one LLM call at a time). The tick below starts at SCREEN.
 
   /* ── Phase 1: SCREEN — auto-approve / auto-reject ──────────────────── */
+  step("screen");
   try {
     /* 1a. Reject what can never be enriched, and so can never be screened.
      *
@@ -1243,6 +1260,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
   }
 
   /* ── Phase 2: SEQUENCE generation for approved prospects ───────────── */
+  step("sequence");
   try {
     /* 2a. Heal the lie that wedges this phase (found live 2026-08-20, ARE
      * audit): an approved row with enrichmentStatus 'complete' but NO
@@ -1315,9 +1333,11 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
   }
 
   /* ── Phase 3: ENROLL — generatedSequence → are_execution_queue rows ── */
+  step("enroll");
   await enrollApprovedForCampaign(campaign, result);
 
   /* ── Phase 4: DISPATCH due email steps ─────────────────────────────── */
+  step("dispatch");
   // result.sent counts the whole tick, every campaign; this campaign's line
   // reports its own (A68).
   const sentBeforeThisCampaign = result.sent;
@@ -1918,6 +1938,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
   }
 
   /* ── Phase 5: COMPLETE — mark prospects whose every step is actioned ─ */
+  step("complete");
   try {
     const enrolledProspects = await db
       .select({ id: prospectQueue.id })
@@ -1981,6 +2002,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
   }
 
   /* ── Phase 6: COUNTERS — recompute the campaign funnel ─────────────── */
+  step("counters");
   try {
     const [agg] = await db
       .select({
@@ -2024,6 +2046,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
   }
 
   /* ── Phase 7: DISCOVERY — replenish a fully drained queue ──────────── */
+  step("discovery");
   try {
     const [counts] = await db
       .select({

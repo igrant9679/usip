@@ -16,7 +16,7 @@
 export type ResearchModelId = "claude-opus-5-5" | "claude-sonnet-5-5" | "claude-haiku-5-5";
 
 /** USD per million tokens. `over100k` is the price tier for a request whose prompt exceeds 100,000 tokens. */
-type Price = { input: number; output: number; cacheWrite5m: number; cacheRead: number };
+export type Price = { input: number; output: number; cacheWrite5m: number; cacheRead: number };
 
 export const RESEARCH_MODELS: Record<ResearchModelId, { label: string; note: string; price: Price; over100k?: Price }> = {
   "claude-opus-5-5": {

@@ -25,6 +25,8 @@
  * implies is exactly the kind of thing that is impossible to diagnose later.
  */
 
+import { mergeRequestContext } from "./requestContext";
+
 export interface GuardedRunner {
   (): void;
   /** True while a run is in flight. Exposed for tests and diagnostics. */
@@ -55,8 +57,10 @@ export function guardOverlap(name: string, task: () => Promise<unknown>): Guarde
     // `finally` rather than clearing in both branches: if the task throws
     // synchronously or rejects, the flag MUST still clear or the engine is
     // wedged off until the next deploy — a far worse failure than an overlap.
+    // Named for the spend report (services/spend): a paid call the job makes
+    // without naming itself is recorded as `cron <name>`, not "background".
     Promise.resolve()
-      .then(task)
+      .then(() => mergeRequestContext({ feature: `cron ${name}` }, task))
       .catch((e) => console.error(`[Cron] ${name} failed:`, e))
       .finally(() => {
         running = false;

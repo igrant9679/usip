@@ -583,7 +583,7 @@ describe("the cost report", () => {
     expect(unitCostUsd("anthropic", "input_tokens", "claude-opus-5-5-20261001", 1_000_000)).toBe(4);
     expect(unitCostUsd("anthropic", "output_tokens", "claude-opus-5-5", 1_000_000)).toBe(20);
     expect(unitCostUsd("anthropic", "web_searches", "", 100)).toBe(1);
-    expect(unitCostUsd("anthropic", "input_tokens", "claude-haiku-4-5-20251001", 1_000_000)).toBeNull();
+    expect(unitCostUsd("anthropic", "input_tokens", "claude-sonnet-4-6", 1_000_000)).toBeNull();
     expect(unitCostUsd("reoon", "daily_credits", "", 10)).toBeNull();
   });
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { guardOverlap } from "./cronGuard";
+import { getRequestFeature } from "./requestContext";
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -10,6 +11,19 @@ describe("guardOverlap", () => {
     run();
     await tick();
     expect(task).toHaveBeenCalledTimes(1);
+  });
+
+  /** The spend report names a paid call the job makes as `cron <name>`, not "background". */
+  it("runs the task under the job's name", async () => {
+    let seen: string | undefined;
+    const run = guardOverlap("SequenceEngine", async () => {
+      await Promise.resolve();
+      seen = getRequestFeature();
+    });
+    run();
+    await tick();
+    expect(seen).toBe("cron SequenceEngine");
+    expect(getRequestFeature()).toBeUndefined();
   });
 
   /** The whole point: a second tick during a slow run must not start. */

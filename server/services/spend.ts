@@ -27,6 +27,7 @@
 import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import { spendLedger, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { getRequestFeature } from "../_core/requestContext";
 
 export type SpendVendor =
   | "anthropic"
@@ -49,7 +50,10 @@ export type SpendEvent = {
   quantity: number;
   keySource: KeySource;
   model?: string | null;
-  /** What spent it: the tRPC path for a request, a short tag for an engine. */
+  /**
+   * What spent it: the tRPC path for a request, a short tag for an engine.
+   * Left out, it is the current context's (a request's path, an engine step).
+   */
   feature?: string | null;
 };
 
@@ -72,7 +76,7 @@ export async function recordSpend(e: SpendEvent): Promise<void> {
   const quantity = Math.round(Number(e.quantity));
   if (!Number.isFinite(quantity) || quantity <= 0) return;
   const workspaceId = e.workspaceId && e.workspaceId > 0 ? e.workspaceId : UNATTRIBUTED_WORKSPACE;
-  const feature = String(e.feature ?? "").slice(0, 96);
+  const feature = String(e.feature ?? getRequestFeature() ?? "").slice(0, 96);
   if (workspaceId === UNATTRIBUTED_WORKSPACE && !warnedUnattributed.has(`${e.vendor}:${feature}`)) {
     warnedUnattributed.add(`${e.vendor}:${feature}`);
     console.warn(`[spend] ${e.vendor} ${e.meter} with no workspace (feature "${feature || "unknown"}"); counted as unattributed.`);
