@@ -97,6 +97,8 @@ function makeDb(script: Script) {
     insert: (table: unknown) => ({
       values: async (payload: Row) => { writes.push({ op: "insert", table, payload }); },
     }),
+    // 2026-10-27 (audit A39): the version swap runs in one transaction.
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
   };
   return { db, writes };
 }

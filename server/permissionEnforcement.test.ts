@@ -476,7 +476,8 @@ const ENFORCEMENT: Record<string, { enforced: boolean; files?: string[]; reason?
   manage_sequences: { enforced: true, files: ["server/routers/sequences.ts"] },
   manage_integrations: { enforced: true, files: ["server/routers/integrations.ts"] },
   manage_api_keys: { enforced: true, files: ["server/routers/aiCredentials.ts", "server/routers/apollo.ts", "server/routers/prospectSources.ts", "server/routers/quickenrich.ts", "server/routers/reoon.ts"] },
-  access_billing: { enforced: true, files: ["server/routers/admin.ts"] },
+  // 2026-10-27 (audit Phase 3): the cost report is billing too.
+  access_billing: { enforced: true, files: ["server/routers/admin.ts", "server/routers/spend.ts"] },
   view_all_leads: {
     enforced: false,
     reason: "Data scoping, not a gate: it must NARROW the lead lists, never throw. " +

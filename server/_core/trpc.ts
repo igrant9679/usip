@@ -29,7 +29,7 @@ export const router = t.router;
  * nothing to maintain, and the express limiter becomes a cheap early rejection
  * rather than the only control.
  */
-const withRequestContext = t.middleware(async ({ ctx, next }) => {
+const withRequestContext = t.middleware(async ({ ctx, next, path }) => {
   // Same derivation as the express limiters: `req.ip`, which Express computes
   // from X-Forwarded-For using the trusted hop count (_core/clientIp.ts).
   //
@@ -39,7 +39,9 @@ const withRequestContext = t.middleware(async ({ ctx, next }) => {
   // identity: Settings → Security's IP allowlist stays unenforced until it is
   // decided separately. llmRateLimit.test.ts pins this derivation.
   const clientIp = clientIpOf(ctx.req);
-  return await mergeRequestContext({ clientIp }, () => next());
+  // The path is what a paid call made inside this request is reported under
+  // (services/spend): "prospects.verifyEmail", not "unknown".
+  return await mergeRequestContext({ clientIp, feature: path }, () => next());
 });
 
 export const publicProcedure = t.procedure.use(withRequestContext);

@@ -4,8 +4,9 @@ import { usageCounters, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "./crypto";
 import { ENV } from "./env";
-import { getRequestClientIp, getRequestUserId, getRequestWorkspaceId } from "./requestContext";
+import { getRequestClientIp, getRequestFeature, getRequestUserId, getRequestWorkspaceId, isBackgroundWork } from "./requestContext";
 import { recordLlmTokens, usageMonthKey } from "../usageCounters";
+import { recordAiUsage, type KeySource } from "../services/spend";
 
 // ---------------------------------------------------------------------------
 // Public types — kept stable so existing 24 call sites do not change.
@@ -107,6 +108,11 @@ export type InvokeParams = {
    * with a reason in server/researchCoverage.test.ts.
    */
   research?: import("../services/research/context").ResearchUse;
+  /**
+   * What this call is for, in the spend report (services/spend). Defaults to
+   * the tRPC path of the request, else "background"; engines name themselves.
+   */
+  feature?: string;
 };
 
 type ResolvedCreds = {
@@ -117,6 +123,8 @@ type ResolvedCreds = {
   openaiModel: string;
   geminiModel: string;
   defaultProvider: string;
+  /** Whose account each provider's key bills: the workspace's own, or the deployment's env key. */
+  sources: Record<ProviderName, KeySource>;
 };
 
 export type ToolCall = {
@@ -145,6 +153,9 @@ export type InvokeResult = {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    /** Anthropic prompt caching, billed at their own rates (not in total_tokens). */
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
   };
 };
 
@@ -339,6 +350,7 @@ const ENV_CREDS: ResolvedCreds = {
   openaiModel: DEFAULT_MODELS.openai,
   geminiModel: DEFAULT_MODELS.gemini,
   defaultProvider: ENV.aiDefaultProvider,
+  sources: { anthropic: "shared", openai: "shared", gemini: "shared" },
 };
 
 async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
@@ -362,15 +374,24 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
     const row = rows[0];
     if (!row) return ENV_CREDS;
 
+    const own = {
+      anthropic: tryDecryptSecret(row.anthropicApiKeyEnc),
+      openai: tryDecryptSecret(row.openaiApiKeyEnc),
+      gemini: tryDecryptSecret(row.geminiApiKeyEnc),
+    };
     return {
-      anthropicApiKey:
-        tryDecryptSecret(row.anthropicApiKeyEnc) || ENV.anthropicApiKey,
-      openaiApiKey: tryDecryptSecret(row.openaiApiKeyEnc) || ENV.openaiApiKey,
-      geminiApiKey: tryDecryptSecret(row.geminiApiKeyEnc) || ENV.geminiApiKey,
+      anthropicApiKey: own.anthropic || ENV.anthropicApiKey,
+      openaiApiKey: own.openai || ENV.openaiApiKey,
+      geminiApiKey: own.gemini || ENV.geminiApiKey,
       anthropicModel: row.anthropicModel || DEFAULT_MODELS.anthropic,
       openaiModel: row.openaiModel || DEFAULT_MODELS.openai,
       geminiModel: row.geminiModel || DEFAULT_MODELS.gemini,
       defaultProvider: row.aiDefaultProvider || ENV.aiDefaultProvider,
+      sources: {
+        anthropic: own.anthropic ? "workspace" : "shared",
+        openai: own.openai ? "workspace" : "shared",
+        gemini: own.gemini ? "workspace" : "shared",
+      },
     };
   } catch (err) {
     console.error("[llm] loadCreds failed, falling back to env:", err);
@@ -634,6 +655,8 @@ async function invokeViaAnthropic(
       completion_tokens: response.usage.output_tokens,
       total_tokens:
         response.usage.input_tokens + response.usage.output_tokens,
+      cache_creation_input_tokens: response.usage.cache_creation_input_tokens ?? 0,
+      cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
     },
   };
 }
@@ -986,7 +1009,7 @@ const LLM_PUBLIC_BURST_MAX = 20;
 /** Keyed `u:<userId>` or `ip:<addr>` so the two namespaces cannot collide. */
 const llmBurst = new Map<string, number[]>();
 
-function checkLlmBurst(
+export function checkLlmBurst(
   userId: number | undefined,
   clientIp: string | undefined,
   now: number,
@@ -1041,7 +1064,7 @@ export function __resetLlmBurstForTests(): void {
 const CAP_CACHE_MS = 60_000;
 const capCache = new Map<number, { at: number; cap: number | null; used: number }>();
 
-async function checkMonthlyCap(workspaceId: number | undefined, now: number): Promise<void> {
+export async function checkMonthlyCap(workspaceId: number | undefined, now: number): Promise<void> {
   if (!workspaceId) return;
   const cached = capCache.get(workspaceId);
   let cap = cached?.cap ?? null;
@@ -1093,7 +1116,10 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   // concurrency slot is taken — a limit enforced after the money is spent is
   // not a limit, and a refused call must not hold a slot others are queued on.
   const now = Date.now();
-  checkLlmBurst(getRequestUserId(), getRequestClientIp(), now);
+  // A persisted bulk job (services/jobs/runner) paces itself one item at a
+  // time; holding it to the clicking user's per-minute ceiling is what made
+  // a 50-row "Generate sequences" fail part-way (audit A37).
+  if (!isBackgroundWork()) checkLlmBurst(getRequestUserId(), getRequestClientIp(), now);
   await checkMonthlyCap(workspaceId, now);
 
   const creds = await loadCreds(workspaceId);
@@ -1121,6 +1147,22 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   // than at each call site — there are dozens and a new one would simply not
   // be counted.
   await recordLlmTokens(workspaceId, result.usage?.total_tokens ?? 0);
+  // The spend ledger (audit Phase 3) splits the same call by meter, model and
+  // whose key paid, so the report can match the provider's usage page. A
+  // call with no workspace is still counted, as unattributed.
+  await recordAiUsage({
+    workspaceId,
+    vendor: provider,
+    model: result.model,
+    keySource: creds.sources[provider],
+    feature: params.feature ?? getRequestFeature() ?? "background",
+    usage: {
+      input: result.usage?.prompt_tokens,
+      output: result.usage?.completion_tokens,
+      cacheWrite: result.usage?.cache_creation_input_tokens,
+      cacheRead: result.usage?.cache_read_input_tokens,
+    },
+  });
   return result;
 }
 
@@ -1159,6 +1201,8 @@ export async function workspaceAnthropicKey(workspaceId: number): Promise<string
  */
 export async function runAnthropicServerTools(args: {
   workspaceId: number;
+  /** For the spend report; "research" when unset. */
+  feature?: string;
   params: Anthropic.MessageCreateParamsNonStreaming;
   onBlock?: (block: Anthropic.ContentBlock) => void;
   signal?: AbortSignal;
@@ -1177,5 +1221,19 @@ export async function runAnthropicServerTools(args: {
     args.workspaceId,
     (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0),
   );
+  await recordAiUsage({
+    workspaceId: args.workspaceId,
+    vendor: "anthropic",
+    model: message.model,
+    keySource: "workspace",
+    feature: args.feature ?? "research",
+    usage: {
+      input: u.input_tokens,
+      output: u.output_tokens,
+      cacheWrite: u.cache_creation_input_tokens,
+      cacheRead: u.cache_read_input_tokens,
+      webSearches: u.server_tool_use?.web_search_requests,
+    },
+  });
   return message;
 }

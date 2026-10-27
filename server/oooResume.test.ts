@@ -285,7 +285,12 @@ describe("the sweep runs on the existing sequence tick", () => {
     // touches only voice_calls.
     // 41 since 2026-10-04 too: the AI call dialer (aiCallDialer), which
     // touches only voice_call_requests and voice_calls.
-    expect(read("_core", "index.ts").split("setInterval(").length - 1).toBe(41);
+    // 42 since 2026-10-27 (audit Phase 3): the LinkedIn lookup queue and the
+    // persisted bulk-job runner, less the 01:00 LinkedIn daily check the queue
+    // replaced. Neither touches the sequence tables.
+    // 43 the same day: the daily engine-log retention (audit A24), which
+    // deletes only are_engine_logs and discovery_logs.
+    expect(read("_core", "index.ts").split("setInterval(").length - 1).toBe(43);
   });
 });
 

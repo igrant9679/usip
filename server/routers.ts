@@ -63,6 +63,7 @@ import { aiCredentialsRouter } from "./routers/aiCredentials";
 import { apolloRouter } from "./routers/apollo";
 import { reoonRouter } from "./routers/reoon";
 import { quickenrichRouter } from "./routers/quickenrich";
+import { spendRouter } from "./routers/spend";
 import { prospectSourcesRouter } from "./routers/prospectSources";
 import { voiceAgentsRouter } from "./routers/voiceAgents";
 import { aiCallsRouter } from "./routers/aiCalls";
@@ -195,6 +196,7 @@ export const appRouter = router({
   apollo: apolloRouter,
   reoon: reoonRouter,
   quickenrich: quickenrichRouter,
+  spend: spendRouter,
   prospectSources: prospectSourcesRouter,
   voiceAgents: voiceAgentsRouter,
   aiCalls: aiCallsRouter,

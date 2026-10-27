@@ -45,6 +45,8 @@ export interface SourceOutcome {
   nextCursor?: string | null;
   /** The source's own note on the search (SearchResultPage.note). */
   note?: string;
+  /** Net-new previews dropped by WaterfallOptions.screen before anything was paid for them. */
+  screened?: number;
 }
 
 export interface CollectedRecord {
@@ -79,6 +81,13 @@ export interface WaterfallOptions {
   ctx?: SearchContext;
   /** Free-text query used for legacy pull-ledger rows. */
   queryLabel?: string;
+  /**
+   * Free checks a net-new preview must pass before it is acquired or counted
+   * toward the target (audit 2026-10-20, A33: paid export ran first and the
+   * never-target and anchor filters threw away people already paid for).
+   * Returns why the record is dropped, or null to keep it.
+   */
+  screen?: (record: ProspectRecord) => string | null;
 }
 
 export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallResult> {
@@ -136,7 +145,10 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
     outcome.searched = page.records.length;
     outcome.nextCursor = page.nextCursor;
     if (page.note) outcome.note = page.note;
-    if (s.recordUsage) await s.recordUsage(opts.workspaceId, page.records.length, opts.queryLabel ?? "");
+    // The legacy pull ledger feeds the Apollo/QuickEnrich DAILY CAPS that
+    // campaigns run on. A preview is free and fills no queue, so it must not
+    // spend them (audit P69): only an acquiring run records its pulls.
+    if (s.recordUsage && opts.mode === "acquire") await s.recordUsage(opts.workspaceId, page.records.length, opts.queryLabel ?? "");
 
     // Dedupe against the workspace and everything collected so far.
     const netNew: Array<{ record: ProspectRecord; key: string | null; keys: string[] }> = [];
@@ -144,6 +156,7 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
       const rec = page.records[r];
       const d = opts.deduper.check(rec);
       if (!d.netNew) { duplicates.push({ record: rec, slug: s.slug, netNew: false, dedupeKey: d.key, wasCharged: false }); continue; }
+      if (opts.screen && opts.screen(rec) !== null) { outcome.screened = (outcome.screened ?? 0) + 1; continue; }
       // Claim within the page too, so two rows for one person from one
       // vendor count once.
       opts.deduper.claim(d.keys);

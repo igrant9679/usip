@@ -547,7 +547,7 @@ export const prospectsRouter = router({
       if (!apiKey) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Reoon verification is not configured or is turned off for this workspace (Settings → Data sources)." });
 
       const { reoonVerifySingle, reoonStatusToUsip } = await import("../services/reoon");
-      const raw = await reoonVerifySingle(email, apiKey, "power");
+      const raw = await reoonVerifySingle(email, apiKey, "power", { workspaceId: ctx.workspace.id, feature: "prospects.verifyEmail" });
       const verdict = reoonStatusToUsip(raw.status);
 
       const ledger = { ...((p.fieldProvenance ?? {}) as Record<string, unknown>) } as Record<string, { source?: string; confidence?: number; verification?: string; at?: string } | undefined>;

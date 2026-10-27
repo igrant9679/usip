@@ -4821,6 +4821,69 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0215: What every paid call cost, per workspace per day ──────────────
+  // Audit 2026-10-20 (Phase 3): AI calls outside a request, every streamed
+  // reply, Reoon verifications and QuickEnrich hits were spent but never
+  // counted, so no report could match a vendor's dashboard. spend_ledger is
+  // one row per workspace, UTC day, vendor, meter, model, key source and
+  // feature, incremented atomically (services/spend.ts). workspaceId 0 holds
+  // calls no workspace could be found for.
+  //
+  // Shared deployment keys are opt-in per workspace (owner decision
+  // 2026-10-27): the platform owner switches them on, and they start ON only
+  // for Reoon in workspaces 2, 4 and 5, which verify through the shared Reoon
+  // key today. All three have their own QuickEnrich key. The caps are NULL
+  // (none) until the owner sets them from a week of this ledger.
+  {
+    name: "0215_spend_ledger.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `spend_ledger` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `day` varchar(10) NOT NULL, `vendor` varchar(24) NOT NULL, `meter` varchar(32) NOT NULL, `model` varchar(96) NOT NULL DEFAULT '', `keySource` varchar(12) NOT NULL, `feature` varchar(96) NOT NULL DEFAULT '', `quantity` bigint NOT NULL DEFAULT 0, `calls` int NOT NULL DEFAULT 0, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, UNIQUE KEY `ux_spend_row` (`workspaceId`, `day`, `vendor`, `meter`, `model`, `keySource`, `feature`), INDEX `ix_spend_day` (`day`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `sharedReoonKey` boolean NOT NULL DEFAULT false",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `sharedQuickenrichKey` boolean NOT NULL DEFAULT false",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `sharedReoonDailyCap` int NULL",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `sharedQuickenrichDailyCap` int NULL",
+      "UPDATE `workspace_settings` SET `sharedReoonKey` = true WHERE `workspaceId` IN (2, 4, 5) AND (`reoonApiKeyEnc` IS NULL OR `reoonApiKeyEnc` = '')",
+    ],
+  },
+
+  // ── 0216: Background work that survives a restart, and one LinkedIn queue ─
+  // Audit 2026-10-20 (Phase 3: A37, P11, P6, P7, P8, P90). bulk_jobs holds
+  // the bulk AI actions and "Recompute all" that ran inside a request or in a
+  // promise the request left behind (services/jobs/runner.ts drains it). The
+  // LinkedIn job tables learn to wait: a lookup the account limits hold parks
+  // the job, batch or day's check (hold_reason) for the queue to resume
+  // (heartbeat_at tells a live worker from a dead one). Enrich jobs keep their
+  // options so a resumed job runs the same way, and a review item keeps the
+  // candidate profile its reviewer confirms.
+  {
+    name: "0216_bulk_jobs_and_linkedin_queue.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `bulk_jobs` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `userId` int NULL, `kind` varchar(48) NOT NULL, `status` varchar(16) NOT NULL DEFAULT 'queued', `total` int NOT NULL DEFAULT 0, `done` int NOT NULL DEFAULT 0, `failed` int NOT NULL DEFAULT 0, `resumeFrom` int NOT NULL DEFAULT 0, `payload` json NULL, `failures` json NULL, `message` varchar(500) NULL, `heartbeatAt` timestamp NULL, `startedAt` timestamp NULL, `finishedAt` timestamp NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, `updatedAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX `ix_bj_status` (`status`, `id`), INDEX `ix_bj_ws_kind` (`workspaceId`, `kind`, `status`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "ALTER TABLE `linkedin_enrichment_jobs` ADD COLUMN `options` json NULL",
+      "ALTER TABLE `linkedin_enrichment_jobs` ADD COLUMN `hold_reason` varchar(300) NULL",
+      "ALTER TABLE `linkedin_enrichment_jobs` ADD COLUMN `heartbeat_at` timestamp NULL",
+      "ALTER TABLE `linkedin_enrichment_job_items` ADD COLUMN `candidate_profile` json NULL",
+      "ALTER TABLE `linkedin_enrichment_batches` ADD COLUMN `run_by_user_id` int NULL",
+      "ALTER TABLE `linkedin_enrichment_batches` ADD COLUMN `hold_reason` varchar(300) NULL",
+      "ALTER TABLE `linkedin_enrichment_batches` ADD COLUMN `heartbeat_at` timestamp NULL",
+      "ALTER TABLE `linkedin_daily_check_jobs` ADD COLUMN `hold_reason` varchar(300) NULL",
+    ],
+  },
+
+  // ── 0217: An engine log line that repeats is counted, not re-written ────
+  // Audit 2026-10-20 (Phase 3, A24): every tick wrote the same lines for every
+  // campaign ("Discovery skipped — queue full", "Dispatched … 0"), thousands a
+  // day, so a real error scrolled out of the Logs tab within the hour. A line
+  // identical to the last one its campaign's phase wrote now bumps that row
+  // (repeatCount, lastSeenAt); logs older than 30 days are deleted daily.
+  {
+    name: "0217_engine_log_repeats.sql",
+    statements: [
+      "ALTER TABLE `are_engine_logs` ADD COLUMN `repeatCount` int NOT NULL DEFAULT 1",
+      "ALTER TABLE `are_engine_logs` ADD COLUMN `lastSeenAt` timestamp NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

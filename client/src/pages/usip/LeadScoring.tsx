@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader, Shell } from "@/components/usip/Shell";
+import { confirmAction } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
 import { Loader2, RefreshCw, Save, Sparkles, Target, Gauge } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -68,10 +69,33 @@ export default function LeadScoring() {
     onSuccess: () => { toast.success("Scoring rules saved"); utils.leadScoring.getConfig.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
+  // "Recompute all" is a background job (audit P11): asked with the count and
+  // what it costs, shown while it runs, and one at a time per workspace.
+  const recomputeJob = trpc.leadScoring.recomputeJob.useQuery(undefined, {
+    refetchInterval: (q) => (q.state.data && ["queued", "running"].includes(q.state.data.status) ? 3000 : false),
+  });
   const recomputeAll = trpc.leadScoring.recomputeAll.useMutation({
-    onSuccess: (r) => toast.success(`Re-scored ${r.recomputed} leads (${r.failed} failed)`),
+    onSuccess: (r) => {
+      toast.success(r.existing ? "Leads are already being re-scored — progress is shown below." : `Re-scoring ${r.total.toLocaleString()} leads in the background.`);
+      utils.leadScoring.recomputeJob.invalidate();
+    },
     onError: (e) => toast.error(e.message),
   });
+  const cancelRecompute = trpc.leadScoring.cancelRecompute.useMutation({
+    onSuccess: () => utils.leadScoring.recomputeJob.invalidate(),
+    onError: (e) => toast.error(e.message),
+  });
+  const job = recomputeJob.data;
+  const jobActive = !!job && (job.status === "queued" || job.status === "running");
+  const askRecompute = async () => {
+    const p = await utils.leadScoring.recomputeAllPreview.fetch();
+    if (p.running) { toast.info("Leads are already being re-scored."); return; }
+    confirmAction({
+      title: `Re-score ${p.leads.toLocaleString()} leads?`,
+      description: `Each lead is one AI call on this workspace's AI budget (${p.leads.toLocaleString()} calls). Leads that cross Sales Ready notify their owner, and can be enrolled into sequences that start on a score. It runs in the background; you can leave this page.`,
+      confirmLabel: "Re-score",
+    }, () => recomputeAll.mutate());
+  };
 
   const firmoMax = cfg.firmoOrgTypeWeight + cfg.firmoTitleWeight + cfg.firmoCompletenessWeight;
   const totalMax = firmoMax + (cfg.behavOpenMax + cfg.behavClickMax + cfg.behavReplyPoints + cfg.behavStepPoints * 5) + cfg.aiFitMax;
@@ -87,12 +111,27 @@ export default function LeadScoring() {
       <PageHeader title="Lead Scoring Engine" pageKey="lead-scoring" description={`Three-component model. Current configuration max-possible = ${totalMax} pts (capped at 100). Default 40 + 30 + 30 = 100.`}
         icon={<Gauge className="size-5" />}
       >
-        <Button variant="outline" className="bg-card" onClick={() => recomputeAll.mutate()} disabled={recomputeAll.isPending}>
-          <RefreshCw className={`size-4 ${recomputeAll.isPending ? "animate-spin" : ""}`} /> Recompute all
+        <Button variant="outline" className="bg-card" onClick={askRecompute} disabled={recomputeAll.isPending || jobActive}>
+          <RefreshCw className={`size-4 ${recomputeAll.isPending || jobActive ? "animate-spin" : ""}`} /> Recompute all
         </Button>
         <Button onClick={() => save.mutate(cfg)} disabled={save.isPending}><Save className="size-4" /> Save</Button>
       </PageHeader>
 
+      {job && (jobActive || job.finishedAt) && (
+        <div className="px-4 md:px-5 pt-3 text-[13px] text-muted-foreground flex items-center gap-2 flex-wrap">
+          {jobActive ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" />
+              <span>Re-scoring leads: {job.done.toLocaleString()} of {job.total.toLocaleString()}{job.failed ? ` (${job.failed} failed)` : ""}</span>
+              <Button size="sm" variant="ghost" className="h-6" disabled={cancelRecompute.isPending} onClick={() => cancelRecompute.mutate({ jobId: job.id })}>Cancel</Button>
+            </>
+          ) : (
+            <span>
+              Last re-score {job.status === "canceled" ? "canceled" : job.status === "failed" ? "stopped" : "finished"} {new Date(job.finishedAt!).toLocaleString()}: {job.done.toLocaleString()} scored{job.failed ? `, ${job.failed} failed` : ""}.
+            </span>
+          )}
+        </div>
+      )}
       {isLoading ? (
         <div className="p-4 md:p-5 flex items-center gap-2 text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading…</div>
       ) : (

@@ -11,8 +11,9 @@
  * Compliance: Unipile-only retrieval (no scraping); rate-limited; never
  * refreshes a suppressed prospect.
  */
+import { and, asc, desc, eq, getTableColumns, gte, inArray, isNull, lt, ne, or } from "drizzle-orm";
+import { utcDayStart } from "@shared/timeWindows";
 import { archivedWorkspaceIds } from "../../_core/workspaceArchive";
-import { and, asc, desc, eq, getTableColumns, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
   prospects,
@@ -22,6 +23,7 @@ import {
 } from "../../../drizzle/schema";
 import { retrieveLinkedInProfileByUrl } from "./unipileProfile";
 import { applyEnrichment, markUnavailable, enrichmentBlockReason } from "./enrichmentService";
+import { LOOKUP_WAIT_MS, type LookupTurn } from "./lookupQueue";
 
 const TWENTY_FOUR_H = 24 * 60 * 60 * 1000;
 /** Bound a single workspace run so a huge workspace can't run unbounded. */
@@ -36,25 +38,69 @@ export interface DailyCheckResult {
   skipped: number;
 }
 
-/** Run the daily check for one workspace. */
+/**
+ * Today's job for a workspace: one row per UTC day, however many turns the
+ * LinkedIn queue gives it, so the status card reads as one run.
+ */
+async function todaysJob(ws: number, trigger: "manual" | "scheduled") {
+  const db = await getDb();
+  if (!db) return null;
+  const [today] = await db.select().from(linkedinDailyCheckJobs)
+    .where(and(eq(linkedinDailyCheckJobs.workspaceId, ws), gte(linkedinDailyCheckJobs.createdAt, utcDayStart())))
+    .orderBy(desc(linkedinDailyCheckJobs.id))
+    .limit(1);
+  if (today) return today;
+  await db.insert(linkedinDailyCheckJobs).values({ workspaceId: ws, status: "pending", trigger, checkedCount: 0, changedCount: 0, failedCount: 0 } as never);
+  const [created] = await db.select().from(linkedinDailyCheckJobs)
+    .where(eq(linkedinDailyCheckJobs.workspaceId, ws))
+    .orderBy(desc(linkedinDailyCheckJobs.id))
+    .limit(1);
+  return created ?? null;
+}
+
+/**
+ * One turn of the daily check for one workspace: stale profiles, oldest
+ * first, until today's budget (MAX_PER_RUN) is spent, the account limits hold
+ * a lookup, or `deadline` passes.
+ *
+ * Audit 2026-10-20 (P6): this ran every profile back to back at 01:00. The
+ * gate allows one lookup per ~90 s in working hours, so every lookup was
+ * refused, and each refusal was recorded as "profile unavailable": up to 250
+ * false alerts a night, and no job change ever found. Now the LinkedIn queue
+ * (lookupQueue) gives each workspace a turn every few minutes, a hold parks
+ * the day's job as "waiting" and resumes later, and only the vendor saying
+ * the profile is gone ("not found") raises the unavailable alert.
+ */
 export async function runDailyCheckForWorkspace(opts: {
   workspaceId: number;
   force?: boolean;
   trigger?: "manual" | "scheduled";
-}): Promise<DailyCheckResult> {
+  deadline?: number;
+}): Promise<DailyCheckResult & LookupTurn> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const ws = opts.workspaceId;
+  // An archived workspace is frozen (2026-08-12), whoever asks.
+  const archivedWs = await archivedWorkspaceIds();
+  if (archivedWs.has(ws)) {
+    return { jobId: 0, workspaceId: ws, checked: 0, changed: 0, failed: 0, skipped: 0, looked: 0, held: null };
+  }
+  const deadline = opts.deadline ?? Number.POSITIVE_INFINITY;
+  const job = await todaysJob(ws, opts.trigger ?? "scheduled");
+  if (!job) throw new Error("Database unavailable");
+  const jobId = job.id;
 
-  const jobRes = await db.insert(linkedinDailyCheckJobs).values({
-    workspaceId: ws,
-    status: "running",
-    trigger: opts.trigger ?? "scheduled",
-    startedAt: new Date(),
-  } as never);
-  const jobId = Number((jobRes as { insertId?: number }[])[0]?.insertId ?? 0);
-
-  let checked = 0, changed = 0, failed = 0, skipped = 0;
+  let checked = job.checkedCount ?? 0, changed = job.changedCount ?? 0, failed = job.failedCount ?? 0, skipped = 0, looked = 0;
+  const result = (held: string | null): DailyCheckResult & LookupTurn => ({ jobId, workspaceId: ws, checked, changed, failed, skipped, looked, held });
+  const save = async (set: Record<string, unknown>) => {
+    await db.update(linkedinDailyCheckJobs)
+      .set({ checkedCount: checked, changedCount: changed, failedCount: failed, ...set } as never)
+      .where(eq(linkedinDailyCheckJobs.id, jobId));
+  };
+  if (job.status === "completed" && !opts.force) return result(null);
+  const budget = Math.max(0, MAX_PER_RUN - checked - failed);
+  if (budget === 0) { await save({ status: "completed", completedAt: new Date(), holdReason: null }); return result(null); }
+  await save({ status: "running", holdReason: null, startedAt: job.startedAt ?? new Date() });
 
   try {
     // Staleness and suppression decide the SET, not the loop.
@@ -98,11 +144,11 @@ export async function runDailyCheckForWorkspace(opts: {
         )]),
       ))
       .orderBy(asc(prospectLinkedinEnrichments.linkedinLastCheckedAt))
-      .limit(MAX_PER_RUN);
+      .limit(budget);
 
     // Map source account → owner user id so lookups route through the same
     // (rate-limited) bridged account they were enriched with.
-    const accountIds = [...new Set(enrichments.map((e) => e.linkedinSourceAccountId).filter(Boolean) as string[])];
+    const accountIds = Array.from(new Set(enrichments.map((e) => e.linkedinSourceAccountId).filter(Boolean) as string[]));
     const ownerByAccount = new Map<string, number>();
     if (accountIds.length) {
       const accts = await db
@@ -113,10 +159,10 @@ export async function runDailyCheckForWorkspace(opts: {
     }
 
     for (const enr of enrichments) {
-      // No staleness check here any more — the query above owns it. A refusal
-      // that can never fire reads, on the next visit, like the filter is
-      // still being applied somewhere it is not.
-
+      if (Date.now() >= deadline) {
+        await save({ status: "waiting", holdReason: null });
+        return result(null);
+      }
       // Compliance: never refresh a suppressed/rejected prospect. Kept
       // despite the SQL predicate: every iteration awaits a network
       // retrieval, so a prospect can be rejected while this loop is running.
@@ -133,11 +179,32 @@ export async function runDailyCheckForWorkspace(opts: {
         isAdmin: true, // pool-wide so requestedAccountId resolves
         linkedinUrl: enr.linkedinProfileUrl,
         requestedAccountId: enr.linkedinSourceAccountId ?? undefined,
+        waitMs: LOOKUP_WAIT_MS,
+        feature: "linkedinDailyCheck",
       });
 
+      // Held by the account limits: nothing was looked up, nothing is known
+      // about this profile. Park the day's job; the queue resumes it.
+      if (retrieve.status === "rate_limited") {
+        await save({ status: "waiting", holdReason: retrieve.message.slice(0, 300) });
+        return result(retrieve.message);
+      }
+      looked++;
+
       if (!retrieve.ok || !retrieve.profile) {
-        await markUnavailable({ workspaceId: ws, prospectId: enr.prospectId, enrichmentId: enr.id, reason: retrieve.message });
+        // Only the vendor saying the profile is gone is an alert; a vendor
+        // error is a failed check, tried again tomorrow.
+        if (retrieve.status === "no_match") {
+          await markUnavailable({ workspaceId: ws, prospectId: enr.prospectId, enrichmentId: enr.id, reason: retrieve.message });
+        } else {
+          // Checked today, without an answer: tomorrow's turn tries again. Left
+          // unstamped, every turn today would look it up again.
+          await db.update(prospectLinkedinEnrichments)
+            .set({ linkedinLastCheckedAt: new Date() })
+            .where(and(eq(prospectLinkedinEnrichments.workspaceId, ws), eq(prospectLinkedinEnrichments.id, enr.id)));
+        }
         failed++;
+        await save({});
         continue;
       }
 
@@ -151,47 +218,64 @@ export async function runDailyCheckForWorkspace(opts: {
       });
       checked++;
       if (applied.changes.length > 0) changed++;
+      await save({});
     }
 
-    await db
-      .update(linkedinDailyCheckJobs)
-      .set({ status: "completed", checkedCount: checked, changedCount: changed, failedCount: failed, completedAt: new Date() })
-      .where(eq(linkedinDailyCheckJobs.id, jobId));
+    await save({ status: "completed", completedAt: new Date(), holdReason: null });
   } catch (e) {
-    await db
-      .update(linkedinDailyCheckJobs)
-      .set({ status: "failed", checkedCount: checked, changedCount: changed, failedCount: failed, completedAt: new Date() })
-      .where(eq(linkedinDailyCheckJobs.id, jobId));
+    await save({ status: "failed", completedAt: new Date() });
     console.error(`[linkedinDailyCheck] workspace ${ws} failed:`, (e as Error).message);
   }
 
-  return { jobId, workspaceId: ws, checked, changed, failed, skipped };
+  return result(null);
+}
+
+/** The LinkedIn queue's turn for this workspace's change check. */
+export async function dailyCheckTurn(ws: number, deadline: number): Promise<LookupTurn> {
+  const r = await runDailyCheckForWorkspace({ workspaceId: ws, trigger: "scheduled", deadline });
+  return { looked: r.looked, held: r.held };
+}
+
+/** Workspaces with enriched profiles whose check for today is not finished. */
+export async function workspacesWithDailyCheckDue(): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const withProfiles = Array.from(new Set((await db
+    .select({ ws: prospectLinkedinEnrichments.workspaceId })
+    .from(prospectLinkedinEnrichments)).map((r) => r.ws)));
+  if (withProfiles.length === 0) return [];
+  const doneToday = new Set((await db
+    .select({ ws: linkedinDailyCheckJobs.workspaceId })
+    .from(linkedinDailyCheckJobs)
+    .where(and(gte(linkedinDailyCheckJobs.createdAt, utcDayStart()), eq(linkedinDailyCheckJobs.status, "completed")))).map((r) => r.ws));
+  return withProfiles.filter((ws) => !doneToday.has(ws));
+}
+
+/** How many profiles the next turn would check (the "Run now" confirmation, audit P157). */
+export async function dailyCheckDue(ws: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const staleBefore = new Date(Date.now() - TWENTY_FOUR_H);
+  const rows = await db
+    .select({ id: prospectLinkedinEnrichments.id })
+    .from(prospectLinkedinEnrichments)
+    .innerJoin(prospects, and(eq(prospects.id, prospectLinkedinEnrichments.prospectId), eq(prospects.workspaceId, ws)))
+    .where(and(
+      eq(prospectLinkedinEnrichments.workspaceId, ws),
+      or(isNull(prospects.verificationStatus), ne(prospects.verificationStatus, "rejected")),
+      or(isNull(prospectLinkedinEnrichments.linkedinLastCheckedAt), lt(prospectLinkedinEnrichments.linkedinLastCheckedAt, staleBefore)),
+    ));
+  return Math.min(rows.length, MAX_PER_RUN);
 }
 
 /**
- * Scheduler entry point: run the daily check across every workspace that has
- * LinkedIn enrichments, staggered to stay clear of vendor rate limits.
+ * Scheduler entry point, kept for callers: the change check now runs as part
+ * of the LinkedIn queue (lookupQueue.drainLinkedInLookups), in working hours,
+ * at the pace the account limits allow.
  */
 export async function runDailyCheckAllWorkspaces(): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
-  const rows = await db
-    .selectDistinct({ ws: prospectLinkedinEnrichments.workspaceId })
-    .from(prospectLinkedinEnrichments);
-  const workspaceIds = rows.map((r) => r.ws);
-  console.log(`[linkedinDailyCheck] starting for ${workspaceIds.length} workspace(s)`);
-    const archivedWs = await archivedWorkspaceIds();
-  for (const ws of workspaceIds) {
-    if (archivedWs.has(ws)) continue; // archived workspaces are frozen (2026-08-12)
-    try {
-      const r = await runDailyCheckForWorkspace({ workspaceId: ws, trigger: "scheduled" });
-      console.log(`[linkedinDailyCheck] ws ${ws}: checked=${r.checked} changed=${r.changed} failed=${r.failed} skipped=${r.skipped}`);
-    } catch (e) {
-      console.error(`[linkedinDailyCheck] ws ${ws} threw:`, (e as Error).message);
-    }
-    // Stagger workspaces to avoid bursting the vendor.
-    await new Promise((res) => setTimeout(res, 2000));
-  }
+  const { drainLinkedInLookups } = await import("./lookupQueue");
+  await drainLinkedInLookups();
 }
 
 /** Last daily-check job for a workspace (status card). */

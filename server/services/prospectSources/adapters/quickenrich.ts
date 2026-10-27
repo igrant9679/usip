@@ -70,7 +70,7 @@ export function createQuickEnrichSource(): ProspectSource & { acquisition: "none
       if (!body) return { ok: false, reason: "invalid_params", message: "no title or mappable industry filter — refusing to search their whole database" };
       const page = ctx.cursor ? Math.max(1, Number(ctx.cursor) || 1) : 1;
       body.page = page;
-      const res = await quickenrichContactFinder(apiKey, body);
+      const res = await quickenrichContactFinder(apiKey, body, { workspaceId: c.workspaceId, feature: "sourceSearch" });
       if (!res.ok) {
         const msg = res.error;
         return { ok: false, reason: /HTTP 429/.test(msg) ? "rate_limited" : /HTTP 40[13]/.test(msg) ? "unauthorized" : /HTTP 422/.test(msg) ? "invalid_params" : "unavailable", message: msg };
@@ -97,7 +97,7 @@ export function createQuickEnrichSource(): ProspectSource & { acquisition: "none
       for (let i = 0; i < externalIds.length; i++) {
         const url = externalIds[i];
         if (!/linkedin\.com/i.test(url)) { failed.push(url); continue; }
-        const r = await quickenrichFindEmailByLinkedIn(apiKey, url);
+        const r = await quickenrichFindEmailByLinkedIn(apiKey, url, { workspaceId: c.workspaceId, feature: "sourceSearch" });
         if (r.email) {
           units += 1;
           records.push({

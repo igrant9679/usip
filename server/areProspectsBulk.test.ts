@@ -14,7 +14,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
-import { prospectQueue, emailSuppressions, areSuppressionList, areEngineLogs, auditLog } from "../drizzle/schema";
+import { prospectQueue, emailSuppressions, areSuppressionList, areEngineLogs, auditLog, bulkJobs } from "../drizzle/schema";
 import type { TrpcContext } from "./_core/context";
 
 const h = vi.hoisted(() => ({ db: null as any }));
@@ -44,6 +44,9 @@ function makeDb(queueRows: Array<Record<string, unknown>>, cap: Cap) {
       then(res: (v: unknown) => void) {
         if (st.joined) {
           res([{ ws: { ...WS, ownerUserId: 1, archivedAt: null }, mb: { id: 1, userId: 1, workspaceId: WS.id, role: "manager", deactivatedAt: null, lastActiveAt: new Date() } }]);
+        } else if (st.table === bulkJobs) {
+          // A job written by enqueueJob, read back by id (2026-10-27, audit A37).
+          res(cap.inserts.filter((i) => i.table === tname(bulkJobs)).map((i, k) => ({ id: k + 1, ...(i.values as object) })));
         } else if (st.table === prospectQueue) {
           // Return the rows whose id is among the bound params (the IN list / eq id).
           const ids = st.params.filter((p) => typeof p === "number");
@@ -56,7 +59,12 @@ function makeDb(queueRows: Array<Record<string, unknown>>, cap: Cap) {
   return {
     select: () => builder(),
     update: (t: unknown) => ({ set: (v: Record<string, unknown>) => ({ where: async (cond: unknown) => { cap.updates.push({ table: tname(t), set: v, where: render(cond).sql }); return [{ affectedRows: 1 }]; } }) }),
-    insert: (t: unknown) => ({ values: async (v: unknown) => { cap.inserts.push({ table: tname(t), values: v }); return [{ insertId: 1 }]; } }),
+    insert: (t: unknown) => ({ values: (v: unknown) => {
+      cap.inserts.push({ table: tname(t), values: v });
+      const done: any = Promise.resolve([{ insertId: 1 }]);
+      done.$returningId = async () => [{ id: cap.inserts.filter((i) => i.table === tname(t)).length }];
+      return done;
+    } }),
   };
 }
 function makeCtx(): TrpcContext {
@@ -128,6 +136,9 @@ describe("are.prospects.bulk", () => {
     h.db = makeDb(rows, cap);
     const r = await appRouter.createCaller(makeCtx()).are.prospects.bulk({ campaignId: 21, prospectIds: rows.map((x) => x.id), action: "generateSequence" });
     expect(r.summary).toMatch(/Generating sequences for 8 prospects in the background/);
+    // 2026-10-27 (audit A37): "the background" is a persisted job now
+    // (services/jobs/runner; server/phase3Jobs.test.ts runs it).
+    expect(cap.inserts.some((i) => i.table === tname(bulkJobs) && (i.values as any).kind === "are.bulk" && (i.values as any).total === 8)).toBe(true);
     // The "started" campaign log line is written before returning…
     expect(cap.inserts.some((i) => i.table === tname(areEngineLogs) && /running in the background/.test((i.values as any).message))).toBe(true);
     // …and the audit row is NOT yet (it is written when the background loop finishes).

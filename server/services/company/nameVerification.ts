@@ -145,8 +145,10 @@ async function fetchHomepage(domain: string): Promise<string | null> {
 
 interface ExtractVerdict { usable: boolean; officialName: string; acronym: string | null; confidence: number; evidence: string }
 
-async function extractOfficialName(domain: string, signals: PageSignals): Promise<ExtractVerdict> {
+async function extractOfficialName(domain: string, signals: PageSignals, workspaceId: number): Promise<ExtractVerdict> {
   const res = await invokeLLM({
+    workspaceId,
+    feature: "nameVerification",
     messages: [
       {
         role: "system",
@@ -197,8 +199,14 @@ async function extractOfficialName(domain: string, signals: PageSignals): Promis
   };
 }
 
-/** Cached official-name lookup for one domain. Returns the cache row. */
-export async function lookupOfficialName(domain: string): Promise<{ status: string; officialName: string | null; acronym: string | null; confidence: number }> {
+/**
+ * Cached official-name lookup for one domain. Returns the cache row.
+ *
+ * The cache is shared by every workspace, so a miss is paid by the workspace
+ * whose prospects asked for it (`workspaceId`, audit 2026-10-20 Phase 3: the
+ * sweep runs outside any request, and the call was counted nowhere).
+ */
+export async function lookupOfficialName(domain: string, workspaceId: number): Promise<{ status: string; officialName: string | null; acronym: string | null; confidence: number }> {
   const db = await getDb();
   if (!db) return { status: "unreachable", officialName: null, acronym: null, confidence: 0 };
 
@@ -222,7 +230,7 @@ export async function lookupOfficialName(domain: string): Promise<{ status: stri
       const hasSignal = signals.title || signals.siteName || signals.copyright || signals.h1;
       if (hasSignal) {
         try {
-          const v = await extractOfficialName(domain, signals);
+          const v = await extractOfficialName(domain, signals, workspaceId);
           if (v.usable && v.officialName) {
             status = "verified"; officialName = v.officialName; acronym = v.acronym; confidence = v.confidence; evidence = v.evidence;
           } else {
@@ -302,7 +310,7 @@ export async function runNameVerificationSweep(opts?: {
   for (const [domain, group] of Array.from(byDomain.entries())) {
     if (lookups >= maxLookups) break; // the rest stays in the look-back window for the next tick
     lookups++;
-    const lookup = await lookupOfficialName(domain);
+    const lookup = await lookupOfficialName(domain, group[0].workspaceId);
     out.domainsLookedUp++;
     if (lookup.status !== "verified" || !lookup.officialName || lookup.confidence < MIN_APPLY_CONFIDENCE) {
       if (lookup.status === "unusable") out.unusableDomains++;

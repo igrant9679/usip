@@ -38,7 +38,7 @@ export function registerEmailBuilderStreamRoutes(app: Express) {
       // One rule for all five streaming routes — see resolveStreamAuth.
       const auth = await resolveStreamAuth(req, res);
       if (!auth) return;
-      const { workspaceId } = auth;
+      const { workspaceId, userId } = auth;
 
       // ── Validate body ───────────────────────────────────────────────────
       const body = (req.body ?? {}) as { content?: unknown; instruction?: unknown; tone?: unknown; sectorId?: unknown };
@@ -89,6 +89,8 @@ ${HUMAN_COPY_RULES}`;
           ],
           research: sectorId ? { surface: "outreach", sectorId } : undefined,
           workspaceId,
+          userId,
+          feature: "stream emailBuilder.rewrite",
           signal: abort.signal,
         })) {
           if (res.writableEnded) break;

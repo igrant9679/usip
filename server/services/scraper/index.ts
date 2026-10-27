@@ -108,7 +108,7 @@ export async function resolveVerifiedEmail(input: {
   lastName?: string | null;
   companyDomain?: string | null;
   companyWebsite?: string | null;
-  /** Resolves the workspace's own Reoon key; omit to fall back to the env var. */
+  /** Resolves the workspace's Reoon key (its own, or the shared one if allowed); none without it. */
   workspaceId?: number | null;
 }): Promise<ResolvedEmail> {
   const first = (input.firstName ?? "").trim();
@@ -164,10 +164,11 @@ export async function resolveVerifiedEmail(input: {
   // Stage A — quick filter (cheap instant credits), drop confident invalids.
   let creditsQuick = 0;
   const survivors: string[] = [];
+  const meter = { workspaceId: input.workspaceId, feature: "emailFinder" };
   const quick = await Promise.all(
     patterns.map(async (p) => {
       try {
-        const r = await reoonVerifySingle(p.email, apiKey, "quick");
+        const r = await reoonVerifySingle(p.email, apiKey, "quick", meter);
         return { email: p.email, status: reoonStatusToUsip(r.status), ok: true as const };
       } catch {
         return { email: p.email, status: "unknown" as VerificationStatus, ok: false as const };
@@ -184,7 +185,7 @@ export async function resolveVerifiedEmail(input: {
   let best: { email: string; status: VerificationStatus } | null = null;
   for (const email of survivors) {
     try {
-      const r = await reoonVerifySingle(email, apiKey, "power");
+      const r = await reoonVerifySingle(email, apiKey, "power", meter);
       creditsPower++;
       const status = reoonStatusToUsip(r.status);
       if (!best || STATUS_RANK[status] > STATUS_RANK[best.status]) best = { email, status };
@@ -446,7 +447,7 @@ export async function lookupContactInfo(
   const quickResults = await Promise.all(
     patterns.map(async (p) => {
       try {
-        const r = await reoonVerifySingle(p.email, apiKey, "quick");
+        const r = await reoonVerifySingle(p.email, apiKey, "quick", { workspaceId: input.workspaceId, feature: "prospectLookup" });
         return { pattern: p, status: reoonStatusToUsip(r.status), overallScore: r.overall_score, ok: true as const };
       } catch {
         // Quick mode unreachable — be conservative and still try power on
@@ -475,7 +476,7 @@ export async function lookupContactInfo(
   // most-likely pattern gets the first power probe and triggers early-stop.
   for (const s of survivors) {
     try {
-      const r = await reoonVerifySingle(s.pattern.email, apiKey, "power");
+      const r = await reoonVerifySingle(s.pattern.email, apiKey, "power", { workspaceId: input.workspaceId, feature: "prospectLookup" });
       creditsPower++;
       const status = reoonStatusToUsip(r.status);
       enrichment.patternsVerified.push({

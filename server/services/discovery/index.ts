@@ -36,7 +36,6 @@ import { ARE_SOURCE_IDS, resolveSourceOrder, selectRunSources, type AreSourceId 
 import {
   scrapeGoogleBusiness,
   scrapeNews,
-  scrapeWeb,
 } from "../../routers/are/scraper";
 import { searchLinkedInProfiles } from "../linkedinLookup";
 import { apolloSearchPeople, getApolloDailyCap, apolloPulledToday } from "../apollo";
@@ -56,10 +55,17 @@ import { processRun } from "./consolidate";
  * (isAdmin so it isn't scoped to one user) and maps hits into the raw-find
  * shape. Returns [] when no account is bridged or the search fails.
  */
+/**
+ * What one source produced, and — when it produced nothing because it could
+ * not run (no key, daily cap spent, LinkedIn on hold) — why (audit P63: the
+ * run log said "0 finds", which reads like "nobody matched").
+ */
+type SourceOut = { raw: Array<Record<string, unknown>>; note?: string };
+
 async function discoverLinkedInPeople(
   workspaceId: number,
   query: string,
-): Promise<Array<Record<string, unknown>>> {
+): Promise<SourceOut> {
   const res = await searchLinkedInProfiles({
     workspaceId,
     userId: 0,
@@ -68,16 +74,18 @@ async function discoverLinkedInPeople(
     limit: 25,
     source: "discovery",
   });
-  if (!res.ok) return [];
-  return res.hits.map((h) => ({
-    firstName: h.firstName,
-    lastName: h.lastName,
-    title: h.headline,
-    companyName: h.company,
-    linkedinUrl: h.linkedinUrl,
-    sourceUrl: h.linkedinUrl,
-    geography: h.location,
-  }));
+  if (!res.ok) return { raw: [], note: res.message };
+  return {
+    raw: res.hits.map((h) => ({
+      firstName: h.firstName,
+      lastName: h.lastName,
+      title: h.headline,
+      companyName: h.company,
+      linkedinUrl: h.linkedinUrl,
+      sourceUrl: h.linkedinUrl,
+      geography: h.location,
+    })),
+  };
 }
 
 /**
@@ -126,10 +134,11 @@ async function discoverViaApollo(
   workspaceId: number,
   mode: SearchMode,
   input: DiscoveryInput,
-): Promise<Array<Record<string, unknown>>> {
+): Promise<SourceOut> {
   const cap = await getApolloDailyCap(workspaceId);
-  const headroom = cap - (await apolloPulledToday(workspaceId));
-  if (headroom <= 0) return [];
+  const used = await apolloPulledToday(workspaceId);
+  const headroom = cap - used;
+  if (headroom <= 0) return { raw: [], note: `today's Apollo record cap is used up (${used}/${cap})` };
 
   const p = input as PersonSearchInput;
   const a = input as AccountSearchInput;
@@ -146,10 +155,10 @@ async function discoverViaApollo(
     locations: location ? [location] : [],
     keywords,
     perPage: Math.min(headroom, 25),
-  });
-  if (!res.ok) return [];
+  }, "findProspects");
+  if (!res.ok) return { raw: [], note: res.error ?? "the Apollo search failed" };
   await recordPullLedger(workspaceId, "apollo", buildQuery(mode, input), res.prospects.length);
-  return res.prospects.map((x) => ({ ...x }));
+  return { raw: res.prospects.map((x) => ({ ...x })) };
 }
 
 /**
@@ -167,12 +176,13 @@ async function discoverViaApollo(
 async function discoverViaQuickEnrich(
   workspaceId: number,
   input: PersonSearchInput,
-): Promise<Array<Record<string, unknown>>> {
+): Promise<SourceOut> {
   const apiKey = await getQuickEnrichKey(workspaceId);
-  if (!apiKey) return [];
+  if (!apiKey) return { raw: [], note: "no QuickEnrich key for this workspace (Settings → Data sources)" };
   const cap = await getQuickenrichDailyPullCap(workspaceId);
-  const headroom = cap - (await quickenrichPulledToday(workspaceId));
-  if (headroom <= 0) return [];
+  const used = await quickenrichPulledToday(workspaceId);
+  const headroom = cap - used;
+  if (headroom <= 0) return { raw: [], note: `today's QuickEnrich pull cap is used up (${used}/${cap})` };
   // Industries must be validated against their controlled vocabulary — one
   // unrecognised value 422s the entire request (observed live 2026-08-24).
   // Lookup unavailable → the industry dimension is omitted, titles still search.
@@ -182,8 +192,8 @@ async function discoverViaQuickEnrich(
     industries: input.industry ? [input.industry] : [],
     geos: input.location ? [input.location] : [],
   }, allowedIndustries);
-  if (!body) return [];
-  const res = await quickenrichContactFinder(apiKey, body);
+  if (!body) return { raw: [], note: "needs a job title, or an industry QuickEnrich knows, to search on" };
+  const res = await quickenrichContactFinder(apiKey, body, { workspaceId, feature: "findProspects" });
   // A real API failure surfaces as this source's error in perSource + the
   // run log, exactly like every other source in the fan-out.
   if (!res.ok) throw new Error(`QuickEnrich contact-finder failed: ${res.error}`);
@@ -191,15 +201,17 @@ async function discoverViaQuickEnrich(
     .sort((a, b) => Number(b.hasEmail) - Number(a.hasEmail))
     .slice(0, headroom);
   await recordPullLedger(workspaceId, "quickenrich", [input.jobTitle, input.industry, input.location].filter(Boolean).join(" · ") || "person search", kept.length);
-  return kept.map((p) => ({
-    firstName: p.firstName,
-    lastName: p.lastName,
-    title: p.title,
-    linkedinUrl: p.linkedinUrl,
-    sourceUrl: p.linkedinUrl,
-    companyName: p.companyName,
-    companyDomain: p.companyDomain,
-  }));
+  return {
+    raw: kept.map((p) => ({
+      firstName: p.firstName,
+      lastName: p.lastName,
+      title: p.title,
+      linkedinUrl: p.linkedinUrl,
+      sourceUrl: p.linkedinUrl,
+      companyName: p.companyName,
+      companyDomain: p.companyDomain,
+    })),
+  };
 }
 
 export type SearchMode = "person" | "account";
@@ -421,23 +433,25 @@ export async function runDiscovery(
   // migration 0172) applies on this surface exactly as in the ARE engine: a
   // source the workspace disabled never runs, whatever the mode mix says.
   // ORDER is irrelevant here — raw finds are consolidated, not first-claimed.
-  type SourceTask = { id: AreSourceId; run: () => Promise<{ source: string; raw: Array<Record<string, unknown>> }> };
+  //
+  // "Web scraping" is not offered (audit 2026-10-20, P62/A25): it reads a
+  // page at a URL, and this search is text, so it returned nothing every time
+  // while showing as a source. It stays on the Scraper tab, for a URL.
+  type SourceTask = { id: AreSourceId; run: () => Promise<{ source: string } & SourceOut> };
   const candidates: SourceTask[] = mode === "person"
     ? [
-      { id: "linkedin", run: () => discoverLinkedInPeople(workspaceId, query).then((raw) => ({ source: "linkedin_people", raw })) },
-      { id: "web", run: () => scrapeWeb(workspaceId, null, query, icpContext).then((raw) => ({ source: "web", raw })) },
+      { id: "linkedin", run: () => discoverLinkedInPeople(workspaceId, query).then((r) => ({ source: "linkedin_people", ...r })) },
       { id: "news", run: () => scrapeNews(workspaceId, null, query, icpContext).then((raw) => ({ source: "news", raw })) },
-      { id: "apollo", run: () => discoverViaApollo(workspaceId, mode, input).then((raw) => ({ source: "apollo", raw })) },
-      { id: "quickenrich", run: () => discoverViaQuickEnrich(workspaceId, input as PersonSearchInput).then((raw) => ({ source: "quickenrich", raw })) },
+      { id: "apollo", run: () => discoverViaApollo(workspaceId, mode, input).then((r) => ({ source: "apollo", ...r })) },
+      { id: "quickenrich", run: () => discoverViaQuickEnrich(workspaceId, input as PersonSearchInput).then((r) => ({ source: "quickenrich", ...r })) },
     ]
     : [
       // Account mode keeps the company-shaped sources. LinkedIn's classic
       // search is people-only, so there's no real "company" LinkedIn source to
       // include here — the old scrapeLinkedIn(...,"company") just fabricated.
       { id: "google_business", run: () => scrapeGoogleBusiness(workspaceId, null, query, icpContext).then((raw) => ({ source: "google_business", raw })) },
-      { id: "web", run: () => scrapeWeb(workspaceId, null, query, icpContext).then((raw) => ({ source: "web", raw })) },
       { id: "news", run: () => scrapeNews(workspaceId, null, query, icpContext).then((raw) => ({ source: "news", raw })) },
-      { id: "apollo", run: () => discoverViaApollo(workspaceId, mode, input).then((raw) => ({ source: "apollo", raw })) },
+      { id: "apollo", run: () => discoverViaApollo(workspaceId, mode, input).then((r) => ({ source: "apollo", ...r })) },
     ];
   const [wsSourceRow] = await db
     .select({ order: workspaceSettings.areSourceOrder, mask: workspaceSettings.areScraperSources })
@@ -462,7 +476,7 @@ export async function runDiscovery(
   const tasks = candidates.filter((c) => runSet.has(c.id)).map((c) => c.run());
 
   const settled = await Promise.allSettled(tasks);
-  const perSource: Record<string, { found: number; error?: string }> = {};
+  const perSource: Record<string, { found: number; error?: string; note?: string }> = {};
   let totalFinds = 0;
   const rowsToInsert: typeof rawFinds.$inferInsert[] = [];
 
@@ -474,11 +488,12 @@ export async function runDiscovery(
         `Source failed: ${reason}`, { reason });
       continue;
     }
-    const { source, raw } = s.value;
-    perSource[source] = { found: raw.length };
+    const { source, raw, note } = s.value;
+    perSource[source] = { found: raw.length, ...(note ? { note } : {}) };
     totalFinds += raw.length;
-    await emitLog(workspaceId, runId, "source.complete", "info",
-      `Source ${source} returned ${raw.length} finds`, { source, count: raw.length });
+    // A source that could not run says why (P63), and says it as a warning.
+    await emitLog(workspaceId, runId, "source.complete", note ? "warn" : "info",
+      `Source ${source} returned ${raw.length} finds${note ? ` — ${note}` : ""}`, { source, count: raw.length, ...(note ? { note } : {}) });
     for (const r of raw) {
       rowsToInsert.push(toRawFindRow(workspaceId, runId, source, r));
     }

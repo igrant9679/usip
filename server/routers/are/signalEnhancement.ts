@@ -9,6 +9,11 @@
  * The enhanced hook is stored in prospectIntelligence.enhancedHook and
  * signalEnhancedAt is stamped so the sequence engine can use it for the next
  * outreach step.
+ *
+ * ⚠️ NOT CALLED (audit 2026-10-20, A38). Nothing reads enhancedHook, so every
+ * email open paid for a rewrite nobody used. processSignal stopped calling
+ * this; wire the hook into the sequence writer before calling it again. The
+ * call below is metered against the workspace for when that happens.
  */
 
 import { and, eq } from "drizzle-orm";
@@ -121,6 +126,8 @@ export async function runSignalEnhancement(
           : "accepted your LinkedIn connection";
 
     const result = await invokeLLM({
+      workspaceId,
+      feature: "are.signalEnhancement",
       messages: [
         {
           role: "system",

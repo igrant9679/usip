@@ -200,6 +200,8 @@ export async function runSSEStream(
       ...built,
       research: built.research,
       workspaceId,
+      userId,
+      feature: `stream ${req.path}`,
       signal: abort.signal,
     })) {
       if (res.writableEnded) break;

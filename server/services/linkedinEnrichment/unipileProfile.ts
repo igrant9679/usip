@@ -34,13 +34,27 @@ export interface RetrieveOutcome {
   viaAccountId: string | null;
   identifier: string | null;
   message: string;
+  /**
+   * The account limits held it (status "rate_limited"): nothing reached
+   * LinkedIn. Stop, keep the item pending, try again after retryAfterMs (or
+   * on a later tick when null). Never a reason to call a profile unavailable.
+   */
+  blocked?: { reason: string; retryAfterMs: number | null };
 }
 
-/** Classify a lookupProfile failure message into a typed status. */
+/**
+ * Classify a lookupProfile failure that was NOT a hold (holds come typed, as
+ * `blocked`). Until 2026-10-27 holds were guessed from the wording, and a
+ * pacing or working-hours refusal ("…for this account…") read as a missing
+ * account or a vendor error (audit P6/P7). "Not found" is the one answer that
+ * says the profile itself is gone.
+ */
 function classify(message: string, hadIdentifier: boolean): RetrieveStatus {
   if (!hadIdentifier) return "invalid_url";
-  if (/cap|limit/i.test(message)) return "rate_limited";
-  if (/bridged|connect|account/i.test(message)) return "source_unavailable";
+  if (/no linkedin accounts are bridged|haven't bridged|isn't available in this workspace pool/i.test(message)) return "source_unavailable";
+  // A vendor throttle is a hold too, even though it reached LinkedIn.
+  if (/\b429\b|too many requests/i.test(message)) return "rate_limited";
+  if (/\b404\b|not found|no longer exists|does not exist/i.test(message)) return "no_match";
   return "vendor_error";
 }
 
@@ -57,8 +71,23 @@ export async function retrieveLinkedInProfileByUrl(opts: {
   requestedAccountId?: string;
   /** A person enriching one record (2026-10-05): allowed while LinkedIn activity is switched off. */
   personInitiated?: boolean;
+  /** Wait out a spacing hold up to this long (background paths). */
+  waitMs?: number;
+  /** What looked it up, for the spend report. */
+  feature?: string;
 }): Promise<RetrieveOutcome> {
   const res = await lookupProfile(opts);
+  if (res.blocked) {
+    return {
+      ok: false,
+      status: "rate_limited",
+      profile: null,
+      viaAccountId: res.viaAccountId,
+      identifier: res.identifier,
+      message: res.message,
+      blocked: res.blocked,
+    };
+  }
   if (res.ok && res.profile) {
     return {
       ok: true,
@@ -94,6 +123,8 @@ export async function retrieveByNameCompany(opts: {
     company?: string | null; city?: string | null; state?: string | null; country?: string | null;
   };
   personInitiated?: boolean;
+  /** Wait out a spacing hold up to this long (background paths). */
+  waitMs?: number;
 }): Promise<RetrieveOutcome> {
   const p = opts.prospect;
   const keywords = [
@@ -107,13 +138,15 @@ export async function retrieveByNameCompany(opts: {
   }
   const res = await searchLinkedInProfiles({
     workspaceId: opts.workspaceId, userId: opts.userId, isAdmin: opts.isAdmin, keywords, limit: 3, source: "enrichment",
-    personInitiated: opts.personInitiated,
+    personInitiated: opts.personInitiated, waitMs: opts.waitMs,
   });
   if (!res.ok) {
     // A policy refusal (paused, capped, paced, outside hours) reached no
     // vendor: a retry-later condition, never a verdict on the person.
-    const status: RetrieveStatus = res.blocked ? "rate_limited" : classify(res.message, true);
-    return { ok: false, status, profile: null, viaAccountId: res.viaAccountId, identifier: null, message: res.message };
+    if (res.blocked) {
+      return { ok: false, status: "rate_limited", profile: null, viaAccountId: res.viaAccountId, identifier: null, message: res.message, blocked: { reason: res.blocked, retryAfterMs: null } };
+    }
+    return { ok: false, status: classify(res.message, true), profile: null, viaAccountId: res.viaAccountId, identifier: null, message: res.message };
   }
   if (res.hits.length === 0) {
     return { ok: false, status: "no_match", profile: null, viaAccountId: res.viaAccountId, identifier: null, message: "No LinkedIn profile matched these identifiers" };

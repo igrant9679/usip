@@ -19,6 +19,19 @@ type RequestStore = {
    * signed-in user.
    */
   clientIp?: string;
+  /**
+   * What the request is doing, for the spend report (services/spend): the
+   * tRPC path, set by the base middleware. Background engines have none and
+   * name themselves on each paid call.
+   */
+  feature?: string;
+  /**
+   * Server-side background work started on someone's behalf (a persisted bulk
+   * job, services/jobs/runner.ts). Set only by server code, never from a
+   * request. The per-user burst ceiling is an interactive control and skips
+   * it; the workspace's monthly budget still applies.
+   */
+  background?: boolean;
 };
 
 const als = new AsyncLocalStorage<RequestStore>();
@@ -68,4 +81,12 @@ export function getRequestUserId(): number | undefined {
 
 export function getRequestClientIp(): string | undefined {
   return als.getStore()?.clientIp;
+}
+
+export function getRequestFeature(): string | undefined {
+  return als.getStore()?.feature;
+}
+
+export function isBackgroundWork(): boolean {
+  return als.getStore()?.background === true;
 }

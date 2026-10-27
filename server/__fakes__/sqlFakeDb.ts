@@ -6,8 +6,8 @@
  * condition object that merely looks right. It understands only what the
  * routers under test write: ANDs (and one level of OR) of =, <>, <, >, <=, >=,
  * IS NULL, IN and NOT IN, LIKE ('%' wildcards, case-insensitive), column-to-column equality in (inner and left) joins, ORDER BY a column,
- * LIMIT, GROUP BY with count(*), `col + n` or `COALESCE(col, NOW() | ?)` in an UPDATE, and an insert's
- * onDuplicateKeyUpdate against the table's unique indexes, `lower(col) = ?`, and
+ * LIMIT, GROUP BY with count(*) or SUM(col), `col + n`, `col + ?` or `COALESCE(col, NOW() | ?)` in an UPDATE or an
+ * insert's onDuplicateKeyUpdate against the table's unique indexes, `lower(col) = ?`, `DATE(col) = ?`, and
  * db.transaction(fn) — which rolls every table back if fn throws. Anything else
  * throws, naming the clause, so a test never passes on SQL it did not read.
  *
@@ -77,15 +77,53 @@ export function makeSqlFakeDb(opts: {
     return x < y ? -1 : x > y ? 1 : 0;
   };
   const REF = "(`\\w+`(?:\\.`\\w+`)?)";
+  /** Split on `sep` outside any parentheses. */
+  const splitTop = (s: string, sep: string): string[] => {
+    const out: string[] = [];
+    let depth = 0, start = 0;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === "(") depth++;
+      else if (s[i] === ")") depth--;
+      else if (depth === 0 && s.startsWith(sep, i)) { out.push(s.slice(start, i).trim()); start = i + sep.length; }
+    }
+    out.push(s.slice(start).trim());
+    return out;
+  };
+  /** Whether one pair of parentheses encloses the whole of `s`. */
+  const wrapped = (s: string): boolean => {
+    if (!s.startsWith("(") || !s.endsWith(")")) return false;
+    let depth = 0;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === "(") depth++;
+      else if (s[i] === ")") depth--;
+      if (depth === 0 && i < s.length - 1) return false;
+    }
+    return true;
+  };
   const evalClause = (clause: string, ctx: Row, params: unknown[], pi: { i: number }): boolean => {
     let m: RegExpMatchArray | null;
-    if (clause.startsWith("(") && clause.endsWith(")") && clause.includes(" or ")) {
-      const parts = clause.slice(1, -1).split(" or ").map((c) => c.trim());
-      let any = false;
-      for (const p of parts) if (evalClause(p, ctx, params, pi)) any = true; // every part consumes its params
-      return any;
+    // A parenthesised group: OR of its top-level parts, else AND of them, at
+    // any depth ("(a or (b and c))"). Every part consumes its params.
+    if (wrapped(clause)) {
+      const inner = clause.slice(1, -1).trim();
+      const ors = splitTop(inner, " or ");
+      if (ors.length > 1) {
+        let any = false;
+        for (const p of ors) if (evalClause(p, ctx, params, pi)) any = true;
+        return any;
+      }
+      const ands = splitTop(inner, " and ");
+      let all = true;
+      for (const p of ands) if (!evalClause(p, ctx, params, pi)) all = false;
+      return all;
     }
     if ((m = clause.match(new RegExp(`^${REF} = \\?$`)))) return same(lookup(ctx, m[1]), params[pi.i++]);
+    // DATE(col) = 'YYYY-MM-DD': the UTC calendar day of the stored value.
+    if ((m = clause.match(new RegExp(`^DATE\\(${REF}\\) = \\?$`)))) {
+      const v = lookup(ctx, m[1]);
+      const day = v instanceof Date ? v.toISOString().slice(0, 10) : v == null ? null : String(v).slice(0, 10);
+      return day === String(params[pi.i++]).slice(0, 10);
+    }
     if ((m = clause.match(new RegExp(`^lower\\(${REF}\\) = \\?$`)))) {
       const v = lookup(ctx, m[1]);
       return v != null && String(v).toLowerCase() === String(params[pi.i++]);
@@ -96,8 +134,8 @@ export function makeSqlFakeDb(opts: {
     if ((m = clause.match(new RegExp(`^${REF} > \\?$`)))) return cmp(lookup(ctx, m[1]), params[pi.i++]) > 0;
     if ((m = clause.match(new RegExp(`^${REF} <= \\?$`)))) { const v = lookup(ctx, m[1]); const p = params[pi.i++]; return v != null && cmp(v, p) <= 0; }
     if ((m = clause.match(new RegExp(`^${REF} >= \\?$`)))) { const v = lookup(ctx, m[1]); const p = params[pi.i++]; return v != null && cmp(v, p) >= 0; }
-    if ((m = clause.match(new RegExp(`^${REF} is null$`)))) return lookup(ctx, m[1]) == null;
-    if ((m = clause.match(new RegExp(`^${REF} is not null$`)))) return lookup(ctx, m[1]) != null;
+    if ((m = clause.match(new RegExp(`^${REF} is null$`, "i")))) return lookup(ctx, m[1]) == null;
+    if ((m = clause.match(new RegExp(`^${REF} is not null$`, "i")))) return lookup(ctx, m[1]) != null;
     if ((m = clause.match(new RegExp(`^${REF} like \\?$`)))) {
       const v = lookup(ctx, m[1]);
       const pat = String(params[pi.i++]).split("%").map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
@@ -124,17 +162,10 @@ export function makeSqlFakeDb(opts: {
     const { sql, params } = render(cond);
     let s = sql.trim();
     // Strip the outer AND group's parentheses only (not an OR group's).
-    if (s.startsWith("(") && s.endsWith(")") && !/^\([^()]* or [^()]*\)$/.test(s)) s = s.slice(1, -1).trim();
+    if (wrapped(s) && splitTop(s.slice(1, -1).trim(), " or ").length === 1) s = s.slice(1, -1).trim();
     const pi = { i: 0 };
     // Split on top-level " and " only.
-    const clauses: string[] = [];
-    let depth = 0, start = 0;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] === "(") depth++;
-      else if (s[i] === ")") depth--;
-      else if (depth === 0 && s.startsWith(" and ", i)) { clauses.push(s.slice(start, i).trim()); start = i + 5; }
-    }
-    clauses.push(s.slice(start).trim());
+    const clauses = splitTop(s, " and ");
     let ok = true;
     for (const c of clauses) if (!evalClause(c, ctx, params, pi)) ok = false; // keep consuming params
     return ok;
@@ -188,6 +219,11 @@ export function makeSqlFakeDb(opts: {
         }
         return undefined;
       };
+      // An aggregate over rows: SUM(col) adds the column; anything else counts.
+      const aggregate = (qs: Row[], v: unknown): number => {
+        const s = render(v as SQL).sql.match(/sum\((`\w+`\.`\w+`)\)/i);
+        return s ? qs.reduce((a, q) => a + Number(lookup(q, s[1]) ?? 0), 0) : qs.length;
+      };
       let out: Row[];
       if (st.group) {
         const groups = new Map<string, Row[]>();
@@ -198,13 +234,13 @@ export function makeSqlFakeDb(opts: {
         }
         out = Array.from(groups.values()).map((qs) => {
           const r: Row = {};
-          for (const [k, v] of Object.entries(projection ?? {})) r[k] = is(v, SQL) ? qs.length : pick(qs[0], v);
+          for (const [k, v] of Object.entries(projection ?? {})) r[k] = is(v, SQL) ? aggregate(qs, v) : pick(qs[0], v);
           return r;
         });
       } else if (projection && Object.values(projection).some((v) => is(v, SQL))) {
         // An aggregate with no GROUP BY (`select({ c: count() })`): one row.
         const r: Row = {};
-        for (const [k, v] of Object.entries(projection)) r[k] = is(v, SQL) ? ctxs.length : pick(ctxs[0]?.q ?? {}, v);
+        for (const [k, v] of Object.entries(projection)) r[k] = is(v, SQL) ? aggregate(ctxs.map((c) => c.q), v) : pick(ctxs[0]?.q ?? {}, v);
         out = [r];
       } else if (projection) {
         out = ctxs.map((c) => {
@@ -264,7 +300,7 @@ export function makeSqlFakeDb(opts: {
           if (!twin) continue;
           all.splice(all.indexOf(r), 1);
           inserted.splice(inserted.indexOf(r), 1);
-          Object.assign(twin, set);
+          for (const [k, v] of Object.entries(set)) twin[k] = is(v, SQL) ? setExpression(table, twin, v as SQL) : v;
         }
         return chain;
       },
@@ -272,6 +308,25 @@ export function makeSqlFakeDb(opts: {
       then(res: (v: unknown) => void) { res([{ affectedRows: inserted.length, insertId: inserted[0]?.id }]); },
     };
     return chain;
+  };
+
+  /**
+   * The value an SQL expression in SET gives row `r`: COALESCE(col, NOW() | ?)
+   * keeps a value that is there; `col + n` and `col + ?` add to it.
+   */
+  const setExpression = (table: any, r: Row, v: SQL): unknown => {
+    const q = render(v);
+    const co = q.sql.match(/^COALESCE\((`\w+`\.`\w+`), (NOW\(\)|\?)\)$/i);
+    if (co) {
+      const cur = lookup(qualify(table, r), co[1]);
+      return cur ?? (co[2] === "?" ? q.params[0] : new Date());
+    }
+    const m = q.sql.match(/`(\w+)` \+ (\d+|\?)$/);
+    if (!m) throw new Error(`fake db: unsupported SET ${q.sql}`);
+    // The SQL names the DB column (session_version); the row is keyed by the
+    // JS name (sessionVersion).
+    const src = Object.entries(getTableColumns(table)).find(([, c]) => (c as Column).name === m[1])?.[0] ?? m[1];
+    return Number(r[src] ?? 0) + Number(m[2] === "?" ? q.params[0] : m[2]);
   };
 
   const update = (table: any) => {
@@ -288,24 +343,7 @@ export function makeSqlFakeDb(opts: {
               let n = 0;
               for (const r of rowsOf(name)) {
                 if (!matches(cond, qualify(table, r))) continue;
-                for (const [k, v] of Object.entries(values)) {
-                  if (is(v, SQL)) {
-                    // COALESCE(col, NOW()) / COALESCE(col, ?): keep a value that is there.
-                    const q = render(v);
-                    const co = q.sql.match(/^COALESCE\((`\w+`\.`\w+`), (NOW\(\)|\?)\)$/i);
-                    if (co) {
-                      const cur = lookup(qualify(table, r), co[1]);
-                      r[k] = cur ?? (co[2] === "?" ? q.params[0] : new Date());
-                      continue;
-                    }
-                    const m = q.sql.match(/`(\w+)` \+ (\d+)$/);
-                    if (!m) throw new Error(`fake db: unsupported SET ${render(v).sql}`);
-                    // The SQL names the DB column (session_version); the row is
-                    // keyed by the JS name (sessionVersion).
-                    const src = Object.entries(getTableColumns(table)).find(([, c]) => (c as Column).name === m[1])?.[0] ?? m[1];
-                    r[k] = Number(r[src] ?? 0) + Number(m[2]);
-                  } else r[k] = v;
-                }
+                for (const [k, v] of Object.entries(values)) r[k] = is(v, SQL) ? setExpression(table, r, v as SQL) : v;
                 // ON UPDATE CURRENT_TIMESTAMP, as MySQL applies it: an updatedAt
                 // the statement sets explicitly is kept.
                 if (!("updatedAt" in values)) r.updatedAt = new Date();

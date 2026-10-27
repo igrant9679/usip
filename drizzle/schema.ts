@@ -1977,6 +1977,16 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
   // endpoint; credits are spent later by the sweep's lookup pass, only on
   // delivery. Consumed by discoverViaQuickenrich in areEngine.
   quickenrichDailyPullCap: int("quickenrichDailyPullCap").default(50).notNull(),
+  // ── Shared deployment keys (migration 0215; owner decision 2026-10-27) ──
+  // The env REOON_API_KEY / QUICKENRICH_API_KEY are the platform's accounts.
+  // A workspace without its own key may use them only when the platform owner
+  // has switched this on (routers/spend.ts); getReoonKey/getQuickEnrichKey
+  // honour it. The daily caps bound that workspace's use of the shared key,
+  // counted from spend_ledger; NULL = no cap beyond the vendor's own.
+  sharedReoonKey: boolean("sharedReoonKey").default(false).notNull(),
+  sharedQuickenrichKey: boolean("sharedQuickenrichKey").default(false).notNull(),
+  sharedReoonDailyCap: int("sharedReoonDailyCap"),
+  sharedQuickenrichDailyCap: int("sharedQuickenrichDailyCap"),
   // Per-workspace ARE source checking ORDER (Migration 0172): AreSourceId[].
   // Read ONLY through @shared/areSources.resolveSourceOrder together with
   // areScraperSources (the EXISTING enable mask — one vocabulary, runtime-
@@ -2368,6 +2378,72 @@ export const usageCounters = mysqlTable(
   }),
 );
 export type UsageCounter = typeof usageCounters.$inferSelect;
+
+/**
+ * Every paid call, per workspace per UTC day (migration 0215, audit Phase 3).
+ * One row per (workspace, day, vendor, meter, model, keySource, feature),
+ * incremented atomically by services/spend.ts and nowhere else. workspaceId 0
+ * = a call no workspace could be found for. `meter` names the vendor's billing
+ * unit (input_tokens, power_credits, email_hits…), `keySource` whose account
+ * paid ("workspace" = its own key, "shared" = the deployment's).
+ */
+export const spendLedger = mysqlTable(
+  "spend_ledger",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    day: varchar("day", { length: 10 }).notNull(),
+    vendor: varchar("vendor", { length: 24 }).notNull(),
+    meter: varchar("meter", { length: 32 }).notNull(),
+    model: varchar("model", { length: 96 }).default("").notNull(),
+    keySource: varchar("keySource", { length: 12 }).notNull(),
+    feature: varchar("feature", { length: 96 }).default("").notNull(),
+    quantity: bigint("quantity", { mode: "number" }).default(0).notNull(),
+    calls: int("calls").default(0).notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    ux: uniqueIndex("ux_spend_row").on(t.workspaceId, t.day, t.vendor, t.meter, t.model, t.keySource, t.feature),
+    byDay: index("ix_spend_day").on(t.day),
+  }),
+);
+export type SpendLedgerRow = typeof spendLedger.$inferSelect;
+
+/**
+ * Background work that survives a restart (migration 0216, audit A37/P11):
+ * the bulk AI actions and "Recompute all", drained in slices by
+ * services/jobs/runner.ts. `resumeFrom` is where the next slice starts (a
+ * position or a last id, as the job's kind defines it); `heartbeatAt` tells
+ * a live worker from a dead one.
+ */
+export const bulkJobs = mysqlTable(
+  "bulk_jobs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId"),
+    kind: varchar("kind", { length: 48 }).notNull(),
+    /** queued | running | done | failed | canceled */
+    status: varchar("status", { length: 16 }).default("queued").notNull(),
+    total: int("total").default(0).notNull(),
+    done: int("done").default(0).notNull(),
+    failed: int("failed").default(0).notNull(),
+    resumeFrom: int("resumeFrom").default(0).notNull(),
+    payload: json("payload"),
+    failures: json("failures"),
+    message: varchar("message", { length: 500 }),
+    heartbeatAt: timestamp("heartbeatAt"),
+    startedAt: timestamp("startedAt"),
+    finishedAt: timestamp("finishedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byStatus: index("ix_bj_status").on(t.status, t.id),
+    byWsKind: index("ix_bj_ws_kind").on(t.workspaceId, t.kind, t.status),
+  }),
+);
+export type BulkJobRow = typeof bulkJobs.$inferSelect;
 
 /* ──────────────────────────────────────────────────────────────────────────
    Visual Canvas Sequence Builder (Sprint 2 — Tier 1)
@@ -4226,6 +4302,9 @@ export const areEngineLogs = mysqlTable(
     level: varchar("level", { length: 8 }).default("info").notNull(),
     message: text("message").notNull(),
     details: json("details"),
+    /** How many times this exact line was written in a row (migration 0217, audit A24), and when last. */
+    repeatCount: int("repeatCount").default(1).notNull(),
+    lastSeenAt: timestamp("lastSeenAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
@@ -5136,8 +5215,13 @@ export const linkedinEnrichmentBatches = mysqlTable(
     uploadedByUserId: int("uploaded_by_user_id").notNull(),
     /** pasted_urls | csv_upload */
     sourceType: varchar("source_type", { length: 32 }).notNull(),
-    /** created | validating | validated | running | completed | failed */
+    /** created | validating | validated | queued | running | waiting | completed | failed */
     status: varchar("status", { length: 24 }).default("created").notNull(),
+    /** Who queued the run (migration 0216): the account pool it may use. */
+    runByUserId: int("run_by_user_id"),
+    /** Why a "waiting" batch is waiting: the account limits held a lookup. */
+    holdReason: varchar("hold_reason", { length: 300 }),
+    heartbeatAt: timestamp("heartbeat_at"),
     totalRows: int("total_rows").default(0).notNull(),
     validRows: int("valid_rows").default(0).notNull(),
     invalidRows: int("invalid_rows").default(0).notNull(),
@@ -5298,8 +5382,10 @@ export const linkedinDailyCheckJobs = mysqlTable(
   {
     id: int("id").autoincrement().primaryKey(),
     workspaceId: int("workspaceId").notNull(),
-    /** pending | running | completed | failed */
+    /** pending | running | waiting | completed | failed — one row per workspace per UTC day */
     status: varchar("status", { length: 16 }).default("pending").notNull(),
+    /** Why a "waiting" day is waiting (migration 0216): the account limits held a lookup. */
+    holdReason: varchar("hold_reason", { length: 300 }),
     checkedCount: int("checked_count").default(0).notNull(),
     changedCount: int("changed_count").default(0).notNull(),
     failedCount: int("failed_count").default(0).notNull(),
@@ -5335,8 +5421,13 @@ export const linkedinEnrichmentJobs = mysqlTable(
     triggeredByUserId: int("triggered_by_user_id").notNull(),
     /** people_bulk_action | people_row_action | open_profile_action | full_profile_action | list_bulk_action | list_enrich_all | account_contacts_action | daily_monitoring | manual_admin_run */
     triggerType: varchar("trigger_type", { length: 32 }).notNull(),
-    /** queued | running | completed | failed */
+    /** queued | running | waiting | completed | failed */
     status: varchar("status", { length: 16 }).default("queued").notNull(),
+    /** The run's EnrichOptions (migration 0216), so the queue resumes it the same way. */
+    options: json("options"),
+    /** Why a "waiting" job is waiting: the account limits held a lookup. */
+    holdReason: varchar("hold_reason", { length: 300 }),
+    heartbeatAt: timestamp("heartbeat_at"),
     totalProspects: int("total_prospects").default(0).notNull(),
     eligibleCount: int("eligible_count").default(0).notNull(),
     enrichedCount: int("enriched_count").default(0).notNull(),
@@ -5371,6 +5462,8 @@ export const linkedinEnrichmentJobItems = mysqlTable(
     /** pending | skipped | retrieving | matched | enriched | needs_review | conflict | failed | blocked_by_policy | unavailable */
     status: varchar("status", { length: 20 }).default("pending").notNull(),
     errorMessage: text("error_message"),
+    /** needs_review / conflict: the profile the run found, which "Confirm & apply" applies (migration 0216, audit P8). */
+    candidateProfile: json("candidate_profile"),
     startedAt: timestamp("started_at"),
     completedAt: timestamp("completed_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),

@@ -438,6 +438,7 @@ export async function backfillQueueCompanies(opts: {
   if (live.length === 0) return { ...empty, stoppedBecause: "no_candidates" as const };
 
   const { retrieveLinkedInProfileByUrl } = await import("./linkedinEnrichment/unipileProfile");
+  const { LOOKUP_WAIT_MS } = await import("./linkedinEnrichment/lookupQueue");
   let attempted = 0, filled = 0, withDomain = 0, noCompanyOnProfile = 0, fromHeadline = 0;
   const byStatus: Record<string, number> = {};
   const samples: string[] = [];
@@ -452,6 +453,10 @@ export async function backfillQueueCompanies(opts: {
         userId: opts.userId,
         isAdmin: opts.isAdmin,
         linkedinUrl: r.linkedinUrl ?? "",
+        // Pace through the account's spacing instead of stopping at its first
+        // hold (audit P7: every row after the first used to be refused).
+        waitMs: LOOKUP_WAIT_MS,
+        feature: "companyBackfill",
       });
       byStatus[out.status] = (byStatus[out.status] ?? 0) + 1;
       if (samples.length < 3 && out.status !== "enriched" && out.message) samples.push(`${out.status}: ${out.message}`.slice(0, 200));
@@ -657,7 +662,7 @@ export async function sweepWorkspace(
         break;
       }
       try {
-        const found = await quickenrichFindEmailByLinkedIn(qeKey, q.linkedinUrl ?? "");
+        const found = await quickenrichFindEmailByLinkedIn(qeKey, q.linkedinUrl ?? "", { workspaceId, feature: "enrichmentSweep" });
         result.attempted++;
         result.fromQueue++;
         result.quickenrichAttempted++;
@@ -678,7 +683,7 @@ export async function sweepWorkspace(
           // guess, a wrong database entry looks exactly like a right one.
           let status = "unknown";
           try {
-            const v = await reoonVerifySingle(found.email, key, "power");
+            const v = await reoonVerifySingle(found.email, key, "power", { workspaceId, feature: "enrichmentSweep" });
             result.creditsPower++;
             dailyCreditsLeft--;
             status = reoonStatusToUsip(v.status);

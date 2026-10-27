@@ -915,7 +915,7 @@ export function createWarmySenderSource(deps?: { fetchImpl?: typeof fetch }): Pr
       };
     },
 
-    async acquire(externalIds, c, _ctx) {
+    async acquire(externalIds, c, ctx) {
       if (externalIds.length === 0) return { ok: true, records: [], unitsSpent: 0, failedExternalIds: [] };
       const schema = cfg(c).toolSchemas?.export_leads ?? null;
       const res = await mcpCall(c, "tools/call", { name: "export_leads", arguments: buildExportLeadsArgs(externalIds, schema) }, "mcp.export_leads", { fetchImpl: f });
@@ -945,6 +945,13 @@ export function createWarmySenderSource(deps?: { fetchImpl?: typeof fetch }): Pr
       }
       const charged = pick(payload ?? {}, ["units_spent", "charged", "credits_used", "new_leads", "spent", "units_used", "leads_used", "used"]);
       const unitsSpent = typeof charged === "number" ? charged : records.filter((r) => r.email && !r.emailIsMasked).length;
+      // One unit per NEW lead delivered (their billing). Counted here, the one
+      // place both the campaign engine and Source search acquire through.
+      const { recordSpend } = await import("../../spend");
+      await recordSpend({
+        workspaceId: c.workspaceId, vendor: "warmysender", meter: "leads", quantity: unitsSpent,
+        keySource: "workspace", feature: ctx?.campaignId ? "are.discovery" : "sourceSearch",
+      });
       return { ok: true, records, unitsSpent, failedExternalIds: failed } as AcquisitionResult & { ok: true };
     },
 

@@ -22,7 +22,7 @@ import { reengageProspectManually } from "../services/linkedinEnrichment/jobChan
 import { recordAudit } from "../audit";
 import { checkLinkedInEnrichmentHealth } from "../services/linkedinEnrichment/health";
 import {
-  createBatch, runBatch, applyReview, getBatch, getBatchRows,
+  createBatch, startBatch, retryFailedRows, applyReview, getBatch, getBatchRows,
 } from "../services/linkedinEnrichment/batchService";
 import {
   getProspectEnrichment,
@@ -35,7 +35,10 @@ import {
 import { retrieveLinkedInProfileByUrl, retrieveByNameCompany } from "../services/linkedinEnrichment/unipileProfile";
 import { determineLookupStrategy } from "../services/linkedinEnrichment/lookupStrategy";
 import { scoreIntendedMatch } from "../services/linkedinEnrichment/matching";
-import { runDailyCheckForWorkspace, getLastDailyCheck } from "../services/linkedinEnrichment/dailyCheck";
+import { dailyCheckDue, getLastDailyCheck } from "../services/linkedinEnrichment/dailyCheck";
+import { drainLinkedInLookups } from "../services/linkedinEnrichment/lookupQueue";
+import { listUsableAccounts } from "../services/linkedinLookup";
+import type { VelocityLinkedInProfile } from "../services/linkedinEnrichment/mapper";
 import { runForProspects, runForList, getJob, getJobItems } from "../services/linkedinEnrichment/orchestrator";
 import {
   prospects,
@@ -63,6 +66,30 @@ const enrichOptions = z.object({
 // One rank map — _core/workspace.ts.
 function requireRole(role: string, min: "manager" | "admin") {
   requireMinRole(role, min, "You don't have permission to run LinkedIn enrichment.");
+}
+
+/**
+ * Profile lookups the caller's accounts have left today (their own account,
+ * or the workspace pool for an admin), so a bulk run can say up front how far
+ * today will get (audit P7/P92). The rest waits in the queue for tomorrow.
+ */
+async function lookupsLeftToday(ctx: { workspace: { id: number }; user: { id: number }; member: { role: string } }): Promise<number> {
+  const pool = await listUsableAccounts({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin: isAdminRole(ctx.member.role) });
+  return pool.reduce((a, acct) => a + acct.remainingToday, 0);
+}
+
+/** The candidate a review item would apply, as the review list shows it (audit P8). */
+function candidateSummary(stored: unknown) {
+  const p = (stored as { profile?: Partial<VelocityLinkedInProfile> } | null)?.profile;
+  if (!p) return null;
+  return {
+    fullName: p.fullName ?? ([p.firstName, p.lastName].filter(Boolean).join(" ") || null),
+    headline: p.headline ?? null,
+    currentTitle: p.currentTitle ?? null,
+    currentCompanyName: p.currentCompanyName ?? null,
+    location: p.location ?? null,
+    profileUrl: p.profileUrl ?? null,
+  };
 }
 
 async function emitActivity(opts: {
@@ -118,6 +145,9 @@ export const linkedinEnrichmentRouter = router({
       options: enrichOptions,
     }))
     .mutation(async ({ ctx, input }) => {
+      // Audit P92: anyone could start a 500-person run. One record is a
+      // person's own lookup; more is a bulk spend of the shared accounts.
+      if (input.prospectIds.length > 1) requireRole(ctx.member.role, "manager");
       const isAdmin = isAdminRole(ctx.member.role);
       const health = await checkLinkedInEnrichmentHealth({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin });
       if (health.status !== "connected") {
@@ -132,7 +162,7 @@ export const linkedinEnrichmentRouter = router({
         prospectId: input.prospectIds.length === 1 ? input.prospectIds[0] : undefined,
         subject: `LinkedIn enrichment started for ${handle.total} prospect(s)`,
       });
-      return handle;
+      return { ...handle, lookupsLeftToday: await lookupsLeftToday(ctx) };
     }),
 
   /** One-click enrich for a list — selected members or every eligible member. */
@@ -144,21 +174,30 @@ export const linkedinEnrichmentRouter = router({
       options: enrichOptions,
     }))
     .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "manager"); // audit P92
       const isAdmin = isAdminRole(ctx.member.role);
       const health = await checkLinkedInEnrichmentHealth({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin });
       if (health.status !== "connected") {
         throw new TRPCError({ code: "FAILED_PRECONDITION", message: health.missing_requirements[0] ?? "LinkedIn integration not ready." });
       }
-      const handle = await runForList({
-        workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin,
-        listId: input.listId, prospectIds: input.prospectIds, enrichAll: input.enrichAll, options: input.options,
-      });
+      let handle;
+      try {
+        handle = await runForList({
+          workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin,
+          listId: input.listId, prospectIds: input.prospectIds, enrichAll: input.enrichAll, options: input.options,
+        });
+      } catch (e) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: (e as Error).message });
+      }
       await emitActivity({
         workspaceId: ctx.workspace.id, actorUserId: ctx.user.id,
         subject: `LinkedIn enrichment started for ${handle.total} list member(s)`,
       });
-      return handle;
+      return { ...handle, lookupsLeftToday: await lookupsLeftToday(ctx) };
     }),
+
+  /** Lookups the caller's accounts have left today (the Enrich and "Run now" confirmations, audit P92/P157). */
+  lookupsLeft: workspaceProcedure.query(async ({ ctx }) => ({ lookupsLeftToday: await lookupsLeftToday(ctx) })),
 
   /** Job status + counters (poll this for progress). */
   getJob: workspaceProcedure
@@ -230,6 +269,9 @@ export const linkedinEnrichmentRouter = router({
         linkedinUrlUsed: r.item.linkedinUrlUsed,
         errorMessage: r.item.errorMessage,
         createdAt: r.item.createdAt,
+        // What "Confirm & apply" will apply (audit P8), or null for items from
+        // before 2026-10-27, which kept nothing and need Enrich again.
+        candidate: candidateSummary(r.item.candidateProfile),
       }));
     }),
 
@@ -275,7 +317,13 @@ export const linkedinEnrichmentRouter = router({
       return summary;
     }),
 
-  /** Run Unipile retrieval + matching for a batch. */
+  /**
+   * Queue a batch's lookups (audit 2026-10-20, P7/P90). They used to run
+   * inside this request, back to back, so every row after the first failed
+   * on the pacing refusal, and a second click re-spent them. The LinkedIn
+   * queue now works the batch's pending rows at the pace the account limits
+   * allow; the page polls getBatch.
+   */
   runBatch: workspaceProcedure
     .input(z.object({ batchId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
@@ -287,15 +335,33 @@ export const linkedinEnrichmentRouter = router({
       if (health.status !== "connected") {
         throw new TRPCError({ code: "FAILED_PRECONDITION", message: health.missing_requirements[0] ?? "LinkedIn integration not ready." });
       }
-      const summary = await runBatch({
-        workspaceId: ctx.workspace.id, userId: ctx.user.id,
-        isAdmin: isAdminRole(ctx.member.role), batchId: input.batchId,
-      });
+      let started;
+      try {
+        started = await startBatch({ workspaceId: ctx.workspace.id, batchId: input.batchId, userId: ctx.user.id });
+      } catch (e) {
+        throw new TRPCError({ code: "CONFLICT", message: (e as Error).message });
+      }
+      void drainLinkedInLookups({ onlyWorkspaceId: ctx.workspace.id }).catch((e) => console.error("[linkedinQueue] batch start failed:", e));
       await emitActivity({
         workspaceId: ctx.workspace.id, actorUserId: ctx.user.id,
-        subject: `LinkedIn batch run: ${summary.matchedRows} enriched, ${summary.needsReviewRows} to review, ${summary.failedRows} failed`,
+        subject: `LinkedIn batch queued: ${started.pending} profile(s) to look up`,
       });
-      return summary;
+      return { batchId: input.batchId, ...started, lookupsLeftToday: await lookupsLeftToday(ctx) };
+    }),
+
+  /** Put a batch's failed rows back in the queue (audit P90). */
+  retryFailedRows: workspaceProcedure
+    .input(z.object({ batchId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "manager");
+      let r;
+      try {
+        r = await retryFailedRows({ workspaceId: ctx.workspace.id, batchId: input.batchId, userId: ctx.user.id });
+      } catch (e) {
+        throw new TRPCError({ code: "CONFLICT", message: (e as Error).message });
+      }
+      if (r.retried > 0) void drainLinkedInLookups({ onlyWorkspaceId: ctx.workspace.id }).catch((e) => console.error("[linkedinQueue] retry failed:", e));
+      return r;
     }),
 
   /** Batch status + summary. */
@@ -420,48 +486,45 @@ export const linkedinEnrichmentRouter = router({
    * it also lets an operator resolve a single flagged record on demand.
    */
   confirmEnrich: workspaceProcedure
-    .input(z.object({ prospectId: z.number().int().positive() }))
+    .input(z.object({ itemId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       requireRole(ctx.member.role, "manager");
-      const isAdmin = isAdminRole(ctx.member.role);
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      const health = await checkLinkedInEnrichmentHealth({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin });
-      if (health.status !== "connected") {
-        throw new TRPCError({ code: "FAILED_PRECONDITION", message: health.missing_requirements[0] ?? "LinkedIn integration not ready." });
+      // Audit 2026-10-20 (P8): this re-ran the lookup and applied whatever
+      // came back first, which the reviewer had never seen, and spent a second
+      // lookup doing it. It now applies the candidate the Enrich run found,
+      // the one the review list shows, and looks nothing up.
+      const [item] = await db.select().from(linkedinEnrichmentJobItems)
+        .where(and(
+          eq(linkedinEnrichmentJobItems.workspaceId, ctx.workspace.id),
+          eq(linkedinEnrichmentJobItems.id, input.itemId),
+          inArray(linkedinEnrichmentJobItems.status, ["needs_review", "conflict"]),
+        ));
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "That review item is gone or already resolved." });
+      const stored = item.candidateProfile as { profile?: VelocityLinkedInProfile; viaAccountId?: string | null } | null;
+      if (!stored?.profile) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This item kept no candidate (it is from before 2026-10-27). Run Enrich again for this person." });
       }
 
       const [p] = await db.select().from(prospects)
-        .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.id, input.prospectId)));
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.id, item.prospectId)));
       if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found." });
       // Compliance — never enrich a suppressed/rejected prospect, even on confirm.
       const block = enrichmentBlockReason(p);
       if (block) throw new TRPCError({ code: "FORBIDDEN", message: block });
 
-      const [prior] = await db.select({ url: prospectLinkedinEnrichments.linkedinProfileUrl })
-        .from(prospectLinkedinEnrichments)
-        .where(and(eq(prospectLinkedinEnrichments.workspaceId, ctx.workspace.id), eq(prospectLinkedinEnrichments.prospectId, p.id)));
-
-      const { strategy, url } = determineLookupStrategy(p as never, prior?.url ?? null);
-      if (strategy === "unavailable") {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "No LinkedIn URL or enough profile context to enrich this prospect." });
-      }
-
-      const retrieve = url
-        ? await retrieveLinkedInProfileByUrl({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin, linkedinUrl: url, personInitiated: true })
-        : await retrieveByNameCompany({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin, prospect: p as never, personInitiated: true });
-      if (!retrieve.ok || !retrieve.profile) {
-        throw new TRPCError({ code: "BAD_GATEWAY", message: retrieve.message });
-      }
-
       // Score for the audit record, but apply regardless — the reviewer confirmed identity.
-      const match = scoreIntendedMatch(p as never, retrieve.profile, { userInitiatedSingle: true });
+      const match = scoreIntendedMatch(p as never, stored.profile, { userInitiatedSingle: true });
       const applied = await applyEnrichment({
-        workspaceId: ctx.workspace.id, prospectId: p.id, profile: retrieve.profile,
-        matchStatus: match.status, sourceAccountId: retrieve.viaAccountId,
-        imageAllowed: !!retrieve.profile.profileImageUrl,
+        workspaceId: ctx.workspace.id, prospectId: p.id, profile: stored.profile,
+        matchStatus: match.status, sourceAccountId: stored.viaAccountId ?? null,
+        imageAllowed: !!stored.profile.profileImageUrl,
       });
+      await db.update(linkedinEnrichmentJobItems)
+        .set({ status: "enriched", completedAt: new Date() })
+        .where(and(eq(linkedinEnrichmentJobItems.workspaceId, ctx.workspace.id), eq(linkedinEnrichmentJobItems.id, item.id)));
 
       await recordAudit({
         workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update",
@@ -475,17 +538,28 @@ export const linkedinEnrichmentRouter = router({
       return { ok: true as const, matchStatus: match.status, matchScore: match.score, changes: applied.changes };
     }),
 
-  /** Admin-only: force-run the daily LinkedIn change check for this workspace. */
+  /** What "Run now" would do: profiles due and lookups left today (audit P157). */
+  dailyCheckPreview: workspaceProcedure.query(async ({ ctx }) => {
+    requireRole(ctx.member.role, "admin");
+    return { due: await dailyCheckDue(ctx.workspace.id), lookupsLeftToday: await lookupsLeftToday(ctx) };
+  }),
+
+  /**
+   * Admin-only: start today's change check now (audit P157). It used to force
+   * up to 250 lookups back to back, unconfirmed; it now checks the profiles
+   * that are due, through the LinkedIn queue, at the pace the account limits
+   * allow. The page confirms with dailyCheckPreview first.
+   */
   dailyCheckRun: workspaceProcedure
-    .input(z.object({ force: z.boolean().default(true) }))
-    .mutation(async ({ ctx, input }) => {
+    .mutation(async ({ ctx }) => {
       requireRole(ctx.member.role, "admin");
-      const res = await runDailyCheckForWorkspace({ workspaceId: ctx.workspace.id, force: input.force, trigger: "manual" });
+      const due = await dailyCheckDue(ctx.workspace.id);
+      void drainLinkedInLookups({ onlyWorkspaceId: ctx.workspace.id }).catch((e) => console.error("[linkedinQueue] daily check start failed:", e));
       await emitActivity({
         workspaceId: ctx.workspace.id, actorUserId: ctx.user.id,
-        subject: `LinkedIn daily check: ${res.checked} checked, ${res.changed} changed`,
+        subject: `LinkedIn change check started for ${due} profile(s)`,
       });
-      return res;
+      return { due };
     }),
 
   /** Last daily-check run for this workspace (status card). */

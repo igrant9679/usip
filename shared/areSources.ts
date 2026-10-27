@@ -17,6 +17,11 @@
  * Rule going forward: a source may appear here ONLY if the engine actually
  * runs it. If you add an entry, add its branch in areEngine.runDiscovery in
  * the same commit — an option that does nothing is worse than no option.
+ *
+ * "web" was removed 2026-10-27 (audit A25/P62): it reads a page at a URL, and
+ * discovery hands it search text, so it found nobody, every tick, on every
+ * campaign. normalizeSources drops it from stored campaigns and settings.
+ * Scraping a page a person names stays on the campaign's Scraper tab.
  */
 
 export const ARE_SOURCES = [
@@ -34,11 +39,6 @@ export const ARE_SOURCES = [
     id: "linkedin",
     label: "LinkedIn",
     description: "Find decision-makers matching your title filters via your connected LinkedIn account.",
-  },
-  {
-    id: "web",
-    label: "Web scraping",
-    description: "Extract prospects from company sites, team pages, and directory listings.",
   },
   {
     id: "news",
@@ -104,7 +104,6 @@ export const ARE_DEFAULT_SOURCE_ORDER: AreSourceId[] = [
   "apollo",
   "google_business",
   "news",
-  "web",
 ];
 
 /**

@@ -74,6 +74,9 @@ afterEach(() => {
   }
 });
 
+/** Who a paid call is billed to (audit Phase 3): required on every call. */
+const M = { workspaceId: 7, feature: "test" };
+
 describe("getQuickEnrichKey — same contract as getReoonKey/getApolloKey", () => {
   it("prefers the workspace's own encrypted key", async () => {
     // Round-trips through the REAL encryptSecret/tryDecryptSecret, so a drift
@@ -83,17 +86,25 @@ describe("getQuickEnrichKey — same contract as getReoonKey/getApolloKey", () =
     expect(await getQuickEnrichKey(7)).toBe("ws-key-123");
   });
 
-  it("falls back to the env var when the workspace column is empty", async () => {
-    mocks.getDb.mockResolvedValue(dbWithRow(null));
+  // 2026-10-27 (owner decision, audit A58): the deployment's key is no longer
+  // a silent fallback. A workspace without its own key gets it only when the
+  // platform owner switched it on (workspace_settings.sharedQuickenrichKey).
+  // The stub answers every query with the same row, so one row carries both
+  // the key column and the switch.
+  it("uses the deployment's key only when the platform owner allowed this workspace", async () => {
     process.env.QUICKENRICH_API_KEY = "env-key";
+    mocks.getDb.mockResolvedValue(dbWithRow({ enc: null }));
+    expect(await getQuickEnrichKey(7)).toBe("");
+    mocks.getDb.mockResolvedValue(dbWithRow({ enc: null, quickenrich: true, quickenrichCap: null }));
     expect(await getQuickEnrichKey(7)).toBe("env-key");
   });
 
-  it("falls back to the env var when the ciphertext is corrupt", async () => {
-    // tryDecryptSecret's whole purpose: a mangled column must degrade to the
-    // deploy-wide key, not crash the request.
-    mocks.getDb.mockResolvedValue(dbWithRow({ enc: "not:valid:ciphertext" }));
+  it("a corrupt ciphertext degrades like an empty column, never a crash", async () => {
+    // tryDecryptSecret's whole purpose: a mangled column must not crash the request.
     process.env.QUICKENRICH_API_KEY = "env-key";
+    mocks.getDb.mockResolvedValue(dbWithRow({ enc: "not:valid:ciphertext" }));
+    expect(await getQuickEnrichKey(7)).toBe("");
+    mocks.getDb.mockResolvedValue(dbWithRow({ enc: "not:valid:ciphertext", quickenrich: true, quickenrichCap: null }));
     expect(await getQuickEnrichKey(7)).toBe("env-key");
   });
 
@@ -102,16 +113,16 @@ describe("getQuickEnrichKey — same contract as getReoonKey/getApolloKey", () =
     expect(await getQuickEnrichKey(7)).toBe("");
   });
 
-  it("skips the DB entirely without a workspaceId", async () => {
+  it("without a workspace there is nobody to bill: no key, and no DB read", async () => {
     process.env.QUICKENRICH_API_KEY = "env-key";
-    expect(await getQuickEnrichKey(null)).toBe("env-key");
+    expect(await getQuickEnrichKey(null)).toBe("");
     expect(mocks.getDb).not.toHaveBeenCalled();
   });
 
-  it("a DB failure degrades to the env var rather than throwing", async () => {
+  it("a DB failure grants nothing and does not throw: the shared key is opt-in", async () => {
     mocks.getDb.mockRejectedValue(new Error("connection refused"));
     process.env.QUICKENRICH_API_KEY = "env-key";
-    expect(await getQuickEnrichKey(7)).toBe("env-key");
+    expect(await getQuickEnrichKey(7)).toBe("");
   });
 });
 
@@ -201,7 +212,7 @@ describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () =
     ["work_email spelling", { data: { work_email: "ada@acme.io" } }],
   ])("finds the address in a %s envelope", async (_name, body) => {
     mocks.fetch.mockResolvedValue(jsonResponse(200, body));
-    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    const r = await quickenrichFindEmailByLinkedIn("k", LI, M);
     expect(r.reason).toBe("found");
     expect(r.email).toBe("ada@acme.io"); // lowercased
   });
@@ -211,7 +222,7 @@ describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () =
     // can 200 with no rows, which reads exactly like "not in their DB". So a
     // miss on the historical param retries once under the renamed one.
     mocks.fetch.mockResolvedValue(jsonResponse(200, { data: {} }));
-    await quickenrichFindEmailByLinkedIn("k", LI);
+    await quickenrichFindEmailByLinkedIn("k", LI, M);
     expect(mocks.fetch).toHaveBeenCalledTimes(2);
     const [url1, opts] = mocks.fetch.mock.calls[0];
     const [url2] = mocks.fetch.mock.calls[1];
@@ -222,7 +233,7 @@ describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () =
 
   it("a hit on the first param never spends the second call", async () => {
     mocks.fetch.mockResolvedValue(jsonResponse(200, { data: { email: "ada@acme.io" } }));
-    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    const r = await quickenrichFindEmailByLinkedIn("k", LI, M);
     expect(r.reason).toBe("found");
     expect(mocks.fetch).toHaveBeenCalledTimes(1);
   });
@@ -231,7 +242,7 @@ describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () =
     mocks.fetch
       .mockResolvedValueOnce(jsonResponse(404, {}))
       .mockResolvedValueOnce(jsonResponse(200, { data: { email: "ada@acme.io" } }));
-    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    const r = await quickenrichFindEmailByLinkedIn("k", LI, M);
     expect(r.reason).toBe("found");
     expect(r.email).toBe("ada@acme.io");
   });
@@ -240,32 +251,32 @@ describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () =
     mocks.fetch
       .mockResolvedValueOnce(jsonResponse(500, {}))
       .mockResolvedValueOnce(jsonResponse(404, {}));
-    expect((await quickenrichFindEmailByLinkedIn("k", LI)).reason).toBe("no_match");
+    expect((await quickenrichFindEmailByLinkedIn("k", LI, M)).reason).toBe("no_match");
   });
 
   it("a 404 is a no_match, not an error", async () => {
     mocks.fetch.mockResolvedValue(jsonResponse(404, {}));
-    expect((await quickenrichFindEmailByLinkedIn("k", LI)).reason).toBe("no_match");
+    expect((await quickenrichFindEmailByLinkedIn("k", LI, M)).reason).toBe("no_match");
   });
 
   it("a recognisable envelope with no address is a no_match", async () => {
     mocks.fetch.mockResolvedValue(jsonResponse(200, { data: { first_name: "Ada" } }));
-    expect((await quickenrichFindEmailByLinkedIn("k", LI)).reason).toBe("no_match");
+    expect((await quickenrichFindEmailByLinkedIn("k", LI, M)).reason).toBe("no_match");
   });
 
   it("never accepts a non-address string as an email", async () => {
     // has_email flags and status words must not leak into the email field —
     // that is the Email Status bug wearing an API costume.
     mocks.fetch.mockResolvedValue(jsonResponse(200, { data: { email: "valid" } }));
-    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    const r = await quickenrichFindEmailByLinkedIn("k", LI, M);
     expect(r.email).toBeNull();
   });
 
   it("HTTP failure and network failure return distinct reasons, and never throw", async () => {
     mocks.fetch.mockResolvedValue(jsonResponse(500, {}));
-    expect((await quickenrichFindEmailByLinkedIn("k", LI)).reason).toBe("http_error");
+    expect((await quickenrichFindEmailByLinkedIn("k", LI, M)).reason).toBe("http_error");
     mocks.fetch.mockRejectedValue(new Error("ETIMEDOUT"));
-    expect((await quickenrichFindEmailByLinkedIn("k", LI)).reason).toBe("network_error");
+    expect((await quickenrichFindEmailByLinkedIn("k", LI, M)).reason).toBe("network_error");
   });
 
   it("harvests company identity alongside the address", async () => {
@@ -274,7 +285,7 @@ describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () =
     mocks.fetch.mockResolvedValue(jsonResponse(200, {
       data: { email: "ada@acme.io", company_name: "Acme Inc", company_url: "https://www.acme.io/about" },
     }));
-    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    const r = await quickenrichFindEmailByLinkedIn("k", LI, M);
     expect(r.reason).toBe("found");
     expect(r.companyName).toBe("Acme Inc");
     expect(r.companyDomain).toBe("acme.io");
@@ -284,7 +295,7 @@ describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () =
     mocks.fetch.mockResolvedValue(jsonResponse(200, {
       data: { first_name: "Ada", company_name: "Acme Inc", email_domain: "acme.io" },
     }));
-    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    const r = await quickenrichFindEmailByLinkedIn("k", LI, M);
     expect(r.reason).toBe("no_match");
     expect(r.email).toBeNull();
     expect(r.companyDomain).toBe("acme.io");
@@ -295,7 +306,7 @@ describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () =
     mocks.fetch
       .mockResolvedValueOnce(jsonResponse(200, { data: { first_name: "Ada", company_domain: "acme.io" } }))
       .mockResolvedValueOnce(jsonResponse(404, {}));
-    const r = await quickenrichFindEmailByLinkedIn("k", LI);
+    const r = await quickenrichFindEmailByLinkedIn("k", LI, M);
     expect(r.reason).toBe("no_match");
     expect(r.companyDomain).toBe("acme.io");
   });
@@ -571,7 +582,7 @@ describe("quickenrichContactFinder — free discovery, defensively parsed", () =
         { first_name: "Full", last_name: "Url", employee_linkedin: "https://www.linkedin.com/in/full-url", has_email: false },
       ],
     }));
-    const r = await quickenrichContactFinder("k", BODY);
+    const r = await quickenrichContactFinder("k", BODY, M);
     if (!r.ok) throw new Error(r.error);
     expect(r.people).toHaveLength(2);
     expect(r.people[0].linkedinUrl).toBe("https://www.linkedin.com/in/rosa-nunez-1a2b");
@@ -590,7 +601,7 @@ describe("quickenrichContactFinder — free discovery, defensively parsed", () =
         locality: "Richmond, Virginia, United States", city: "Richmond", country_code: "US",
       }],
     }));
-    const r = await quickenrichContactFinder("k", BODY);
+    const r = await quickenrichContactFinder("k", BODY, M);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.people).toEqual([{
@@ -612,7 +623,7 @@ describe("quickenrichContactFinder — free discovery, defensively parsed", () =
         { linkedin_url: "https://linkedin.com/in/nameless" },
       ],
     }));
-    const r = await quickenrichContactFinder("k", BODY);
+    const r = await quickenrichContactFinder("k", BODY, M);
     if (!r.ok) throw new Error("expected ok");
     expect(r.people).toHaveLength(1);
     expect(r.people[0].firstName).toBe("Ada");
@@ -624,20 +635,20 @@ describe("quickenrichContactFinder — free discovery, defensively parsed", () =
         { first_name: "A", last_name: "B", linkedin_url: "https://linkedin.com/in/a", has_email: "true" },
       ],
     }));
-    const r = await quickenrichContactFinder("k", BODY);
+    const r = await quickenrichContactFinder("k", BODY, M);
     if (!r.ok) throw new Error("expected ok");
     expect(r.people[0].hasEmail).toBe(false);
   });
 
   it("reports HTTP and envelope failures as errors, and never throws", async () => {
     mocks.fetch.mockResolvedValue(jsonResponse(500, {}));
-    expect((await quickenrichContactFinder("k", BODY)).ok).toBe(false);
+    expect((await quickenrichContactFinder("k", BODY, M)).ok).toBe(false);
     mocks.fetch.mockResolvedValue(jsonResponse(200, { weird: "shape" }));
-    const r = await quickenrichContactFinder("k", BODY);
+    const r = await quickenrichContactFinder("k", BODY, M);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("unrecognised envelope");
     mocks.fetch.mockRejectedValue(new Error("ETIMEDOUT"));
-    expect((await quickenrichContactFinder("k", BODY)).ok).toBe(false);
+    expect((await quickenrichContactFinder("k", BODY, M)).ok).toBe(false);
   });
 });
 

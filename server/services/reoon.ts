@@ -102,17 +102,21 @@ export function getReoonApiKey(): string {
 }
 
 /**
- * The Reoon key for a workspace: its own BYOK column first, the process-wide
- * env var second, "" when neither is set.
+ * The Reoon key for a workspace: its own BYOK column first, then the
+ * deployment's env key ONLY if the platform owner allowed this workspace the
+ * shared key and its daily cap is not used up; "" otherwise.
  *
- * Migration 0131 made this per-workspace. The env fallback is not legacy
- * politeness — it is what lets an already-deployed instance keep verifying
- * while nobody has pasted a key into Settings yet. **Every** Reoon call site
- * must go through here: a key entered in Settings that only some of the app
- * honours is worse than no field at all.
+ * Migration 0131 made this per-workspace. Until 2026-10-27 the env key was a
+ * silent fallback for every workspace, new sign-ups included, so the
+ * platform's Reoon account paid for anyone without a key (audit P10/A58).
+ * The owner made it opt-in per workspace (migration 0215 switched it on for
+ * the three that relied on it). **Every** Reoon call site must go through
+ * here: a key entered in Settings that only some of the app honours is worse
+ * than no field at all.
  *
  * Returns "" rather than throwing — callers report `reoon_key_missing` as a
  * skip reason, and a missing key is a configuration state, not an exception.
+ * No workspace means no shared key: there is nobody to bill it to.
  */
 export async function getReoonKey(workspaceId?: number | null): Promise<string> {
   if (workspaceId) {
@@ -139,10 +143,47 @@ export async function getReoonKey(workspaceId?: number | null): Promise<string> 
         if (plaintext) return plaintext;
       }
     } catch (e) {
+      // A failed read grants nothing: the shared key is opt-in.
       console.error("[reoon] workspace key lookup failed:", (e as Error).message);
+      return "";
     }
   }
-  return process.env.REOON_API_KEY ?? "";
+  if (!workspaceId) return "";
+  const shared = process.env.REOON_API_KEY ?? "";
+  if (!shared) return "";
+  const { sharedKeyUsable } = await import("./spend");
+  const verdict = await sharedKeyUsable(workspaceId, "reoon");
+  if (!verdict.ok) {
+    noteSharedRefusal(workspaceId, verdict.detail);
+    return "";
+  }
+  return shared;
+}
+
+const sharedRefusalNoted = new Set<string>();
+function noteSharedRefusal(workspaceId: number, detail: string): void {
+  const k = `${workspaceId}:${detail}`;
+  if (sharedRefusalNoted.has(k)) return;
+  sharedRefusalNoted.add(k);
+  console.warn(`[reoon] workspace ${workspaceId}: no key — ${detail}.`);
+}
+
+/**
+ * Who a Reoon call is billed to in the spend ledger (services/spend). Required
+ * on every paid call, so a new call site cannot spend without being counted.
+ */
+export type ReoonMeter = { workspaceId: number | null | undefined; feature: string };
+
+async function meterReoon(meter: ReoonMeter, apiKey: string, unit: "daily_credits" | "instant_credits" | "bulk_emails", n: number): Promise<void> {
+  const { recordSpend, keySourceOf } = await import("./spend");
+  await recordSpend({
+    workspaceId: meter.workspaceId,
+    vendor: "reoon",
+    meter: unit,
+    quantity: n,
+    keySource: keySourceOf(apiKey, process.env.REOON_API_KEY),
+    feature: meter.feature,
+  });
 }
 
 export type ReoonMode = "power" | "quick";
@@ -160,18 +201,23 @@ export type ReoonMode = "power" | "quick";
 export async function reoonVerifySingle(
   email: string,
   apiKey: string,
-  mode: ReoonMode = "power",
+  mode: ReoonMode,
+  meter: ReoonMeter,
 ): Promise<ReoonVerifyResult> {
   const timeoutMs = mode === "quick" ? 15_000 : 90_000;
   const url = `${REOON_BASE}/verify?email=${encodeURIComponent(email)}&key=${apiKey}&mode=${mode}`;
   const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`Reoon API error: ${res.status}`);
-  return (await res.json()) as ReoonVerifyResult;
+  const body = (await res.json()) as ReoonVerifyResult;
+  // One credit from the pool the mode draws on (see above).
+  await meterReoon(meter, apiKey, mode === "quick" ? "instant_credits" : "daily_credits", 1);
+  return body;
 }
 
 export async function reoonCreateBulkTask(
   emails: string[],
   apiKey: string,
+  meter: ReoonMeter,
 ): Promise<ReoonBulkCreateResult> {
   const res = await fetch(`${REOON_BASE}/create-bulk-verification-task/`, {
     method: "POST",
@@ -180,7 +226,10 @@ export async function reoonCreateBulkTask(
     signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) throw new Error(`Reoon bulk create error: ${res.status}`);
-  return (await res.json()) as ReoonBulkCreateResult;
+  const task = (await res.json()) as ReoonBulkCreateResult;
+  // Reoon bills the addresses it will check: duplicates it removed are free.
+  await meterReoon(meter, apiKey, "bulk_emails", Number(task.count_processing ?? emails.length));
+  return task;
 }
 
 export async function reoonGetBulkResult(

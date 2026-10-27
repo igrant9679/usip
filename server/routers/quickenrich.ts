@@ -19,6 +19,7 @@ import { encryptSecret, maskSecret, tryDecryptSecret } from "../_core/crypto";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { getQuickEnrichKey, quickenrichPulledToday, quickenrichTestKey } from "../services/quickenrich";
+import { sharedKeyUsable } from "../services/spend";
 
 async function ensureSettingsRow(workspaceId: number): Promise<void> {
   const db = await getDb();
@@ -49,13 +50,17 @@ export const quickenrichRouter = router({
 
     const workspaceKey = tryDecryptSecret(row?.enc);
     const envKey = process.env.QUICKENRICH_API_KEY ?? "";
-    const effective = workspaceKey || envKey;
+    // The deployment's key counts only where getQuickEnrichKey would hand it out.
+    const shared = !workspaceKey && envKey ? await sharedKeyUsable(ctx.workspace.id, "quickenrich") : null;
+    const effective = workspaceKey || (shared?.ok ? envKey : "");
 
     return {
       configured: effective.length > 0,
       masked: maskSecret(effective),
-      /** "workspace" = this workspace's own key, "env" = the deploy-wide fallback. */
-      source: workspaceKey ? ("workspace" as const) : envKey ? ("env" as const) : ("none" as const),
+      /** "workspace" = this workspace's own key, "env" = the deployment's, which the platform owner allowed here. */
+      source: workspaceKey ? ("workspace" as const) : shared?.ok ? ("env" as const) : ("none" as const),
+      /** Why the deployment's key is not in use, when it exists and this workspace has none of its own. */
+      sharedKeyNote: shared && !shared.ok ? shared.detail : null,
       dailyPullCap: row?.cap ?? 50,
       pulledToday: await quickenrichPulledToday(ctx.workspace.id),
     };
@@ -63,8 +68,8 @@ export const quickenrichRouter = router({
 
   /**
    * Set or clear the key. Admins only.
-   * - apiKey="" clears the column, which falls the workspace BACK to the env
-   *   var if the deployment sets one.
+   * - apiKey="" clears the column, which falls the workspace back to the
+   *   deployment's key only if the platform owner allowed it the shared key.
    */
   upsert: adminWsProcedure
     .input(z.object({
