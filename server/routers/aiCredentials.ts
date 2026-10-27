@@ -25,6 +25,7 @@ const providerEnum = z.enum(["anthropic", "openai", "gemini"]);
 
 async function ensureSettingsRow(workspaceId: number): Promise<void> {
   const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
   const existing = await db
     .select({ workspaceId: workspaceSettings.workspaceId })
     .from(workspaceSettings)
@@ -42,6 +43,7 @@ export const aiCredentialsRouter = router({
    */
   get: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
     const rows = await db
       .select({
         anthropicApiKeyEnc: workspaceSettings.anthropicApiKeyEnc,
@@ -96,6 +98,7 @@ export const aiCredentialsRouter = router({
       await checkPermission(ctx, "manage_api_keys");
       await ensureSettingsRow(ctx.workspace.id);
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
 
       const updates: Record<string, string | null> = {};
       if (input.apiKey !== undefined) {
@@ -179,6 +182,7 @@ export const aiCredentialsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await ensureSettingsRow(ctx.workspace.id);
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       await db
         .update(workspaceSettings)
         .set({ aiDefaultProvider: input.provider === "" ? null : input.provider })

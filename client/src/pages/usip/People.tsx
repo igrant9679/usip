@@ -1520,7 +1520,7 @@ function AiEmptyState({
 
       <div className="mt-6 flex items-center justify-center gap-2">
         <Button variant="outline" size="sm" className="gap-1.5" onClick={onImport}><Upload className="size-4" /> Import a CSV</Button>
-        <Button variant="outline" size="sm" className="gap-1.5" onClick={onDiscover}><Search className="size-4" /> Discover prospects</Button>
+        <Button variant="outline" size="sm" className="gap-1.5" onClick={() => onDiscover()}><Search className="size-4" /> Discover prospects</Button>
       </div>
     </div>
   );

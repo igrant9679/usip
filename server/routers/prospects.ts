@@ -872,7 +872,7 @@ export const prospectsRouter = router({
         );
         const scoreConds = [...conditions, ...promotedConds];
         if (input.scoreMinRating) {
-          const set = input.scoreMinRating === "excellent" ? ["excellent"]
+          const set: ("fair" | "good" | "excellent")[] = input.scoreMinRating === "excellent" ? ["excellent"]
             : input.scoreMinRating === "good" ? ["good", "excellent"]
               : ["fair", "good", "excellent"];
           scoreConds.push(inArray(scoreResults.rating, set));

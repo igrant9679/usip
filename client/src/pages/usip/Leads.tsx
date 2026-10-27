@@ -64,10 +64,26 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
     onSuccess: (d) => { setSubject(d.subject ?? ""); setBody(d.body ?? ""); setUseAi(false); },
     onError: (e: any) => toast.error(e.message),
   });
+  // One send per lead: the procedure takes one leadId. Posting { leadIds }
+  // failed validation, so this button never sent anything (found by tsc, X3).
   const send = trpc.leads.sendAdHocEmail.useMutation({
-    onSuccess: () => { setSent(true); onComplete(); },
-    onError: (e: any) => toast.error(e.message),
+    // sendAll catches each failure and says how many sent; nothing to add here.
+    onError: () => {},
   });
+  const [sending, setSending] = useState(false);
+  async function sendAll() {
+    setSending(true);
+    const failed: string[] = [];
+    for (const leadId of leadIds) {
+      try { await send.mutateAsync({ leadId, subject, body }); }
+      catch (e: any) { failed.push(e?.message ?? "failed"); }
+    }
+    setSending(false);
+    if (failed.length === leadIds.length) { toast.error(failed[0]); return; }
+    if (failed.length) toast.warning(`Sent to ${leadIds.length - failed.length} of ${leadIds.length}. ${failed[0]}`);
+    setSent(true);
+    onComplete();
+  }
   function reset() { setSubject(""); setBody(""); setAiPrompt(""); setUseAi(false); setSent(false); }
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) { reset(); } onOpenChange(v); }}>
@@ -88,7 +104,7 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
               {useAi && (
                 <>
                   <Input aria-label="Describe the email" placeholder="Describe the email…" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} className="flex-1 h-8 text-sm" />
-                  <Button size="sm" onClick={() => compose.mutate({ prompt: aiPrompt, contactIds: [] })} disabled={!aiPrompt || compose.isPending}>
+                  <Button size="sm" onClick={() => compose.mutate({ prompt: aiPrompt, toLeadId: leadIds.length === 1 ? leadIds[0] : undefined })} disabled={!aiPrompt || compose.isPending}>
                     {compose.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Generate"}
                   </Button>
                 </>
@@ -98,8 +114,8 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
             <RichTextEditor placeholder="Body…" value={body} onChange={setBody} minHeight="160px" compact aiContext={{ subject, leadId: leadIds.length === 1 ? leadIds[0] : undefined }} />
             <div className="flex gap-2 justify-end">
               <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-              <Button onClick={() => send.mutate({ leadIds, subject, body })} disabled={!subject || isEmptyEmailBody(body) || send.isPending}>
-                {send.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Send className="size-4 mr-1" />}
+              <Button onClick={sendAll} disabled={!subject || isEmptyEmailBody(body) || sending}>
+                {sending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Send className="size-4 mr-1" />}
                 Send
               </Button>
             </div>

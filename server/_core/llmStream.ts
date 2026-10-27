@@ -56,6 +56,7 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
   if (!workspaceId) return ENV_CREDS;
   try {
     const db = await getDb();
+    if (!db) return ENV_CREDS;
     const rows = await db
       .select({
         anthropicApiKeyEnc: workspaceSettings.anthropicApiKeyEnc,
@@ -114,7 +115,8 @@ function resolveProvider(
 
 // ─── Message normalisation (text-only for streaming endpoints) ──────────────
 
-type SimpleMsg = { role: "system" | "user" | "assistant"; content: string };
+// System text goes to `system`; turns are the conversation, user and assistant only.
+type SimpleMsg = { role: "user" | "assistant"; content: string };
 
 function flatten(params: InvokeParams): { system: string; turns: SimpleMsg[] } {
   const system: string[] = [];

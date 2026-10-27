@@ -94,7 +94,8 @@ export class CalDAVAdapter implements CalendarAdapter {
     const calendars = await client.fetchCalendars();
     return calendars.map((c) => ({
       id: c.url,
-      name: c.displayName ?? "Calendar",
+      // displayName can come back as a parsed XML node, not text.
+      name: typeof c.displayName === "string" ? c.displayName : "Calendar",
       description: c.description ?? undefined,
       color: (c as any).calendarColor ?? undefined,
       primary: false,

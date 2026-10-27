@@ -963,7 +963,7 @@ function SequencePromptCard({ campaignId, campaign }: { campaignId: number; camp
     try {
       const payload: Record<string, any> = { id: campaignId };
       for (const f of dirtyFields) payload[f.key] = valueOf(f.key);
-      await update.mutateAsync(payload);
+      await update.mutateAsync(payload as Parameters<typeof update.mutateAsync>[0]);
       toast.success("Saved — applies to the next generation (existing sequences are untouched until regenerated)");
       setDrafts({});
       await utils.are.campaigns.get.invalidate({ id: campaignId });

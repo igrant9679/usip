@@ -334,8 +334,8 @@ function canvasToSteps(nodes: CanvasNode[], edges: CanvasEdge[]): ListStep[] {
       if (step) out.push(step);
     }
     // Pick next edge: prefer sourceHandle="true" if present, else first.
-    const outs = outBySrc.get(cur) ?? [];
-    const next = outs.find((e) => e.sourceHandle === "true") ?? outs[0];
+    const outs: CanvasEdge[] = outBySrc.get(cur) ?? [];
+    const next: CanvasEdge | undefined = outs.find((e) => e.sourceHandle === "true") ?? outs[0];
     cur = next ? next.target : null;
   }
   return out;
@@ -2195,7 +2195,7 @@ export async function autoSendForAllWorkspaces(): Promise<{
   failed: number;
 }> {
   const db = await getDb();
-  if (!db) return { workspacesProcessed: 0, dispatched: 0, skipped: 0, failed: 0 };
+  if (!db) return { workspacesProcessed: 0, dispatched: 0, skipped: 0, skippedNullScore: 0, skippedLowScore: 0, failed: 0 };
 
   const enabledWs = await db
     .select({

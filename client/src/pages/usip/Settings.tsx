@@ -1341,7 +1341,7 @@ function AIProvidersSection({ isAdmin }: { isAdmin: boolean }) {
 
   const [drafts, setDrafts] = useState<Record<string, { apiKey: string; model: string }>>({});
   const setDraft = (id: string, patch: Partial<{ apiKey: string; model: string }>) =>
-    setDrafts((d) => ({ ...d, [id]: { apiKey: "", model: "", ...d[id], ...patch } }));
+    setDrafts((d) => ({ ...d, [id]: { ...(d[id] ?? { apiKey: "", model: "" }), ...patch } }));
 
   const data = credsQ.data;
 

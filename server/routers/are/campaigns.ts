@@ -27,7 +27,7 @@ import { respaceOverdueSteps } from "../../services/are/stepHold";
 import { campaignCapMessage, campaignHeadroom } from "../../services/are/campaignConcurrency";
 import { getAreHubFunnelTotals } from "../../services/performanceMetrics";
 import { recordAudit } from "../../audit";
-import { invokeLLM } from "../../_core/llm";
+import { invokeLLM, contentText } from "../../_core/llm";
 import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 import { MIN_STEP_GAP_DAYS, MAX_STEP_GAP_DAYS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { areExecutionQueue } from "../../../drizzle/schema";
@@ -788,7 +788,7 @@ export const campaignsRouter = router({
           },
         },
       });
-      const content = res.choices[0]?.message?.content;
+      const content = contentText(res.choices[0]?.message?.content);
       if (!content) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "AI returned no targeting" });
       let parsed: {
         targetTitles?: unknown; targetIndustries?: unknown;

@@ -490,19 +490,33 @@ export default function TourBuilderPage() {
   const [isNew, setIsNew] = useState(false);
 
   const { data: tours, refetch } = trpc.tours.list.useQuery({ type: "all", status: "all" });
+  // The list rows carry no steps; editing opens the whole tour (G20: an edit
+  // started from the list row showed no steps, and saving kept none).
+  const fullTour = trpc.tours.get.useQuery({ id: editing?.id ?? 0 }, { enabled: !!editing });
 
   const createMut = trpc.tours.create.useMutation({
     onSuccess: () => { toast.success("Tour created"); refetch(); setIsNew(false); },
     onError: (e) => toast.error(e.message),
   });
+  const utils = trpc.useUtils();
   const updateMut = trpc.tours.update.useMutation({
-    onSuccess: () => { toast.success("Tour updated"); refetch(); setEditing(null); },
+    onSuccess: () => { toast.success("Tour updated"); refetch(); utils.tours.get.invalidate(); setEditing(null); },
     onError: (e) => toast.error(e.message),
   });
   const deleteMut = trpc.tours.delete.useMutation({
     onSuccess: () => { toast.success("Tour deleted"); refetch(); },
     onError: (e) => toast.error(e.message),
   });
+
+  if (editing && !fullTour.data) {
+    return (
+      <Shell title="Tour Builder">
+        <div className="flex items-center justify-center py-24 text-sm text-muted-foreground">
+          {fullTour.error ? `Couldn’t load the tour: ${fullTour.error.message}` : "Loading tour…"}
+        </div>
+      </Shell>
+    );
+  }
 
   if (isNew || editing) {
     return (
@@ -523,7 +537,8 @@ export default function TourBuilderPage() {
             {isNew ? "New Tour" : `Edit: ${editing.name}`}
           </h2>
           <TourForm
-            initial={editing}
+            key={editing?.id ?? "new"}
+            initial={editing ? fullTour.data : null}
             onSave={(data) => {
               if (isNew) {
                 createMut.mutate(data);
@@ -551,15 +566,15 @@ export default function TourBuilderPage() {
         title="Tour Builder"
         description="Create and manage guided tours. Tours appear in the Help Center and as proactive nudges when users first visit a page."
         pageKey="tour-builder"
-        actions={
-          <Button
-            className="bg-violet-600 hover:bg-violet-700 text-white"
-            onClick={() => { setIsNew(true); setEditing(null); }}
-          >
-            <Plus className="h-4 w-4 mr-1" /> New Tour
-          </Button>
-        }
-      />
+      >
+        {/* PageHeader takes its actions as children; an `actions` prop was dropped, so there was no New button (X3.4). */}
+        <Button
+          className="bg-violet-600 hover:bg-violet-700 text-white"
+          onClick={() => { setIsNew(true); setEditing(null); }}
+        >
+          <Plus className="h-4 w-4 mr-1" /> New Tour
+        </Button>
+      </PageHeader>
 
       <div className="px-6 pb-8">
         {(!tours || tours.length === 0) && (
@@ -592,12 +607,12 @@ export default function TourBuilderPage() {
                   <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{tour.description}</p>
                 )}
                 <div className="flex items-center gap-3 mt-1">
-                  <span className="text-xs text-muted-foreground">{tour.steps?.length ?? 0} steps</span>
+                  <span className="text-xs text-muted-foreground">{tour.stepCount} step{tour.stepCount === 1 ? "" : "s"}</span>
                   {tour.estimatedMinutes && (
                     <span className="text-xs text-muted-foreground">~{tour.estimatedMinutes} min</span>
                   )}
-                  {tour.triggerPageKey && (
-                    <span className="text-xs text-muted-foreground">Triggers on: {tour.triggerPageKey}</span>
+                  {tour.pageKey && (
+                    <span className="text-xs text-muted-foreground">Triggers on: {tour.pageKey}</span>
                   )}
                 </div>
               </div>

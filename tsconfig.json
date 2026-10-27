@@ -6,6 +6,9 @@
     "tsBuildInfoFile": "./node_modules/typescript/tsbuildinfo",
     "noEmit": true,
     "module": "ESNext",
+    // Type-checking only (noEmit; Vite and esbuild build). Without a target
+    // tsc assumed ES5 and flagged every for-of over a Set or Map (TS2802).
+    "target": "ES2022",
     "strict": true,
     "lib": ["esnext", "dom", "dom.iterable"],
     "jsx": "preserve",

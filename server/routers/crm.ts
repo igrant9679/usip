@@ -2216,10 +2216,12 @@ export const opportunitiesRouter = router({
         type: a.type,
         subject: a.subject ?? null,
         body: a.body ?? null,
-        disposition: a.disposition ?? null,
+        // The columns are callDisposition and actorUserId; read under other
+        // names, call outcome and author were always blank (X3.6, R7).
+        disposition: a.callDisposition ?? null,
         occurredAt: a.occurredAt ?? a.createdAt,
         createdAt: a.createdAt,
-        createdByUserId: a.createdByUserId ?? null,
+        createdByUserId: a.actorUserId ?? null,
         // Flag activities that are pushed AI meeting summaries
         isMeetingSummary: a.type === "note" && typeof a.subject === "string" && a.subject.startsWith("Meeting Summary:"),
       }));

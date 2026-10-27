@@ -402,7 +402,7 @@ function ForecastView() {
             <Sparkles className="size-4" />
             AI Forecast Commentary
           </div>
-          <Button size="sm" variant="outline" onClick={() => commentaryMut.mutate({})} disabled={commentaryMut.isPending}>
+          <Button size="sm" variant="outline" onClick={() => commentaryMut.mutate()} disabled={commentaryMut.isPending}>
             {commentaryMut.isPending ? <><Loader2 className="size-3.5 animate-spin" /> Generating…</> : "Generate"}
           </Button>
         </div>

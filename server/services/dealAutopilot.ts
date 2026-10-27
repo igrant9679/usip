@@ -20,7 +20,7 @@ import { activeTaskStatuses } from "@shared/taskStatus";
 import { opportunities, tasks, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { closedStageKeys } from "../_core/stageSemantics";
-import { invokeLLM } from "../_core/llm";
+import { invokeLLM, contentText } from "../_core/llm";
 
 function daysSince(d: Date | string | null | undefined): number | null {
   if (!d) return null;
@@ -114,7 +114,7 @@ Return: {
         max_tokens: 300,
         workspaceId,
       });
-      const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
+      const parsed = JSON.parse(contentText(res.choices?.[0]?.message?.content) || "{}");
       const nextStep = String(parsed.nextStep ?? "").slice(0, 250) || o.nextStep;
       const winProb = Math.max(0, Math.min(100, Math.round(Number(parsed.winProb)) ));
       const priority = ["low", "normal", "high", "urgent"].includes(parsed.priority) ? parsed.priority : "normal";

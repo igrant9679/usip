@@ -151,7 +151,7 @@ export const linkedinEnrichmentRouter = router({
       const isAdmin = isAdminRole(ctx.member.role);
       const health = await checkLinkedInEnrichmentHealth({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin });
       if (health.status !== "connected") {
-        throw new TRPCError({ code: "FAILED_PRECONDITION", message: health.missing_requirements[0] ?? "LinkedIn integration not ready." });
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: health.missing_requirements[0] ?? "LinkedIn integration not ready." });
       }
       const handle = await runForProspects({
         workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin,
@@ -178,7 +178,7 @@ export const linkedinEnrichmentRouter = router({
       const isAdmin = isAdminRole(ctx.member.role);
       const health = await checkLinkedInEnrichmentHealth({ workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin });
       if (health.status !== "connected") {
-        throw new TRPCError({ code: "FAILED_PRECONDITION", message: health.missing_requirements[0] ?? "LinkedIn integration not ready." });
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: health.missing_requirements[0] ?? "LinkedIn integration not ready." });
       }
       let handle;
       try {
@@ -333,7 +333,7 @@ export const linkedinEnrichmentRouter = router({
         workspaceId: ctx.workspace.id, userId: ctx.user.id, isAdmin: isAdminRole(ctx.member.role),
       });
       if (health.status !== "connected") {
-        throw new TRPCError({ code: "FAILED_PRECONDITION", message: health.missing_requirements[0] ?? "LinkedIn integration not ready." });
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: health.missing_requirements[0] ?? "LinkedIn integration not ready." });
       }
       let started;
       try {

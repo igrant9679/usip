@@ -20,7 +20,7 @@ import { genuineReplyScope } from "./replyScope";
 import { emailReplies, emailSuppressions, enrollments, tasks, unipileAccounts, unipileMessages, workspaceSettings } from "../../drizzle/schema";
 import { inSendWindow } from "./sendWindow";
 import { getDb } from "../db";
-import { invokeLLM } from "../_core/llm";
+import { invokeLLM, contentText } from "../_core/llm";
 import { refFromRelated, researchUseFor } from "./research/recipient";
 import { humanizeAiCopy } from "./humanCopy";
 import { createMeetingProposal } from "./meetingScheduler";
@@ -123,7 +123,7 @@ Return: {
       max_tokens: 500,
       workspaceId,
     });
-    const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
+    const parsed = JSON.parse(contentText(res.choices?.[0]?.message?.content) || "{}");
     cls = {
       replyClass: (REPLY_CLASSES as readonly string[]).includes(parsed.replyClass) ? parsed.replyClass : "none_of_the_above",
       sentiment: SENTIMENTS.includes(parsed.sentiment) ? parsed.sentiment : "neutral",
@@ -534,7 +534,7 @@ Classes (pick exactly one):
       max_tokens: 500,
       workspaceId,
     });
-    const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
+    const parsed = JSON.parse(contentText(res.choices?.[0]?.message?.content) || "{}");
     cls = {
       replyClass: (REPLY_CLASSES as readonly string[]).includes(parsed.replyClass) ? parsed.replyClass : "none_of_the_above",
       sentiment: SENTIMENTS.includes(parsed.sentiment) ? parsed.sentiment : "neutral",

@@ -19,7 +19,7 @@ import { forbiddenMessage } from "@/lib/forbidden";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
-import { trpc } from "@/lib/trpc";
+import { trpc, type RouterInputs } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -540,18 +540,21 @@ export default function TasksV2() {
   );
 }
 
+/** What tasks.create takes: its type and priority lists, not any string. */
+type NewTask = RouterInputs["tasks"]["create"];
+
 function NewTaskDialog({
   open, onOpenChange, onCreate, pending,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  onCreate: (v: { title: string; description?: string; type: string; priority: string; dueAt?: string }) => void;
+  onCreate: (v: NewTask) => void;
   pending: boolean;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [type, setType] = useState("todo");
-  const [priority, setPriority] = useState("normal");
+  const [type, setType] = useState<NewTask["type"]>("todo");
+  const [priority, setPriority] = useState<NewTask["priority"]>("normal");
   const [due, setDue] = useState("");
 
   const submit = () => {
@@ -581,14 +584,14 @@ function NewTaskDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>Type</Label>
-              <Select value={type} onValueChange={setType}>
+              <Select value={type} onValueChange={(v) => setType(v as NewTask["type"])}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>{TASK_TYPE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
               <Label>Priority</Label>
-              <Select value={priority} onValueChange={setPriority}>
+              <Select value={priority} onValueChange={(v) => setPriority(v as NewTask["priority"])}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="low">Low</SelectItem>

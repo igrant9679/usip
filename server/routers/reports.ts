@@ -289,6 +289,7 @@ export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ 
 
 async function resolveUserNames<T extends Record<string, unknown>>(rows: T[], key: string): Promise<T[]> {
   const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
   const ids = [...new Set(rows.map((r) => r[key]).filter((v): v is number => typeof v === "number" && v > 0))];
   if (ids.length === 0) return rows;
   const found = await db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(inArray(users.id, ids));
@@ -382,6 +383,7 @@ export const reportsRouter = router({
   /* saved reports */
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
     return db.select().from(savedReports).where(eq(savedReports.workspaceId, ctx.workspace.id)).orderBy(desc(savedReports.updatedAt));
   }),
 
@@ -389,6 +391,7 @@ export const reportsRouter = router({
     .input(z.object({ id: z.number().int().optional(), name: z.string().min(1).max(160), spec: specSchema }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       if (input.id) {
         const [existing] = await db.select({ id: savedReports.id }).from(savedReports)
           .where(and(eq(savedReports.id, input.id), eq(savedReports.workspaceId, ctx.workspace.id))).limit(1);
@@ -410,6 +413,7 @@ export const reportsRouter = router({
 
   remove: workspaceProcedure.input(z.object({ id: z.number().int() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
     await db.delete(savedReports).where(and(eq(savedReports.id, input.id), eq(savedReports.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -432,6 +436,7 @@ export const reportsRouter = router({
       // who may not start a delivery must still be able to stop one.
       if (input.freq !== "none") await checkPermission(ctx, "export_data");
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       const [r] = await db.select({ id: savedReports.id }).from(savedReports)
         .where(and(eq(savedReports.id, input.id), eq(savedReports.workspaceId, ctx.workspace.id))).limit(1);
       if (!r) throw new TRPCError({ code: "NOT_FOUND" });
