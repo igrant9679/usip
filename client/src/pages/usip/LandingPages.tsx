@@ -17,8 +17,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { confirmAction } from "@/components/usip/Common";
 import {
-  LayoutTemplate, Plus, Trash2, Copy, ExternalLink, Check, Globe, Eye, Send, Loader2, GripVertical,
+  ArrowLeft, LayoutTemplate, Plus, Trash2, Copy, ExternalLink, Check, Globe, Eye, Send, Loader2, GripVertical,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { isAdminRole } from "@shared/roleRank";
 
 const ALL_FIELDS = [
@@ -121,7 +122,8 @@ export default function LandingPages() {
     <Shell title="Landing Pages">
       <div data-tour-id="landing-pages-list" className="flex h-full min-h-0">
         {/* List */}
-        <aside className="w-72 shrink-0 border-r border-border flex flex-col bg-card/40">
+        {/* A phone shows the list or the open one, not both side by side (X5.5). */}
+        <aside className={cn("w-full md:w-72 shrink-0 border-r border-border flex-col bg-card/40", selectedId ? "hidden md:flex" : "flex")}>
           <div className="h-11 shrink-0 flex items-center gap-2 px-3 border-b border-border">
             <LayoutTemplate className="size-4" style={{ color: accent }} />
             <span className="text-sm font-semibold">Landing Pages</span>
@@ -151,16 +153,19 @@ export default function LandingPages() {
         </aside>
 
         {/* Editor */}
-        <div className="flex-1 min-w-0 overflow-auto">
+        <div className={cn("flex-1 min-w-0 overflow-auto", !selectedId && "hidden md:block")}>
           {!form ? (
             <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
               {selectedId ? <Loader2 className="size-5 animate-spin" /> : "Select a page, or create a new one."}
             </div>
           ) : (
-            <div className="max-w-2xl mx-auto p-6 space-y-6">
+            <div className="max-w-2xl mx-auto p-4 sm:p-6 space-y-6">
+              <Button variant="ghost" size="sm" className="md:hidden -ml-2 h-7 gap-1" onClick={() => setSelectedId(null)}>
+                <ArrowLeft className="size-3.5" /> All pages
+              </Button>
               {/* Header actions */}
-              <div className="flex items-center gap-2">
-                <Input aria-label="Page name" value={form.name} onChange={(e) => patch("name", e.target.value)} className="h-9 text-base font-semibold flex-1" />
+              <div className="flex flex-wrap items-center gap-2">
+                <Input aria-label="Page name" value={form.name} onChange={(e) => patch("name", e.target.value)} className="h-9 text-base font-semibold flex-1 min-w-[12rem]" />
                 {form.status === "published" ? (
                   <Button variant="outline" size="sm" className="h-8" onClick={() => setStatus.mutate({ id: form.id, status: "draft" })}>Unpublish</Button>
                 ) : (

@@ -172,9 +172,9 @@ export default function ListDetail() {
           <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mb-0.5">
             <Link href="/v2/lists" className="hover:text-foreground hover:underline">Lists</Link>
             <span>›</span>
-            <span className="text-foreground truncate max-w-[240px]">{list?.name ?? "…"}</span>
+            <span className="min-w-0 text-foreground truncate max-w-[240px]">{list?.name ?? "…"}</span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
             {editingName ? (
               <div className="flex items-center gap-1">
                 <Input
@@ -183,7 +183,7 @@ export default function ListDetail() {
                   maxLength={200}
                   autoFocus
                   aria-label="List name"
-                  className="h-7 w-64 text-[14px] font-semibold"
+                  className="h-7 w-56 sm:w-64 text-[14px] font-semibold"
                   onKeyDown={(e) => { if (e.key === "Enter") saveName(); if (e.key === "Escape") setEditingName(false); }}
                 />
                 <Button size="icon-sm" variant="ghost" aria-label="Save name" disabled={!nameDraft.trim() || renameMut.isPending} onClick={saveName}>
@@ -193,7 +193,7 @@ export default function ListDetail() {
               </div>
             ) : (
               <>
-                <h1 className="text-[16px] font-semibold tracking-tight truncate max-w-[280px]">{list?.name ?? "Loading…"}</h1>
+                <h1 className="min-w-0 text-[16px] font-semibold tracking-tight truncate max-w-[60vw] sm:max-w-[280px]">{list?.name ?? "Loading…"}</h1>
                 {list && (
                   <Button size="icon-sm" variant="ghost" aria-label="Rename list" title="Rename list" onClick={() => { setNameDraft(list.name); setEditingName(true); }}>
                     <Pencil className="size-3.5 text-muted-foreground" />

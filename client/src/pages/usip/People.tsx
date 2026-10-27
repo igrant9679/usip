@@ -113,6 +113,8 @@ import { SearchSettingsSheet, type AppliedFilter } from "@/components/usip/peopl
 import { LinkedInEnrichmentSummaryCard, EnrichButton } from "@/components/usip/people/LinkedInEnrichment";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { pressable } from "@/lib/pressable";
+import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
+import { useIsMobile } from "@/hooks/useMobile";
 
 /* ─────────────────────────── filter rail ──────────────────────────────── */
 
@@ -276,6 +278,9 @@ export default function People() {
 
   // ── view state ──
   const [hideFilters, setHideFilters] = useState(false);
+  // Below md the filter rail is a sheet the toolbar's Filters button opens.
+  const phone = useIsMobile();
+  const [filtersSheet, setFiltersSheet] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [photoBatchOpen, setPhotoBatchOpen] = useState(false);
   const [checked, setChecked] = useState<Set<number>>(new Set());
@@ -861,7 +866,7 @@ export default function People() {
     <Shell title="People">
       <div data-tour-id="people-table" className="flex flex-col h-full min-h-0" style={{ ["--people-accent" as any]: accent }}>
         {/* Compact title row */}
-        <div className="relative shrink-0 flex items-center gap-2 px-4 h-11 border-b border-border bg-card/40">
+        <div className="relative shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 min-h-11 py-1.5 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <Users className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Find people</h1>
@@ -887,8 +892,13 @@ export default function People() {
         {/* body: filter rail | results | detail panel */}
         <div className="flex flex-1 min-h-0">
           {/* ── filter rail (the fulcrum) ── */}
-          {!hideFilters && (
-            <aside className="w-64 shrink-0 border-r border-border flex flex-col min-h-0 bg-card/30">
+          {(phone || !hideFilters) && (
+            <ResponsiveRail
+              title="Filters"
+              open={filtersSheet}
+              onOpenChange={setFiltersSheet}
+              className="w-64 shrink-0 border-r border-border flex-col min-h-0 bg-card/30"
+            >
               {/* stats strip — each tile IS the saved-status filter: Total
                   clears it, Net new / Saved apply it, and the counts come
                   from the server across the whole filtered dataset so the
@@ -942,7 +952,7 @@ export default function People() {
                   <SlidersHorizontal className="size-3.5" /> More filters
                 </button>
               </div>
-            </aside>
+            </ResponsiveRail>
           )}
 
           {/* ── centre column ── */}
@@ -958,8 +968,8 @@ export default function People() {
                 onRemove={removeSavedSearch}
               />
 
-              <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => setHideFilters((v) => !v)}>
-                <Filter className="size-4" /> {hideFilters ? "Show" : "Hide"} filters{activeCount ? ` (${activeCount})` : ""}
+              <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => (phone ? setFiltersSheet(true) : setHideFilters((v) => !v))}>
+                <Filter className="size-4" /> {phone ? "Filters" : `${hideFilters ? "Show" : "Hide"} filters`}{activeCount ? ` (${activeCount})` : ""}
               </Button>
 
               <div className="flex items-center gap-1.5 px-2 h-7 rounded-md border bg-background text-[11px] min-w-[104px] flex-1 max-w-[160px]">
@@ -1161,6 +1171,7 @@ const fmtShortDate = (d: string | Date | null | undefined) => {
 };
 
 function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => void; onOpenFull: () => void }) {
+  // A 384 px panel beside the table on a desktop; the whole screen on a phone (R78).
   // The list row (p) renders instantly; the full record carries the resolved
   // profile_image (stripped from search results) so the avatar can show here.
   const { data: full } = trpc.prospects.get.useQuery({ id: p.id });
@@ -1209,7 +1220,15 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
   const summary: string | null = e?.summaryAbout || e?.linkedinHeadline || null;
 
   return (
-    <aside className="w-96 shrink-0 border-l border-border flex flex-col min-h-0 bg-card shadow-lg">
+    <ResponsiveRail
+      title="Quick Preview"
+      side="right"
+      open
+      onOpenChange={(o) => { if (!o) onClose(); }}
+      className="w-96 shrink-0 border-l border-border flex-col min-h-0 bg-card shadow-lg"
+      sheetClassName="w-full max-w-none sm:max-w-md"
+      ownHeader
+    >
       {/* panel header */}
       <div className="relative shrink-0 flex h-11 items-center justify-between border-b border-border px-4">
         <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: "var(--people-accent, hsl(var(--foreground)))" }} />
@@ -1373,7 +1392,7 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
           />
         </div>
       </div>
-    </aside>
+    </ResponsiveRail>
   );
 }
 

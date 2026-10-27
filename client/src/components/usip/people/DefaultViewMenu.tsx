@@ -56,7 +56,7 @@ export function DefaultViewMenu({
           <Table2 className="size-4" /> {activeName} <ChevronDown className="size-3.5 opacity-60" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-[420px] p-0">
+      <PopoverContent align="start" className="w-[420px] max-w-[calc(100vw-1rem)] p-0">
         {/* search */}
         <div className="p-2.5 border-b">
           <div className="flex items-center gap-2 px-2 h-8 rounded-md border bg-background">

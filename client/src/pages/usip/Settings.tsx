@@ -189,7 +189,7 @@ export function LegacySettingsSection({ tab, title }: { tab: TabId; title: strin
 
   return (
     <>
-      <div className="shrink-0 px-6 pt-4 flex items-start justify-between gap-3">
+      <div className="shrink-0 px-4 sm:px-6 pt-4 flex flex-wrap items-start justify-between gap-3">
         <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto bg-muted/40 mt-3">

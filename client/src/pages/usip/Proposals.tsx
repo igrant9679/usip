@@ -624,7 +624,7 @@ export default function Proposals() {
       ]} />
       {/* Bulk action bar */}
       {selectedIds.size > 0 && (
-        <div className="flex items-center gap-3 px-6 py-2.5 bg-teal-500/10 border-b border-teal-500/30 shrink-0">
+        <div className="flex flex-wrap items-center gap-3 px-4 sm:px-6 py-2.5 bg-teal-500/10 border-b border-teal-500/30 shrink-0">
           <span className="text-sm font-medium text-teal-600">{selectedIds.size} selected</span>
           <Button
             size="sm"

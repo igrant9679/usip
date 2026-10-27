@@ -82,7 +82,7 @@ export default function LeadRouting() {
         ) : rules.length === 0 ? (
           <EmptyState icon={Sparkles} title="No routing rules yet" description="Add a rule to auto-assign new leads on creation." />
         ) : (
-          <div className="rounded-lg border bg-card overflow-hidden">
+          <div className="rounded-lg border bg-card overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-secondary/50 text-xs uppercase text-muted-foreground">
                 <tr>

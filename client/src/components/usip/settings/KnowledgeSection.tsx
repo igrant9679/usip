@@ -103,7 +103,7 @@ export function KnowledgeSection() {
 
   return (
     <>
-      <div className="shrink-0 px-6 pt-4">
+      <div className="shrink-0 px-4 sm:px-6 pt-4">
         <h1 className="text-xl font-semibold tracking-tight">Knowledge base</h1>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto bg-muted/40 mt-3 border-t border-border">

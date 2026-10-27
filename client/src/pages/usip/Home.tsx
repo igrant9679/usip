@@ -26,6 +26,7 @@ import {
   Phone, ArrowRight, Inbox,
 } from "lucide-react";
 import { FailedLoadsBanner } from "@/components/usip/QueryState";
+import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
 
 const LS_KEY = "velocity_home_layout_v1";
 const LS_HEIGHTS = "velocity_home_heights_v1";
@@ -369,7 +370,14 @@ export default function Home() {
 
           {/* widget library */}
           {editing && libOpen && (
-            <aside className="w-80 shrink-0 border-l border-border bg-card flex flex-col min-h-0">
+            <ResponsiveRail
+              title="Widget library"
+              side="right"
+              open
+              onOpenChange={setLibOpen}
+              ownHeader
+              className="w-80 shrink-0 border-l border-border bg-card flex-col min-h-0"
+            >
               <div className="flex items-center justify-between px-4 h-11 border-b border-border">
                 <h2 className="text-sm font-semibold">Widget library</h2>
                 <button aria-label="Close" onClick={() => setLibOpen(false)} className="p-1 text-muted-foreground hover:text-foreground"><X className="size-4" /></button>
@@ -411,7 +419,7 @@ export default function Home() {
                   </div>
                 )}
               </div>
-            </aside>
+            </ResponsiveRail>
           )}
         </div>
       </div>

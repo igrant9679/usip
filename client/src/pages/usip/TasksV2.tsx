@@ -328,7 +328,7 @@ export default function TasksV2() {
     <Shell title="Tasks">
       <div data-tour-id="tasks-list" className="flex flex-col h-full min-h-0">
         {/* Header */}
-        <div className="relative shrink-0 flex items-center gap-2 px-4 h-11 border-b border-border bg-card/40">
+        <div className="relative shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 min-h-11 py-1.5 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <ListTodo className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Tasks</h1>

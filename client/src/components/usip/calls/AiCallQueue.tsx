@@ -132,7 +132,7 @@ export function AiCallQueue({ accent }: { accent: string }) {
             {tab === "draft" ? "Nothing waiting for approval. Queue people from People → Queue AI call." : tab === "approved" ? "No approved calls waiting to dial." : "No finished calls yet."}
           </div>
         ) : (
-          <table className="w-full text-[12.5px]">
+          <div className="overflow-x-auto"><table className="w-full text-[12.5px]">
             <thead className="border-b border-border/60 text-[11px] text-muted-foreground">
               <tr>
                 {tab !== "done" && (
@@ -200,7 +200,7 @@ export function AiCallQueue({ accent }: { accent: string }) {
                 );
               })}
             </tbody>
-          </table>
+          </table></div>
         )}
       </div>
 

@@ -1687,7 +1687,7 @@ function LogRow({ log }: { log: any }) {
       <button
         type="button"
         onClick={() => expandable && setOpen((o) => !o)}
-        className={`w-full px-3 py-2 flex items-start gap-3 text-left ${expandable ? "hover:bg-muted/60 cursor-pointer" : "cursor-default"}`}
+        className={`w-full px-3 py-2 flex flex-wrap sm:flex-nowrap items-start gap-x-3 gap-y-1 text-left ${expandable ? "hover:bg-muted/60 cursor-pointer" : "cursor-default"}`}
       >
         <span className="text-[10px] text-muted-foreground/70 w-4 shrink-0 pt-0.5">
           {expandable ? (open ? "▼" : "▶") : ""}
@@ -1707,10 +1707,11 @@ function LogRow({ log }: { log: any }) {
         >
           {log.level}
         </Badge>
-        <span className={`text-foreground/90 break-words ${open ? "" : "line-clamp-2"}`}>{log.message}</span>
+        {/* Under the time, phase and level on a phone; beside them from sm up. */}
+        <span className={`basis-full sm:basis-auto min-w-0 sm:flex-1 text-foreground/90 break-words ${open ? "" : "line-clamp-2"}`}>{log.message}</span>
       </button>
       {open && (
-        <div className="pl-[180px] pr-3 pb-3 space-y-2">
+        <div className="pl-3 sm:pl-[180px] pr-3 pb-3 space-y-2">
           {isLong && (
             <div>
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Full message</div>
@@ -2398,7 +2399,8 @@ export default function ARECampaignDetail() {
 
         {/* ── Tabs ── */}
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="bg-muted/50 border">
+          {/* Eight tabs are wider than a phone: the strip scrolls, the page does not (A65). */}
+          <TabsList className="bg-muted/50 border max-w-full overflow-x-auto justify-start">
             <TabsTrigger value="prospects" className="text-xs gap-1.5">
               <Users className="size-3.5" />
               Prospects

@@ -22,8 +22,9 @@ describe("the Settings hub carries the workspace switcher", () => {
     expect(hub.split("<SettingsWorkspaceSwitcher />").length - 1).toBe(2);
     const rail = hub.slice(hub.indexOf("{/* ── settings rail ── */}"), hub.indexOf("{/* ── content panel ── */}"));
     expect(rail).toContain("<SettingsWorkspaceSwitcher />");
-    const mobile = hub.slice(hub.indexOf("{/* mobile top bar (rail is hidden below md) */}"));
-    expect(mobile.slice(0, 800)).toContain("<SettingsWorkspaceSwitcher />");
+    // Below md the rail is a sheet (phase 4, G27); the bar keeps the switcher beside the section button.
+    const mobile = hub.slice(hub.indexOf("{/* mobile top bar"));
+    expect(mobile.slice(0, 1400)).toContain("<SettingsWorkspaceSwitcher />");
   });
 
   it("switches through the shared context, never a second mechanism", () => {
