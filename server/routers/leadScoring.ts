@@ -1,10 +1,11 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, sql } from "drizzle-orm";
 import { genuineReplyScope } from "../services/replyScope";
 import { z } from "zod";
 import {
   accounts,
   activities,
+  bulkJobs,
   emailDrafts,
   emailReplies,
   emailSuppressions,
@@ -37,6 +38,7 @@ import { activeMemberIds } from "../_core/activeMembers";
 import { notifyIfEnabled } from "../services/policyNotify";
 import { gradeForTier } from "@shared/leadTier";
 import { evalConditions } from "./operations";
+import { activeJob, cancelJob, enqueueJob, getJob as getBulkJob, registerJobKind } from "../services/jobs/runner";
 
 /* ───────── helpers ───────── */
 
@@ -310,6 +312,42 @@ async function recomputeOne(workspaceId: number, leadId: number) {
   return { ...breakdown, grade, aiFit: aiFitJson };
 }
 
+/* ───────── "Recompute all" as a background job (audit P11) ───────── */
+
+const RECOMPUTE_JOB = "leadScoring.recomputeAll";
+/** Leads per read; a slice keeps reading until its time is up. */
+const RECOMPUTE_PAGE = 25;
+
+registerJobKind(RECOMPUTE_JOB, {
+  // resumeFrom is the last lead id scored: leads added during the run are
+  // scored too, and a restart picks up after the last one saved.
+  async step(job, _payload, budgetMs) {
+    const until = Date.now() + budgetMs;
+    const db = await getDb();
+    if (!db) throw new Error("Database unavailable");
+    let last = job.resumeFrom;
+    let done = 0;
+    const failures: Array<{ id: number; error: string }> = [];
+    for (;;) {
+      const page = await db.select({ id: leads.id }).from(leads)
+        .where(and(eq(leads.workspaceId, job.workspaceId), gt(leads.id, last)))
+        .orderBy(asc(leads.id))
+        .limit(RECOMPUTE_PAGE);
+      if (page.length === 0) return { cursor: last, done, failures, finished: true, message: `Scored ${job.done + done} of ${job.total}` };
+      for (const r of page) {
+        if (Date.now() >= until) return { cursor: last, done, failures, finished: false, message: `Scored ${job.done + done} of ${job.total}` };
+        try { await recomputeOne(job.workspaceId, r.id); done++; }
+        catch (e) { failures.push({ id: r.id, error: ((e as Error)?.message ?? String(e)).slice(0, 200) }); }
+        last = r.id;
+      }
+    }
+  },
+  async finish(job, _payload, outcome) {
+    await recordAudit({ workspaceId: job.workspaceId, actorUserId: job.userId, action: "update", entityType: "lead_score_config",
+      after: { recomputed: job.done, failed: job.failed, outcome, jobId: job.id } });
+  },
+});
+
 /* ───────── tRPC router ───────── */
 
 export const leadScoringRouter = router({
@@ -363,18 +401,48 @@ export const leadScoringRouter = router({
     return recomputeOne(ctx.workspace.id, input.leadId);
   }),
 
-  /** Recompute all leads in this workspace. Synchronous but bounded by row count. */
+  /**
+   * What "Recompute all" would do, for its confirmation (audit P11): how many
+   * leads, each one AI call on this workspace's budget, and the job already
+   * running if there is one.
+   */
+  recomputeAllPreview: adminWsProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [{ n }] = await db.select({ n: count() }).from(leads).where(eq(leads.workspaceId, ctx.workspace.id));
+    return { leads: Number(n ?? 0), running: await activeJob(ctx.workspace.id, RECOMPUTE_JOB) };
+  }),
+
+  /**
+   * Re-score every lead, as a background job (audit 2026-10-20, P11). This
+   * was one request making an AI call per lead; a second click ran it all
+   * again, and a long run died with the request. Now it is one persisted job
+   * per workspace (a second click gets the running one back), worked in
+   * slices by services/jobs/runner, which the page shows and can cancel.
+   */
   recomputeAll: adminWsProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const rows = await db.select({ id: leads.id }).from(leads).where(eq(leads.workspaceId, ctx.workspace.id));
-    let ok = 0;
-    let fail = 0;
-    for (const r of rows) {
-      try { await recomputeOne(ctx.workspace.id, r.id); ok++; } catch { fail++; }
-    }
-    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "lead_score_config", after: { recomputed: ok, failed: fail } });
-    return { recomputed: ok, failed: fail };
+    const [{ n }] = await db.select({ n: count() }).from(leads).where(eq(leads.workspaceId, ctx.workspace.id));
+    const { job, existing } = await enqueueJob({
+      workspaceId: ctx.workspace.id, userId: ctx.user.id, kind: RECOMPUTE_JOB, payload: {}, total: Number(n ?? 0), oneAtATime: true,
+    });
+    return { jobId: job.id, total: job.total, existing };
+  }),
+
+  /** The latest "Recompute all" job, for the progress line (polled while it runs). */
+  recomputeJob: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return null;
+    const [latest] = await db.select({ id: bulkJobs.id }).from(bulkJobs)
+      .where(and(eq(bulkJobs.workspaceId, ctx.workspace.id), eq(bulkJobs.kind, RECOMPUTE_JOB)))
+      .orderBy(desc(bulkJobs.id))
+      .limit(1);
+    return latest ? getBulkJob(ctx.workspace.id, latest.id) : null;
+  }),
+
+  cancelRecompute: adminWsProcedure.input(z.object({ jobId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+    return { canceled: await cancelJob(ctx.workspace.id, input.jobId) };
   }),
 
   /** Read-only breakdown for the lead detail panel: current components + 90-day history. */

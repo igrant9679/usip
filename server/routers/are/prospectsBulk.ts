@@ -31,6 +31,7 @@ import { areEngineLogs, emailSuppressions, prospectIntelligence, prospectQueue }
 import { getDb } from "../../db";
 import { recordAudit } from "../../audit";
 import { upsertPersonForRow, type QueuePersonShape } from "../../services/personLink";
+import { callerContextFor, enqueueJob, findActiveJob, registerJobKind } from "../../services/jobs/runner";
 
 export const BULK_ACTIONS = [
   // campaign state — via the single-row procedures
@@ -77,6 +78,8 @@ export interface BulkResult {
   linked?: number;
   unlinkable?: number;
   listId?: number;
+  /** The background job an LLM-backed action became (services/jobs/runner). */
+  jobId?: number;
 }
 
 type Ctx = { workspace: { id: number }; user: { id: number } };
@@ -109,6 +112,49 @@ async function peopleIdsFor(workspaceId: number, rows: Array<typeof prospectQueu
   return { byQueueId, linked, unlinkable };
 }
 
+/** What a background bulk job (kind "are.bulk") carries. */
+type BulkJobPayload = { campaignId: number; action: "generateSequence" | "reEvaluate"; prospectIds: number[]; force?: boolean };
+
+const BULK_JOB_LABEL = { generateSequence: "Generating sequences", reEvaluate: "Re-evaluating" } as const;
+
+/**
+ * The background half of an LLM-backed bulk action: one prospect at a time,
+ * through the same procedure the row button runs (same guards, same history),
+ * as the person who started it.
+ */
+registerJobKind<BulkJobPayload>("are.bulk", {
+  async step(job, payload, budgetMs) {
+    const until = Date.now() + budgetMs;
+    const { appRouter } = await import("../../routers");
+    const caller = appRouter.createCaller((await callerContextFor(job)) as never);
+    const ids = payload.prospectIds ?? [];
+    let i = job.resumeFrom;
+    let done = 0;
+    const failures: Array<{ id: number; error: string }> = [];
+    while (i < ids.length && Date.now() < until) {
+      const id = ids[i];
+      try {
+        if (payload.action === "generateSequence") await caller.are.prospects.generateSequence({ prospectId: id, campaignId: payload.campaignId, force: payload.force ?? false });
+        else await caller.are.prospects.reEvaluate({ prospectId: id });
+        done++;
+      } catch (e) {
+        failures.push({ id, error: ((e as Error)?.message ?? String(e)).slice(0, 200) });
+      }
+      i++;
+    }
+    return { cursor: i, done, failures, finished: i >= ids.length, message: `${BULK_JOB_LABEL[payload.action]}: ${i} of ${ids.length}` };
+  },
+  async finish(job, payload, outcome) {
+    const label = BULK_JOB_LABEL[payload.action];
+    const summary = outcome === "done"
+      ? `${label} finished: ${job.done} of ${job.total} done${job.failed ? `, ${job.failed} failed` : ""}`
+      : `${label} ${outcome === "canceled" ? "canceled" : "stopped"} after ${job.done} of ${job.total}${job.message ? ` (${job.message})` : ""}`;
+    await recordAudit({ workspaceId: job.workspaceId, actorUserId: job.userId, action: "update", entityType: "are_prospect_bulk", entityId: payload.campaignId,
+      after: { action: payload.action, requested: job.total, ok: job.done, failed: job.failures, prospectIds: payload.prospectIds, background: true, jobId: job.id, outcome } });
+    await emitBulkLog(job.workspaceId, payload.campaignId, job.failed || outcome !== "done" ? "warn" : "info", `Bulk ${payload.action}: ${summary}`, { failed: job.failures, jobId: job.id });
+  },
+});
+
 export async function runBulkAction(ctx: Ctx, input: BulkInput): Promise<BulkResult> {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -136,31 +182,32 @@ export async function runBulkAction(ctx: Ctx, input: BulkInput): Promise<BulkRes
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
   // LLM-backed actions take seconds PER ROW, so a mass run cannot finish
-  // inside one request. Above a small batch they run in the background:
-  // the call returns at once, the campaign log gets a "started" line and a
-  // "finished" line with the per-row outcome, and the audit row is written
-  // when it finishes. The tab refreshes as rows change.
+  // inside one request. Above a small batch they become a persisted job
+  // (audit 2026-10-20, A37): they used to run in a promise the request left
+  // behind, which a restart lost and which the clicking user's 30-a-minute
+  // model ceiling cut off part-way. The job runner works the rows one at a
+  // time, saves its place, survives a restart, and writes the "finished" log
+  // line and the audit row at the end. A second click on the same rows gets
+  // the running job back instead of paying again.
   const LLM_ACTIONS: BulkAction[] = ["generateSequence", "reEvaluate"];
   const INLINE_MAX = 5;
   if (LLM_ACTIONS.includes(input.action) && rows.length > INLINE_MAX) {
     const label = input.action === "generateSequence" ? "Generating sequences" : "Re-evaluating";
-    await emitBulkLog(ws, input.campaignId, "info", `Bulk ${input.action}: ${label} for ${plural(rows.length, "prospect")} — running in the background`, { prospectIds: input.prospectIds });
-    void (async () => {
-      const bg: BulkResult = { action: input.action, requested: rows.length, ok: 0, failed: [], summary: "" };
-      for (const r of rows) {
-        try {
-          if (input.action === "generateSequence") await caller.are.prospects.generateSequence({ prospectId: r.id, campaignId: input.campaignId, force: input.force ?? false });
-          else await caller.are.prospects.reEvaluate({ prospectId: r.id });
-          bg.ok++;
-        } catch (e) { bg.failed.push({ id: r.id, error: ((e as Error)?.message ?? String(e)).slice(0, 200) }); }
-      }
-      bg.summary = `${label} finished: ${bg.ok} of ${rows.length} done${bg.failed.length ? `, ${bg.failed.length} failed` : ""}`;
-      await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "update", entityType: "are_prospect_bulk", entityId: input.campaignId,
-        after: { action: input.action, requested: bg.requested, ok: bg.ok, failed: bg.failed, prospectIds: input.prospectIds, background: true } });
-      await emitBulkLog(ws, input.campaignId, bg.failed.length ? "warn" : "info", `Bulk ${input.action}: ${bg.summary}`, { failed: bg.failed });
-    })().catch((e) => console.error("[are.bulk] background run failed:", e));
+    const ids = rows.map((r) => r.id);
+    const running = await findActiveJob<BulkJobPayload>(ws, "are.bulk", (p) =>
+      p.campaignId === input.campaignId && p.action === input.action && ids.every((id) => p.prospectIds?.includes(id)));
+    if (running) {
+      result.summary = `${label} for these prospects is already running in the background`;
+      result.ok = 0;
+      result.jobId = running.id;
+      return result;
+    }
+    const payload: BulkJobPayload = { campaignId: input.campaignId, action: input.action as BulkJobPayload["action"], prospectIds: ids, force: input.force ?? false };
+    const { job } = await enqueueJob({ workspaceId: ws, userId: ctx.user.id, kind: "are.bulk", payload, total: ids.length });
+    await emitBulkLog(ws, input.campaignId, "info", `Bulk ${input.action}: ${label} for ${plural(rows.length, "prospect")} — running in the background (job ${job.id})`, { prospectIds: input.prospectIds });
     result.summary = `${label} for ${plural(rows.length, "prospect")} in the background — rows update as each finishes; the campaign log has the outcome`;
     result.ok = rows.length; // accepted, not finished — the summary says so
+    result.jobId = job.id;
     return result;
   }
 

@@ -17,7 +17,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
-import { checkLinkedInAction, pickAccountForAction, recordLinkedInAction } from "./linkedin/activityGate";
+import { pickAccountForAction, recordLinkedInAction } from "./linkedin/activityGate";
 import type { BlockReason } from "@shared/linkedinLimits";
 import {
   unipileAccounts,
@@ -230,7 +230,50 @@ export type LookupResult = {
   viaAccountId: string | null;
   profile: UnipileUserProfile | null;
   message: string;
+  /**
+   * Set when the account limits held the lookup (audit 2026-10-20, P6/P7):
+   * nothing reached LinkedIn, and the profile is neither found nor missing.
+   * Bulk paths stop here and try again later; they must never read this as
+   * "profile unavailable".
+   */
+  blocked?: { reason: BlockReason | "daily_cap"; retryAfterMs: number | null };
 };
+
+/**
+ * The first candidate account the gate allows now, waiting out a spacing hold
+ * no longer than `waitMs` (audit Phase 3, P7). Background paths pass a wait
+ * (linkedinEnrichment/lookupQueue.LOOKUP_WAIT_MS), so a bulk run paces itself
+ * instead of being refused after its first lookup; a person clicking passes
+ * none and hears the hold at once.
+ */
+async function pickWithWait(opts: {
+  workspaceId: number;
+  candidates: string[];
+  kind: "lookup" | "search";
+  personInitiated?: boolean;
+  waitMs?: number;
+}): Promise<Awaited<ReturnType<typeof pickAccountForAction>>> {
+  const until = Date.now() + Math.max(0, opts.waitMs ?? 0);
+  for (;;) {
+    const pick = await pickAccountForAction({
+      workspaceId: opts.workspaceId,
+      candidates: opts.candidates,
+      kind: opts.kind,
+      personInitiated: opts.personInitiated,
+    });
+    const v = pick.verdict;
+    if (pick.unipileAccountId || !v || v.reason !== "spacing" || v.retryAfterMs === null) return pick;
+    if (Date.now() + v.retryAfterMs > until) return pick;
+    await new Promise((r) => setTimeout(r, v.retryAfterMs! + 250));
+  }
+}
+
+/** A lookup or search that reached LinkedIn, in the spend report (services/spend). */
+async function meterLinkedIn(workspaceId: number, meter: "profile_lookups" | "searches", feature: string | undefined): Promise<void> {
+  const { recordSpend } = await import("./spend");
+  const { getRequestFeature } = await import("../_core/requestContext");
+  await recordSpend({ workspaceId, vendor: "linkedin", meter, quantity: 1, keySource: "workspace", feature: feature ?? getRequestFeature() ?? "linkedin" });
+}
 
 /**
  * Resolve a LinkedIn URL → profile via the chosen (or auto-picked) bridged
@@ -245,6 +288,10 @@ export async function lookupProfile(opts: {
   requestedAccountId?: string;
   /** A person enriching one record (2026-10-05): allowed while LinkedIn activity is switched off. */
   personInitiated?: boolean;
+  /** Wait out a spacing hold up to this long (background paths); 0 = answer at once. */
+  waitMs?: number;
+  /** What looked it up, for the spend report. */
+  feature?: string;
 }): Promise<LookupResult> {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -275,12 +322,12 @@ export async function lookupProfile(opts: {
   }
 
   // Account selection:
-  //   - admin + explicit request → that account (must be in the pool)
-  //   - otherwise → least-used account with headroom
-  let chosen: BridgedAccount | undefined;
+  //   - admin + explicit request → that account alone (must be in the pool)
+  //   - otherwise → every account with headroom, most headroom first
+  let candidates: BridgedAccount[];
   if (opts.isAdmin && opts.requestedAccountId) {
-    chosen = pool.find((a) => a.unipileAccountId === opts.requestedAccountId);
-    if (!chosen) {
+    const requested = pool.find((a) => a.unipileAccountId === opts.requestedAccountId);
+    if (!requested) {
       return {
         ok: false,
         identifier,
@@ -289,8 +336,10 @@ export async function lookupProfile(opts: {
         message: "Requested LinkedIn account isn't available in this workspace pool.",
       };
     }
+    candidates = [requested];
   } else {
-    chosen = pool.find((a) => a.remainingToday > 0) ?? pool[0];
+    const open = pool.filter((a) => a.remainingToday > 0);
+    candidates = open.length > 0 ? open : [pool[0]];
   }
 
   /**
@@ -302,32 +351,42 @@ export async function lookupProfile(opts: {
    * since its last action, and the hours it is allowed to work. The per-day
    * reservation underneath stays exactly as it was — it is atomic and it is
    * the thing that survives concurrency, which this check deliberately is not.
+   *
+   * The first candidate the gate allows runs the lookup (audit Phase 3, P7:
+   * one account's spacing hold used to refuse a lookup another account could
+   * make), and a refusal comes back TYPED, so no caller mistakes it for a
+   * missing profile.
    */
-  const gate = await checkLinkedInAction({
+  const pick = await pickWithWait({
     workspaceId: opts.workspaceId,
-    unipileAccountId: chosen.unipileAccountId,
+    candidates: candidates.map((a) => a.unipileAccountId),
     kind: "lookup",
     personInitiated: opts.personInitiated,
+    waitMs: opts.waitMs,
   });
-  if (!gate.allowed) {
+  if (!pick.unipileAccountId) {
+    const held = candidates[0];
+    const message = pick.verdict?.message ?? "LinkedIn lookups are on hold for this account right now.";
     await db.insert(linkedinLookupLog).values({
       workspaceId: opts.workspaceId,
       requestedByUserId: opts.userId,
-      unipileAccountId: chosen.unipileAccountId,
-      accountOwnerUserId: chosen.ownerUserId,
+      unipileAccountId: held.unipileAccountId,
+      accountOwnerUserId: held.ownerUserId,
       targetUrl: opts.linkedinUrl,
       targetIdentifier: identifier,
       status: "blocked",
-      error: gate.message.slice(0, 500),
+      error: message.slice(0, 500),
     } as never);
     return {
       ok: false,
       identifier,
-      viaAccountId: chosen.unipileAccountId,
+      viaAccountId: held.unipileAccountId,
       profile: null,
-      message: gate.message,
+      message,
+      blocked: { reason: pick.verdict?.reason ?? "spacing", retryAfterMs: pick.verdict?.retryAfterMs ?? null },
     };
   }
+  const chosen = candidates.find((a) => a.unipileAccountId === pick.unipileAccountId) ?? candidates[0];
 
   // Rate-limit gate — ATOMIC reserve. Concurrent lookups on the same
   // account can't all slip past (the old `remainingToday <= 0` read-check
@@ -353,6 +412,7 @@ export async function lookupProfile(opts: {
       message: opts.isAdmin
         ? `That account hit its daily cap (${LINKEDIN_DAILY_CAP}). Pick another from the pool or wait for the UTC-midnight reset.`
         : `You've hit today's LinkedIn lookup cap (${LINKEDIN_DAILY_CAP}). Resets at midnight UTC.`,
+      blocked: { reason: "daily_cap", retryAfterMs: null },
     };
   }
 
@@ -378,6 +438,7 @@ export async function lookupProfile(opts: {
       targetIdentifier: identifier,
       status: "ok",
     } as never);
+    await meterLinkedIn(opts.workspaceId, "profile_lookups", opts.feature);
     return {
       ok: true,
       identifier,
@@ -489,6 +550,8 @@ export async function searchLinkedInProfiles(opts: {
   source?: string;
   /** A person enriching one record (2026-10-05): allowed while LinkedIn activity is switched off. */
   personInitiated?: boolean;
+  /** Wait out a spacing hold up to this long (background paths); 0 = answer at once. */
+  waitMs?: number;
 }): Promise<SearchResult> {
   const keywords = opts.keywords.trim();
   if (keywords.length < 2) {
@@ -535,7 +598,7 @@ export async function searchLinkedInProfiles(opts: {
    * vendor and is reported with its reason, never as "no results".
    */
   const candidates = chosen ? [chosen.unipileAccountId] : pool.map((a) => a.unipileAccountId);
-  const pick = await pickAccountForAction({ workspaceId: opts.workspaceId, candidates, kind: "search", personInitiated: opts.personInitiated });
+  const pick = await pickWithWait({ workspaceId: opts.workspaceId, candidates, kind: "search", personInitiated: opts.personInitiated, waitMs: opts.waitMs });
   if (!pick.unipileAccountId) {
     return {
       ok: false,
@@ -561,6 +624,7 @@ export async function searchLinkedInProfiles(opts: {
       source: opts.source ?? "search",
       targetIdentifier: keywords,
     });
+    await meterLinkedIn(opts.workspaceId, "searches", opts.source);
     const hits = items.map(mapSearchHit).filter((h) => h.name.length > 0);
     return {
       ok: true,

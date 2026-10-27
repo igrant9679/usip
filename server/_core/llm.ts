@@ -4,7 +4,7 @@ import { usageCounters, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "./crypto";
 import { ENV } from "./env";
-import { getRequestClientIp, getRequestFeature, getRequestUserId, getRequestWorkspaceId } from "./requestContext";
+import { getRequestClientIp, getRequestFeature, getRequestUserId, getRequestWorkspaceId, isBackgroundWork } from "./requestContext";
 import { recordLlmTokens, usageMonthKey } from "../usageCounters";
 import { recordAiUsage, type KeySource } from "../services/spend";
 
@@ -1116,7 +1116,10 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   // concurrency slot is taken — a limit enforced after the money is spent is
   // not a limit, and a refused call must not hold a slot others are queued on.
   const now = Date.now();
-  checkLlmBurst(getRequestUserId(), getRequestClientIp(), now);
+  // A persisted bulk job (services/jobs/runner) paces itself one item at a
+  // time; holding it to the clicking user's per-minute ceiling is what made
+  // a 50-row "Generate sequences" fail part-way (audit A37).
+  if (!isBackgroundWork()) checkLlmBurst(getRequestUserId(), getRequestClientIp(), now);
   await checkMonthlyCap(workspaceId, now);
 
   const creds = await loadCreds(workspaceId);

@@ -15,7 +15,9 @@
 import { useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Shell } from "@/components/usip/Shell";
-import { useAuth } from "@/_core/hooks/useAuth";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { rankOf, ROLE_RANK } from "@shared/roleRank";
+import { confirmAction } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -131,25 +133,42 @@ function HealthBanner({ onConnect }: { onConnect: () => void }) {
 
 function DailyCheckCard({ isAdmin }: { isAdmin: boolean }) {
   const utils = trpc.useUtils();
-  const { data: job } = trpc.linkedinEnrichment.dailyCheckStatus.useQuery();
+  const { data: job } = trpc.linkedinEnrichment.dailyCheckStatus.useQuery(undefined, {
+    refetchInterval: (q) => ((q.state.data as any)?.status === "running" ? 15_000 : false),
+  });
   const run = trpc.linkedinEnrichment.dailyCheckRun.useMutation({
-    onSuccess: (r) => { toast.success(`Daily check: ${r.checked} checked, ${r.changed} changed`); utils.linkedinEnrichment.dailyCheckStatus.invalidate(); },
+    onSuccess: (r) => { toast.success(`Change check started for ${r.due} profile${r.due === 1 ? "" : "s"}. It runs at the pace the LinkedIn limits allow.`); utils.linkedinEnrichment.dailyCheckStatus.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
+  // Audit P157: "Run now" forced up to 250 lookups, unconfirmed. It now says
+  // how many profiles are due and how many lookups today has left, first.
+  const askRun = async () => {
+    const p = await utils.linkedinEnrichment.dailyCheckPreview.fetch();
+    if (p.due === 0) { toast.info("No profiles are due for a check: each was checked in the last 24 hours."); return; }
+    confirmAction({
+      title: `Check ${p.due} LinkedIn profile${p.due === 1 ? "" : "s"} now?`,
+      description: `Each check is one LinkedIn profile lookup. Your accounts have ${p.lookupsLeftToday} lookup${p.lookupsLeftToday === 1 ? "" : "s"} left today; the checks run at the pace the account limits allow, and what does not fit today continues tomorrow.`,
+      confirmLabel: "Check now",
+    }, () => run.mutate());
+  };
   return (
     <div className="rounded-lg border bg-card p-3">
       <div className="flex items-center justify-between">
         <div className="text-[13px] font-semibold inline-flex items-center gap-1.5"><Clock className="size-3.5 text-muted-foreground" /> Daily change check</div>
         {isAdmin && (
-          <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={run.isPending} onClick={() => run.mutate({ force: true })}>
+          <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={run.isPending || job?.status === "running"} onClick={askRun}>
             {run.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} Run now
           </Button>
         )}
       </div>
       <p className="mt-1 text-[12px] text-muted-foreground">
-        {job
-          ? `Last run ${new Date(job.completedAt ?? job.createdAt).toLocaleString()} — ${job.checkedCount} checked, ${job.changedCount} changed, ${job.failedCount} failed.`
-          : "No daily check has run yet. Enriched prospects are checked automatically once a day."}
+        {!job
+          ? "No daily check has run yet. Enriched prospects are checked automatically once a day, in working hours."
+          : job.status === "waiting" && job.holdReason
+            ? `Today's check is waiting for the LinkedIn limits (${job.holdReason}). ${job.checkedCount} checked, ${job.changedCount} changed so far; it continues automatically.`
+            : job.status === "running" || job.status === "waiting" || job.status === "pending"
+              ? `Today's check is under way: ${job.checkedCount} checked, ${job.changedCount} changed, ${job.failedCount} failed so far.`
+              : `Last run ${new Date(job.completedAt ?? job.createdAt).toLocaleString()} — ${job.checkedCount} checked, ${job.changedCount} changed, ${job.failedCount} failed.`}
       </p>
     </div>
   );
@@ -159,9 +178,10 @@ function DailyCheckCard({ isAdmin }: { isAdmin: boolean }) {
 
 /**
  * Unresolved needs_review / conflict items from one-click Enrich jobs.
- * Confirm = the reviewer asserts identity → confirmEnrich (re-retrieves via
- * Unipile + applies) then the item is marked resolved. Skip just resolves it.
- * Renders nothing when the worklist is empty.
+ * Confirm = the reviewer asserts that the profile shown IS this person →
+ * confirmEnrich applies exactly that stored candidate and resolves the item
+ * (audit P8: it used to look the person up again and apply whatever came back,
+ * unseen). Skip just resolves it. Renders nothing when the worklist is empty.
  */
 function ReviewPanel() {
   const utils = trpc.useUtils();
@@ -178,9 +198,9 @@ function ReviewPanel() {
   const onConfirm = async (item: (typeof items)[number]) => {
     setBusyId(item.id);
     try {
-      const r = await confirm.mutateAsync({ prospectId: item.prospectId });
-      await resolve.mutateAsync({ itemId: item.id, resolution: "enriched" });
+      const r = await confirm.mutateAsync({ itemId: item.id });
       toast.success(`Applied — ${r.changes.length} change${r.changes.length === 1 ? "" : "s"} detected`);
+      utils.linkedinEnrichment.listReviewItems.invalidate();
       utils.linkedinEnrichment.getChangeSummaries.invalidate();
     } catch (e: any) {
       toast.error(e?.message ?? "Could not apply enrichment");
@@ -219,10 +239,24 @@ function ReviewPanel() {
                 {it.status === "conflict" ? "Conflict" : "Needs review"}
               </Badge>
             </div>
-            {it.linkedinUrlUsed && <div className="text-muted-foreground truncate">{it.linkedinUrlUsed}</div>}
+            {it.candidate ? (
+              <div className="mt-1 rounded border bg-muted/30 px-2 py-1">
+                <div className="text-muted-foreground">Found on LinkedIn:</div>
+                <div className="font-medium">{it.candidate.fullName ?? "Unnamed profile"}</div>
+                {(it.candidate.headline || it.candidate.currentTitle) && (
+                  <div className="text-muted-foreground truncate">{it.candidate.headline ?? it.candidate.currentTitle}{it.candidate.currentCompanyName ? ` · ${it.candidate.currentCompanyName}` : ""}</div>
+                )}
+                {it.candidate.location && <div className="text-muted-foreground truncate">{it.candidate.location}</div>}
+                {it.candidate.profileUrl && (
+                  <a href={it.candidate.profileUrl} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline truncate block">{it.candidate.profileUrl}</a>
+                )}
+              </div>
+            ) : (
+              <div className="text-muted-foreground">No candidate was kept for this item. Run Enrich again for this person to review a match.</div>
+            )}
             {it.errorMessage && <div className="text-muted-foreground truncate">{it.errorMessage}</div>}
             <div className="mt-1.5 flex items-center gap-2">
-              <Button size="sm" variant="outline" className="h-6 gap-1" disabled={busyId != null} onClick={() => onConfirm(it)}>
+              <Button size="sm" variant="outline" className="h-6 gap-1" disabled={busyId != null || !it.candidate} onClick={() => onConfirm(it)}>
                 {busyId === it.id ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />} Confirm & apply
               </Button>
               <Button size="sm" variant="ghost" className="h-6" disabled={busyId != null} onClick={() => onSkip(it)}>Skip</Button>
@@ -244,8 +278,12 @@ function ReviewPanel() {
 
 export default function LinkedInEnrichmentImport() {
   const [, setLocation] = useLocation();
-  const { user } = useAuth();
-  const isAdmin = ["admin", "super_admin"].includes((user as any)?.role ?? "");
+  // The workspace role (audit P153): this read users.role, the PLATFORM role,
+  // so workspace admins never saw "Run now" and the platform owner always did.
+  const { current } = useWorkspace();
+  const rank = rankOf(current?.role ?? "rep");
+  const isAdmin = rank >= ROLE_RANK.admin;
+  const isManager = rank >= ROLE_RANK.manager;
   const utils = trpc.useUtils();
 
   const [paste, setPaste] = useState("");
@@ -259,9 +297,16 @@ export default function LinkedInEnrichmentImport() {
   });
   const runMut = trpc.linkedinEnrichment.runBatch.useMutation({
     onSuccess: (s) => {
-      toast.success(`Enriched ${s.matchedRows}, ${s.needsReviewRows} to review, ${s.failedRows} failed`);
+      toast.success(`Queued ${s.pending} lookup${s.pending === 1 ? "" : "s"}. ${s.lookupsLeftToday} left today; they run at the pace the LinkedIn limits allow, and the rest continue tomorrow.`);
       utils.linkedinEnrichment.listBatchRows.invalidate({ batchId: s.batchId });
       utils.linkedinEnrichment.getBatch.invalidate({ batchId: s.batchId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const retryMut = trpc.linkedinEnrichment.retryFailedRows.useMutation({
+    onSuccess: (r) => {
+      toast.success(r.retried ? `Queued ${r.retried} failed row${r.retried === 1 ? "" : "s"} again.` : "No failed rows to retry.");
+      if (batchId) { utils.linkedinEnrichment.listBatchRows.invalidate({ batchId }); utils.linkedinEnrichment.getBatch.invalidate({ batchId }); }
     },
     onError: (e) => toast.error(e.message),
   });
@@ -270,8 +315,14 @@ export default function LinkedInEnrichmentImport() {
     onError: (e) => toast.error(e.message),
   });
 
-  const batchQ = trpc.linkedinEnrichment.getBatch.useQuery({ batchId: batchId! }, { enabled: !!batchId });
-  const rowsQ = trpc.linkedinEnrichment.listBatchRows.useQuery({ batchId: batchId! }, { enabled: !!batchId });
+  // A queued batch runs in the background: poll while it does.
+  const live = (s?: string) => s === "queued" || s === "running" || s === "waiting";
+  const batchQ = trpc.linkedinEnrichment.getBatch.useQuery({ batchId: batchId! }, {
+    enabled: !!batchId,
+    refetchInterval: (q) => (live((q.state.data as any)?.status) ? 5000 : false),
+  });
+  const batchLive = live(batchQ.data?.status);
+  const rowsQ = trpc.linkedinEnrichment.listBatchRows.useQuery({ batchId: batchId! }, { enabled: !!batchId, refetchInterval: batchLive ? 5000 : false });
   const batchRows = (rowsQ.data ?? []) as any[];
 
   const onFile = (f: File) => {
@@ -374,17 +425,30 @@ export default function LinkedInEnrichmentImport() {
               </div>
               <div className="flex items-center gap-2">
                 <Button variant="ghost" size="sm" className="h-7" onClick={reset}>New batch</Button>
+                {isManager && batchQ.data?.status === "completed" && counts.failed > 0 && (
+                  <Button variant="outline" size="sm" className="h-7" disabled={retryMut.isPending} onClick={() => retryMut.mutate({ batchId })}>
+                    Retry {counts.failed} failed
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   className="h-7 gap-1.5"
-                  disabled={runMut.isPending || (batchQ.data?.status === "completed")}
+                  disabled={!isManager || runMut.isPending || batchLive || (batchQ.data?.status === "completed")}
                   onClick={() => runMut.mutate({ batchId })}
                 >
-                  {runMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowRight className="size-3.5" />}
-                  {batchQ.data?.status === "completed" ? "Completed" : "Run enrichment"}
+                  {runMut.isPending || batchLive ? <Loader2 className="size-3.5 animate-spin" /> : <ArrowRight className="size-3.5" />}
+                  {batchQ.data?.status === "completed" ? "Completed" : batchLive ? "Running" : "Run enrichment"}
                 </Button>
               </div>
             </div>
+
+            {batchLive && (
+              <div className="px-4 py-2 border-b text-[12px] text-muted-foreground">
+                {batchQ.data?.status === "waiting" && batchQ.data?.holdReason
+                  ? `Waiting for the LinkedIn limits (${batchQ.data.holdReason}). ${counts.pending} left; it continues automatically.`
+                  : `Looking up profiles at the pace the LinkedIn limits allow: ${counts.pending} left.`}
+              </div>
+            )}
 
             {/* result counts */}
             {batchQ.data?.status === "completed" && (

@@ -44,7 +44,6 @@ import { runDailyVerificationMaintenance, advanceRunningVerificationJobs } from 
 import { processEnrollments, resumeDueEnrollments } from "../sequenceEngine";
 import { autoSendForAllWorkspaces } from "../routers/sequences";
 import { runNightlyBatch } from "../nightlyBatch";
-import { runDailyCheckAllWorkspaces } from "../services/linkedinEnrichment/dailyCheck";
 import { runAreEngine } from "../areEngine";
 import { runTaskAutopilotAllWorkspaces } from "../services/taskAutopilot";
 import { runCampaignRoutingAllWorkspaces } from "../services/campaignRouter";
@@ -797,26 +796,36 @@ async function startServer() {
   };
   scheduleNightlyBatch();
 
-  // Daily LinkedIn change check (Unipile). Runs ~1h after midnight to stagger
-  // off the nightly AI batch and keep clear of vendor rate limits. The worker
-  // itself skips workspaces/prospects checked within 24h, suppressed records,
-  // and respects the per-account daily lookup cap.
-  const scheduleLinkedInDailyCheck = () => {
-    const now = new Date();
-    const nextRun = new Date(now);
-    nextRun.setHours(25, 0, 0, 0); // 01:00 next day
-    const msUntil = nextRun.getTime() - now.getTime();
-    setTimeout(() => {
-      const run = () =>
-        runDailyCheckAllWorkspaces().catch((e) =>
-          console.error("[LinkedInDailyCheck] run failed:", e)
-        );
-      run();
-      setInterval(run, 24 * 60 * 60 * 1000);
-    }, msUntil);
-    console.log(`[LinkedInDailyCheck] Scheduled for ~01:00 (~${Math.round(msUntil / 60000)} min away)`);
+  // One LinkedIn lookup queue (audit 2026-10-20, Phase 3: P6/P7). It resumes
+  // bulk Enrich jobs, batch imports and the daily change check, at the pace
+  // the account limits allow. The change check used to run at 01:00, outside
+  // every account's working hours, so each lookup was refused and recorded as
+  // "profile unavailable". Each pass gets 9 of its 10 minutes; a pass still
+  // going when the next is due is skipped by the queue's own guard.
+  const runLinkedInQueue = () => {
+    import("../services/linkedinEnrichment/lookupQueue")
+      .then((m) => m.drainLinkedInLookups())
+      .then((r) => {
+        if (r.looked > 0 || Object.keys(r.held).length > 0) {
+          console.log(`[LinkedInQueue] looked=${r.looked} workspaces=${r.workspaces} held=${JSON.stringify(r.held)}`);
+        }
+      })
+      .catch((e) => console.error("[LinkedInQueue] pass failed:", e));
   };
-  scheduleLinkedInDailyCheck();
+  setTimeout(runLinkedInQueue, 7 * 60 * 1000);
+  setInterval(runLinkedInQueue, 10 * 60 * 1000);
+
+  // Persisted bulk jobs (audit 2026-10-20, Phase 3: A37/P11): bulk AI actions
+  // and "Recompute all" lead scores, worked in slices that survive a restart.
+  // A job enqueued from a request starts at once; this tick resumes the rest
+  // and picks up any whose worker died.
+  const runBulkJobs = () => {
+    import("../services/jobs/runner")
+      .then((m) => m.tickJobs())
+      .catch((e) => console.error("[jobs] tick failed:", e));
+  };
+  setTimeout(runBulkJobs, 40_000);
+  setInterval(runBulkJobs, 15_000);
 
   // Renewal stages: the stored customers.renewalStage never moved — a contract
   // ending in nine days stayed in the column wonToCustomer stamped on the day

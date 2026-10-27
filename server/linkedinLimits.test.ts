@@ -249,7 +249,10 @@ describe("every LinkedIn action path passes the gate", () => {
   });
 
   it("gates profile lookups BEFORE consuming the atomic reservation", () => {
-    const checkAt = lookup.indexOf("checkLinkedInAction(");
+    // 2026-10-27 (audit P7): through pickWithWait, which asks the gate for
+    // every account with headroom (and may wait out a short spacing hold).
+    expect(fnBody(lookup, "async function pickWithWait(", "lookup")).toContain("pickAccountForAction(");
+    const checkAt = lookup.indexOf("const pick = await pickWithWait({");
     const reserveAt = lookup.indexOf("await reserveSlot(");
     expect(checkAt).toBeGreaterThan(0);
     expect(reserveAt).toBeGreaterThan(0);
@@ -337,7 +340,7 @@ describe("people searches pass the gate too", () => {
 
   it("the shared people search asks the gate and records; a refusal is reported as a refusal, not as no results", () => {
     const body = fnBody(lookup, "export async function searchLinkedInProfiles(", "lookup");
-    expect(body).toContain("pickAccountForAction(");
+    expect(body).toContain("pickWithWait("); // → pickAccountForAction (2026-10-27)
     expect(body).toContain('kind: "search"');
     expect(body).toContain("blocked:");
     const search = body.indexOf("searchLinkedInPeople(");
@@ -384,7 +387,8 @@ describe("people searches pass the gate too", () => {
   it("a refused enrichment search is retry-later, never a verdict on the person", () => {
     const src = readFileSync("server/services/linkedinEnrichment/unipileProfile.ts", "utf8");
     const body = fnBody(src, "export async function retrieveByNameCompany(", "unipileProfile");
-    expect(body).toContain('res.blocked ? "rate_limited"');
+    // 2026-10-27: the hold comes back typed (blocked), as for lookups.
+    expect(body).toMatch(/if \(res\.blocked\) \{\s*return \{ ok: false, status: "rate_limited"/);
   });
 
   it("reconcile stops spending its search budget once the gate refuses", () => {

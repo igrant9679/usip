@@ -2409,6 +2409,42 @@ export const spendLedger = mysqlTable(
 );
 export type SpendLedgerRow = typeof spendLedger.$inferSelect;
 
+/**
+ * Background work that survives a restart (migration 0216, audit A37/P11):
+ * the bulk AI actions and "Recompute all", drained in slices by
+ * services/jobs/runner.ts. `resumeFrom` is where the next slice starts (a
+ * position or a last id, as the job's kind defines it); `heartbeatAt` tells
+ * a live worker from a dead one.
+ */
+export const bulkJobs = mysqlTable(
+  "bulk_jobs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId"),
+    kind: varchar("kind", { length: 48 }).notNull(),
+    /** queued | running | done | failed | canceled */
+    status: varchar("status", { length: 16 }).default("queued").notNull(),
+    total: int("total").default(0).notNull(),
+    done: int("done").default(0).notNull(),
+    failed: int("failed").default(0).notNull(),
+    resumeFrom: int("resumeFrom").default(0).notNull(),
+    payload: json("payload"),
+    failures: json("failures"),
+    message: varchar("message", { length: 500 }),
+    heartbeatAt: timestamp("heartbeatAt"),
+    startedAt: timestamp("startedAt"),
+    finishedAt: timestamp("finishedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (t) => ({
+    byStatus: index("ix_bj_status").on(t.status, t.id),
+    byWsKind: index("ix_bj_ws_kind").on(t.workspaceId, t.kind, t.status),
+  }),
+);
+export type BulkJobRow = typeof bulkJobs.$inferSelect;
+
 /* ──────────────────────────────────────────────────────────────────────────
    Visual Canvas Sequence Builder (Sprint 2 — Tier 1)
    ────────────────────────────────────────────────────────────────────────── */
@@ -5176,8 +5212,13 @@ export const linkedinEnrichmentBatches = mysqlTable(
     uploadedByUserId: int("uploaded_by_user_id").notNull(),
     /** pasted_urls | csv_upload */
     sourceType: varchar("source_type", { length: 32 }).notNull(),
-    /** created | validating | validated | running | completed | failed */
+    /** created | validating | validated | queued | running | waiting | completed | failed */
     status: varchar("status", { length: 24 }).default("created").notNull(),
+    /** Who queued the run (migration 0216): the account pool it may use. */
+    runByUserId: int("run_by_user_id"),
+    /** Why a "waiting" batch is waiting: the account limits held a lookup. */
+    holdReason: varchar("hold_reason", { length: 300 }),
+    heartbeatAt: timestamp("heartbeat_at"),
     totalRows: int("total_rows").default(0).notNull(),
     validRows: int("valid_rows").default(0).notNull(),
     invalidRows: int("invalid_rows").default(0).notNull(),
@@ -5338,8 +5379,10 @@ export const linkedinDailyCheckJobs = mysqlTable(
   {
     id: int("id").autoincrement().primaryKey(),
     workspaceId: int("workspaceId").notNull(),
-    /** pending | running | completed | failed */
+    /** pending | running | waiting | completed | failed — one row per workspace per UTC day */
     status: varchar("status", { length: 16 }).default("pending").notNull(),
+    /** Why a "waiting" day is waiting (migration 0216): the account limits held a lookup. */
+    holdReason: varchar("hold_reason", { length: 300 }),
     checkedCount: int("checked_count").default(0).notNull(),
     changedCount: int("changed_count").default(0).notNull(),
     failedCount: int("failed_count").default(0).notNull(),
@@ -5375,8 +5418,13 @@ export const linkedinEnrichmentJobs = mysqlTable(
     triggeredByUserId: int("triggered_by_user_id").notNull(),
     /** people_bulk_action | people_row_action | open_profile_action | full_profile_action | list_bulk_action | list_enrich_all | account_contacts_action | daily_monitoring | manual_admin_run */
     triggerType: varchar("trigger_type", { length: 32 }).notNull(),
-    /** queued | running | completed | failed */
+    /** queued | running | waiting | completed | failed */
     status: varchar("status", { length: 16 }).default("queued").notNull(),
+    /** The run's EnrichOptions (migration 0216), so the queue resumes it the same way. */
+    options: json("options"),
+    /** Why a "waiting" job is waiting: the account limits held a lookup. */
+    holdReason: varchar("hold_reason", { length: 300 }),
+    heartbeatAt: timestamp("heartbeat_at"),
     totalProspects: int("total_prospects").default(0).notNull(),
     eligibleCount: int("eligible_count").default(0).notNull(),
     enrichedCount: int("enriched_count").default(0).notNull(),
@@ -5411,6 +5459,8 @@ export const linkedinEnrichmentJobItems = mysqlTable(
     /** pending | skipped | retrieving | matched | enriched | needs_review | conflict | failed | blocked_by_policy | unavailable */
     status: varchar("status", { length: 20 }).default("pending").notNull(),
     errorMessage: text("error_message"),
+    /** needs_review / conflict: the profile the run found, which "Confirm & apply" applies (migration 0216, audit P8). */
+    candidateProfile: json("candidate_profile"),
     startedAt: timestamp("started_at"),
     completedAt: timestamp("completed_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),

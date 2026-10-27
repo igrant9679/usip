@@ -20,7 +20,7 @@ import { getDb } from "../db";
 import { tryDecryptSecret } from "./crypto";
 import { ENV } from "./env";
 import { checkLlmBurst, checkMonthlyCap, type InvokeParams, type ProviderName, type TextContent } from "./llm";
-import { getRequestClientIp, getRequestFeature, getRequestUserId, getRequestWorkspaceId } from "./requestContext";
+import { getRequestClientIp, getRequestFeature, getRequestUserId, getRequestWorkspaceId, isBackgroundWork } from "./requestContext";
 import { recordLlmTokens } from "../usageCounters";
 import { recordAiUsage, type KeySource } from "../services/spend";
 
@@ -362,7 +362,7 @@ export async function* streamLLM(params: StreamParams): AsyncGenerator<string> {
   }
   // invokeLLM's two ceilings, before the provider is called.
   const now = Date.now();
-  checkLlmBurst(params.userId ?? getRequestUserId(), getRequestClientIp(), now);
+  if (!isBackgroundWork()) checkLlmBurst(params.userId ?? getRequestUserId(), getRequestClientIp(), now);
   await checkMonthlyCap(workspaceId, now);
 
   const creds = await loadCreds(workspaceId);

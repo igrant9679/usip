@@ -45,12 +45,16 @@ describe("who counts as a person asking", () => {
   });
   it("a manager's refresh or confirm of one record counts", () => {
     const r = read("routers", "linkedinEnrichment.ts");
-    expect(r.match(/personInitiated: true/g)).toHaveLength(3);
+    // 2026-10-27 (audit P8): confirm applies the candidate the run found and
+    // looks nothing up, so only the refresh still makes a person's lookup.
+    expect(r.match(/personInitiated: true/g)).toHaveLength(1);
+    const confirm = r.slice(r.indexOf("confirmEnrich: workspaceProcedure"), r.indexOf("dailyCheckPreview:"));
+    expect(confirm).not.toMatch(/retrieveLinkedInProfileByUrl|retrieveByNameCompany/);
   });
   it("the flag reaches the gate for lookups and searches", () => {
     const l = read("services", "linkedinLookup.ts");
     expect(l).toContain('kind: "lookup",\n    personInitiated: opts.personInitiated,');
-    expect(l).toContain('kind: "search", personInitiated: opts.personInitiated });');
+    expect(l).toContain('kind: "search", personInitiated: opts.personInitiated, waitMs: opts.waitMs });');
     const g = read("services", "linkedin", "activityGate.ts");
     expect(g).toContain("accountAgeDays: ageDays, personInitiated: input.personInitiated });");
     expect(g).toContain("      personInitiated: input.personInitiated,\n    });\n    if (verdict.allowed)");

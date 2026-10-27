@@ -50,11 +50,11 @@ export function useEnrichJob() {
   const [jobId, setJobId] = useState<number | null>(null);
 
   const runMut = trpc.linkedinEnrichment.run.useMutation({
-    onSuccess: (h) => { setJobId(h.jobId); toast.info(`Enriching ${h.total} prospect(s) via LinkedIn…`); },
+    onSuccess: (h) => { setJobId(h.jobId); toast.info(`Enriching ${h.total} prospect(s) via LinkedIn… ${h.lookupsLeftToday} lookup${h.lookupsLeftToday === 1 ? "" : "s"} left today.`); },
     onError: (e) => toast.error(e.message),
   });
   const runListMut = trpc.linkedinEnrichment.runForList.useMutation({
-    onSuccess: (h) => { setJobId(h.jobId); toast.info(`Enriching ${h.total} list member(s) via LinkedIn…`); },
+    onSuccess: (h) => { setJobId(h.jobId); toast.info(`Enriching ${h.total} list member(s) via LinkedIn… ${h.lookupsLeftToday} lookup${h.lookupsLeftToday === 1 ? "" : "s"} left today.`); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -64,6 +64,13 @@ export function useEnrichJob() {
   );
 
   useEffect(() => {
+    // Held by the LinkedIn limits (audit P7): the job waits and the queue
+    // resumes it, so stop polling and say so rather than spin forever.
+    if (jobQ.data?.status === "waiting") {
+      toast.info(`LinkedIn limits paused the enrichment${jobQ.data.holdReason ? ` (${jobQ.data.holdReason})` : ""}. The rest continues automatically.`);
+      setJobId(null);
+      return;
+    }
     if (jobQ.data?.status === "completed") {
       const j = jobQ.data;
       const bits = [
