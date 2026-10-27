@@ -3,9 +3,10 @@ import { workspaceProcedure } from "../_core/workspace";
 import { z } from "zod";
 import { getDb } from "../db";
 import { audienceSegments, contacts } from "../../drizzle/schema";
-import { eq, and, inArray, sql } from "drizzle-orm";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { matchesSegment, segmentProblem } from "@shared/segmentRules";
+import { segmentProblem } from "@shared/segmentRules";
+import { countSegment, segmentWhere } from "../services/segmentSql";
 
 // ─── Rule schema ──────────────────────────────────────────────────────────────
 const RuleSchema = z.object({
@@ -23,11 +24,10 @@ const RuleSchema = z.object({
 
 type Rule = z.infer<typeof RuleSchema>;
 
-// ─── Evaluate rules against contacts in JS (post-fetch) ──────────────────────
-// One evaluator, shared with the hourly auto-enrol (audit 2026-10-20, P19).
-function evaluateRules(contact: Record<string, any>, rules: Rule[], matchType: "all" | "any"): boolean {
-  return matchesSegment(contact, rules, matchType);
-}
+// ─── Counting ────────────────────────────────────────────────────────────────
+// The rules compile to one WHERE clause and the database counts
+// (services/segmentSql.ts, audit 2026-10-20, P52). Every count used to load
+// every contact in the workspace and filter them here.
 
 /** Refuses a segment that cannot mean what it says (P1, P19). */
 function assertSavable(rules: Rule[]) {
@@ -59,14 +59,7 @@ export const segmentsRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
 
-      // Evaluate count immediately
-      const allContacts = await db
-        .select()
-        .from(contacts)
-        .where(eq(contacts.workspaceId, ctx.workspace.id));
-      const count = allContacts.filter((c) =>
-        evaluateRules(c as Record<string, any>, input.rules, input.matchType)
-      ).length;
+      const count = await countSegment(db, ctx.workspace.id, input.rules, input.matchType);
 
       const [result] = await db.insert(audienceSegments).values({
         workspaceId: ctx.workspace.id,
@@ -94,14 +87,7 @@ export const segmentsRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
 
-      // Re-evaluate count
-      const allContacts = await db
-        .select()
-        .from(contacts)
-        .where(eq(contacts.workspaceId, ctx.workspace.id));
-      const count = allContacts.filter((c) =>
-        evaluateRules(c as Record<string, any>, input.rules, input.matchType)
-      ).length;
+      const count = await countSegment(db, ctx.workspace.id, input.rules, input.matchType);
 
       await db
         .update(audienceSegments)
@@ -143,14 +129,7 @@ export const segmentsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
-      const allContacts = await db
-        .select()
-        .from(contacts)
-        .where(eq(contacts.workspaceId, ctx.workspace.id));
-      const matching = allContacts.filter((c) =>
-        evaluateRules(c as Record<string, any>, input.rules, input.matchType)
-      );
-      return { count: matching.length };
+      return { count: await countSegment(db, ctx.workspace.id, input.rules, input.matchType) };
     }),
 
   refresh: workspaceProcedure
@@ -168,16 +147,9 @@ export const segmentsRouter = router({
             eq(audienceSegments.workspaceId, ctx.workspace.id),
           );
 
-      const allContacts = await db
-        .select()
-        .from(contacts)
-        .where(eq(contacts.workspaceId, ctx.workspace.id));
-
       for (const seg of segs) {
         const rules = (seg.rules as Rule[]) ?? [];
-        const count = allContacts.filter((c) =>
-          evaluateRules(c as Record<string, any>, rules, (seg.matchType ?? "all") as "all" | "any")
-        ).length;
+        const count = await countSegment(db, ctx.workspace.id, rules, (seg.matchType ?? "all") as "all" | "any");
         await db
           .update(audienceSegments)
           .set({ contactCount: count, lastEvaluatedAt: new Date() })
@@ -238,15 +210,15 @@ export const segmentsRouter = router({
         });
       }
       const updatedRules = [...existingRules, ...newRules];
-      const allContacts = await db.select().from(contacts).where(eq(contacts.workspaceId, ctx.workspace.id));
-      const count = allContacts.filter((c) => evaluateRules(c as Record<string, any>, updatedRules, effectiveMatch)).length;
+      const count = await countSegment(db, ctx.workspace.id, updatedRules, effectiveMatch);
       await db.update(audienceSegments).set({ rules: updatedRules, contactCount: count, lastEvaluatedAt: new Date() })
         .where(and(eq(audienceSegments.id, input.segmentId), eq(audienceSegments.workspaceId, ctx.workspace.id)));
       return { added: newRules.length, total: count };
     }),
 
+  /** The segment's contacts, newest first, at most `limit` (P52). */
   getContacts: workspaceProcedure
-    .input(z.object({ id: z.number() }))
+    .input(z.object({ id: z.number(), limit: z.number().int().min(1).max(1000).default(200) }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
@@ -258,13 +230,8 @@ export const segmentsRouter = router({
           eq(audienceSegments.workspaceId, ctx.workspace.id),
         ));
       if (!seg) return [];
-      const allContacts = await db
-        .select()
-        .from(contacts)
-        .where(eq(contacts.workspaceId, ctx.workspace.id));
-      const rules = (seg.rules as Rule[]) ?? [];
-      return allContacts.filter((c) =>
-        evaluateRules(c as Record<string, any>, rules, (seg.matchType ?? "all") as "all" | "any")
-      );
+      const where = segmentWhere(ctx.workspace.id, (seg.rules as Rule[]) ?? [], (seg.matchType ?? "all") as "all" | "any");
+      if (!where) return [];
+      return db.select().from(contacts).where(where).orderBy(desc(contacts.id)).limit(input.limit);
     }),
 });

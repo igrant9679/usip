@@ -264,8 +264,8 @@ describe("a sector's results", () => {
     // The persona's copy had the sector's pains too: they are the research's, not "no longer in it".
     expect(r.pains.find((p) => p.text === PAINS[0])).toMatchObject({ inResearch: true, replied: 3 });
     const all = await caller(2).research.results.personas();
-    expect(all[100]).toEqual({ written: 10, contacted: 10, replied: 3, positive: 2, meetings: 1 });
-    expect(all[101]).toEqual({ written: 10, contacted: 10, replied: 0, positive: 0, meetings: 0 });
+    expect(all[100]).toEqual({ written: 10, contacted: 10, replied: 3, positive: 2, meetings: 1, capped: false });
+    expect(all[101]).toEqual({ written: 10, contacted: 10, replied: 0, positive: 0, meetings: 0, capped: false });
     expect(Object.keys(all).sort()).toEqual(["100", "101"]);
     await expect(caller(4).research.results.persona({ id: 101 })).rejects.toMatchObject({ code: "NOT_FOUND" });
   });

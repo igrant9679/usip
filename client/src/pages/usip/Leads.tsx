@@ -24,8 +24,10 @@ import { leadTierLabel, tierForGrade, type LeadTier } from "@shared/leadTier";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { ConvertLeadDialog } from "@/components/usip/ConvertLeadDialog";
 import { pressable } from "@/lib/pressable";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 
 const NEUTRAL_TONE = "bg-slate-200 text-slate-700";
+const PAGE_SIZE = 50;
 const GRADE_TONE: Record<string, string> = { A: "bg-emerald-100 text-emerald-800", B: "bg-blue-100 text-blue-800", C: "bg-amber-100 text-amber-800", D: "bg-rose-100 text-rose-800" };
 const TIER_TONE: Record<LeadTier, string> = {
   cold: NEUTRAL_TONE,
@@ -112,7 +114,7 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
 function EditLeadDialog({ lead, open, onOpenChange, onSaved }: { lead: any; open: boolean; onOpenChange: (v: boolean) => void; onSaved: () => void }) {
   const utils = trpc.useUtils();
   const updateMut = trpc.leads.update.useMutation({
-    onSuccess: () => { toast.success("Lead updated"); utils.leads.list.invalidate(); onSaved(); onOpenChange(false); },
+    onSuccess: () => { toast.success("Lead updated"); utils.leads.invalidate(); onSaved(); onOpenChange(false); },
     onError: (e: any) => toast.error(e.message),
   });
   return (
@@ -163,31 +165,40 @@ export default function Leads() {
   const [sendEmailOpen, setSendEmailOpen] = useState(false);
   const [editLead, setEditLead] = useState<any | null>(null);
   // Hiding the Export button is UX, not a boundary — the CSV is built here in
-  // the browser from rows leads.list already returned, so there is no server
-  // call to refuse. See the comment on reports.exportCsv.
+  // the browser from rows leads.list returns, so there is no server call to
+  // refuse. See the comment on reports.exportCsv.
   const { can } = usePermissions();
   const utils = trpc.useUtils();
-  const { data, isLoading, error, refetch } = trpc.leads.list.useQuery({ search });
+  // One page at a time, searched in SQL once typing pauses (R49).
+  const [page, setPage] = useState(1);
+  const query = useDebouncedValue(search.trim());
+  useClearOnChange({ query }, () => setPage(1));
+  const pageQ = trpc.leads.page.useQuery({ search: query || undefined, page, perPage: PAGE_SIZE }, { placeholderData: (prev) => prev });
+  const { isLoading, error, refetch } = pageQ;
+  const data = pageQ.data?.rows;
+  const total = pageQ.data?.total ?? 0;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const [exporting, setExporting] = useState(false);
   // Selection belongs to the rows it was made on (R4).
-  useClearOnChange({ search }, () => setSelectedIds(new Set()));
+  useClearOnChange({ query, page }, () => setSelectedIds(new Set()));
 
   const suggestNextAction = trpc.leadsAi.suggestNextAction.useMutation({
-    onSuccess: () => utils.leads.list.invalidate(),
+    onSuccess: () => utils.leads.invalidate(),
     onError: (e: any) => toast.error(e.message),
   });
   const rescore = trpc.leadScoring.recompute.useMutation({
-    onSuccess: () => { utils.leads.list.invalidate(); toast.success("Re-scored"); },
+    onSuccess: () => { utils.leads.invalidate(); toast.success("Re-scored"); },
     onError: (e: any) => toast.error("Re-score failed", { description: e.message }),
   });
   // Converting asks what the lead becomes first (R8) — see ConvertLeadDialog.
   const [convertingId, setConvertingId] = useState<number | null>(null);
   const deleteMut = trpc.leads.delete.useMutation({
-    onSuccess: () => { utils.leads.list.invalidate(); toast.success("Lead deleted"); },
+    onSuccess: () => { utils.leads.invalidate(); toast.success("Lead deleted"); },
     onError: (e: any) => toast.error(e.message),
   });
   const bulkDeleteMut = trpc.leads.bulkDelete.useMutation({
     onSuccess: (res) => {
-      utils.leads.list.invalidate();
+      utils.leads.invalidate();
       setSelectedIds(new Set());
       toast.success(`${res.deleted} lead${res.deleted === 1 ? "" : "s"} deleted`);
     },
@@ -247,15 +258,17 @@ export default function Leads() {
           </>
         )}
         {can("export_data") && (
-        <Button variant="outline" onClick={() => {
-          const rows = data ?? [];
+        <Button variant="outline" onClick={async () => {
+          // Every lead the search matches, not only this page.
+          setExporting(true);
+          const rows = await utils.leads.list.fetch({ search: query || undefined, limit: 5000 }).finally(() => setExporting(false));
           if (!rows.length) return;
           const cols = ["id", "firstName", "lastName", "email", "phone", "company", "title", "source", "score", "status", "createdAt"];
           const lines = [cols.join(","), ...rows.map((r: any) => cols.map((c) => JSON.stringify(r[c] ?? "")).join(","))];
           const blob = new Blob([lines.join("\n")], { type: "text/csv" });
           const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `leads-${Date.now()}.csv`; a.click();
-        }} disabled={!data?.length}>
-          <Download className="size-4" /> Export CSV
+        }} disabled={!total || exporting}>
+          {exporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />} Export CSV
         </Button>
         )}
         <Button onClick={() => setCreateOpen(true)} data-tour-id="leads-new-button"><Plus className="size-4" /> New lead</Button>
@@ -363,6 +376,14 @@ export default function Leads() {
                 ))}
               </tbody>
             </table></div>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2 text-xs text-muted-foreground">
+              <span>{(page - 1) * PAGE_SIZE + 1}–{(page - 1) * PAGE_SIZE + data!.length} of {total.toLocaleString()}</span>
+              <div className="flex items-center gap-1">
+                <Button size="sm" variant="outline" className="h-7" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
+                <span className="px-2">Page {page} of {pages}</span>
+                <Button size="sm" variant="outline" className="h-7" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -381,7 +402,7 @@ export default function Leads() {
 function CreateLeadDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const utils = trpc.useUtils();
   const create = trpc.leads.create.useMutation({
-    onSuccess: () => { utils.leads.list.invalidate(); onOpenChange(false); toast.success("Lead created"); },
+    onSuccess: () => { utils.leads.invalidate(); onOpenChange(false); toast.success("Lead created"); },
     onError: (e) => toast.error("Failed to create lead", { description: e.message }),
   });
   return (

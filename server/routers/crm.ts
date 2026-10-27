@@ -71,6 +71,7 @@ import { businessDomainFromEmail, normalizedAccountFields } from "../services/co
 import { accountMatchesForLead, findContactByEmail } from "../services/crmMatching";
 import { ACTIVE_ENROLLMENT_STATUSES } from "../services/crossEngineEnrollment";
 import { assertOutboundNotPaused } from "../services/outboundPause";
+import { LEAD_LIST_COLUMNS, LEAD_ORDER, leadWhere, searchLeads } from "../services/leadSearch";
 
 /** The ONE public origin — see server/appUrl.ts. */
 const getAppBaseUrl = publicAppOrigin;
@@ -1199,17 +1200,34 @@ Return a JSON object with ONLY the fields you can reasonably suggest from this i
 /* ──────────────────────────────────────────────────────────────────────── */
 
 export const leadsRouter = router({
+  /**
+   * Leads for a picker or an export: filtered in SQL, highest score first,
+   * at most `limit` (R49). The Leads table pages through `page` instead.
+   */
   list: workspaceProcedure
-    .input(z.object({ status: z.string().optional(), search: z.string().optional() }).optional())
+    .input(z.object({
+      status: z.string().optional(),
+      search: z.string().optional(),
+      limit: z.number().int().min(1).max(5000).default(500),
+    }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
-      let rows = await db.select().from(leads).where(eq(leads.workspaceId, ctx.workspace.id)).orderBy(desc(leads.score));
-      if (input?.status) rows = rows.filter((l) => l.status === input.status);
-      const q = input?.search?.toLowerCase().trim();
-      if (q) rows = rows.filter((l) => `${l.firstName} ${l.lastName} ${l.company ?? ""} ${l.email ?? ""}`.toLowerCase().includes(q));
-      return rows;
+      return db.select(LEAD_LIST_COLUMNS).from(leads)
+        .where(leadWhere(ctx.workspace.id, input ?? {}))
+        .orderBy(...LEAD_ORDER)
+        .limit(input?.limit ?? 500);
     }),
+
+  /** One page of the Leads table and how many match (R49). */
+  page: workspaceProcedure
+    .input(z.object({
+      status: z.string().optional(),
+      search: z.string().max(200).optional(),
+      page: z.number().int().min(1).default(1),
+      perPage: z.number().int().min(10).max(200).default(50),
+    }))
+    .query(({ ctx, input }) => searchLeads(ctx.workspace.id, input)),
 
   get: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
     const db = await getDb();

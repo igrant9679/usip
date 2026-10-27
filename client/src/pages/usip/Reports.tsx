@@ -23,6 +23,7 @@ import {
   BarChart3, Clock, Download, FolderOpen, Loader2, Play, Plus, Save, SlidersHorizontal, Sparkles, Trash2, X,
 } from "lucide-react";
 import { PhoneRailButton, ResponsiveRail } from "@/components/usip/ResponsiveRail";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 
 type Filter = { field: string; op: string; value?: string };
 type Spec = {
@@ -113,8 +114,11 @@ export default function Reports() {
     [spec, effectiveColumns],
   );
 
-  const result = trpc.reports.run.useQuery(runnableSpec as never, {
-    enabled: armed && effectiveColumns.length > 0,
+  // Typing a filter value re-ran the report on every keystroke (G54, X4.3):
+  // the query takes the spec once it has settled.
+  const settledSpec = useDebouncedValue(runnableSpec);
+  const result = trpc.reports.run.useQuery(settledSpec as never, {
+    enabled: armed && settledSpec.columns.length > 0,
   });
   const exportCsv = trpc.reports.exportCsv.useMutation({
     onSuccess: (r) => {

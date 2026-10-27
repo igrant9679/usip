@@ -145,19 +145,20 @@ export function AddExistingProspectsDialog({
     { enabled: open && step === 1 && source === "search" },
   );
   const lists = trpc.recordLists.list.useQuery(undefined, { enabled: open && step === 1 && source === "list" });
+  // A list pages on the server too (P49), with the same search box.
   const listMembers = trpc.recordLists.members.useQuery(
-    { id: listId ?? 0 },
+    { id: listId ?? 0, page, perPage: PAGE_SIZE, search: search || undefined },
     { enabled: open && step === 1 && source === "list" && listId != null },
   );
 
   const pageRows: PersonRow[] = useMemo(() => {
     if (source === "search") return ((list.data as any)?.data ?? []) as PersonRow[];
-    return ((listMembers.data ?? []) as any[])
+    return ((listMembers.data?.rows ?? []) as any[])
       .filter((m) => m.recordType === "prospect" && m.record)
       .map((m) => m.record as PersonRow);
   }, [source, list.data, listMembers.data]);
   const pageIds = useMemo(() => pageRows.map((r) => r.id as number), [pageRows]);
-  const total: number = source === "search" ? Number((list.data as any)?.total ?? 0) : pageRows.length;
+  const total: number = source === "search" ? Number((list.data as any)?.total ?? 0) : Number(listMembers.data?.total ?? 0);
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const rowsLoading = source === "search" ? list.isLoading : listId != null && listMembers.isLoading;
 

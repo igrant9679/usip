@@ -59,7 +59,7 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
         toast[r.added.length > 0 ? "info" : "error"](`${r.skipped.length} skipped: ${reasons}`);
       }
       invalidatePeople();
-      utils.are.prospects.list.invalidate();
+      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
       close();
     },
     onError: (e: any) => toast.error(e.message),
@@ -90,7 +90,7 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
       if (r.added > 0) toast.success(`Added ${r.added} to their best-fit campaign${r.added === 1 ? "" : "s"} — the engine will enrich and write their emails`);
       if (r.skipped > 0) toast.info(`${r.skipped} skipped (already in outreach or unidentifiable)`);
       invalidatePeople();
-      utils.are.prospects.list.invalidate();
+      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
       close();
     },
     onError: (e: any) => toast.error(e.message),

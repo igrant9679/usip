@@ -20,7 +20,7 @@ export function RoutingSuggestions() {
       toast.success(`${r.accepted} accepted — ${r.added} added to campaigns${r.skipped ? `, ${r.skipped} skipped (already in outreach)` : ""}`);
       utils.are.campaigns.listRoutingSuggestions.invalidate();
       utils.attention.summary.invalidate();
-      utils.are.prospects.list.invalidate();
+      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -30,7 +30,7 @@ export function RoutingSuggestions() {
       else toast.info("Dismissed");
       utils.are.campaigns.listRoutingSuggestions.invalidate();
       utils.attention.summary.invalidate();
-      utils.are.prospects.list.invalidate();
+      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });

@@ -17,6 +17,8 @@ import { LinkedInUpdateIndicator, useEnrichJob } from "@/components/usip/people/
 import { trpc } from "@/lib/trpc";
 import { ResearchAiMenu } from "@/components/usip/people/ResearchAiMenu";
 import { cn } from "@/lib/utils";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -82,7 +84,6 @@ export default function ListDetail() {
   const utils = trpc.useUtils();
 
   const listQ = trpc.recordLists.get.useQuery({ id }, { enabled: Number.isFinite(id) });
-  const membersQ = trpc.recordLists.members.useQuery({ id }, { enabled: Number.isFinite(id) });
   const list = listQ.data as { id: number; name: string; entityType: string; description?: string | null } | null | undefined;
   const isCompanies = list?.entityType === "companies";
   const { enrichList, running: enriching } = useEnrichJob();
@@ -112,44 +113,36 @@ export default function ListDetail() {
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [sort, setSort] = useState("added");
 
-  const members = (membersQ.data ?? []) as { memberId: number; recordType: string; recordId: number; addedAt: string | Date; record: any }[];
+  // One page of members, searched and sorted by the server once typing
+  // pauses (P49): the list used to arrive whole, every column of every row.
+  const [page, setPage] = useState(1);
+  const query = useDebouncedValue(search.trim());
+  useClearOnChange({ query, sort }, () => setPage(1));
+  const membersQ = trpc.recordLists.members.useQuery(
+    { id, page, perPage: PAGE_SIZE, search: query || undefined, sort: sort === "name" ? "name" : "added" },
+    { enabled: Number.isFinite(id), placeholderData: (prev) => prev },
+  );
+  const rows = (membersQ.data?.rows ?? []) as { memberId: number; recordType: string; recordId: number; addedAt: string | Date; record: any }[];
+  const total = membersQ.data?.total ?? 0;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // Every person on the list, for "Add all to…" — ids only.
+  const memberProspectIds = membersQ.data?.prospectIds ?? [];
 
-  // Compact LinkedIn change indicators for prospect members (batched — returns
-  // only members with unacknowledged updates). Same component as the People tab.
-  const memberProspectIds = useMemo(
-    () => members.filter((m) => m.recordType === "prospect").map((m) => m.recordId),
-    [members],
+  // Compact LinkedIn change indicators for the people on this page (batched —
+  // returns only members with unacknowledged updates). Same component as the People tab.
+  const pageProspectIds = useMemo(
+    () => rows.filter((m) => m.recordType === "prospect").map((m) => m.recordId),
+    [rows],
   );
   const { data: liSummaries } = trpc.linkedinEnrichment.getChangeSummaries.useQuery(
-    { prospectIds: memberProspectIds },
-    { enabled: memberProspectIds.length > 0 },
+    { prospectIds: pageProspectIds },
+    { enabled: pageProspectIds.length > 0 },
   );
   const liSummaryMap = useMemo(
     () => new Map((liSummaries ?? []).map((s: any) => [s.prospect_id, s])),
     [liSummaries],
   );
 
-  const rows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    let out = members;
-    if (q) {
-      out = members.filter((m) => {
-        const r = m.record ?? {};
-        const hay = isCompanies
-          ? `${r.name ?? ""} ${r.domain ?? ""} ${r.industry ?? ""}`
-          : `${r.firstName ?? ""} ${r.lastName ?? ""} ${r.title ?? ""} ${r.company ?? ""} ${r.email ?? ""}`;
-        return hay.toLowerCase().includes(q);
-      });
-    }
-    if (sort === "name") {
-      out = [...out].sort((a, b) => {
-        const an = isCompanies ? a.record?.name ?? "" : `${a.record?.firstName ?? ""} ${a.record?.lastName ?? ""}`;
-        const bn = isCompanies ? b.record?.name ?? "" : `${b.record?.firstName ?? ""} ${b.record?.lastName ?? ""}`;
-        return String(an).localeCompare(String(bn));
-      });
-    }
-    return out;
-  }, [members, search, sort, isCompanies]);
 
   // A missing or another workspace's list (or a non-numeric id) said
   // "Loading…" forever and still offered Add (audit 2026-10-20, P51).
@@ -206,7 +199,7 @@ export default function ListDetail() {
                 {isCompanies ? <Building2 className="size-3" /> : <Users className="size-3" />} {isCompanies ? "Companies" : "People"}
               </Badge>
             )}
-            <span className="text-[12px] text-muted-foreground">{members.length} {members.length === 1 ? "record" : "records"}</span>
+            <span className="text-[12px] text-muted-foreground">{total.toLocaleString()} {total === 1 ? "record" : "records"}</span>
             <div className="flex-1" />
             {/* A list is a targeting set — it should be one click from
                 outreach (seams audit, phase 2). Whole list, People lists only. */}
@@ -246,7 +239,7 @@ export default function ListDetail() {
               variant="outline"
               size="sm"
               className="gap-1.5"
-              disabled={enriching || members.length === 0}
+              disabled={enriching || total === 0}
               onClick={() => enrichList(id, { enrichAll: true })}
               title="Enrich all eligible people in this list via LinkedIn (Unipile)"
             >
@@ -271,11 +264,11 @@ export default function ListDetail() {
         <div className="flex-1 min-h-0 overflow-auto">
           {membersQ.isLoading ? (
             <div className="p-3 space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-11 rounded bg-muted/50 animate-pulse" />)}</div>
-          ) : members.length === 0 ? (
+          ) : total === 0 && !query ? (
             <EmptyState isCompanies={!!isCompanies} onFind={() => { setPicked(new Set()); setAddOpen(true); }} onImport={() => setLocation("/v2/data-enrichment?tab=import-contacts")} onWorkflow={() => setLocation("/v2/workflows")} />
           ) : rows.length === 0 ? (
             <div className="text-center py-16 px-4">
-              <p className="text-sm text-muted-foreground">No records match “{search}”.</p>
+              <p className="text-sm text-muted-foreground">No records match “{query}”.</p>
               <Button variant="outline" size="sm" className="mt-3" onClick={() => setSearch("")}>Clear search</Button>
             </div>
           ) : (
@@ -340,6 +333,16 @@ export default function ListDetail() {
             </table>
           )}
         </div>
+        {pages > 1 && (
+          <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-2 text-xs text-muted-foreground">
+            <span>{(page - 1) * PAGE_SIZE + 1}–{(page - 1) * PAGE_SIZE + rows.length} of {total.toLocaleString()}</span>
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="outline" className="h-7" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
+              <span className="px-2">Page {page} of {pages}</span>
+              <Button size="sm" variant="outline" className="h-7" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+            </div>
+          </div>
+        )}
       </div>
 
       {addOpen && (
@@ -357,6 +360,8 @@ export default function ListDetail() {
     </Shell>
   );
 }
+
+const PAGE_SIZE = 100;
 
 function EmptyState({ isCompanies, onFind, onImport, onWorkflow }: { isCompanies: boolean; onFind: () => void; onImport: () => void; onWorkflow: () => void }) {
   const cards = [

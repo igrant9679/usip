@@ -14,6 +14,7 @@
  * which also exports RelatedTasks) is left untouched.
  */
 import { useMemo, useState } from "react";
+import { SHOW_MORE_STEP, useShowMore } from "@/hooks/useShowMore";
 import { forbiddenMessage } from "@/lib/forbidden";
 import { Link } from "wouter";
 import { toast } from "sonner";
@@ -192,6 +193,10 @@ export default function TasksV2() {
         return ta - tb;
       });
   }, [activeTasks, approvalIds]);
+  // 50 rows at a time (X4.2): the page rendered every task and draft at once,
+  // 19,627 DOM nodes live.
+  const queueRows = useShowMore(queue);
+  const draftRows = useShowMore(draftTasks);
   // "Recently closed" deliberately includes CANCELLED, not just done.
   // Dismissing an AI-drafted task sets status="cancelled" (activities.dismissDraft),
   // and this page rendered neither bucket for it — so the task vanished from
@@ -455,7 +460,12 @@ export default function TasksV2() {
                 </Button>
               </div>
               <div className="rounded-xl border bg-card overflow-hidden shadow-sm" style={{ borderColor: "#7c3aed40" }}>
-                {draftTasks.map((t) => <DraftRow key={t.id} t={t} />)}
+                {draftRows.shown.map((t) => <DraftRow key={t.id} t={t} />)}
+                {draftRows.remaining > 0 && (
+                  <button type="button" onClick={draftRows.showMore} className="w-full border-t px-3 py-2 text-center text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground">
+                    Show {Math.min(draftRows.remaining, SHOW_MORE_STEP)} more drafts ({draftRows.remaining.toLocaleString()} not shown)
+                  </button>
+                )}
               </div>
             </section>
           )}
@@ -484,7 +494,14 @@ export default function TasksV2() {
                   </div>
                 </div>
               ) : (
-                queue.map((t) => <QueueRow key={t.id} t={t} />)
+                <>
+                  {queueRows.shown.map((t) => <QueueRow key={t.id} t={t} />)}
+                  {queueRows.remaining > 0 && (
+                    <button type="button" onClick={queueRows.showMore} className="w-full border-t px-3 py-2 text-center text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground">
+                      Show {Math.min(queueRows.remaining, SHOW_MORE_STEP)} more tasks ({queueRows.remaining.toLocaleString()} not shown)
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </section>

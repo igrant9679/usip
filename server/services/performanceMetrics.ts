@@ -42,7 +42,7 @@
  *     the denominator would understate the rate forever. `opensTracked` is
  *     false for those cells, so the UI can say "not tracked" rather than "0%".
  */
-import { and, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { genuineReplyScope } from "./replyScope";
 import { getDb } from "../db";
 import { stageIndexFor } from "../_core/stageSemantics";
@@ -1158,6 +1158,9 @@ export interface DispatchStat {
   meeting: boolean;
 }
 
+/** Dispatch cards shown per campaign, newest first. */
+export const MAX_DISPATCHES = 500;
+
 export async function getDispatchStats(
   workspaceId: number,
   campaignId: number,
@@ -1191,7 +1194,12 @@ export async function getDispatchStats(
       eq(areExecutionQueue.workspaceId, workspaceId),
       eq(areExecutionQueue.campaignId, campaignId),
       eq(areExecutionQueue.status, "sent" as never),
-    ));
+    ))
+    // The newest sends only (A44): every send of the campaign, with its
+    // preview, came back for the cards. For each prospect these are its
+    // latest sends, so last-touch credit below is unchanged for every card.
+    .orderBy(desc(areExecutionQueue.executedAt), desc(areExecutionQueue.id))
+    .limit(MAX_DISPATCHES);
 
   const signals = await db
     .select({

@@ -36,6 +36,9 @@ const ALERT_THRESHOLDS = {
  * while the previous one is undismissed, so re-running the scan in a
  * tight loop does not flood the alerts table.
  */
+/** Deals read together by the 15-minute alert sweep. */
+const ALERT_CHUNK = 500;
+
 export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ scanned: number; created: number }> {
   const db = await getDb();
   if (!db) return { scanned: 0, created: 0 };
@@ -46,57 +49,63 @@ export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ sc
   const noActivityCutoff = new Date(now.getTime() - ALERT_THRESHOLDS.noActivityDays * 86400000);
   const closingSoonCutoff = new Date(now.getTime() + ALERT_THRESHOLDS.closingSoonDays * 86400000);
 
-  const opps = await db.select().from(opportunities).where(eq(opportunities.workspaceId, wsId));
+  // The deals' facts in three reads per ALERT_CHUNK deals, not three or four
+  // reads per deal (audit 2026-10-20, R66, X4.4): this runs every 15 minutes
+  // for every workspace. Same checks, same alerts.
+  const opps = await db.select({
+    id: opportunities.id, name: opportunities.name, stage: opportunities.stage,
+    closeDate: opportunities.closeDate, winProb: opportunities.winProb,
+  }).from(opportunities).where(eq(opportunities.workspaceId, wsId));
   const stages = await stageIndexFor(db, wsId);
   const activeOpps = opps.filter((o) => stages.isOpen(o.stage));
   let created = 0;
 
-  for (const opp of activeOpps) {
-    // No-activity check
-    const recent = await db.select().from(activities)
-      .where(and(
-        eq(activities.workspaceId, wsId),
-        eq(activities.relatedType, "opportunity"),
-        eq(activities.relatedId, opp.id),
-        gte(activities.createdAt, noActivityCutoff),
-      )).limit(1);
-    if (recent.length === 0) {
-      const existing = await db.select().from(pipelineAlerts)
-        .where(and(eq(pipelineAlerts.opportunityId, opp.id), eq(pipelineAlerts.alertType, "no_activity"), isNull(pipelineAlerts.dismissedAt))).limit(1);
-      if (existing.length === 0) {
-        await db.insert(pipelineAlerts).values({
+  for (let i = 0; i < activeOpps.length; i += ALERT_CHUNK) {
+    const chunk = activeOpps.slice(i, i + ALERT_CHUNK);
+    const ids = chunk.map((o) => o.id);
+    const [recent, open, roles] = await Promise.all([
+      db.select({ id: activities.relatedId }).from(activities)
+        .where(and(
+          eq(activities.workspaceId, wsId),
+          eq(activities.relatedType, "opportunity"),
+          inArray(activities.relatedId, ids),
+          gte(activities.createdAt, noActivityCutoff),
+        )).groupBy(activities.relatedId),
+      db.select({ id: pipelineAlerts.opportunityId, type: pipelineAlerts.alertType }).from(pipelineAlerts)
+        .where(and(inArray(pipelineAlerts.opportunityId, ids), isNull(pipelineAlerts.dismissedAt))),
+      db.select({ id: opportunityContactRoles.opportunityId }).from(opportunityContactRoles)
+        .where(inArray(opportunityContactRoles.opportunityId, ids)).groupBy(opportunityContactRoles.opportunityId),
+    ]);
+    const active = new Set(recent.map((r) => r.id));
+    const alerted = new Set(open.map((r) => `${r.id}:${r.type}`));
+    const championed = new Set(roles.map((r) => r.id));
+    const fresh: (typeof pipelineAlerts.$inferInsert)[] = [];
+    for (const opp of chunk) {
+      // No-activity check
+      if (!active.has(opp.id) && !alerted.has(`${opp.id}:no_activity`)) {
+        fresh.push({
           workspaceId: wsId, opportunityId: opp.id, alertType: "no_activity",
           details: { daysSinceActivity: ALERT_THRESHOLDS.noActivityDays, oppName: opp.name },
         });
-        created++;
       }
-    }
-    // Closing-soon-with-low-prob check
-    if (opp.closeDate && opp.closeDate <= closingSoonCutoff && opp.winProb < 50) {
-      const existing = await db.select().from(pipelineAlerts)
-        .where(and(eq(pipelineAlerts.opportunityId, opp.id), eq(pipelineAlerts.alertType, "closing_soon_regression"), isNull(pipelineAlerts.dismissedAt))).limit(1);
-      if (existing.length === 0) {
+      // Closing-soon-with-low-prob check
+      if (opp.closeDate && opp.closeDate <= closingSoonCutoff && opp.winProb < 50 && !alerted.has(`${opp.id}:closing_soon_regression`)) {
         const daysUntilClose = Math.ceil((opp.closeDate.getTime() - now.getTime()) / 86400000);
-        await db.insert(pipelineAlerts).values({
+        fresh.push({
           workspaceId: wsId, opportunityId: opp.id, alertType: "closing_soon_regression",
           details: { daysUntilClose, winProb: opp.winProb, closeDate: opp.closeDate.toISOString(), oppName: opp.name },
         });
-        created++;
       }
-    }
-    // No-champion check
-    const roles = await db.select().from(opportunityContactRoles).where(eq(opportunityContactRoles.opportunityId, opp.id)).limit(1);
-    if (roles.length === 0) {
-      const existing = await db.select().from(pipelineAlerts)
-        .where(and(eq(pipelineAlerts.opportunityId, opp.id), eq(pipelineAlerts.alertType, "no_champion"), isNull(pipelineAlerts.dismissedAt))).limit(1);
-      if (existing.length === 0) {
-        await db.insert(pipelineAlerts).values({
+      // No-champion check
+      if (!championed.has(opp.id) && !alerted.has(`${opp.id}:no_champion`)) {
+        fresh.push({
           workspaceId: wsId, opportunityId: opp.id, alertType: "no_champion",
           details: { oppName: opp.name, stage: opp.stage },
         });
-        created++;
       }
     }
+    if (fresh.length) await db.insert(pipelineAlerts).values(fresh);
+    created += fresh.length;
   }
 
   return { scanned: activeOpps.length, created };

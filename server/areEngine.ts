@@ -124,6 +124,11 @@ import { cleanScrapedField } from "@shared/fieldHygiene";
 import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
 
 /* ─── Per-tick bounds (keep LLM cost + wall-time predictable) ───────────── */
+
+/** Prospects the screen pass decides per campaign per tick (A34). */
+export const SCREEN_BATCH = 200;
+/** Prospects per grouped read in the completion sweep (A34). */
+const SWEEP_CHUNK = 500;
 /** Max prospects enriched per engine cycle. Enrichment runs ONE AT A TIME
  *  (strictly serial) across all ACTIVE campaigns, so the LLM provider never
  *  sees more than one concurrent enrichment call. Bounded so a large backlog
@@ -1121,6 +1126,9 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         `${gaveUp} candidate${gaveUp === 1 ? "" : "s"} rejected — no verifiable email address could be found, so they never entered the queue.`);
     }
 
+    // A batch per tick, oldest first (audit 2026-10-20, A34): every enriched
+    // row was read whole on every 3-minute tick and updated one at a time.
+    // The rest are screened on the next ticks; none is passed over.
     const enriched = await db
       .select()
       .from(prospectQueue)
@@ -1131,7 +1139,9 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
           eq(prospectQueue.enrichmentStatus, "complete"),
           eq(prospectQueue.sequenceStatus, "pending"),
         ),
-      );
+      )
+      .orderBy(prospectQueue.id)
+      .limit(SCREEN_BATCH);
     const mode = campaign.autonomyMode;
     const threshold = campaign.autoApproveThreshold ?? DEFAULT_APPROVE_THRESHOLD;
     // Counted, not notified per prospect: a full-autonomy tick can approve a
@@ -1950,12 +1960,16 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
           eq(prospectQueue.sequenceStatus, "enrolled"),
         ),
       );
-    for (const p of enrolledProspects) {
-      // One aggregated read instead of two counts — and the two extra facts
-      // (sent, healable-failed) are what the completion decision was missing
-      // when it marked zero-send sequences finished and disarmed the heal.
-      const [c] = await db
+    // One aggregated read per 500 prospects, grouped by prospect (A34): it
+    // was one query per enrolled prospect on every tick. The two extra facts
+    // (sent, healable-failed) are what the completion decision was missing
+    // when it marked zero-send sequences finished and disarmed the heal.
+    const tallies = new Map<number, { total: number; stillScheduled: number; sent: number; healableFailed: number; skipped: number }>();
+    const enrolledIds = enrolledProspects.map((p) => p.id);
+    for (let i = 0; i < enrolledIds.length; i += SWEEP_CHUNK) {
+      const rows = await db
         .select({
+          pq: areExecutionQueue.prospectQueueId,
           total: sql<number>`count(*)`,
           stillScheduled: sql<number>`sum(case when ${areExecutionQueue.status} = 'scheduled' then 1 else 0 end)`,
           sent: sql<number>`sum(case when ${areExecutionQueue.status} = 'sent' then 1 else 0 end)`,
@@ -1968,7 +1982,12 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
           skipped: sql<number>`sum(case when ${areExecutionQueue.status} = 'skipped' then 1 else 0 end)`,
         })
         .from(areExecutionQueue)
-        .where(eq(areExecutionQueue.prospectQueueId, p.id));
+        .where(inArray(areExecutionQueue.prospectQueueId, enrolledIds.slice(i, i + SWEEP_CHUNK)))
+        .groupBy(areExecutionQueue.prospectQueueId);
+      for (const r of rows) tallies.set(r.pq, r);
+    }
+    for (const p of enrolledProspects) {
+      const c = tallies.get(p.id);
       const verdict = sequenceCompletionVerdict({
         total: Number(c?.total ?? 0),
         stillScheduled: Number(c?.stillScheduled ?? 0),

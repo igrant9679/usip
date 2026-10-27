@@ -422,7 +422,8 @@ describe("the client fixes", () => {
     const pins: Array<[string, string]> = [
       ["client/src/pages/usip/People.tsx", "useClearOnChange(listQuery, () => setChecked(new Set()));"],
       ["client/src/pages/usip/Companies.tsx", "useClearOnChange({ filters, sort, page }, () => setChecked(new Set()));"],
-      ["client/src/pages/usip/Leads.tsx", "useClearOnChange({ search }, () => setSelectedIds(new Set()));"],
+      // Leads pages on the server since phase 4 (R49): the page is part of the scope.
+      ["client/src/pages/usip/Leads.tsx", "useClearOnChange({ query, page }, () => setSelectedIds(new Set()));"],
       ["client/src/pages/usip/Prospects.tsx", "useClearOnChange(listQuery, () => setSelectedIds(new Set()));"],
       ["client/src/pages/usip/Proposals.tsx", "useClearOnChange({ search, statusFilter, sortBy, expiryWindow }, () => setSelectedIds(new Set()));"],
     ];

@@ -64,6 +64,11 @@ function JsonSection({ title, data }: { title: string; data: any }) {
   );
 }
 
+/** How often to re-read a pipeline in this state: until it is done, not after. */
+export function pipelinePollMs(status: string | null | undefined): number | false {
+  return status === "complete" || status === "failed" ? false : 2000;
+}
+
 export default function ResearchPipeline() {
   const [goal, setGoal] = useState("");
   const [tone, setTone] = useState<"concise" | "warm" | "formal" | "punchy">("concise");
@@ -72,7 +77,9 @@ export default function ResearchPipeline() {
   const { data: pipelines = [], refetch } = trpc.researchPipeline.list.useQuery(undefined);
   const { data: activePipeline, refetch: refetchActive } = trpc.researchPipeline.get.useQuery(
     { id: activePipelineId! },
-    { enabled: !!activePipelineId, refetchInterval: activePipelineId ? 2000 : false },
+    // Every 2 s while it runs; a finished or failed pipeline is not polled
+    // again (audit 2026-10-20, P144, X4.3: it polled forever).
+    { enabled: !!activePipelineId, refetchInterval: (q) => pipelinePollMs(q.state.data?.status) },
   );
 
   const start = trpc.researchPipeline.start.useMutation({
