@@ -1342,19 +1342,6 @@ export const TOURS: TourSeed[] = [
     ],
   },
   {
-    name: "Campaigns",
-    description: "Group your outbound and measure it together.",
-    type: "feature",
-    estimatedMinutes: 2,
-    pageKey: "campaigns",
-    route: "/campaigns",
-    roleTags: ["sdr"],
-    steps: [
-      { title: "Campaign as a container", bodyMarkdown: "A campaign groups sequences and prospects so you can judge a whole motion rather than one email at a time.", routeTo: "/campaigns", targetDataTourId: "page-campaigns", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Autonomous campaigns are separate", bodyMarkdown: "The fully autonomous engine lives in the ARE hub. This page is the classic, rep-driven kind.", visualTreatment: "coach", advanceCondition: "next_button" },
-    ],
-  },
-  {
     name: "Segments",
     description: "Rules that keep their own membership current.",
     type: "feature",
@@ -1906,6 +1893,11 @@ const RETIRED_LEGACY_TOURS = [
   "AI Draft Queue & Auto-Send",
   "AI Pipeline: Review Drafts",
   "Contacts and Accounts",
+  // Retired 2026-10-27 with the legacy Broadcasts page (phase 5 item 2). Its
+  // first step spotlighted `page-campaigns`, an anchor that only ever existed
+  // on that page, and startTour would route to /campaigns and be redirected
+  // straight out — the same failure mode "AI Pipeline: Review Drafts" had.
+  "Campaigns",
 ];
 
 /* ─── Upsert helpers ─────────────────────────────────────────────────────── */

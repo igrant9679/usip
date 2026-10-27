@@ -6,7 +6,6 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import {
   accounts,
   auditLog,
-  campaigns,
   contacts,
   contractAmendments,
   customers,
@@ -437,32 +436,11 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
     });
   }
 
-  // Campaigns (3)
-  for (const camp of [
-    { name: SEED_CAMPAIGN_NAMES[0], objective: "renewal", status: "live" as const, description: "Coordinated campaign to lift Q2 renewals across the watch tier." },
-    { name: SEED_CAMPAIGN_NAMES[1], objective: "expansion", status: "scheduled" as const, description: "Cross-sell analytics module to top 50 mid-market accounts." },
-    { name: SEED_CAMPAIGN_NAMES[2], objective: "awareness", status: "planning" as const, description: "Multi-channel awareness push around new brand identity." },
-  ]) {
-    await db.insert(campaigns).values({
-      workspaceId,
-      name: camp.name,
-      objective: camp.objective,
-      status: camp.status,
-      startsAt: daysFromNow(camp.status === "live" ? -10 : 14),
-      endsAt: daysFromNow(camp.status === "live" ? 30 : 45),
-      budget: String(randInt(15, 80) * 1000),
-      targetSegment: "Watch-tier customers, midmarket",
-      description: camp.description,
-      checklist: [
-        { id: 1, label: "Owner assigned", done: true },
-        { id: 2, label: "Budget approved", done: camp.status !== "planning" },
-        { id: 3, label: "Creative reviewed", done: camp.status === "live" },
-        { id: 4, label: "Tracking links generated", done: camp.status === "live" },
-        { id: 5, label: "Sequences enrolled", done: camp.status === "live" },
-      ],
-      ownerUserId,
-    });
-  }
+  // Campaigns: not seeded any more. The legacy Broadcasts page was retired on
+  // 2026-10-27 (phase 5 item 2), so these three rows would have no surface to
+  // appear on. SEED_CAMPAIGN_NAMES and SEED_FINGERPRINT.campaignNames stay as
+  // they are: workspaces seeded before that date still hold the rows, and the
+  // sample-data remover finds them by exactly those names.
 
   // Products
   for (const prod of [

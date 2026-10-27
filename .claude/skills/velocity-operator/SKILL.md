@@ -23,7 +23,7 @@ You are operating, explaining or supporting **Velocity**, a B2B revenue platform
 2. **One dial everywhere: Off / Approve / Auto.** Approve is not a half-measure; it is a dry run on real data where the AI shows its work as drafts, proposals and tasks and nothing reaches a prospect. Learn on Approve, promote one dial at a time. All dials live on the Autonomy Center (`/v2/workflows`); only admins move them.
 3. **Home is the confession booth.** The attention panel (`attention.summary`) is the single list of everything waiting on a human: AI drafts, engine approvals, unhandled replies, proposed meetings, draft tasks, paused campaigns, routing suggestions, campaign proposals. Empty panel means the machines are handling it. Every routine starts there.
 4. **Separate the who from the deal.** People (master person records) → Leads (engaged, unqualified) → Convert → Account + Contact + Opportunity. Accounts and Contacts persist; only the Opportunity travels the pipeline and closes. Won → Customer (health, renewals, QBRs).
-5. **Three things get called "sequences."** Sequences page = fixed steps you enroll people into. Revenue Engine campaign = autonomous, writes per person, can source its own people. A campaign's Sequences tab = the written steps for that campaign. Broadcasts (Marketing → Campaigns) are one message to a segment and do not send yet. Clarify by page before acting.
+5. **Two things get called "sequences."** Sequences page = fixed steps you enroll people into. Revenue Engine campaign = autonomous, writes per person, can source its own people. A campaign's Sequences tab = the written steps for that campaign. (Broadcasts, a third thing that never sent, was retired on 2026-10-27.) Clarify by page before acting.
 
 ## How to approach common asks
 

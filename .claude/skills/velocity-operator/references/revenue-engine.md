@@ -2,15 +2,16 @@
 
 The Autonomous Revenue Engine is the part of Velocity that spends real sending reputation. Understand it before touching it live.
 
-## Three things people call "sequences" (they are different)
+## Two things people call "sequences" (they are different)
 | Name | Where | What | Copy | Sources its own people? |
 |---|---|---|---|---|
 | **Sequence** | Sequences `/v2/sequences` | Fixed multi-step flow; same steps to everyone enrolled | Fixed with merge tags | No — you enroll |
 | **Revenue Engine campaign** | Campaigns `/are/campaigns` | Autonomous outbound: discover → enrich → write → send → work replies | Per person (model writes from a dossier) or fixed | Yes, when working count < target |
 | **Campaign Sequences tab** | Inside a campaign | The per-person written steps for that campaign | — | — |
-| **Broadcast** | Marketing `/campaigns` | One message to a segment (not yet sending) | One message | No |
 
 Owners often say "sequence" meaning a Revenue Engine campaign. Clarify by page.
+
+A third thing, **Broadcast** (Marketing `/campaigns`), was retired on 2026-10-27: it never sent, and one message to a segment is now a fixed-copy Revenue Engine campaign.
 
 ## Campaign anatomy
 - **Targeting**: titles, industries, geographies, keywords, company size, personas; drives discovery and the ICP screen.

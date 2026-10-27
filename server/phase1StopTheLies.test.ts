@@ -25,12 +25,11 @@ describe("navigation tells the product story", () => {
     }
   });
 
-  it("the unfinished Broadcasts product is off the rail but still reachable", () => {
-    const row = registry.slice(registry.indexOf('href: "/campaigns"'), registry.indexOf("}", registry.indexOf('href: "/campaigns"')));
-    expect(row).toContain('group: "Marketing"');
-    expect(row).not.toContain("primary: true");
-    expect(row).toContain("Not yet sending");
-  });
+  // Broadcasts was the unfinished product this guarded: in the palette, off
+  // the rail, honestly described as not sending. It never sent and the page is
+  // retired (2026-10-27, phase 5 item 2), so there is no row to describe. That
+  // the registry no longer offers a retired path at all is pinned in
+  // server/phase5Retired.test.ts, which reads this same file.
 
   it("Customer Success holds Customers, Renewals and QBRs; Help Center is configuration", () => {
     for (const href of ['"/customers"', '"/renewals"', '"/qbrs"']) {

@@ -26,7 +26,6 @@ import { lazyChunk } from "@/lib/lazyChunk";
  */
 const AccountRedirect = lazyChunk(() => import("@/pages/usip/AccountRedirect"));
 const Audit = lazyChunk(() => import("@/pages/usip/Audit"));
-const Campaigns = lazyChunk(() => import("@/pages/usip/Campaigns"));
 const ContactRedirect = lazyChunk(() => import("@/pages/usip/ContactRedirect"));
 const Customers = lazyChunk(() => import("@/pages/usip/Customers"));
 const Dashboard = lazyChunk(() => import("@/pages/usip/Dashboard"));
@@ -482,7 +481,11 @@ function Router() {
       <Route path="/sending-accounts"><AuthGate><SendingAccounts /></AuthGate></Route>
       <Route path="/sender-pools"><AuthGate><SenderPools /></AuthGate></Route>
       <Route path="/social"><AuthGate><Social /></AuthGate></Route>
-      <Route path="/campaigns"><AuthGate><Campaigns /></AuthGate></Route>
+      {/* The legacy Broadcasts page is retired (phase 5 item 2, 2026-10-27).
+          It never sent — Launch only ticked a checklist — and it had no detail
+          route, so there is no id to carry: every bookmark of it is this one
+          path. Lands on the engine's campaign list. See lib/retiredRoutes. */}
+      <Route path="/campaigns"><AuthGate><RetiredRedirect from="/campaigns" /></AuthGate></Route>
       <Route path="/customers"><AuthGate><Customers /></AuthGate></Route>
       <Route path="/renewals"><AuthGate><Renewals /></AuthGate></Route>
       <Route path="/qbrs"><AuthGate><QBRs /></AuthGate></Route>

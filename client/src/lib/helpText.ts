@@ -63,7 +63,6 @@ export const NAV_HELP: Record<string, HelpEntry> = {
 
   // ── Engage ──
   "/v2/sequences": { body: "Fixed multi-step email follow-ups — the same steps to everyone you enroll. Not the same as a Revenue Engine campaign, which writes per person and can source its own people.", article: "sequences-vs-campaigns" },
-  "/campaigns": { body: "Broadcasts: one message to a segment. Not yet sending — prepare audiences and copy here; live outreach runs as Revenue Engine campaigns.", article: "are-tuning-campaign" },
   "/segments": { body: "Saved filters over your contacts that stay up to date as data changes." },
   "/sending-accounts": { body: "The mailboxes and services that actually send your email, with per-account daily limits.", article: "email-sending-preferences" },
   "/email-builder": { body: "Design reusable email templates and snippets.", article: "email-builder-templates" },
