@@ -163,9 +163,12 @@ describe("the audit's screens each tell a failure from nothing (X1.6)", () => {
     ["R62 enrich job", "client/src/components/usip/people/LinkedInEnrichment.tsx", /jobQ\.data\?\.status === "failed" \|\| jobQ\.data\?\.status === "canceled"/],
     ["P113 research runs", "client/src/components/usip/research/ResearchRuns.tsx", /if \(q\.error && !q\.data\) return <Section title="AI research runs"><QueryError/],
     ["A63 what's working", "client/src/pages/usip/AREPerformance.tsx", /!loading && !metricsError && stepRows\.length === 0/],
-    ["R88 prospects", "client/src/pages/usip/Prospects.tsx", /!isLoading && error && !data && \(/],
-    ["R88 filters", "client/src/pages/usip/Prospects.tsx", /No prospects match these filters\./],
-    ["R88 page clamp", "client/src/pages/usip/Prospects.tsx", /if \(data && page > lastPage\) setPage\(lastPage\)/],
+    // The prospect list is People since 2026-10-27 (phase 5 item 2); R88 is
+    // pinned there now. Same three guarantees, one reached differently.
+    ["R88 people error", "client/src/pages/usip/People.tsx", /\) : error \? \(/],
+    ["R88 people error offers a retry", "client/src/pages/usip/People.tsx", /load people\. \{error\.message\}[\s\S]{0,160}onClick=\{\(\) => refetch\(\)\}/],
+    ["R88 filters", "client/src/pages/usip/People.tsx", /No people match these filters/],
+    ["R88 paging cannot strand you", "client/src/pages/usip/People.tsx", /useEffect\(\(\) => \{ setPage\(1\); \}, \[tiers, seniorities, sortField, sortDir\]\);/],
     ["R70 proposals", "client/src/pages/usip/Proposals.tsx", /listError && !list \? \(\s*<QueryError what="proposals"/],
   ];
   for (const [name, file, re] of cases) {

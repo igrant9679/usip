@@ -428,8 +428,10 @@ export default function Dashboards() {
             right={<Button aria-label="New dashboard" size="sm" variant="ghost" onClick={() => setOpenNew(true)}><Plus className="h-3.5 w-3.5" /></Button>}
           >
             <ul className="space-y-0.5">
-              {/* Pinned system dashboards */}
-              {[{ label: "Home", href: "/dashboard" }, { label: "Home 2", href: "/dashboard-home2" }].map((p) => {
+              {/* Pinned system dashboards. "Home 2" (/dashboard-home2) was a
+                  second home page over the same workspace.summary and is
+                  retired (phase 5 item 2, 2026-10-27). */}
+              {[{ label: "Home", href: "/dashboard" }].map((p) => {
                 const isCurrentHome = homeDashboard === p.href || (p.href === "/dashboard" && homeDashboard === "/");
                 return (
                   <li key={p.href} className="group">

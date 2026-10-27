@@ -71,10 +71,15 @@ describe("wiring — every stage renders what the server now returns", () => {
     expect(page).not.toMatch(/errorRows\.(reduce|filter)\([^)]*reason/);
   });
 
-  it("the confirm summary states destination and dedupe rule; the done step's CTA follows the destination", () => {
+  it("the confirm summary states destination and dedupe rule; the done step's CTA lands where the rows are", () => {
     expect(page).toContain('{destination === "prospects" ? "Prospects — cleaned by the sweeper first" : "CRM Contacts — usable immediately"}');
     expect(page).toContain('{matchOnNameCompany ? "email, or name + company" : "email only"}');
-    expect(page).toContain('href={destination === "prospects" ? "/prospects" : "/v2/people"}');
+    // The CTA used to fork on the destination because a prospects import sent
+    // the reader to a page its rows were not on. Both destinations land on
+    // People now that the /prospects list is retired (phase 5 item 2,
+    // 2026-10-27), so one link IS the CTA following the rows.
+    expect(page).toContain('<Link href="/v2/people">');
+    expect(page).toContain("View People");
   });
 
   it("every imported contact reaches the People tab — awaited, batch-scoped, reported", () => {

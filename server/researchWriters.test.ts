@@ -201,7 +201,9 @@ describe("the editor assistant", () => {
   });
 
   it("every editor that knows its recipient says so", () => {
-    expect(read("client/src/pages/usip/Contacts.tsx")).toContain("aiContext={{ subject, contactId: contactIds.length === 1 ? contactIds[0] : undefined }}");
+    // Contacts.tsx held a contactId editor too; the page was deleted on
+    // 2026-10-27 (phase 5 item 2). RecordDrawer below is the reachable
+    // contact-keyed editor and is still pinned.
     expect(read("client/src/pages/usip/Leads.tsx")).toContain("aiContext={{ subject, leadId: leadIds.length === 1 ? leadIds[0] : undefined }}");
     const drawer = read("client/src/components/usip/RecordDrawer.tsx");
     expect(drawer).toContain("aiContext={{ subject, leadId }}");
