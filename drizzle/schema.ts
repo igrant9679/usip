@@ -4302,6 +4302,9 @@ export const areEngineLogs = mysqlTable(
     level: varchar("level", { length: 8 }).default("info").notNull(),
     message: text("message").notNull(),
     details: json("details"),
+    /** How many times this exact line was written in a row (migration 0217, audit A24), and when last. */
+    repeatCount: int("repeatCount").default(1).notNull(),
+    lastSeenAt: timestamp("lastSeenAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({

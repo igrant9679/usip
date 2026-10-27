@@ -53,7 +53,7 @@ function clientList(name: string): string[] {
 const count = (src: string, needle: string) => src.split(needle).length - 1;
 
 describe("selectRunSources — the mask wins, the selection narrows", () => {
-  const cands: AreSourceId[] = ["linkedin", "web", "news", "apollo", "quickenrich"];
+  const cands: AreSourceId[] = ["linkedin", "internal", "news", "apollo", "quickenrich"];
   const all = new Set<string>(cands);
 
   it("no selection runs every enabled candidate, in candidate order", () => {
@@ -62,23 +62,23 @@ describe("selectRunSources — the mask wins, the selection narrows", () => {
   });
 
   it("a selection narrows to the chosen candidates, keeping candidate order", () => {
-    const r = selectRunSources(cands, all, ["apollo", "web"]);
-    expect(r.run).toEqual(["web", "apollo"]);
+    const r = selectRunSources(cands, all, ["apollo", "internal"]);
+    expect(r.run).toEqual(["internal", "apollo"]);
     expect(r.unselected).toEqual(["linkedin", "news", "quickenrich"]);
     expect(r.masked).toEqual([]);
   });
 
   it("cannot re-enable a source the workspace disabled", () => {
-    const enabled = new Set<string>(["linkedin", "news", "apollo", "quickenrich"]); // web masked
-    const r = selectRunSources(cands, enabled, ["web", "apollo"]);
+    const enabled = new Set<string>(["linkedin", "news", "apollo", "quickenrich"]); // internal masked
+    const r = selectRunSources(cands, enabled, ["internal", "apollo"]);
     expect(r.run).toEqual(["apollo"]);
-    expect(r.masked).toEqual(["web"]);
+    expect(r.masked).toEqual(["internal"]);
     // Masked is reported as masked, never as "you did not pick it".
     expect(r.unselected).toEqual(["linkedin", "news", "quickenrich"]);
   });
 
   it("ignores ids the mode does not offer", () => {
-    expect(selectRunSources(cands, all, ["google_business", "web"]).run).toEqual(["web"]);
+    expect(selectRunSources(cands, all, ["google_business", "internal"]).run).toEqual(["internal"]);
   });
 
   it("an explicit selection naming nothing valid runs nothing, and says so", () => {

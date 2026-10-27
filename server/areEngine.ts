@@ -41,6 +41,7 @@ import { getDb } from "./db";
 import {
   areCampaigns,
   areEngineLogs,
+  discoveryLogs,
   areExecutionQueue,
   areSuppressionList,
   contacts,
@@ -56,7 +57,6 @@ import {
   saveScrapeJobAndQueue,
   scrapeGoogleBusiness,
   scrapeNews,
-  scrapeWeb,
 } from "./routers/are/scraper";
 import { searchLinkedInPeople, type UnipileLinkedInSearchHit } from "./lib/unipile";
 import { listUsableAccounts } from "./services/linkedinLookup";
@@ -293,6 +293,22 @@ function errorDetails(e: unknown): Record<string, unknown> {
  * campaign detail "Logs" tab so the user can see what the engine is actually
  * doing. Never throws; logging must not break a tick.
  */
+/**
+ * The last line each campaign's phase wrote (audit 2026-10-20, A24). Every
+ * tick wrote the same lines for every campaign — thousands a day — so a real
+ * error scrolled out of the Logs tab within the hour. A line identical to the
+ * last one (same level and text) within LOG_REPEAT_WINDOW_MS now bumps that
+ * row's repeatCount and lastSeenAt instead of adding a row; the first row
+ * keeps its details. In-process: after a restart the next line starts a row.
+ */
+const lastLogByPhase = new Map<string, { id: number; signature: string; at: number }>();
+export const LOG_REPEAT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** Test seam: forget the last lines. */
+export function __resetEngineLogRepeatsForTests(): void {
+  lastLogByPhase.clear();
+}
+
 async function emitLog(
   workspaceId: number,
   campaignId: number | null,
@@ -304,18 +320,55 @@ async function emitLog(
   try {
     const db = await getDb();
     if (!db) return;
-    await db.insert(areEngineLogs).values({
+    const text = message.slice(0, 500);
+    const key = `${campaignId ?? 0}|${phase}`;
+    const signature = `${level}|${text}`;
+    const now = Date.now();
+    const last = lastLogByPhase.get(key);
+    if (last && last.signature === signature && now - last.at < LOG_REPEAT_WINDOW_MS) {
+      await db.update(areEngineLogs)
+        .set({ repeatCount: sql`${areEngineLogs.repeatCount} + 1`, lastSeenAt: new Date(now) } as never)
+        .where(eq(areEngineLogs.id, last.id));
+      last.at = now;
+      return;
+    }
+    const [row] = await db.insert(areEngineLogs).values({
       workspaceId,
       campaignId: campaignId ?? null,
       phase,
       level,
-      message: message.slice(0, 500),
+      message: text,
       details: details === undefined ? null : (details as any),
-    });
+      repeatCount: 1,
+    } as never).$returningId();
+    if (row?.id) lastLogByPhase.set(key, { id: row.id, signature, at: now });
   } catch (e) {
     // Logging failures are non-fatal — fall back to console.
     console.error("[AreEngine] emitLog failed:", e);
   }
+}
+
+/** How long engine and discovery logs are kept (audit A24). */
+export const ENGINE_LOG_RETENTION_DAYS = 30;
+
+/**
+ * Delete engine and discovery logs older than ENGINE_LOG_RETENTION_DAYS, in
+ * batches so a first run over a year of rows does not hold a long lock.
+ * Returns how many batches ran. Daily, from _core/index.ts.
+ */
+export async function purgeOldEngineLogs(now: Date = new Date()): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const cutoff = new Date(now.getTime() - ENGINE_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  let batches = 0;
+  for (const [table, createdAt] of [[areEngineLogs, areEngineLogs.createdAt], [discoveryLogs, discoveryLogs.createdAt]] as const) {
+    for (let i = 0; i < 200; i++) {
+      const [res] = await db.execute(sql`DELETE FROM ${table} WHERE ${createdAt} < ${cutoff} LIMIT 5000`);
+      batches++;
+      if (Number((res as { affectedRows?: number })?.affectedRows ?? 0) < 5000) break;
+    }
+  }
+  return batches;
 }
 
 /* ─── Engine entrypoint ─────────────────────────────────────────────────── */
@@ -603,6 +656,8 @@ async function enrollApprovedForCampaignUnlocked(
   const wsId = campaign.workspaceId;
   const campId = campaign.id;
 
+  // What THIS run enrolled (A68: the log used to report the rows it read).
+  let enrolledHere = 0;
   try {
     const rows = await db
       .select({
@@ -934,10 +989,11 @@ async function enrollApprovedForCampaignUnlocked(
         .set({ sequenceStatus: "enrolled" })
         .where(eq(prospectQueue.id, row.id));
       result.enrolled++;
+      enrolledHere++;
     }
-    if (rows.length > 0) {
+    if (enrolledHere > 0) {
       await emitLog(wsId, campId, "enroll", "info",
-        `Enrolled ${rows.length} prospects into execution queue`);
+        `Enrolled ${enrolledHere} prospect${enrolledHere === 1 ? "" : "s"} into execution queue${rows.length > enrolledHere ? ` (${rows.length - enrolledHere} of the ${rows.length} read were not)` : ""}`);
     }
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} enroll phase failed:`, e);
@@ -1262,6 +1318,9 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
   await enrollApprovedForCampaign(campaign, result);
 
   /* ── Phase 4: DISPATCH due email steps ─────────────────────────────── */
+  // result.sent counts the whole tick, every campaign; this campaign's line
+  // reports its own (A68).
+  const sentBeforeThisCampaign = result.sent;
   try {
     const channels = (campaign.channelsEnabled ?? {}) as Record<string, boolean>;
     const emailEnabled = channels.email !== false; // null/undefined ⇒ enabled
@@ -1851,7 +1910,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
       }
     }
     await emitLog(wsId, campId, "dispatch", "info",
-      `Dispatched (sent so far this tick: ${result.sent}, daily remaining cap: ${remaining})`
+      `Dispatched (sent this tick: ${result.sent - sentBeforeThisCampaign}, daily remaining cap: ${remaining})`
       + (poolHeld ? ` — email steps held and re-scheduled: ${poolHeld}` : ""));
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} dispatch phase failed:`, e);
@@ -2007,6 +2066,37 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult): Promis
  *               tick, so a later source is never called — or paid — for
  *               people an earlier one already supplied.
  */
+/** One angle of a campaign's targeting, and how its searches have gone. */
+type DiscoverySliceState = { id: string; q: string; lastSearchedAt: number | null; lastNewCount: number | null; emptyRuns?: number; nextAt?: number | null };
+/** areCampaigns.discoveryQueryState. */
+type DiscoveryState = {
+  slices?: DiscoverySliceState[];
+  qe?: QuickenrichPageState | null;
+  ap?: ApolloPageState | null;
+  ws?: string | null;
+  updatedAt?: number;
+  /** When discovery last ran, and how many new people it found (A25). */
+  lastRunAt?: number;
+  lastRunNew?: number;
+  /** Sources resting after empty runs, by source id (A25). */
+  src?: Record<string, { empty: number; nextAt: number | null }>;
+};
+
+/** A campaign whose last discovery run found nobody new waits this long (A25). */
+export const DISCOVERY_REST_MS = 30 * 60 * 1000;
+
+/**
+ * How long an angle or a source rests after `emptyRuns` empty runs in a row:
+ * 15 minutes, doubling, at most a day (A25).
+ */
+export function discoveryBackoffMs(emptyRuns: number): number {
+  if (emptyRuns <= 0) return 0;
+  return Math.min(15 * 60 * 1000 * 2 ** (emptyRuns - 1), 24 * 60 * 60 * 1000);
+}
+
+/** One discovery run for a campaign, for tests (server/phase3Engine.test.ts). */
+export { runDiscovery };
+
 async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_INTEGER): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
@@ -2096,11 +2186,11 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // JSON carries the QuickEnrich page cursor (`qe`) — see nextQuickenrichPage —
   // Apollo's (`ap`, nextApolloPage) and WarmySender's search cursor (`ws`).
   const persistedState =
-    (campaign as { discoveryQueryState?: { slices?: Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }>; qe?: QuickenrichPageState | null; ap?: ApolloPageState | null; ws?: string | null } | null }).discoveryQueryState
-    ?? { slices: [] as Array<{ id: string; q: string; lastSearchedAt?: number | null; lastNewCount?: number | null }>, qe: null, ap: null, ws: null };
-  const stateById = new Map<string, { id: string; q: string; lastSearchedAt: number | null; lastNewCount: number | null }>();
+    (campaign as { discoveryQueryState?: DiscoveryState | null }).discoveryQueryState
+    ?? { slices: [] as DiscoverySliceState[], qe: null, ap: null, ws: null };
+  const stateById = new Map<string, DiscoverySliceState>();
   for (const s of persistedState.slices ?? []) {
-    stateById.set(s.id, { id: s.id, q: s.q, lastSearchedAt: s.lastSearchedAt ?? null, lastNewCount: s.lastNewCount ?? null });
+    stateById.set(s.id, { id: s.id, q: s.q, lastSearchedAt: s.lastSearchedAt ?? null, lastNewCount: s.lastNewCount ?? null, emptyRuns: s.emptyRuns ?? 0, nextAt: s.nextAt ?? null });
   }
   // Ensure every current slice has a row; drop persisted rows that no
   // longer match the targeting (ICP edits invalidate stale slice IDs).
@@ -2109,17 +2199,33 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     if (!liveSliceIds.has(id)) stateById.delete(id);
   }
   for (const s of targetingSlices) {
-    if (!stateById.has(s.id)) stateById.set(s.id, { id: s.id, q: s.q, lastSearchedAt: null, lastNewCount: null });
+    if (!stateById.has(s.id)) stateById.set(s.id, { id: s.id, q: s.q, lastSearchedAt: null, lastNewCount: null, emptyRuns: 0, nextAt: null });
   }
 
-  // Pick the stalest slice (null lastSearchedAt first, then oldest).
-  const ordered = Array.from(stateById.values()).sort((a, b) => {
-    const aTs = a.lastSearchedAt ?? 0;
-    const bTs = b.lastSearchedAt ?? 0;
-    return aTs - bTs;
-  });
+  // Audit 2026-10-20 (A25): a run that found nobody new ran again three
+  // minutes later, and an angle of the targeting that never finds anyone was
+  // searched again in its turn, forever. Now a campaign whose last run found
+  // nobody rests DISCOVERY_REST_MS, and an angle that keeps coming back empty
+  // waits longer each time (discoveryBackoffMs), until it finds someone.
+  const now0 = Date.now();
+  if (persistedState.lastRunNew === 0 && persistedState.lastRunAt && now0 - persistedState.lastRunAt < DISCOVERY_REST_MS) {
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
+      `Discovery resting — the last run found nobody new; next run after ${new Date(persistedState.lastRunAt + DISCOVERY_REST_MS).toISOString().slice(11, 16)} UTC.`);
+    return 0;
+  }
+  // Pick the stalest slice that is not backing off (null lastSearchedAt first, then oldest).
+  const ordered = Array.from(stateById.values())
+    .filter((s) => (s.nextAt ?? 0) <= now0)
+    .sort((a, b) => (a.lastSearchedAt ?? 0) - (b.lastSearchedAt ?? 0));
+  if (ordered.length === 0) {
+    const soonest = Math.min(...Array.from(stateById.values()).map((s) => s.nextAt ?? now0));
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
+      `Discovery resting — every angle of this campaign's targeting has come back empty lately; the next one is tried after ${new Date(soonest).toISOString().slice(0, 16).replace("T", " ")} UTC. Widening the targeting brings new angles at once.`);
+    return 0;
+  }
   const slice = ordered[0];
   const query = slice.q;
+  const sourceState: Record<string, { empty: number; nextAt: number | null }> = { ...(persistedState.src ?? {}) };
 
   const icpContext =
     `Industries: ${industries.join(", ")}; ` +
@@ -2262,12 +2368,6 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
         query,
         raw,
       })),
-    web: () =>
-      scrapeWeb(campaign.workspaceId, campaign.id, query, icpContext).then((raw) => ({
-        sourceType: "web_scrape" as const,
-        query,
-        raw,
-      })),
   };
 
   const [wsSourceRow] = await db
@@ -2298,10 +2398,19 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
       perSource[id] = { raw: 0, new: 0, skipped: "target met by earlier sources" };
       continue;
     }
+    // A source that keeps returning nothing (or failing) rests, longer each
+    // time, instead of being called every tick (A25).
+    const rest = sourceState[id];
+    if (rest?.nextAt && rest.nextAt > Date.now()) {
+      perSource[id] = { raw: 0, new: 0, skipped: `resting after ${rest.empty} empty run${rest.empty === 1 ? "" : "s"}, until ${new Date(rest.nextAt).toISOString().slice(0, 16).replace("T", " ")} UTC` };
+      continue;
+    }
     let value: SourceResult;
     try {
       value = await taskFactories[id](remaining);
     } catch (err) {
+      const empty = (sourceState[id]?.empty ?? 0) + 1;
+      sourceState[id] = { empty, nextAt: Date.now() + discoveryBackoffMs(empty) };
       console.error(`[AreEngine] discovery source ${id} failed for campaign ${campaign.id}:`, err);
       const reason = err instanceof Error ? err.message : String(err);
       perSource[id] = { raw: 0, new: 0, error: reason };
@@ -2310,6 +2419,12 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
       continue;
     }
     const { sourceType, query: q, raw } = value;
+    if (raw.length === 0) {
+      const empty = (sourceState[id]?.empty ?? 0) + 1;
+      sourceState[id] = { empty, nextAt: Date.now() + discoveryBackoffMs(empty) };
+    } else {
+      delete sourceState[id];
+    }
     // Within-tick + cross-tick dedup AND cross-campaign exclusivity, one
     // vocabulary (services/are/queueIdentity).
     const unique = raw.filter((p) => {
@@ -2368,10 +2483,15 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   if (updatedSlice) {
     updatedSlice.lastSearchedAt = now;
     updatedSlice.lastNewCount = totalNew;
+    updatedSlice.emptyRuns = totalNew === 0 ? (updatedSlice.emptyRuns ?? 0) + 1 : 0;
+    updatedSlice.nextAt = totalNew === 0 ? now + discoveryBackoffMs(updatedSlice.emptyRuns) : null;
   }
-  const newState = {
+  const newState: DiscoveryState = {
     slices: Array.from(stateById.values()),
     updatedAt: now,
+    lastRunAt: now,
+    lastRunNew: totalNew,
+    src: sourceState,
     // The QuickEnrich page cursor rides the same JSON: the advanced state
     // when this tick pulled, else whatever was stored (a skipped pull — no
     // key, no headroom — must not reset the rotation).

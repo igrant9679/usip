@@ -77,13 +77,45 @@ export function makeSqlFakeDb(opts: {
     return x < y ? -1 : x > y ? 1 : 0;
   };
   const REF = "(`\\w+`(?:\\.`\\w+`)?)";
+  /** Split on `sep` outside any parentheses. */
+  const splitTop = (s: string, sep: string): string[] => {
+    const out: string[] = [];
+    let depth = 0, start = 0;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === "(") depth++;
+      else if (s[i] === ")") depth--;
+      else if (depth === 0 && s.startsWith(sep, i)) { out.push(s.slice(start, i).trim()); start = i + sep.length; }
+    }
+    out.push(s.slice(start).trim());
+    return out;
+  };
+  /** Whether one pair of parentheses encloses the whole of `s`. */
+  const wrapped = (s: string): boolean => {
+    if (!s.startsWith("(") || !s.endsWith(")")) return false;
+    let depth = 0;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === "(") depth++;
+      else if (s[i] === ")") depth--;
+      if (depth === 0 && i < s.length - 1) return false;
+    }
+    return true;
+  };
   const evalClause = (clause: string, ctx: Row, params: unknown[], pi: { i: number }): boolean => {
     let m: RegExpMatchArray | null;
-    if (clause.startsWith("(") && clause.endsWith(")") && clause.includes(" or ")) {
-      const parts = clause.slice(1, -1).split(" or ").map((c) => c.trim());
-      let any = false;
-      for (const p of parts) if (evalClause(p, ctx, params, pi)) any = true; // every part consumes its params
-      return any;
+    // A parenthesised group: OR of its top-level parts, else AND of them, at
+    // any depth ("(a or (b and c))"). Every part consumes its params.
+    if (wrapped(clause)) {
+      const inner = clause.slice(1, -1).trim();
+      const ors = splitTop(inner, " or ");
+      if (ors.length > 1) {
+        let any = false;
+        for (const p of ors) if (evalClause(p, ctx, params, pi)) any = true;
+        return any;
+      }
+      const ands = splitTop(inner, " and ");
+      let all = true;
+      for (const p of ands) if (!evalClause(p, ctx, params, pi)) all = false;
+      return all;
     }
     if ((m = clause.match(new RegExp(`^${REF} = \\?$`)))) return same(lookup(ctx, m[1]), params[pi.i++]);
     // DATE(col) = 'YYYY-MM-DD': the UTC calendar day of the stored value.
@@ -130,17 +162,10 @@ export function makeSqlFakeDb(opts: {
     const { sql, params } = render(cond);
     let s = sql.trim();
     // Strip the outer AND group's parentheses only (not an OR group's).
-    if (s.startsWith("(") && s.endsWith(")") && !/^\([^()]* or [^()]*\)$/.test(s)) s = s.slice(1, -1).trim();
+    if (wrapped(s) && splitTop(s.slice(1, -1).trim(), " or ").length === 1) s = s.slice(1, -1).trim();
     const pi = { i: 0 };
     // Split on top-level " and " only.
-    const clauses: string[] = [];
-    let depth = 0, start = 0;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] === "(") depth++;
-      else if (s[i] === ")") depth--;
-      else if (depth === 0 && s.startsWith(" and ", i)) { clauses.push(s.slice(start, i).trim()); start = i + 5; }
-    }
-    clauses.push(s.slice(start).trim());
+    const clauses = splitTop(s, " and ");
     let ok = true;
     for (const c of clauses) if (!evalClause(c, ctx, params, pi)) ok = false; // keep consuming params
     return ok;

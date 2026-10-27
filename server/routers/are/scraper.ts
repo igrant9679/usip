@@ -140,6 +140,23 @@ function cleanForLLM(rawHtml: string): string {
  * as-is, and a plain fetch would have read cloud metadata or anything on the
  * private network and handed the body to the LLM — and back to the caller.
  */
+/**
+ * Audit 2026-10-20 (A25): the status was never checked, so Google's 429 and
+ * its "unusual traffic" page were cleaned and handed to the model as search
+ * results — a paid model call on a refusal page, every tick. A refusal now
+ * throws, and every caller already treats a failed fetch as "nothing found".
+ */
+export function refusalOf(status: number, body: string): string | null {
+  if (status === 429) return "rate limited (HTTP 429)";
+  if (status >= 400) return `HTTP ${status}`;
+  // Google's own refusal pages only: a company page that loads a captcha
+  // widget is still a page with content.
+  if (/our systems have detected unusual traffic|\/sorry\/index|before you continue to google/i.test(body.slice(0, 20000))) {
+    return "a captcha or consent page, not results";
+  }
+  return null;
+}
+
 async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -151,6 +168,8 @@ async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<string>
       },
     });
     const text = await res.text();
+    const refused = refusalOf(res.status, text);
+    if (refused) throw new Error(`${new URL(url).hostname} refused the request: ${refused}`);
     return cleanForLLM(text);
   } finally {
     clearTimeout(timer);

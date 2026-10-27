@@ -1578,8 +1578,16 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
 }
 
 function LogsTab({ campaignId }: { campaignId: number }) {
+  // Level and phase filters (audit A24): the server filters the engine feed,
+  // so a rare error is found among weeks of routine lines.
+  const [levelFilter, setLevelFilter] = useState<"all" | "warn" | "error">("all");
+  const [phaseFilter, setPhaseFilter] = useState<string>("all");
   const { data: engineLogs = [], refetch: refetchEngine, isLoading: loadingEngine } =
-    trpc.are.engine.getLogs.useQuery({ campaignId, limit: 300 });
+    trpc.are.engine.getLogs.useQuery({
+      campaignId, limit: 300,
+      ...(levelFilter === "error" ? { level: "error" } : {}),
+      ...(phaseFilter !== "all" ? { phase: phaseFilter } : {}),
+    });
   const { data: discoveryLogsForCampaign = [], refetch: refetchDiscovery, isLoading: loadingDiscovery } =
     trpc.discovery.getLogsForCampaign.useQuery({ campaignId, limit: 300 });
   const runOnce = trpc.are.engine.runOnce.useMutation();
@@ -1587,11 +1595,16 @@ function LogsTab({ campaignId }: { campaignId: number }) {
   // Merge the two feeds into one chronological timeline. Source tag is
   // kept on each row so the row component can colour-prefix the phase
   // (engine.* vs discovery.*) without the user needing two scroll boxes.
-  type UnifiedLog = { id: string | number; source: "engine" | "discovery"; phase: string; level: string; message: string; details: unknown; createdAt: Date | string };
-  const unified: UnifiedLog[] = [
-    ...engineLogs.map((l: any) => ({ id: `e-${l.id}`, source: "engine" as const, phase: l.phase, level: l.level, message: l.message, details: l.details, createdAt: l.createdAt })),
+  type UnifiedLog = { id: string | number; source: "engine" | "discovery"; phase: string; level: string; message: string; details: unknown; createdAt: Date | string; repeatCount?: number; lastSeenAt?: Date | string | null };
+  const merged: UnifiedLog[] = [
+    ...engineLogs.map((l: any) => ({ id: `e-${l.id}`, source: "engine" as const, phase: l.phase, level: l.level, message: l.message, details: l.details, createdAt: l.createdAt, repeatCount: l.repeatCount, lastSeenAt: l.lastSeenAt })),
     ...discoveryLogsForCampaign.map((l: any) => ({ id: `d-${l.id}`, source: "discovery" as const, phase: l.phase, level: l.level, message: l.message, details: l.details, createdAt: l.createdAt })),
-  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  ];
+  const unified = merged
+    .filter((l) => levelFilter === "all" || l.level === "error" || (levelFilter === "warn" && l.level === "warn"))
+    .filter((l) => phaseFilter === "all" || l.phase === phaseFilter)
+    .sort((a, b) => new Date(b.lastSeenAt ?? b.createdAt).getTime() - new Date(a.lastSeenAt ?? a.createdAt).getTime());
+  const phases = Array.from(new Set([...engineLogs, ...discoveryLogsForCampaign].map((l: any) => String(l.phase)))).sort();
 
   const isLoading = loadingEngine || loadingDiscovery;
   if (isLoading) return <div className="text-sm text-muted-foreground p-6 text-center">Loading logs…</div>;
@@ -1600,9 +1613,28 @@ function LogsTab({ campaignId }: { campaignId: number }) {
     <div className="space-y-3">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="text-xs text-muted-foreground">
-          {unified.length} {unified.length === 1 ? "entry" : "entries"} · engine + discovery merged, newest first
+          {unified.length} {unified.length === 1 ? "entry" : "entries"} · engine + discovery merged, newest first · kept 30 days
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <select
+            aria-label="Level"
+            className="h-8 rounded-md border bg-background px-2 text-xs"
+            value={levelFilter}
+            onChange={(e) => setLevelFilter(e.target.value as "all" | "warn" | "error")}
+          >
+            <option value="all">All levels</option>
+            <option value="warn">Warnings and errors</option>
+            <option value="error">Errors only</option>
+          </select>
+          <select
+            aria-label="Phase"
+            className="h-8 rounded-md border bg-background px-2 text-xs"
+            value={phaseFilter}
+            onChange={(e) => setPhaseFilter(e.target.value)}
+          >
+            <option value="all">All phases</option>
+            {phases.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
           <Button size="sm" variant="outline" onClick={() => { refetchEngine(); refetchDiscovery(); }}>
             <RefreshCw className="size-3 mr-1" /> Refresh
           </Button>
@@ -1658,6 +1690,11 @@ function LogRow({ log }: { log: any }) {
           {new Date(log.createdAt).toLocaleString()}
         </span>
         <Badge variant="outline" className="text-[10px] w-20 shrink-0 justify-center">{log.phase}</Badge>
+        {log.repeatCount > 1 && (
+          <span className="text-[10px] text-muted-foreground tabular-nums shrink-0" title={log.lastSeenAt ? `Last ${new Date(log.lastSeenAt).toLocaleString()}` : undefined}>
+            ×{log.repeatCount}
+          </span>
+        )}
         <Badge
           variant={log.level === "error" ? "destructive" : log.level === "warn" ? "secondary" : "outline"}
           className="text-[10px] w-14 shrink-0 justify-center"

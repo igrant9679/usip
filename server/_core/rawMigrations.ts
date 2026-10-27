@@ -4870,6 +4870,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0217: An engine log line that repeats is counted, not re-written ────
+  // Audit 2026-10-20 (Phase 3, A24): every tick wrote the same lines for every
+  // campaign ("Discovery skipped — queue full", "Dispatched … 0"), thousands a
+  // day, so a real error scrolled out of the Logs tab within the hour. A line
+  // identical to the last one its campaign's phase wrote now bumps that row
+  // (repeatCount, lastSeenAt); logs older than 30 days are deleted daily.
+  {
+    name: "0217_engine_log_repeats.sql",
+    statements: [
+      "ALTER TABLE `are_engine_logs` ADD COLUMN `repeatCount` int NOT NULL DEFAULT 1",
+      "ALTER TABLE `are_engine_logs` ADD COLUMN `lastSeenAt` timestamp NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

@@ -436,8 +436,9 @@ function initialParams(): { runId: number | null; q: string } {
  * (sourcePicker.test.ts pins them equal), so the picker can never offer a
  * source the run would not use, or hide one it would. Order as the service.
  */
-const PERSON_SOURCES: AreSourceId[] = ["linkedin", "web", "news", "apollo", "quickenrich"];
-const ACCOUNT_SOURCES: AreSourceId[] = ["google_business", "web", "news", "apollo"];
+// No "web" (audit 2026-10-27, P62): it reads a page at a URL, and this search is text.
+const PERSON_SOURCES: AreSourceId[] = ["linkedin", "news", "apollo", "quickenrich"];
+const ACCOUNT_SOURCES: AreSourceId[] = ["google_business", "news", "apollo"];
 const SOURCE_LABEL: Record<string, string> = Object.fromEntries(ARE_SOURCES.map((s) => [s.id, s.label]));
 
 export function FindProspectsPanel() {

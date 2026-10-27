@@ -53,7 +53,7 @@ describe("campaigns skip QuickEnrich when it cannot apply their places (owner de
 describe("QuickEnrich as a Find-prospects source", () => {
   it("person mode fans out to quickenrich; account mode does not (it is a people DB)", () => {
     const person = svc.slice(svc.indexOf('if (mode === "person") {'), svc.indexOf("} else {", svc.indexOf('if (mode === "person") {')));
-    expect(person).toContain('({ source: "quickenrich", raw })');
+    expect(person).toContain('({ source: "quickenrich", ...r })'); // with its note (P63, 2026-10-27)
     const account = svc.slice(svc.indexOf("// Account mode keeps the company-shaped sources"), svc.indexOf("const settled = await Promise.allSettled(tasks)"));
     expect(account).not.toContain("quickenrich");
   });
@@ -68,7 +68,7 @@ describe("QuickEnrich as a Find-prospects source", () => {
     expect(fn).toContain("Number(b.hasEmail) - Number(a.hasEmail)");
     expect(fn).toContain(".slice(0, headroom)");
     // Refuses to search their whole database with no title/industry filter.
-    expect(fn).toContain("if (!body) return []");
+    expect(fn).toContain("if (!body) return { raw: [], note:"); // and says why (P63, 2026-10-27)
     // Same helpers the engine's source uses — one vocabulary, two callers.
     for (const sym of ["getQuickenrichDailyPullCap", "quickenrichPulledToday", "buildQuickenrichFilters", "quickenrichContactFinder"]) {
       expect(engine, `engine also uses ${sym}`).toContain(sym);
@@ -111,8 +111,9 @@ describe("QuickEnrich as a Find-prospects source", () => {
     // The page no longer prints the fan-out as prose: its per-run picker
     // (2026-09-22) is built from these two lists, which sourcePicker.test.ts
     // pins equal to the service's candidate arrays. Pin the entries here too.
-    expect(page).toContain('const PERSON_SOURCES: AreSourceId[] = ["linkedin", "web", "news", "apollo", "quickenrich"]');
-    expect(page).toContain('const ACCOUNT_SOURCES: AreSourceId[] = ["google_business", "web", "news", "apollo"]');
+    // No "web" since 2026-10-27 (audit P62): it needs a URL, and this search is text.
+    expect(page).toContain('const PERSON_SOURCES: AreSourceId[] = ["linkedin", "news", "apollo", "quickenrich"]');
+    expect(page).toContain('const ACCOUNT_SOURCES: AreSourceId[] = ["google_business", "news", "apollo"]');
   });
 });
 
@@ -137,7 +138,9 @@ describe("QuickEnrich is the PRIMARY source (owner decision 2026-08-24), and the
     // absent/true = enabled — an old sparse mask must not disable working sources
     expect(resolveSourceOrder(null, { apollo: true }, ARE_SOURCE_IDS)).toContain("quickenrich");
     expect(resolveSourceOrder(["events", "quickenrich"], null, ARE_SOURCE_IDS)[0]).toBe("quickenrich");
-    expect(resolveSourceOrder(null, null, ["web"])).toEqual(["web"]);
+    expect(resolveSourceOrder(null, null, ["news"])).toEqual(["news"]);
+    // "web" is no longer a source (audit A25/P62, 2026-10-27): a stored one drops.
+    expect(resolveSourceOrder(null, null, ["web"] as never)).toEqual([]);
   });
 
   it("the engine builds its tasks FROM the resolver and walks them in order — as a WATERFALL that stops at the open-slot count", () => {

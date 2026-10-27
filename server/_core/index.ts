@@ -827,6 +827,16 @@ async function startServer() {
   setTimeout(runBulkJobs, 40_000);
   setInterval(runBulkJobs, 15_000);
 
+  // Engine and discovery logs older than 30 days (audit A24: they were kept
+  // forever, thousands of rows per campaign per day).
+  const runLogRetention = () => {
+    import("../areEngine")
+      .then((m) => m.purgeOldEngineLogs())
+      .catch((e) => console.error("[AreEngine] log retention failed:", e));
+  };
+  setTimeout(runLogRetention, 26 * 60 * 1000);
+  setInterval(runLogRetention, 24 * 60 * 60 * 1000);
+
   // Renewal stages: the stored customers.renewalStage never moved — a contract
   // ending in nine days stayed in the column wonToCustomer stamped on the day
   // the deal was won. Every READER now derives the stage from contractEnd, so
