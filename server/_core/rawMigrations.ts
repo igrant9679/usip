@@ -4884,6 +4884,21 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Phase 4 (audit 2026-10-20, L9 and Calendar): two reads that went through
+  // every row a workspace has, bodies and raw results included.
+  //  - "Pulled today" for Apollo and QuickEnrich sums today's are_scrape_jobs
+  //    rows for one source: 1.3-1.9 s on each Settings card, on the source
+  //    strip, and in every discovery's cap check.
+  //  - meetings.list finds the reply that booked each meeting by meetingId:
+  //    0.9 s on Calendar and Meetings.
+  {
+    name: "0218_read_indexes.sql",
+    statements: [
+      "CREATE INDEX `ix_asj_ws_src_at` ON `are_scrape_jobs` (`workspaceId`, `sourceType`, `scrapedAt`)",
+      "CREATE INDEX `ix_er_ws_meeting` ON `email_replies` (`workspaceId`, `meetingId`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

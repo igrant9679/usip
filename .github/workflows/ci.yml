@@ -89,4 +89,8 @@ jobs:
       # It was one 10 MB script before pages were split by route.
       - name: Build + bundle budget
         if: always()
+        # The job's NODE_ENV is "test", which would build React's development
+        # bundle (about 300 KB bigger than what ships). Measure the real build.
+        env:
+          NODE_ENV: production
         run: pnpm exec vite build && node scripts/bundleBudget.mjs dist/public

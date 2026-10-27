@@ -77,7 +77,10 @@ describe("the budget is measured from the built files", () => {
   it("CI builds and runs it", () => {
     const ci = read(".github/workflows/ci.yml");
     expect(ci).toContain("run: pnpm exec vite build && node scripts/bundleBudget.mjs dist/public");
-    expect(ci.slice(ci.indexOf("name: Build + bundle budget"))).not.toContain("continue-on-error");
+    const step = ci.slice(ci.indexOf("name: Build + bundle budget"));
+    expect(step).not.toContain("continue-on-error");
+    // The job runs with NODE_ENV=test, which builds React's development bundle.
+    expect(step).toMatch(/env:\s*\n\s*NODE_ENV: production/);
   });
 });
 

@@ -207,11 +207,14 @@ export class ImapSmtpAdapter implements EmailAdapter {
     return this.withImap(folder, async (client) => {
       const lock = await client.getMailboxLock(folder);
       try {
-        const uids = await client.search({ all: true }, { uid: true });
-        const recent = uids.slice(-maxResults).reverse();
-        if (recent.length === 0) return { threads: [] };
+        // The newest messages hold the highest sequence numbers, so fetch that
+        // range. It first searched for every UID in the folder, which on a big
+        // mailbox was most of the Mailbox page's wait (audit 2026-10-20, L8).
+        const exists = client.mailbox ? client.mailbox.exists : 0;
+        if (!exists) return { threads: [] };
+        const first = Math.max(1, exists - maxResults + 1);
         const threads: EmailThread[] = [];
-        for await (const msg of client.fetch(recent.join(","), { uid: true, flags: true, envelope: true }, { uid: true })) {
+        for await (const msg of client.fetch(`${first}:*`, { uid: true, flags: true, envelope: true })) {
           const env = msg.envelope;
           const from = env?.from?.[0];
           threads.push({
@@ -221,6 +224,7 @@ export class ImapSmtpAdapter implements EmailAdapter {
             messageCount: 1, labels: [...msg.flags],
           });
         }
+        threads.sort((a, b) => Number(b.threadId) - Number(a.threadId)); // newest first
         return { threads };
       } finally { lock.release(); }
     });

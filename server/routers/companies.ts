@@ -18,10 +18,20 @@ import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { workspaceProcedure, requireMinRole } from "../_core/workspace";
 import { getDb } from "../db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { accounts } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { searchWorkspaceAccounts } from "../services/company/searchService";
+
+/** Distinct trimmed values with how many rows have each, most first. */
+function tally(values: Array<string | null | undefined>): [string, number][] {
+  const m = new Map<string, number>();
+  for (const raw of values) {
+    const v = (raw ?? "").trim();
+    if (v) m.set(v, (m.get(v) ?? 0) + 1);
+  }
+  return Array.from(m.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
 import {
   getCompanyProfile, getCompanyContacts, getCompanyActivity, getCompanyEnrichmentHistory,
 } from "../services/company/profileService";
@@ -144,6 +154,25 @@ export const companiesRouter = router({
     }),
 
   /* ── search / list ── */
+  /**
+   * The Industry and Location filter options with their counts, over the
+   * accounts search shows (not archived). The page built them from
+   * accounts.list, every column of every account, 83 MB in LSI Media
+   * (audit 2026-10-20, L6). Location is the first of state, region, country.
+   */
+  facets: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { industries: [] as [string, number][], locations: [] as [string, number][] };
+    const rows = await db
+      .select({ industry: accounts.industry, hqState: accounts.hqState, region: accounts.region, hqCountry: accounts.hqCountry })
+      .from(accounts)
+      .where(and(eq(accounts.workspaceId, ctx.workspace.id), isNull(accounts.archivedAt)));
+    return {
+      industries: tally(rows.map((r) => r.industry)),
+      locations: tally(rows.map((r) => r.hqState || r.region || r.hqCountry)),
+    };
+  }),
+
   search: workspaceProcedure
     .input(z.object({ filters, sort, page: z.number().int().min(1).default(1), perPage: z.number().int().min(10).max(200).default(50) }))
     .query(async ({ ctx, input }) => searchWorkspaceAccounts(ctx.workspace.id, input)),

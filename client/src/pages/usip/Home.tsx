@@ -226,7 +226,8 @@ export default function Home() {
   // screenshot 2026-08-26). A filter either narrows the view or it lies —
   // and so does a silently-defaulted error.
   const people = ((trpc.prospects.list.useQuery({ page: 1, perPage: 10 }).data as any)?.data ?? []) as any[];
-  const companies = (trpc.accounts.list.useQuery().data ?? []) as any[];
+  // The "Top companies" card shows five.
+  const companies = (trpc.accounts.list.useQuery({ limit: 5 }).data ?? []) as any[];
   const tasks = (trpc.tasks.list.useQuery({}).data ?? []) as any[];
   // The one definition of open/dueToday/overdue, in the workspace's timezone.
   const taskStats = trpc.tasks.stats.useQuery().data as any;

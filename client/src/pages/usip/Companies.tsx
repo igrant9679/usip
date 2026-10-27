@@ -41,12 +41,6 @@ function fmtNum(n: number) {
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
 }
-function facet<T>(list: T[], get: (x: T) => string | null | undefined): [string, number][] {
-  const m = new Map<string, number>();
-  for (const x of list) { const v = (get(x) ?? "").trim(); if (v) m.set(v, (m.get(v) ?? 0) + 1); }
-  return [...m.entries()].sort((a, b) => b[1] - a[1]);
-}
-
 function FilterGroup({ label, icon: Icon, count, open, onToggle, children }: {
   label: string; icon: any; count?: number; open: boolean; onToggle: () => void; children?: React.ReactNode;
 }) {
@@ -235,12 +229,12 @@ export default function Companies() {
 
   useEffect(() => { const t = setTimeout(() => { setQ(searchInput); setPage(1); }, 300); return () => clearTimeout(t); }, [searchInput]);
 
-  // Facet source (all accounts — lightweight) for the industry/location checkboxes.
-  const { data: facetSrc } = trpc.accounts.list.useQuery();
-  const industryFacet = useMemo(() => facet((facetSrc ?? []) as any[], (a) => a.industry), [facetSrc]);
+  // Industry / location options with counts, counted on the server.
+  const { data: facets } = trpc.companies.facets.useQuery(undefined, { staleTime: 60_000 });
+  const industryFacet = facets?.industries ?? [];
   const { data: sectorOptions } = trpc.research.sectors.options.useQuery(undefined, { staleTime: 60_000 });
   const sectorName = useMemo(() => new Map((sectorOptions ?? []).map((s) => [s.id, s.name])), [sectorOptions]);
-  const locationFacet = useMemo(() => facet((facetSrc ?? []) as any[], (a) => a.hqState || a.region || a.hqCountry), [facetSrc]);
+  const locationFacet = facets?.locations ?? [];
 
   const filters = {
     q: q || undefined,
