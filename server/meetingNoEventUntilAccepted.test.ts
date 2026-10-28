@@ -31,11 +31,32 @@ vi.mock("./services/meetingProposalEmail", async (a) => ({
 
 import { confirmProposalPick, expireUnpickedProposals, proposalForPick, sendMeetingInvite, __resetLiveBusyCacheForTests } from "./services/meetingScheduler";
 import { proposalEmailBodies, proposalPickUrl } from "./services/meetingProposalEmail";
+import { localDateOf, wallTimeToUtcMs } from "@shared/availability";
 
 const DAY = 86_400_000;
-// Two weekdays ahead, 10:00 and 14:00 New York (14:00 / 18:00 UTC in October).
-const day = (() => { let d = Date.now() + 3 * DAY; while ([0, 6].includes(new Date(d).getUTCDay())) d += DAY; return Math.floor(d / DAY) * DAY; })();
-const T = [day + 14 * 3_600_000, day + 18 * 3_600_000, day + DAY + 14 * 3_600_000].map((ms) => new Date(ms).toISOString());
+const NY = "America/New_York";
+// Two weekdays ahead: 10:00 and 14:00 in New York, then 10:00 the day after.
+//
+// Derived through the zone, never by adding a fixed number of hours to a UTC
+// midnight (DST fix 2026-10-28). The old fixtures added 14h and 18h and said
+// so in the comment — "in October" — because that was 10:00 and 14:00 only
+// while New York was on EDT (UTC−4). The day floats off Date.now(), so when it
+// first crossed the 2026-11-01 DST end those became 9:00 and 13:00 EST and the
+// email below named the wrong zone. wallTimeToUtcMs asks the zone for the
+// offset on the day in question, so these hold on either side of a transition.
+const dayUtc = (() => { let d = Date.now() + 3 * DAY; while ([0, 6].includes(new Date(d).getUTCDay())) d += DAY; return Math.floor(d / DAY) * DAY; })();
+// Noon UTC, so the calendar day is unambiguous in New York (at UTC midnight it
+// is still the previous day there).
+const nyDay = localDateOf(NY, dayUtc + 12 * 3_600_000);
+/** `hour`:00 New York on the fixture day, `plusDays` later. */
+const nyAt = (plusDays: number, hour: number) =>
+  new Date(wallTimeToUtcMs(NY, nyDay.y, nyDay.m, nyDay.d + plusDays, hour * 60)).toISOString();
+/** What New York's zone is actually called at that instant — EDT or EST. */
+const nyZoneAbbr = (iso: string) =>
+  new Intl.DateTimeFormat("en-US", { timeZone: NY, timeZoneName: "short" })
+    .formatToParts(new Date(iso))
+    .find((p) => p.type === "timeZoneName")!.value;
+const T = [nyAt(0, 10), nyAt(0, 14), nyAt(1, 10)];
 const TOKEN = "tok_abcdefghijklmnopqrstuvwxyz0123456789";
 
 type Row = Record<string, any>;
@@ -123,7 +144,9 @@ describe("the email", () => {
     expect(html).toContain(`href="${proposalPickUrl(TOKEN, 1)}"`);
     expect(proposalPickUrl(TOKEN, 1)).toMatch(new RegExp(`/m/${TOKEN}\\?t=1$`));
     expect(text).toContain(proposalPickUrl(TOKEN, 0));
-    expect(html).toContain("EDT"); // the zone is named
+    // The zone is named. Which name depends on the date, so ask the zone
+    // rather than hardcoding one half of the year (DST fix 2026-10-28).
+    expect(html).toContain(nyZoneAbbr(T[0]));
   });
 
   it("says a calendar invite follows a confirmation, and that a reply works too", () => {

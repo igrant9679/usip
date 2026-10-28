@@ -38,13 +38,27 @@ vi.mock("./routers/are/execution", async (importActual) => ({
 
 import { appRouter } from "./routers";
 import { proposalIsOutdated, sendMeetingInvite, startsInProposalWindow } from "./services/meetingScheduler";
+import { localDateOf, wallTimeToUtcMs } from "@shared/availability";
 
 const DAY = 86_400_000;
 const NY = "America/New_York";
-// Three days out, at 10:00 UTC (6:00 AM New York, EDT) and 15:00 UTC (11:00 AM).
-const day = Math.ceil((Date.now() + 3 * DAY) / DAY) * DAY;
-const SIX_AM_ET = new Date(day + 10 * 3_600_000).toISOString();
-const ELEVEN_AM_ET = new Date(day + 15 * 3_600_000).toISOString();
+// Three days out, at 6:00 AM and 11:00 AM in New York.
+//
+// Derived through the zone, never by adding a fixed number of hours to a UTC
+// midnight (DST fix 2026-10-28): the old fixtures added 10h and 15h because
+// that WAS 6:00 and 11:00 in New York — while New York was on EDT (UTC−4).
+// The day floats off Date.now(), so when it first crossed the 2026-11-01 DST
+// end the same arithmetic started meaning 5:00 and 10:00 EST, and the window
+// cases below fell off their boundaries. wallTimeToUtcMs asks the zone what
+// the offset is on the day in question, so these now mean the same wall-clock
+// time on either side of a transition.
+const dayUtc = Math.ceil((Date.now() + 3 * DAY) / DAY) * DAY;
+// Noon UTC, so the calendar day is unambiguous in New York (at UTC midnight it
+// is still the previous day there).
+const nyDay = localDateOf(NY, dayUtc + 12 * 3_600_000);
+const nyAt = (hour: number) => new Date(wallTimeToUtcMs(NY, nyDay.y, nyDay.m, nyDay.d, hour * 60)).toISOString();
+const SIX_AM_ET = nyAt(6);
+const ELEVEN_AM_ET = nyAt(11);
 
 type World = { role: string; meeting: any; updates: any[] };
 let w: World;
@@ -99,9 +113,9 @@ describe("the window test", () => {
     expect(startsInProposalWindow(SIX_AM_ET, NY)).toBe(false);
     expect(startsInProposalWindow(SIX_AM_ET, "UTC")).toBe(true);
     expect(startsInProposalWindow(ELEVEN_AM_ET, NY)).toBe(true);
-    expect(startsInProposalWindow(new Date(day + 13 * 3_600_000).toISOString(), NY)).toBe(true);  // 9:00 ET
-    expect(startsInProposalWindow(new Date(day + 20 * 3_600_000).toISOString(), NY)).toBe(true);  // 16:00 ET
-    expect(startsInProposalWindow(new Date(day + 21 * 3_600_000).toISOString(), NY)).toBe(false); // 17:00 ET
+    expect(startsInProposalWindow(nyAt(9), NY)).toBe(true);   // 9:00, the first bound
+    expect(startsInProposalWindow(nyAt(16), NY)).toBe(true);  // 16:00, the last bound
+    expect(startsInProposalWindow(nyAt(17), NY)).toBe(false); // 17:00, just outside
     expect(startsInProposalWindow("not a time", NY)).toBe(false);
   });
 
