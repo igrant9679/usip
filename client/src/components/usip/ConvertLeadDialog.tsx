@@ -49,7 +49,7 @@ export function ConvertLeadDialog({
 
   const convert = trpc.leads.convert.useMutation({
     onSuccess: (r) => {
-      utils.leads.list.invalidate();
+      utils.leads.invalidate();
       utils.leads.get.invalidate();
       utils.workspace.summary.invalidate();
       toast.success(r.opportunityId ? "Converted — deal created" : "Converted");

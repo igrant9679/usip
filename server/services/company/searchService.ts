@@ -109,7 +109,7 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
       .where(and(eq(contactAccountLinks.workspaceId, ws), eq(contactAccountLinks.accountId, accounts.id)))));
   }
   if (f.minRating) {
-    const set = f.minRating === "excellent" ? ["excellent"] : f.minRating === "good" ? ["good", "excellent"] : ["fair", "good", "excellent"];
+    const set: ("fair" | "good" | "excellent")[] = f.minRating === "excellent" ? ["excellent"] : f.minRating === "good" ? ["good", "excellent"] : ["fair", "good", "excellent"];
     conds.push(exists(db.select({ x: sql`1` }).from(scoreResults)
       .where(and(eq(scoreResults.workspaceId, ws), eq(scoreResults.objectType, "company"),
         eq(scoreResults.objectId, accounts.id), inArray(scoreResults.rating, set)))));

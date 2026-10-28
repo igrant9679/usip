@@ -11,7 +11,7 @@ import { calendarAccounts, calendarEvents, activities, opportunities } from "../
 import { eq, and, gte, lte, desc } from "drizzle-orm";
 import { createCalendarAdapter } from "../calendarAdapter";
 import { encryptField } from "../emailAdapter";
-import { invokeLLM } from "../_core/llm";
+import { invokeLLM, contentText } from "../_core/llm";
 import { assertOutboundNotPausedFor } from "../services/outboundPause";
 
 function resolveTargetUser(
@@ -407,7 +407,7 @@ Be concise and professional. Use markdown formatting.`;
           { role: "user", content: prompt },
         ],
       });
-      const summary = llmResult.choices?.[0]?.message?.content ?? "(no summary generated)";
+      const summary = contentText(llmResult.choices?.[0]?.message?.content) || "(no summary generated)";
 
       // Save summary to calendarEvents row
       await db.update(calendarEvents).set({ aiSummary: summary, aiSummarizedAt: new Date() })

@@ -54,6 +54,7 @@ import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
 import { AddExistingProspectsDialog } from "@/components/usip/are/AddExistingProspectsDialog";
@@ -246,6 +247,11 @@ const SIGNAL_COLORS: Record<string, string> = {
   neutral: "#94A3B8",
 };
 
+/** Rejected prospects per page on the Rejections tab (A44). */
+const REJECTION_PAGE = 100;
+/** Prospects per page on the Prospects tab (A45). */
+const PROSPECT_PAGE = 100;
+
 const REJECT_TEMPLATES = [
   "Wrong industry",
   "Company too small",
@@ -378,7 +384,7 @@ function useCampaignSync(campaignId: number) {
   return {
     invalidateAll: () => {
       // Per-prospect data
-      utils.are.prospects.list.invalidate();
+      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
       utils.are.prospects.listSequences.invalidate({ campaignId });
       // Inline sequence-progress timelines (per-step representative rows)
       utils.are.execution.getStepStates.invalidate({ campaignId });
@@ -957,7 +963,7 @@ function SequencePromptCard({ campaignId, campaign }: { campaignId: number; camp
     try {
       const payload: Record<string, any> = { id: campaignId };
       for (const f of dirtyFields) payload[f.key] = valueOf(f.key);
-      await update.mutateAsync(payload);
+      await update.mutateAsync(payload as Parameters<typeof update.mutateAsync>[0]);
       toast.success("Saved — applies to the next generation (existing sequences are untouched until regenerated)");
       setDrafts({});
       await utils.are.campaigns.get.invalidate({ id: campaignId });
@@ -1687,7 +1693,7 @@ function LogRow({ log }: { log: any }) {
       <button
         type="button"
         onClick={() => expandable && setOpen((o) => !o)}
-        className={`w-full px-3 py-2 flex items-start gap-3 text-left ${expandable ? "hover:bg-muted/60 cursor-pointer" : "cursor-default"}`}
+        className={`w-full px-3 py-2 flex flex-wrap sm:flex-nowrap items-start gap-x-3 gap-y-1 text-left ${expandable ? "hover:bg-muted/60 cursor-pointer" : "cursor-default"}`}
       >
         <span className="text-[10px] text-muted-foreground/70 w-4 shrink-0 pt-0.5">
           {expandable ? (open ? "▼" : "▶") : ""}
@@ -1707,10 +1713,11 @@ function LogRow({ log }: { log: any }) {
         >
           {log.level}
         </Badge>
-        <span className={`text-foreground/90 break-words ${open ? "" : "line-clamp-2"}`}>{log.message}</span>
+        {/* Under the time, phase and level on a phone; beside them from sm up. */}
+        <span className={`basis-full sm:basis-auto min-w-0 sm:flex-1 text-foreground/90 break-words ${open ? "" : "line-clamp-2"}`}>{log.message}</span>
       </button>
       {open && (
-        <div className="pl-[180px] pr-3 pb-3 space-y-2">
+        <div className="pl-3 sm:pl-[180px] pr-3 pb-3 space-y-2">
           {isLong && (
             <div>
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Full message</div>
@@ -1999,7 +2006,14 @@ export default function ARECampaignDetail() {
   const validId = Number.isInteger(campaignId) && campaignId > 0;
   const campaignQ = trpc.are.campaigns.get.useQuery({ id: campaignId }, { enabled: validId });
   const { data: campaign, isLoading: loadingCampaign } = campaignQ;
-  const { data: prospects, isLoading: loadingProspects } = trpc.are.prospects.list.useQuery({ campaignId, limit: 100 });
+  // A page of the review queue, and the counts for all of it (A45).
+  const [prospectPage, setProspectPage] = useState(1);
+  const { data: prospects, isLoading: loadingProspects } = trpc.are.prospects.list.useQuery(
+    { campaignId, limit: PROSPECT_PAGE, offset: (prospectPage - 1) * PROSPECT_PAGE },
+    { placeholderData: (prev) => prev },
+  );
+  const { data: queueCounts } = trpc.are.prospects.statusCounts.useQuery({ campaignId });
+  const prospectPages = Math.max(1, Math.ceil((queueCounts?.inQueue ?? 0) / PROSPECT_PAGE));
   // The no-email door (2026-09-16): staged candidates the email-finder is
   // still working. Hidden from the list above by the server; surfaced only
   // as a count so the funnel stays legible.
@@ -2010,7 +2024,7 @@ export default function ARECampaignDetail() {
   const approveAllPending = trpc.are.campaigns.approveAllPending.useMutation({
     onSuccess: (r) => {
       toast.success(`${r.approved} ${r.approved === 1 ? "person" : "people"} approved — the engine writes their sequences on its next tick`);
-      utils.are.prospects.list.invalidate({ campaignId });
+      utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
       utils.are.campaigns.get.invalidate({ id: campaignId });
       utils.are.campaigns.pendingApprovalCount.invalidate({ campaignId });
       utils.attention.summary.invalidate();
@@ -2077,7 +2091,6 @@ export default function ARECampaignDetail() {
   // Sankey; the cards below are the individual dispatches it rolls up.
   const { data: dispatches } = trpc.are.prospects.getDispatches.useQuery({ campaignId });
   const { data: scrapeJobs } = trpc.are.scraper.listJobs.useQuery({ campaignId, limit: 25 });
-  const { data: rejectionStats } = trpc.are.prospects.getRejectionStats.useQuery({ campaignId });
   const { data: reevalHistory } = trpc.are.prospects.getReevalHistory.useQuery({ campaignId });
   const { data: csvData, refetch: fetchCsv } = trpc.are.prospects.exportRejections.useQuery(
     { campaignId },
@@ -2091,7 +2104,7 @@ export default function ARECampaignDetail() {
           : `Still below threshold. New score: ${d.newScore}`
       );
       utils.are.prospects.getRejectionStats.invalidate({ campaignId });
-      utils.are.prospects.list.invalidate({ campaignId });
+      utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -2118,7 +2131,7 @@ export default function ARECampaignDetail() {
       );
       if (d.processed > 0 && d.requalified === 0) setShowIcpSuggestion(true);
       utils.are.prospects.getRejectionStats.invalidate({ campaignId });
-      utils.are.prospects.list.invalidate({ campaignId });
+      utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
     },
     onError: (e) => {
       setReEvalProgress(null);
@@ -2171,10 +2184,17 @@ export default function ARECampaignDetail() {
   const [reasonFilter, setReasonFilterState] = useState<string | null>(
     urlParams.get("reason") || null
   );
-  // Mass-action selection over the rejections currently shown (respects the reason filter).
-  const rejectionIds = useMemo(() => ((rejectionStats?.items ?? []) as Array<{ id: number; rejectionReason?: string | null }>)
-    .filter((item) => reasonFilter === null || (item.rejectionReason?.trim() || "No reason given") === reasonFilter)
-    .map((item) => item.id), [rejectionStats, reasonFilter]);
+  // One page of the rejected, for the reason picked (A44): the server
+  // filters and pages; this tab used to render every rejection at once.
+  const [rejPage, setRejPage] = useState(1);
+  useClearOnChange({ reasonFilter }, () => setRejPage(1));
+  const { data: rejectionStats } = trpc.are.prospects.getRejectionStats.useQuery(
+    { campaignId, reason: reasonFilter, page: rejPage, perPage: REJECTION_PAGE },
+    { placeholderData: (prev) => prev },
+  );
+  const rejPages = Math.max(1, Math.ceil((rejectionStats?.itemsTotal ?? 0) / REJECTION_PAGE));
+  // Mass-action selection over the rejections on this page.
+  const rejectionIds = useMemo(() => ((rejectionStats?.items ?? []) as Array<{ id: number }>).map((item) => item.id), [rejectionStats]);
   const rejSel = useRowSelection(rejectionIds);
   const setReasonFilter = (r: string | null) => {
     setReasonFilterState(r);
@@ -2249,7 +2269,7 @@ export default function ARECampaignDetail() {
   const enrichBatch = trpc.are.prospects.enrichBatch.useMutation({
     onSuccess: (d) => {
       toast.success(`Enrichment started for ${d.started} prospects`);
-      setTimeout(() => utils.are.prospects.list.invalidate(), 3000);
+      setTimeout(() => { utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate(); }, 3000);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -2271,7 +2291,7 @@ export default function ARECampaignDetail() {
       setImportOpen(false);
       setImportParsed([]);
       setImportFileName("");
-      utils.are.prospects.list.invalidate({ campaignId });
+      utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
       utils.are.campaigns.get.invalidate({ id: campaignId });
     },
     onError: (e) => toast.error(e.message),
@@ -2280,7 +2300,7 @@ export default function ARECampaignDetail() {
   const scrape = trpc.are.scraper.run.useMutation({
     onSuccess: (d) => {
       toast.success(`Scraped ${d.prospectsAdded} prospects from ${d.source.replace(/_/g, " ")}`);
-      utils.are.prospects.list.invalidate();
+      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
       utils.are.campaigns.get.invalidate({ id: campaignId });
     },
     onError: (e) => toast.error(e.message),
@@ -2309,8 +2329,8 @@ export default function ARECampaignDetail() {
   }
 
   const selectedProspect = prospects?.find((p) => p.id === selectedProspectId);
-  const pendingEnrich = prospects?.filter((p) => p.enrichmentStatus === "pending").length ?? 0;
-  const awaitingApproval = prospects?.filter((p) => p.sequenceStatus === "pending" && p.enrichmentStatus === "complete").length ?? 0;
+  const pendingEnrich = queueCounts?.pendingEnrich ?? 0;
+  const awaitingApproval = queueCounts?.awaitingApproval ?? 0;
   const autoThreshold = thresholdDraft !== null ? thresholdDraft : (campaign?.autoApproveThreshold ?? null);
   const minConfidence = minConfDraft !== null ? minConfDraft : ((campaign as any)?.minConfidence ?? 40);
   const s2oActive = s2oEnabled !== null ? s2oEnabled : (campaign?.signalToOpportunityEnabled ?? false);
@@ -2398,13 +2418,14 @@ export default function ARECampaignDetail() {
 
         {/* ── Tabs ── */}
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="bg-muted/50 border">
+          {/* Eight tabs are wider than a phone: the strip scrolls, the page does not (A65). */}
+          <TabsList className="bg-muted/50 border max-w-full overflow-x-auto justify-start">
             <TabsTrigger value="prospects" className="text-xs gap-1.5">
               <Users className="size-3.5" />
               Prospects
-              {(prospects?.length ?? 0) > 0 && (
+              {(queueCounts?.inQueue ?? 0) > 0 && (
                 <span className="ml-1 text-[10px] bg-primary/20 text-foreground rounded-full px-1.5 py-0.5 font-medium">
-                  {prospects?.length}
+                  {queueCounts?.inQueue.toLocaleString()}
                 </span>
               )}
             </TabsTrigger>
@@ -2531,6 +2552,16 @@ export default function ARECampaignDetail() {
               <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#F87171]" /> failed</span>
               <span className="ml-auto flex items-center gap-1"><Eye className="size-3" /> Click row to view dossier</span>
             </div>
+            {prospectPages > 1 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3 text-xs text-muted-foreground">
+                <span>{(prospectPage - 1) * PROSPECT_PAGE + 1}–{(prospectPage - 1) * PROSPECT_PAGE + (prospects?.length ?? 0)} of {(queueCounts?.inQueue ?? 0).toLocaleString()}</span>
+                <div className="flex items-center gap-1">
+                  <Button size="sm" variant="outline" className="h-7" disabled={prospectPage <= 1} onClick={() => { setSelectedIds(new Set()); setProspectPage((p) => p - 1); }}>Previous</Button>
+                  <span className="px-2">Page {prospectPage} of {prospectPages}</span>
+                  <Button size="sm" variant="outline" className="h-7" disabled={prospectPage >= prospectPages} onClick={() => { setSelectedIds(new Set()); setProspectPage((p) => p + 1); }}>Next</Button>
+                </div>
+              </div>
+            )}
             {/* Mass actions (shared bar; every action runs through are.prospects.bulk and is logged on the campaign + audit) */}
             <div className="mb-3">
               <AreBulkActionBar
@@ -3581,10 +3612,7 @@ export default function ARECampaignDetail() {
                   </label>
                 </div>
                 <AreBulkActionBar campaignId={campaignId} selection={rejSel} actions={REJECTION_TAB_ACTIONS} />
-                {(rejectionStats?.items ?? []).filter((item: any) =>
-                  reasonFilter === null ||
-                  (item.rejectionReason?.trim() || "No reason given") === reasonFilter
-                ).map((item: any) => (
+                {(rejectionStats?.items ?? []).map((item: any) => (
                   <div key={item.id} className={`flex items-start gap-3 rounded-xl border px-3 py-2.5 bg-card ${rejSel.isSelected(item.id) ? "border-primary/50 bg-primary/5" : ""}`}>
                     <span className="mt-0.5 shrink-0"><Checkbox checked={rejSel.isSelected(item.id)} onCheckedChange={() => rejSel.toggle(item.id)} aria-label="Select" /></span>
                     <XCircle className="size-4 text-destructive/60 mt-0.5 shrink-0" />
@@ -3627,6 +3655,16 @@ export default function ARECampaignDetail() {
                     </div>
                   </div>
                 ))}
+                {rejPages > 1 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs text-muted-foreground">
+                    <span>{(rejPage - 1) * REJECTION_PAGE + 1}–{(rejPage - 1) * REJECTION_PAGE + (rejectionStats?.items?.length ?? 0)} of {(rejectionStats?.itemsTotal ?? 0).toLocaleString()}</span>
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" variant="outline" className="h-7" disabled={rejPage <= 1} onClick={() => setRejPage((p) => p - 1)}>Previous</Button>
+                      <span className="px-2">Page {rejPage} of {rejPages}</span>
+                      <Button size="sm" variant="outline" className="h-7" disabled={rejPage >= rejPages} onClick={() => setRejPage((p) => p + 1)}>Next</Button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </TabsContent>
@@ -3712,7 +3750,7 @@ export default function ARECampaignDetail() {
         onOpenChange={setAddExistingOpen}
         campaignId={campaignId}
         campaignName={campaign.name}
-        onPushed={() => { utils.are.prospects.list.invalidate(); utils.are.campaigns.get.invalidate(); }}
+        onPushed={() => { utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate(); utils.are.campaigns.get.invalidate(); }}
       />
 
       {/* ── Import CSV Dialog ── */}

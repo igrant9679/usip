@@ -47,7 +47,15 @@ export const toursRouter = router({
       if (input.type !== "all") conditions.push(eq(tours.type, input.type));
       if (input.status !== "all") conditions.push(eq(tours.status, input.status));
       if (input.pageKey) conditions.push(eq(tours.pageKey, input.pageKey));
-      return db.select().from(tours).where(and(...conditions)).orderBy(tours.type, tours.name);
+      const rows = await db.select().from(tours).where(and(...conditions)).orderBy(tours.type, tours.name);
+      // How many steps each has, for the builder's list (X3.4: it read a
+      // `steps` array the list never sent, so every tour said 0 steps).
+      const counts = rows.length
+        ? await db.select({ tourId: tourSteps.tourId, n: sql<number>`count(*)` }).from(tourSteps)
+          .where(inArray(tourSteps.tourId, rows.map((t) => t.id))).groupBy(tourSteps.tourId)
+        : [];
+      const byTour = new Map(counts.map((c) => [c.tourId, Number(c.n)]));
+      return rows.map((t) => ({ ...t, stepCount: byTour.get(t.id) ?? 0 }));
     }),
 
   get: workspaceProcedure

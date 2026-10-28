@@ -23,13 +23,13 @@ import {
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { screenEnrollmentCandidates } from "./sequences";
-import { matchesSegment, type SegmentRule } from "@shared/segmentRules";
+import { type SegmentRule } from "@shared/segmentRules";
+import { segmentWhere } from "../services/segmentSql";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 
-/* ─── Rule evaluation: the one evaluator segments.ts uses too (P19) ───── */
+/* ─── Rule evaluation: the SQL segments.ts counts with (P19, P52) ─────── */
 type Rule = SegmentRule;
-const evaluateRules = (contact: Record<string, any>, rules: Rule[], matchType: "all" | "any") => matchesSegment(contact, rules, matchType);
 
 /* ─── Core enrollment logic (exported for cron use) ─────────────────── */
 export async function runSegmentEnrollmentForWorkspace(workspaceId: number): Promise<{ enrolled: number; skipped: number; rules: number }> {
@@ -51,12 +51,6 @@ export async function runSegmentEnrollmentForWorkspace(workspaceId: number): Pro
     .from(sequences)
     .where(and(eq(sequences.workspaceId, workspaceId), eq(sequences.status, "active"), inArray(sequences.id, sequenceIds)));
   const activeSeqIds = new Set(activeSeqs.map((s) => s.id));
-
-  // Get all contacts for this workspace
-  const allContacts = await db
-    .select()
-    .from(contacts)
-    .where(eq(contacts.workspaceId, workspaceId));
 
   // Get all segment definitions for the rules
   const segmentIds = Array.from(new Set(rules.map((r) => r.segmentId)));
@@ -93,10 +87,9 @@ export async function runSegmentEnrollmentForWorkspace(workspaceId: number): Pro
       continue;
     }
 
-    // Find contacts matching the segment
-    const matchingContacts = allContacts.filter((c) =>
-      evaluateRules(c as Record<string, any>, segRules, matchType)
-    );
+    // The segment's contacts, found in SQL: ids only, never the whole table (P52).
+    const where = segmentWhere(workspaceId, segRules, matchType);
+    const matchingContacts = where ? await db.select({ id: contacts.id }).from(contacts).where(where) : [];
 
     if (matchingContacts.length === 0) {
       await record({ matched: 0, enrolled: 0 });

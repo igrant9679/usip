@@ -64,6 +64,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "wouter";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -479,7 +480,15 @@ export default function MindmapCanvas() {
 
         {/* Side panel */}
         {selectedNode && (
-          <div className="w-72 shrink-0 border-l bg-background flex flex-col overflow-y-auto">
+          <ResponsiveRail
+            title="Node properties"
+            side="right"
+            open
+            onOpenChange={(o) => { if (!o) setSelectedNode(null); }}
+            ownHeader
+            className="w-72 shrink-0 border-l bg-background flex-col overflow-y-auto"
+            sheetClassName="overflow-y-auto"
+          >
             <div className="flex items-center justify-between px-4 py-3 border-b">
               <span className="font-semibold text-sm">Node Properties</span>
               <Button aria-label="Close" variant="ghost" size="icon" className="size-7" onClick={() => setSelectedNode(null)}>
@@ -572,7 +581,7 @@ export default function MindmapCanvas() {
                 </Button>
               </div>
             </div>
-          </div>
+          </ResponsiveRail>
         )}
       </div>
 

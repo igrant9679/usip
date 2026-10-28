@@ -1621,7 +1621,9 @@ function PipelinePanel({ proposal, onRefetch }: { proposal: any; onRefetch: () =
 
 // ── Activity Feed ────────────────────────────────────────────────────────────
 function ActivityFeed({ proposalId }: { proposalId: number }) {
-  const { workspaceId } = useWorkspace();
+  // The context has `current`, not `workspaceId`: gated on the missing field,
+  // the feed never loaded (audit 2026-10-20, X3.5).
+  const { current } = useWorkspace();
   const [activeFilter, setActiveFilter] = useState<string>("all");
   const [approveOpen, setApproveOpen] = useState(false);
   const [denyOpen, setDenyOpen] = useState(false);
@@ -1651,7 +1653,7 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
   });
   const { data: events, isLoading } = trpc.proposals.listActivity.useQuery(
     { proposalId },
-    { enabled: !!workspaceId },
+    { enabled: !!current },
   );
   const ACTIVITY_ICONS: Record<string, any> = {
     system: Clock,

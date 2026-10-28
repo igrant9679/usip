@@ -37,6 +37,18 @@ export type FileContent = {
 
 export type MessageContent = string | TextContent | ImageContent | FileContent;
 
+/**
+ * The text of a reply's content. Providers answer with a string; the type
+ * also allows content parts, so a parts array is joined. JSON.parse and the
+ * database took the union as if it were always a string.
+ */
+export function contentText(content: MessageContent | MessageContent[] | null | undefined): string {
+  if (content == null) return "";
+  if (typeof content === "string") return content;
+  const parts = Array.isArray(content) ? content : [content];
+  return parts.map((p) => (typeof p === "string" ? p : p.type === "text" ? p.text : "")).join("");
+}
+
 export type Message = {
   role: Role;
   content: MessageContent | MessageContent[];
@@ -357,6 +369,7 @@ async function loadCreds(workspaceId?: number): Promise<ResolvedCreds> {
   if (!workspaceId) return ENV_CREDS;
   try {
     const db = await getDb();
+    if (!db) return ENV_CREDS;
     const rows = await db
       .select({
         anthropicApiKeyEnc: workspaceSettings.anthropicApiKeyEnc,

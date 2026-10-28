@@ -335,6 +335,7 @@ export const proposalsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       await getProposalOrThrow(db, input.id, ctx.workspace.id);
       const { id, rfpDeadline, completionDate, budget, expiresAt, skipAutoExtend, ...rest } = input;
       const patch: Record<string, unknown> = { ...rest };
@@ -397,6 +398,7 @@ export const proposalsRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Use Accept to accept a proposal — it closes the linked deal and creates the follow-up." });
       }
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       await getProposalOrThrow(db, input.id, ctx.workspace.id);
       const patch: Record<string, unknown> = { status: input.status };
       if (input.status === "sent") patch.sentAt = new Date();
@@ -592,7 +594,8 @@ export const proposalsRouter = router({
         proposalId: newId,
         actorUserId: ctx.user.id,
         actorName: ctx.user.name ?? undefined,
-        subject: `Proposal created: "${input.title}"`,
+        // input is { id } here: this logged 'Proposal created: "undefined"' (X3.7, R91).
+        subject: `Proposal duplicated from "${src.title}"`,
       });
       return { id: newId };
     }),
@@ -1346,12 +1349,15 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
     .input(z.object({ proposalId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       const proposal = await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
       const feedbackRows = await db
         .select({ id: proposalFeedback.id })
         .from(proposalFeedback)
         .where(eq(proposalFeedback.proposalId, proposal.id));
-      const score = computeEngagementScore(proposal, feedbackRows.length);
+      // The count goes in the object: as a second argument it was ignored, the
+      // score came out 15 low and could report a drop that did not happen.
+      const score = computeEngagementScore({ ...proposal, feedbackCount: feedbackRows.length });
       // Check for score drop vs most recent snapshot
       const [prevSnapshot] = await db
         .select({ score: proposalScoreHistory.score })
@@ -1372,7 +1378,7 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
             workspaceId: ctx.workspace.id,
             actorUserId: ctx.user.id,
             subject: `Engagement score dropped from ${prevScore} to ${score}`,
-            detail: `The proposal "${proposal.title}" engagement score decreased by ${prevScore - score} points.`,
+            body: `The proposal "${proposal.title}" engagement score decreased by ${prevScore - score} points.`,
           });
           const { notifyOwner } = await import("../_core/notification");
           await notifyOwner({
@@ -1467,6 +1473,7 @@ Reason: ${input.reason}`,
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       const { inArray } = await import("drizzle-orm");
       // Verify all proposals belong to this workspace
       const rows = await db
@@ -1506,6 +1513,7 @@ Reason: ${input.reason}`,
       // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
       await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       const proposal = await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
       // The day picked lasts to its end in the workspace's zone (R29), and it
       // must be in the future (R68: the default was a week past an expiry
@@ -1616,6 +1624,7 @@ ${proposal.shareToken ? `<p><a href="${appUrl(`/p/${proposal.shareToken}`)}">Vie
       // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
       await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       const proposal = await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
       // Log activity
       await logProposalActivity(db, {
@@ -1837,6 +1846,7 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
     .input(z.object({ proposalId: z.number().int().positive() }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
       const rows = await db
         .select({
@@ -1862,6 +1872,7 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
     .input(z.object({ proposalId: z.number().int().positive() }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
       const rows = await db
         .select({

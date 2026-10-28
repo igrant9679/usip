@@ -253,6 +253,7 @@ export function registerUnipileWebhookRoutes(app: Express) {
         }
 
         const db = await getDb();
+        if (!db) throw new Error("Database unavailable");
 
         const [existing] = await db
           .select({ id: unipileAccounts.id })
@@ -359,6 +360,7 @@ export function registerUnipileWebhookRoutes(app: Express) {
         console.log(`[UnipileStatusWebhook] account=${account_id} status=${statusMsg}`);
 
         const db = await getDb();
+        if (!db) throw new Error("Database unavailable");
 
         // Find the local row for this Unipile account
         const [row] = await db
@@ -412,7 +414,9 @@ export function registerUnipileWebhookRoutes(app: Express) {
         try {
           const result = await generateHostedAuthLink({
             type: "reconnect",
-            providers: [row.provider],
+            // A string: Unipile rejects an array here ("Expected union value"),
+            // so every reconnect link this sweep asked for failed (lib/unipile.ts).
+            providers: row.provider,
             expiresOn,
             notifyUrl,
             successRedirectUrl,
@@ -678,6 +682,7 @@ export function registerUnipileWebhookRoutes(app: Express) {
         const { email_id, account_id, event } = payload;
 
         const db = await getDb();
+        if (!db) throw new Error("Database unavailable");
 
         // Resolve the local unipile_accounts row for tenancy.
         const [acct] = await db
@@ -950,6 +955,7 @@ export function registerUnipileWebhookRoutes(app: Express) {
         }
 
         const db = await getDb();
+        if (!db) throw new Error("Database unavailable");
         const [acct] = await db
           .select({
             id: unipileAccounts.id,
@@ -1035,6 +1041,7 @@ export function registerUnipileWebhookRoutes(app: Express) {
 
         const eventDate = payload.date ? new Date(payload.date) : new Date();
         const db = await getDb();
+        if (!db) throw new Error("Database unavailable");
 
         // Look up the draft FIRST so we can also bump the parent
         // campaign's counter after the draft counter goes up.

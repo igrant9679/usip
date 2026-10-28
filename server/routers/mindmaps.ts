@@ -13,6 +13,7 @@ import { recordAudit } from "../audit";
 const mindmapsRouter = router({
   list: repProcedure.query(async ({ ctx }) => {
     const db = await getDb();
+    if (!db) throw new Error("Database unavailable");
     return db
       .select()
       .from(mindmaps)
@@ -24,6 +25,7 @@ const mindmapsRouter = router({
     .input(z.object({ name: z.string().min(1).max(240), description: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
       const [result] = await db.insert(mindmaps).values({
         workspaceId: ctx.workspace.id,
         name: input.name,
@@ -46,6 +48,7 @@ const mindmapsRouter = router({
     .input(z.object({ id: z.number(), name: z.string().min(1).max(240) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
       await db
         .update(mindmaps)
         .set({ name: input.name })
@@ -56,6 +59,7 @@ const mindmapsRouter = router({
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
       await db
         .delete(mindmapEdges)
         .where(and(eq(mindmapEdges.mindmapId, input.id), eq(mindmapEdges.workspaceId, ctx.workspace.id)));
@@ -75,6 +79,7 @@ const mindmapsRouter = router({
     .input(z.object({ id: z.number() }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
       const [map] = await db
         .select()
         .from(mindmaps)
@@ -124,6 +129,7 @@ const mindmapsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
       const wsId = ctx.workspace.id;
 
       // Verify ownership
@@ -198,6 +204,7 @@ const mindmapsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
       const wsId = ctx.workspace.id;
 
       // Create the task
@@ -255,6 +262,7 @@ const mindmapsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
       const wsId = ctx.workspace.id;
 
       // Store as an activity note linked to the mindmap

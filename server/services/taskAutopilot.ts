@@ -23,7 +23,7 @@ import { and, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { activeTaskStatuses } from "@shared/taskStatus";
 import { prospects, tasks, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
-import { invokeLLM } from "../_core/llm";
+import { invokeLLM, contentText } from "../_core/llm";
 
 export type AutopilotMode = "off" | "approval" | "auto";
 
@@ -139,7 +139,7 @@ Return: {
         max_tokens: 300,
         workspaceId,
       });
-      const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
+      const parsed = JSON.parse(contentText(res.choices?.[0]?.message?.content) || "{}");
 
       const type = (ALLOWED_TYPES as readonly string[]).includes(parsed.type) ? parsed.type : "follow_up";
       const priority = (ALLOWED_PRIORITIES as readonly string[]).includes(parsed.priority) ? parsed.priority : "normal";

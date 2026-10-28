@@ -40,6 +40,7 @@ import {
   Link2,
   Mail,
   Play,
+  Plus,
   Save,
   Settings2,
   UserPlus,
@@ -49,6 +50,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "wouter";
 import { toast } from "sonner";
 import { NodeEditPanel, type NodeData } from "@/components/usip/canvas/NodeEditPanel";
+import { PhoneRailButton, ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import {
   SequenceSettingsPanel,
   type ExitCondition,
@@ -252,6 +254,7 @@ function CanvasInner({
   // Panel state
   const [selectedNode, setSelectedNode] = useState<Node<NodeData> | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   const utils = trpc.useUtils();
   const canvasQ = trpc.sequences.getCanvas.useQuery({ id: sequenceId });
@@ -426,6 +429,7 @@ function CanvasInner({
 
   const addNodeFromPalette = (type: string, label: string, description: string) => {
     if (readOnly) return;
+    setPaletteOpen(false);
     const id = `${type}-${Date.now()}`;
     const defaultData: NodeData = {
       label,
@@ -471,50 +475,58 @@ function CanvasInner({
 
   return (
     <div className="flex h-full">
-      {/* Palette sidebar */}
-      <div className="w-52 shrink-0 border-r bg-card flex flex-col gap-1 p-3 overflow-y-auto">
-        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Node palette</div>
-        {PALETTE_ITEMS.map((item) => {
-          const color = NODE_COLORS[item.type];
-          const Icon = NODE_ICONS[item.type];
-          return (
-            <button
-              key={item.type}
-              disabled={readOnly}
-              onClick={() => addNodeFromPalette(item.type, item.label, item.description)}
-              className="flex items-start gap-2 rounded-md border p-2 text-left text-sm hover:bg-secondary transition disabled:opacity-40"
-              style={{ borderColor: color + "66" }}
+      {/* Palette sidebar — a sheet on a phone, opened from the canvas */}
+      <ResponsiveRail
+        title="Node palette"
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        className="w-52 shrink-0 border-r bg-card"
+      >
+        <div className="flex-1 min-h-0 flex flex-col gap-1 p-3 overflow-y-auto">
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Node palette</div>
+          {PALETTE_ITEMS.map((item) => {
+            const color = NODE_COLORS[item.type];
+            const Icon = NODE_ICONS[item.type];
+            return (
+              <button
+                key={item.type}
+                disabled={readOnly}
+                onClick={() => addNodeFromPalette(item.type, item.label, item.description)}
+                className="flex items-start gap-2 rounded-md border p-2 text-left text-sm hover:bg-secondary transition disabled:opacity-40"
+                style={{ borderColor: color + "66" }}
+              >
+                <Icon className="size-4 mt-0.5 shrink-0" style={{ color }} />
+                <div>
+                  <div className="font-medium text-xs">{item.label}</div>
+                  <div className="text-[10px] text-muted-foreground">{item.description}</div>
+                </div>
+              </button>
+            );
+          })}
+
+          {readOnly && (
+            <div className="mt-4 rounded-md bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800 flex items-start gap-1.5">
+              <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
+              Canvas is read-only while sequence is {seqStatus}.
+            </div>
+          )}
+
+          <div className="mt-auto pt-4">
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full gap-1.5 text-xs"
+              onClick={() => { setSettingsOpen(true); setSelectedNode(null); setPaletteOpen(false); }}
             >
-              <Icon className="size-4 mt-0.5 shrink-0" style={{ color }} />
-              <div>
-                <div className="font-medium text-xs">{item.label}</div>
-                <div className="text-[10px] text-muted-foreground">{item.description}</div>
-              </div>
-            </button>
-          );
-        })}
-
-        {readOnly && (
-          <div className="mt-4 rounded-md bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800 flex items-start gap-1.5">
-            <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
-            Canvas is read-only while sequence is {seqStatus}.
+              <Settings2 className="size-3.5" /> Sequence settings
+            </Button>
           </div>
-        )}
-
-        <div className="mt-auto pt-4">
-          <Button
-            size="sm"
-            variant="outline"
-            className="w-full gap-1.5 text-xs"
-            onClick={() => { setSettingsOpen(true); setSelectedNode(null); }}
-          >
-            <Settings2 className="size-3.5" /> Sequence settings
-          </Button>
         </div>
-      </div>
+      </ResponsiveRail>
 
-      {/* Canvas area — shrinks when a panel is open */}
-      <div className={`flex-1 relative overflow-hidden transition-all ${anyPanelOpen ? "mr-80" : ""}`}>
+      {/* Canvas area — shrinks when a panel is open; on a phone the panel
+          covers it instead (there is no room beside it) */}
+      <div className={`flex-1 min-w-0 relative overflow-hidden transition-all ${anyPanelOpen ? "md:mr-80" : ""}`}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -531,6 +543,11 @@ function CanvasInner({
         >
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
           <Controls />
+          <Panel position="top-left" className="md:hidden">
+            <PhoneRailButton onClick={() => setPaletteOpen(true)} icon={Plus} className="bg-card">
+              {readOnly ? "Steps" : "Add step"}
+            </PhoneRailButton>
+          </Panel>
           <Panel position="top-right" className="flex items-center gap-2">
             <span className={`text-xs px-2 py-1 rounded-full ${saveState === "saved" ? "bg-green-100 text-green-700" : saveState === "saving" ? "bg-yellow-100 text-yellow-700" : "bg-muted text-muted-foreground"}`}>
               {saveState === "saved" ? "Saved" : saveState === "saving" ? "Saving…" : "Unsaved changes"}
@@ -593,17 +610,17 @@ export default function SequenceCanvas() {
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b bg-card shrink-0">
-        <Link href="/sequences" className="text-muted-foreground hover:text-foreground transition">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-2 border-b bg-card shrink-0">
+        <Link href="/sequences" aria-label="Back to sequences" className="text-muted-foreground hover:text-foreground transition">
           <ArrowLeft className="size-4" />
         </Link>
-        <div className="font-semibold text-sm truncate max-w-xs">{seq?.name ?? "Loading…"}</div>
+        <div className="min-w-0 font-semibold text-sm truncate max-w-[55vw] sm:max-w-xs">{seq?.name ?? "Loading…"}</div>
         {seq && (
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColor[seq.status] ?? ""}`}>
             {seq.status}
           </span>
         )}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           {seq?.status === "draft" && (
             <Button size="sm" variant="outline" onClick={() => setStatus.mutate({ id: sequenceId, status: "active" })}>
               <Play className="size-3.5" /> Activate

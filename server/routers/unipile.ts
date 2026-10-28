@@ -133,6 +133,7 @@ export const unipileRouter = router({
    */
   listConnectedAccounts: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
     const rows = await db
       .select()
       .from(unipileAccounts)
@@ -153,6 +154,7 @@ export const unipileRouter = router({
     .input(z.object({ unipileAccountId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       // Verify ownership
       const [row] = await db
         .select()
@@ -195,6 +197,7 @@ export const unipileRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       // Get user's connected accounts
       const accounts = await db
         .select()
@@ -270,6 +273,7 @@ export const unipileRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       const [own] = await db
         .select({ id: unipileAccounts.id })
         .from(unipileAccounts)
@@ -313,6 +317,7 @@ export const unipileRouter = router({
       // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
       await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       // Verify account ownership — in THIS workspace, as sendLinkedInInvite
       // does: the same user's account connected elsewhere is not this one's.
       const [account] = await db
@@ -405,6 +410,7 @@ export const unipileRouter = router({
       // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything").
       await assertOutboundNotPaused(ctx.workspace.id);
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       // Verify account ownership — scoped to the CURRENT workspace
       // (2026-09-20): this proc could previously send from an account the
       // same user connected in a DIFFERENT workspace.
@@ -479,6 +485,7 @@ export const unipileRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       // Verify account ownership
       const [account] = await db
         .select()
@@ -509,6 +516,7 @@ export const unipileRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       const conditions = [eq(unipileMessages.workspaceId, ctx.workspace.id)];
       if (input.linkedContactId)
         conditions.push(eq(unipileMessages.linkedContactId, input.linkedContactId));
@@ -537,6 +545,7 @@ export const unipileRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       const conditions = [eq(unipileInvites.workspaceId, ctx.workspace.id)];
       if (input.linkedContactId)
         conditions.push(eq(unipileInvites.linkedContactId, input.linkedContactId));
@@ -558,6 +567,7 @@ export const unipileRouter = router({
    */
   metrics: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
     const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
     // Total outbound messages in last 30 days
@@ -875,7 +885,7 @@ export const unipileRouter = router({
       api: z.enum(["classic", "sales_navigator"]).default("classic"),
       category: z.enum(["people", "companies"]).default("people"),
       keywords: z.string().optional(),
-      filters: z.record(z.any()).optional(),
+      filters: z.record(z.string(), z.any()).optional(),
       limit: z.number().int().min(1).max(25).optional(),
       unipileAccountId: z.string().optional(),
     }))

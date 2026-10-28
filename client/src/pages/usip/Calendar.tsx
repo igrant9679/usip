@@ -239,15 +239,8 @@ function EventDialog({
   );
   const summarizeMeeting = trpc.calendar.summarizeMeeting.useMutation({
     onSuccess: (data) => {
-      // The summary may come back as the raw LLM choice content, which can
-      // be a string or a multi-part content array. Coerce to string for
-      // setState (which is typed string | null).
-      const text = typeof data.summary === "string"
-        ? data.summary
-        : Array.isArray(data.summary)
-          ? data.summary.map((p: { type?: string; text?: string }) => p?.type === "text" ? (p.text ?? "") : "").join("")
-          : "";
-      setAiSummary(text);
+      // The server sends text now (contentText in _core/llm), never content parts.
+      setAiSummary(data.summary);
       toast.success("Meeting summary generated");
     },
     onError: (e) => toast.error(e.message),

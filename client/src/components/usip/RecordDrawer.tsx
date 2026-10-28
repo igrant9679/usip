@@ -34,7 +34,7 @@ const DISPOSITIONS = [
 function LeadScorePanel({ leadId }: { leadId: number }) {
   const utils = trpc.useUtils();
   const { data: bd, isLoading } = trpc.leadScoring.breakdown.useQuery({ leadId });
-  const recompute = trpc.leadScoring.recompute.useMutation({ onSuccess: () => { utils.leadScoring.breakdown.invalidate({ leadId }); utils.leads.list.invalidate(); toast.success("Re-scored"); }, onError: (e) => toast.error(e.message) });
+  const recompute = trpc.leadScoring.recompute.useMutation({ onSuccess: () => { utils.leadScoring.breakdown.invalidate({ leadId }); utils.leads.invalidate(); toast.success("Re-scored"); }, onError: (e) => toast.error(e.message) });
   const [openSec, setOpenSec] = useState<"firmo" | "behav" | "ai" | null>("firmo");
   if (isLoading || !bd) return <div className="text-sm text-muted-foreground py-6 flex items-center gap-2"><Loader2 className="size-3 animate-spin" /> Loading score…</div>;
   const tier = bd.tier as string;
@@ -805,7 +805,7 @@ function RecordDrawerForRecord({
           utils.accounts.list.invalidate();
           utils.accounts.hierarchy.invalidate();
         }
-        if (relatedType === "lead") utils.leads.list.invalidate();
+        if (relatedType === "lead") utils.leads.invalidate();
         if (relatedType === "opportunity") utils.opportunities.board.invalidate();
         onOpenChange(false);
       },

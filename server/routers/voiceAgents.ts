@@ -50,6 +50,7 @@ const BUILTIN_VOICES = ["eve", "ara", "rex", "sal", "leo"];
 
 async function getXaiKey(workspaceId: number): Promise<string> {
   const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
   const [row] = await db
     .select({ enc: workspaceSettings.xaiApiKeyEnc })
     .from(workspaceSettings)
@@ -101,6 +102,7 @@ export const voiceAgentsRouter = router({
 
   getSettings: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
     const [row] = await db
       .select({ enc: workspaceSettings.xaiApiKeyEnc, model: workspaceSettings.xaiVoiceModel })
       .from(workspaceSettings)
@@ -118,6 +120,7 @@ export const voiceAgentsRouter = router({
     .input(z.object({ apiKey: z.string().optional(), model: z.string().max(64).optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       // ensure the settings row exists (same guard as aiCredentials)
       const existing = await db
         .select({ workspaceId: workspaceSettings.workspaceId })
@@ -364,6 +367,7 @@ export const voiceAgentsRouter = router({
 
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
     const agents = await db
       .select()
       .from(voiceAgents)
@@ -389,6 +393,7 @@ export const voiceAgentsRouter = router({
 
   create: workspaceProcedure.input(agentInput).mutation(async ({ ctx, input }) => {
     const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
     const ownerUserId =
       input.purpose === "callback_receptionist"
         ? (input.ownerUserId ?? ctx.user.id)
@@ -415,6 +420,7 @@ export const voiceAgentsRouter = router({
     .input(agentInput.partial().extend({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       const [agent] = await db
         .select()
         .from(voiceAgents)
@@ -456,6 +462,7 @@ export const voiceAgentsRouter = router({
 
   remove: workspaceProcedure.input(z.object({ id: z.number().int() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
     const [agent] = await db
       .select()
       .from(voiceAgents)
@@ -473,6 +480,7 @@ export const voiceAgentsRouter = router({
     .input(z.object({ agentId: z.number().int().optional(), limit: z.number().int().min(1).max(200).default(50) }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       const where = input?.agentId
         ? and(eq(voiceCalls.workspaceId, ctx.workspace.id), eq(voiceCalls.agentId, input.agentId))
         : eq(voiceCalls.workspaceId, ctx.workspace.id);

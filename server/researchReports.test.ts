@@ -181,7 +181,7 @@ describe("a market's reports", () => {
     db.rowsOf("prospect_intelligence").push({ id: 1, prospectQueueId: 100, workspaceId: 2, researchSectorId: 1 }, { id: 2, prospectQueueId: 101, workspaceId: 2, researchSectorId: 1 });
     db.rowsOf("are_execution_queue").push({ id: 1, workspaceId: 2, prospectQueueId: 100, status: "sent", stepIndex: 0, messageContent: { body: "Hi" } });
     db.rowsOf("are_signal_log").push({ workspaceId: 2, prospectQueueId: 100, signalType: "email_reply", sentiment: "positive" });
-    expect(await caller(2).research.reports.results({ marketId: 1 })).toEqual({ 1: { written: 2, contacted: 1, replied: 1, positive: 1, meetings: 0 } });
+    expect(await caller(2).research.reports.results({ marketId: 1 })).toEqual({ 1: { written: 2, contacted: 1, replied: 1, positive: 1, meetings: 0, capped: false } });
   });
 
   it("the report pages are reachable, and the editor pages link to them", () => {

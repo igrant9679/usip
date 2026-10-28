@@ -240,8 +240,8 @@ export function BrandingSection() {
 
   return (
     <>
-      <div className="shrink-0 px-6 pt-4 flex items-start justify-between gap-3">
-        <div>
+      <div className="shrink-0 px-4 sm:px-6 pt-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-xl font-semibold tracking-tight">Branding</h1>
           <p className="text-[12.5px] text-muted-foreground">Your workspace's colours, logo, company profile, and brand voice.</p>
         </div>

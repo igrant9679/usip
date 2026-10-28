@@ -51,8 +51,10 @@ import { BrandingSection } from "@/components/usip/settings/BrandingSection";
 import { TotpSetupDialog } from "@/components/usip/settings/TotpSetupDialog";
 import { SocialAccountsSection } from "@/components/usip/settings/SocialAccountsSection";
 import { LegacySettingsSection } from "@/pages/usip/Settings";
+import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import {
   ArrowLeft,
+  Menu,
   Search,
   User,
   Bell,
@@ -175,7 +177,12 @@ export default function SettingsHub() {
       .filter((g) => g.items.length > 0);
   }, [query, canBilling]);
 
+  // Below md the rail is a sheet, opened from the top bar (G27).
+  const [navOpen, setNavOpen] = useState(false);
+  const sectionLabel = GROUPS.flatMap((g) => g.items).find((i) => i.id === section)?.label ?? "Profile";
+
   const go = (it: HubItem) => {
+    setNavOpen(false);
     if (it.internal) navigate(`/v2/settings/${it.id}`);
     else if (it.href) navigate(it.href);
   };
@@ -183,7 +190,12 @@ export default function SettingsHub() {
   return (
     <div className="h-screen flex bg-background text-foreground">
       {/* ── settings rail ── */}
-      <aside className="hidden md:flex w-60 shrink-0 flex-col min-h-0 border-r border-border bg-card/30">
+      <ResponsiveRail
+        title="Settings sections"
+        open={navOpen}
+        onOpenChange={setNavOpen}
+        className="w-60 shrink-0 flex-col min-h-0 border-r border-border bg-card/30"
+      >
         <div className="shrink-0 px-3 pt-4 pb-2">
           <button
             type="button"
@@ -243,19 +255,30 @@ export default function SettingsHub() {
             <UserPlus className="size-4" /> Add Teammates
           </Button>
         </div>
-      </aside>
+      </ResponsiveRail>
 
       {/* ── content panel ── */}
       {/* Keyed by workspace: switching remounts every section, so a form
           half-edited in one workspace can never be saved into the next one
           (several sections copy their query data into local state once). */}
       <main key={currentWorkspace?.id ?? 0} className="flex-1 min-w-0 flex flex-col min-h-0">
-        {/* mobile top bar (rail is hidden below md) */}
-        <div className="md:hidden shrink-0 flex items-center gap-2 border-b border-border px-4 h-12">
-          <button type="button" onClick={() => navigate("/")} className="flex items-center gap-1.5 text-sm font-semibold">
-            <ArrowLeft className="size-4" /> Settings
+        {/* mobile top bar (rail is a sheet below md, opened from here) */}
+        <div className="md:hidden shrink-0 flex items-center gap-2 border-b border-border px-3 h-12">
+          <button type="button" onClick={() => navigate("/")} aria-label="Leave settings" className="shrink-0 rounded-md p-1 hover:bg-muted">
+            <ArrowLeft className="size-4" />
           </button>
-          <div className="ml-auto w-44 min-w-0">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 min-w-0 gap-1.5"
+            aria-haspopup="dialog"
+            aria-expanded={navOpen}
+            onClick={() => setNavOpen(true)}
+          >
+            <Menu className="size-3.5 shrink-0" />
+            <span className="truncate">{sectionLabel}</span>
+          </Button>
+          <div className="ml-auto w-36 min-w-0 shrink">
             <SettingsWorkspaceSwitcher />
           </div>
         </div>
@@ -397,7 +420,7 @@ function ProfileSection() {
   return (
     <>
       {/* header: title + save */}
-      <div className="shrink-0 px-6 pt-4 flex items-start justify-between gap-3">
+      <div className="shrink-0 px-4 sm:px-6 pt-4 flex flex-wrap items-start justify-between gap-3">
         <h1 className="text-xl font-semibold tracking-tight">Profile</h1>
         <Button size="sm" disabled={!dirty || saving} onClick={saveAll} className="gap-1.5">
           {saving ? <Loader2 className="size-3.5 animate-spin" /> : null} Save
