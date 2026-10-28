@@ -204,7 +204,8 @@ describe("the heal reaches locked-out prospects (structural — engine execution
   it("the completion sweep consults the verdict, not a raw count comparison", () => {
     const at = engine.indexOf("Phase 5: COMPLETE");
     expect(at).toBeGreaterThan(-1);
-    const block = engine.slice(at, at + 2200);
+    // Wider since phase 4 (A34): the sweep reads its counts grouped, per chunk, first.
+    const block = engine.slice(at, at + 3200);
     expect(block.includes("sequenceCompletionVerdict("), "completion no longer uses the shared verdict").toBe(true);
     expect(block.includes("healableFailed"), "completion stopped counting revivable failures").toBe(true);
   });

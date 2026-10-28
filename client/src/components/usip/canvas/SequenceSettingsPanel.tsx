@@ -140,7 +140,7 @@ export function SequenceSettingsPanel({ open, readOnly, name, description, exitC
   };
 
   return (
-    <div className="absolute right-0 top-0 h-full w-80 bg-card border-l shadow-xl z-10 flex flex-col">
+    <div className="absolute right-0 top-0 h-full w-full sm:w-80 bg-card border-l shadow-xl z-10 flex flex-col">
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0">
         <Settings2 className="size-4 text-muted-foreground" />

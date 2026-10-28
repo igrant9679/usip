@@ -380,6 +380,7 @@ export class UnipileMailAdapter implements EmailAdapter {
     maxResults: number,
   ): Promise<EmailThread[]> {
     const db = await getDb();
+    if (!db) throw new Error("Database unavailable");
     // Pull a generous window then filter by folder client-side — folders
     // is a JSON column so we can't WHERE on it portably. maxResults*4 is
     // enough headroom for typical folder distributions.
@@ -458,6 +459,7 @@ export class UnipileMailAdapter implements EmailAdapter {
     // against subject / from across cached rows for this account.
     if (threads.length === 0) {
       const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
       const likeQ = `%${query}%`;
       const cacheRows = await db
         .select()
@@ -534,6 +536,7 @@ export class UnipileMailAdapter implements EmailAdapter {
     // thread id, if known) or emailId column (the Mailbox UI passes the
     // emailId we returned from listThreads when there's no real threadId).
     const db = await getDb();
+    if (!db) throw new Error("Database unavailable");
     const cacheRows = await db
       .select()
       .from(unipileEmailsCache)

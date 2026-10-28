@@ -30,7 +30,7 @@
  * decision, not something to infer.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, getTableColumns, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { HELD_PAUSED, holdProspectSteps, releaseProspectSteps } from "../../services/are/stepHold";
 import { z } from "zod";
 import {
@@ -160,6 +160,9 @@ Score each dimension 0-20 and provide a total score 0-100.
 // buildEffectiveIcp moved to services/are/effectiveIcp.ts (phase 3): the
 // campaign router needs the same merge for every campaign at once.
 import { buildEffectiveIcp } from "../../services/are/effectiveIcp";
+
+/** How the Rejections tab names a rejection with no reason recorded. */
+const NO_REASON = "No reason given";
 
 /* ─── Enrich Agent ───────────────────────────────────────────────────────── */
 
@@ -1228,6 +1231,34 @@ export async function runSequenceAgent(
 /* ─── Router ─────────────────────────────────────────────────────────────── */
 
 export const prospectsRouter = router({
+  /**
+   * How many of the campaign's prospects are in each state, counted in SQL
+   * (A45): the Prospects tab counted the 100 rows it had loaded, so its badge
+   * and its "awaiting approval" stopped at 100.
+   */
+  statusCounts: workspaceProcedure
+    .input(z.object({ campaignId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return { inQueue: 0, pendingEnrich: 0, awaitingApproval: 0, byStatus: {} as Record<string, number> };
+      const rows = await db.select({ seq: prospectQueue.sequenceStatus, enr: prospectQueue.enrichmentStatus, n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .where(and(eq(prospectQueue.workspaceId, ctx.workspace.id), eq(prospectQueue.campaignId, input.campaignId)))
+        .groupBy(prospectQueue.sequenceStatus, prospectQueue.enrichmentStatus);
+      const byStatus: Record<string, number> = {};
+      let inQueue = 0, pendingEnrich = 0, awaitingApproval = 0;
+      for (const r of rows) {
+        const n = Number(r.n);
+        byStatus[String(r.seq)] = (byStatus[String(r.seq)] ?? 0) + n;
+        // The review queue is what list shows with no status filter.
+        if (r.seq === "skipped" || r.seq === "sourcing") continue;
+        inQueue += n;
+        if (r.enr === "pending") pendingEnrich += n;
+        if (r.seq === "pending" && r.enr === "complete") awaitingApproval += n;
+      }
+      return { inQueue, pendingEnrich, awaitingApproval, byStatus };
+    }),
+
   list: workspaceProcedure
     .input(
       z.object({
@@ -1340,7 +1371,8 @@ export const prospectsRouter = router({
          * fit ranking and only orders after an EQUALLY-fitting one that has
          * evidence behind it.
          */
-        .orderBy(desc(prospectQueue.icpMatchScore), desc(intentSignals))
+        // …and the id last, so rows that tie keep one order across pages (R61).
+        .orderBy(desc(prospectQueue.icpMatchScore), desc(intentSignals), desc(prospectQueue.id))
         .limit(input.limit)
         .offset(input.offset);
 
@@ -2612,42 +2644,61 @@ export const prospectsRouter = router({
       return { success: true };
     }),
   /** Rejection analytics — top reasons and counts for a campaign */
+  /**
+   * The Rejections tab: how many, the top reasons (counted in SQL), and one
+   * page of the rejected, optionally for one reason (A44, X4.2). It returned
+   * every rejected row — 6,000 cards on a busy campaign.
+   */
   getRejectionStats: workspaceProcedure
-    .input(z.object({ campaignId: z.number() }))
+    .input(z.object({
+      campaignId: z.number(),
+      reason: z.string().max(2000).nullish(),
+      page: z.number().int().min(1).default(1),
+      perPage: z.number().int().min(10).max(500).default(100),
+    }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
-      if (!db) return { total: 0, byReason: [] };
-      // prospectQueue has firstName/lastName/title — NOT contactName/
-      // contactTitle. Selecting the nonexistent columns threw on every
-      // load, crashing the whole Rejections tab. The UI already falls
-      // back to firstName+lastName / title.
-      const rejected = await db.select({
-        id: prospectQueue.id,
-        companyName: prospectQueue.companyName,
-        firstName: prospectQueue.firstName,
-        lastName: prospectQueue.lastName,
-        title: prospectQueue.title,
-        rejectionReason: prospectQueue.rejectionReason,
-        rejectedAt: prospectQueue.rejectedAt,
-      })
-        .from(prospectQueue)
-        .where(and(
-          eq(prospectQueue.campaignId, input.campaignId),
-          eq(prospectQueue.workspaceId, ctx.workspace.id),
-          eq(prospectQueue.sequenceStatus, "skipped"),
-        ))
-        .orderBy(desc(prospectQueue.rejectedAt));
-      // Aggregate by reason
+      if (!db) return { total: 0, byReason: [], items: [], itemsTotal: 0, page: input.page, perPage: input.perPage };
+      const rejected = and(
+        eq(prospectQueue.campaignId, input.campaignId),
+        eq(prospectQueue.workspaceId, ctx.workspace.id),
+        eq(prospectQueue.sequenceStatus, "skipped"),
+      );
+      const groups = await db.select({ reason: prospectQueue.rejectionReason, n: sql<number>`count(*)` })
+        .from(prospectQueue).where(rejected).groupBy(prospectQueue.rejectionReason);
+      // Reasons that differ only by surrounding space, or none, read as one.
       const reasonMap = new Map<string, number>();
-      for (const p of rejected) {
-        const key = p.rejectionReason?.trim() || "No reason given";
-        reasonMap.set(key, (reasonMap.get(key) ?? 0) + 1);
+      for (const g of groups) {
+        const key = g.reason?.trim() || NO_REASON;
+        reasonMap.set(key, (reasonMap.get(key) ?? 0) + Number(g.n));
       }
+      const total = Array.from(reasonMap.values()).reduce((a, b) => a + b, 0);
       const byReason = Array.from(reasonMap.entries())
         .map(([reason, count]) => ({ reason, count }))
-        .sort((a, b) => b.count - a.count)
+        .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
         .slice(0, 10);
-      return { total: rejected.length, byReason, items: rejected };
+      const where = input.reason == null ? rejected
+        : input.reason === NO_REASON ? and(rejected, or(isNull(prospectQueue.rejectionReason), eq(prospectQueue.rejectionReason, "")))
+        : and(rejected, eq(prospectQueue.rejectionReason, input.reason));
+      const [items, [{ n: itemsTotal }]] = await Promise.all([
+        db.select({
+          // prospectQueue has firstName/lastName/title — NOT contactName/
+          // contactTitle. Selecting the nonexistent columns threw on every
+          // load, crashing the whole Rejections tab.
+          id: prospectQueue.id,
+          companyName: prospectQueue.companyName,
+          firstName: prospectQueue.firstName,
+          lastName: prospectQueue.lastName,
+          title: prospectQueue.title,
+          rejectionReason: prospectQueue.rejectionReason,
+          rejectedAt: prospectQueue.rejectedAt,
+        })
+          .from(prospectQueue).where(where)
+          .orderBy(desc(prospectQueue.rejectedAt), desc(prospectQueue.id))
+          .limit(input.perPage).offset((input.page - 1) * input.perPage),
+        db.select({ n: sql<number>`count(*)` }).from(prospectQueue).where(where),
+      ]);
+      return { total, byReason, items, itemsTotal: Number(itemsTotal), page: input.page, perPage: input.perPage };
     }),
 
   exportRejections: workspaceProcedure

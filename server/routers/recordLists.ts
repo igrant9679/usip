@@ -9,6 +9,7 @@ import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { z } from "zod";
+import { listMemberPage } from "../services/listMembers";
 import { getDb } from "../db";
 import { recordLists, recordListMembers, prospects, accounts } from "../../drizzle/schema";
 import { eq, and, inArray, desc, sql } from "drizzle-orm";
@@ -90,36 +91,19 @@ export const recordListsRouter = router({
     return { ok: true };
   }),
 
-  /** Member records for a list, joined to the underlying prospect/account row. */
-  members: workspaceProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) return [];
-    const mem = await db
-      .select()
-      .from(recordListMembers)
-      .where(and(eq(recordListMembers.listId, input.id), eq(recordListMembers.workspaceId, ctx.workspace.id)))
-      .orderBy(desc(recordListMembers.addedAt));
-    if (mem.length === 0) return [];
-    const prospectIds = mem.filter((m) => m.recordType === "prospect").map((m) => m.recordId);
-    const accountIds = mem.filter((m) => m.recordType === "account").map((m) => m.recordId);
-    const pRows = prospectIds.length
-      ? await db.select().from(prospects).where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, prospectIds)))
-      : [];
-    const aRows = accountIds.length
-      ? await db.select().from(accounts).where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, accountIds)))
-      : [];
-    const pMap = new Map(pRows.map((r) => [r.id, r]));
-    const aMap = new Map(aRows.map((r) => [r.id, r]));
-    return mem
-      .map((m) => ({
-        memberId: m.id,
-        recordType: m.recordType,
-        recordId: m.recordId,
-        addedAt: m.addedAt,
-        record: m.recordType === "prospect" ? pMap.get(m.recordId) ?? null : m.recordType === "account" ? aMap.get(m.recordId) ?? null : null,
-      }))
-      .filter((m) => m.record); // drop members whose underlying record was deleted
-  }),
+  /**
+   * One page of a list's members with the columns the list shows, searched
+   * and sorted in SQL, and the ids of its people for "Add all to…" (P49).
+   */
+  members: workspaceProcedure
+    .input(z.object({
+      id: z.number(),
+      page: z.number().int().min(1).default(1),
+      perPage: z.number().int().min(10).max(500).default(100),
+      search: z.string().max(200).optional(),
+      sort: z.enum(["added", "name"]).default("added"),
+    }))
+    .query(({ ctx, input }) => listMemberPage(ctx.workspace.id, input)),
 
   /** Add records to a list (de-duplicated against existing membership). */
   addMembers: workspaceProcedure

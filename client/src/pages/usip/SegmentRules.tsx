@@ -136,8 +136,9 @@ export default function SegmentRules() {
               const seg = segmentMap.get(rule.segmentId);
               const seq = sequenceMap.get(rule.sequenceId);
               return (
-                <div key={rule.id} className={`flex items-center gap-4 border border-border rounded-lg p-4 bg-card transition-opacity ${rule.enabled ? "" : "opacity-50"}`}>
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                <div key={rule.id} className={`flex flex-wrap items-center gap-x-4 gap-y-2 border border-border rounded-lg p-4 bg-card transition-opacity ${rule.enabled ? "" : "opacity-50"}`}>
+                  {/* Segment → sequence keep a line of their own on a phone; the counts and buttons wrap under them. */}
+                  <div className="flex items-center gap-2 flex-1 min-w-[8rem]">
                     <Users className="size-4 text-muted-foreground shrink-0" />
                     <div className="min-w-0">
                       <div className="text-sm font-medium truncate">{seg?.name ?? `Segment #${rule.segmentId}`}</div>
@@ -145,7 +146,7 @@ export default function SegmentRules() {
                     </div>
                   </div>
                   <div className="text-muted-foreground text-sm shrink-0">→</div>
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-1 min-w-[8rem]">
                     <Zap className="size-4 text-muted-foreground shrink-0" />
                     <div className="min-w-0">
                       <div className="text-sm font-medium truncate">{seq?.name ?? `Sequence #${rule.sequenceId}`}</div>

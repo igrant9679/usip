@@ -422,7 +422,8 @@ describe("the client fixes", () => {
     const pins: Array<[string, string]> = [
       ["client/src/pages/usip/People.tsx", "useClearOnChange(listQuery, () => setChecked(new Set()));"],
       ["client/src/pages/usip/Companies.tsx", "useClearOnChange({ filters, sort, page }, () => setChecked(new Set()));"],
-      ["client/src/pages/usip/Leads.tsx", "useClearOnChange({ search }, () => setSelectedIds(new Set()));"],
+      // Leads pages on the server since phase 4 (R49): the page is part of the scope.
+      ["client/src/pages/usip/Leads.tsx", "useClearOnChange({ query, page }, () => setSelectedIds(new Set()));"],
       // The /prospects list was retired on 2026-10-27 (phase 5 item 2); its
       // pin is gone because the page is, not because R4 relaxed — People.tsx
       // above is the surviving list over the same prospects.list query.

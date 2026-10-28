@@ -43,7 +43,7 @@ import { getDb } from "../db";
 import { wonStageKeys } from "../_core/stageSemantics";
 import { closedIn, closeMonthKey, currentRanges, instantMonthKey, loadMetricDeals, openTotals } from "../services/dealMetrics";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
-import { invokeLLM } from "../_core/llm";
+import { invokeLLM, contentText } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 
@@ -112,7 +112,7 @@ churnRiskScore: 0=no risk, 100=certain churn. Be calibrated — a healthy custom
           response_format: { type: "json_object" },
           max_tokens: 120,
         });
-        const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
+        const parsed = JSON.parse(contentText(res.choices?.[0]?.message?.content) || "{}");
         score = Math.max(0, Math.min(100, Math.round(Number(parsed.churnRiskScore ?? 50))));
         rationale = String(parsed.rationale ?? rationale).slice(0, 300);
       } catch {
@@ -157,7 +157,7 @@ churnRiskScore: 0=no risk, 100=certain churn. Be calibrated — a healthy custom
 Customer: ${acct?.name ?? "Unknown"}, ARR $${Number(cust.arr ?? 0).toLocaleString()}, health ${cust.healthScore}/100 (${cust.healthTier}), NPS ${cust.npsScore}, renewal stage ${renewalStage}, days to renewal ${daysToRenewal ?? "unknown"}.
 Return: { "churnRiskScore": <0-100>, "rationale": "<one sentence>" }`;
         const res = await invokeLLM({ messages: [{ role: "user", content: prompt }], response_format: { type: "json_object" }, max_tokens: 100 });
-        const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
+        const parsed = JSON.parse(contentText(res.choices?.[0]?.message?.content) || "{}");
         const score = Math.max(0, Math.min(100, Math.round(Number(parsed.churnRiskScore ?? 50))));
         const label = churnLabelFromScore(score);
         await db.update(customers).set({ churnRiskScore: score, churnRiskLabel: label, churnRiskRationale: String(parsed.rationale ?? "").slice(0, 300), churnRiskScoredAt: new Date() }).where(eq(customers.id, cust.id));
@@ -218,7 +218,7 @@ Return: { "action": "call|email|linkedin|wait", "note": "<one sentence explainin
           response_format: { type: "json_object" },
           max_tokens: 150,
         });
-        const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
+        const parsed = JSON.parse(contentText(res.choices?.[0]?.message?.content) || "{}");
         const validActions = ["call", "email", "linkedin", "wait"];
         action = validActions.includes(parsed.action) ? parsed.action : "email";
         note = String(parsed.note ?? note).slice(0, 300);
@@ -283,7 +283,7 @@ Return: { "relStrengthScore": <0-100>, "label": "cold|warm|active|strong" }
           response_format: { type: "json_object" },
           max_tokens: 80,
         });
-        const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
+        const parsed = JSON.parse(contentText(res.choices?.[0]?.message?.content) || "{}");
         score = Math.max(0, Math.min(100, Math.round(Number(parsed.relStrengthScore ?? 0))));
         const validLabels = ["cold", "warm", "active", "strong"];
         label = validLabels.includes(parsed.label) ? parsed.label : relLabelFromScore(score);
@@ -362,7 +362,7 @@ priceMin/priceMax should bracket the recommended selling range. discountCeil is 
           response_format: { type: "json_object" },
           max_tokens: 150,
         });
-        const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
+        const parsed = JSON.parse(contentText(res.choices?.[0]?.message?.content) || "{}");
         priceMin = Math.max(0, Number(parsed.priceMin ?? priceMin));
         priceMax = Math.max(priceMin, Number(parsed.priceMax ?? priceMax));
         discountCeil = Math.max(0, Math.min(50, Number(parsed.discountCeil ?? discountCeil)));
@@ -455,7 +455,7 @@ Make the 3 suggestions distinct from existing rules and target real meeting-book
         max_tokens: 900,
         workspaceId: ctx.workspace.id,
       });
-      const content = res.choices?.[0]?.message?.content ?? "{}";
+      const content = contentText(res.choices?.[0]?.message?.content) || "{}";
       // Handle both array and {suggestions: [...]} shapes
       const parsed = JSON.parse(content);
       const arr = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.suggestions) ? parsed.suggestions : []);
@@ -754,7 +754,7 @@ Return: { "label": "urgent|follow_up|fyi|no_action", "confidence": <50-99>, "rat
           response_format: { type: "json_object" },
           max_tokens: 100,
         });
-        const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
+        const parsed = JSON.parse(contentText(res.choices?.[0]?.message?.content) || "{}");
         label = TRIAGE_LABELS.includes(parsed.label) ? parsed.label : "fyi";
         confidence = Math.max(50, Math.min(99, Math.round(Number(parsed.confidence ?? 70))));
         rationale = String(parsed.rationale ?? rationale).slice(0, 200);
@@ -806,7 +806,7 @@ Labels: urgent=needs immediate reply, follow_up=needs reply soon, fyi=informatio
           response_format: { type: "json_object" },
           max_tokens: 500,
         });
-        const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
+        const parsed = JSON.parse(contentText(res.choices?.[0]?.message?.content) || "{}");
         const arr = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.results) ? parsed.results : []);
         for (const item of arr) {
           const label: TriageLabel = TRIAGE_LABELS.includes(item.label) ? item.label : "fyi";

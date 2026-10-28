@@ -26,7 +26,9 @@ import {
   Filter,
   Plug,
   ChevronRight,
+  ArrowLeft,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Link } from "wouter";
 
 // ─── Provider color map ───────────────────────────────────────────────────────
@@ -325,7 +327,7 @@ export default function UnifiedInbox() {
               the inner ScrollArea (flex-1) gets implicit min-height:auto
               and grows to fit content instead of constraining to the
               viewport — same flexbox trap the Email Builder hit. */}
-          <div className="w-80 flex-shrink-0 border-r flex flex-col min-h-0">
+          <div className={cn("w-full md:w-80 flex-shrink-0 border-r flex-col min-h-0", selectedChat ? "hidden md:flex" : "flex")}>
             {/* Filters */}
             <div className="p-3 border-b space-y-2 shrink-0">
               <div className="relative">
@@ -380,12 +382,15 @@ export default function UnifiedInbox() {
           </div>
 
           {/* ── Right panel: message thread ── */}
-          <div className="flex-1 flex flex-col min-h-0">
+          <div className={cn("flex-1 min-w-0 flex-col min-h-0", selectedChat ? "flex" : "hidden md:flex")}>
             {selectedChat ? (
               <>
                 {/* Thread header */}
-                <div className="p-4 border-b flex items-center justify-between shrink-0">
-                  <div className="flex items-center gap-3">
+                <div className="p-4 border-b flex items-center justify-between gap-2 shrink-0">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <Button variant="ghost" size="icon" className="md:hidden -ml-2 size-8 shrink-0" aria-label="Back to conversations" onClick={() => setSelectedChat(null)}>
+                      <ArrowLeft className="size-4" />
+                    </Button>
                     <Avatar className="h-9 w-9">
                       <AvatarFallback
                         style={{

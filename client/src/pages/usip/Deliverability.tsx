@@ -141,7 +141,7 @@ export default function Deliverability() {
   return (
     <Shell title="Deliverability suite">
       <div data-tour-id="deliverability-overview" className="flex flex-col h-full min-h-0">
-        <div className="relative shrink-0 flex items-center gap-2 px-4 h-11 border-b border-border bg-card/40">
+        <div className="relative shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 min-h-11 py-1.5 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <Network className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Deliverability suite</h1>
@@ -177,7 +177,7 @@ export default function Deliverability() {
                   <Button size="sm" className="mt-3" onClick={() => setLocation("/sending-accounts")}>Connect an account</Button>
                 </div>
               ) : (
-                <table className="w-full text-sm">
+                <div className="overflow-x-auto"><table className="w-full text-sm">
                   <thead className="border-b bg-muted/30 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                     <tr>
                       <th className="px-3 py-2 font-medium">Account</th>
@@ -224,7 +224,7 @@ export default function Deliverability() {
                       );
                     })}
                   </tbody>
-                </table>
+                </table></div>
               )}
             </div>
             <p className="mt-2 text-[11px] text-muted-foreground">

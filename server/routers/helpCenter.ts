@@ -4,7 +4,7 @@
  * feedback, search logging, admin insights, learning preferences.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, ilike, like, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, ilike, like, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   aiHelpConversations,
@@ -540,7 +540,36 @@ Keep the article under 600 words. Be friendly and action-oriented.`,
         .orderBy(desc(helpSearchLog.createdAt))
         .limit(10),
     ]);
-    return { topArticles, recentSearches, unansweredSearches };
+    // The four cards the Insights tab shows (X3.2): it read these names and
+    // the server sent none of them, so every card was always empty.
+    const searchCounts = (only0: boolean) => db
+      .select({ query: helpSearchLog.query, count: sql<number>`count(*)` })
+      .from(helpSearchLog)
+      .where(only0 ? and(eq(helpSearchLog.workspaceId, ctx.workspace.id), eq(helpSearchLog.resultsCount, 0)) : eq(helpSearchLog.workspaceId, ctx.workspace.id))
+      .groupBy(helpSearchLog.query)
+      .orderBy(desc(sql`count(*)`), helpSearchLog.query)
+      .limit(10);
+    const [topSearches, unansweredQuestions, rated] = await Promise.all([
+      searchCounts(false),
+      searchCounts(true),
+      db.select({ id: helpArticles.id, title: helpArticles.title, helpful: helpArticles.helpfulCount, notHelpful: helpArticles.notHelpfulCount })
+        .from(helpArticles)
+        .where(and(eq(helpArticles.workspaceId, ctx.workspace.id), or(gt(helpArticles.helpfulCount, 0), gt(helpArticles.notHelpfulCount, 0)))),
+    ]);
+    const withPct = rated.map((a) => {
+      const votes = a.helpful + a.notHelpful;
+      return { id: a.id, title: a.title, votes, helpfulPct: Math.round((a.helpful / votes) * 100), unhelpfulPct: Math.round((a.notHelpful / votes) * 100) };
+    });
+    const mostHelpful = withPct.filter((a) => a.helpfulPct >= 50)
+      .sort((a, b) => b.helpfulPct - a.helpfulPct || b.votes - a.votes).slice(0, 10);
+    const needsImprovement = withPct.filter((a) => a.unhelpfulPct > 50)
+      .sort((a, b) => b.unhelpfulPct - a.unhelpfulPct || b.votes - a.votes).slice(0, 10);
+    return {
+      topArticles, recentSearches, unansweredSearches,
+      topSearches: topSearches.map((s) => ({ query: s.query, count: Number(s.count) })),
+      unansweredQuestions: unansweredQuestions.map((s) => ({ query: s.query, count: Number(s.count) })),
+      mostHelpful, needsImprovement,
+    };
   }),
 
   /* ── Learning Preferences ───────────────────────────────────────────────── */

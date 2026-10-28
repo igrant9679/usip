@@ -120,7 +120,7 @@ function StatusPill({ status }: { status: string }) {
 function Card({ title, description, action, children }: { title: string; description?: string; action?: React.ReactNode; children?: React.ReactNode }) {
   return (
     <section className="rounded-xl border border-border/70 bg-card p-5 sm:p-6 space-y-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1 min-w-0">
           <h2 className="text-[15px] font-semibold">{title}</h2>
           {description && <p className="text-[12.5px] text-muted-foreground">{description}</p>}
@@ -221,14 +221,14 @@ export function SocialAccountsSection() {
 
   return (
     <>
-      <div className="shrink-0 px-6 pt-4 flex items-start justify-between gap-3">
-        <div>
+      <div className="shrink-0 px-4 sm:px-6 pt-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-xl font-semibold tracking-tight">Social accounts</h1>
           <p className="text-[12.5px] text-muted-foreground">
             Connect the accounts used to find prospects and send direct messages.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -281,7 +281,7 @@ export function SocialAccountsSection() {
                   const usage = usageByAccount.get(a.unipileAccountId);
                   return (
                     <div key={a.id ?? a.unipileAccountId} className="rounded-lg border border-border/70 bg-background p-4 space-y-3">
-                      <div className="flex items-start gap-3">
+                      <div className="flex flex-wrap items-start gap-3">
                         <span
                           className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-[12px] font-bold text-white"
                           style={{ backgroundColor: meta.color }}
@@ -299,7 +299,8 @@ export function SocialAccountsSection() {
                             {a.connectedAt ? ` · connected ${new Date(a.connectedAt).toLocaleDateString()}` : ""}
                           </div>
                         </div>
-                        <div className="flex shrink-0 items-center gap-2">
+                        {/* Under the account on a phone, beside it from sm up. */}
+                        <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:w-auto">
                           {reauth && (
                             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => openConnect(a.unipileAccountId)}>
                               <RefreshCw className="size-3.5" /> Reconnect

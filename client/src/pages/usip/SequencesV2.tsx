@@ -36,6 +36,8 @@ import {
 import { toast } from "sonner";
 import { isAdminRole } from "@shared/roleRank";
 import { pressable } from "@/lib/pressable";
+import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
+import { useIsMobile } from "@/hooks/useMobile";
 import { tablistProps, tabProps } from "@/lib/tabs";
 
 const AI_STEPS = [
@@ -172,6 +174,9 @@ export default function SequencesV2() {
   const [statusSel, setStatusSel] = useState<Set<string>>(new Set());
   const [ownerMine, setOwnerMine] = useState(false);
   const [hideFilters, setHideFilters] = useState(false);
+  // Below md the filter rail is a sheet the toolbar's Filters button opens.
+  const phone = useIsMobile();
+  const [filtersSheet, setFiltersSheet] = useState(false);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Status", "Owned by"]));
   const [checked, setChecked] = useState<Set<number>>(new Set());
   // sequences.create / fork refuse a member whose manage_sequences is denied.
@@ -239,7 +244,7 @@ export default function SequencesV2() {
             {/* toolbar */}
             <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-1.5 flex-wrap bg-card/40 [&_button]:h-7">
               <Button variant="outline" size="sm" className="gap-1.5">All Sequences <ChevronDown className="size-3.5 opacity-60" /></Button>
-              <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => setHideFilters((v) => !v)}><Filter className="size-4" /> {hideFilters ? "Show" : "Hide"} filters{activeCount ? ` (${activeCount})` : ""}</Button>
+              <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => (phone ? setFiltersSheet(true) : setHideFilters((v) => !v))}><Filter className="size-4" /> {phone ? "Filters" : `${hideFilters ? "Show" : "Hide"} filters`}{activeCount ? ` (${activeCount})` : ""}</Button>
               <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-sm min-w-0 flex-1 max-w-xs">
                 <Search className="size-4 text-muted-foreground shrink-0" />
                 <input aria-label="Search sequences" value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search sequences…" />
@@ -263,8 +268,13 @@ export default function SequencesV2() {
 
             <div className="flex flex-1 min-h-0">
               {/* filter rail */}
-              {!hideFilters && (
-                <aside className="w-60 shrink-0 border-r border-border flex flex-col min-h-0 bg-card/30">
+              {(phone || !hideFilters) && (
+                <ResponsiveRail
+                  title="Filters"
+                  open={filtersSheet}
+                  onOpenChange={setFiltersSheet}
+                  className="w-60 shrink-0 border-r border-border flex-col min-h-0 bg-card/30"
+                >
                   <div className="flex-1 min-h-0 overflow-y-auto">
                     <FGroup label="Starred" icon={Star} open={openGroups.has("Starred")} onToggle={() => toggleGroup("Starred")}>
                       <p className="text-[12px] text-muted-foreground">Star sequences to pin them here.</p>
@@ -293,7 +303,7 @@ export default function SequencesV2() {
                   <div className="shrink-0 border-t border-border p-2">
                     <Button variant="outline" size="sm" className="w-full h-7" disabled={activeCount === 0} onClick={clearFilters}>Clear filters</Button>
                   </div>
-                </aside>
+                </ResponsiveRail>
               )}
 
               {/* table / empty */}

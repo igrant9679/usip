@@ -542,18 +542,27 @@ export async function saveScrapeJobAndQueue(
 
 export const scraperRouter = router({
   /** List all scrape jobs for the workspace */
+  /**
+   * Recent scrape jobs for the Scraper tab: what the cards show, never
+   * rawResults — every discovered prospect of every job, which the list sent
+   * and nothing read (A44). At most 200, newest first, the id breaking ties.
+   */
   listJobs: workspaceProcedure
-    .input(z.object({ campaignId: z.number().optional(), limit: z.number().default(50) }))
+    .input(z.object({ campaignId: z.number().optional(), limit: z.number().int().min(1).max(200).default(50) }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const conditions = [eq(areScrapeJobs.workspaceId, ctx.workspace.id)];
       if (input.campaignId) conditions.push(eq(areScrapeJobs.campaignId, input.campaignId));
       return db
-        .select()
+        .select({
+          id: areScrapeJobs.id, campaignId: areScrapeJobs.campaignId, sourceType: areScrapeJobs.sourceType,
+          query: areScrapeJobs.query, status: areScrapeJobs.status, resultCount: areScrapeJobs.resultCount,
+          errorMessage: areScrapeJobs.errorMessage, scrapedAt: areScrapeJobs.scrapedAt, createdAt: areScrapeJobs.createdAt,
+        })
         .from(areScrapeJobs)
         .where(and(...conditions))
-        .orderBy(desc(areScrapeJobs.createdAt))
+        .orderBy(desc(areScrapeJobs.createdAt), desc(areScrapeJobs.id))
         .limit(input.limit);
     }),
 

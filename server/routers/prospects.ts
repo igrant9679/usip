@@ -13,7 +13,8 @@
  *   bulkDelete        — remove many prospects at once
  */
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, like, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, notInArray, or, sql, type SQL } from "drizzle-orm";
+import type { MySqlColumn } from "drizzle-orm/mysql-core";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, isAdminRole, requireMinRole, workspaceProcedure } from "../_core/workspace";
@@ -77,6 +78,21 @@ export async function deriveLifecycle(
     if (lead && lead.status !== "converted") return { ...out, stage: "lead" };
   }
   return out;
+}
+
+/**
+ * ORDER BY for the People list: the chosen column, then the id the same way
+ * (audit 2026-10-20, R61). Most sorts tie — blank titles, a shared company,
+ * one import's createdAt — and rows that tie came back in a different order
+ * on each page, so paging could show a person twice and another never.
+ */
+export function peopleOrder(sortField?: string | null, sortDir?: string | null): SQL[] {
+  const sdir = sortDir === "asc" ? asc : desc;
+  const col = ({
+    fit: [prospects.confidenceScore], name: [prospects.firstName, prospects.lastName], title: [prospects.title],
+    company: [prospects.company], email: [prospects.email], phone: [prospects.phone], industry: [prospects.industry],
+  } as Record<string, MySqlColumn[]>)[sortField ?? ""];
+  return col ? [...col.map((c) => sdir(c)), sdir(prospects.id)] : [desc(prospects.createdAt), desc(prospects.id)];
 }
 
 export const prospectsRouter = router({
@@ -714,16 +730,7 @@ export const prospectsRouter = router({
       const offset = (input.page - 1) * input.perPage;
 
       // Whole-dataset sort (Total + pagination follow it). Default: newest first.
-      const sdir = input.sortDir === "asc" ? asc : desc;
-      const sortExprs =
-        input.sortField === "fit" ? [sdir(prospects.confidenceScore)]
-          : input.sortField === "name" ? [sdir(prospects.firstName), sdir(prospects.lastName)]
-            : input.sortField === "title" ? [sdir(prospects.title)]
-              : input.sortField === "company" ? [sdir(prospects.company)]
-                : input.sortField === "email" ? [sdir(prospects.email)]
-                  : input.sortField === "phone" ? [sdir(prospects.phone)]
-                    : input.sortField === "industry" ? [sdir(prospects.industry)]
-                      : [desc(prospects.createdAt)];
+      const sortExprs = peopleOrder(input.sortField, input.sortDir);
 
       // ── Score filter/sort against the primary person Fit model ───────────
       // Scores live in score_results, so a LEFT JOIN keeps unscored prospects
@@ -865,7 +872,7 @@ export const prospectsRouter = router({
         );
         const scoreConds = [...conditions, ...promotedConds];
         if (input.scoreMinRating) {
-          const set = input.scoreMinRating === "excellent" ? ["excellent"]
+          const set: ("fair" | "good" | "excellent")[] = input.scoreMinRating === "excellent" ? ["excellent"]
             : input.scoreMinRating === "good" ? ["good", "excellent"]
               : ["fair", "good", "excellent"];
           scoreConds.push(inArray(scoreResults.rating, set));
@@ -877,8 +884,9 @@ export const prospectsRouter = router({
         if (input.scoreMin != null) scoreConds.push(sql`${scoreResults.normalizedScore} >= ${input.scoreMin}`);
         if (input.scoreMax != null) scoreConds.push(sql`${scoreResults.normalizedScore} <= ${input.scoreMax}`);
 
-        const orderBy = input.sortByScore === "asc" ? [asc(scoreResults.normalizedScore)]
-          : input.sortByScore === "desc" ? [desc(scoreResults.normalizedScore)]
+        // The id breaks ties here too (R61): many people share a score.
+        const orderBy = input.sortByScore === "asc" ? [asc(scoreResults.normalizedScore), asc(prospects.id)]
+          : input.sortByScore === "desc" ? [desc(scoreResults.normalizedScore), desc(prospects.id)]
             : sortExprs;
 
         const joined = await db.select().from(prospects).leftJoin(scoreResults, joinCond)

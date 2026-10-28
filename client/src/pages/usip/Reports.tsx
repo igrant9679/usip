@@ -20,8 +20,10 @@ import {
 import { DashboardChartRenderer } from "@/components/usip/DashboardChartRenderer";
 import { confirmAction } from "@/components/usip/Common";
 import {
-  BarChart3, Clock, Download, FolderOpen, Loader2, Play, Plus, Save, Sparkles, Trash2, X,
+  BarChart3, Clock, Download, FolderOpen, Loader2, Play, Plus, Save, SlidersHorizontal, Sparkles, Trash2, X,
 } from "lucide-react";
+import { PhoneRailButton, ResponsiveRail } from "@/components/usip/ResponsiveRail";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 
 type Filter = { field: string; op: string; value?: string };
 type Spec = {
@@ -100,6 +102,8 @@ export default function Reports() {
   const [loadedId, setLoadedId] = useState<number | null>(null);
   const [loadedName, setLoadedName] = useState<string>("");
   const [saveOpen, setSaveOpen] = useState(false);
+  // Below md the builder is a sheet, opened from the header (G65).
+  const [builderOpen, setBuilderOpen] = useState(false);
   const [armed, setArmed] = useState(false); // true once the user hits Run
 
   const objSchema = schema.data?.[spec.object];
@@ -110,8 +114,11 @@ export default function Reports() {
     [spec, effectiveColumns],
   );
 
-  const result = trpc.reports.run.useQuery(runnableSpec as never, {
-    enabled: armed && effectiveColumns.length > 0,
+  // Typing a filter value re-ran the report on every keystroke (G54, X4.3):
+  // the query takes the spec once it has settled.
+  const settledSpec = useDebouncedValue(runnableSpec);
+  const result = trpc.reports.run.useQuery(settledSpec as never, {
+    enabled: armed && settledSpec.columns.length > 0,
   });
   const exportCsv = trpc.reports.exportCsv.useMutation({
     onSuccess: (r) => {
@@ -159,12 +166,13 @@ export default function Reports() {
   return (
     <Shell title="Reports">
       <div data-tour-id="reports-list" className="flex flex-col h-full min-h-0">
-        <div className="relative shrink-0 flex items-center gap-2 px-4 h-11 border-b border-border bg-card/40">
+        <div className="relative shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 min-h-11 py-1.5 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <BarChart3 className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Reports</h1>
           {loadedName && <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">{loadedName}</span>}
           <div className="flex-1" />
+          <PhoneRailButton onClick={() => setBuilderOpen(true)} icon={SlidersHorizontal}>Build</PhoneRailButton>
           {can("export_data") && (
             <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={!armed || exportCsv.isPending} onClick={() => exportCsv.mutate(runnableSpec as never)}>
               {exportCsv.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />} Export CSV
@@ -173,195 +181,202 @@ export default function Reports() {
           <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setSaveOpen(true)} disabled={effectiveColumns.length === 0}>
             <Save className="size-3.5" /> Save
           </Button>
-          <Button size="sm" className="h-7 gap-1.5" onClick={() => setArmed(true)} disabled={effectiveColumns.length === 0}>
+          <Button size="sm" className="h-7 gap-1.5" onClick={() => { setArmed(true); setBuilderOpen(false); }} disabled={effectiveColumns.length === 0}>
             <Play className="size-3.5" /> Run
           </Button>
         </div>
 
         <div className="flex-1 min-h-0 flex">
           {/* ── builder panel ── */}
-          <aside className="w-72 shrink-0 border-r border-border overflow-y-auto p-3 space-y-4 bg-card/30">
-            {/* preset reports */}
-            <section>
-              <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Preset reports</h2>
-              <div className="space-y-0.5">
-                {(presets.data ?? []).map((p: any) => (
-                  <button
-                    key={p.key}
-                    type="button"
-                    title={p.description}
-                    className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-muted"
-                    onClick={() => { setSpec(p.spec as Spec); setLoadedId(null); setLoadedName(p.name); setArmed(true); }}
-                  >
-                    <Sparkles className="size-3.5 shrink-0" style={{ color: accent }} />
-                    <span className="truncate">{p.name}</span>
-                  </button>
-                ))}
-              </div>
-            </section>
-
-            {/* saved reports */}
-            {(saved.data ?? []).length > 0 && (
+          <ResponsiveRail
+            title="Report builder"
+            open={builderOpen}
+            onOpenChange={setBuilderOpen}
+            className="w-72 shrink-0 border-r border-border bg-card/30 flex-col min-h-0"
+          >
+            <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-4">
+              {/* preset reports */}
               <section>
-                <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Saved reports</h2>
+                <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Preset reports</h2>
                 <div className="space-y-0.5">
-                  {(saved.data as Record<string, any>[]).map((r) => (
-                    <div key={r.id} className={cn("group flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12.5px] hover:bg-muted", loadedId === r.id && "bg-muted font-medium")}>
-                      <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={() => loadSaved(r)}>
-                        <FolderOpen className="size-3.5 shrink-0 text-muted-foreground" />
-                        <span className="truncate">{r.name}</span>
-                        <span className="ml-auto shrink-0 text-[10.5px] text-muted-foreground">{OBJECT_LABELS[r.object] ?? r.object}</span>
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Schedule ${r.name}`}
-                        title={r.scheduleFreq && r.scheduleFreq !== "none" ? `Emailed ${r.scheduleFreq}` : "Schedule email"}
-                        className={cn("shrink-0 rounded p-0.5", r.scheduleFreq && r.scheduleFreq !== "none" ? "text-sky-600" : "text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100")}
-                        onClick={() => setSchedFor(r)}
-                      >
-                        <Clock className="size-3" />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Delete ${r.name}`}
-                        className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:text-rose-600 group-hover:opacity-100 group-focus-within:opacity-100"
-                        onClick={() => { confirmAction({ title: `Delete report "${r.name}"?`, description: "This saved report and its schedule will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { remove.mutate({ id: r.id }); }); }}
-                      >
-                        <Trash2 className="size-3" />
-                      </button>
-                    </div>
+                  {(presets.data ?? []).map((p: any) => (
+                    <button
+                      key={p.key}
+                      type="button"
+                      title={p.description}
+                      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-muted"
+                      onClick={() => { setSpec(p.spec as Spec); setLoadedId(null); setLoadedName(p.name); setArmed(true); }}
+                    >
+                      <Sparkles className="size-3.5 shrink-0" style={{ color: accent }} />
+                      <span className="truncate">{p.name}</span>
+                    </button>
                   ))}
                 </div>
               </section>
-            )}
 
-            {/* object */}
-            <section>
-              <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Report on</h2>
-              <select aria-label="Report on" value={spec.object} onChange={(e) => setObject(e.target.value)} className={cn(selectCls, "w-full")}>
-                {Object.entries(OBJECT_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
-            </section>
-
-            {/* columns */}
-            <section>
-              <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Columns</h2>
-              <div className="space-y-1">
-                {columnsMeta.map((c) => (
-                  <label key={c.key} className="flex cursor-pointer items-center gap-2 text-[12.5px]">
-                    <input type="checkbox" className="accent-current" checked={effectiveColumns.includes(c.key)} onChange={() => toggleColumn(c.key)} />
-                    {c.label}
-                  </label>
-                ))}
-              </div>
-            </section>
-
-            {/* filters */}
-            <section>
-              <div className="mb-1.5 flex items-center justify-between">
-                <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Filters</h2>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 text-[11.5px] font-medium hover:underline"
-                  style={{ color: accent }}
-                  onClick={() => setSpec((s) => ({ ...s, filters: [...s.filters, { field: columnsMeta[0]?.key ?? "", op: "contains", value: "" }] }))}
-                >
-                  <Plus className="size-3" /> Add
-                </button>
-              </div>
-              <div className="space-y-2">
-                {spec.filters.map((f, i) => {
-                  const op = OPS.find((o) => o.value === f.op);
-                  const patch = (p: Partial<Filter>) => setSpec((s) => ({ ...s, filters: s.filters.map((x, j) => (j === i ? { ...x, ...p } : x)) }));
-                  return (
-                    <div key={i} className="space-y-1 rounded-md border border-border/70 p-1.5">
-                      <div className="flex items-center gap-1">
-                        <select aria-label={`Filter ${i + 1} field`} value={f.field} onChange={(e) => patch({ field: e.target.value })} className={cn(selectCls, "min-w-0 flex-1")}>
-                          {columnsMeta.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-                        </select>
-                        <button type="button" aria-label="Remove filter" className="shrink-0 rounded p-1 text-muted-foreground hover:text-rose-600" onClick={() => setSpec((s) => ({ ...s, filters: s.filters.filter((_, j) => j !== i) }))}>
-                          <X className="size-3.5" />
+              {/* saved reports */}
+              {(saved.data ?? []).length > 0 && (
+                <section>
+                  <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Saved reports</h2>
+                  <div className="space-y-0.5">
+                    {(saved.data as Record<string, any>[]).map((r) => (
+                      <div key={r.id} className={cn("group flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12.5px] hover:bg-muted", loadedId === r.id && "bg-muted font-medium")}>
+                        <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={() => loadSaved(r)}>
+                          <FolderOpen className="size-3.5 shrink-0 text-muted-foreground" />
+                          <span className="truncate">{r.name}</span>
+                          <span className="ml-auto shrink-0 text-[10.5px] text-muted-foreground">{OBJECT_LABELS[r.object] ?? r.object}</span>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Schedule ${r.name}`}
+                          title={r.scheduleFreq && r.scheduleFreq !== "none" ? `Emailed ${r.scheduleFreq}` : "Schedule email"}
+                          className={cn("shrink-0 rounded p-0.5", r.scheduleFreq && r.scheduleFreq !== "none" ? "text-sky-600" : "text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100")}
+                          onClick={() => setSchedFor(r)}
+                        >
+                          <Clock className="size-3" />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Delete ${r.name}`}
+                          className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:text-rose-600 group-hover:opacity-100 group-focus-within:opacity-100"
+                          onClick={() => { confirmAction({ title: `Delete report "${r.name}"?`, description: "This saved report and its schedule will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { remove.mutate({ id: r.id }); }); }}
+                        >
+                          <Trash2 className="size-3" />
                         </button>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <select aria-label={`Filter ${i + 1} operator`} value={f.op} onChange={(e) => patch({ op: e.target.value })} className={cn(selectCls, "w-28 shrink-0")}>
-                          {OPS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                        </select>
-                        {op?.needsValue !== false && (
-                          <Input aria-label={`Filter ${i + 1} value`} value={f.value ?? ""} onChange={(e) => patch({ value: e.target.value })} placeholder="value" className="h-8 min-w-0 flex-1 text-[12.5px]" />
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-                {spec.filters.length === 0 && <p className="text-[11.5px] text-muted-foreground">No filters — all rows.</p>}
-              </div>
-            </section>
-
-            {/* group by */}
-            <section>
-              <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Group by</h2>
-              <select aria-label="Group by"
-                value={spec.groupBy ?? ""}
-                onChange={(e) => setSpec((s) => ({ ...s, groupBy: e.target.value || undefined, aggregate: e.target.value ? (s.aggregate ?? "count") : undefined }))}
-                className={cn(selectCls, "w-full")}
-              >
-                <option value="">No grouping (row list)</option>
-                {columnsMeta.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-              </select>
-              {spec.groupBy && (
-                <div className="mt-1.5 flex items-center gap-1.5">
-                  <select aria-label="Aggregate"
-                    value={spec.aggregate ?? "count"}
-                    onChange={(e) => setSpec((s) => ({ ...s, aggregate: e.target.value as Spec["aggregate"] }))}
-                    className={cn(selectCls, "flex-1")}
-                  >
-                    <option value="count">Count rows</option>
-                    <option value="sum_value">Sum of…</option>
-                    <option value="avg_value">Average of…</option>
-                  </select>
-                  {spec.aggregate && spec.aggregate !== "count" && (
-                    <select aria-label="Aggregate field"
-                      value={spec.aggregateField ?? numericFields[0]?.key ?? ""}
-                      onChange={(e) => setSpec((s) => ({ ...s, aggregateField: e.target.value }))}
-                      className={cn(selectCls, "flex-1")}
-                    >
-                      {numericFields.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-                    </select>
-                  )}
-                </div>
+                    ))}
+                  </div>
+                </section>
               )}
-            </section>
 
-            {/* sort + limit */}
-            {!spec.groupBy && (
+              {/* object */}
               <section>
-                <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Sort & limit</h2>
-                <div className="flex items-center gap-1.5">
-                  <select aria-label="Sort by"
-                    value={spec.sort?.field ?? ""}
-                    onChange={(e) => setSpec((s) => ({ ...s, sort: e.target.value ? { field: e.target.value, dir: s.sort?.dir ?? "desc" } : undefined }))}
-                    className={cn(selectCls, "min-w-0 flex-1")}
-                  >
-                    <option value="">Default order</option>
-                    {columnsMeta.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-                  </select>
-                  {spec.sort && (
-                    <select aria-label="Sort direction" value={spec.sort.dir} onChange={(e) => setSpec((s) => ({ ...s, sort: s.sort ? { ...s.sort, dir: e.target.value as "asc" | "desc" } : undefined }))} className={cn(selectCls, "w-20 shrink-0")}>
-                      <option value="desc">Desc</option>
-                      <option value="asc">Asc</option>
-                    </select>
-                  )}
-                </div>
-                <div className="mt-1.5 flex items-center gap-2 text-[12.5px] text-muted-foreground">
-                  Max rows
-                  <select aria-label="Max rows" value={spec.limit} onChange={(e) => setSpec((s) => ({ ...s, limit: Number(e.target.value) }))} className={cn(selectCls, "w-24")}>
-                    {[50, 200, 500, 1000].map((n) => <option key={n} value={n}>{n}</option>)}
-                  </select>
+                <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Report on</h2>
+                <select aria-label="Report on" value={spec.object} onChange={(e) => setObject(e.target.value)} className={cn(selectCls, "w-full")}>
+                  {Object.entries(OBJECT_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </section>
+
+              {/* columns */}
+              <section>
+                <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Columns</h2>
+                <div className="space-y-1">
+                  {columnsMeta.map((c) => (
+                    <label key={c.key} className="flex cursor-pointer items-center gap-2 text-[12.5px]">
+                      <input type="checkbox" className="accent-current" checked={effectiveColumns.includes(c.key)} onChange={() => toggleColumn(c.key)} />
+                      {c.label}
+                    </label>
+                  ))}
                 </div>
               </section>
-            )}
-          </aside>
+
+              {/* filters */}
+              <section>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Filters</h2>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-[11.5px] font-medium hover:underline"
+                    style={{ color: accent }}
+                    onClick={() => setSpec((s) => ({ ...s, filters: [...s.filters, { field: columnsMeta[0]?.key ?? "", op: "contains", value: "" }] }))}
+                  >
+                    <Plus className="size-3" /> Add
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {spec.filters.map((f, i) => {
+                    const op = OPS.find((o) => o.value === f.op);
+                    const patch = (p: Partial<Filter>) => setSpec((s) => ({ ...s, filters: s.filters.map((x, j) => (j === i ? { ...x, ...p } : x)) }));
+                    return (
+                      <div key={i} className="space-y-1 rounded-md border border-border/70 p-1.5">
+                        <div className="flex items-center gap-1">
+                          <select aria-label={`Filter ${i + 1} field`} value={f.field} onChange={(e) => patch({ field: e.target.value })} className={cn(selectCls, "min-w-0 flex-1")}>
+                            {columnsMeta.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                          </select>
+                          <button type="button" aria-label="Remove filter" className="shrink-0 rounded p-1 text-muted-foreground hover:text-rose-600" onClick={() => setSpec((s) => ({ ...s, filters: s.filters.filter((_, j) => j !== i) }))}>
+                            <X className="size-3.5" />
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <select aria-label={`Filter ${i + 1} operator`} value={f.op} onChange={(e) => patch({ op: e.target.value })} className={cn(selectCls, "w-28 shrink-0")}>
+                            {OPS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                          </select>
+                          {op?.needsValue !== false && (
+                            <Input aria-label={`Filter ${i + 1} value`} value={f.value ?? ""} onChange={(e) => patch({ value: e.target.value })} placeholder="value" className="h-8 min-w-0 flex-1 text-[12.5px]" />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {spec.filters.length === 0 && <p className="text-[11.5px] text-muted-foreground">No filters — all rows.</p>}
+                </div>
+              </section>
+
+              {/* group by */}
+              <section>
+                <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Group by</h2>
+                <select aria-label="Group by"
+                  value={spec.groupBy ?? ""}
+                  onChange={(e) => setSpec((s) => ({ ...s, groupBy: e.target.value || undefined, aggregate: e.target.value ? (s.aggregate ?? "count") : undefined }))}
+                  className={cn(selectCls, "w-full")}
+                >
+                  <option value="">No grouping (row list)</option>
+                  {columnsMeta.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                </select>
+                {spec.groupBy && (
+                  <div className="mt-1.5 flex items-center gap-1.5">
+                    <select aria-label="Aggregate"
+                      value={spec.aggregate ?? "count"}
+                      onChange={(e) => setSpec((s) => ({ ...s, aggregate: e.target.value as Spec["aggregate"] }))}
+                      className={cn(selectCls, "flex-1")}
+                    >
+                      <option value="count">Count rows</option>
+                      <option value="sum_value">Sum of…</option>
+                      <option value="avg_value">Average of…</option>
+                    </select>
+                    {spec.aggregate && spec.aggregate !== "count" && (
+                      <select aria-label="Aggregate field"
+                        value={spec.aggregateField ?? numericFields[0]?.key ?? ""}
+                        onChange={(e) => setSpec((s) => ({ ...s, aggregateField: e.target.value }))}
+                        className={cn(selectCls, "flex-1")}
+                      >
+                        {numericFields.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                      </select>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              {/* sort + limit */}
+              {!spec.groupBy && (
+                <section>
+                  <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Sort & limit</h2>
+                  <div className="flex items-center gap-1.5">
+                    <select aria-label="Sort by"
+                      value={spec.sort?.field ?? ""}
+                      onChange={(e) => setSpec((s) => ({ ...s, sort: e.target.value ? { field: e.target.value, dir: s.sort?.dir ?? "desc" } : undefined }))}
+                      className={cn(selectCls, "min-w-0 flex-1")}
+                    >
+                      <option value="">Default order</option>
+                      {columnsMeta.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                    </select>
+                    {spec.sort && (
+                      <select aria-label="Sort direction" value={spec.sort.dir} onChange={(e) => setSpec((s) => ({ ...s, sort: s.sort ? { ...s.sort, dir: e.target.value as "asc" | "desc" } : undefined }))} className={cn(selectCls, "w-20 shrink-0")}>
+                        <option value="desc">Desc</option>
+                        <option value="asc">Asc</option>
+                      </select>
+                    )}
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-2 text-[12.5px] text-muted-foreground">
+                    Max rows
+                    <select aria-label="Max rows" value={spec.limit} onChange={(e) => setSpec((s) => ({ ...s, limit: Number(e.target.value) }))} className={cn(selectCls, "w-24")}>
+                      {[50, 200, 500, 1000].map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  </div>
+                </section>
+              )}
+            </div>
+          </ResponsiveRail>
 
           {/* ── results ── */}
           <div className="flex-1 min-w-0 overflow-auto">

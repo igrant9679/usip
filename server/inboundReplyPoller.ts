@@ -95,8 +95,10 @@ async function pollImapAccount(account: any) {
   try {
     const lock = await client.getMailboxLock("INBOX");
     try {
-      // Search for unseen messages
-      const uids = await client.search({ unseen: true }, { uid: true });
+      // Unseen messages. search() answers false, not [], when there are none,
+      // and .slice threw on every poll of a mailbox with nothing new (X3.8).
+      // { seen: false } is UNSEEN, the form imapflow's types know.
+      const uids = (await client.search({ seen: false }, { uid: true })) || [];
       if (uids.length === 0) return;
 
       const recentUids = uids.slice(-50); // Process up to 50 at a time
@@ -115,6 +117,7 @@ async function pollImapAccount(account: any) {
             .where(and(eq(emailReplies.sendingAccountId, account.id), eq(emailReplies.imapUid, msg.uid)));
           if (byImap.length > 0) continue;
 
+          if (!msg.source) continue;
           const parsed = await simpleParser(msg.source);
           const fromAddr = parsed.from?.value?.[0];
           const toVal = parsed.to;

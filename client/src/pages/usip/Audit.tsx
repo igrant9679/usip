@@ -5,6 +5,7 @@ import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
 import { Activity, ClipboardList, Download, Loader2, User } from "lucide-react";
 import { useState } from "react";
+import { SHOW_MORE_STEP, useShowMore } from "@/hooks/useShowMore";
 import { toast } from "sonner";
 
 export default function Audit() {
@@ -22,6 +23,9 @@ export default function Audit() {
     actorUserId,
     limit: 500,
   });
+
+  // 500 entries arrive; 50 render at a time (X4.2: 10,000 DOM nodes).
+  const rows = useShowMore(data ?? [], { entityType, actorUserId });
 
   // Load team members for the member filter dropdown
   const { data: teamData } = trpc.team.list.useQuery(undefined);
@@ -127,8 +131,9 @@ export default function Audit() {
               description={actorUserId ? "No activity found for this member with the current filters." : undefined}
             />
           ) : (
+            <>
             <ul className="divide-y">
-              {data!.map((a) => (
+              {rows.shown.map((a) => (
                 <li key={a.id} className="p-3 text-sm">
                   <div className="flex items-center gap-2">
                     <StatusPill tone={a.action === "create" ? "success" : a.action === "delete" ? "danger" : "info"}>
@@ -171,6 +176,12 @@ export default function Audit() {
                 </li>
               ))}
             </ul>
+            {rows.remaining > 0 && (
+              <button type="button" onClick={rows.showMore} className="w-full border-t px-3 py-2 text-center text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground">
+                Show {Math.min(rows.remaining, SHOW_MORE_STEP)} more entries ({rows.remaining.toLocaleString()} not shown)
+              </button>
+            )}
+            </>
           )}
         </Section>
       </div>

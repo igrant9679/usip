@@ -99,7 +99,7 @@ export function MailboxesSection() {
   return (
     <TooltipProvider delayDuration={200}>
       {/* header */}
-      <div className="shrink-0 px-6 pt-4">
+      <div className="shrink-0 px-4 sm:px-6 pt-4">
         <h1 className="text-xl font-semibold tracking-tight">Mailboxes</h1>
       </div>
 

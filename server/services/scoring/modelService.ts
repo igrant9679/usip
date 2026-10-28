@@ -150,8 +150,8 @@ export async function createCriterion(ws: number, scoreModelId: number, c: Crite
     operator: c.operator, valueJson: c.valueJson ?? null, points: Math.round(c.points),
     impactLabel: c.impactLabel ?? null, criterionType: c.criterionType,
     categoryKey: c.categoryKey ?? null,
-    isNegative: c.isNegative ?? c.criterionType === "negative" ?? false,
-    isDisqualifier: c.isDisqualifier ?? c.criterionType === "disqualifier" ?? false,
+    isNegative: c.isNegative ?? c.criterionType === "negative",
+    isDisqualifier: c.isDisqualifier ?? c.criterionType === "disqualifier",
     explanationTemplate: c.explanationTemplate ?? null, orderIndex: c.orderIndex ?? 0,
   } as never);
   return insertId(res);

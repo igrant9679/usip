@@ -96,7 +96,7 @@ export function VoiceAgentsSection() {
 
   return (
     <>
-      <div className="shrink-0 px-6 pt-4">
+      <div className="shrink-0 px-4 sm:px-6 pt-4">
         <h1 className="text-xl font-semibold tracking-tight">Voice agents</h1>
       </div>
 

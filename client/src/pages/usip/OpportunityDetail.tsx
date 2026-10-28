@@ -129,7 +129,9 @@ export default function OpportunityDetail() {
             {intel.suggestedStage && intel.suggestedStage !== o.stage && (
               <div className="text-muted-foreground">Suggests: <span className="text-foreground">{intel.suggestedStage}</span></div>
             )}
-            {intel.aiSummary && <div className="text-xs">{intel.aiSummary}</div>}
+            {/* The intelligence row has no aiSummary column, so this never showed (X3.3);
+                the AI's own reasoning for the win probability is the summary it writes. */}
+            {intel.winProbabilityRationale && <div className="text-xs">{intel.winProbabilityRationale}</div>}
           </>
         ) : <div className="text-xs text-muted-foreground">No analysis yet — run from Pipeline.</div>}
         </div>

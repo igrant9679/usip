@@ -23,8 +23,9 @@ import { Switch } from "@/components/ui/switch";
 import { confirmAction } from "@/components/usip/Common";
 import { HelpTip } from "@/components/usip/HelpTip";
 import {
-  MessageSquare, Plus, Trash2, Copy, ExternalLink, Check, Globe, Loader2, Users, CalendarCheck, Code2,
+  ArrowLeft, MessageSquare, Plus, Trash2, Copy, ExternalLink, Check, Globe, Loader2, Users, CalendarCheck, Code2,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { isAdminRole } from "@shared/roleRank";
 import { renderChatInline } from "@/components/usip/ChatMarkdown";
 
@@ -148,7 +149,8 @@ export default function ChatAgents() {
     <Shell title="Chat">
       <div className="flex h-full min-h-0">
         {/* List */}
-        <aside data-tour-id="chat-agent-list" className="w-72 shrink-0 border-r border-border flex flex-col bg-card/40">
+        {/* A phone shows the list or the open one, not both side by side (X5.5). */}
+        <aside data-tour-id="chat-agent-list" className={cn("w-full md:w-72 shrink-0 border-r border-border flex-col bg-card/40", selectedId ? "hidden md:flex" : "flex")}>
           <div className="h-11 shrink-0 flex items-center gap-2 px-3 border-b border-border">
             <MessageSquare className="size-4" style={{ color: accent }} />
             <span className="text-sm font-semibold">Chat agents</span>
@@ -180,15 +182,18 @@ export default function ChatAgents() {
         </aside>
 
         {/* Editor */}
-        <div className="flex-1 min-w-0 overflow-auto">
+        <div className={cn("flex-1 min-w-0 overflow-auto", !selectedId && "hidden md:block")}>
           {!form ? (
             <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
               {selectedId ? <Loader2 className="size-5 animate-spin" /> : "Select an agent, or create a new one."}
             </div>
           ) : (
-            <div className="max-w-2xl mx-auto p-6 space-y-6">
-              <div className="flex items-center gap-2">
-                <Input aria-label="Agent name" value={form.name} onChange={(e) => patch("name", e.target.value)} className="h-9 text-base font-semibold flex-1" />
+            <div className="max-w-2xl mx-auto p-4 sm:p-6 space-y-6">
+              <Button variant="ghost" size="sm" className="md:hidden -ml-2 h-7 gap-1" onClick={() => setSelectedId(null)}>
+                <ArrowLeft className="size-3.5" /> All agents
+              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input aria-label="Agent name" value={form.name} onChange={(e) => patch("name", e.target.value)} className="h-9 text-base font-semibold flex-1 min-w-[12rem]" />
                 {form.status === "published" ? (
                   <Button variant="outline" size="sm" className="h-8" onClick={() => setField("status", "draft")}>Unpublish</Button>
                 ) : (

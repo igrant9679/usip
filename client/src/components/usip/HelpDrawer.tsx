@@ -408,7 +408,8 @@ export function HelpDrawer({ onClose }: { onClose: () => void }) {
       />
 
       {/* Drawer */}
-      <div role="dialog" aria-label="Help Center" className="fixed right-0 top-0 bottom-0 z-[9975] w-[380px] bg-card shadow-2xl flex flex-col">
+      {/* The full width of a phone; 380 px beside the page from sm up (G65). */}
+      <div role="dialog" aria-label="Help Center" className="fixed right-0 top-0 bottom-0 z-[9975] w-full sm:w-[380px] bg-card shadow-2xl flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <div className="flex items-center gap-2">

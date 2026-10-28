@@ -5,9 +5,9 @@
  * that produced, so a missing `workspaceId = ?` is a row that leaks, not a
  * condition object that merely looks right. It understands only what the
  * routers under test write: ANDs (and one level of OR) of =, <>, <, >, <=, >=,
- * IS NULL, IN and NOT IN, LIKE ('%' wildcards, case-insensitive), column-to-column equality in (inner and left) joins, ORDER BY a column,
+ * IS NULL, IN and NOT IN, LIKE and NOT LIKE ('%' wildcards, case-insensitive), column-to-column equality in (inner and left) joins, ORDER BY a column,
  * LIMIT, GROUP BY with count(*) or SUM(col), `col + n`, `col + ?` or `COALESCE(col, NOW() | ?)` in an UPDATE or an
- * insert's onDuplicateKeyUpdate against the table's unique indexes, `lower(col) = ?`, `DATE(col) = ?`, and
+ * insert's onDuplicateKeyUpdate against the table's unique indexes, `lower(col) = ?` and `<> ?`, `DATE(col) = ?`, and
  * db.transaction(fn) — which rolls every table back if fn throws. Anything else
  * throws, naming the clause, so a test never passes on SQL it did not read.
  *
@@ -126,7 +126,14 @@ export function makeSqlFakeDb(opts: {
     }
     if ((m = clause.match(new RegExp(`^lower\\(${REF}\\) = \\?$`)))) {
       const v = lookup(ctx, m[1]);
-      return v != null && String(v).toLowerCase() === String(params[pi.i++]);
+      // Take the param before the NULL check, or the next clause reads this one.
+      const p = params[pi.i++];
+      return v != null && String(v).toLowerCase() === String(p);
+    }
+    if ((m = clause.match(new RegExp(`^lower\\(${REF}\\) <> \\?$`)))) {
+      const v = lookup(ctx, m[1]);
+      const p = params[pi.i++];
+      return v != null && String(v).toLowerCase() !== String(p);
     }
     if ((m = clause.match(new RegExp(`^${REF} <> \\?$`)))) return !same(lookup(ctx, m[1]), params[pi.i++]);
     if ((m = clause.match(new RegExp(`^${REF} = ${REF}$`)))) return same(lookup(ctx, m[1]), lookup(ctx, m[2]));
@@ -136,11 +143,13 @@ export function makeSqlFakeDb(opts: {
     if ((m = clause.match(new RegExp(`^${REF} >= \\?$`)))) { const v = lookup(ctx, m[1]); const p = params[pi.i++]; return v != null && cmp(v, p) >= 0; }
     if ((m = clause.match(new RegExp(`^${REF} is null$`, "i")))) return lookup(ctx, m[1]) == null;
     if ((m = clause.match(new RegExp(`^${REF} is not null$`, "i")))) return lookup(ctx, m[1]) != null;
-    if ((m = clause.match(new RegExp(`^${REF} like \\?$`)))) {
+    if ((m = clause.match(new RegExp(`^${REF} (not )?like \\?$`)))) {
       const v = lookup(ctx, m[1]);
       const pat = String(params[pi.i++]).split("%").map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
-      // Case-insensitive, as LIKE is under MySQL's default (_ci) collation.
-      return v != null && new RegExp(`^${pat}$`, "is").test(String(v));
+      // Case-insensitive, as LIKE is under MySQL's default (_ci) collation;
+      // NULL is neither like nor not like anything.
+      if (v == null) return false;
+      return new RegExp(`^${pat}$`, "is").test(String(v)) !== !!m[2];
     }
     if ((m = clause.match(new RegExp(`^${REF} in \\(([?, ]+)\\)$`)))) {
       const n = (m[2].match(/\?/g) ?? []).length;

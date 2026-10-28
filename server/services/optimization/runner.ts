@@ -71,7 +71,7 @@ async function alreadyExists(db: any, workspaceId: number, p: Proposal): Promise
     eq(optimizationRecommendations.module, p.module as never),
     eq(optimizationRecommendations.kind, p.kind),
     eq(optimizationRecommendations.scopeType, p.scopeType as never),
-    inArray(optimizationRecommendations.status, BLOCKING_STATUSES as unknown as string[]),
+    inArray(optimizationRecommendations.status, [...BLOCKING_STATUSES]),
   ];
   const rows = await db
     .select({

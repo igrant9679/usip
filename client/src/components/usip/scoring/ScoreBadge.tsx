@@ -86,7 +86,7 @@ export function ScorePopover({
       <PopoverTrigger asChild>
         <button type="button" onClick={(e) => e.stopPropagation()} className="cursor-pointer">{children}</button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-96 p-0" onClick={(e) => e.stopPropagation()}>
+      <PopoverContent align="start" className="w-96 max-w-[calc(100vw-1rem)] p-0" onClick={(e) => e.stopPropagation()}>
         <div className="border-b px-3 py-2">
           <div className="text-xs font-semibold">Why this score</div>
           {b?.summary && <div className="text-[11px] text-muted-foreground mt-0.5">{b.summary}</div>}

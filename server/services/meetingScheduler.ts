@@ -31,7 +31,7 @@ import { inSendWindow } from "./sendWindow";
 import { and, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { activities, calendarAccounts, calendarEvents, contacts, leads, meetings, notifications, prospects, users, workspaceMembers, workspaceSettings, workspaces } from "../../drizzle/schema";
 import { getDb } from "../db";
-import { invokeLLM } from "../_core/llm";
+import { invokeLLM, contentText } from "../_core/llm";
 import { refFromRelated, researchUseFor } from "./research/recipient";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "./humanCopy";
 import { buildBrandContext } from "./brandContext";
@@ -489,7 +489,7 @@ ${HUMAN_COPY_RULES}`;
       max_tokens: 400,
       workspaceId,
     });
-    const parsed = JSON.parse(res.choices?.[0]?.message?.content ?? "{}");
+    const parsed = JSON.parse(contentText(res.choices?.[0]?.message?.content) || "{}");
     if (parsed.title) title = humanizeAiCopy(String(parsed.title).slice(0, 240));
     if (parsed.inviteMessage) inviteMessage = humanizeAiCopy(String(parsed.inviteMessage).slice(0, 1500));
     reasoning = String(parsed.reasoning ?? "").slice(0, 500);

@@ -144,7 +144,7 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
   const lists = trpc.recordLists.list.useQuery(undefined, { enabled: pending?.params === "list" });
 
   const refreshAll = () => {
-    utils.are.prospects.list.invalidate();
+    utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
     utils.are.prospects.listSequences.invalidate();
     utils.are.prospects.getRejectionStats.invalidate();
     utils.are.execution.getQueue.invalidate();

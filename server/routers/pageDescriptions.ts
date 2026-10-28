@@ -10,6 +10,7 @@ export const pageDescriptionsRouter = router({
     .input(z.object({ pageKey: z.string().max(100) }))
     .query(async ({ input }) => {
       const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
       const rows = await db
         .select()
         .from(pageDescriptions)
@@ -27,10 +28,12 @@ export const pageDescriptionsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      if (ctx.user.role !== "admin" && ctx.user.role !== "super_admin") {
+      // A platform role is "user" or "admin"; there is no "super_admin" to allow.
+      if (ctx.user.role !== "admin") {
         throw new Error("Only admins can edit page descriptions.");
       }
       const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
       await db
         .insert(pageDescriptions)
         .values({

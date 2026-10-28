@@ -32,6 +32,8 @@ import { isAdminRole } from "@shared/roleRank";
 import { companySourceLabel, isResearchSource } from "@shared/researchSource";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { pressable } from "@/lib/pressable";
+import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
+import { useIsMobile } from "@/hooks/useMobile";
 
 const RATING_STYLE: Record<string, string> = {
   excellent: "bg-emerald-100 text-emerald-800", good: "bg-blue-100 text-blue-800",
@@ -223,6 +225,9 @@ export default function Companies() {
   const perPage = 50;
 
   const [hideFilters, setHideFilters] = useState(false);
+  // Below md the filter rail is a sheet the toolbar's Filters button opens.
+  const phone = useIsMobile();
+  const [filtersSheet, setFiltersSheet] = useState(false);
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["quick", "industry", "location", "score"]));
   const toggleGroup = (g: string) => setOpenGroups((p) => { const n = new Set(p); n.has(g) ? n.delete(g) : n.add(g); return n; });
@@ -341,7 +346,7 @@ export default function Companies() {
   return (
     <Shell title="Companies">
       <div data-tour-id="companies-table" className="flex flex-col h-full min-h-0" style={{ ["--co-accent" as any]: accent }}>
-        <div className="relative shrink-0 flex items-center gap-2 px-4 h-11 border-b border-border bg-card/40">
+        <div className="relative shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 min-h-11 py-1.5 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <Building2 className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Find companies</h1>
@@ -359,8 +364,13 @@ export default function Companies() {
         </div>
 
         <div className="flex flex-1 min-h-0">
-          {!hideFilters && (
-            <aside className="w-72 shrink-0 border-r border-border flex flex-col min-h-0 bg-card/30">
+          {(phone || !hideFilters) && (
+            <ResponsiveRail
+              title="Filters"
+              open={filtersSheet}
+              onOpenChange={setFiltersSheet}
+              className="w-72 shrink-0 border-r border-border flex-col min-h-0 bg-card/30"
+            >
               <div className="grid grid-cols-2 gap-px bg-border/60 shrink-0">
                 {/* `rows` is the CURRENT PAGE — next to a workspace-wide
                     Total, an unqualified "With contacts" read as workspace-
@@ -424,12 +434,12 @@ export default function Companies() {
               <div className="shrink-0 border-t border-border flex items-center px-3 py-2 bg-card">
                 <button type="button" onClick={clearAll} disabled={!activeCount} className="text-[12px] text-muted-foreground hover:text-foreground disabled:opacity-40 inline-flex items-center gap-1"><X className="size-3.5" /> Clear all{activeCount ? ` (${activeCount})` : ""}</button>
               </div>
-            </aside>
+            </ResponsiveRail>
           )}
 
           <section className="flex-1 min-w-0 flex flex-col min-h-0">
             <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-1.5 flex-wrap bg-card/40 [&_button]:h-7">
-              <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => setHideFilters((v) => !v)}><Filter className="size-4" /> {hideFilters ? "Show" : "Hide"} filters{activeCount ? ` (${activeCount})` : ""}</Button>
+              <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => (phone ? setFiltersSheet(true) : setHideFilters((v) => !v))}><Filter className="size-4" /> {phone ? "Filters" : `${hideFilters ? "Show" : "Hide"} filters`}{activeCount ? ` (${activeCount})` : ""}</Button>
               <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-sm min-w-0 flex-1 max-w-xs">
                 <Search className="size-4 text-muted-foreground shrink-0" />
                 <input aria-label="Search companies" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search companies" />

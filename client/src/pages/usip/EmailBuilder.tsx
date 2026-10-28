@@ -1410,7 +1410,7 @@ function Builder({ templateId }: { templateId: number }) {
                     : <Lightbulb size={13} />}
                 </Button>
               </PopoverTrigger>
-              <PopoverContent align="end" className="w-[420px] p-0">
+              <PopoverContent align="end" className="w-[420px] max-w-[calc(100vw-1rem)] p-0">
                 <div className="p-3 border-b flex items-center justify-between">
                   <span className="text-sm font-medium">AI Subject Suggestions</span>
                   <Button aria-label="Suggest again" variant="ghost" size="icon" className="h-6 w-6" onClick={() => {

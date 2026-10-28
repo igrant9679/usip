@@ -16,7 +16,7 @@
  * Only ARE campaign prospects are counted: they are the copy whose research
  * use is recorded and whose sends and replies are tracked per person.
  */
-import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { areExecutionQueue, areSignalLog, emailReplies, personas, prospectIntelligence, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
@@ -68,7 +68,11 @@ export function researchUseColumns(
 
 const REPLY_SIGNALS = ["email_reply", "linkedin_reply", "sms_reply", "voice_connected_interested", "voice_connected_not_interested"] as const;
 const OUTCOME_SIGNALS = [...REPLY_SIGNALS, "meeting_booked"] as const;
-/** The newest this many prospects are counted; a sector with more says so. */
+/**
+ * The newest this many prospects are counted for each sector or persona; one
+ * with more says so (capped). It was this many for all of them together, with
+ * no flag, so the busiest sector crowded the rest out of the tallies (P28).
+ */
 export const MAX_PROSPECTS = 5000;
 const CHUNK = 500;
 
@@ -103,6 +107,11 @@ export function outcomeOf(sent: SentRow[], signals: SignalRow[], replies: ReplyR
   return { contacted, replied, positive, meeting, sentOpener: openingLineOf(body), repliedAt: times.length ? new Date(Math.min(...times)) : null };
 }
 
+/**
+ * Outcomes for these prospects. Tallies need no message text, so only the
+ * results page asks for bodies, and only for the openers it shows (P28): a
+ * tally used to read every sent message's body to count them.
+ */
 async function outcomesFor(db: Db, workspaceId: number, ids: number[]): Promise<Map<number, Outcome>> {
   const sent = new Map<number, SentRow[]>();
   const sig = new Map<number, SignalRow[]>();
@@ -111,7 +120,7 @@ async function outcomesFor(db: Db, workspaceId: number, ids: number[]): Promise<
   for (let i = 0; i < ids.length; i += CHUNK) {
     const chunk = ids.slice(i, i + CHUNK);
     const [s, g, r] = await Promise.all([
-      db.select({ pq: areExecutionQueue.prospectQueueId, stepIndex: areExecutionQueue.stepIndex, messageContent: areExecutionQueue.messageContent, executedAt: areExecutionQueue.executedAt })
+      db.select({ pq: areExecutionQueue.prospectQueueId, stepIndex: areExecutionQueue.stepIndex, executedAt: areExecutionQueue.executedAt })
         .from(areExecutionQueue)
         .where(and(eq(areExecutionQueue.workspaceId, workspaceId), eq(areExecutionQueue.status, "sent"), inArray(areExecutionQueue.prospectQueueId, chunk))),
       db.select({ pq: areSignalLog.prospectQueueId, signalType: areSignalLog.signalType, sentiment: areSignalLog.sentiment, processedAt: areSignalLog.processedAt })
@@ -121,7 +130,7 @@ async function outcomesFor(db: Db, workspaceId: number, ids: number[]): Promise<
         .from(emailReplies)
         .where(and(eq(emailReplies.workspaceId, workspaceId), inArray(emailReplies.prospectQueueId, chunk))),
     ]);
-    for (const x of s) push(sent, x.pq, { stepIndex: x.stepIndex, messageContent: x.messageContent, executedAt: x.executedAt });
+    for (const x of s) push(sent, x.pq, { stepIndex: x.stepIndex, messageContent: null, executedAt: x.executedAt });
     for (const x of g) push(sig, x.pq, { signalType: String(x.signalType), sentiment: x.sentiment ?? null, processedAt: x.processedAt });
     for (const x of r) if (x.pq != null) push(rep, x.pq, { replyClass: x.replyClass ?? null });
   }
@@ -250,9 +259,19 @@ export async function researchResults(workspaceId: number, of: { sectorId: numbe
     .sort((a, b) => Number(b.o.meeting) - Number(a.o.meeting) || Number(b.o.positive) - Number(a.o.positive) || (b.o.repliedAt?.getTime() ?? 0) - (a.o.repliedAt?.getTime() ?? 0))
     .slice(0, 8);
   if (shown.length) {
-    const ps = await db.select({ id: prospectQueue.id, title: prospectQueue.title, company: prospectQueue.companyName }).from(prospectQueue)
-      .where(and(eq(prospectQueue.workspaceId, workspaceId), inArray(prospectQueue.id, shown.map((x) => x.pq))));
+    const pqs = shown.map((x) => x.pq);
+    const [ps, firstSent] = await Promise.all([
+      db.select({ id: prospectQueue.id, title: prospectQueue.title, company: prospectQueue.companyName }).from(prospectQueue)
+        .where(and(eq(prospectQueue.workspaceId, workspaceId), inArray(prospectQueue.id, pqs))),
+      // The first message sent to each, the only bodies this page reads.
+      db.select({ pq: areExecutionQueue.prospectQueueId, stepIndex: areExecutionQueue.stepIndex, messageContent: areExecutionQueue.messageContent, executedAt: areExecutionQueue.executedAt })
+        .from(areExecutionQueue)
+        .where(and(eq(areExecutionQueue.workspaceId, workspaceId), eq(areExecutionQueue.status, "sent"), inArray(areExecutionQueue.prospectQueueId, pqs))),
+    ]);
     for (const p of ps) who.set(p.id, { title: p.title ?? "", company: p.company ?? "" });
+    const sentBy = new Map<number, SentRow[]>();
+    for (const r of firstSent) sentBy.set(r.pq, [...(sentBy.get(r.pq) ?? []), { stepIndex: r.stepIndex, messageContent: r.messageContent, executedAt: r.executedAt }]);
+    for (const x of shown) x.o = { ...x.o, sentOpener: outcomeOf(sentBy.get(x.pq) ?? [], [], []).sentOpener };
   }
 
   return {
@@ -272,42 +291,41 @@ export async function researchResults(workspaceId: number, of: { sectorId: numbe
   };
 }
 
-/** Contacted, replied and meetings for every persona with recorded use, for the persona lists. */
-export async function personaResultSummaries(workspaceId: number): Promise<Record<number, Tally>> {
-  const db = await getDb();
-  if (!db) return {};
-  const rows = await db
-    .select({ pq: prospectIntelligence.prospectQueueId, personaId: prospectIntelligence.researchPersonaId })
-    .from(prospectIntelligence)
-    .where(and(eq(prospectIntelligence.workspaceId, workspaceId), isNotNull(prospectIntelligence.researchPersonaId)))
-    .orderBy(desc(prospectIntelligence.id))
-    .limit(MAX_PROSPECTS);
-  const outcomes = await outcomesFor(db, workspaceId, rows.map((r) => r.pq));
-  const out: Record<number, Tally> = {};
-  for (const r of rows) {
-    const id = r.personaId!;
-    out[id] ??= emptyTally();
-    add(out[id], outcomes.get(r.pq)!);
+export type GroupTally = Tally & { capped: boolean };
+
+/**
+ * Tallies per sector or per persona, the newest MAX_PROSPECTS of each; a
+ * group with more is marked capped. How many each has is counted in SQL.
+ */
+async function groupTallies(db: Db, workspaceId: number, by: "sector" | "persona", groupIds?: number[]): Promise<Record<number, GroupTally>> {
+  const col = by === "sector" ? prospectIntelligence.researchSectorId : prospectIntelligence.researchPersonaId;
+  const scope = and(eq(prospectIntelligence.workspaceId, workspaceId), groupIds ? inArray(col, groupIds) : isNotNull(col));
+  const counts = await db.select({ g: col, n: sql<number>`count(*)` }).from(prospectIntelligence).where(scope).groupBy(col).orderBy(asc(col));
+  const rows: { pq: number; g: number }[] = [];
+  for (const c of counts) {
+    if (c.g == null) continue;
+    const newest = await db.select({ pq: prospectIntelligence.prospectQueueId }).from(prospectIntelligence)
+      .where(and(eq(prospectIntelligence.workspaceId, workspaceId), eq(col, c.g)))
+      .orderBy(desc(prospectIntelligence.id)).limit(MAX_PROSPECTS);
+    for (const r of newest) rows.push({ pq: r.pq, g: c.g });
   }
+  const outcomes = await outcomesFor(db, workspaceId, Array.from(new Set(rows.map((r) => r.pq))));
+  const out: Record<number, GroupTally> = {};
+  for (const c of counts) if (c.g != null) out[c.g] = { ...emptyTally(), capped: Number(c.n) > MAX_PROSPECTS };
+  for (const r of rows) add(out[r.g], outcomes.get(r.pq)!);
   return out;
 }
 
+/** Contacted, replied and meetings for every persona with recorded use, for the persona lists. */
+export async function personaResultSummaries(workspaceId: number): Promise<Record<number, GroupTally>> {
+  const db = await getDb();
+  if (!db) return {};
+  return groupTallies(db, workspaceId, "persona");
+}
+
 /** Written, contacted, replied and meetings for each of these sectors, for the market's results report. */
-export async function sectorTallies(workspaceId: number, sectorIds: number[]): Promise<Record<number, Tally>> {
+export async function sectorTallies(workspaceId: number, sectorIds: number[]): Promise<Record<number, GroupTally>> {
   const db = await getDb();
   if (!db || !sectorIds.length) return {};
-  const rows = await db
-    .select({ pq: prospectIntelligence.prospectQueueId, sectorId: prospectIntelligence.researchSectorId })
-    .from(prospectIntelligence)
-    .where(and(eq(prospectIntelligence.workspaceId, workspaceId), inArray(prospectIntelligence.researchSectorId, sectorIds)))
-    .orderBy(desc(prospectIntelligence.id))
-    .limit(MAX_PROSPECTS);
-  const outcomes = await outcomesFor(db, workspaceId, rows.map((r) => r.pq));
-  const out: Record<number, Tally> = {};
-  for (const r of rows) {
-    const id = r.sectorId!;
-    out[id] ??= emptyTally();
-    add(out[id], outcomes.get(r.pq)!);
-  }
-  return out;
+  return groupTallies(db, workspaceId, "sector", sectorIds);
 }

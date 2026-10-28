@@ -220,8 +220,8 @@ export class ImapSmtpAdapter implements EmailAdapter {
           threads.push({
             threadId: String(msg.uid), subject: env?.subject ?? "(no subject)", snippet: "",
             fromEmail: from?.address ?? "", fromName: from?.name ?? "",
-            date: env?.date ?? new Date(), unread: !msg.flags.has("\\Seen"),
-            messageCount: 1, labels: [...msg.flags],
+            date: env?.date ?? new Date(), unread: !msg.flags?.has("\\Seen"),
+            messageCount: 1, labels: [...(msg.flags ?? [])],
           });
         }
         threads.sort((a, b) => Number(b.threadId) - Number(a.threadId)); // newest first
@@ -236,6 +236,7 @@ export class ImapSmtpAdapter implements EmailAdapter {
       try {
         const msgs: EmailMessage[] = [];
         for await (const msg of client.fetch(threadId, { uid: true, flags: true, envelope: true, source: true }, { uid: true })) {
+          if (!msg.source) continue;
           const parsed = await simpleParser(msg.source);
           const toVal = parsed.to;
           const ccVal = parsed.cc;
@@ -251,7 +252,7 @@ export class ImapSmtpAdapter implements EmailAdapter {
             attachments: (parsed.attachments ?? []).map((a) => ({ filename: a.filename ?? "attachment", contentType: a.contentType, size: a.size ?? 0 })),
             inReplyTo: parsed.inReplyTo ?? undefined,
             references: Array.isArray(parsed.references) ? parsed.references.join(" ") : (parsed.references ?? undefined),
-            unread: !msg.flags.has("\\Seen"),
+            unread: !msg.flags?.has("\\Seen"),
           });
         }
         return msgs;
@@ -313,7 +314,8 @@ export class ImapSmtpAdapter implements EmailAdapter {
     return this.withImap(folder, async (client) => {
       const lock = await client.getMailboxLock(folder);
       try {
-        const uids = await client.search({ text: query }, { uid: true });
+        // search() answers false, not [], when nothing matches (X3.8).
+        const uids = (await client.search({ text: query }, { uid: true })) || [];
         const recent = uids.slice(-maxResults).reverse();
         if (recent.length === 0) return { threads: [] };
         const threads: EmailThread[] = [];
@@ -323,8 +325,8 @@ export class ImapSmtpAdapter implements EmailAdapter {
           threads.push({
             threadId: String(msg.uid), subject: env?.subject ?? "(no subject)", snippet: "",
             fromEmail: from?.address ?? "", fromName: from?.name ?? "",
-            date: env?.date ?? new Date(), unread: !msg.flags.has("\\Seen"),
-            messageCount: 1, labels: [...msg.flags],
+            date: env?.date ?? new Date(), unread: !msg.flags?.has("\\Seen"),
+            messageCount: 1, labels: [...(msg.flags ?? [])],
           });
         }
         return { threads };
@@ -338,6 +340,7 @@ export class ImapSmtpAdapter implements EmailAdapter {
       try {
         let result: { data: Buffer; contentType: string; filename: string } | null = null;
         for await (const msg of client.fetch(messageId, { source: true }, { uid: true })) {
+          if (!msg.source) continue;
           const parsed = await simpleParser(msg.source);
           const idx = parseInt(attachmentIndex, 10);
           const att = parsed.attachments?.[isNaN(idx) ? 0 : idx];

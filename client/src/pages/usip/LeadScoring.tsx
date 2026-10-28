@@ -229,7 +229,7 @@ function BreakdownPreview() {
   );
   const utils = trpc.useUtils();
   const recompute = trpc.leadScoring.recompute.useMutation({
-    onSuccess: () => { utils.leadScoring.breakdown.invalidate(); utils.leads.list.invalidate(); toast.success("Recomputed"); },
+    onSuccess: () => { utils.leadScoring.breakdown.invalidate(); utils.leads.invalidate(); toast.success("Recomputed"); },
     onError: (e) => toast.error(e.message),
   });
 

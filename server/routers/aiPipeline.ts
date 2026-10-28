@@ -726,7 +726,10 @@ Return JSON with:
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const conditions = [eq(emailDrafts.workspaceId, ctx.workspace.id)];
-      if (input.status) conditions.push(eq(emailDrafts.status, input.status));
+      // "Bounced" is not a draft status; a bounce stamps bouncedAt. Asked to
+      // clear bounced drafts, this matched none.
+      if (input.status === "bounced") conditions.push(isNotNull(emailDrafts.bouncedAt));
+      else if (input.status) conditions.push(eq(emailDrafts.status, input.status));
       const res = await db.delete(emailDrafts).where(and(...conditions));
       const deleted = Number((res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0);
       return { ok: true, deleted };
