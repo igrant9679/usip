@@ -53,6 +53,34 @@
  * the page, its "New Campaign" button (F21's actual payoff), its sidebar and
  * tool-registry entries, its page help and its guided tour. The demo seeder
  * no longer creates new ones.
+ *
+ * Why `/settings` is NOT in this map, so the gap reads as deliberate
+ * (Phase 5 item 3, checked 2026-10-28):
+ *
+ * It needs no entry because it was already collapsed, a month before this
+ * module existed — commit 1e9c333, 2026-09-15. `/settings` is not a page: it
+ * is a three-line shim that reads `?tab=` and redirects into the matching
+ * Settings-hub section, which is more than this map can express (eleven
+ * targets keyed by a query parameter, where `retiredRedirectUrl` maps one
+ * path to one target). So it keeps its own mechanism on purpose; converting
+ * it to `RetiredRedirect` would throw the per-tab mapping away and land every
+ * old deep link on the same section. `server/settingsHubCollapse.test.ts`
+ * pins it, including that each target is an INTERNAL hub section — a target
+ * that is merely one of the hub's link-out rows resolves to Profile instead,
+ * with no error.
+ *
+ * Two related things are deliberately NOT retired:
+ *
+ *  - `/settings/pipelines` and `/settings/linkedin-limits` are separate pages
+ *    that merely share the prefix. Same trap as `/prospects/:id`: the parent
+ *    stopped being a page, the children did not.
+ *  - The Settings hub still has seven rows that navigate to standalone pages
+ *    rather than rendering inside it (`/team`, `/audit`, `/custom-fields`,
+ *    `/notification-prefs`, `/tour-builder`, `/v2/calls`,
+ *    `/v2/data-enrichment`). Those are link-outs BY DESIGN, not leftovers:
+ *    each is a full page in its own right, so hosting it in the hub means
+ *    re-rendering it, which is a different job from retiring a duplicate and
+ *    was left out of Phase 5 item 3 on purpose.
  */
 
 /** Retired path → its v2 equivalent. Both are real routes in App.tsx. */
