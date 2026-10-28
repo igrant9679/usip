@@ -283,9 +283,10 @@ describe("the Settings workspace switcher is a real disclosure (a11y 2026-10-28)
   // free are written out by hand and nothing but this test keeps them there.
   // Part 4 named the trigger ("Switch workspace") but left it mute about the
   // popup. Same attribute pair as Shell's AdminSettingsMenu, same keydown
-  // shape as ChatLauncher. These are source pins: they hold the code in place,
-  // and the behaviour itself was checked in the deployed app, because the suite
-  // has no DOM to press Escape in.
+  // shape as ChatLauncher. These are source pins, not behaviour: there is no
+  // jsdom and no testing-library here, so nothing in this suite can press
+  // Escape or read a computed accessible name. The behaviour belongs to a
+  // browser and is checked against the running app.
   const switcher = () => {
     const s = read("client/src/pages/usip/SettingsHub.tsx");
     const from = s.indexOf("function SettingsWorkspaceSwitcher");
