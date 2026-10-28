@@ -19,7 +19,7 @@
  *   Email settings — sending prefs, sequence opt-out, mailbox links
  *   Conversations  — per-user notification routing (team.getNotifPrefs)
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -1023,12 +1023,31 @@ function ChangeEmailDialog({ open, onClose, hasPassword, currentEmail }: { open:
 function SettingsWorkspaceSwitcher() {
   const { workspaces, current, switchTo, isLoading } = useWorkspace();
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // Hand-rolled disclosure, so the semantics Radix supplies for free have to be
+  // written out (a11y 2026-10-28): the trigger says it opens a popup and
+  // whether it is open, and Escape closes the panel and puts focus back on the
+  // trigger rather than leaving it stranded. Same keydown shape as
+  // ChatLauncher/HelpDrawer; same aria pair as Shell's AdminSettingsMenu.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
   return (
     <div className="relative min-w-0">
       <button
+        ref={triggerRef}
         type="button"
         aria-label="Switch workspace"
         title="Which workspace these settings belong to"
+        aria-haspopup="menu"
+        aria-expanded={open}
         disabled={isLoading || !current}
         onClick={() => setOpen((v) => !v)}
         className="flex w-full min-w-0 items-center gap-2 rounded-md border border-border bg-background px-2 py-1.5 text-[13px] hover:bg-muted"

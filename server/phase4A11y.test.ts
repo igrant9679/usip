@@ -277,3 +277,47 @@ describe("public pages and the shell (L13, G70, X5.6)", () => {
     }
   });
 });
+
+describe("the Settings workspace switcher is a real disclosure (a11y 2026-10-28)", () => {
+  // It is hand-rolled, not a Radix menu, so the semantics Radix supplies for
+  // free are written out by hand and nothing but this test keeps them there.
+  // Part 4 named the trigger ("Switch workspace") but left it mute about the
+  // popup. Same attribute pair as Shell's AdminSettingsMenu, same keydown
+  // shape as ChatLauncher. These are source pins, not behaviour: there is no
+  // jsdom and no testing-library here, so nothing in this suite can press
+  // Escape or read a computed accessible name. The behaviour belongs to a
+  // browser and is checked against the running app.
+  const switcher = () => {
+    const s = read("client/src/pages/usip/SettingsHub.tsx");
+    const from = s.indexOf("function SettingsWorkspaceSwitcher");
+    const to = s.indexOf("{open && (", from);
+    expect(from, "SettingsWorkspaceSwitcher").toBeGreaterThan(-1);
+    expect(to, "the switcher's panel").toBeGreaterThan(from);
+    return s.slice(from, to);
+  };
+
+  it("the trigger says it opens a popup, and says whether it is open", () => {
+    const t = switcher();
+    expect(t).toContain('aria-haspopup="menu"');
+    // Bound to the state, not a constant: a hardcoded value is worse than none.
+    expect(t).toContain("aria-expanded={open}");
+  });
+
+  it("Escape closes the menu and puts focus back on the trigger", () => {
+    const t = switcher();
+    // Positions, not a regex: a character class written through a shell
+    // heredoc loses a backslash level and then matches nothing at all, which
+    // is how a check here went blind once (2026-10-27).
+    const guard = t.indexOf('if (e.key !== "Escape") return;');
+    const close = t.indexOf("setOpen(false);", guard);
+    const refocus = t.indexOf("triggerRef.current?.focus();", close);
+    expect(guard, "the Escape guard").toBeGreaterThan(-1);
+    expect(close, "Escape closes the menu").toBeGreaterThan(guard);
+    expect(refocus, "focus goes back to the trigger").toBeGreaterThan(close);
+    expect(t).toContain('window.addEventListener("keydown", onKey)');
+    // Listener removed when it closes, or every open leaves one behind.
+    expect(t).toContain('window.removeEventListener("keydown", onKey)');
+    // The focus call needs something to focus.
+    expect(t).toContain("ref={triggerRef}");
+  });
+});
