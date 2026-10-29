@@ -84,7 +84,7 @@ The traditional stage board over the same opportunities as Deals, back on the ra
 Named static sets of people or companies. Create from a filter (AI Assistant or People bulk action), add/remove members, use as the source in the Add existing wizard, bulk enroll, export.
 
 ### ★ Tasks — `/v2/tasks`
-Your to-do queue: open, in progress, snoozed, done. AI-proposed **draft** tasks land here for approval (Task Autopilot in Approve). Types cover call, email, meeting, LinkedIn, follow-up, meeting prep, CRM update. Overdue tasks fire the `task_overdue` workflow trigger.
+Your to-do queue: open, in progress, snoozed, done. AI-proposed **draft** tasks land here for approval (Task Autopilot in Approve). Types cover call, email, meeting, LinkedIn, follow-up, meeting prep, CRM update. Overdue tasks fire the `task_overdue` workflow trigger. Tasks can be **assigned**: pick an assignee when creating one (blank means you), see the owner on each queue row, and filter the queue by assignee — the assignee is notified when it is not you. The filter scopes the queue only; the stat cards above it count the whole workspace.
 
 ---
 
