@@ -36,7 +36,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Phone, Mail, CalendarClock, Link2, ListTodo, Repeat, Database, Sparkles, Check, Clock,
-  AlertTriangle, Plus, Zap, MoreHorizontal, X, Bot, CheckCheck, Inbox, Trash2,
+  AlertTriangle, Plus, Zap, MoreHorizontal, X, Bot, CheckCheck, Inbox, Trash2, User,
 } from "lucide-react";
 import { confirmAction, ConfirmButton } from "@/components/usip/Common";
 
@@ -54,6 +54,9 @@ type Task = {
   aiConfidence?: number | null;
   relatedType?: string | null;
   relatedId?: number | null;
+  /** Who the task belongs to. tasks.list returns whole rows, so this was
+   *  always on the wire — this page simply never read it (2026-10-29). */
+  ownerUserId?: number | null;
 };
 
 const TYPE_ICON: Record<string, typeof Phone> = {
@@ -166,6 +169,31 @@ export default function TasksV2() {
 
   const [newOpen, setNewOpen] = useState(false);
 
+  // Task ownership, ported from the legacy /tasks page (2026-10-29). That page
+  // was the ONLY surface that could read or set `tasks.ownerUserId`, while this
+  // is the Tasks page the nav points at. The column was never decorative —
+  // tasks.create validates it with assertOwnerInWorkspace, defaults it to the
+  // caller and notifies the assignee when it is someone else, and tasks.list
+  // takes an ownerOnly filter — so until now it was writable by the API and the
+  // autopilot and editable by no human. Three things came across: the assignee
+  // picker on create, the owner on each row, and the assignee filter.
+  // /tasks is NOT retired by this change; that decision is the owner's.
+  const { data: members } = trpc.team.list.useQuery();
+  const memberOpts = useMemo(
+    () => (members ?? []).map((m: { userId: number; name: string | null }) => ({ userId: m.userId, name: m.name })),
+    [members],
+  );
+  const memberName = (userId: number | null | undefined) => {
+    if (userId == null) return null;
+    return memberOpts.find((m) => m.userId === userId)?.name ?? `User ${userId}`;
+  };
+  // "" = anyone. Scopes the QUEUE only, which is why it lives in that section's
+  // header: the stat cards above come from tasks.stats on the server and count
+  // the whole workspace, and a filter that silently re-scoped the list while
+  // leaving those numbers alone is how a header ends up counting one population
+  // and the list another.
+  const [assigneeFilter, setAssigneeFilter] = useState<string>("");
+
   const mode = autopilot.data?.mode ?? "off";
   const activeTasks = (active.data ?? []) as Task[];
   const draftTasks = (drafts.data ?? []) as Task[];
@@ -183,7 +211,7 @@ export default function TasksV2() {
   const s = stats.data ?? { open: 0, dueToday: 0, overdue: 0, completed: 0, draftsPending: 0, snoozed: 0, aiOpen: 0 };
 
   // Queue: open / in_progress / snoozed, sorted by due date (nulls last).
-  const queue = useMemo(() => {
+  const queueAll = useMemo(() => {
     return activeTasks
       .filter((t) => t.status === "open" || t.status === "in_progress" || t.status === "snoozed")
       .filter((t) => !approvalIds.has(t.id))
@@ -193,6 +221,12 @@ export default function TasksV2() {
         return ta - tb;
       });
   }, [activeTasks, approvalIds]);
+  // Kept separate from queueAll so the header can say "n of m" rather than
+  // quietly showing a shorter list.
+  const queue = useMemo(
+    () => (assigneeFilter ? queueAll.filter((t) => String(t.ownerUserId ?? "") === assigneeFilter) : queueAll),
+    [queueAll, assigneeFilter],
+  );
   // 50 rows at a time (X4.2): the page rendered every task and draft at once,
   // 19,627 DOM nodes live.
   const queueRows = useShowMore(queue);
@@ -250,6 +284,11 @@ export default function TasksV2() {
             {href
               ? <Link href={href} className="inline-flex items-center gap-1 hover:underline"><Link2 className="size-3" /> {t.relatedType}</Link>
               : <span>No linked record</span>}
+            {/* Whose task it is. Absent rather than guessed when the row has no
+                owner, or has one who is no longer a workspace member. */}
+            {t.ownerUserId != null && (
+              <span className="inline-flex items-center gap-1 shrink-0"><User className="size-3" />{memberName(t.ownerUserId)}</span>
+            )}
             {t.aiReasoning && <span className="truncate italic">· {t.aiReasoning}</span>}
           </div>
         </div>
@@ -472,7 +511,30 @@ export default function TasksV2() {
 
           {/* Queue */}
           <section>
-            <h2 className="text-sm font-semibold mb-2 flex items-center gap-2"><CalendarClock className="size-4" style={{ color: accent }} /> Task queue</h2>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold flex items-center gap-2"><CalendarClock className="size-4" style={{ color: accent }} /> Task queue</h2>
+              <div className="flex items-center gap-2 text-xs">
+                {/* Says what it is scoping, so the unfiltered stat cards above
+                    cannot be read as describing this list. */}
+                {assigneeFilter && (
+                  <span className="text-muted-foreground tabular-nums">
+                    {queue.length} of {queueAll.length} in queue
+                  </span>
+                )}
+                <label htmlFor="queue-assignee" className="text-muted-foreground">Assignee</label>
+                <select
+                  id="queue-assignee"
+                  className="rounded border bg-background px-2 py-1"
+                  value={assigneeFilter}
+                  onChange={(e) => setAssigneeFilter(e.target.value)}
+                >
+                  <option value="">Anyone</option>
+                  {memberOpts.map((m) => (
+                    <option key={m.userId} value={String(m.userId)}>{m.name ?? `User ${m.userId}`}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
             <div className="rounded-xl border bg-card overflow-hidden shadow-sm">
               {active.isLoading ? (
                 <div className="p-3 space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-10 rounded bg-muted/50 animate-pulse" />)}</div>
@@ -480,6 +542,19 @@ export default function TasksV2() {
                 <div className="text-center py-12 px-4">
                   <p className="text-sm text-muted-foreground">Couldn’t load tasks. {active.error.message}</p>
                   <Button variant="outline" size="sm" className="mt-3" onClick={() => active.refetch()}>Retry</Button>
+                </div>
+              ) : queue.length === 0 && assigneeFilter ? (
+                // Nothing for THIS assignee is not the same as nothing at all,
+                // and the queue is not "clear" while queueAll still has rows.
+                <div className="text-center py-14 px-4">
+                  <Inbox className="size-8 mx-auto text-muted-foreground opacity-50 mb-2" />
+                  <div className="text-sm font-medium">Nothing assigned to {memberName(Number(assigneeFilter)) ?? "them"}</div>
+                  <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
+                    {queueAll.length} task{queueAll.length === 1 ? "" : "s"} in the queue{queueAll.length ? " belong to someone else" : ""}.
+                  </p>
+                  <div className="flex items-center justify-center gap-2 mt-3">
+                    <Button size="sm" variant="outline" onClick={() => setAssigneeFilter("")}>Show anyone</Button>
+                  </div>
                 </div>
               ) : queue.length === 0 ? (
                 <div className="text-center py-14 px-4">
@@ -535,7 +610,7 @@ export default function TasksV2() {
       </div>
 
       {/* New task dialog */}
-      <NewTaskDialog open={newOpen} onOpenChange={setNewOpen} onCreate={(v) => create.mutate(v)} pending={create.isPending} />
+      <NewTaskDialog open={newOpen} onOpenChange={setNewOpen} onCreate={(v) => create.mutate(v)} pending={create.isPending} members={memberOpts} />
     </Shell>
   );
 }
@@ -544,18 +619,23 @@ export default function TasksV2() {
 type NewTask = RouterInputs["tasks"]["create"];
 
 function NewTaskDialog({
-  open, onOpenChange, onCreate, pending,
+  open, onOpenChange, onCreate, pending, members,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   onCreate: (v: NewTask) => void;
   pending: boolean;
+  members: { userId: number; name: string | null }[];
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [type, setType] = useState<NewTask["type"]>("todo");
   const [priority, setPriority] = useState<NewTask["priority"]>("normal");
   const [due, setDue] = useState("");
+  // "" means "leave it to the server", which defaults the owner to the caller
+  // (activities.ts) — the same contract the legacy page's "— Me —" relied on.
+  // Never send 0 or a guessed id.
+  const [ownerUserId, setOwnerUserId] = useState<string>("");
 
   const submit = () => {
     if (!title.trim()) return;
@@ -565,8 +645,9 @@ function NewTaskDialog({
       type,
       priority,
       dueAt: due ? new Date(due).toISOString() : undefined,
+      ownerUserId: ownerUserId ? Number(ownerUserId) : undefined,
     });
-    setTitle(""); setDescription(""); setType("todo"); setPriority("normal"); setDue("");
+    setTitle(""); setDescription(""); setType("todo"); setPriority("normal"); setDue(""); setOwnerUserId("");
   };
 
   return (
@@ -602,9 +683,28 @@ function NewTaskDialog({
               </Select>
             </div>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="task-due">Due</Label>
-            <Input id="task-due" type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="task-due">Due</Label>
+              <Input id="task-due" type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="task-owner">Assignee</Label>
+              {/* A plain select, not Radix: "" has to be a selectable value and
+                  Radix's SelectItem rejects an empty string. "Me" is the
+                  server's default, so it sends nothing. */}
+              <select
+                id="task-owner"
+                className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                value={ownerUserId}
+                onChange={(e) => setOwnerUserId(e.target.value)}
+              >
+                <option value="">Me</option>
+                {members.map((m) => (
+                  <option key={m.userId} value={String(m.userId)}>{m.name ?? `User ${m.userId}`}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="task-desc">Notes</Label>
