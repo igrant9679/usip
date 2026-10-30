@@ -5,9 +5,9 @@
  *   list, get, create, update, setStatus, approveBatch
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { areCampaigns, campaignRoutingSuggestions, personas, prospectIntelligence, prospectQueue, prospects, researchSectors, sequences, workspaceSettings } from "../../../drizzle/schema";
+import { areCampaigns, areEngineLogs, campaignRoutingSuggestions, personas, prospectIntelligence, prospectQueue, prospects, researchSectors, sequences, workspaceSettings } from "../../../drizzle/schema";
 
 /** A caller-chosen research sector must be this workspace's. */
 async function assertResearchSectorInWorkspace(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, sectorId: number, workspaceId: number) {
@@ -21,7 +21,10 @@ async function assertResearchSectorInWorkspace(db: NonNullable<Awaited<ReturnTyp
 import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
-import { runAreEngine } from "../../areEngine";
+import { ENGINE_LOG_RETENTION_DAYS, runAreEngine } from "../../areEngine";
+import { getWorkspaceSendWindow } from "../../services/sendWindow";
+import { getWorkspaceTimezone, startOfLocalDay } from "../../services/workspaceTimezone";
+import { describeSendWindow, isWithinSendWindow, nextSendWindowOpening } from "@shared/sendWindow";
 import { promoteApprovedProspects } from "../../services/are/approvePromotion";
 import { respaceOverdueSteps } from "../../services/are/stepHold";
 import { campaignCapMessage, campaignHeadroom } from "../../services/are/campaignConcurrency";
@@ -31,6 +34,17 @@ import { invokeLLM, contentText } from "../../_core/llm";
 import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
 import { MIN_STEP_GAP_DAYS, MAX_STEP_GAP_DAYS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { areExecutionQueue } from "../../../drizzle/schema";
+
+/**
+ * The one surviving trace of a spent sender pool. When the pool reports every
+ * mailbox spent the engine re-schedules the rows and clears their
+ * failureReason (areEngine.ts:1923-1927), so this substring of the dispatch
+ * log line is all there is to read. Kept here, next to the only reader, and
+ * pinned to the engine's wording by a guard test — if the engine's phrasing
+ * changes and this does not, the panel silently reports "no pool trouble" for
+ * a pool that is spent.
+ */
+const POOL_HELD_MARKER = "email steps held and re-scheduled: ";
 
 export const campaignsRouter = router({
   list: workspaceProcedure
@@ -917,6 +931,299 @@ export const campaignsRouter = router({
       // Companies for the newly-approved people — see approveBatch above.
       void promoteApprovedProspects(ctx.workspace.id, { campaignId: input.campaignId, limit: 500 });
       return { approved };
+    }),
+
+  /**
+   * "Why is this campaign stalled?" — one count per gate (F11, owner's audit,
+   * High: "Today these are log lines that scroll away").
+   *
+   * One correction to that premise, found while reading: the log lines do NOT
+   * scroll away — `areEngineLogs` persists them for ENGINE_LOG_RETENTION_DAYS
+   * with repeat collapsing. F11 is a UI gap, not a data gap, so this is a
+   * reader of state the engine already keeps, not new instrumentation.
+   *
+   * THE DESIGN RULE: every number carries its tense. Seven gates are stored
+   * state and can be counted. Two leave no per-row trace at all:
+   *
+   *   • outside window — due rows stay `scheduled` (areEngine.ts:1503): no
+   *     failureReason, no per-row log. So this reports the window's state NOW
+   *     and how many steps are waiting on it. It cannot say how many sends the
+   *     window blocked yesterday, because nothing recorded that.
+   *   • pool spent — when the pool reports every mailbox spent, the engine
+   *     RESETS the rows (`status: "scheduled", failureReason: null`,
+   *     areEngine.ts:1923-1927) and the only survivor is one dispatch log
+   *     line. A per-row count is not recoverable, so this reads that line and
+   *     says when it was last seen; the client labels it as the engine's last
+   *     word, not a live pool query.
+   *
+   * Each count is scoped the way the ENGINE scopes it, not the way that reads
+   * nicest. `copyHeld` and `noEmail` join on sequenceStatus='approved' because
+   * the engine's gates do; `queue.working` excludes 'skipped' because an
+   * unfiltered count(*) there once held every campaign at "queue full" forever
+   * and killed discovery on all three live campaigns (areEngine.ts:2074-2082).
+   * A panel that computes a gate differently from the engine will say "queue
+   * full" while the engine is happily discovering, or the reverse.
+   */
+  stallReasons: workspaceProcedure
+    .input(z.object({ campaignId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const wsId = ctx.workspace.id;
+      const campId = input.campaignId;
+      const [campaign] = await db
+        .select({
+          status: areCampaigns.status,
+          dailySendCap: areCampaigns.dailySendCap,
+          targetProspectCount: areCampaigns.targetProspectCount,
+        })
+        .from(areCampaigns)
+        .where(and(eq(areCampaigns.id, campId), eq(areCampaigns.workspaceId, wsId)))
+        .limit(1);
+      if (!campaign) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const now = new Date();
+      const scoped = [eq(prospectQueue.campaignId, campId), eq(prospectQueue.workspaceId, wsId)];
+      const num = (r: { n: number } | undefined) => Number(r?.n ?? 0);
+
+      /* ── Block 1: what is stopping sends RIGHT NOW ─────────────────────── */
+
+      const { timezone, window, paused: workspacePaused } = await getWorkspaceSendWindow(wsId, now.getTime());
+      // Same two-part answer inSendWindow gives the engine: the pause shuts the
+      // window regardless of the hour.
+      const windowOpen = !workspacePaused && isWithinSendWindow(now.getTime(), timezone, window);
+      // No next opening while outbound is paused: the pause has no end date, so
+      // naming an hour would promise a send that is not coming.
+      const nextOpen = windowOpen || workspacePaused
+        ? null
+        : nextSendWindowOpening(now.getTime(), timezone, window);
+
+      // Due = exactly the rows the dispatch page selects (areEngine.ts:1511),
+      // without its per-tick limit: scheduled, and past their time. Read NOW —
+      // this is not a tally of blocked attempts, because there are none to
+      // tally.
+      const [due] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(areExecutionQueue)
+        .where(and(
+          eq(areExecutionQueue.campaignId, campId),
+          eq(areExecutionQueue.workspaceId, wsId),
+          eq(areExecutionQueue.status, "scheduled"),
+          lte(areExecutionQueue.scheduledAt, now),
+        ));
+
+      const [poolLog] = await db
+        .select({
+          message: areEngineLogs.message,
+          repeatCount: areEngineLogs.repeatCount,
+          lastSeenAt: areEngineLogs.lastSeenAt,
+          createdAt: areEngineLogs.createdAt,
+        })
+        .from(areEngineLogs)
+        .where(and(
+          eq(areEngineLogs.workspaceId, wsId),
+          eq(areEngineLogs.campaignId, campId),
+          eq(areEngineLogs.phase, "dispatch"),
+          like(areEngineLogs.message, `%${POOL_HELD_MARKER}%`),
+        ))
+        .orderBy(desc(areEngineLogs.createdAt))
+        .limit(1);
+      const poolSpent = poolLog
+        ? {
+            reason: poolLog.message.slice(poolLog.message.indexOf(POOL_HELD_MARKER) + POOL_HELD_MARKER.length).trim(),
+            // lastSeenAt is written when a line REPEATS (migration 0217), so a
+            // line seen once has none — its createdAt is its last sighting.
+            lastSeenAt: (poolLog.lastSeenAt ?? poolLog.createdAt).toISOString(),
+            repeatCount: poolLog.repeatCount,
+          }
+        : null;
+
+      /* ── Block 2: why prospects are not moving (stored state) ──────────── */
+
+      // Scoped as areEngine.ts:1375 scopes it, the WORKSPACE's day included:
+      // the cap counted from UTC midnight until A31, which for an Eastern
+      // workspace restarted the day mid-evening.
+      const [sentToday] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(areExecutionQueue)
+        .where(and(
+          eq(areExecutionQueue.campaignId, campId),
+          eq(areExecutionQueue.status, "sent"),
+          gte(areExecutionQueue.executedAt, startOfLocalDay(await getWorkspaceTimezone(wsId), now)),
+        ));
+
+      // THE EMAIL GATE, as the engine counts it (areEngine.ts:805-826): an
+      // approved row with a usable sequence that contains an email step, and no
+      // address. NOT "every row with no email" — a LinkedIn-only sequence
+      // enrolls without one, so counting those would overstate the gate.
+      const usableSequence = sql`(JSON_TYPE(${prospectIntelligence.generatedSequence}) = 'ARRAY'
+               AND JSON_LENGTH(${prospectIntelligence.generatedSequence}) > 0)`;
+      const [noEmail] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .innerJoin(prospectIntelligence, eq(prospectIntelligence.prospectQueueId, prospectQueue.id))
+        .where(and(
+          ...scoped,
+          eq(prospectQueue.sequenceStatus, "approved"),
+          isNotNull(prospectIntelligence.generatedSequence),
+          usableSequence,
+          sql`(${prospectQueue.email} IS NULL OR ${prospectQueue.email} = '')`,
+          sql`(JSON_SEARCH(${prospectIntelligence.generatedSequence}, 'one', 'email', NULL, '$[*].channel') IS NOT NULL
+               OR COALESCE(JSON_LENGTH(JSON_EXTRACT(${prospectIntelligence.generatedSequence}, '$[*].channel')), 0)
+                  < JSON_LENGTH(${prospectIntelligence.generatedSequence}))`,
+        ));
+
+      // Enrichment failures, with the engine's own error text rather than a
+      // paraphrase. Top three distinct errors; enrichmentError can be null on a
+      // failed row, and that groups as its own "no reason recorded" rather than
+      // being dropped.
+      const [enrichFailed] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .where(and(...scoped, eq(prospectQueue.enrichmentStatus, "failed")));
+      const enrichReasons = num(enrichFailed) === 0 ? [] : await db
+        .select({ reason: prospectQueue.enrichmentError, n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .where(and(...scoped, eq(prospectQueue.enrichmentStatus, "failed")))
+        .groupBy(prospectQueue.enrichmentError)
+        .orderBy(desc(sql`count(*)`))
+        .limit(3);
+
+      // No dossier: approved, and no written sequence to enrol — either no
+      // prospect_intelligence row at all or one with no sequence on it. A LEFT
+      // JOIN, because the gate is the ABSENCE of the row.
+      const [noDossier] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .leftJoin(prospectIntelligence, eq(prospectIntelligence.prospectQueueId, prospectQueue.id))
+        .where(and(
+          ...scoped,
+          eq(prospectQueue.sequenceStatus, "approved"),
+          isNull(prospectIntelligence.generatedSequence),
+        ));
+      // The other half of that gate, and a DIFFERENT fix: a sequence was
+      // written and yields no usable steps (areEngine.ts:765-786). Counted
+      // apart because "wait for the writer" and "regenerate this" are different
+      // instructions, and one number covering both tells the operator to do
+      // neither.
+      const [unusable] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .innerJoin(prospectIntelligence, eq(prospectIntelligence.prospectQueueId, prospectQueue.id))
+        .where(and(
+          ...scoped,
+          eq(prospectQueue.sequenceStatus, "approved"),
+          isNotNull(prospectIntelligence.generatedSequence),
+          sql`NOT ${usableSequence}`,
+        ));
+
+      // Copy held for a research avoid rule — the engine's own count
+      // (areEngine.ts:789-796), approved only. Grouped by the reason text,
+      // because "6 held" is a number while "4 for a banned claim, 2 for a
+      // competitor mention" is an action.
+      const heldScope = [
+        ...scoped,
+        eq(prospectQueue.sequenceStatus, "approved"),
+        isNotNull(prospectIntelligence.copyHoldReason),
+      ];
+      const [copyHeld] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .innerJoin(prospectIntelligence, eq(prospectIntelligence.prospectQueueId, prospectQueue.id))
+        .where(and(...heldScope));
+      const heldReasons = num(copyHeld) === 0 ? [] : await db
+        .select({ reason: prospectIntelligence.copyHoldReason, n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .innerJoin(prospectIntelligence, eq(prospectIntelligence.prospectQueueId, prospectQueue.id))
+        .where(and(...heldScope))
+        .groupBy(prospectIntelligence.copyHoldReason)
+        .orderBy(desc(sql`count(*)`))
+        .limit(3);
+
+      // "Paused" is THREE distinct facts, and collapsing them would reproduce
+      // exactly the uselessness F11 exists to fix: a campaign can be `active`
+      // itself while every prospect is held and the workspace pause is on.
+      // Three facts, three different actions.
+      const [pausedProspects] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .where(and(...scoped, eq(prospectQueue.sequenceStatus, "paused")));
+
+      // Queue full, computed the engine's way (areEngine.ts:2074-2082).
+      const [queue] = await db
+        .select({
+          working: sql<number>`sum(case when ${prospectQueue.sequenceStatus} <> 'skipped' then 1 else 0 end)`,
+          rejected: sql<number>`sum(case when ${prospectQueue.sequenceStatus} = 'skipped' then 1 else 0 end)`,
+        })
+        .from(prospectQueue)
+        .where(and(...scoped));
+      const working = Number(queue?.working ?? 0);
+
+      const gates = {
+        noEmail: num(noEmail),
+        enrichmentFailed: {
+          count: num(enrichFailed),
+          reasons: enrichReasons.map((r) => ({ reason: r.reason, count: Number(r.n) })),
+        },
+        noDossier: num(noDossier),
+        unusableSequence: num(unusable),
+        copyHeld: {
+          count: num(copyHeld),
+          reasons: heldReasons.map((r) => ({ reason: r.reason, count: Number(r.n) })),
+        },
+        cap: {
+          cap: campaign.dailySendCap,
+          sentToday: num(sentToday),
+          remaining: Math.max(0, campaign.dailySendCap - num(sentToday)),
+        },
+        paused: {
+          workspaceOutbound: workspacePaused,
+          campaignStatus: campaign.status,
+          prospects: num(pausedProspects),
+        },
+        queue: {
+          working,
+          target: campaign.targetProspectCount,
+          rejected: Number(queue?.rejected ?? 0),
+          full: working >= campaign.targetProspectCount,
+        },
+      };
+
+      /**
+       * The spec's "with the top reason". Ordered by WHAT IT BLOCKS, not by how
+       * big the number is: a blocker that stops the whole campaign comes before
+       * one that stops some rows, because releasing six held sequences changes
+       * nothing while the workspace pause is on. Null when nothing is blocking,
+       * which is itself the answer: this campaign is not stalled.
+       */
+      const topReason =
+        gates.paused.workspaceOutbound ? "workspacePaused"
+        : campaign.status !== "active" ? "campaignNotActive"
+        : !windowOpen && num(due) > 0 ? "windowClosed"
+        : gates.cap.remaining === 0 ? "capUsed"
+        : gates.copyHeld.count > 0 ? "copyHeld"
+        : gates.noEmail > 0 ? "noEmail"
+        : gates.unusableSequence > 0 ? "unusableSequence"
+        : gates.noDossier > 0 ? "noDossier"
+        : gates.enrichmentFailed.count > 0 ? "enrichmentFailed"
+        : gates.paused.prospects > 0 ? "prospectsPaused"
+        : gates.queue.full ? "queueFull"
+        : null;
+
+      return {
+        checkedAt: now.toISOString(),
+        timezone,
+        sending: {
+          windowOpen,
+          windowDescription: describeSendWindow(window),
+          nextOpenAt: nextOpen == null ? null : new Date(nextOpen).toISOString(),
+          dueNow: num(due),
+          poolSpent,
+          poolLogRetentionDays: ENGINE_LOG_RETENTION_DAYS,
+        },
+        gates,
+        topReason,
+      };
     }),
 
   delete: workspaceProcedure

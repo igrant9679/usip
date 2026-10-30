@@ -62,6 +62,7 @@ import { ActiveSequenceTimeline } from "@/components/usip/are/ActiveSequenceTime
 import { AreMessageDialog } from "@/components/usip/are/AreMessageDialog";
 import { IntelligenceDossier } from "@/components/usip/are/IntelligenceDossier";
 import { CampaignResearchCard } from "@/components/usip/are/CampaignResearchCard";
+import { CampaignStallPanel } from "@/components/usip/are/CampaignStallPanel";
 import { CampaignTargetingCard } from "@/components/usip/are/CampaignTargetingCard";
 import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
@@ -2415,6 +2416,12 @@ export default function ARECampaignDetail() {
           <StatCard label="Replied" value={campaign.prospectsReplied ?? 0} tone={(campaign.prospectsReplied ?? 0) > 0 ? "success" : undefined} />
           <StatCard label="Meetings" value={campaign.meetingsBooked ?? 0} tone={(campaign.meetingsBooked ?? 0) > 0 ? "success" : undefined} />
         </div>
+
+        {/* ── Why isn't this campaign sending? (F11) ──
+            Above the tabs, not inside one: "why is nothing happening" is the
+            first question a stalled campaign raises, and the answer used to
+            live in the Logs tab as prose an operator had to reconstruct. */}
+        <CampaignStallPanel campaignId={campaignId} onJump={setTab} />
 
         {/* ── Tabs ── */}
         <Tabs value={tab} onValueChange={setTab}>
