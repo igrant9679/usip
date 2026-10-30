@@ -154,10 +154,53 @@ export const tasksRouter = router({
     return { ok: true };
   }),
 
+  /**
+   * Permanently remove a task. A HARD delete, and `/v2/tasks` calls it, so any
+   * rep can destroy a task outright.
+   *
+   * Audited since 2026-10-30, because it was not: `create`, `complete`, `bulk`
+   * and the four approve-and-sends all recorded an entry and this — the only
+   * irreversible one of them — recorded nothing. A reviewer could see who
+   * finished a task and never who destroyed one.
+   *
+   * The row is read BEFORE the delete and stored as `before`, which is the part
+   * that matters: after a hard delete the audit entry is the only surviving
+   * record of the task, so an entry carrying just the id would say something was
+   * deleted without saying what. That is an audit trail that cannot answer the
+   * question it exists for.
+   *
+   * Nothing is recorded when the id matches no row in this workspace — an
+   * attempt on someone else's task is not a deletion and must not read as one.
+   *
+   * Two limits worth knowing rather than discovering: `recordAudit` swallows its
+   * own failures by design (every caller relies on that), so the entry is
+   * best-effort; and this is still a hard delete, not a soft one. Making it
+   * recoverable needs a column and every read filtered, which is a product
+   * decision and not this change.
+   */
   delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // Both clauses written out, not hoisted into a `const scope`: the
+    // tenantScope guard reads the ARGUMENT TEXT of .where(), so a variable is
+    // invisible to it and the statement stops being one it protects. Its own
+    // comment records someone hitting this before, and I hit it here on
+    // 2026-10-30 — the repetition is the point.
+    const [doomed] = await db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.id, input.id), eq(tasks.workspaceId, ctx.workspace.id)))
+      .limit(1);
+    if (!doomed) return { ok: true };
     await db.delete(tasks).where(and(eq(tasks.id, input.id), eq(tasks.workspaceId, ctx.workspace.id)));
+    await recordAudit({
+      workspaceId: ctx.workspace.id,
+      actorUserId: ctx.user.id,
+      action: "delete",
+      entityType: "task",
+      entityId: input.id,
+      before: doomed,
+    });
     return { ok: true };
   }),
 
@@ -560,10 +603,40 @@ export const attachmentsRouter = router({
       return { id: Number((r as any)[0]?.insertId ?? 0), url: put.url, key: put.key };
     }),
 
+  /**
+   * Remove an attachment record. Audited since 2026-10-30, for the same reason
+   * `tasks.delete` above is: it is a hard delete a rep can call, and it was the
+   * second unaudited one in this file. `activities.delete` already did this
+   * correctly, which is the pattern both now follow.
+   *
+   * The whole row goes in `before` — there is no blob column, only metadata —
+   * so the entry says which file was removed, what it was attached to and who
+   * uploaded it. None of that is recoverable afterwards.
+   *
+   * NOTE, recorded and not acted on: this deletes the DATABASE ROW only. The
+   * stored object behind `fileKey` is left where it is, so the file survives its
+   * attachment and stays reachable by `url`. Whether a delete should also remove
+   * the object is a product and retention decision, not an audit fix.
+   */
   delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // Written out for the same reason as tasks.delete above.
+    const [doomed] = await db
+      .select()
+      .from(attachments)
+      .where(and(eq(attachments.id, input.id), eq(attachments.workspaceId, ctx.workspace.id)))
+      .limit(1);
+    if (!doomed) return { ok: true };
     await db.delete(attachments).where(and(eq(attachments.id, input.id), eq(attachments.workspaceId, ctx.workspace.id)));
+    await recordAudit({
+      workspaceId: ctx.workspace.id,
+      actorUserId: ctx.user.id,
+      action: "delete",
+      entityType: "attachment",
+      entityId: input.id,
+      before: doomed,
+    });
     return { ok: true };
   }),
 });
