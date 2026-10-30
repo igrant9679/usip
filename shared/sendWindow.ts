@@ -75,6 +75,29 @@ export function isWithinSendWindow(nowMs: number, timezone: string, window: Send
   return minutes >= w.startHour * 60 && minutes < w.endHour * 60;
 }
 
+/**
+ * The first instant inside the window at or after `fromMs`, or null if there is
+ * none in the next eight days (a normalised window always opens within seven,
+ * so null means a window this module could not normalise).
+ *
+ * Found by asking `isWithinSendWindow` at successive real instants rather than
+ * by adding the zone's offset to the opening hour: stepping instants is
+ * DST-correct by construction, where "start hour + offset" is the shape that
+ * breaks twice a year. Quarter-hour steps, not hourly, because zones at :30
+ * and :45 offsets (Asia/Kolkata, Asia/Kathmandu) put every local whole hour off
+ * every UTC hour boundary — hourly steps would report a window that opens at
+ * 9:00 as opening at 9:45.
+ */
+export function nextSendWindowOpening(fromMs: number, timezone: string, window: SendWindow): number | null {
+  const STEP = 15 * 60_000;
+  const STEPS = 8 * 24 * 4; // eight days of quarter-hours
+  let t = Math.ceil(fromMs / STEP) * STEP;
+  for (let i = 0; i < STEPS; i++, t += STEP) {
+    if (isWithinSendWindow(t, timezone, window)) return t;
+  }
+  return null;
+}
+
 /** "6:00 AM–5:00 PM, Mon–Fri" style summary for the Settings page. */
 export function describeSendWindow(window: SendWindow): string {
   const w = normalizeSendWindow(window);
