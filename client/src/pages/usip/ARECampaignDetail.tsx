@@ -63,6 +63,7 @@ import { AreMessageDialog } from "@/components/usip/are/AreMessageDialog";
 import { IntelligenceDossier } from "@/components/usip/are/IntelligenceDossier";
 import { CampaignResearchCard } from "@/components/usip/are/CampaignResearchCard";
 import { CampaignStallPanel } from "@/components/usip/are/CampaignStallPanel";
+import { CampaignSourceHealth } from "@/components/usip/are/CampaignSourceHealth";
 import { CampaignTargetingCard } from "@/components/usip/are/CampaignTargetingCard";
 import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
@@ -2615,6 +2616,9 @@ export default function ARECampaignDetail() {
 
           {/* ── Scraper tab ── */}
           <TabsContent value="scraper" className="mt-4">
+            {/* F12: before offering to spend money on a source, say what each
+                one is costing and returning. Above the launcher on purpose. */}
+            <div className="mb-6"><CampaignSourceHealth campaignId={campaignId} /></div>
             <div className="max-w-2xl space-y-5">
               <p className="text-sm text-muted-foreground leading-relaxed">
                 Discover new prospects from external sources. The AI extraction engine normalises all results into structured prospect records and scores them against the active ICP.

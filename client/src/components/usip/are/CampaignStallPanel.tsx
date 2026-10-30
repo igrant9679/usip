@@ -318,7 +318,12 @@ export function CampaignStallPanel({ campaignId, onJump }: {
                 value={`${g.queue.working}/${g.queue.target}`}
                 note={g.queue.full
                   ? "Queue full, so discovery stays idle. Reject rows you do not want, or raise the target."
-                  : "Below target — discovery runs on every tick."}
+                  : g.queue.discoveryRestingUntil
+                    // Below target and searching are different claims. This row
+                    // said "runs on every tick" unconditionally until F12
+                    // (2026-10-30) surfaced the rest state it was ignoring.
+                    ? `Below target, but discovery is resting until ${inZone(g.queue.discoveryRestingUntil, data.timezone)} — the last run found nobody new.`
+                    : "Below target — discovery runs on every tick."}
               >
                 {g.queue.rejected > 0 && (
                   <div className="text-[11px] text-muted-foreground mt-0.5">
