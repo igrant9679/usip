@@ -68,7 +68,14 @@ describe("the router composes the pieces that already existed", () => {
   });
   it("effectiveIcp is the ONE merge — prospects.ts imports it instead of keeping a copy", () => {
     const p = read("routers", "are", "prospects.ts");
-    expect(p).toContain('import { buildEffectiveIcp } from "../../services/are/effectiveIcp"');
+    /**
+     * Matched on the whole import statement until 2026-10-30, when F17 added
+     * `scoringTargetsOf` to the same line for the territory verdict. What this
+     * protects is that the merge is IMPORTED and not re-implemented here, so
+     * it now checks the binding and the module separately and tolerates
+     * co-imports from the one module that owns the merge.
+     */
+    expect(p).toMatch(/import \{[^}]*\bbuildEffectiveIcp\b[^}]*\} from "\.\.\/\.\.\/services\/are\/effectiveIcp"/);
     expect(p).not.toContain("function buildEffectiveIcp(");
   });
   it("pushExisting and the router share one insert path", () => {

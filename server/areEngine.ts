@@ -120,6 +120,7 @@ import { downstreamAccountFor, hasSellerDownstreamLink } from "./services/resear
 import { pickFallback, researchTargeting, workspaceIcpFallback } from "./services/research/targetingPrior";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { inSendWindow } from "./services/sendWindow";
+import { parseTargetPlaces, placeFit, placeStringOf } from "./services/placeFit";
 import { cleanScrapedField } from "@shared/fieldHygiene";
 import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
 
@@ -2433,6 +2434,10 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // the tick, never fails it.
   let totalNew = 0;
   const perSource: Record<string, { raw: number; new: number; error?: string; skipped?: string }> = {};
+  // F17: the campaign's places, classified once, and what the check found.
+  const targetPlaces = parseTargetPlaces(geos);
+  const territoryMode = territoryModeOf(campaign.icpOverrides);
+  const outsideTerritory: { name: string; place: string }[] = [];
   for (let idx = 0; idx < runOrder.length; idx++) {
     const id = runOrder[idx];
     const remaining = slots - totalNew;
@@ -2494,7 +2499,32 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     // the enrichment/enroll picks at the top of the queue are the best ones.
     const scored = kept
       .filter((p) => String(p.companyDomain ?? "").trim() !== "" || String(p.title ?? "").trim() !== "")
-      .map((p) => ({ ...p, icpMatchScore: scoreIcpMatch(p, { titles, industries, geos, keywords }) }))
+      .map((p) => {
+        /**
+         * The territory verdict (F17). In `reject` mode an out-of-territory
+         * person is queued as `skipped` with a reason rather than dropped on
+         * the floor: the Rejections tab shows them, restore puts them back, and
+         * discovery's working count already excludes skipped rows so they do
+         * not hold the queue at "full". A dropped row would be invisible, and a
+         * verdict this often "unknown" needs to stay reviewable.
+         *
+         * `elsewhere` only. An unknown place is never rejected.
+         */
+        const verdict = territoryMode === "off"
+          ? "unknown"
+          : placeFit(placeStringOf({ geography: p.geography as string | null }), targetPlaces);
+        if (verdict === "elsewhere") outsideTerritory.push({
+          name: [p.firstName, p.lastName].filter(Boolean).join(" ") || String(p.companyName ?? "someone"),
+          place: String(p.geography ?? "").trim() || "no place given",
+        });
+        return {
+          ...p,
+          icpMatchScore: scoreIcpMatch(p, { titles, industries, geos, keywords }),
+          ...(territoryMode === "reject" && verdict === "elsewhere"
+            ? { __territoryReject: TERRITORY_REJECT_REASON }
+            : {}),
+        };
+      })
       .sort((a, b) => (b.icpMatchScore as number) - (a.icpMatchScore as number));
     try {
       await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, q, scored);
@@ -2510,6 +2540,15 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   if (excludedOtherCampaign > 0) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
       `${excludedOtherCampaign} prospect${excludedOtherCampaign === 1 ? "" : "s"} excluded — already active in another campaign in this workspace (one campaign per prospect).`);
+  }
+  if (outsideTerritory.length > 0) {
+    const examples = outsideTerritory.slice(0, 3).map((d) => `${d.name} (${d.place})`).join("; ");
+    const n = outsideTerritory.length;
+    await emitLog(campaign.workspaceId, campaign.id, "discovery", "info",
+      territoryMode === "reject"
+        ? `${n} found ${n === 1 ? "person is" : "people are"} outside the campaign's places and ${n === 1 ? "was" : "were"} auto-rejected — restore any from the Rejections tab. For example: ${examples}.`
+        : `${n} found ${n === 1 ? "person is" : "people are"} outside the campaign's places, flagged but kept (the territory check is set to flag only). For example: ${examples}.`,
+      { outsideTerritory: outsideTerritory.slice(0, 50), mode: territoryMode });
   }
   if (neverTargetDropped.length > 0) {
     const examples = neverTargetDropped.slice(0, 3).map((d) => `${d.name} (${d.reason})`).join("; ");
@@ -2624,6 +2663,38 @@ export function buildQuerySlices(args: {
  * plus B2B anchor bonuses (company domain, having a title at all). Used to
  * rank within a tick and to gate enrichment (campaign.minConfidence).
  */
+/**
+ * The campaign's territory check (F17, owner 2026-10-30).
+ *
+ * Stored on `icpOverrides` because it IS a targeting rule and that is where the
+ * campaign's places already live — no migration, and a campaign retargeted
+ * through the same blob carries its check with it. Default **flag**: the
+ * verdict is visible on every row and nothing is thrown away, which matters
+ * because "unknown" is a common verdict (two sources write an empty place and
+ * a third writes none at all).
+ *
+ * `off` disables the check entirely, screening of paid previews included. There
+ * is deliberately no separate switch for that screening: it runs on free masked
+ * previews BEFORE a charge, so the only thing a second switch could buy is the
+ * ability to keep the check on while paying for people it would reject.
+ */
+export type TerritoryMode = "off" | "flag" | "reject";
+
+export function territoryModeOf(icpOverrides: unknown): TerritoryMode {
+  const v = (icpOverrides as { territoryCheck?: unknown } | null | undefined)?.territoryCheck;
+  return v === "off" || v === "reject" ? v : "flag";
+}
+
+/**
+ * The reason stored on an auto-rejected row. Deliberately the SAME string the
+ * manual reject dialog already offers (REJECT_TEMPLATES in ARECampaignDetail),
+ * so the Rejections tab groups auto and manual rejections of this kind into one
+ * bucket: they state the same fact about the same person, and a second
+ * near-identical label is exactly the vocabulary drift this codebase keeps
+ * removing. Pinned to the client's list by a guard test.
+ */
+export const TERRITORY_REJECT_REASON = "Outside target geography";
+
 export function scoreIcpMatch(
   p: Record<string, unknown>,
   icp: { titles: string[]; industries: string[]; geos: string[]; keywords: string[] },
@@ -2647,8 +2718,22 @@ export function scoreIcpMatch(
   if (icp.industries.length > 0) {
     score += icp.industries.some((i) => { const ii = norm(i); return ii && hay.includes(ii); }) ? 20 : 0;
   }
+  /**
+   * Place, by the same verdict F17 shows on the row — not a substring test.
+   *
+   * This was `geos.some((g) => geo.includes(g))`, which scored "Charleston,
+   * West Virginia, United States" as a match for a Virginia campaign, worth 15
+   * points of fit on every row of every source (measured 2026-10-30, and the
+   * exact case quickenrichPlaceCheck's comment was written to prevent). It also
+   * gave a row with NO place the same 0 as a row that is genuinely elsewhere.
+   *
+   * Only `inside` scores. `elsewhere` and `unknown` both score 0, deliberately:
+   * an unreadable place must not be penalised as if it were out of territory —
+   * two sources write an empty string and a third writes none at all. Keeping
+   * out-of-territory people out is the screen's job, not the score's.
+   */
   if (icp.geos.length > 0) {
-    score += icp.geos.some((g) => { const gg = norm(g); return gg && geo.includes(gg); }) ? 15 : 0;
+    score += placeFit(geo, parseTargetPlaces(icp.geos)) === "inside" ? 15 : 0;
   }
   if (icp.keywords.length > 0) {
     score += icp.keywords.some((k) => { const kk = norm(k); return kk && hay.includes(kk); }) ? 10 : 0;
@@ -2708,6 +2793,8 @@ async function discoverViaRegistrySource(
   const { criteriaFromTargeting, recordToQueueRow } = await import("./services/prospectSources/bridge");
 
   const criteria = criteriaFromTargeting(targeting);
+  const targetPlaces = parseTargetPlaces(targeting.geos);
+  const territoryMode = territoryModeOf(campaign.icpOverrides);
   const { eligible, skipped } = await eligibleFor(campaign.workspaceId, criteria, { only: [slug] });
   if (eligible.length === 0) {
     const why = skipped.find((x) => x.slug === slug);
@@ -2737,6 +2824,17 @@ async function discoverViaRegistrySource(
       const row = recordToQueueRow(rec);
       const hit = neverTargetHit(neverTarget, { title: row.title as string | null, company: row.companyName as string | null, industry: row.industry as string | null });
       if (hit) return neverTargetReason(hit);
+      /**
+       * The territory check, here rather than only after queueing, because
+       * THIS is the lever: these are free masked previews and the next step
+       * charges a unit per person. The 83 out-of-territory prospects F17 was
+       * written for each cost an email lookup. `elsewhere` only — an unknown
+       * place is never screened out, since most sources' place data is poor.
+       */
+      if (territoryMode !== "off"
+          && placeFit(placeStringOf({ geography: row.geography as string | null }), targetPlaces) === "elsewhere") {
+        return TERRITORY_REJECT_REASON.toLowerCase();
+      }
       const anchored = String(row.companyDomain ?? "").trim() !== "" || String(row.title ?? "").trim() !== "";
       return anchored ? null : "no company domain or title";
     },

@@ -71,8 +71,17 @@ describe("ordering", () => {
 
   it("ranks in SQL, before pagination", () => {
     // Not `rows.sort(...)` after the fact — that reorders one page.
+    /**
+     * `.limit(` was located by its FIRST occurrence until 2026-10-30, when
+     * F17 added two small `.limit(1)` reads (the campaign's places, for the
+     * territory verdict) ahead of the main query — and the test failed while
+     * the guarantee it protects was still true. The pagination limit is
+     * `.limit(input.limit)` specifically, so it is now located by that: a
+     * locator that any earlier limit can win is pinned on the wrong thing.
+     */
     const orderAt = listProc.indexOf(".orderBy(");
-    const limitAt = listProc.indexOf(".limit(");
+    const limitAt = listProc.indexOf(".limit(input.limit)");
+    expect(limitAt, "the pagination limit").toBeGreaterThan(0);
     expect(orderAt).toBeGreaterThan(0);
     expect(orderAt).toBeLessThan(limitAt);
     expect(listProc).not.toMatch(/rows\.sort\(/);

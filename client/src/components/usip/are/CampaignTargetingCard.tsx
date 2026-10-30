@@ -23,6 +23,10 @@ const sizeValue = (v: string): number | null => {
   return v.trim() === "" || !Number.isFinite(n) || n < 0 ? null : Math.round(n);
 };
 
+/** Mirrors `TerritoryMode` in server/areEngine.ts; a guard test pins the three
+ *  values against it so the two cannot drift. */
+type TerritoryMode = "off" | "flag" | "reject";
+
 export function CampaignTargetingCard({ campaign }: { campaign: { id: number; icpOverrides?: unknown; researchSectorId?: number | null } }) {
   const utils = trpc.useUtils();
   const saved = useMemo(() => targetingFromOverrides(campaign.icpOverrides), [campaign.icpOverrides]);
@@ -44,6 +48,24 @@ export function CampaignTargetingCard({ campaign }: { campaign: { id: number; ic
       utils.are.campaigns.get.invalidate({ id: campaign.id });
     },
   });
+
+  /**
+   * F17's territory check. It lives here because it is a targeting rule, and
+   * it saves on change rather than joining the Save targeting button: it is
+   * one value with no draft state, and making an operator press Save to turn
+   * off an auto-reject they have just seen misfire is the wrong order.
+   *
+   * `overridesWithTargeting` spreads the existing overrides, so this key and
+   * the targeting fields do not clobber each other.
+   */
+  const territoryMode: TerritoryMode =
+    ((campaign.icpOverrides as { territoryCheck?: unknown } | null | undefined)?.territoryCheck === "off" ? "off"
+      : (campaign.icpOverrides as { territoryCheck?: unknown } | null | undefined)?.territoryCheck === "reject" ? "reject"
+      : "flag");
+  const setTerritoryMode = (mode: TerritoryMode) => {
+    const base = (campaign.icpOverrides ?? {}) as Record<string, unknown>;
+    save.mutate({ id: campaign.id, icpOverrides: { ...base, territoryCheck: mode } });
+  };
 
   return (
     <Card className="bg-card border">
@@ -80,6 +102,36 @@ export function CampaignTargetingCard({ campaign }: { campaign: { id: number; ic
           onChange={(v) => patch({ exclude: v })}
           placeholder="consultant, retired…"
         />
+        {/* ── F17: territory check ── */}
+        <div className="rounded-lg border border-border/60 p-3 space-y-1.5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <Label htmlFor="territory-check" className="text-xs font-medium">Territory check</Label>
+            <select
+              id="territory-check"
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              value={territoryMode}
+              disabled={save.isPending}
+              onChange={(e) => setTerritoryMode(e.target.value as TerritoryMode)}
+            >
+              <option value="off">Off</option>
+              <option value="flag">Flag only</option>
+              <option value="reject">Flag and auto-reject</option>
+            </select>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {territoryMode === "off"
+              ? "No place verdict is shown, and people outside these places are discovered and paid for like anyone else."
+              : territoryMode === "reject"
+                ? "People whose country or state these places exclude are rejected as they are found — visible in the Rejections tab and restorable. People whose place cannot be read are always kept."
+                : "Every prospect shows In target area, Outside target area or Place unknown. Nothing is rejected."}
+          </p>
+          {territoryMode !== "off" && (
+            <p className="text-[11px] text-muted-foreground/80">
+              Either way, a source that charges per person is screened on its free preview first, so nobody outside
+              these places is paid for.
+            </p>
+          )}
+        </div>
         {problem && <p className="text-xs text-destructive">{problem}</p>}
         {dirty && (
           <div className="flex items-center gap-3">

@@ -28,8 +28,17 @@ describe("the no-email door — staging on every insert path", () => {
   });
 
   it("discovery, single add, CSV import and People-push all stage email-less rows", () => {
-    expect(read("routers", "are", "scraper.ts"))
-      .toContain('sequenceStatus: (email ? "pending" : "sourcing")');
+    /**
+     * Updated 2026-10-30 (F17). The expression gained an outer branch: a row
+     * the territory check auto-rejected is queued as 'skipped' instead. The
+     * door's guarantee is untouched — an email-less row still never enters the
+     * WORKING queue — and a skipped row is out of it just as firmly as a
+     * sourcing one, so this is a stronger exclusion rather than a hole. Both
+     * arms are pinned below so neither can be dropped.
+     */
+    const scraper = read("routers", "are", "scraper.ts");
+    expect(scraper).toContain('? "skipped"');
+    expect(scraper).toContain(': email ? "pending" : "sourcing") as "pending" | "sourcing" | "skipped"');
     const prospects = read("routers", "are", "prospects.ts");
     expect(prospects).toContain('sequenceStatus: rest.email && String(rest.email).trim() ? "pending" : "sourcing"');
     expect(prospects).toContain('sequenceStatus: email ? "pending" : "sourcing"');
