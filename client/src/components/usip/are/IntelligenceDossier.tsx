@@ -9,6 +9,7 @@ import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenc
 import { EmptyState } from "@/components/usip/Shell";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { PlaceVerdictBadge } from "@/components/usip/are/PlaceVerdictBadge";
 import { Separator } from "@/components/ui/separator";
 import {
   Activity, FlaskConical, Loader2, MessageSquare, Newspaper, Sparkles, Target, Zap,
@@ -49,6 +50,19 @@ export function IntelligenceDossier({ prospect }: { prospect: any }) {
 
   return (
     <div className="space-y-6 pb-8">
+      {/* F17: the territory verdict, at the top of the dossier because
+          "are they even in our area" is decided before anything below it is
+          worth reading. The row carries the verdict, so this needs no second
+          query and cannot disagree with the list. */}
+      {prospect.placeVerdict && (
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <PlaceVerdictBadge verdict={prospect.placeVerdict} place={prospect.placeJudged} />
+          {String(prospect.placeJudged ?? "").trim()
+            ? <span className="truncate">{prospect.placeJudged}</span>
+            : <span>No place recorded for them</span>}
+        </div>
+      )}
+
       {/* Confidence + channel */}
       <div className="flex items-center gap-4 p-3 rounded-xl bg-muted/50 border">
         <div className="text-center">

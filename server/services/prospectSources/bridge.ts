@@ -10,7 +10,11 @@ import type { ProspectRecord } from "./types";
 
 /** Country names → ISO codes the vendors filter on. Unmapped geos stay as
  *  state/city text — never guessed into a country. */
-const COUNTRY_CODES: Record<string, string> = {
+/** Exported for @see services/placeFit, which needs the same vocabulary.
+ *  NOTE: services/quickenrich.ts holds a byte-identical private copy of this
+ *  table (noted 2026-10-30, not merged here: that file is a live vendor path
+ *  and this was not the change to destabilise it). */
+export const COUNTRY_CODES: Record<string, string> = {
   "united states": "US", usa: "US", us: "US", america: "US", "united states of america": "US",
   "united kingdom": "GB", uk: "GB", "great britain": "GB", england: "GB",
   canada: "CA", australia: "AU", ireland: "IE", "new zealand": "NZ",

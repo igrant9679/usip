@@ -64,6 +64,7 @@ import { IntelligenceDossier } from "@/components/usip/are/IntelligenceDossier";
 import { CampaignResearchCard } from "@/components/usip/are/CampaignResearchCard";
 import { CampaignStallPanel } from "@/components/usip/are/CampaignStallPanel";
 import { CampaignSourceHealth } from "@/components/usip/are/CampaignSourceHealth";
+import { PlaceVerdictBadge } from "@/components/usip/are/PlaceVerdictBadge";
 import { CampaignTargetingCard } from "@/components/usip/are/CampaignTargetingCard";
 import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
@@ -533,6 +534,10 @@ function ProspectRow({
               </span>
             ) : null}
             {displayPhone ? <span className="shrink-0 tabular-nums">{displayPhone}</span> : null}
+            {/* F17: the territory verdict, beside the contact details rather
+                than near the ICP ring — it is a fact about the person, not a
+                component of their fit score. */}
+            <PlaceVerdictBadge verdict={p.placeVerdict} place={p.placeJudged} className="shrink-0" />
           </div>
         )}
         {p.enrichmentStatus === "failed" && p.enrichmentError && (() => {

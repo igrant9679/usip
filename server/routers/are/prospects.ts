@@ -159,7 +159,8 @@ Score each dimension 0-20 and provide a total score 0-100.
 
 // buildEffectiveIcp moved to services/are/effectiveIcp.ts (phase 3): the
 // campaign router needs the same merge for every campaign at once.
-import { buildEffectiveIcp } from "../../services/are/effectiveIcp";
+import { buildEffectiveIcp, scoringTargetsOf } from "../../services/are/effectiveIcp";
+import { parseTargetPlaces, placeFit, placeStringOf } from "../../services/placeFit";
 
 /** How the Rejections tab names a rejection with no reason recorded. */
 const NO_REASON = "No reason given";
@@ -1308,6 +1309,29 @@ export const prospectsRouter = router({
         + COALESCE(JSON_LENGTH(${prospectIntelligence.painSignals}), 0)
       )`;
 
+      /**
+       * F17's territory verdict, computed per row rather than stored.
+       *
+       * Deliberately not a column: the verdict is a function of the row's place
+       * AND the campaign's current places, so a stored one would go stale the
+       * moment someone retargets the campaign — and a stale "outside" is the
+       * kind of wrong number this phase exists to remove. One read of the ICP
+       * per request, then a pure function per row.
+       */
+      const [verdictCampaign] = await db
+        .select({ icpOverrides: areCampaigns.icpOverrides })
+        .from(areCampaigns)
+        .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      const [verdictIcp] = await db
+        .select()
+        .from(icpProfiles)
+        .where(and(eq(icpProfiles.workspaceId, ctx.workspace.id), eq(icpProfiles.isActive, true)))
+        .limit(1);
+      const targetPlaces = parseTargetPlaces(
+        scoringTargetsOf(buildEffectiveIcp(verdictIcp, verdictCampaign?.icpOverrides), verdictCampaign?.icpOverrides).geos,
+      );
+
       const rows = await db
         .select({
           ...getTableColumns(prospectQueue),
@@ -1387,6 +1411,13 @@ export const prospectsRouter = router({
           personCity, personState, personCountry, personImageUrl, personImageSource, personImageStatus,
           ...queue
         } = r;
+        /**
+         * The place actually judged, returned beside the verdict so the UI can
+         * show WHAT was read. A verdict with no visible input is unarguable,
+         * and this one is wrong often enough to need arguing with.
+         */
+        const placeJudged = placeStringOf({ personCity, personState, personCountry, geography: r.geography });
+        const placeVerdict = placeFit(placeJudged, targetPlaces);
         const person = r.personProspectId && personFirstName !== null
           ? {
               id: r.personProspectId,
@@ -1402,7 +1433,7 @@ export const prospectsRouter = router({
               }),
             }
           : null;
-        return { ...queue, person };
+        return { ...queue, person, placeVerdict, placeJudged };
       });
     }),
 

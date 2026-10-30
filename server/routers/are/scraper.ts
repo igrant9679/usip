@@ -478,12 +478,26 @@ export async function saveScrapeJobAndQueue(
         // int column 0-100 — round and clamp (scores can arrive as floats)
         icpMatchScore: Math.max(0, Math.min(100, Math.round(Number((p as any).icpMatchScore ?? 0) || 0))),
         enrichmentStatus: "pending" as const,
+        /**
+         * F17's auto-reject, carried on the row the way `__queueSourceType`
+         * is. Queued as `skipped` WITH a reason rather than dropped, so the
+         * Rejections tab shows them and restore puts them back — an
+         * out-of-territory verdict is reversible and should look it.
+         */
+        ...((p as { __territoryReject?: string }).__territoryReject
+          ? {
+              rejectedAt: new Date(),
+              rejectionReason: String((p as { __territoryReject?: string }).__territoryReject),
+            }
+          : {}),
         // THE NO-EMAIL DOOR (owner rule 2026-09-16, migration 0180): a
         // candidate without a usable address never enters the campaign's
         // working queue — it stages as 'sourcing' (hidden from the Prospects
         // tab and every counter) while the enrich phase hunts the email.
         // The engine's ADMIT step promotes it the moment one lands.
-        sequenceStatus: (email ? "pending" : "sourcing") as "pending" | "sourcing",
+        sequenceStatus: ((p as { __territoryReject?: string }).__territoryReject
+          ? "skipped"
+          : email ? "pending" : "sourcing") as "pending" | "sourcing" | "skipped",
       };
     });
 
