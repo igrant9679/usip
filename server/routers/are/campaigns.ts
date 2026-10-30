@@ -21,7 +21,7 @@ async function assertResearchSectorInWorkspace(db: NonNullable<Awaited<ReturnTyp
 import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
-import { ENGINE_LOG_RETENTION_DAYS, runAreEngine } from "../../areEngine";
+import { DISCOVERY_REST_MS, ENGINE_LOG_RETENTION_DAYS, runAreEngine } from "../../areEngine";
 import { getWorkspaceSendWindow } from "../../services/sendWindow";
 import { getWorkspaceTimezone, startOfLocalDay } from "../../services/workspaceTimezone";
 import { describeSendWindow, isWithinSendWindow, nextSendWindowOpening } from "@shared/sendWindow";
@@ -31,9 +31,11 @@ import { campaignCapMessage, campaignHeadroom } from "../../services/are/campaig
 import { getAreHubFunnelTotals } from "../../services/performanceMetrics";
 import { recordAudit } from "../../audit";
 import { invokeLLM, contentText } from "../../_core/llm";
-import { ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
+import { ARE_DEFAULT_SOURCES, ARE_SOURCES, normalizeSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 import { MIN_STEP_GAP_DAYS, MAX_STEP_GAP_DAYS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
-import { areExecutionQueue } from "../../../drizzle/schema";
+import { areExecutionQueue, spendLedger } from "../../../drizzle/schema";
+import { describeSources } from "../../services/prospectSources/registry";
+import { spendDay } from "../../services/spend";
 
 /**
  * The one surviving trace of a spent sender pool. When the pool reports every
@@ -45,6 +47,15 @@ import { areExecutionQueue } from "../../../drizzle/schema";
  * a pool that is spent.
  */
 const POOL_HELD_MARKER = "email steps held and re-scheduled: ";
+
+/**
+ * The engine writes ONE discovery summary per call, carrying its per-source
+ * breakdown in `details.perSource`. Matched by this prefix, and pinned to the
+ * engine's own wording by a guard test for the same reason POOL_HELD_MARKER is:
+ * if the engine rewords the line and this does not follow, every source reads
+ * "never attempted" while discovery is running normally.
+ */
+const DISCOVERY_SUMMARY_MARKER = "Discovery slice ";
 
 export const campaignsRouter = router({
   list: workspaceProcedure
@@ -976,6 +987,7 @@ export const campaignsRouter = router({
           status: areCampaigns.status,
           dailySendCap: areCampaigns.dailySendCap,
           targetProspectCount: areCampaigns.targetProspectCount,
+          discoveryQueryState: areCampaigns.discoveryQueryState,
         })
         .from(areCampaigns)
         .where(and(eq(areCampaigns.id, campId), eq(areCampaigns.workspaceId, wsId)))
@@ -1149,6 +1161,15 @@ export const campaignsRouter = router({
         .from(prospectQueue)
         .where(and(...scoped, eq(prospectQueue.sequenceStatus, "paused")));
 
+      // Discovery's own rest state (A25, added with F12 on 2026-10-30). The
+      // queue gate below used to say "below target — discovery runs on every
+      // tick", which is false while discovery is resting after a run that
+      // found nobody new: below target and running are not the same claim.
+      const discoveryState = (campaign.discoveryQueryState ?? {}) as { lastRunAt?: number; lastRunNew?: number };
+      const restUntilMs = discoveryState.lastRunNew === 0 && discoveryState.lastRunAt
+        ? discoveryState.lastRunAt + DISCOVERY_REST_MS
+        : null;
+
       // Queue full, computed the engine's way (areEngine.ts:2074-2082).
       const [queue] = await db
         .select({
@@ -1186,6 +1207,8 @@ export const campaignsRouter = router({
           target: campaign.targetProspectCount,
           rejected: Number(queue?.rejected ?? 0),
           full: working >= campaign.targetProspectCount,
+          /** Below target does not mean searching: discovery rests after an empty run. */
+          discoveryRestingUntil: restUntilMs && restUntilMs > Date.now() ? new Date(restUntilMs).toISOString() : null,
         },
       };
 
@@ -1223,6 +1246,219 @@ export const campaignsRouter = router({
         },
         gates,
         topReason,
+      };
+    }),
+
+  /**
+   * Per-source health for ONE campaign — F12 ("shows which sources earn their
+   * cost"), read-only.
+   *
+   * What this deliberately does NOT do is repeat the workspace back office.
+   * `ProspectSourceRegistryCard` (Settings → Data sources) already shows every
+   * registry vendor's capability manifest, credential status, circuit state and
+   * budget, and Settings → Billing already reports spend per vendor per day.
+   * Both are workspace-wide. What has never existed is the campaign-scoped
+   * answer: of the sources THIS campaign is set to use, which will actually run
+   * on the next tick, which are resting, and what each returned last time. So
+   * this adds the four things those surfaces cannot say and links to them for
+   * the rest.
+   *
+   * Three honesty rules it is built on:
+   *
+   *   1. All seven ARE sources appear, not just the three the registry
+   *      instruments. internal / google_business / linkedin / news have no
+   *      credential row, no breaker and no ledger — they are hand-written
+   *      branches in runDiscovery. Omitting them would answer "which sources
+   *      earn their cost" wrongly by leaving four of them out, so they are
+   *      listed and marked as not instrumented.
+   *   2. A breaker reading is only reported as durable for `table` sources.
+   *      Legacy ones (Apollo, QuickEnrich) keep it in a process-local Map, so
+   *      the surface says that rather than showing a countdown that a deploy
+   *      forgets.
+   *   3. Spend is labelled for what it is: a WORKSPACE total for a UTC day.
+   *      `spend_ledger` has no campaign column and its `day` is UTC
+   *      (`spendDay()` slices an ISO string), so neither a per-campaign figure
+   *      nor a workspace-day figure can be derived from it, and this must not
+   *      imply otherwise.
+   *
+   * "Last success or error" is answered as LAST ATTEMPT, honestly labelled:
+   * nothing records a per-source success time (`recordSuccess` zeroes the
+   * failure count and writes no timestamp), and `lastValidatedAt` is a key
+   * check rather than a search. The engine's own discovery summary carries
+   * `details.perSource` — `{ raw, new, error?, skipped? }` per source — so that
+   * is what is read and that is what it is called.
+   */
+  sourceHealth: workspaceProcedure
+    .input(z.object({ campaignId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const wsId = ctx.workspace.id;
+      const [campaign] = await db
+        .select({
+          prospectSources: areCampaigns.prospectSources,
+          discoveryQueryState: areCampaigns.discoveryQueryState,
+          targetProspectCount: areCampaigns.targetProspectCount,
+        })
+        .from(areCampaigns)
+        .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, wsId)))
+        .limit(1);
+      if (!campaign) throw new TRPCError({ code: "NOT_FOUND" });
+
+      // The campaign's selection read the ENGINE's way, including the rule that
+      // an EXPLICIT empty list means "no discovery" while a null or
+      // dead-ids-only list falls back to the defaults (areEngine.ts:2296-2300).
+      // Reading it any other way would show sources that will not run, or hide
+      // ones that will.
+      const rawSources = campaign.prospectSources;
+      const explicitlyNone = Array.isArray(rawSources) && rawSources.length === 0;
+      const configured = normalizeSources(rawSources);
+      const selected = configured.length > 0 ? configured : explicitlyNone ? [] : [...ARE_DEFAULT_SOURCES];
+      const [wsRow] = await db
+        .select({ order: workspaceSettings.areSourceOrder, mask: workspaceSettings.areScraperSources })
+        .from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, wsId))
+        .limit(1);
+      // The same resolver the engine calls, so the order shown IS the order
+      // that will run — and order is dedup precedence, not decoration.
+      const runOrder = resolveSourceOrder(wsRow?.order, wsRow?.mask, selected as AreSourceId[]);
+      const mask = (wsRow?.mask && typeof wsRow.mask === "object" ? wsRow.mask : {}) as Record<string, unknown>;
+
+      const state = (campaign.discoveryQueryState ?? {}) as {
+        src?: Record<string, { empty: number; nextAt: number | null }>;
+        lastRunAt?: number;
+        lastRunNew?: number;
+      };
+      const restUntilMs = state.lastRunNew === 0 && state.lastRunAt ? state.lastRunAt + DISCOVERY_REST_MS : null;
+
+      // The engine's own per-source breakdown, from the summary line it writes
+      // once per discovery call. Matched on a marker pinned to the engine's
+      // wording by a guard test — see POOL_HELD_MARKER for why.
+      const [summary] = await db
+        .select({ details: areEngineLogs.details, createdAt: areEngineLogs.createdAt, lastSeenAt: areEngineLogs.lastSeenAt })
+        .from(areEngineLogs)
+        .where(and(
+          eq(areEngineLogs.workspaceId, wsId),
+          eq(areEngineLogs.campaignId, input.campaignId),
+          eq(areEngineLogs.phase, "discovery"),
+          like(areEngineLogs.message, `${DISCOVERY_SUMMARY_MARKER}%`),
+        ))
+        .orderBy(desc(areEngineLogs.createdAt))
+        .limit(1);
+      const lastRun = summary
+        ? {
+            at: new Date(summary.lastSeenAt ?? summary.createdAt).toISOString(),
+            perSource: ((summary.details ?? {}) as {
+              perSource?: Record<string, { raw: number; new: number; error?: string; skipped?: string }>;
+            }).perSource ?? {},
+          }
+        : null;
+
+      // Workspace spend for the UTC day, per vendor. Labelled as such on the
+      // surface: this ledger has no campaign column.
+      const today = spendDay();
+      const spendRows = await db
+        .select({
+          vendor: spendLedger.vendor,
+          meter: spendLedger.meter,
+          keySource: spendLedger.keySource,
+          quantity: spendLedger.quantity,
+          calls: spendLedger.calls,
+        })
+        .from(spendLedger)
+        .where(and(eq(spendLedger.workspaceId, wsId), eq(spendLedger.day, today)));
+
+      // Capability match is deliberately not asked for (null criteria): the
+      // campaign's targeting resolution lives in the engine, and re-deriving it
+      // here to show a verdict would be a second, divergent implementation of
+      // it. The "can this source filter on X" question is F17's, from the same
+      // registry call.
+      const described = await describeSources(wsId, null);
+      const bySlug = new Map(described.map((d) => [d.slug as string, d]));
+
+      const sources = ARE_SOURCES.map((meta) => {
+        const d = bySlug.get(meta.id);
+        const rest = state.src?.[meta.id] ?? null;
+        const attempt = lastRun?.perSource?.[meta.id] ?? null;
+        const vendorSpend = spendRows.filter((r) => r.vendor === meta.id);
+        const orderIdx = runOrder.indexOf(meta.id as AreSourceId);
+        return {
+          slug: meta.id,
+          label: meta.label,
+          /** Will this source run on the next tick, and where in the waterfall? */
+          runsAt: orderIdx === -1 ? null : orderIdx,
+          selectedOnCampaign: selected.includes(meta.id as AreSourceId),
+          enabledInWorkspace: mask[meta.id] !== false,
+          /** false = no credential row, no breaker, no ledger for this source. */
+          instrumented: d != null,
+          key: d
+            ? {
+                configured: d.credential.configured,
+                // Only table-mode sources have a validated status; for a legacy
+                // source "configured" is the whole of what is known.
+                status: d.credentialMode === "table" ? d.credential.status : null,
+                validatedAt: d.credential.lastValidatedAt ? new Date(d.credential.lastValidatedAt).toISOString() : null,
+                error: d.credential.validationError ?? null,
+              }
+            : null,
+          breaker: d
+            ? {
+                open: d.circuit.open,
+                failures: d.circuit.failures,
+                openUntil: d.circuit.openUntil ? new Date(d.circuit.openUntil).toISOString() : null,
+                /** false = process memory, forgotten on deploy (circuit.ts). */
+                durable: d.credentialMode === "table",
+              }
+            : null,
+          budget: d
+            ? {
+                leadsRemaining: d.leadsRemaining,
+                buckets: d.budget.map((b) => ({
+                  bucket: b.bucket,
+                  remaining: b.remaining,
+                  limit: b.limit,
+                  used: b.used,
+                  /** The vendor's own word for where the allowance comes from,
+                   *  or null — which the adapters use to mean "tracked
+                   *  locally", never "zero". */
+                  fundedBy: b.fundedBy ?? null,
+                })),
+              }
+            : null,
+          /** Live back-off state (A25), from the campaign's own discovery JSON. */
+          rest: rest && rest.nextAt
+            ? { emptyRuns: rest.empty, until: new Date(rest.nextAt).toISOString() }
+            : null,
+          lastAttempt: attempt
+            ? { raw: attempt.raw, kept: attempt.new, error: attempt.error ?? null, skipped: attempt.skipped ?? null }
+            : null,
+          spendToday: vendorSpend.length === 0 ? null : {
+            quantity: vendorSpend.reduce((a, r) => a + Number(r.quantity), 0),
+            calls: vendorSpend.reduce((a, r) => a + Number(r.calls), 0),
+            meters: vendorSpend.map((r) => ({ meter: r.meter, keySource: r.keySource, quantity: Number(r.quantity), calls: Number(r.calls) })),
+          },
+        };
+      });
+
+      return {
+        checkedAt: new Date().toISOString(),
+        /** Both labels the surface needs to stay honest about scope. */
+        spendScope: "workspace" as const,
+        spendDay: today,
+        /** The horizon of "no attempt on record" — never transcribed client-side. */
+        logRetentionDays: ENGINE_LOG_RETENTION_DAYS,
+        discovery: {
+          /** null = this campaign never ran discovery, which is not "0 found". */
+          lastRunAt: lastRun?.at ?? null,
+          lastRunNew: state.lastRunNew ?? null,
+          /** The campaign-wide 30-minute rest after a run that found nobody. */
+          restingUntil: restUntilMs && restUntilMs > Date.now() ? new Date(restUntilMs).toISOString() : null,
+          restWindowMinutes: Math.round(DISCOVERY_REST_MS / 60_000),
+          /** Empty, and the engine says so: no source will be called at all. */
+          noUsableSources: runOrder.length === 0,
+          explicitlyNone,
+        },
+        sources,
       };
     }),
 

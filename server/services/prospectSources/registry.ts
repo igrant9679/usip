@@ -72,6 +72,14 @@ export interface SourceStatus {
   /** Position in the workspace's checking order (0-based), null when unordered. */
   order: number | null;
   credential: Omit<CredentialRowView, "config"> & { config: Record<string, unknown> };
+  /**
+   * Where this source's credentials and circuit state live. It is not trivia:
+   * a `legacy` source keeps its breaker in a process-local Map (see
+   * circuit.ts), so a UI showing it a countdown is reading one container's
+   * memory, which a deploy forgets. Reported so a surface can SAY that
+   * instead of implying the state is durable (F12, 2026-10-30).
+   */
+  credentialMode: "table" | "legacy";
   circuit: CircuitState;
   budget: BudgetSnapshot[];
   /** Ledger-derived headroom for the leads bucket: null = uncapped/untracked. */
@@ -159,7 +167,7 @@ export async function describeSources(workspaceId: number, criteria?: SearchCrit
       acquisition: s.acquisition, implemented: isImplemented(s),
       enabled: mask[s.slug] !== false,
       order: idx === -1 ? null : idx,
-      credential: cred, circuit, budget, leadsRemaining,
+      credential: cred, credentialMode: s.credentialMode, circuit, budget, leadsRemaining,
       match: criteria ? matchCapabilities(caps, criteria) : null,
     };
   }));
