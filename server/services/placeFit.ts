@@ -4,7 +4,7 @@
  * Generalises `quickenrichPlaceCheck`, which answers the same question for one
  * vendor and one shape of target. Two things it deliberately does differently:
  *
- *  1. **No targets means "unknown", never "elsewhere".** The QuickEnrich check
+ *  1. **No targets means "no_targets", never "elsewhere".** The QuickEnrich check
  *     cannot be called with an empty state list: `country && !states.some(...)`
  *     is true for every recognisable country, so everyone comes back
  *     "elsewhere". It is correct today only because the engine guards the call.
@@ -27,7 +27,20 @@
  */
 import { COUNTRY_CODES, regionCountry } from "./prospectSources/bridge";
 
-export type PlaceVerdict = "inside" | "elsewhere" | "unknown";
+/**
+ * `no_targets` is NOT a shade of `unknown`, and keeping them apart is the point
+ * (2026-10-31). Both mean "no verdict", but they blame different things:
+ * `unknown` is a gap in the PERSON's data, `no_targets` a gap in the
+ * CAMPAIGN's. Collapsed into one label, the badge told an owner looking at a
+ * prospect reading "Boston, MA" that there was "not enough place detail to
+ * judge" — sending him to the prospect records when the campaign simply had no
+ * target area (verified live on ws 5 campaign 30, which has neither an ICP
+ * profile nor overrides, so all 11 rows read unknown).
+ *
+ * Nothing that acts on a verdict changes: every caller tests for `inside` or
+ * `elsewhere`, and `no_targets` is neither.
+ */
+export type PlaceVerdict = "inside" | "elsewhere" | "unknown" | "no_targets";
 
 /** A city target, with the country it was named beside if it was named. */
 interface CityTarget {
@@ -127,12 +140,14 @@ export function placeStringOf(row: {
  *
  * `inside` on a positive match of country, state or an exactly-named city;
  * `elsewhere` only when their country or state resolves and the targets
- * exclude it; `unknown` for everything else, including every blank place.
+ * exclude it; `no_targets` when the campaign named no places at all; `unknown`
+ * for everything else, including every blank place.
  */
 export function placeFit(place: string | null | undefined, targets: TargetPlaces): PlaceVerdict {
   // The guard the QuickEnrich check lacks. Nothing targeted means nothing can
-  // be outside it.
-  if (targets.empty) return "unknown";
+  // be outside it — and says so in its own words, rather than borrowing
+  // `unknown`, which claims the person's place was the problem.
+  if (targets.empty) return "no_targets";
   const parts = String(place ?? "").split(",").map(lower).filter(Boolean);
   if (parts.length === 0) return "unknown";
 

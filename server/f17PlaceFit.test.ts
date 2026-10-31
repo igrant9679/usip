@@ -38,7 +38,10 @@ describe("the two cases the old code got wrong", () => {
     // the difference is on the record.
     expect(quickenrichPlaceCheck("Richmond, Virginia, United States", [])).toBe("elsewhere");
     for (const place of ["Richmond, Virginia, United States", "Toronto, Ontario, Canada", "Paris, France", ""]) {
-      expect(fit(place, []), `no targets: ${place}`).toBe("unknown");
+      // 2026-10-31: was "unknown". Still not "elsewhere" — that is the trap
+      // this test was written for and it is untouched — but it now says WHOSE
+      // gap it is. See the no_targets describe block below.
+      expect(fit(place, []), `no targets: ${place}`).toBe("no_targets");
     }
   });
 });
@@ -266,11 +269,18 @@ describe("the verdict is computed, never stored", () => {
 });
 
 describe("the badge never dresses unknown as outside", () => {
-  it("has three distinct labels and a neutral one for unknown", () => {
+  // 2026-10-31: four, since `no_targets` split off from `unknown`. Its own
+  // assertions live in the no_targets block; what this one still guards is
+  // that every label is distinct and only `elsewhere` gets a warning colour.
+  it("has four distinct labels and a neutral one for unknown", () => {
     const badge = read("client/src/components/usip/are/PlaceVerdictBadge.tsx");
+    const labels = (badge.match(/label: "[^"]+"/g) ?? []);
+    expect(labels).toHaveLength(4);
+    expect(new Set(labels).size, "no two verdicts share a label").toBe(4);
     expect(badge).toContain('label: "In target area"');
     expect(badge).toContain('label: "Outside target area"');
     expect(badge).toContain('label: "Place unknown"');
+    expect(badge).toContain('label: "No target area"');
     // Unknown is muted, not a warning colour, and says what it means.
     expect(badge).toContain("not the same as being outside the area");
     const unknown = badge.slice(badge.indexOf("unknown: {"), badge.indexOf("};", badge.indexOf("unknown: {")));
@@ -286,6 +296,78 @@ describe("the badge never dresses unknown as outside", () => {
       expect(read(f), f).toContain('from "@/components/usip/are/PlaceVerdictBadge"');
       expect(read(f), f).toContain("<PlaceVerdictBadge verdict=");
     }
+  });
+});
+
+describe("no_targets is the campaign's gap, not the person's (2026-10-31)", () => {
+  /**
+   * Found by looking at the live app rather than at the code. ws 5 campaign 30
+   * has neither an ICP profile nor overrides, so it names no places and every
+   * one of its 11 rows read "Place unknown" — tooltip "Not enough place detail
+   * to judge", above a prospect whose place said "Boston, MA".
+   *
+   * The verdict was right and the sentence was wrong, and wrong in the
+   * expensive direction: it sent the reader to the prospect records when the
+   * only thing that could fix it was the campaign's targeting.
+   */
+  it("judges a perfectly readable place as no_targets when nothing is targeted", () => {
+    for (const place of ["Boston, MA", "Austin, Texas, United States", "Toronto, Ontario, Canada"]) {
+      expect(fit(place, []), place).toBe("no_targets");
+      // The distinction only earns its keep if it is NOT the person's verdict.
+      expect(fit(place, []), place).not.toBe("unknown");
+    }
+  });
+
+  it("still says unknown when the campaign DOES target and the place is unreadable", () => {
+    // The two must not collapse in the other direction either: a real target
+    // list plus a place we cannot read is the person's gap, and stays so.
+    expect(fit("", ["Virginia"])).toBe("unknown");
+    expect(fit("remote", ["Virginia"])).toBe("unknown");
+    expect(fit("Greater Boston Area", ["Virginia"])).toBe("unknown");
+  });
+
+  it("changes nothing that acts on a verdict", () => {
+    /**
+     * The whole safety argument for a fourth member: every consumer tests for
+     * `inside` or `elsewhere`, and `no_targets` is neither, so scoring, the
+     * free-preview screen and auto-reject all behave exactly as before.
+     */
+    const engine = read("server/areEngine.ts");
+    // An untargeted campaign scores every place the same, and never below zero.
+    const noGeos = { titles: [], industries: [], geos: [], keywords: [] };
+    expect(scoreIcpMatch({ geography: "Boston, MA" }, noGeos)).toBe(scoreIcpMatch({}, noGeos));
+    expect(scoreIcpMatch({ geography: "Boston, MA" }, noGeos)).toBeGreaterThanOrEqual(0);
+    // Every engine call site decides on `inside` or `elsewhere` within a few
+    // lines of the call — a window, because the ternary that assigns the
+    // verdict wraps and the comparison lands on a different line from the
+    // call. `no_targets` is neither, so none of these change.
+    let from = engine.indexOf("placeFit(");
+    let sites = 0;
+    while (from !== -1) {
+      const around = engine.slice(Math.max(0, from - 250), from + 400);
+      expect(around, `call site ${sites} decides on inside/elsewhere`).toMatch(/=== "(inside|elsewhere)"/);
+      sites += 1;
+      from = engine.indexOf("placeFit(", from + 1);
+    }
+    expect(sites, "engine call sites found").toBeGreaterThanOrEqual(3);
+    // Nothing branches on the new member. (Not a blanket ban on `=== "unknown"`
+    // in this file: `quickenrichPlaceCheck` is a different function with its
+    // own three verdicts, and line ~3064 tallies them for a log.)
+    expect(engine).not.toContain('=== "no_targets"');
+  });
+
+  it("gives the badge its own sentence, and stops blaming a place it never read", () => {
+    const badge = read("client/src/components/usip/are/PlaceVerdictBadge.tsx");
+    expect(badge).toContain('label: "No target area"');
+    const block = badge.slice(badge.indexOf("no_targets: {"), badge.indexOf("};", badge.indexOf("no_targets: {")));
+    expect(block).toContain("nothing to judge anyone against");
+    // Neutral, like unknown: a campaign without targeting is a setup gap, not
+    // a warning about this person.
+    expect(block).toContain("text-muted-foreground");
+    expect(block).not.toMatch(/rose|amber|destructive/);
+    // And the "no place was recorded" tail must not reach it — that sentence
+    // is the exact blame this verdict exists to remove.
+    expect(badge).toContain('verdict === "no_targets" ? ""');
   });
 });
 
@@ -318,18 +400,22 @@ describe("gaps found by mutation testing, 2026-10-30", () => {
     expect(elsewhere).toBeGreaterThanOrEqual(0);
   });
 
-  it("keeps both early guards, though either alone yields the same answer", () => {
+  it("keeps both early guards — and the first one now carries its own answer", () => {
     /**
-     * Mutants m2 and m6 removed the `targets.empty` and the blank-place
-     * early returns, and the suite stayed green — correctly, because the
-     * `targeted.size > 0` check independently makes both cases `unknown`.
-     * They are redundant by construction, not dead by accident, and the
-     * redundancy is deliberate: the two traps this module exists to avoid are
-     * each guarded where a reader will look for them. Pinned as source, with
-     * this comment, so a later removal is a decision rather than a drift.
+     * Mutants m2 and m6 removed the `targets.empty` and the blank-place early
+     * returns, and the suite stayed green — correctly, because the
+     * `targeted.size > 0` check independently made both cases `unknown`.
+     * Pinned as source, with that reasoning, so a later removal would be a
+     * decision rather than a drift.
+     *
+     * 2026-10-31: that reasoning expired for the FIRST guard. `targets.empty`
+     * now returns `no_targets`, which no other path produces, so deleting it
+     * changes the answer rather than arriving at it another way. It is
+     * load-bearing, and the "no_targets is the campaign's gap" block proves it
+     * behaviourally — which is why only the blank-place guard still needs a
+     * source pin.
      */
     const fitSrc = read("server/services/placeFit.ts");
-    expect(fitSrc).toContain('if (targets.empty) return "unknown";');
     expect(fitSrc).toContain('if (parts.length === 0) return "unknown";');
     expect(fitSrc).toContain("if (placeCountry && targeted.size > 0) {");
   });

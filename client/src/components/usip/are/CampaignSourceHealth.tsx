@@ -76,6 +76,24 @@ const TONE_CLASS: Record<"ok" | "muted" | "warn" | "bad", string> = {
   bad: "text-rose-700 dark:text-rose-400",
 };
 
+/**
+ * Run order, because the sentence above the table SAYS the list is run order
+ * and names "a lower source" as the one that never gets paid twice.
+ *
+ * It wasn't (verified live 2026-10-31). The server returns registry order, and
+ * nothing sorted it, so on ws 2 campaign 38 QuickEnrich — which runs FIRST,
+ * and was the only source returning rows — sat sixth from the top, below four
+ * sources that run after it. A reader doing exactly what the sentence said
+ * would have had dedup precedence backwards. The ORDER column was right the
+ * whole time, which is what made it worth trusting the list.
+ *
+ * Sources that will not run have no position in the order, so they sort last
+ * and keep registry order among themselves (Array.prototype.sort is stable).
+ */
+export function inRunOrder(sources: readonly Source[]): Source[] {
+  return [...sources].sort((a, b) => (a.runsAt ?? Number.POSITIVE_INFINITY) - (b.runsAt ?? Number.POSITIVE_INFINITY));
+}
+
 function SourceRow({ s }: { s: Source }) {
   const v = verdict(s);
   const budget = s.budget;
@@ -237,7 +255,7 @@ export function CampaignSourceHealth({ campaignId }: { campaignId: number }) {
               </tr>
             </thead>
             <tbody>
-              {data.sources.map((s) => <SourceRow key={s.slug} s={s} />)}
+              {inRunOrder(data.sources).map((s) => <SourceRow key={s.slug} s={s} />)}
             </tbody>
           </table>
         </div>
