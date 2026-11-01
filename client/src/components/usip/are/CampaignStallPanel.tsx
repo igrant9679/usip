@@ -244,7 +244,13 @@ export function CampaignStallPanel({ campaignId, onJump }: {
                     {g.enrichmentFailed.reasons.map((r, i) => {
                       const d = describeEnrichmentError(r.reason);
                       return (
-                        <li key={i} className="text-[11px]">
+                        /* The label is the failure class; the stored string
+                           lives on hover. Until 2026-10-31 this printed the
+                           reason verbatim, which for a Drizzle error is an
+                           INSERT statement — two of them filled this panel on
+                           ws 2 campaign 38, cut mid-token, in the one place
+                           built to say why a campaign is stuck. */
+                        <li key={i} className="text-[11px]" title={d?.detail}>
                           <span className="tabular-nums text-muted-foreground">{r.count}×</span>{" "}
                           <span className={d ? TONE_CLASS[d.tone] : "text-muted-foreground"}>
                             {d?.label ?? "No reason recorded"}

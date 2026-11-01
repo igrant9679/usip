@@ -31,8 +31,9 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ARE_SOURCES } from "@shared/areSources";
-import { inRunOrder } from "@/components/usip/are/CampaignSourceHealth";
+import { ARE_SOURCES, ARE_SOURCE_IDS } from "@shared/areSources";
+import { PROSPECT_SOURCE_SLUGS } from "@shared/prospectSources";
+import { inRunOrder, verdict } from "@/components/usip/are/CampaignSourceHealth";
 import { DISCOVERY_REST_MS, discoveryBackoffMs } from "./areEngine";
 
 const root = join(__dirname, "..");
@@ -166,7 +167,14 @@ describe("all seven ARE sources are listed, instrumented or not", () => {
   });
 
   it("an uninstrumented source says so rather than showing blanks", () => {
-    expect(strip).toContain("Not instrumented — no key status, breaker or budget is tracked for this source.");
+    // 2026-10-31: the sentence this pinned was true and still read as a
+    // footnote to the green "Ready" beside it, so it was rewritten to carry
+    // the consequence instead. The old wording ("no key status, breaker or
+    // budget is tracked for this source") is deliberately gone; what must
+    // survive is that the absence is stated at all.
+    expect(strip).toContain("Not instrumented — no credential, breaker or budget record exists for this source");
+    expect(strip).toContain("there is nothing to");
+    expect(strip).toContain("read a verdict from");
     expect(strip).toContain("not tracked");
   });
 
@@ -308,5 +316,108 @@ describe("the table is in the order its own sentence promises (2026-10-31)", () 
     // If the sentence goes, the sort is no longer load-bearing and this whole
     // block should be revisited rather than quietly kept.
     expect(strip).toContain("in the order they run");
+  });
+});
+
+/**
+ * "Ready" was asserted from the absence of evidence (2026-10-31).
+ *
+ * Found live on ws 2 campaign 38: internal, google_business, linkedin and news
+ * each showed the green "Ready" on the same row as "no key status, breaker or
+ * budget is tracked for this source". They have no credential row, no breaker
+ * and no ledger, so every gate in verdict() that could have failed them is
+ * unreachable, and they fell through to the last line. The panel exists to
+ * stop a zero being read as a measurement; this was the same error one layer
+ * up — an unknown read as a pass, in the surface built to prevent it.
+ *
+ * The honest reading is that the engine will call their branch and nothing
+ * checks whether that branch can do anything.
+ */
+describe("an uninstrumented source is unknown, not ready (2026-10-31)", () => {
+  type Row = Parameters<typeof verdict>[0];
+  const row = (over: Record<string, unknown>): Row => ({
+    slug: "internal",
+    label: "Internal CRM",
+    runsAt: 0,
+    selectedOnCampaign: true,
+    enabledInWorkspace: true,
+    instrumented: false,
+    key: null,
+    breaker: null,
+    budget: null,
+    rest: null,
+    lastAttempt: null,
+    spendToday: null,
+    ...over,
+  }) as unknown as Row;
+
+  it("never reads Ready, and never reads green", () => {
+    const v = verdict(row({}));
+    expect(v.text).not.toBe("Ready");
+    expect(v.text).toBe("Will run — nothing here checks that it can");
+    // Muted, not emerald: an absence of evidence is a quiet fact, which is
+    // also how F17 renders an unknown place. "ok" would be the same lie in a
+    // different font.
+    expect(v.tone).toBe("muted");
+    expect(v.tone).not.toBe("ok");
+  });
+
+  it("still says Ready for a source that something actually checked", () => {
+    // The fix must not have been to delete the state. An instrumented source
+    // with a configured key, a closed breaker and a place in the order has
+    // evidence behind the word.
+    const v = verdict(row({
+      slug: "quickenrich",
+      instrumented: true,
+      key: { configured: true, status: "valid", validatedAt: null, error: null },
+      breaker: { open: false, failures: 0, openUntil: null, durable: false },
+    }));
+    expect(v).toEqual({ text: "Ready", tone: "ok" });
+  });
+
+  it("says 'will not run' ahead of it, because that one is known", () => {
+    // Order matters: a source with no position in the waterfall will not run
+    // at all, which is a fact, and it beats "nothing checks it".
+    const v = verdict(row({ runsAt: null }));
+    expect(v.text).toBe("Will not run");
+  });
+
+  it("checks instrumentation after every gate it could fail, and before Ready", () => {
+    const fn = strip.indexOf("function verdict(");
+    expect(fn, "verdict()").toBeGreaterThan(-1);
+    // Bounded by the declaration that follows verdict(), rather than by a
+    // brace: an anchor with no escapes in it.
+    const end = strip.indexOf("const TONE_CLASS", fn);
+    expect(end, "TONE_CLASS after verdict()").toBeGreaterThan(fn);
+    const body = strip.slice(fn, end);
+    const at = (needle: string) => {
+      const i = body.indexOf(needle);
+      expect(i, needle).toBeGreaterThan(-1);
+      return i;
+    };
+    expect(at("s.runsAt == null")).toBeLessThan(at("!s.instrumented"));
+    expect(at("!s.instrumented")).toBeLessThan(at('text: "Ready"'));
+  });
+
+  it("pins the four sources this applies to, so a fifth cannot arrive quietly", () => {
+    /**
+     * `instrumented` is the server's `d != null` from describeSources, and
+     * describeSources only knows the registry — so an ARE source with no
+     * adapter in SOURCE_FACTORIES is an uninstrumented one. These four are
+     * hand-written branches in runDiscovery.
+     *
+     * Pinned as a set rather than a count: adding an eighth ARE source without
+     * an adapter would otherwise inherit the new state silently, and whoever
+     * adds it should decide that on purpose. If this fails, the question is
+     * whether the new source really has no credential, breaker or budget — not
+     * whether to widen the list.
+     */
+    const registered = new Set<string>(PROSPECT_SOURCE_SLUGS as readonly string[]);
+    const uninstrumented = (ARE_SOURCE_IDS as readonly string[]).filter((id) => !registered.has(id));
+    expect(uninstrumented).toEqual(["internal", "google_business", "linkedin", "news"]);
+    // And the other three are instrumented, so the split is real rather than
+    // an empty assertion about an empty set.
+    const instrumented = (ARE_SOURCE_IDS as readonly string[]).filter((id) => registered.has(id));
+    expect(instrumented).toEqual(["apollo", "quickenrich", "warmysender"]);
   });
 });
