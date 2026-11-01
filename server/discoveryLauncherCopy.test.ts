@@ -120,14 +120,102 @@ describe("the discovery launcher describes the run it actually performs", () => 
     expect(read("client/src/App.tsx")).toContain('<Route path="/v2/people">');
   });
 
-  it("does not promise a review queue for the people it finds", () => {
-    // The doc comment said results land in "/prospects (verified) or the Needs
-    // Review queue". The needs-review count in the run summary is ACCOUNTS
-    // needing review from company association — every person found is
-    // persisted. Two different nouns, one of which sent a reader looking for a
-    // queue that was never holding their prospects.
-    expect(launcher).not.toContain("Needs Review");
-    expect(launcherDoc).not.toContain("Needs Review");
+  it("keeps the two 'needs review' nouns apart", () => {
+    /**
+     * Corrected mid-PR, 2026-11-01. This first asserted the doc comment did
+     * NOT mention Needs Review at all, on the reasoning that the run summary's
+     * needs-review count is about ACCOUNTS from company association. That
+     * reasoning was wrong by omission: discovered PEOPLE also carry a
+     * needs_review state, as a `verificationStatus` set by confidence tier. So
+     * banning the phrase deleted something true. Both exist, they are
+     * different, and the comment has to say which it means.
+     */
+    // The people: a status on the row, by confidence tier.
+    expect(read("server/services/discovery/consolidate.ts"))
+      .toContain('const status: ScoredCandidate["status"] = tier === "high" ? "verified" : "needs_review";');
+    // The accounts: a count in the run summary, from company association.
     expect(service).toContain("accounts created, ${s.needsReview} need review");
+    // And the comment names both rather than one or neither.
+    expect(launcherDoc).toContain("verificationStatus");
+    expect(launcherDoc).toContain("counts ACCOUNTS from company association");
+  });
+
+  it("the Find Prospects help article names the same two lists", () => {
+    // Found by the repo-wide sweep, 2026-11-01: it carried "Web" in BOTH the
+    // Person and the Account list. Everything else in it was already right.
+    const seed = read("server/seedHelpContent.ts");
+    const i = seed.indexOf("**Find Prospects** (sidebar");
+    expect(i, "the Find Prospects article").toBeGreaterThan(-1);
+    const article = seed.slice(i, seed.indexOf("`,", i));
+    expect(article).toContain("Person: LinkedIn, News, Apollo, QuickEnrich");
+    expect(article).toContain("Account: Google Business, News, Apollo");
+    expect(article).not.toMatch(/\bWeb\b/);
+  });
+
+  it("the engine's own explainer names the real sources, and no removed one", () => {
+    /**
+     * The worst instance the sweep found. It claimed "web scraping" AND
+     * "industry event attendee lists" — and `events` was not merely removed,
+     * it was disabled for FABRICATING attendees (see shared/areSources.ts), so
+     * the page explaining how the engine works advertised a source taken out
+     * for inventing people. It also omitted the three vendor databases, which
+     * are the sources that actually return rows.
+     */
+    const hub = read("client/src/pages/usip/AREHub.tsx");
+    const i = hub.indexOf('title: "Prospect Discovery"');
+    expect(i, "the Prospect Discovery card").toBeGreaterThan(-1);
+    const card = hub.slice(i, hub.indexOf("},", i));
+    for (const word of ["CRM", "QuickEnrich", "Apollo", "WarmySender", "Google Business", "LinkedIn", "news"]) {
+      expect(card, word).toContain(word);
+    }
+    // One word per ARE source, so an eighth source makes this fail rather than
+    // leaving the explainer quietly short.
+    expect(ARE_SOURCE_IDS).toHaveLength(7);
+  });
+
+  it("no copy file advertises a source that was taken out", () => {
+    /**
+     * The point of the sweep, kept. The defect was never "stale copy on one
+     * control" — it was one wrong source list copied into several homes, and
+     * three of the four were found only by looking for the others.
+     *
+     * Both phrases are banned outright. "web scraping" because the source is
+     * gone; a URL scrape still exists on the campaign's Scraper tab and should
+     * be called that, so if this fails on legitimate Scraper-tab copy, name the
+     * tab rather than widening the ban. "event attendee" because `events` was
+     * disabled for fabricating them, which no copy should ever offer.
+     */
+    const COPY = [
+      "server/seedHelpContent.ts",
+      "server/seedHelpOperatorManual.ts",
+      "server/productKnowledge.ts",
+      "client/src/pages/usip/AREHub.tsx",
+      "client/src/pages/usip/ARECampaignDetail.tsx",
+      "client/src/pages/usip/ARECampaigns.tsx",
+      "client/src/pages/usip/ARESettings.tsx",
+    ];
+    for (const f of COPY) {
+      const text = read(f);
+      expect(text, f + " claims web scraping").not.toMatch(/web scraping/i);
+      expect(text, f + " claims event attendees").not.toMatch(/event attendee/i);
+    }
+    expect(ARE_SOURCE_IDS as readonly string[]).not.toContain("events");
+  });
+
+  it("the Find Prospects tour names the same sources, and not web", () => {
+    /**
+     * The fourth home for this claim, found while checking the other three
+     * (2026-11-01). The seeded tour step for /find-prospects read "Results fan
+     * out across LinkedIn, web, and news" — the same removed source, and the
+     * same two missing ones, one surface over. That page runs BOTH modes, so
+     * it names both lists.
+     */
+    const seed = read("server/seedHelpContent.ts");
+    const step = seed.slice(seed.indexOf('{ title: "Run discovery"'));
+    const body = step.slice(0, step.indexOf("},") + 2);
+    expect(body).not.toMatch(/\bweb\b/i);
+    for (const word of ["LinkedIn", "Apollo", "QuickEnrich", "news", "Google Business"]) {
+      expect(body, word).toContain(word);
+    }
   });
 });

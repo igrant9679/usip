@@ -1529,9 +1529,16 @@ function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; 
  *  It calls `discovery.search` in PERSON mode, whose candidates are
  *  linkedin / news / apollo / quickenrich (services/discovery/index.ts),
  *  narrowed by the workspace source mask. That is NOT the ARE engine's own
- *  per-campaign waterfall, and it is not the account-mode list. New people are
- *  inserted into `prospects` — the People table — and the per-step trace
- *  appears in the campaign's unified Logs tab.
+ *  per-campaign waterfall, and it is not the account-mode list.
+ *
+ *  New people are inserted into `prospects` — the People table — each carrying
+ *  `verificationStatus` by confidence tier: high becomes `verified`, medium and
+ *  low become `needs_review` (services/discovery/consolidate.ts). That is a
+ *  DIFFERENT thing from the "need review" count in the run summary, which
+ *  counts ACCOUNTS from company association. Two nouns, one phrase; naming
+ *  which one is meant is the whole of the difference between telling a reader
+ *  where their people went and sending them to the wrong queue. The per-step
+ *  trace appears in the campaign's unified Logs tab.
  *
  *  The copy below was wrong in four ways until 2026-11-01, on the control that
  *  spends vendor credits. It advertised "LinkedIn + Web + News + Google

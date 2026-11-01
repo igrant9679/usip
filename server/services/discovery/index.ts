@@ -424,9 +424,11 @@ export async function runDiscovery(
     return { runId, rawFindCount: 0, perSource: {}, prospectsCreated: 0, prospectsUpdated: 0, highConfidenceCount: 0, mediumConfidenceCount: 0, lowConfidenceCount: 0 };
   }
 
-  // Choose the source mix per mode. Person mode favors profile lookups
-  // (LinkedIn + web pages with team bios). Account mode favors
-  // company-shaped sources (Google Business + company sites + news).
+  // Choose the source mix per mode. Person mode favors profile lookups and the
+  // vendor databases (LinkedIn, news, Apollo, QuickEnrich). Account mode favors
+  // company-shaped sources (Google Business, news, Apollo). Neither includes
+  // web pages or company sites: that source was removed on 2026-10-27, and this
+  // comment said otherwise until 2026-11-01.
   // Both run in parallel so one slow source doesn't gate the others.
   //
   // The workspace's source mask (Settings, workspace_settings.areSourceConfig,
