@@ -66,6 +66,42 @@ function stepMeta(s: Step): { icon: any; label: string; summary: string } {
 const TABS = ["Editor", "Contacts", "Activity", "Report", "Settings"] as const;
 type Tab = (typeof TABS)[number];
 
+/**
+ * The enrollment states the schema actually has — `drizzle/schema.ts` →
+ * `enrollments.status`, the mysqlEnum — in the order a rep reads them.
+ *
+ * Pinned by `server/sequenceContactsTab.test.ts` against that enum: a fifth
+ * state added there without a tile here would quietly vanish from this grid
+ * and the counts would stop summing to the rows below them.
+ */
+const ENROLLMENT_STATES = [
+  { key: "active", label: "Active", pill: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300" },
+  { key: "paused", label: "Paused", pill: "bg-amber-100 text-amber-900 dark:bg-amber-950/50 dark:text-amber-300" },
+  { key: "finished", label: "Finished", pill: "bg-blue-100 text-blue-800 dark:bg-blue-950/50 dark:text-blue-300" },
+  { key: "exited", label: "Exited", pill: "bg-muted text-muted-foreground" },
+] as const;
+
+/**
+ * WHAT WAS DELETED HERE, and why there are four tiles and not six
+ * (2026-11-01). The Contacts tab used to render six: "Total" and "In
+ * progress" were the same enrolled count printed twice, and Cold /
+ * Approaching / Replied / Interested were the literal number `0` — in the
+ * accent colour, in the same weight and size as the real count — so four of
+ * six tiles were decoration that read as measurement, with an empty-state
+ * card below them that never listed anybody however many were enrolled.
+ *
+ * Nothing in the schema backs those four. An `enrollments` row carries
+ * status, currentStep, startedAt, nextActionAt and resumeAt; there is no
+ * engagement temperature in it anywhere. They are deleted rather than mapped
+ * onto the nearest column, because a tile that is absent asks a question and
+ * a tile that is wrong answers one.
+ *
+ * "Replied" is the one of the four that is buildable, but not from enrollment
+ * state: it needs `sequences.getPerformanceAnalytics`
+ * (server/services/sequenceAnalytics.ts), which legacy /sequences renders and
+ * v2 does not. Recorded as a gap in HANDOFF.md rather than faked here.
+ */
+
 export default function SequenceEditor() {
   const { id: idStr } = useParams<{ id: string }>();
   const id = Number(idStr);
@@ -79,7 +115,21 @@ export default function SequenceEditor() {
   const updateSteps = trpc.sequences.updateSteps.useMutation({ onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); }, onError: (e) => toast.error(e.message) });
   const updateMeta = trpc.sequences.update.useMutation({ onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); }, onError: (e) => toast.error(e.message) });
 
+  const [tabForQuery, setTabForQuery] = useState(false);
+  /**
+   * WHO is enrolled, from the one resolver that already answers it
+   * (`sequences.listEnrollments` — it batch-resolves the name and the
+   * /prospects/:id link per row, added for the owner 2026-09-20). Both the
+   * tiles and the list read these same rows, so the counts can never disagree
+   * with what is listed under them.
+   */
+  const enrollmentsQ = trpc.sequences.listEnrollments.useQuery(
+    { sequenceId: id },
+    { enabled: Number.isFinite(id) && tabForQuery },
+  );
+
   const [tab, setTab] = useState<Tab>("Editor");
+  useEffect(() => { if (tab === "Contacts") setTabForQuery(true); }, [tab]);
   const [steps, setSteps] = useState<Step[]>([]);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -250,25 +300,11 @@ export default function SequenceEditor() {
 
           {/* CONTACTS */}
           {tab === "Contacts" && (
-            <div className="p-4 md:p-6">
-              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2 mb-4">
-                {[
-                  { l: "Total", v: seq.enrolledCount ?? 0 }, { l: "Cold", v: 0 }, { l: "Approaching", v: 0 },
-                  { l: "Replied", v: 0 }, { l: "Interested", v: 0 }, { l: "In progress", v: seq.enrolledCount ?? 0 },
-                ].map((s) => (
-                  <div key={s.l} className="rounded-lg border bg-card p-2.5 text-center shadow-sm">
-                    <div className="text-lg font-semibold tabular-nums" style={{ color: accent }}>{s.v}</div>
-                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{s.l}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="rounded-xl border bg-card shadow-sm py-14 text-center">
-                <Users className="size-8 text-muted-foreground opacity-40 mx-auto mb-2" />
-                <div className="text-sm font-medium">{(seq.enrolledCount ?? 0) === 0 ? "No contacts enrolled yet" : `${seq.enrolledCount} enrolled`}</div>
-                <p className="text-xs text-muted-foreground mt-1">Add people from the People page or a list to start this sequence.</p>
-                <Button size="sm" className="mt-3" style={{ backgroundColor: accent }} onClick={() => setLocation("/v2/people")}>Add contacts</Button>
-              </div>
-            </div>
+            <ContactsTab
+              accent={accent}
+              query={enrollmentsQ}
+              onAddContacts={() => setLocation("/v2/people")}
+            />
           )}
 
           {/* ACTIVITY */}
@@ -325,6 +361,160 @@ export default function SequenceEditor() {
         </div>
       </div>
     </Shell>
+  );
+}
+
+/**
+ * The Contacts tab: four counted states, then the people themselves.
+ *
+ * Every number here is counted off the rows listed below it, and an unknown
+ * is never drawn as a zero — while the query is in flight or has failed, the
+ * tiles read "—" and the error says so in words. That is the whole point of
+ * the rewrite: the tab's previous zeros were not measurements.
+ */
+function ContactsTab({
+  accent, query, onAddContacts,
+}: {
+  accent: string;
+  query: { data?: unknown; isError: boolean; error?: { message: string } | null };
+  onAddContacts: () => void;
+}) {
+  /**
+    * `known === null` means NOT READ YET, and every number below asks it
+    * first. It is keyed off the rows existing rather than off a loading flag:
+    * the query is enabled only once this tab is opened, so on the first paint
+    * `isLoading` is still false with no data in hand — which rendered four
+    * zeros and "No contacts enrolled yet" for a frame before the fetch even
+    * started. A zero that is true a moment later is still a zero that was
+    * never measured.
+    */
+  const rows = Array.isArray(query.data) ? (query.data as any[]) : null;
+  const known = query.isError ? null : rows;
+
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const r of known ?? []) c[String(r?.status)] = (c[String(r?.status)] ?? 0) + 1;
+    return c;
+  }, [known]);
+
+  // Rows whose status is not one of the four. The mysqlEnum makes this
+  // impossible today and the guard test pins the enum, but counting the
+  // remainder means the tiles always sum to the list even if it stops being.
+  const unrecognised = known
+    ? known.length - ENROLLMENT_STATES.reduce((n, s) => n + (counts[s.key] ?? 0), 0)
+    : 0;
+
+  /**
+   * "Enrolled" means active + paused + finished — the same definition
+   * `liveEnrolledCounts` uses for the count on the Sequences list and in the
+   * people picker, so this header cannot contradict them. An exited row was
+   * taken out of the sequence and is reported in its own tile instead.
+   */
+  const enrolled = known
+    ? (counts.active ?? 0) + (counts.paused ?? 0) + (counts.finished ?? 0)
+    : null;
+
+  const ordered = useMemo(() => {
+    const rank = new Map(ENROLLMENT_STATES.map((s, i) => [s.key as string, i]));
+    return [...(known ?? [])].sort((a, b) =>
+      (rank.get(String(a?.status)) ?? 9) - (rank.get(String(b?.status)) ?? 9) || (a?.id ?? 0) - (b?.id ?? 0),
+    );
+  }, [known]);
+
+  return (
+    <div className="p-4 md:p-6">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-[12px] font-medium px-2 py-1 rounded-md border bg-card inline-flex items-center gap-1.5">
+          <Users className="size-3.5" style={{ color: accent }} />
+          {enrolled === null ? "Enrollments" : `${enrolled} enrolled`}
+        </span>
+        {known === null && !query.isError && (
+          <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1">
+            <Loader2 className="size-3 animate-spin" /> Reading enrollments…
+          </span>
+        )}
+      </div>
+
+      {query.isError && (
+        <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+          These counts could not be read, so they are shown as unknown rather than zero.
+          {query.error?.message ? ` ${query.error.message}` : ""}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+        {ENROLLMENT_STATES.map((s) => (
+          <div key={s.key} className="rounded-lg border bg-card p-2.5 text-center shadow-sm">
+            <div className="text-lg font-semibold tabular-nums" style={known ? { color: accent } : undefined}>
+              {known ? (counts[s.key] ?? 0) : <span className="text-muted-foreground" title="Not read yet — not zero">—</span>}
+            </div>
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {unrecognised > 0 && (
+        <div className="mb-3 text-[11px] text-muted-foreground">
+          {unrecognised} enrollment{unrecognised === 1 ? "" : "s"} in a state this tab does not have a tile for — listed below.
+        </div>
+      )}
+
+      {query.isError ? null : known === null ? (
+        <div className="rounded-xl border bg-card shadow-sm divide-y divide-border/60">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="px-3 py-3"><div className="h-4 w-48 bg-muted/50 rounded animate-pulse" /></div>
+          ))}
+        </div>
+      ) : ordered.length === 0 ? (
+        <div className="rounded-xl border bg-card shadow-sm py-14 text-center">
+          <Users className="size-8 text-muted-foreground opacity-40 mx-auto mb-2" />
+          <div className="text-sm font-medium">No contacts enrolled yet</div>
+          <p className="text-xs text-muted-foreground mt-1">Add people from the People page or a list to start this sequence.</p>
+          <Button size="sm" className="mt-3" style={{ backgroundColor: accent }} onClick={onAddContacts}>Add contacts</Button>
+        </div>
+      ) : (
+        <ul className="rounded-xl border bg-card shadow-sm divide-y divide-border/60">
+          {ordered.map((e) => {
+            const state = ENROLLMENT_STATES.find((s) => s.key === e?.status);
+            const name = e?.personName || `Enrollment #${e?.id}`;
+            const href = e?.personId ? `/prospects/${e.personId}` : e?.leadHref ?? null;
+            return (
+              <li key={e?.id} className="flex items-center gap-2 px-3 py-2.5 text-[13px]">
+                <span className="size-7 shrink-0 rounded-full flex items-center justify-center text-[10px] font-semibold" style={{ backgroundColor: `${accent}1f`, color: accent }}>
+                  {(e?.personName ?? "?").trim().charAt(0).toUpperCase() || "?"}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium">
+                    {href ? <Link href={href} className="hover:underline">{name}</Link> : <span>{name}</span>}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground truncate">
+                    Step {(e?.currentStep ?? 0) + 1}
+                    {e?.nextActionAt && ` · Next ${new Date(e.nextActionAt).toLocaleDateString()}`}
+                    {/* A paused row with a resumeAt is an out-of-office snooze that
+                        resumes itself, not a dead end — the rep needs to see that
+                        before resuming it by hand on top of the sweep. */}
+                    {e?.status === "paused" && e?.resumeAt && ` · Resumes ${new Date(e.resumeAt).toLocaleDateString()}`}
+                  </div>
+                </div>
+                <span className={cn("shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide", state?.pill ?? "bg-muted text-muted-foreground")}>
+                  {state?.label ?? String(e?.status ?? "unknown")}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {/*
+        Enrollment management — resume / exit / pause-on-reply, and the bulk
+        enrol picker — lives on legacy /sequences and is not here. The gap is
+        recorded in HANDOFF.md; this tab reads, it does not act, so nothing on
+        it can change an enrollment by accident.
+      */}
+      <div className="mt-3 text-[11px] text-muted-foreground">
+        Read-only. Pause, resume and exit are on the Sequences list for now.
+      </div>
+    </div>
   );
 }
 
