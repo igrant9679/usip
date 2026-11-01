@@ -10,10 +10,18 @@ import type { ProspectRecord } from "./types";
 
 /** Country names → ISO codes the vendors filter on. Unmapped geos stay as
  *  state/city text — never guessed into a country. */
-/** Exported for @see services/placeFit, which needs the same vocabulary.
- *  NOTE: services/quickenrich.ts holds a byte-identical private copy of this
- *  table (noted 2026-10-30, not merged here: that file is a live vendor path
- *  and this was not the change to destabilise it). */
+/** Exported for @see services/placeFit and @see services/quickenrich, which
+ *  need the same vocabulary. The second of those kept a byte-identical private
+ *  copy until 2026-11-01 — deferred on 2026-10-30 because it is a live vendor
+ *  path and that was not the change to destabilise. Collapsed now, after
+ *  checking the two were still identical character for character: they were,
+ *  all 24 entries, so there was no side to pick. quickenrich.ts already
+ *  imported `regionCountry` from here, so this added no new edge to the graph.
+ *
+ *  If you are about to copy this table again: a geo vocabulary that disagrees
+ *  with itself makes one surface call a person inside the territory and
+ *  another call the same person elsewhere, which is the class of bug F17 exists
+ *  to remove. */
 export const COUNTRY_CODES: Record<string, string> = {
   "united states": "US", usa: "US", us: "US", america: "US", "united states of america": "US",
   "united kingdom": "GB", uk: "GB", "great britain": "GB", england: "GB",

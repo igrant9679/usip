@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { _clearTargetPlaceCache, parseTargetPlaces, placeFit, placeStringOf } from "./services/placeFit";
 import { quickenrichPlaceCheck } from "./services/quickenrich";
 import { scoreIcpMatch, territoryModeOf } from "./areEngine";
+import { icpLabels } from "@shared/icpShape";
 
 const root = join(__dirname, "..");
 const read = (rel: string) => readFileSync(join(root, rel), "utf8").replace(/\r\n/g, "\n");
@@ -164,7 +165,15 @@ describe("target parsing", () => {
 describe("the scorer no longer uses a substring test", () => {
   it("scoreIcpMatch asks placeFit, and the old includes() is gone", () => {
     const engine = read("server/areEngine.ts");
-    const scorer = engine.slice(engine.indexOf("function scoreIcpMatch"), engine.indexOf("function scoreIcpMatch") + 2000);
+    // 2026-11-01: this was a fixed 2000-character window, which stopped
+    // reaching the geo block when the comment above it was corrected — the
+    // test failed on a comment edit while the code it guards was untouched.
+    // Anchored to the function's own last line instead, so it covers the whole
+    // scorer however long the prose inside it gets.
+    const scorerStart = engine.indexOf("function scoreIcpMatch");
+    const scorerEnd = engine.indexOf("return Math.min(100, score);", scorerStart);
+    expect(scorerEnd, "end of scoreIcpMatch").toBeGreaterThan(scorerStart);
+    const scorer = engine.slice(scorerStart, scorerEnd);
     expect(scorer).toContain("placeFit(");
     // The exact expression measured as wrong in the evidence pass.
     expect(scorer).not.toContain("geo.includes(gg)");
@@ -382,12 +391,22 @@ describe("gaps found by mutation testing, 2026-10-30", () => {
     expect(fit("Kansas City, Missouri, United States", ["Kansas"])).toBe("elsewhere");
   });
 
-  it("never penalises a place it could not read", () => {
-    // Mutant m7 scored `unknown` at -15 and nothing noticed, because no test
-    // looked at the number. An unreadable place must cost nothing: two
-    // discovery sources write an empty string and a third writes none at all,
-    // so penalising unknown would push whole sources down the queue for a
-    // property of our own data rather than of the person.
+  it("costs an unreadable place no more than being elsewhere — and that is 15", () => {
+    /**
+     * Renamed 2026-11-01. It was "never penalises a place it could not read",
+     * which is what the scorer's own comment claimed and what the handoff note
+     * repeated — and it is not what these numbers say: blank and elsewhere are
+     * equal, and both sit 15 below inside. The old title was the over-claim,
+     * the assertions under it were right all along, and nothing read the gap.
+     * So the gap is asserted and named now, because that is the sentence the
+     * comment in areEngine.ts is allowed to make.
+     *
+     * The original reason the assertions exist is unchanged: mutant m7 scored
+     * `unknown` at -15 and nothing noticed, because no test looked at the
+     * number. Two discovery sources write an empty string for place and a
+     * third writes none at all, so scoring unknown BELOW elsewhere would push
+     * whole sources down the queue for a property of our own data.
+     */
     const icp = { titles: [], industries: [], geos: ["Virginia"], keywords: [] };
     const blank = scoreIcpMatch({}, icp);
     const elsewhere = scoreIcpMatch({ geography: "Columbus, Ohio, United States" }, icp);
@@ -395,9 +414,26 @@ describe("gaps found by mutation testing, 2026-10-30", () => {
     expect(blank).toBe(0);
     expect(elsewhere).toBe(0);
     expect(inside).toBe(15);
+    // Equal to each other, and both a full 15 behind in-territory. Either half
+    // of that is a product decision; this records which one is in force.
+    expect(blank).toBe(elsewhere);
+    expect(inside - blank).toBe(15);
     // Nothing in the scorer may go negative: the column is an unsigned 0-100.
     expect(blank).toBeGreaterThanOrEqual(0);
     expect(elsewhere).toBeGreaterThanOrEqual(0);
+  });
+
+  it("and the comment above the scorer says that, rather than the opposite", () => {
+    const engine = read("server/areEngine.ts");
+    const scorer = engine.slice(engine.indexOf("function scoreIcpMatch"));
+    const block = scorer.slice(0, scorer.indexOf("if (icp.geos.length > 0)"));
+    // The clause that made the comment a claimed fix for something unfixed.
+    expect(block).not.toContain("gave a row with NO place the same 0");
+    // What it must say instead: the shared 0 is still here, the 15 is a real
+    // cost, and nobody decided otherwise in passing.
+    expect(block).toContain("WHAT DID NOT CHANGE");
+    expect(block).toContain("IS a penalty");
+    expect(block).toContain("is a product call and is NOT taken here");
   });
 
   it("keeps both early guards — and the first one now carries its own answer", () => {
@@ -418,5 +454,114 @@ describe("gaps found by mutation testing, 2026-10-30", () => {
     const fitSrc = read("server/services/placeFit.ts");
     expect(fitSrc).toContain('if (parts.length === 0) return "unknown";');
     expect(fitSrc).toContain("if (placeCountry && targeted.size > 0) {");
+  });
+});
+
+/**
+ * Item 6 of the 2026-11-01 sweep, checked rather than assumed.
+ *
+ * The worry was that `no_targets` is reachable for a campaign that DOES name
+ * places which `parseTargetPlaces` then fails to parse — in which case the
+ * badge would tell the owner "This campaign names no places" about a campaign
+ * that names several, hiding a silent data problem behind a wrong message.
+ *
+ * It is not reachable, for two independent reasons, and both are asserted here
+ * because the conclusion rests on them:
+ *
+ *   1. An unparseable name is not dropped. Anything that is neither a country
+ *      nor a region becomes a `cities` entry matched by exact name, so targets
+ *      are non-empty for ANY non-blank string. "Northeast", "EMEA" and a typo
+ *      all parse to something; they produce `unknown` or `elsewhere`, never
+ *      `no_targets`.
+ *   2. A blank name cannot reach `geos` at all. `icpLabels` trims and drops
+ *      empty labels, so `icp.geos.length > 0` — the guard on the engine's
+ *      scoring call site — implies at least one non-blank target.
+ *
+ * So `no_targets` means exactly "nothing was named", which is what the badge
+ * says. The router's call site has no `geos.length` guard, which is why the
+ * verdict reaches the badge on a campaign with no ICP at all: that is the live
+ * case it was built for, not a second one.
+ */
+describe("no_targets means nothing was named, and cannot mean 'unparseable'", () => {
+  it("gives every non-blank target name a verdict other than no_targets", () => {
+    _clearTargetPlaceCache();
+    const unparseable = ["Northeast", "EMEA", "APAC", "Virginai", "the midwest", "Zzzz, Qqqq", "12345"];
+    for (const name of unparseable) {
+      expect(parseTargetPlaces([name]).empty, name).toBe(false);
+      expect(fit("Boston, Massachusetts, United States", [name]), name).not.toBe("no_targets");
+      // And a blank place against them is still the PERSON's gap.
+      expect(fit("", [name]), name).toBe("unknown");
+    }
+  });
+
+  it("is empty only when the list reduces to nothing", () => {
+    _clearTargetPlaceCache();
+    expect(parseTargetPlaces([]).empty).toBe(true);
+    expect(parseTargetPlaces(null).empty).toBe(true);
+    expect(parseTargetPlaces(undefined).empty).toBe(true);
+    // Blank strings are the only non-empty input that reduces to empty — and
+    // the next test shows they never get this far.
+    expect(parseTargetPlaces(["", "   "]).empty).toBe(true);
+    expect(parseTargetPlaces(["   ", "Virginia"]).empty).toBe(false);
+  });
+
+  it("cannot be reached from a stored ICP, because icpLabels drops blanks", () => {
+    // If this stops holding, `geos.length > 0` no longer implies a parseable
+    // target and the engine's scoring site can see no_targets — harmless to
+    // the score, which tests for "inside", but the premise above would need
+    // rewriting rather than patching.
+    expect(icpLabels(["", "   ", "Virginia"], "geography")).toEqual(["Virginia"]);
+    expect(icpLabels(["", "   "], "geography")).toEqual([]);
+    expect(icpLabels([{ region: "", country: "" }], "geography")).toEqual([]);
+  });
+
+  it("tells that sentence only to someone whose campaign named nothing", () => {
+    const badge = read("client/src/components/usip/are/PlaceVerdictBadge.tsx");
+    expect(badge).toContain("This campaign names no places");
+    // The call site that feeds the badge computes the verdict unguarded, which
+    // is how the live ws 5 campaign 30 case renders it. Nothing may start
+    // treating no_targets as a judgement about the person.
+    const router = read("server/routers/are/prospects.ts");
+    expect(router).toContain("const placeVerdict = placeFit(placeJudged, targetPlaces);");
+    expect(router).not.toContain('placeVerdict === "no_targets"');
+  });
+});
+
+/**
+ * One country vocabulary, not two (2026-11-01).
+ *
+ * `services/quickenrich.ts` kept a byte-identical private copy of the table
+ * `services/prospectSources/bridge.ts` exports. Noted on 2026-10-30 and
+ * deliberately left alone then — quickenrich.ts is a live vendor path and that
+ * was not the change to destabilise — so this collapses it as its own change,
+ * after checking the two were still identical character for character. They
+ * were, all 24 entries, so there was no side to pick.
+ *
+ * It matters because of what the two copies are FOR. `quickenrichPlaceCheck`
+ * decides whether to spend a credit on a person; `placeFit` decides what the
+ * badge tells the owner about that same person. Let the tables drift and one
+ * surface calls someone inside the territory while the other calls them
+ * elsewhere — the class of bug F17 exists to remove, arriving through the back
+ * door as a maintenance accident rather than a logic error.
+ */
+describe("the country table has one definition", () => {
+  it("is defined once in the server tree, and quickenrich imports it", () => {
+    const quickenrich = read("server/services/quickenrich.ts");
+    expect(quickenrich).toContain('import { COUNTRY_CODES, regionCountry } from "./prospectSources/bridge";');
+    // The definition, not the uses.
+    expect(quickenrich).not.toContain("const COUNTRY_CODES: Record<string, string> = {");
+    expect(read("server/services/prospectSources/bridge.ts")).toContain("export const COUNTRY_CODES: Record<string, string> = {");
+  });
+
+  it("is the same vocabulary both callers read, tested through both", () => {
+    // Not a source pin: the two functions are asked the same question about
+    // the same person and must not disagree about what country they are in.
+    // "england" is in the table and is not a US state, which makes it the case
+    // a drifted copy would get wrong in opposite directions.
+    expect(quickenrichPlaceCheck("London, England", [{ place: "Virginia, United States", name: "Virginia", country: "US" }])).toBe("elsewhere");
+    expect(fit("London, England", ["Virginia, United States"])).toBe("elsewhere");
+    // And agreement on the shared country, where neither may say "elsewhere".
+    expect(quickenrichPlaceCheck("Richmond, Virginia, United States", [{ place: "Virginia, United States", name: "Virginia", country: "US" }])).toBe("inside");
+    expect(fit("Richmond, Virginia, United States", ["Virginia, United States"])).toBe("inside");
   });
 });

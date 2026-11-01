@@ -28,7 +28,7 @@ import { areScrapeJobs, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { tryDecryptSecret } from "../_core/crypto";
 import { normalizeDomain } from "./scraper/domain";
-import { regionCountry } from "./prospectSources/bridge";
+import { COUNTRY_CODES, regionCountry } from "./prospectSources/bridge";
 import { stripNameCredentials } from "./enrichment/personName";
 import { utcDayStart } from "@shared/timeWindows";
 import { canonicalText } from "@shared/canonicalText";
@@ -126,15 +126,6 @@ export async function quickenrichPulledToday(workspaceId: number): Promise<numbe
  * would silently empty the search. Deliberately small: cover what campaigns
  * actually write, and the caller logs whatever was dropped.
  */
-const COUNTRY_CODES: Record<string, string> = {
-  "united states": "US", usa: "US", us: "US", america: "US", "united states of america": "US",
-  "united kingdom": "GB", uk: "GB", "great britain": "GB", england: "GB",
-  canada: "CA", australia: "AU", ireland: "IE", "new zealand": "NZ",
-  germany: "DE", france: "FR", netherlands: "NL", spain: "ES", italy: "IT",
-  sweden: "SE", norway: "NO", denmark: "DK", switzerland: "CH", belgium: "BE",
-  india: "IN", singapore: "SG",
-};
-
 /**
  * In-process cache of their industries vocabulary (GET /api/lookups/industries).
  * Their contact-finder 422s the WHOLE request when any `industry_linkedin`
