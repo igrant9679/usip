@@ -1524,9 +1524,31 @@ function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; 
 /* ─── Logs tab: backend engine activity for this campaign ─────────────── */
 /** One-click multi-source discovery launcher embedded in the Scraper tab.
  *  Pre-fills from the campaign's icpOverrides so the user doesn't retype
- *  targeting that already lives on the campaign. Results land in
- *  /prospects (verified) or the Needs Review queue; the per-step trace
- *  appears in the campaign's unified Logs tab. */
+ *  targeting that already lives on the campaign.
+ *
+ *  It calls `discovery.search` in PERSON mode, whose candidates are
+ *  linkedin / news / apollo / quickenrich (services/discovery/index.ts),
+ *  narrowed by the workspace source mask. That is NOT the ARE engine's own
+ *  per-campaign waterfall, and it is not the account-mode list.
+ *
+ *  New people are inserted into `prospects` — the People table — each carrying
+ *  `verificationStatus` by confidence tier: high becomes `verified`, medium and
+ *  low become `needs_review` (services/discovery/consolidate.ts). That is a
+ *  DIFFERENT thing from the "need review" count in the run summary, which
+ *  counts ACCOUNTS from company association. Two nouns, one phrase; naming
+ *  which one is meant is the whole of the difference between telling a reader
+ *  where their people went and sending them to the wrong queue. The per-step
+ *  trace appears in the campaign's unified Logs tab.
+ *
+ *  The copy below was wrong in four ways until 2026-11-01, on the control that
+ *  spends vendor credits. It advertised "LinkedIn + Web + News + Google
+ *  Business": Web was removed as a source on 2026-10-27 (it reads a page at a
+ *  URL and discovery hands it search text), Google Business runs in ACCOUNT
+ *  mode only and never on this button, and Apollo and QuickEnrich — half of
+ *  what it actually runs — were not mentioned at all. It then pointed at
+ *  /prospects, retired in Phase 5 item 2, which redirects to /v2/people. A
+ *  guard test reads the candidate list out of the service and fails if this
+ *  sentence and that list disagree again. */
 function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: number; campaign: any }) {
   const utils = trpc.useUtils();
   const launch = trpc.discovery.search.useMutation({
@@ -1558,7 +1580,10 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold">Multi-source discovery (recommended)</div>
             <div className="text-[11px] text-muted-foreground mt-0.5">
-              One-click search across LinkedIn + Web + News + Google Business using this campaign's targeting. Results are consolidated, scored, and saved to <Link href="/prospects"><span className="underline">/prospects</span></Link>; the per-step trace appears in this campaign's Logs tab.
+              One-click search across LinkedIn, Apollo, QuickEnrich and news for this campaign's targeting — whichever
+              of those four your workspace has enabled in Settings. New people are consolidated, scored and saved to{" "}
+              <Link href="/v2/people"><span className="underline">People</span></Link>; the per-step trace appears in
+              this campaign's Logs tab.
             </div>
             {ready ? (
               <div className="flex flex-wrap gap-1 mt-2">

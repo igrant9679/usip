@@ -671,7 +671,15 @@ export default function AREHub() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {[
               { step: "01", title: "ICP Inference", desc: "The ICP Agent reads every won and lost deal in your CRM and uses an LLM to extract the ideal customer profile — no manual form-filling.", color: "#A78BFA", icon: Brain },
-              { step: "02", title: "Prospect Discovery", desc: "Campaigns source prospects from your CRM, Google Business, LinkedIn, web scraping, news monitoring, and industry event attendee lists.", color: "#60A5FA", icon: Radar },
+              /* Sources corrected 2026-11-01. This advertised the retired `web` source
+                 (removed 2026-10-27) and an `events` one — and `events` was not merely
+                 removed, it was disabled for FABRICATING the attendee lists it offered
+                 (shared/areSources.ts), so the page explaining how the engine works
+                 offered a source taken out for inventing people. It also omitted the
+                 three vendor databases, which are the sources that actually return
+                 rows. Pinned by server/discoveryLauncherCopy.test.ts — which bans both
+                 phrases outright, so this note names the source ids instead. */
+              { step: "02", title: "Prospect Discovery", desc: "Campaigns source prospects from your CRM, QuickEnrich, Apollo, WarmySender, Google Business, LinkedIn and news monitoring — whichever your workspace has enabled, in its checking order.", color: "#60A5FA", icon: Radar },
               { step: "03", title: "Enrich & Sequence", desc: "The Enrich Agent builds an intelligence dossier per prospect. The Sequence Agent writes personalised outreach and self-evaluates quality.", color: "#34D399", icon: Sparkles },
               { step: "04", title: "Send & Learn", desc: "Messages go out on the configured channels. Every reply is analysed by the Signal Feedback Agent, which updates the ICP and suppression list.", color: "#F59E0B", icon: Activity },
             ].map(({ step, title, desc, color, icon: Icon }) => (

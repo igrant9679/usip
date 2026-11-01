@@ -433,7 +433,7 @@ Every engine has the same three-way switch, and they all live on one screen — 
     tags: ["prospecting", "discovery", "icp"],
     pageKey: "find-prospects",
     tourName: "Find Prospects",
-    bodyMarkdown: `**Find Prospects** (sidebar → Prospect and enrich) runs multi-source discovery against your ICP. Pick **Person** or **Account** mode, fill the fields you care about (job title, seniority, industry, location) and add keywords for intent. The **Sources for this run** row picks which sources this run searches (Person: LinkedIn, Web, News, Apollo, QuickEnrich; Account: Google Business, Web, News, Apollo). A source switched off in Settings stays off, and at least one must be ticked. Click **Run discovery** — results fan out across the ticked sources, then get scored and de-duplicated automatically. Anything fully verified lands in **Verified**; partial matches land in **Needs Review** for you to clean up. Click any result row to open the full prospect. Skipped fields are ignored, so start broad and narrow if you get noise.`,
+    bodyMarkdown: `**Find Prospects** (sidebar → Prospect and enrich) runs multi-source discovery against your ICP. Pick **Person** or **Account** mode, fill the fields you care about (job title, seniority, industry, location) and add keywords for intent. The **Sources for this run** row picks which sources this run searches (Person: LinkedIn, News, Apollo, QuickEnrich; Account: Google Business, News, Apollo). A source switched off in Settings stays off, and at least one must be ticked. Click **Run discovery** — results fan out across the ticked sources, then get scored and de-duplicated automatically. Anything fully verified lands in **Verified**; partial matches land in **Needs Review** for you to clean up. Click any result row to open the full prospect. Skipped fields are ignored, so start broad and narrow if you get noise.`,
   },
   {
     slug: "research-markets-sectors",
@@ -1780,7 +1780,12 @@ export const TOURS: TourSeed[] = [
     steps: [
       { title: "Discover net-new prospects", bodyMarkdown: "Multi-source discovery against your ICP.", routeTo: "/find-prospects", visualTreatment: "coach", advanceCondition: "route_changed" },
       { title: "Pick a mode", bodyMarkdown: "Person or Account — fill only the fields you care about.", visualTreatment: "coach", advanceCondition: "next_button" },
-      { title: "Run discovery", bodyMarkdown: "Results fan out across LinkedIn, web, and news, then get scored + deduped.", visualTreatment: "coach", advanceCondition: "next_button" },
+      /* Sources corrected 2026-11-01: this said "LinkedIn, web, and news".
+         Web was removed as a source on 2026-10-27, and Apollo and QuickEnrich
+         were missing — the same four-way error as the campaign Scraper tab's
+         launcher, in a second home. This page runs both modes, so both lists
+         are named. Pinned by server/discoveryLauncherCopy.test.ts. */
+      { title: "Run discovery", bodyMarkdown: "Results fan out across the sources your workspace has enabled — LinkedIn, Apollo, QuickEnrich and news for people; Google Business, Apollo and news for companies — then get scored + deduped.", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Verified vs Needs Review", bodyMarkdown: "Clean matches land in Verified; partials in Needs Review for you to fix.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },

@@ -2724,13 +2724,34 @@ export function scoreIcpMatch(
    * This was `geos.some((g) => geo.includes(g))`, which scored "Charleston,
    * West Virginia, United States" as a match for a Virginia campaign, worth 15
    * points of fit on every row of every source (measured 2026-10-30, and the
-   * exact case quickenrichPlaceCheck's comment was written to prevent). It also
-   * gave a row with NO place the same 0 as a row that is genuinely elsewhere.
+   * exact case quickenrichPlaceCheck's comment was written to prevent). That
+   * substring false positive is what F17 fixed here, and it is the whole of
+   * what it fixed.
    *
-   * Only `inside` scores. `elsewhere` and `unknown` both score 0, deliberately:
-   * an unreadable place must not be penalised as if it were out of territory —
-   * two sources write an empty string and a third writes none at all. Keeping
-   * out-of-territory people out is the screen's job, not the score's.
+   * WHAT DID NOT CHANGE, said plainly because this comment used to claim
+   * otherwise (corrected 2026-11-01). It listed "it also gave a row with NO
+   * place the same 0 as a row that is genuinely elsewhere" among the old
+   * code's faults, and then the replacement kept that behaviour — so the
+   * comment read as a fix for something nobody had fixed, which is how the
+   * handoff note came to say "unknown is not penalised".
+   *
+   * Only `inside` scores. `elsewhere`, `unknown` and `no_targets` all score 0.
+   * The consequence is real: an otherwise identical prospect whose place could
+   * not be read sits 15 points below one in territory, so an unreadable place
+   * IS a penalty — just not a larger one than being out of territory, which is
+   * the narrow sense in which it is "not penalised". Live example (ws 2
+   * campaign 38, 2026-10-31): Jon Amelio, place blank, reads "Place unknown"
+   * directly beside Justin Sherwood in Franklin County NC at "In target area".
+   * Rescored today Amelio sits 15 lower, for a gap in our data rather than a
+   * fact about him.
+   *
+   * A 0/15 scheme has nowhere else to put "we do not know". Separating the two
+   * needs a third value and a decision about what an unknown place is worth,
+   * which is a product call and is NOT taken here. Keeping out-of-territory
+   * people out is the screen's job, not the score's.
+   *
+   * `server/f17PlaceFit.test.ts` holds the numbers, so the paragraph above
+   * cannot drift from what the function does.
    */
   if (icp.geos.length > 0) {
     score += placeFit(geo, parseTargetPlaces(icp.geos)) === "inside" ? 15 : 0;
