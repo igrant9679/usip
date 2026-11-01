@@ -39,7 +39,10 @@ const SOURCE_LABEL: Record<string, string> = {
   linkedin_people: "LinkedIn — people",
   web_scrape: "Web scrape",
   news_event: "News event",
-  industry_event: "Industry event",
+  /* The source is disabled (fabricated attendees), but rows from before that
+     still exist and still need a name. Saying so here is cheaper than a reader
+     wondering why the number never grows (2026-11-01). */
+  industry_event: "Industry event (source disabled)",
   apollo: "Apollo.io",
   zoominfo: "ZoomInfo",
   clay: "Clay",

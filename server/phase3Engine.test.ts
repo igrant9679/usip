@@ -21,7 +21,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { ARE_DEFAULT_SOURCE_ORDER, ARE_SOURCE_IDS, normalizeSources, resolveSourceOrder } from "@shared/areSources";
-import { refusalOf } from "./routers/are/scraper";
+import { DISABLED_SCRAPE_SOURCES, refusalOf, scrapeIndustryEvents } from "./routers/are/scraper";
 import {
   DISCOVERY_REST_MS, discoveryBackoffMs, purgeOldEngineLogs, runDiscovery, __resetEngineLogRepeatsForTests,
 } from "./areEngine";
@@ -213,5 +213,91 @@ describe("the counts in a log line are what they say (A68, P63)", () => {
     expect(find).toMatch(/note: `today's Apollo record cap is used up/);
     expect(find).toMatch(/note: "no QuickEnrich key for this workspace/);
     expect(find).toMatch(/if \(!res\.ok\) return \{ raw: \[\], note: res\.message \};/);
+  });
+});
+
+/**
+ * A disabled source must say it is disabled, not return a zero (2026-11-01).
+ *
+ * `scrapeIndustryEvents` is correctly off: it fetched nothing and asked the
+ * model to name "likely" speakers and exhibitors with "their likely contact
+ * details", so it returns [] rather than inventing attendees. That guard is not
+ * what these tests are about — they are about the silence around it.
+ *
+ * Both endpoints still called it, still wrote a scrape job reading "No
+ * prospects returned — source returned nothing or every result was
+ * deduplicated", and still returned `count: 0` with no reason. So a caller
+ * could not tell "no attendees matched my ICP" from "this source does nothing
+ * and cannot". Same shape as the four uninstrumented sources reading "Ready",
+ * found the same night, sign flipped: a refusal the code makes correctly and no
+ * surface reports.
+ *
+ * Nothing is removed. The endpoints, the type member and the DB enum values
+ * stay, because deleting a source from an enum rewrites stored history and
+ * `industry_event` queue rows may predate the disable.
+ */
+describe("a disabled scrape source says so rather than returning a zero", () => {
+  const scraper = read("server/routers/are/scraper.ts");
+
+  it("still refuses rather than inventing attendees", () => {
+    // The guard this is built around. If this ever returns rows, stop and read
+    // what wired them in before touching anything below.
+    expect(DISABLED_SCRAPE_SOURCES.industry_events, "the disabled reason").toBeTruthy();
+  });
+
+  it("returns nothing, and spends no model call doing it", async () => {
+    await expect(scrapeIndustryEvents(1, null, "saas conferences 2026", "")).resolves.toEqual([]);
+    const fn = scraper.slice(scraper.indexOf("export async function scrapeIndustryEvents("));
+    const body = fn.slice(0, fn.indexOf("/* ─── Shared:"));
+    expect(body).not.toContain("invokeLLM");
+    expect(body).not.toContain("fetchWithTimeout");
+    expect(body).toContain("return [];");
+  });
+
+  it("names a reason a person can act on, and does not call it a result", () => {
+    const why = DISABLED_SCRAPE_SOURCES.industry_events!;
+    expect(why).toMatch(/disabled/i);
+    // The two things a reader needs: that nothing was searched, and that this
+    // is not a judgement about their ICP.
+    expect(why).toMatch(/nothing was searched/i);
+    expect(why).not.toMatch(/\b0\b|\bzero\b/i);
+  });
+
+  it("writes the real reason into the audit row, not the generic one", () => {
+    // The stored lie was the generic sentence on a source that never searched.
+    const insert = scraper.slice(scraper.indexOf(".insert(areScrapeJobs)"));
+    const values = insert.slice(0, insert.indexOf("$returningId()"));
+    expect(values).toContain("DISABLED_SCRAPE_SOURCES[sourceType]");
+    // Still a row, and still `failed` — the attempt keeps its place in the
+    // trail; only the reason changes.
+    expect(values).toContain('status: prospects.length === 0 ? "failed" : "complete"');
+  });
+
+  it("both endpoints report it, reading the map rather than hardcoding", () => {
+    expect(scraper).toContain("return { count: prospects.length, prospects, disabled: DISABLED_SCRAPE_SOURCES.industry_events ?? null };");
+    // The batch one, keyed the same way as its breakdown.
+    expect(scraper).toContain("if (why) disabled.industryEvents = why;");
+    expect(scraper).toContain("return { total, breakdown: results, disabled };");
+  });
+
+  it("is not offered as a working option by any surface", () => {
+    // `scraper.run` is what the campaign's Scraper tab calls, and it never
+    // offered industry events. Asserted so that re-adding it to that enum
+    // without re-enabling the source fails here.
+    const run = scraper.slice(scraper.indexOf("  run: workspaceProcedure"));
+    expect(run.slice(0, run.indexOf("mutation"))).toContain('source: z.enum(["google_business", "linkedin", "web", "news"])');
+    const tab = read("client/src/pages/usip/ARECampaignDetail.tsx");
+    expect(tab).not.toContain("industryEvents");
+    expect(tab).not.toContain("scrapeIndustryEvents");
+  });
+
+  it("keeps the enum member and the endpoint, because history is stored under them", () => {
+    // Making it absent instead of honest would rewrite what already happened.
+    expect(scraper).toContain("scrapeIndustryEvents: workspaceProcedure");
+    expect(read("drizzle/schema.ts")).toContain('"web_scrape", "news", "industry_events",');
+    expect(scraper).toContain('industry_events: "industry_event",');
+    // And a stored row still gets a name, which now says the source is off.
+    expect(read("client/src/pages/usip/AREPerformance.tsx"))
+      .toContain('industry_event: "Industry event (source disabled)"');
   });
 });

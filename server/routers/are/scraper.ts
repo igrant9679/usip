@@ -338,6 +338,39 @@ export async function scrapeIndustryEvents(
 
 /* ─── Shared: save scrape job + queue prospects ─────────────────────────── */
 
+/** The scrape job's own source vocabulary — the `are_scrape_jobs` enum. */
+export type ScrapeSourceType =
+  | "google_business" | "linkedin_company" | "linkedin_people" | "web_scrape"
+  | "news" | "industry_events" | "apollo" | "internal" | "quickenrich" | "warmysender";
+
+/**
+ * Sources that still exist in the enum and in stored history but cannot run,
+ * with the sentence a caller should be told instead of a bare zero.
+ *
+ * `industry_events` fetched nothing and asked the model to name "likely"
+ * speakers and exhibitors with "their likely contact details", so it was
+ * disabled rather than left to invent attendees. **That guard holds** — the
+ * function returns [] and logs.
+ *
+ * What it did not do was SAY so (found 2026-11-01). Both endpoints still wrote
+ * a scrape job reading "No prospects returned — source returned nothing or
+ * every result was deduplicated", which claims a search ran and found nobody,
+ * and returned `count: 0` with no reason. That is the same shape as the four
+ * uninstrumented sources reading "Ready", fixed the same night: a refusal the
+ * code makes correctly and no surface reports, so an unknown reads as a
+ * measurement. A zero and a refusal are different claims.
+ *
+ * NOT removed, deliberately. The endpoints, the type member and the
+ * `are_scrape_jobs` / `prospect_queue` enum values all stay: deleting a source
+ * from a DB enum rewrites stored history, `industry_event` queue rows may
+ * predate the disable, and whether the feature comes back is the owner's call.
+ * Honest, not absent.
+ */
+export const DISABLED_SCRAPE_SOURCES: Partial<Record<ScrapeSourceType, string>> = {
+  industry_events:
+    "Industry events is disabled — it had no event-data source and was inventing attendees, so nothing was searched and nothing was added. It stays off until a real agenda or exhibitor-list fetch is wired in.",
+};
+
 /** Column-width guards live inside @shared/fieldHygiene's cleaners now:
  *  scraped values regularly exceed the prospect_queue varchar widths
  *  (LinkedIn headlines ~220 chars vs title's varchar(120)), and MySQL strict
@@ -357,7 +390,7 @@ function cleanName(v: unknown, max: number): string {
 export async function saveScrapeJobAndQueue(
   workspaceId: number,
   campaignId: number | null,
-  sourceType: "google_business" | "linkedin_company" | "linkedin_people" | "web_scrape" | "news" | "industry_events" | "apollo" | "internal" | "quickenrich" | "warmysender",
+  sourceType: ScrapeSourceType,
   query: string,
   prospects: Array<Record<string, unknown>>,
 ): Promise<void> {
@@ -413,8 +446,11 @@ export async function saveScrapeJobAndQueue(
       status: prospects.length === 0 ? "failed" : "complete",
       resultCount: prospects.length,
       rawResults: prospects,
+      // A disabled source did not search and find nobody — it did not search.
+      // Saying the former in the audit row is how a refusal became a zero.
       errorMessage: prospects.length === 0
-        ? "No prospects returned — source returned nothing or every result was deduplicated"
+        ? DISABLED_SCRAPE_SOURCES[sourceType]
+          ?? "No prospects returned — source returned nothing or every result was deduplicated"
         : null,
       scrapedAt: new Date(),
     })
@@ -625,13 +661,24 @@ export const scraperRouter = router({
       return { count: prospects.length, prospects };
     }),
 
-  /** Scrape industry events for speakers, exhibitors, and attendees */
+  /**
+   * Industry events — DISABLED, and now it says which it is.
+   *
+   * No client calls this and none should: `scraper.run`, which the campaign's
+   * Scraper tab uses, offers google_business / linkedin / web / news only. It
+   * is still reachable over tRPC, and the owner drives this API directly, so
+   * returning a bare `count: 0` left "no attendees matched my ICP"
+   * indistinguishable from "this source does nothing and cannot".
+   *
+   * `disabled` is read from the map rather than hardcoded, so deleting the
+   * entry when a real event-data source is wired in makes this null on its own.
+   */
   scrapeIndustryEvents: workspaceProcedure
     .input(z.object({ campaignId: z.number().optional(), query: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
       const prospects = await scrapeIndustryEvents(ctx.workspace.id, input.campaignId ?? null, input.query, input.icpContext);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "industry_events", input.query, prospects);
-      return { count: prospects.length, prospects };
+      return { count: prospects.length, prospects, disabled: DISABLED_SCRAPE_SOURCES.industry_events ?? null };
     }),
 
   /** Run all scrapers in parallel for a campaign */
@@ -652,6 +699,10 @@ export const scraperRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const results: Record<string, number> = {};
+      // A source that cannot run must not arrive as a 0 beside sources that
+      // searched and found nobody. Keyed by the same name as `breakdown`, so a
+      // caller reading one finds the other.
+      const disabled: Record<string, string> = {};
       const tasks: Promise<void>[] = [];
 
       if (input.queries.googleBusiness) {
@@ -683,6 +734,10 @@ export const scraperRouter = router({
         );
       }
       if (input.queries.industryEvents) {
+        const why = DISABLED_SCRAPE_SOURCES.industry_events;
+        if (why) disabled.industryEvents = why;
+        // Still recorded, so the attempt keeps its place in the audit trail —
+        // with its real reason in errorMessage, not the generic one.
         tasks.push(
           scrapeIndustryEvents(ctx.workspace.id, input.campaignId, input.queries.industryEvents, input.icpContext)
             .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "industry_events", input.queries.industryEvents!, p)
@@ -699,7 +754,7 @@ export const scraperRouter = router({
 
       await Promise.allSettled(tasks);
       const total = Object.values(results).reduce((a, b) => a + b, 0);
-      return { total, breakdown: results };
+      return { total, breakdown: results, disabled };
     }),
 
   /** Unified run — dispatches to the right scraper based on source */
