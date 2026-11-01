@@ -32,6 +32,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ARE_SOURCES } from "@shared/areSources";
+import { inRunOrder } from "@/components/usip/are/CampaignSourceHealth";
 import { DISCOVERY_REST_MS, discoveryBackoffMs } from "./areEngine";
 
 const root = join(__dirname, "..");
@@ -237,5 +238,75 @@ describe("it adds to the workspace back office rather than duplicating it", () =
     const launcher = page.indexOf("<CampaignDiscoveryLauncher campaignId={campaignId}");
     expect(stripMount, "the strip is mounted").toBeGreaterThan(-1);
     expect(stripMount).toBeLessThan(launcher);
+  });
+});
+
+describe("the table is in the order its own sentence promises (2026-10-31)", () => {
+  /**
+   * Found in the live app, not in the code. The header says the sources are
+   * listed "in the order they run — which is also dedup precedence, so a lower
+   * source is never paid for a person a higher one already found". The list
+   * was the server's registry order and nothing sorted it, so on ws 2 campaign
+   * 38 the real order read, top to bottom: 2nd, 4th, 3rd, 5th, —, 1st, —.
+   *
+   * QuickEnrich runs FIRST and sat SIXTH, below four sources that run after
+   * it, and it was the only source returning rows (10 returned → 7 kept, every
+   * other one "skipped — target met by earlier sources"). A reader following
+   * the sentence would have had precedence exactly backwards on the one row it
+   * mattered for.
+   *
+   * The ORDER column was correct throughout. That is what made the list worth
+   * believing, and why this is a sort rather than a rewrite of the sentence.
+   */
+  const order = (rows: { slug: string; runsAt: number | null }[]) =>
+    inRunOrder(rows as unknown as Parameters<typeof inRunOrder>[0]).map((s) => s.slug);
+
+  it("sorts by runsAt, which registry order does not", () => {
+    // The exact shape the live campaign returned, in the order the server
+    // returns it.
+    const live = [
+      { slug: "internal", runsAt: 1 },
+      { slug: "google_business", runsAt: 3 },
+      { slug: "linkedin", runsAt: 2 },
+      { slug: "news", runsAt: 4 },
+      { slug: "apollo", runsAt: null },
+      { slug: "quickenrich", runsAt: 0 },
+      { slug: "warmysender", runsAt: null },
+    ];
+    expect(order(live)).toEqual([
+      "quickenrich", "internal", "linkedin", "google_business", "news", "apollo", "warmysender",
+    ]);
+    // The bug, stated as the thing that must not come back: the source that
+    // runs first must not be below one that runs later.
+    const sorted = order(live);
+    expect(sorted.indexOf("quickenrich")).toBeLessThan(sorted.indexOf("internal"));
+  });
+
+  it("puts sources that will not run last, keeping their order among themselves", () => {
+    // `runsAt: null` is "no position in the order", not "position zero" — a
+    // comparator reading null as 0 would float them to the top, above the
+    // source that actually runs first.
+    const rows = [
+      { slug: "apollo", runsAt: null },
+      { slug: "warmysender", runsAt: null },
+      { slug: "quickenrich", runsAt: 0 },
+    ];
+    expect(order(rows)).toEqual(["quickenrich", "apollo", "warmysender"]);
+  });
+
+  it("does not mutate the array it was given", () => {
+    // It sorts react-query's cached data; sorting in place would reorder the
+    // cache under every other reader of that query.
+    const rows = [{ slug: "b", runsAt: 1 }, { slug: "a", runsAt: 0 }];
+    order(rows);
+    expect(rows.map((r) => r.slug)).toEqual(["b", "a"]);
+  });
+
+  it("is actually what the table renders, and the sentence still says so", () => {
+    expect(strip).toContain("{inRunOrder(data.sources).map((s) => <SourceRow");
+    expect(strip).not.toContain("{data.sources.map((s) => <SourceRow");
+    // If the sentence goes, the sort is no longer load-bearing and this whole
+    // block should be revisited rather than quietly kept.
+    expect(strip).toContain("in the order they run");
   });
 });
