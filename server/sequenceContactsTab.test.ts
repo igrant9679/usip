@@ -101,7 +101,11 @@ describe("Contacts tab — the tiles are the states the schema has", () => {
 
 describe("Contacts tab — an unknown is not a zero", () => {
   it("renders an em dash, not 0, until the rows are read", () => {
-    expect(tabCode).toContain('const known = query.isLoading || query.isError ? null : rows;');
+    // Unknown is keyed off the rows existing, not off a loading flag: this
+    // query is enabled only when the tab opens, so `isLoading` is false with
+    // no data on the first paint and a flag-based check flashed four zeros.
+    expect(tabCode).toContain("const rows = Array.isArray(query.data) ? (query.data as any[]) : null;");
+    expect(tabCode).toContain("const known = query.isError ? null : rows;");
     // The count is only reachable under `known`; the other branch is a dash.
     expect(tabCode).toMatch(/known\s*\?\s*\(counts\[s\.key\]\s*\?\?\s*0\)\s*:\s*<span/);
     expect(tabCode).toContain("—");
@@ -111,10 +115,17 @@ describe("Contacts tab — an unknown is not a zero", () => {
   it("says so in words when the read failed", () => {
     expect(tabCode).toContain("query.isError && (");
     expect(tabCode).toContain("shown as unknown rather than zero");
-    // A failed read must not fall through to the "nobody is enrolled" card.
-    const list = tabCode.slice(tabCode.indexOf("{query.isLoading ? ("));
-    expect(list.indexOf("query.isError ? null")).toBeLessThan(list.indexOf("No contacts enrolled yet"));
-    expect(list.indexOf("query.isError ? null")).toBeGreaterThan(-1);
+    // Neither a failed read nor an unread one may fall through to the
+    // "nobody is enrolled" card. Both branches are taken before it, and the
+    // slice starts at the list so the indexes below cannot be satisfied by
+    // some earlier mention of either check.
+    const at = tabCode.indexOf("{query.isError ? null : known === null ? (");
+    expect(at).toBeGreaterThan(-1);
+    const list = tabCode.slice(at);
+    const empty = list.indexOf("No contacts enrolled yet");
+    expect(empty).toBeGreaterThan(-1);
+    expect(list.indexOf("query.isError ? null")).toBeLessThan(empty);
+    expect(list.indexOf("known === null ?")).toBeLessThan(empty);
   });
 
   it("derives the header count the way liveEnrolledCounts does", () => {

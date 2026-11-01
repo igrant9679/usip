@@ -376,11 +376,20 @@ function ContactsTab({
   accent, query, onAddContacts,
 }: {
   accent: string;
-  query: { data?: unknown; isLoading: boolean; isError: boolean; error?: { message: string } | null };
+  query: { data?: unknown; isError: boolean; error?: { message: string } | null };
   onAddContacts: () => void;
 }) {
-  const rows = (Array.isArray(query.data) ? query.data : []) as any[];
-  const known = query.isLoading || query.isError ? null : rows;
+  /**
+    * `known === null` means NOT READ YET, and every number below asks it
+    * first. It is keyed off the rows existing rather than off a loading flag:
+    * the query is enabled only once this tab is opened, so on the first paint
+    * `isLoading` is still false with no data in hand — which rendered four
+    * zeros and "No contacts enrolled yet" for a frame before the fetch even
+    * started. A zero that is true a moment later is still a zero that was
+    * never measured.
+    */
+  const rows = Array.isArray(query.data) ? (query.data as any[]) : null;
+  const known = query.isError ? null : rows;
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -419,7 +428,7 @@ function ContactsTab({
           <Users className="size-3.5" style={{ color: accent }} />
           {enrolled === null ? "Enrollments" : `${enrolled} enrolled`}
         </span>
-        {query.isLoading && (
+        {known === null && !query.isError && (
           <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1">
             <Loader2 className="size-3 animate-spin" /> Reading enrollments…
           </span>
@@ -450,13 +459,13 @@ function ContactsTab({
         </div>
       )}
 
-      {query.isLoading ? (
+      {query.isError ? null : known === null ? (
         <div className="rounded-xl border bg-card shadow-sm divide-y divide-border/60">
           {[0, 1, 2].map((i) => (
             <div key={i} className="px-3 py-3"><div className="h-4 w-48 bg-muted/50 rounded animate-pulse" /></div>
           ))}
         </div>
-      ) : query.isError ? null : ordered.length === 0 ? (
+      ) : ordered.length === 0 ? (
         <div className="rounded-xl border bg-card shadow-sm py-14 text-center">
           <Users className="size-8 text-muted-foreground opacity-40 mx-auto mb-2" />
           <div className="text-sm font-medium">No contacts enrolled yet</div>
