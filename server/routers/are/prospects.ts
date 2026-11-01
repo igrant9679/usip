@@ -55,6 +55,7 @@ import { checkBrief, holdReason } from "../../services/research/avoidCheck";
 import { researchMatchFor, researchUseColumns } from "../../services/research/results";
 import { campaignNeverTarget } from "../../services/research/neverTarget";
 import { neverTargetHit } from "@shared/researchTargeting";
+import { clipAtWordBoundary, enrichmentReasonFrom } from "@shared/enrichmentErrorLabel";
 import { downstreamAccountFor } from "../../services/research/downstreamAccounts";
 import { awardHook } from "@shared/downstreamMap";
 import { router } from "../../_core/trpc";
@@ -519,7 +520,15 @@ Produce:
     // (tooltip + expandable detail) instead of just showing a red 'failed'
     // chip with no explanation. Cap length so a megabyte stack trace
     // doesn't bloat the row.
-    const reason = (err instanceof Error ? err.message : String(err)).slice(0, 800);
+    //
+    // 2026-10-31: `err.message` alone, cut at 800 characters, stored no reason
+    // at all for the two live failures on ws 2 campaign 38. A Drizzle query
+    // error's own message is the SQL statement and the driver's complaint is
+    // in `cause`, so the cap landed inside the VALUES list and threw away the
+    // only sentence that said what went wrong. Innermost message first, and a
+    // cut that lands on whitespace, so what is stored is a reason and never
+    // half a word.
+    const reason = clipAtWordBoundary(enrichmentReasonFrom(err), 800);
     if (isRetryableLLMError(err)) {
       // Provider rate limit / overload — a fact about the moment, not about
       // this prospect. Back to 'pending' so the engine's next tick retries
@@ -527,7 +536,7 @@ Produce:
       // user has to retry by hand.
       await db.update(prospectQueue).set({
         enrichmentStatus: "pending",
-        enrichmentError: `AI provider is rate-limited — enrichment will retry automatically on the next engine pass. (${reason.slice(0, 300)})`,
+        enrichmentError: `AI provider is rate-limited — enrichment will retry automatically on the next engine pass. (${clipAtWordBoundary(reason, 300)})`,
       }).where(eq(prospectQueue.id, prospectId));
     } else {
       await db.update(prospectQueue).set({

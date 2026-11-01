@@ -548,7 +548,7 @@ function ProspectRow({
           return (
             <div
               className={`text-[11px] mt-0.5 line-clamp-2 ${ENRICHMENT_TONE_CLASS[e.tone]}`}
-              title={p.enrichmentError}
+              title={e.detail}
             >
               {e.tone === "error" ? "⚠ " : "ⓘ "}{e.label}
             </div>

@@ -49,7 +49,7 @@ type Source = Health["sources"][number];
  * engine applies the gates — so the reason shown is the reason that is
  * actually operative, not the first one that happens to be true.
  */
-function verdict(s: Source): { text: string; tone: "ok" | "muted" | "warn" | "bad" } {
+export function verdict(s: Source): { text: string; tone: "ok" | "muted" | "warn" | "bad" } {
   if (!s.selectedOnCampaign) return { text: "Not selected for this campaign", tone: "muted" };
   if (!s.enabledInWorkspace) return { text: "Disabled in workspace Settings", tone: "muted" };
   if (s.rest) {
@@ -66,6 +66,22 @@ function verdict(s: Source): { text: string; tone: "ok" | "muted" | "warn" | "ba
   if (s.key?.status === "invalid") return { text: `Key failed validation${s.key.error ? `: ${s.key.error}` : ""}`, tone: "bad" };
   if (s.key?.status === "revoked") return { text: "Key revoked", tone: "bad" };
   if (s.runsAt == null) return { text: "Will not run", tone: "muted" };
+  /**
+   * NOT "Ready", which is a claim, and for these four there is nothing behind
+   * it (2026-10-31). internal / google_business / linkedin / news have no
+   * credential row, no breaker and no ledger, so every gate above this line is
+   * unreachable for them and they fell straight through to the green "Ready" —
+   * readiness asserted from the absence of any evidence, in the panel built to
+   * stop exactly that. Seen live on ws 2 campaign 38: all four read "Ready" on
+   * the same row as "no key status, breaker or budget is tracked for this
+   * source".
+   *
+   * What is actually known is that the engine will call their branch. Whether
+   * they can do anything when called is unchecked, and that is what this says.
+   * Muted rather than green or amber, because an absence of evidence is a quiet
+   * fact and not an alarm — the same reading F17 gives an unknown place.
+   */
+  if (!s.instrumented) return { text: "Will run — nothing here checks that it can", tone: "muted" };
   return { text: "Ready", tone: "ok" };
 }
 
@@ -111,7 +127,8 @@ function SourceRow({ s }: { s: Source }) {
         {/* Said plainly, because the empty cells to the right are not zeros. */}
         {!s.instrumented && (
           <div className="text-[10.5px] text-muted-foreground/80 mt-0.5">
-            Not instrumented — no key status, breaker or budget is tracked for this source.
+            Not instrumented — no credential, breaker or budget record exists for this source, so there is nothing to
+            read a verdict from. If it fails, the only trace is its last attempt.
           </div>
         )}
         {s.breaker && !s.breaker.durable && (
