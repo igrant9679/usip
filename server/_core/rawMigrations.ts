@@ -4899,6 +4899,16 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // LeadOcean as a prospect source: an enum value the DB does not know fails at
+  // the runtime INSERT, on the first campaign that ticks it.
+  {
+    name: "0219_leadocean_source.sql",
+    statements: [
+      "ALTER TABLE `are_scrape_jobs` MODIFY COLUMN `sourceType` enum('google_business','linkedin_company','linkedin_people','web_scrape','news','industry_events','apollo','internal','quickenrich','warmysender','leadocean') NOT NULL",
+      "ALTER TABLE `prospect_queue` MODIFY COLUMN `sourceType` enum('internal_contact','internal_lead','google_business','linkedin_company','linkedin_people','web_scrape','news_event','industry_event','apollo','zoominfo','clay','ai_research','quickenrich','warmysender','leadocean') NOT NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

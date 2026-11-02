@@ -181,7 +181,9 @@ export default function ARECampaigns() {
   const defaultSources = useMemo(() => {
     const saved = ((wsSettings as any)?.areScraperSources ?? null) as Record<string, boolean> | null;
     if (!saved) return [...ARE_DEFAULT_SOURCES];
-    const picked = ARE_SOURCE_IDS.filter((id) => saved[id] ?? true);
+    // ARE_DEFAULT_SOURCES, not every source: "on" in the workspace mask means a
+    // source MAY run, and a source that bills its previews still has to be ticked.
+    const picked = ARE_DEFAULT_SOURCES.filter((id) => saved[id] ?? true);
     // An all-off workspace default would silently create campaigns that can
     // never source anything; treat that as "unset" instead.
     return picked.length > 0 ? picked : [...ARE_DEFAULT_SOURCES];

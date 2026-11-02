@@ -25,8 +25,8 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { checkPermission, getDb } from "../db";
 import { getOrSeedSettings } from "./admin";
 import { recordAudit } from "../audit";
-import { PROSPECT_SOURCE_SLUGS } from "@shared/prospectSources";
-import { describeSources, forgetDisplayBudget, getSource } from "../services/prospectSources/registry";
+import { LEADOCEAN_EMAIL_STATUSES, PROSPECT_SOURCE_SLUGS } from "@shared/prospectSources";
+import { describeSources, forgetDisplayBudget, getSource, listSources } from "../services/prospectSources/registry";
 import { credentialView, loadCredentials, recordValidation, saveCredentials } from "../services/prospectSources/credentials";
 import { ledgerView } from "../services/prospectSources/ledger";
 import {
@@ -72,6 +72,11 @@ export const prospectSourcesRouter = router({
         billingAnniversaryDay: z.number().int().min(1).max(28).nullable().optional(),
         monthlyLeadAllowance: z.number().int().min(0).max(10_000_000).nullable().optional(),
         leadCreditBalance: z.number().int().min(0).max(10_000_000).nullable().optional(),
+        // LeadOcean's options. The never-accepted statuses are not in this list,
+        // so no request can name one.
+        acceptedEmailStatuses: z.array(z.enum(LEADOCEAN_EMAIL_STATUSES)).min(1).optional(),
+        fetchPhones: z.boolean().optional(),
+        dailyPeopleCap: z.number().int().min(1).max(10_000_000).nullable().optional(),
       }).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
@@ -86,6 +91,11 @@ export const prospectSourcesRouter = router({
         if (c.billingAnniversaryDay !== undefined) config.billingAnniversaryDay = c.billingAnniversaryDay ?? undefined;
         if (c.monthlyLeadAllowance !== undefined) config.monthlyLeadAllowance = c.monthlyLeadAllowance ?? undefined;
         if (c.leadCreditBalance !== undefined) config.leadCreditBalance = c.leadCreditBalance ?? undefined;
+        if (input.slug === "leadocean") {
+          if (c.acceptedEmailStatuses !== undefined) config.acceptedEmailStatuses = c.acceptedEmailStatuses;
+          if (c.fetchPhones !== undefined) config.fetchPhones = c.fetchPhones;
+          if (c.dailyPeopleCap !== undefined) config.dailyPeopleCap = c.dailyPeopleCap ?? undefined;
+        }
       }
       await saveCredentials(ctx.workspace.id, input.slug, {
         ...(input.apiKey !== undefined ? { secrets: { apiKey: input.apiKey.trim() } } : {}),
@@ -172,9 +182,8 @@ export const prospectSourcesRouter = router({
       sources: z.array(slugSchema).min(1).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
-      const view = await credentialView(ctx.workspace.id, getSource("warmysender"));
-      const any = view.configured || (await loadCredentials(ctx.workspace.id, getSource("quickenrich"))) || (await loadCredentials(ctx.workspace.id, getSource("apollo")));
-      if (!any) {
+      const views = await Promise.all(listSources().map((s) => credentialView(ctx.workspace.id, s)));
+      if (!views.some((v) => v.configured)) {
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No prospect-data vendor is connected yet. Add a key under Settings → Data sources." });
       }
       try {

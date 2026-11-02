@@ -72,11 +72,12 @@ const post = async (p, i) => (await (await fetch('/api/trpc/' + p, { method: 'PO
 ## Prospect sources (registry)
 - `prospectSources.describe {criteria?}` — every vendor with manifest, credential status, circuit, budget, and (with criteria) the match verdict; the Source search strip reads this.
 - `prospectSources.saveCredentials {slug, apiKey?, config?}` (admin) / `validate {slug}` / `removeCredentials {slug}` — table-mode vendors only (WarmySender); Apollo/QuickEnrich keep `apollo.*` / `quickenrich.*`. Validate captures scopes, tier and the search tool schema.
+- LeadOcean is table-mode too. `saveCredentials` also takes `config: {acceptedEmailStatuses, fetchPhones, dailyPeopleCap}`. Its key is write-only (`describe` reports `configured`, no masked value), and `validate` only reads the free `/v1/account` and `/v1/usage`. A search bills one record per row, so never run one without the owner's go-ahead.
 - `prospectSources.setEnabled {slug, enabled}` (admin) — workspace-wide on/off for one source; writes the same `areScraperSources` mask ARE Settings edits, key and ledger kept.
 - `prospectSources.ledger {slug}` — current-period ledger rows + the vendor's own report.
 - `prospectSources.startSearch {criteria, batchTarget}` → `{runId}` (background, preview only) · `getRun {runId}` (poll) · `listRuns` · `resultRaw {resultId}`.
 - `prospectSources.estimatePromotion {runId, resultIds}` → units the selection would spend · `promote {runId, resultIds}` — acquires on-demand rows (spends) then promotes into People. Always show the estimate before calling promote.
-- Campaign discovery uses the same registry: tick "WarmySender leads" on a campaign's Sources tab; discovery is a waterfall sized to the open queue slots.
+- Campaign discovery uses the same registry: tick "WarmySender leads" on a campaign's Sources tab; discovery is a waterfall sized to the open queue slots. "LeadOcean" is ticked the same way and is never on by default, because its previews are billed.
 
 ## Ops
 - Health: `GET /api/health` → `{commit, ...}`; deploys are verified by polling for the expected commit.

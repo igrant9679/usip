@@ -46,6 +46,7 @@ import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
 import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
 import { WarmySenderSourceCard } from "@/components/usip/settings/WarmySenderSourceCard";
+import { LeadOceanSourceCard } from "@/components/usip/settings/LeadOceanSourceCard";
 import { ProspectSourceRegistryCard } from "@/components/usip/settings/ProspectSourceRegistryCard";
 import { BrandingSection } from "@/components/usip/settings/BrandingSection";
 import { TotpSetupDialog } from "@/components/usip/settings/TotpSetupDialog";
@@ -294,6 +295,7 @@ export default function SettingsHub() {
             <WarmySenderSourceCard />
             <QuickEnrichSourceCard />
             <ApolloSourceCard />
+            <LeadOceanSourceCard />
             <ReoonVerifierCard />
           </div>
         )}

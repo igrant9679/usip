@@ -153,12 +153,12 @@ export async function estimatePromotion(workspaceId: number, runId: number, resu
   if (!db || resultIds.length === 0) return { units: 0, perSource: [] as Array<{ slug: string; toAcquire: number; free: number; remaining: number | null }> };
   const rows = await db.select().from(prospectSearchResults)
     .where(and(eq(prospectSearchResults.workspaceId, workspaceId), eq(prospectSearchResults.runId, runId), inArray(prospectSearchResults.id, resultIds)));
-  const per = new Map<string, { toAcquire: number; free: number }>();
+  const per = new Map<string, { toAcquire: number; free: number; ids: string[] }>();
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     const s = getSource(r.sourceSlug as ProspectSourceSlug);
-    const e = per.get(r.sourceSlug) ?? { toAcquire: 0, free: 0 };
-    if (s.acquisition === "on_demand" && !r.wasCharged && !r.promotedProspectId) e.toAcquire += 1; else e.free += 1;
+    const e = per.get(r.sourceSlug) ?? { toAcquire: 0, free: 0, ids: [] };
+    if (s.acquisition === "on_demand" && !r.wasCharged && !r.promotedProspectId) { e.toAcquire += 1; e.ids.push(r.externalId); } else e.free += 1;
     per.set(r.sourceSlug, e);
   }
   const perSource: Array<{ slug: string; toAcquire: number; free: number; remaining: number | null }> = [];
@@ -168,12 +168,14 @@ export async function estimatePromotion(workspaceId: number, runId: number, resu
     const [slug, e] = entries[i];
     const s = getSource(slug as ProspectSourceSlug);
     let remaining: number | null = null;
+    let cost = e.toAcquire;
     const creds = await loadCredentials(workspaceId, s);
     if (creds) {
       const periods = s.budgetPeriods({ now: new Date(), credentials: creds });
       if (periods.length > 0) remaining = (await remainingUnits(workspaceId, s.slug, "leads", periods)).total;
+      if (s.estimateAcquireUnits) cost = e.ids.reduce((n, id) => n + s.estimateAcquireUnits!(id, creds), 0);
     }
-    units += e.toAcquire;
+    units += cost;
     perSource.push({ slug, toAcquire: e.toAcquire, free: e.free, remaining });
   }
   return { units, perSource };

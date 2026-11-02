@@ -67,9 +67,10 @@ export function SourceSearchPanel() {
   const [target, setTarget] = useState("25");
   const [runId, setRunId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  // Per-run source picker (owner ask 2026-09-22). null = every usable source,
-  // which is what the page ran before it had a picker. A source that is not
-  // usable (no key, disabled, circuit open, invalid key) cannot be chosen.
+  // Per-run source picker (owner ask 2026-09-22). null = every usable source
+  // whose preview is free, which is what the page ran before it had a picker. A
+  // source that bills its previews starts unticked, and one that is not usable
+  // (no key, disabled, circuit open, invalid key) cannot be chosen.
   const [chosen, setChosen] = useState<Set<ProspectSourceSlug> | null>(null);
 
   const describe = trpc.prospectSources.describe.useQuery({ criteria }, { placeholderData: (prev) => prev });
@@ -81,10 +82,15 @@ export function SourceSearchPanel() {
     () => sources.filter((s) => s.implemented && s.credential.configured && s.enabled && !s.circuit.open && s.credential.status !== "invalid").map((s) => s.slug),
     [sources],
   );
-  const chosenSet = useMemo(() => chosen ?? new Set<ProspectSourceSlug>(usableSlugs), [chosen, usableSlugs]);
+  const freeSlugs = useMemo(
+    () => usableSlugs.filter((slug) => sources.find((s) => s.slug === slug)?.capabilities.supportsFreePreview),
+    [usableSlugs, sources],
+  );
+  const chosenSet = useMemo(() => chosen ?? new Set<ProspectSourceSlug>(freeSlugs), [chosen, freeSlugs]);
   const runSources = usableSlugs.filter((slug) => chosenSet.has(slug));
+  const billedPreviews = runSources.filter((slug) => !freeSlugs.includes(slug));
   const toggleSource = (slug: ProspectSourceSlug) => setChosen((prev) => {
-    const next = new Set<ProspectSourceSlug>(prev ?? usableSlugs);
+    const next = new Set<ProspectSourceSlug>(prev ?? freeSlugs);
     if (next.has(slug)) next.delete(slug); else next.add(slug);
     return next;
   });
@@ -128,7 +134,7 @@ export function SourceSearchPanel() {
       <div className="rounded-xl border border-dashed border-border p-8 text-center space-y-3">
         <ShieldCheck className="size-6 mx-auto text-muted-foreground" />
         <div className="text-[14px] font-medium">No prospect-data vendor connected yet</div>
-        <p className="text-[12.5px] text-muted-foreground max-w-md mx-auto">Source search runs down your connected vendors in order and stops at your batch target. Add a WarmySender, QuickEnrich or Apollo key and this page fills in — it gets better with every key you add.</p>
+        <p className="text-[12.5px] text-muted-foreground max-w-md mx-auto">Source search runs down your connected vendors in order and stops at your batch target. Add a WarmySender, QuickEnrich, Apollo or LeadOcean key and this page fills in — it gets better with every key you add.</p>
         <Button asChild size="sm"><Link href="/v2/settings/data-sources">Open Settings → Data sources</Link></Button>
       </div>
     );
@@ -212,10 +218,11 @@ export function SourceSearchPanel() {
         </div>
         <Button size="sm" className="gap-1.5" disabled={start.isPending || active.length === 0 || runSources.length === 0 || status === "running" || status === "queued"}
           onClick={() => start.mutate({ criteria, batchTarget: targetNum, sources: runSources })}>
-          {start.isPending || status === "running" || status === "queued" ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} Run search (free preview)
+          {start.isPending || status === "running" || status === "queued" ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} {billedPreviews.length > 0 ? "Run search (billed preview)" : "Run search (free preview)"}
         </Button>
         {active.length === 0 && <span className="text-[11.5px] text-muted-foreground pb-2">Set at least one filter.</span>}
         {active.length > 0 && runSources.length === 0 && <span className="text-[11.5px] text-muted-foreground pb-2">Pick at least one source.</span>}
+        {billedPreviews.length > 0 && <span className="text-[11.5px] text-amber-700 dark:text-amber-400 pb-2">LeadOcean counts one record per preview row, up to {Math.min(targetNum, 100)} this run, if the sources before it leave slots open.</span>}
       </div>
 
       {/* 4. Results */}
@@ -252,7 +259,7 @@ export function SourceSearchPanel() {
               </Button>
             </div>
           </div>
-          {(status === "queued" || status === "running") && <div className="px-4 py-6 text-[12.5px] text-muted-foreground flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> Walking your sources in order — free previews only, nothing is spent yet.</div>}
+          {(status === "queued" || status === "running") && <div className="px-4 py-6 text-[12.5px] text-muted-foreground flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> {billedPreviews.length > 0 ? "Walking your sources in order. No address is bought until you promote." : "Walking your sources in order — free previews only, nothing is spent yet."}</div>}
           {status === "complete" && results.length === 0 && <div className="px-4 py-6 text-[12.5px] text-muted-foreground">No results. Check the source strip above — a source that "cannot honour" a filter never runs; try removing the narrowest filter.</div>}
           {results.length > 0 && (
             <div className="overflow-x-auto">
@@ -275,8 +282,8 @@ export function SourceSearchPanel() {
                     return (
                       <tr key={r.id} className={cn("border-t border-border/50", !r.isNetNew && "opacity-60")}>
                         <td className="px-3 py-1.5"><Checkbox aria-label="Select result" disabled={!selectable} checked={checked} onCheckedChange={(v) => setSelected((s) => { const n2 = new Set(s); if (v) n2.add(r.id); else n2.delete(r.id); return n2; })} /></td>
-                        <td className="px-3 py-1.5"><div className="font-medium">{n?.firstName} {n?.lastName}</div><div className="text-[10.5px] text-muted-foreground">{n?.jobTitle ?? "—"}</div></td>
-                        <td className="px-3 py-1.5"><div>{n?.companyName ?? "—"}</div><div className="text-[10.5px] text-muted-foreground">{n?.companyDomain ?? [n?.city, n?.stateProvince].filter(Boolean).join(", ")}</div></td>
+                        <td className="px-3 py-1.5"><div className="font-medium">{[n?.firstName, n?.lastName].filter(Boolean).join(" ") || "Name comes with the lookup"}</div><div className="text-[10.5px] text-muted-foreground">{n?.jobTitle ?? "—"}</div></td>
+                        <td className="px-3 py-1.5"><div>{n?.companyName ?? "—"}</div><div className="text-[10.5px] text-muted-foreground">{n?.companyDomain ?? [n?.city, n?.stateProvince].filter(Boolean).join(", ")}</div>{n?.rawSourcePayload?.placeCheck === "outside" && <div className="text-[10.5px] text-amber-700 dark:text-amber-400">Outside the states searched: {[n?.city, n?.stateProvince].filter(Boolean).join(", ")}</div>}</td>
                         <td className="px-3 py-1.5">{r.emailIsMasked ? <span className="inline-flex items-center gap-1 text-muted-foreground"><EyeOff className="size-3" /> masked until acquired</span> : n?.email ? <span>{n.email}</span> : <span className="text-muted-foreground">— (found in enrichment)</span>}</td>
                         <td className="px-3 py-1.5"><Badge variant="outline" className="text-[10px]">{r.sourceSlug}</Badge></td>
                         <td className="px-3 py-1.5 text-[11px]">{r.promotedProspectId ? <span className="text-emerald-700 dark:text-emerald-400">promoted</span> : r.isNetNew ? <span className="text-emerald-700 dark:text-emerald-400">net-new</span> : <span className="text-muted-foreground" title={r.dedupeKey ?? ""}>already in People / a campaign</span>}{r.wasCharged ? <span className="text-muted-foreground"> · charged</span> : null}</td>

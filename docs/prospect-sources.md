@@ -36,6 +36,7 @@ fails it.
 | `searchRuns.ts` | staged searches (`prospect_search_runs` / `_results`), promotion into People, maintenance |
 | `adapters/warmysender.ts` | MCP (leads) + REST (verification) client and adapter |
 | `adapters/quickenrich.ts`, `adapters/apollo.ts` | thin adapters over the existing clients |
+| `adapters/leadocean.ts` | REST client and adapter; the one source that bills its previews |
 | `adapters/stubs.ts` | Hunter, Lemlist — registered, `not_implemented` |
 | `server/routers/prospectSources.ts` | tRPC surface |
 
@@ -103,6 +104,19 @@ Reset semantics per vendor:
   daily pull cap (`workspace_settings.quickenrichDailyPullCap`, metered via
   `are_scrape_jobs`) is the brake.
 - **Apollo** — search-only, zero credits; existing daily record cap.
+- **LeadOcean** — no ledger rows (`budgetPeriods` is empty), because a preview spends too and the ledger only holds units for an acquiring run. The optional daily cap on people pulled reads today's `search_records` from `spend_ledger`; plan and limits are read from `GET /v1/account`, never assumed.
+
+## LeadOcean specifics (read from the spec 2026-11-02, not yet run against a real key)
+
+- Base `https://api.leadocean.io`, header `x-api-key`. Spec at `/openapi.json`, prose at `/llms-full.txt`. Per-workspace key only: `credentialMode: "table"`, no env fallback, and status reads return `configured` with no masked value (`writeOnlyKey`).
+- **A person costs two records:** one search row, one lookup. `supportsFreePreview` is false, so the source is opt-in everywhere: `ARE_OPT_IN_SOURCES` keeps it out of `ARE_DEFAULT_SOURCES` (the new-campaign default and the fallback for a null source list), `eligibleFor` skips it unless a run names it, and Source search starts it unticked. The executor adds `page.unitsSpent` to the lookups and does not overfetch it. `alreadyCharged` stays false because the row is not the deliverable.
+- **Free calls, in order, per `search()`:** `/v1/account` (held if paced), then `count=true, limit=1` (refuses when `meta.unsupportedFilters` names a filter, because LeadOcean returns the rows anyway, unfiltered on it). A company-side filter such as `hqState` is dropped when it matches more than 50,000 employers: add an industry or company size. `meta.total` null with `totalWithheld.reason: viewed_set_too_large` is not a refusal.
+- **No stored cursors.** `search()` walks pages internally (`order=stable` on every page, `limit` at most 100, a short `walkCapped` page continues, 410 restarts) and always returns `nextCursor: null`. What moves a campaign forward between ticks is the viewed list, named per workspace (`velocity-ws-<id>`), because lists live on the LeadOcean account and one key may serve several workspaces. Every delivered row is marked; a lookup that never ran forgets its person again.
+- **State:** there is no person-level filter, so `stateProvince` is approximated and sends `hqState` + `hqCountry`. Each row records `rawSourcePayload.placeCheck` (inside / outside / unknown) from `profile_data.profile_address`, whose shape the spec does not give, using `placeFit`. The campaign's screen drops `outside` before the lookup.
+- **Which lookup:** `/v2/people/email/work` by default (one address, verified / catch_all_valid / catch_all, never a phone). The spec does not mention AppSumo's phone-reveal meter at all, and says `/v1/people/enrich` with `reveal_email` returns every email and phone, so that door may spend one. It runs only when phones are on or an accepted status is one the work door never returns. A thin row has no name, so it first takes `/v1/people/enrich` with `reveal_email: false`, then the work door: two records instead of one.
+- **Statuses:** `verified` by default. `invalid`, `disposable`, `spam_trap` and `abuse` are never accepted, in the settings vocabulary, the search filter or the address check. Search's status is an upper bound, so the address is checked again on the lookup. `emailVerifiedAt` stays null: Velocity's own gate decides what can be mailed.
+- **Limits:** `X-Quota-State`, `meta.notice`, 429 `fair_use_paced` and 429 `key_quota` all read as held: not retried (`vendorFetch`'s `noRetry`), no breaker (`VendorFailure.held`), and the engine waits until the reset instead of recording an empty run. A paced 200 keeps the rows already paid for and adds a note. 402 is `budget_exhausted`. 401 and 403 mark the key invalid.
+- **Test connection** only reads `/v1/account` and `/v1/usage`, so it can run on save and in the six-hourly maintenance without spending. Only an allowlist of the account document is stored: the same read holds the account's email and the key's prefix, and credential config is visible to every workspace member.
 
 ## WarmySender specifics (verified 2026-09-14)
 

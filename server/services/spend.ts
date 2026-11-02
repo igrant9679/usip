@@ -37,6 +37,7 @@ export type SpendVendor =
   | "quickenrich"
   | "apollo"
   | "warmysender"
+  | "leadocean"
   | "linkedin";
 
 export type KeySource = "workspace" | "shared";
@@ -194,6 +195,24 @@ export async function sharedUsedToday(workspaceId: number, vendor: SharedKeyVend
         eq(spendLedger.vendor, vendor),
         eq(spendLedger.keySource, "shared"),
         inArray(spendLedger.meter, SHARED_CAP_METERS[vendor]),
+      ),
+    );
+  return Number(row?.n ?? 0);
+}
+
+/** One meter of one vendor, spent by this workspace today (UTC), whoever's key paid. */
+export async function meterUsedToday(workspaceId: number, vendor: SpendVendor, meter: string): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [row] = await db
+    .select({ n: sql<number>`COALESCE(SUM(${spendLedger.quantity}), 0)` })
+    .from(spendLedger)
+    .where(
+      and(
+        eq(spendLedger.workspaceId, workspaceId),
+        eq(spendLedger.day, spendDay()),
+        eq(spendLedger.vendor, vendor),
+        eq(spendLedger.meter, meter),
       ),
     );
   return Number(row?.n ?? 0);

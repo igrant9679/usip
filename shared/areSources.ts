@@ -60,6 +60,11 @@ export const ARE_SOURCES = [
     label: "WarmySender leads",
     description: "Search WarmySender's B2B lead database (US/Canada deepest). Searching is free and masked; one lead unit is spent per net-new person acquired.",
   },
+  {
+    id: "leadocean",
+    label: "LeadOcean",
+    description: "Search your LeadOcean account for people with an address you accept. Every search row and every lookup counts as a record, so a person costs two. Only runs on a campaign that ticks it, with this workspace's own key.",
+  },
 ] as const;
 
 export type AreSourceId = (typeof ARE_SOURCES)[number]["id"];
@@ -67,16 +72,25 @@ export type AreSourceId = (typeof ARE_SOURCES)[number]["id"];
 export const ARE_SOURCE_IDS: AreSourceId[] = ARE_SOURCES.map((s) => s.id) as AreSourceId[];
 
 /**
- * The default for a NEW campaign: everything on. A campaign that sources from
- * every channel and dedupes across them finds strictly more than one that
- * doesn't, and each source is individually uncheckable for anyone who wants
- * to narrow it.
+ * Sources a person has to tick. LeadOcean bills every preview row, so the rule
+ * below ("a campaign that sources from everything finds more") stops being
+ * free: left in the defaults, saving a key would have started spending that
+ * customer's records on every campaign with a null source list, on the next
+ * tick, with nobody having asked for it.
+ */
+export const ARE_OPT_IN_SOURCES: readonly AreSourceId[] = ["leadocean"];
+
+/**
+ * The default for a NEW campaign: everything that costs nothing to look at. A
+ * campaign that sources from every channel and dedupes across them finds
+ * strictly more than one that doesn't, and each source is individually
+ * uncheckable for anyone who wants to narrow it.
  *
  * Used by the wizard, the server's create-input default, AND the engine's
  * fallback for campaigns whose prospectSources is null — those three used to
  * be three different lists.
  */
-export const ARE_DEFAULT_SOURCES: AreSourceId[] = [...ARE_SOURCE_IDS];
+export const ARE_DEFAULT_SOURCES: AreSourceId[] = ARE_SOURCE_IDS.filter((id) => ARE_OPT_IN_SOURCES.indexOf(id) === -1);
 
 /** Drop anything not in the live vocabulary (e.g. 'ai_research' persisted on
  *  older campaigns) so removed options can't resurrect as silent no-ops. */
@@ -104,6 +118,9 @@ export const ARE_DEFAULT_SOURCE_ORDER: AreSourceId[] = [
   "apollo",
   "google_business",
   "news",
+  // Last: the waterfall stops at the target, so the one source that bills its
+  // previews is only reached for slots the others could not fill.
+  "leadocean",
 ];
 
 /**

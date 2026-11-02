@@ -2111,6 +2111,9 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
  */
 /** One angle of a campaign's targeting, and how its searches have gone. */
 type DiscoverySliceState = { id: string; q: string; lastSearchedAt: number | null; lastNewCount: number | null; emptyRuns?: number; nextAt?: number | null };
+
+/** A source that did not search or was refused. `nextAt` is when a vendor's hold ends. */
+type SourceRefusal = { skipped?: string; error?: string; nextAt?: number };
 /** areCampaigns.discoveryQueryState. */
 type DiscoveryState = {
   slices?: DiscoverySliceState[];
@@ -2337,11 +2340,14 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     | "internal"
     | "apollo"
     | "quickenrich"
-    | "warmysender";
+    | "warmysender"
+    | "leadocean";
   type SourceResult = {
     sourceType: SourceType;
     query: string;
     raw: Array<Record<string, unknown>>;
+    /** It did not search, or was refused: not the same claim as an empty result. */
+    refused?: SourceRefusal;
   };
 
   // Task ORDER is dedup PRIORITY: the settled results are walked in this
@@ -2371,6 +2377,15 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
           raw,
         };
       }),
+    // No cursor in, none kept: LeadOcean says a cursor is a place in one walk and
+    // must not be stored. Its per-workspace viewed list moves the search forward.
+    leadocean: (remaining) =>
+      discoverViaRegistrySource(campaign, "leadocean", { titles, industries, geos, keywords, size }, remaining, null, neverTarget).then(({ raw, refused }) => ({
+        sourceType: "leadocean" as const,
+        query,
+        raw,
+        refused,
+      })),
     internal: () =>
       discoverViaInternalCrm(campaign, titles).then((raw) => ({
         sourceType: "internal" as const,
@@ -2465,7 +2480,20 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
         `Discovery source ${id} failed: ${reason}`, errorDetails(err));
       continue;
     }
-    const { sourceType, query: q, raw } = value;
+    const { sourceType, query: q, raw, refused } = value;
+    if (refused) {
+      // Held by the vendor it waits as long as the vendor said, and a failure
+      // backs off as any failure does. Neither writes a scrape job reading
+      // "source returned nothing", because that is what it did not do. No key
+      // is a choice, not a failure, so it does not rest: a key saved now works
+      // on the next tick.
+      if (refused.nextAt || refused.error) {
+        const empty = (sourceState[id]?.empty ?? 0) + 1;
+        sourceState[id] = { empty, nextAt: refused.nextAt ?? Date.now() + discoveryBackoffMs(empty) };
+      }
+      perSource[id] = { raw: 0, new: 0, ...(refused.error ? { error: refused.error } : { skipped: refused.skipped }) };
+      continue;
+    }
     if (raw.length === 0) {
       const empty = (sourceState[id]?.empty ?? 0) + 1;
       sourceState[id] = { empty, nextAt: Date.now() + discoveryBackoffMs(empty) };
@@ -2797,23 +2825,30 @@ export function scoreIcpMatch(
  * committed to what the vendor actually charged. A masked preview never
  * becomes an email: only acquired addresses are written, and they go
  * through the same Reoon gate as every other address before promotion.
+ *
+ * LeadOcean goes through here too. Its preview is billed (one record per row),
+ * so the screen below saves the second charge rather than the first, and the
+ * executor asks for no more rows than there are open slots.
  */
 async function discoverViaRegistrySource(
   campaign: Campaign,
-  slug: "warmysender",
-  targeting: { titles: string[]; industries: string[]; geos: string[]; keywords: string[] },
+  slug: "warmysender" | "leadocean",
+  targeting: { titles: string[]; industries: string[]; geos: string[]; keywords: string[]; size?: { employeeMin?: number; employeeMax?: number } },
   remaining: number,
   /** Where the last tick's search left off (WarmySender walks titles, then pages). */
   cursor: string | null,
   /** The campaign's never-target words: applied to the free previews BEFORE the paid export (A33). */
   neverTarget: Awaited<ReturnType<typeof campaignNeverTarget>>,
-): Promise<{ raw: Array<Record<string, unknown>>; nextCursor?: string | null }> {
+): Promise<{ raw: Array<Record<string, unknown>>; nextCursor?: string | null; refused?: SourceRefusal }> {
   const { eligibleFor } = await import("./services/prospectSources/registry");
   const { runWaterfall } = await import("./services/prospectSources/executor");
   const { workspaceDeduper } = await import("./services/prospectSources/dedupe");
   const { criteriaFromTargeting, recordToQueueRow } = await import("./services/prospectSources/bridge");
 
   const criteria = criteriaFromTargeting(targeting);
+  if (targeting.size?.employeeMin != null || targeting.size?.employeeMax != null) {
+    criteria.headcountRange = { min: targeting.size.employeeMin, max: targeting.size.employeeMax };
+  }
   const targetPlaces = parseTargetPlaces(targeting.geos);
   const territoryMode = territoryModeOf(campaign.icpOverrides);
   const { eligible, skipped } = await eligibleFor(campaign.workspaceId, criteria, { only: [slug] });
@@ -2824,7 +2859,7 @@ async function discoverViaRegistrySource(
     const level = reason === "no_credentials" || reason === "not_selected" || reason === "disabled" ? "info" : "warn";
     await emitLog(campaign.workspaceId, campaign.id, "discovery", level,
       `${slug} skipped — ${why?.detail ?? "not eligible"}${reason === "no_credentials" ? " (Settings → Data sources)" : ""}.`);
-    return { raw: [] };
+    return { raw: [], refused: { skipped: why?.detail ?? "not eligible" } };
   }
   const target = Math.max(0, Math.min(remaining, 100));
   if (target === 0) return { raw: [] };
@@ -2862,7 +2897,7 @@ async function discoverViaRegistrySource(
   });
   const outcome = result.perSource[0];
   if (outcome) {
-    const level = outcome.error ? (outcome.errorReason === "budget_exhausted" ? "warn" : "error") : "info";
+    const level = outcome.error ? (outcome.errorReason === "budget_exhausted" || outcome.held ? "warn" : "error") : "info";
     await emitLog(campaign.workspaceId, campaign.id, "discovery", level,
       outcome.error
         ? `${slug}: ${outcome.error}`
@@ -2875,6 +2910,13 @@ async function discoverViaRegistrySource(
     raw: result.collected.map((c) => recordToQueueRow(c.record)),
     ...(outcome && !outcome.error ? { nextCursor: outcome.nextCursor ?? null }
       : outcome?.errorReason === "invalid_params" ? { nextCursor: null } : {}),
+    ...(outcome?.error
+      ? {
+          refused: outcome.held
+            ? { skipped: outcome.error, nextAt: Date.now() + Math.min(outcome.retryAfterSeconds ?? 60 * 60, 24 * 60 * 60) * 1000 }
+            : { error: outcome.error },
+        }
+      : {}),
   };
 }
 
