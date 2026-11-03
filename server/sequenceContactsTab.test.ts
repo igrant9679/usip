@@ -172,12 +172,12 @@ describe("Contacts tab — it lists the people", () => {
     expect(tabCode).not.toMatch(/\$\{seq\.enrolledCount\}\s*enrolled/);
   });
 
-  it("does not offer an action it has not wired up", () => {
-    // Read-only by decision: pause / resume / exit live on legacy /sequences,
-    // recorded as a gap. A button that looks live and does nothing is the
-    // same defect class as a tile that shows a zero it cannot compute.
-    expect(tabCode).not.toContain("resumeEnrollment");
-    expect(tabCode).not.toContain("exitEnrollment");
-    expect(tabCode).toContain("Read-only.");
+  it("offers the actions through one wired component", () => {
+    // 2026-11-03: the tab was read-only by decision until pause, resume and
+    // exit could ship together. sequenceEditorGaps.test.ts runs them. A button
+    // that looks live and does nothing is the same defect class as a tile that
+    // shows a zero it cannot compute.
+    expect(tabCode).toContain("<SequenceEnrollmentActions enrollment={e} sequenceId={sequenceId} />");
+    expect(tabCode).not.toContain("Read-only.");
   });
 });

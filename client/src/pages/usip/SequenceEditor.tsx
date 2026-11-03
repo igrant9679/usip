@@ -25,10 +25,15 @@ import {
   Send, Star, Share2, Zap, UserPlus, ChevronDown, Plus, Mail, MailOpen, Phone,
   CheckSquare, MessageSquare, Clock, Trash2, GripVertical, ArrowUp, ArrowDown,
   PauseCircle, PlayCircle,
-  Loader2, Users, Activity as ActivityIcon, BarChart3, Settings2, X,
+  Loader2, Users, Activity as ActivityIcon, Settings2, X,
 } from "lucide-react";
 import { pressable } from "@/lib/pressable";
 import { tablistProps, tabProps } from "@/lib/tabs";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
+import { applyTemplate, detachTemplate, stepDistribution, type EmailStep, type TemplateChoice } from "@/lib/sequenceSteps";
+import { SequenceEnrollmentActions } from "@/components/usip/SequenceEnrollmentActions";
+import { SequenceReport } from "@/components/usip/SequenceReport";
+import { StepTemplatePicker } from "@/components/usip/StepTemplatePicker";
 
 /**
  * `enabled: false` marks a RETIRED step: the send engine skips it entirely.
@@ -37,7 +42,7 @@ import { tablistProps, tabProps } from "@/lib/tabs";
  * Absent/true means active, so existing sequences are unaffected.
  */
 type Step =
-  | { type: "email"; subject: string; body?: string; enabled?: boolean }
+  | EmailStep
   | { type: "wait"; days: number; enabled?: boolean }
   | { type: "task"; body: string; enabled?: boolean }
   | { type: "linkedin_dm"; body?: string; enabled?: boolean }
@@ -96,10 +101,10 @@ const ENROLLMENT_STATES = [
  * onto the nearest column, because a tile that is absent asks a question and
  * a tile that is wrong answers one.
  *
- * "Replied" is the one of the four that is buildable, but not from enrollment
- * state: it needs `sequences.getPerformanceAnalytics`
- * (server/services/sequenceAnalytics.ts), which legacy /sequences renders and
- * v2 does not. Recorded as a gap in HANDOFF.md rather than faked here.
+ * "Replied" is the one of the four that could be built, but not from enrollment
+ * state: it belongs in `sequences.getPerformanceAnalytics`
+ * (server/services/sequenceAnalytics.ts), which the Report tab renders and which
+ * does not count replies yet.
  */
 
 export default function SequenceEditor() {
@@ -163,6 +168,13 @@ export default function SequenceEditor() {
   const moveStep = (i: number, dir: -1 | 1) => { const j = i + dir; if (j < 0 || j >= steps.length) return; const next = [...steps]; [next[i], next[j]] = [next[j], next[i]]; commit(next); };
   const patchStep = (i: number, patch: Partial<Step>) => { setSteps((prev) => prev.map((s, idx) => (idx === i ? ({ ...s, ...patch } as Step) : s))); };
   const commitEdits = () => updateSteps.mutate({ id, steps: steps as any });
+  // Saved at once: the picker and the button leave no field behind to blur.
+  const withEmailStep = (i: number, change: (s: EmailStep) => EmailStep) =>
+    commit(steps.map((s, idx) => (idx === i && s.type === "email" ? change(s) : s)));
+  // The server refuses step edits on these two, and a change that looked saved would not be.
+  const stepsBlocked = seq?.status === "active"
+    ? "Pause the sequence to change its steps."
+    : seq?.status === "archived" ? "An archived sequence can't be changed." : null;
 
   const statusBadge = useMemo(() => {
     const s = seq?.status ?? "draft";
@@ -286,7 +298,14 @@ export default function SequenceEditor() {
                         )}
                         {open && (
                           <div className="border-t border-border/60 p-3 space-y-2" onBlur={commitEdits}>
-                            <StepEditor step={s} onChange={(patch) => patchStep(i, patch)} accent={accent} />
+                            <StepEditor
+                              step={s}
+                              onChange={(patch) => patchStep(i, patch)}
+                              accent={accent}
+                              blocked={stepsBlocked}
+                              onPickTemplate={(t: TemplateChoice) => withEmailStep(i, (e) => applyTemplate(e, t))}
+                              onDetachTemplate={() => withEmailStep(i, detachTemplate)}
+                            />
                           </div>
                         )}
                       </div>
@@ -303,6 +322,8 @@ export default function SequenceEditor() {
             <ContactsTab
               accent={accent}
               query={enrollmentsQ}
+              sequenceId={id}
+              steps={steps}
               onAddContacts={() => setLocation("/v2/people")}
             />
           )}
@@ -322,15 +343,7 @@ export default function SequenceEditor() {
           )}
 
           {/* REPORT */}
-          {tab === "Report" && (
-            <div className="p-6 flex items-center justify-center">
-              <div className="text-center max-w-sm">
-                <div className="mx-auto size-12 rounded-full bg-secondary flex items-center justify-center mb-3"><BarChart3 className="size-5 text-muted-foreground" /></div>
-                <h2 className="text-sm font-semibold">Report</h2>
-                <p className="text-sm text-muted-foreground mt-1">Delivery, open, reply and meeting funnel — populates once this sequence starts sending.</p>
-              </div>
-            </div>
-          )}
+          {tab === "Report" && <SequenceReport sequenceId={id} accent={accent} />}
 
           {/* SETTINGS */}
           {tab === "Settings" && (
@@ -373,10 +386,12 @@ export default function SequenceEditor() {
  * the rewrite: the tab's previous zeros were not measurements.
  */
 function ContactsTab({
-  accent, query, onAddContacts,
+  accent, query, sequenceId, steps, onAddContacts,
 }: {
   accent: string;
   query: { data?: unknown; isError: boolean; error?: { message: string } | null };
+  sequenceId: number;
+  steps: Step[];
   onAddContacts: () => void;
 }) {
   /**
@@ -421,6 +436,8 @@ function ContactsTab({
     );
   }, [known]);
 
+  const atStep = useMemo(() => stepDistribution(known ?? [], steps.length), [known, steps.length]);
+
   return (
     <div className="p-4 md:p-6">
       <div className="flex items-center gap-2 mb-3">
@@ -456,6 +473,26 @@ function ContactsTab({
       {unrecognised > 0 && (
         <div className="mb-3 text-[11px] text-muted-foreground">
           {unrecognised} enrollment{unrecognised === 1 ? "" : "s"} in a state this tab does not have a tile for — listed below.
+        </div>
+      )}
+
+      {known && atStep.total > 0 && (
+        <div className="mb-4 rounded-xl border bg-card p-3 shadow-sm space-y-1.5">
+          <div className="text-[12px] font-medium">Where active and paused people are</div>
+          {steps.map((s, i) => (
+            <div key={i} className="flex items-center gap-3 text-[12px]">
+              <span className="w-32 shrink-0 truncate text-muted-foreground">{i + 1}. {stepMeta(s).label}</span>
+              <div className="h-2 min-w-0 flex-1 rounded-full bg-muted">
+                <div className="h-2 rounded-full" style={{ width: `${(atStep.perStep[i] / atStep.total) * 100}%`, backgroundColor: accent }} />
+              </div>
+              <span className="w-8 shrink-0 text-right tabular-nums">{atStep.perStep[i]}</span>
+            </div>
+          ))}
+          {atStep.beyond > 0 && (
+            <div className="text-[11px] text-muted-foreground">
+              {atStep.beyond} {atStep.beyond === 1 ? "person is" : "people are"} on a step that has since been removed.
+            </div>
+          )}
         </div>
       )}
 
@@ -499,21 +536,14 @@ function ContactsTab({
                 <span className={cn("shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide", state?.pill ?? "bg-muted text-muted-foreground")}>
                   {state?.label ?? String(e?.status ?? "unknown")}
                 </span>
+                <SequenceEnrollmentActions enrollment={e} sequenceId={sequenceId} />
               </li>
             );
           })}
         </ul>
       )}
 
-      {/*
-        Enrollment management — resume / exit / pause-on-reply, and the bulk
-        enrol picker — lives on legacy /sequences and is not here. The gap is
-        recorded in HANDOFF.md; this tab reads, it does not act, so nothing on
-        it can change an enrollment by accident.
-      */}
-      <div className="mt-3 text-[11px] text-muted-foreground">
-        Read-only. Pause, resume and exit are on the Sequences list for now.
-      </div>
+      {/* The bulk enrol picker lives on legacy /sequences and is not here yet; the gap is recorded in HANDOFF.md. */}
     </div>
   );
 }
@@ -534,21 +564,46 @@ function AddStepButton({ accent, open, setOpen, onAdd }: { accent: string; open:
   );
 }
 
-function StepEditor({ step, onChange, accent }: { step: Step; onChange: (patch: Partial<Step>) => void; accent: string }) {
+function StepEditor({ step, onChange, accent, blocked, onPickTemplate, onDetachTemplate }: {
+  step: Step;
+  onChange: (patch: Partial<Step>) => void;
+  accent: string;
+  blocked: string | null;
+  onPickTemplate: (template: TemplateChoice) => void;
+  onDetachTemplate: () => void;
+}) {
   const ta = "w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2";
   const ring = { ["--tw-ring-color" as any]: `${accent}55` } as React.CSSProperties;
   if (step.type === "email") {
     return (
       <>
+        <StepTemplatePicker step={step} blocked={blocked} onPick={onPickTemplate} />
         <Input aria-label="Subject" value={step.subject} placeholder="Subject line" onChange={(e) => onChange({ subject: e.target.value } as any)} />
-        <RichTextEditor
-          value={step.body ?? ""}
-          placeholder="Write your email… Use {{first_name}} for personalization."
-          minHeight="140px"
-          compact
-          aiContext={{ subject: step.subject }}
-          onChange={(html) => onChange({ body: html } as any)}
-        />
+        {step.templateId ? (
+          /* The rich-text editor can't hold Email Builder HTML faithfully, and
+             its first keystroke would save its own version over the copy. So a
+             step from a template shows the copy that will send, and editing it
+             here is a choice. */
+          <>
+            <div
+              className="border rounded-md bg-white text-[#202124] p-3 text-sm max-h-[300px] overflow-y-auto [&_a]:text-blue-600 [&_a]:underline [&_p]:my-2 break-words [&_table]:max-w-full [&_td]:break-words [&_img]:max-w-full [&_img]:h-auto"
+              dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(step.body ?? "") }}
+            />
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+              <span className="min-w-0 flex-1">This is the copy that sends. Later changes to the template don't reach it; pick the template again to refresh it.</span>
+              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={!!blocked} onClick={onDetachTemplate}>Edit the text here</Button>
+            </div>
+          </>
+        ) : (
+          <RichTextEditor
+            value={step.body ?? ""}
+            placeholder="Write your email… Use {{first_name}} for personalization."
+            minHeight="140px"
+            compact
+            aiContext={{ subject: step.subject }}
+            onChange={(html) => onChange({ body: html } as any)}
+          />
+        )}
       </>
     );
   }
