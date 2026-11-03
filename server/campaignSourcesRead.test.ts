@@ -95,8 +95,9 @@ describe("the one reading of a stored list", () => {
   });
 
   it("hands back its own copy, so a caller can't change the defaults", () => {
-    campaignSources(null).pop();
-    expect(campaignSources(null)).toEqual(ARE_DEFAULT_SOURCES);
+    const first = campaignSources(null);
+    expect(first).not.toBe(ARE_DEFAULT_SOURCES);
+    expect(first).toEqual(ARE_DEFAULT_SOURCES);
   });
 
   it("a box changes that one source and nothing else", () => {
