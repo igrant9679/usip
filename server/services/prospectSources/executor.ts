@@ -143,6 +143,7 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
       outcome.error = page.message; outcome.errorReason = page.reason;
       if (page.held) outcome.held = true;
       if (page.retryAfterSeconds != null) outcome.retryAfterSeconds = page.retryAfterSeconds;
+      if (page.unitsSpent) outcome.unitsSpent = page.unitsSpent;
       if (hold) await release(opts.workspaceId, hold);
       await noteFailure(opts.workspaceId, s, page);
       if (page.reason === "budget_exhausted" && periods.length > 0) await markExhausted(opts.workspaceId, s.slug, "leads", periods);
@@ -192,6 +193,7 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
         outcome.error = `acquire: ${acq.message}`; outcome.errorReason = acq.reason;
         if (acq.held) outcome.held = true;
         if (acq.retryAfterSeconds != null) outcome.retryAfterSeconds = acq.retryAfterSeconds;
+        if (acq.unitsSpent) outcome.unitsSpent += acq.unitsSpent;
         if (hold) await release(opts.workspaceId, hold);
         await noteFailure(opts.workspaceId, s, acq);
         if (acq.reason === "budget_exhausted" && periods.length > 0) await markExhausted(opts.workspaceId, s.slug, "leads", periods);
@@ -212,6 +214,10 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
       outcome.acquired = merged.length;
       outcome.unitsSpent += acq.unitsSpent;
       if (acq.note) outcome.note = outcome.note ? `${outcome.note}; ${acq.note}` : acq.note;
+      if (acq.hold) {
+        outcome.held = true;
+        if (acq.hold.retryAfterSeconds != null) outcome.retryAfterSeconds = acq.hold.retryAfterSeconds;
+      }
       charged = acq.unitsSpent > 0;
       if (hold) await commit(opts.workspaceId, hold, acq.unitsSpent);
     } else if (hold) {

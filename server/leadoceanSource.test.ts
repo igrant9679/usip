@@ -1480,6 +1480,359 @@ describe("promoting a staged LeadOcean row", () => {
   });
 });
 
+/* ─── Money and people at the edges ─────────────────────────────────────── */
+
+describe("rows are counted as billed, not as kept", () => {
+  const paged = (rowsIn: unknown[], nextCursor: string | null) =>
+    json({ success: true, data: rowsIn, meta: { count: rowsIn.length, credits: rowsIn.length, nextCursor, unsupportedFilters: [] } });
+
+  it("a page of duplicates and dropped rows does not buy another page to make up the number", async () => {
+    const v = vendor({ pages: [paged([
+      person(1, { meta: { source_ids: { person_id: "1", person_group_id: "G" } } }),
+      person(2, { meta: { source_ids: { person_id: "2", person_group_id: "G" } } }),
+      person(3, { contact: { has_email: false } }),
+    ], "c1"), paged([person(4), person(5)], null)] });
+    const r = ok(await adapter(v).search(CRITERIA, creds(), 3, {}));
+    expect(v.pageCalls()).toHaveLength(1);
+    expect(r.unitsSpent).toBe(3);
+    expect(r.records).toHaveLength(1);
+  });
+
+  it("a short page leaves only what is unbilled for the next one, not what is unkept", async () => {
+    const v = vendor({ pages: [paged([person(1), person(2, { contact: { has_email: false } })], "c1"), paged([person(3)], null)] });
+    const r = ok(await adapter(v).search(CRITERIA, creds(), 3, {}));
+    expect(v.pageCalls().map((p) => p.body.limit)).toEqual([3, 1]);
+    expect(r.unitsSpent).toBe(3);
+  });
+
+  it("so a daily cap of ten is ten billed rows, however many of them are kept", async () => {
+    const dup = (id: number) => person(id, { meta: { source_ids: { person_id: String(id), person_group_id: "G" } } });
+    const v = vendor({ pages: [paged(Array.from({ length: 10 }, (_, i) => dup(i + 1)), "c1"), paged([person(99)], null)] });
+    const r = ok(await adapter(v).search(CRITERIA, creds({ dailyPeopleCap: 10 }), 50, {}));
+    expect(v.pageCalls().map((p) => p.body.limit)).toEqual([10]);
+    expect(r.unitsSpent).toBe(10);
+    expect(spent("search_records")).toBe(10);
+  });
+
+  it("a page billed and then a failure reports what it cost, in the outcome as well as the ledger", async () => {
+    addKey(LSI, KEY_LSI);
+    const v = vendor({ pages: [paged([person(1, { contact: { has_email: false } })], "c1"), json({ success: false, error: { message: "denied" } }, 401)] });
+    const s = adapter(v);
+    const direct = bad(await s.search(CRITERIA, creds(), 3, {}));
+    expect(direct.reason).toBe("unauthorized");
+    expect(direct.unitsSpent).toBe(1);
+
+    const v2 = vendor({ pages: [paged([person(2, { contact: { has_email: false } })], "c1"), json({ success: false, error: { message: "denied" } }, 401)] });
+    const s2 = adapter(v2);
+    const eligible = { source: s2, credentials: creds(), capabilities: s2.capabilities(), match: { verdict: "full" as const, approximated: [], missing: [] }, leadsRemaining: null };
+    const r = await runWaterfall({ workspaceId: LSI, criteria: CRITERIA, target: 3, sources: [eligible], deduper: new Deduper(), mode: "preview" });
+    expect(r.perSource[0]).toEqual(expect.objectContaining({ errorReason: "unauthorized", unitsSpent: 1 }));
+  });
+
+  it("a plan that refuses past its records buys only rows it can afford to look up", async () => {
+    const records = (remaining: number, whenOver = "refused") => ({ records: { ceiling: 1000, used: 1000 - remaining, remaining, overLimit: false, whenOver, resetsAt: null } });
+    const seven = vendor({ pages: [[person(1)]], account: records(7) });
+    ok(await adapter(seven).search(CRITERIA, creds(), 25, {}));
+    expect(seven.pageCalls()[0].body.limit).toBe(3);
+
+    const one = vendor({ pages: [[person(1)]], account: records(1) });
+    const r = bad(await adapter(one).search(CRITERIA, creds(), 25, {}));
+    expect(r.reason).toBe("budget_exhausted");
+    expect(one.calls.some((c) => c.path === "/v1/people/search")).toBe(false);
+
+    // A plan that slows instead of refusing has no such edge.
+    const slows = vendor({ pages: [[person(1)]], account: records(7, "throttled") });
+    ok(await adapter(slows).search(CRITERIA, creds(), 25, {}));
+    expect(slows.pageCalls()[0].body.limit).toBe(25);
+  });
+});
+
+describe("a lookup billed with nothing to take is not bought twice", () => {
+  it("the adapter says which misses were billed: a null is, a 404 and an untried person are not", async () => {
+    let n = 0;
+    const v = vendor({ work: () => {
+      n += 1;
+      if (n === 1) return json({ success: true, data: null });
+      if (n === 2) return json({ success: false, error: { message: "not found" } }, 404);
+      return json({ success: true, data: null }, 200, { "x-quota-state": "paced", "x-quota-reset": LATER });
+    } });
+    const r = ok(await adapter(v).acquire(["leadocean:1", "leadocean:2", "leadocean:3", "leadocean:4"], creds(), {}));
+    expect(r.paidMissExternalIds).toEqual(["leadocean:1", "leadocean:3"]);
+    expect(r.failedExternalIds).toEqual(["leadocean:1", "leadocean:2", "leadocean:3", "leadocean:4"]);
+
+    const thin = vendor({ enrich: (c) => json({ success: true, data: person(c.body.person_id, { contact: { has_email: false } }), meta: { credits: 1 } }) });
+    expect(ok(await adapter(thin).acquire(["leadocean:9:thin"], creds(), {})).paidMissExternalIds).toEqual(["leadocean:9:thin"]);
+  });
+
+  it("promoting it again, as Select all would, buys nothing, and the estimate agrees", async () => {
+    addKey(LSI, KEY_LSI);
+    const v = vendor({ pages: [[person(1), person(2)]], work: (c) => json({ success: true, data: c.body.contact_id === "1" ? null : { email: "p2@henrico.gov", status: "verified" } }) });
+    vi.stubGlobal("fetch", v.impl);
+    rows("prospect_search_runs").push({ id: 11, workspaceId: LSI, userId: ADMIN, criteria: CRITERIA, batchTarget: 5, status: "queued" });
+    await executeRun(LSI, 11, { only: ["leadocean"] });
+    const ids = rows("prospect_search_results").map((r) => r.id);
+    const first = await promoteResults(LSI, ADMIN, 11, ids);
+    expect(first).toEqual(expect.objectContaining({ acquired: 1, unitsSpent: 2, failed: 1 }));
+    const miss = rows("prospect_search_results").find((r) => r.externalId === "leadocean:1");
+    expect(miss.wasCharged).toBe(true);
+    expect(miss.normalized.rawSourcePayload.noAddressFound).toBe(true);
+    expect(miss.promotedProspectId ?? null).toBeNull();
+
+    const doors = () => v.calls.filter((c) => c.path === "/v2/people/email/work").length;
+    const before = doors();
+    const again = await promoteResults(LSI, ADMIN, 11, [miss.id]);
+    expect(again).toEqual(expect.objectContaining({ acquired: 0, unitsSpent: 0, promoted: 0 }));
+    expect(doors()).toBe(before);
+    expect((await estimatePromotion(LSI, 11, [miss.id])).units).toBe(0);
+  });
+
+  it("a miss that was not billed can be tried again", async () => {
+    addKey(LSI, KEY_LSI);
+    const v = vendor({ pages: [[person(1)]], work: () => json({ success: false, error: { message: "not found" } }, 404) });
+    vi.stubGlobal("fetch", v.impl);
+    rows("prospect_search_runs").push({ id: 11, workspaceId: LSI, userId: ADMIN, criteria: CRITERIA, batchTarget: 5, status: "queued" });
+    await executeRun(LSI, 11, { only: ["leadocean"] });
+    const staged = rows("prospect_search_results")[0];
+    await promoteResults(LSI, ADMIN, 11, [staged.id]);
+    expect(staged.wasCharged).toBe(false);
+    expect((await estimatePromotion(LSI, 11, [staged.id])).units).toBe(1);
+  });
+
+  it("the page does not offer it for selection, and says why", () => {
+    const page = read("client/src/pages/usip/SourceSearch.tsx");
+    expect(page).toContain("noAddressFound === true");
+    expect(page).toContain("const selectable = r.isNetNew && !r.promotedProspectId && !lookedUpEmpty(r);");
+    expect(page).toContain("setSelected(v ? new Set(selectableRows.map((r) => r.id)) : new Set())");
+    expect(page).toContain("looked up: no address you accept");
+  });
+});
+
+describe("people are not lost, and it says when they might be", () => {
+  it("a give-back that fails says so instead of claiming they are held for later", async () => {
+    const down = json({ success: false, error: { code: "no_source", message: "down" } }, 503);
+    let n = 0;
+    const v = vendor({
+      viewed: down,
+      work: (c) => { n += 1; return json({ success: true, data: { email: `p${c.body.contact_id}@henrico.gov`, status: "verified" } }, 200, n === 1 ? { "x-quota-state": "paced" } : {}); },
+    });
+    const r = ok(await adapter(v).acquire(["leadocean:1", "leadocean:2"], creds(), {}));
+    expect(r.note).toContain("1 could not be given back");
+    expect(r.note).not.toContain("held for later");
+
+    const refused = vendor({ viewed: down, work: () => json({ success: false, error: { message: "denied" } }, 401) });
+    expect(bad(await adapter(refused).acquire(["leadocean:1"], creds(), {})).message).toContain("could not be given back");
+  });
+
+  it("lookups reach the ledger one at a time, so a batch that dies partway is still counted", async () => {
+    const v = vendor();
+    ok(await adapter(v).acquire(["leadocean:1", "leadocean:2", "leadocean:3"], creds(), {}));
+    const row = rows("spend_ledger").find((r) => r.meter === "lookups");
+    expect(row.quantity).toBe(3);
+    expect(row.calls).toBe(3);
+  });
+
+  it("a search that only skipped people already seen says that, rather than ending quietly", async () => {
+    const skip = (i: number) => json({ success: true, data: [], meta: { credits: 0, nextCursor: `c${i}`, walkCapped: true, excludedViewed: 500 } });
+    const v = vendor({ pages: Array.from({ length: 10 }, (_, i) => skip(i)) });
+    const r = ok(await adapter(v).search(CRITERIA, creds(), 5, {}));
+    expect(r.records).toEqual([]);
+    expect(r.note).toContain("still skipping people this workspace has already seen");
+  });
+
+  it("an earlier search can be reopened on the page, because its rows will not come back", () => {
+    const page = read("client/src/pages/usip/SourceSearch.tsx");
+    expect(page).toContain("trpc.prospectSources.listRuns.useQuery({ limit: 15 })");
+    expect(page).toContain('aria-label="Open an earlier search"');
+    expect(page).toContain("setRunId(e.target.value ? Number(e.target.value) : null)");
+  });
+});
+
+describe("a hold partway through lookups is still a hold", () => {
+  const quota = () => json({ success: false, error: { code: "key_quota", message: "cap", resetsAt: LATER } }, 429, { "retry-after": "3600", "x-key-limit-reset": LATER });
+
+  it("a long Retry-After with nothing else to go on is a pace: AppSumo's wording, not retried into", async () => {
+    const v = vendor({ pages: [json({ success: false, error: { message: "too many" } }, 429, { "retry-after": "60" }), [person(1)]] });
+    const r = bad(await adapter(v).search(CRITERIA, creds(), 5, {}));
+    expect(r.held).toBe(true);
+    expect(r.retryAfterSeconds).toBe(60);
+    expect(v.pageCalls()).toHaveLength(1);
+  });
+
+  it("a key's quota is not retried even when its reset is seconds away", async () => {
+    const soon = json({ success: false, error: { code: "key_quota", message: "cap" } }, 429, { "retry-after": "3" });
+    const v = vendor({ pages: [soon, [person(1)]] });
+    expect(bad(await adapter(v).search(CRITERIA, creds(), 5, {})).held).toBe(true);
+    expect(v.pageCalls()).toHaveLength(1);
+  });
+
+  it("a lookup that failed after a billed step reports what that step cost", async () => {
+    addKey(LSI, KEY_LSI);
+    const v = vendor({ pages: [[person(1)]], work: () => json({ success: false, error: { message: "denied" } }, 401) });
+    const s = adapter(v);
+    const direct = bad(await s.acquire(["leadocean:9:thin"], creds(), {}));
+    expect(direct.reason).toBe("unauthorized");
+    expect(direct.unitsSpent).toBe(1);
+    // In the waterfall too: the row and the identity lookup, with the lookup's failure.
+    const thin = { person_id: "9", profile_data: {}, contact_data: { contact_current_experiences: [{ job_title: "Clerk" }] }, meta: { view: "thin" } };
+    const v2 = vendor({ pages: [[thin]], work: () => json({ success: false, error: { message: "denied" } }, 401) });
+    const s2 = adapter(v2);
+    const eligible = { source: s2, credentials: creds(), capabilities: s2.capabilities(), match: { verdict: "full" as const, approximated: [], missing: [] }, leadsRemaining: null };
+    const r = await runWaterfall({ workspaceId: LSI, criteria: CRITERIA, target: 1, sources: [eligible], deduper: new Deduper(), mode: "acquire" });
+    expect(r.perSource[0]).toEqual(expect.objectContaining({ errorReason: "unauthorized", unitsSpent: 2 }));
+  });
+
+  it("a thin row paced between its two lookups has not been tried: it is given back, and can be bought later", async () => {
+    const v = vendor({ enrich: (c) => json({ success: true, data: person(c.body.person_id), meta: { credits: 1 } }, 200, { "x-quota-state": "paced", "x-quota-reset": LATER }) });
+    const r = ok(await adapter(v).acquire(["leadocean:9:thin"], creds(), {}));
+    expect(v.calls.some((c) => c.path === "/v2/people/email/work")).toBe(false);
+    expect(r.unitsSpent).toBe(1);
+    expect(r.records).toEqual([]);
+    expect(r.paidMissExternalIds).toBeUndefined();
+    expect(r.failedExternalIds).toEqual(["leadocean:9:thin"]);
+    expect(r.hold?.retryAfterSeconds).toBe(3 * 60 * 60);
+    expect(v.viewedCalls().find((c) => c.method === "DELETE")!.body.ids).toEqual(["9"]);
+  });
+
+  it("the adapter reports the hold along with who it did get", async () => {
+    let n = 0;
+    const v = vendor({ work: (c) => { n += 1; return n === 1 ? json({ success: true, data: { email: `p${c.body.contact_id}@henrico.gov`, status: "verified" } }) : quota(); } });
+    const r = ok(await adapter(v).acquire(["leadocean:1", "leadocean:2"], creds(), {}));
+    expect(r.records.map((x) => x.email)).toEqual(["p1@henrico.gov"]);
+    expect(r.hold).toEqual({ message: expect.stringContaining("own cap"), retryAfterSeconds: 3 * 60 * 60 });
+    expect(r.note).toContain("1 held for later");
+  });
+
+  it("a paced first lookup that answers null is a hold, not a search that found nothing", async () => {
+    addKey(LSI, KEY_LSI);
+    const v = vendor({ pages: [[person(1), person(2)]], work: () => json({ success: true, data: null }, 200, { "x-quota-state": "paced", "x-quota-reset": LATER }) });
+    vi.stubGlobal("fetch", v.impl);
+    rows("are_campaigns").push(campaignRow(["leadocean"]));
+    expect(await runDiscovery(rows("are_campaigns")[0], 2)).toBe(0);
+    const state = rows("are_campaigns")[0].discoveryQueryState;
+    expect(state.src.leadocean).toEqual(expect.objectContaining({ held: true, nextAt: T0 + 3 * 60 * 60 * 1000 }));
+    expect(rows("are_scrape_jobs")).toEqual([]);
+    const summary = rows("are_engine_logs").find((l) => /^Discovery slice/.test(l.message));
+    expect(summary.details.perSource.leadocean.skipped).toContain("1 request a minute");
+  });
+
+  it("the people it did get are queued, and the next tick buys nothing until the reset", async () => {
+    addKey(LSI, KEY_LSI);
+    let n = 0;
+    const v = vendor({ pages: [[person(1), person(2)]], work: (c) => { n += 1; return n === 1 ? json({ success: true, data: { email: `p${c.body.contact_id}@henrico.gov`, status: "verified" } }) : quota(); } });
+    vi.stubGlobal("fetch", v.impl);
+    rows("are_campaigns").push(campaignRow(["leadocean"]));
+    expect(await runDiscovery(rows("are_campaigns")[0], 2)).toBe(1);
+    expect(rows("prospect_queue").map((q) => q.email)).toEqual(["p1@henrico.gov"]);
+    const state = rows("are_campaigns")[0].discoveryQueryState;
+    expect(state.src.leadocean).toEqual(expect.objectContaining({ held: true, nextAt: T0 + 3 * 60 * 60 * 1000 }));
+
+    const paid = v.paidCalls().length;
+    vi.setSystemTime(new Date(T0 + 40 * 60 * 1000));
+    await runDiscovery(rows("are_campaigns")[0], 2);
+    expect(v.paidCalls().length).toBe(paid);
+    const log = rows("are_engine_logs").filter((l) => /^Discovery slice/.test(l.message)).pop();
+    expect(log.details.perSource.leadocean.skipped).toContain("held by the vendor");
+  });
+
+  it("a promotion surfaces the hold rather than reading as 'could not be acquired'", async () => {
+    addKey(LSI, KEY_LSI);
+    let n = 0;
+    const v = vendor({ pages: [[person(1), person(2)]], work: (c) => { n += 1; return n === 1 ? json({ success: true, data: { email: `p${c.body.contact_id}@henrico.gov`, status: "verified" } }) : quota(); } });
+    vi.stubGlobal("fetch", v.impl);
+    rows("prospect_search_runs").push({ id: 11, workspaceId: LSI, userId: ADMIN, criteria: CRITERIA, batchTarget: 5, status: "queued" });
+    await executeRun(LSI, 11, { only: ["leadocean"] });
+    const r = await promoteResults(LSI, ADMIN, 11, rows("prospect_search_results").map((x) => x.id));
+    expect(r.errors.join(" ")).toContain("own cap");
+    // Held rows stay promotable: nothing was billed for them.
+    expect(rows("prospect_search_results").find((x) => x.externalId === "leadocean:2").wasCharged).toBe(false);
+  });
+});
+
+describe("a tick that asked nobody is not an empty run", () => {
+  const held = { account: { pace: { search: [], enrich: [], paced: { kind: "search", windowLabel: "5 hours", resetsAt: LATER } } } };
+
+  it("a held source leaves the angle and the campaign's rest alone, and no log says it found nobody", async () => {
+    addKey(LSI, KEY_LSI);
+    vi.stubGlobal("fetch", vendor(held).impl);
+    rows("are_campaigns").push(campaignRow(["leadocean"]));
+    await runDiscovery(rows("are_campaigns")[0], 5);
+    const state = rows("are_campaigns")[0].discoveryQueryState;
+    expect(state.lastRunNew).toBeUndefined();
+    expect(state.lastRunAt).toBeUndefined();
+    expect(state.slices[0].emptyRuns ?? 0).toBe(0);
+    expect(state.slices[0].nextAt ?? null).toBeNull();
+
+    // And the next tick, with the source still resting on the vendor's word.
+    vi.setSystemTime(new Date(T0 + 5 * 60 * 1000));
+    await runDiscovery(rows("are_campaigns")[0], 5);
+    const later = rows("are_campaigns")[0].discoveryQueryState;
+    expect(later.lastRunNew).toBeUndefined();
+    expect(later.slices[0].emptyRuns ?? 0).toBe(0);
+    expect(rows("are_engine_logs").some((l) => /found nobody new|come back empty/.test(l.message))).toBe(false);
+  });
+
+  it("no key is the same, so saving one works on the next tick", async () => {
+    vi.stubGlobal("fetch", vendor().impl);
+    rows("are_campaigns").push(campaignRow(["leadocean"]));
+    await runDiscovery(rows("are_campaigns")[0], 5);
+    const state = rows("are_campaigns")[0].discoveryQueryState;
+    expect(state.lastRunNew).toBeUndefined();
+    expect(state.slices[0].emptyRuns ?? 0).toBe(0);
+  });
+
+  it("a failed search did ask, so it counts the way a failure does", async () => {
+    addKey(LSI, KEY_LSI);
+    vi.stubGlobal("fetch", vendor({ sizing: { total: null, unsupportedFilters: ["hqState"], totalWithheld: { reason: "unsupported_filters" } } }).impl);
+    rows("are_campaigns").push(campaignRow(["leadocean"]));
+    await runDiscovery(rows("are_campaigns")[0], 5);
+    const state = rows("are_campaigns")[0].discoveryQueryState;
+    expect(state.lastRunNew).toBe(0);
+    expect(state.slices[0].emptyRuns).toBe(1);
+  });
+
+  it("beside another source that ran, the run is an ordinary one", async () => {
+    addKey(LSI, KEY_LSI);
+    vi.stubGlobal("fetch", vendor(held).impl);
+    rows("are_campaigns").push(campaignRow(["internal", "leadocean"]));
+    await runDiscovery(rows("are_campaigns")[0], 5);
+    const state = rows("are_campaigns")[0].discoveryQueryState;
+    expect(state.lastRunNew).toBe(0);
+    expect(state.src.leadocean.held).toBe(true);
+    expect(state.src.internal.held).toBeUndefined();
+  });
+
+  it("the campaign's source panel says the vendor asked for the wait", () => {
+    expect(read("server/routers/are/campaigns.ts")).toContain("heldByVendor: !!rest?.held,");
+    expect(read("client/src/components/usip/are/CampaignSourceHealth.tsx")).toContain("Held by the vendor — next attempt");
+  });
+});
+
+describe("what a run has to say reaches where a person reads it", () => {
+  it("Source search and the run inspector show the source's note, not only the engine log", () => {
+    expect(read("client/src/pages/usip/SourceSearch.tsx")).toContain('`${p.netNew} net-new / ${p.searched}${p.note ? ` — ${p.note}` : ""}`');
+    expect(read("client/src/components/usip/settings/ProspectSourceRegistryCard.tsx")).toContain('{p.note ? ` · ${p.note}` : ""}');
+  });
+
+  it("a filter left unsent reaches the staged run's own record", async () => {
+    addKey(LSI, KEY_LSI);
+    vi.stubGlobal("fetch", vendor({ pages: [[person(1)]] }).impl);
+    rows("prospect_search_runs").push({ id: 11, workspaceId: LSI, userId: ADMIN, criteria: { ...CRITERIA, seniorities: ["VP", "Grand Poobah"] }, batchTarget: 5, status: "queued" });
+    await executeRun(LSI, 11, { only: ["leadocean"] });
+    expect(rows("prospect_search_runs")[0].perSource.leadocean.note).toContain("Grand Poobah");
+  });
+
+  it("the card clears a cap of zero in the box as well as on the server", () => {
+    const card = read("client/src/components/usip/settings/LeadOceanSourceCard.tsx");
+    expect(card).toContain('setCap(nextCap == null ? "" : String(nextCap));');
+    expect(card).toContain("dailyPeopleCap: nextCap");
+  });
+
+  it("two letters that are a known country name go through the table: UK is GB on LeadOcean's list", () => {
+    const uk = buildSearchFilters({ ...CRITERIA, countries: ["UK", "us", "DE"] }, ["verified"], LSI, null);
+    expect(uk.filters.country).toEqual(["GB", "US", "DE"]);
+  });
+});
+
 /* ─── Wiring ────────────────────────────────────────────────────────────── */
 
 describe("wiring", () => {

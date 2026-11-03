@@ -306,6 +306,7 @@ type Answer = { status: number; headers: Headers; json: unknown };
 
 const QUOTA_STATES = new Set(["paced", "over-limit"]);
 const PACE_CODES = new Set(["fair_use_paced", "fair_use_throttled", "key_quota"]);
+const PACE_RETRY_AFTER_SECONDS = 5;
 
 function secondsUntil(iso: string | null): number | undefined {
   if (!iso) return undefined;
@@ -314,11 +315,24 @@ function secondsUntil(iso: string | null): number | undefined {
   return Math.max(1, Math.ceil((at - Date.now()) / 1000));
 }
 
-/** Told to wait rather than refused for rate? Retrying would be retrying into the pace. */
+/**
+ * Told to wait rather than refused for rate? Retrying would be retrying into the
+ * pace. Too-fast answers `Retry-After: 1`; a pace 60, a key's quota the seconds
+ * to its reset. So a long wait reads as a pace even with no header or code to
+ * say so, which is how AppSumo's FAQ describes it.
+ */
 function isPaceAnswer(a: Answer): boolean {
   if (a.status !== 429) return false;
   const code = leadoceanErrorCode(a.json);
-  return QUOTA_STATES.has(String(a.headers.get("x-quota-state") ?? "")) || (code != null && PACE_CODES.has(code));
+  return QUOTA_STATES.has(String(a.headers.get("x-quota-state") ?? ""))
+    || (code != null && PACE_CODES.has(code))
+    || Number(a.headers.get("retry-after") ?? 0) > PACE_RETRY_AFTER_SECONDS;
+}
+
+/** When a successful answer's pace ends, in seconds. */
+function paceSeconds(headers: Headers, json: unknown): number | undefined {
+  const until = str(obj(metaOf(json).notice).resetsAt) ?? str(headers.get("x-quota-reset"));
+  return until && until !== "never" ? secondsUntil(until) : undefined;
 }
 
 /** The pace a successful answer reports, in its headers (all doors) or meta.notice (all but the v2 doors). */
@@ -386,10 +400,12 @@ function jobFunctionFor(department: string): string | null {
   return t.length >= 3 ? JOB_FUNCTIONS.find((f) => f.toLowerCase().includes(t)) ?? null : null;
 }
 
+/** The table first: "UK" is two letters and LeadOcean's list spells it GB. */
 function countryCodeFor(value: string): string | null {
   const v = value.trim();
-  if (/^[A-Za-z]{2}$/.test(v)) return v.toUpperCase();
-  return COUNTRY_CODES[v.toLowerCase()] ?? null;
+  const named = COUNTRY_CODES[v.toLowerCase()];
+  if (named) return named;
+  return /^[A-Za-z]{2}$/.test(v) ? v.toUpperCase() : null;
 }
 
 /** Values through a closed list: what it knows, what it does not. */
@@ -583,6 +599,16 @@ export function holdFromAccount(accountIn: unknown): VendorFailure | null {
   return null;
 }
 
+/**
+ * Rows this account can still afford, on a plan that refuses past its records: a
+ * person costs two, so half of what is left. Buying more would leave rows nobody
+ * can look up. Null on a plan with no such number, or that slows instead.
+ */
+export function affordableRows(accountIn: unknown): number | null {
+  const r = summarizeAccount(accountIn).records;
+  return r?.whenOver === "refused" && r.remaining != null ? Math.floor(r.remaining / 2) : null;
+}
+
 /* ─── The industry list (public, free, no key) ──────────────────────────── */
 
 /**
@@ -651,9 +677,10 @@ export function createLeadOceanSource(deps?: { fetchImpl?: typeof fetch; sleep?:
   };
 
   /** Free. People whose lookup never ran must be findable again, or they are lost. */
-  const forgetViewed = async (c: SourceCredentials, ids: string[]): Promise<void> => {
-    if (ids.length === 0) return;
-    await call(c, "viewed.remove", "DELETE", "/v1/people/viewed", { ids, set: viewedSetFor(c.workspaceId) });
+  const forgetViewed = async (c: SourceCredentials, ids: string[]): Promise<boolean> => {
+    if (ids.length === 0) return true;
+    const res = await call(c, "viewed.remove", "DELETE", "/v1/people/viewed", { ids, set: viewedSetFor(c.workspaceId) });
+    return res.ok;
   };
 
   const spend = (c: SourceCredentials, campaignId: number | null | undefined, meter: "search_records" | "lookups", quantity: number) =>
@@ -742,6 +769,9 @@ export function createLeadOceanSource(deps?: { fetchImpl?: typeof fetch; sleep?:
       } else {
         const hold = holdFromAccount(account.json?.data);
         if (hold) return hold;
+        const affordable = affordableRows(account.json?.data);
+        if (affordable === 0) return { ok: false, reason: "budget_exhausted", message: "LeadOcean has fewer records left on this account than the two a person costs." };
+        if (affordable != null) want = Math.min(want, affordable);
       }
 
       const notes = built.notes.slice();
@@ -779,29 +809,35 @@ export function createLeadOceanSource(deps?: { fetchImpl?: typeof fetch; sleep?:
       let viewedFailed = 0;
       let unreadable = 0;
       let unreadableKeys: string[] = [];
+      // Rows delivered, not rows kept: the limit and the cap count what is billed,
+      // and a row dropped below was billed all the same.
+      let delivered = 0;
+      let skippedAhead = false;
 
-      for (let page = 0; page < MAX_PAGES_PER_SEARCH && records.length < want; page++) {
+      for (let page = 0; page < MAX_PAGES_PER_SEARCH && delivered < want; page++) {
         const res: VendorFetchOk<{ data?: unknown[]; meta?: Json }> | VendorFailure = await call<{ data?: unknown[]; meta?: Json }>(
           c, "people.search", "POST", "/v1/people/search",
-          { ...built.filters, limit: Math.min(PAGE_LIMIT, want - records.length), ...(cursor ? { cursor } : {}) },
+          { ...built.filters, limit: Math.min(PAGE_LIMIT, want - delivered), ...(cursor ? { cursor } : {}) },
         );
         if (!res.ok) {
           // The snapshot this walk was reading was retired. People already paid
           // for are in the viewed list, so starting over cannot bill them twice.
           const gone = res.status === 410 && cursor != null && !restarted;
           if (gone) { restarted = true; cursor = null; notes.push("LeadOcean retired this walk's snapshot; restarted"); continue; }
-          if (records.length === 0) return res;
+          if (records.length === 0) return { ...res, unitsSpent: units };
           notes.push(`stopped after page ${page}: ${res.message}`);
           break;
         }
         // An answer with no list in it is not "nobody": it is not an answer.
         if (!Array.isArray(res.json?.data)) {
-          if (records.length === 0) return { ok: false, reason: "unavailable", message: "LeadOcean answered a search without a list of people" };
+          if (records.length === 0) return { ok: false, reason: "unavailable", message: "LeadOcean answered a search without a list of people", unitsSpent: units };
           notes.push("stopped: LeadOcean answered a page without a list of people");
           break;
         }
         const rows = res.json.data;
         const meta = metaOf(res.json);
+        delivered += rows.length;
+        if (meta.walkCapped === true) skippedAhead = true;
         const billed = num(meta.credits) ?? rows.length;
         units += billed;
         if (billed > 0) await spend(c, ctx.campaignId, "search_records", billed);
@@ -843,6 +879,9 @@ export function createLeadOceanSource(deps?: { fetchImpl?: typeof fetch; sleep?:
         cursor = str(meta.nextCursor);
         if (!cursor) break;
       }
+      // Each search starts over from the lowest id, so people already seen are
+      // skipped again every time. Past a point that can use up the whole walk.
+      if (skippedAhead && delivered < want && cursor) notes.push("LeadOcean was still skipping people this workspace has already seen when the walk stopped, so this search reached fewer than it could; narrow the filters to reach further");
 
       if (unreadable) notes.push(`${unreadable} row${unreadable === 1 ? "" : "s"} with no person id, not usable (row keys: ${unreadableKeys.join(", ") || "none"})`);
       if (targets) notes.push(`place check: ${counts.inside} inside, ${counts.outside} outside, ${counts.unknown} unknown`);
@@ -868,10 +907,21 @@ export function createLeadOceanSource(deps?: { fetchImpl?: typeof fetch; sleep?:
       const fullLookup = leadoceanUsesFullLookup(accepted, fetchPhones);
       const records: ProspectRecord[] = [];
       const failed: string[] = [];
+      const paidMiss: string[] = [];
       let units = 0;
       let stop: VendorFailure | null = null;
-      let paced: string | null = null;
+      const pace: { message: string | null; seconds?: number } = { message: null };
       let stoppedAt = externalIds.length;
+      // One at a time and at once, so the ledger holds what was billed if this
+      // batch dies partway: a deploy does not wait for a hundred lookups.
+      const bill = async (n: number) => {
+        units += n;
+        if (n > 0) await spend(c, ctx?.campaignId, "lookups", n);
+      };
+      const notePace = (headers: Headers, json: unknown) => {
+        pace.message = paceNoticeOf(headers, json);
+        pace.seconds = pace.message ? paceSeconds(headers, json) : undefined;
+      };
 
       for (let i = 0; i < externalIds.length; i++) {
         const id = externalIds[i];
@@ -892,8 +942,8 @@ export function createLeadOceanSource(deps?: { fetchImpl?: typeof fetch; sleep?:
             if (res.status === 404) { failed.push(id); continue; }
             stop = res; stoppedAt = i; break;
           }
-          units += num(metaOf(res.json).credits) ?? 1;
-          paced = paceNoticeOf(res.headers, res.json);
+          await bill(num(metaOf(res.json).credits) ?? 1);
+          notePace(res.headers, res.json);
           identity = mapPersonRow(res.json?.data);
           const contact = obj(obj(res.json?.data).contact_data);
           if (fullLookup) {
@@ -910,11 +960,12 @@ export function createLeadOceanSource(deps?: { fetchImpl?: typeof fetch; sleep?:
             }
           } else if (contact.has_email === false || (str(contact.email_status) && !acceptedStatus(str(contact.email_status), accepted))) {
             failed.push(id);
-            if (paced) { stoppedAt = i + 1; break; }
+            paidMiss.push(id);
+            if (pace.message) { stoppedAt = i + 1; break; }
             continue;
           }
           // Who they are, but not yet their address, and the door is slowed now.
-          if (paced && !fullLookup) { stoppedAt = i; break; }
+          if (pace.message && !fullLookup) { stoppedAt = i; break; }
         }
 
         if (!fullLookup) {
@@ -924,8 +975,8 @@ export function createLeadOceanSource(deps?: { fetchImpl?: typeof fetch; sleep?:
             stop = res; stoppedAt = i; break;
           }
           // One record per call, including an answer of null. This door has no meta.
-          units += 1;
-          paced = paceNoticeOf(res.headers, res.json);
+          await bill(1);
+          notePace(res.headers, res.json);
           const data = obj(res.json?.data);
           const status = str(data.status);
           const email = usableEmailOrNull(data.email);
@@ -951,25 +1002,30 @@ export function createLeadOceanSource(deps?: { fetchImpl?: typeof fetch; sleep?:
           });
         } else {
           failed.push(id);
+          paidMiss.push(id);
         }
-        if (paced) { stoppedAt = i + 1; break; }
+        if (pace.message) { stoppedAt = i + 1; break; }
       }
-
-      if (units > 0) await spend(c, ctx?.campaignId, "lookups", units);
 
       const unprocessed = externalIds.slice(stoppedAt);
+      let givenBack = true;
       if (unprocessed.length > 0) {
         failed.push(...unprocessed);
-        await forgetViewed(c, unprocessed.map((id) => parseExternalId(id)?.personId).filter((x): x is string => !!x));
+        givenBack = await forgetViewed(c, unprocessed.map((id) => parseExternalId(id)?.personId).filter((x): x is string => !!x));
       }
-      if (stop && records.length === 0 && units === 0) return stop;
-      const why = paced ?? stop?.message ?? null;
+      const stillViewed = givenBack ? "" : `; ${unprocessed.length} could not be given back to the viewed list, so a later search will not find them`;
+      // Nothing to show for it, so the failure is the answer, with what it cost.
+      if (stop && records.length === 0 && paidMiss.length === 0) return { ...stop, message: `${stop.message}${stillViewed}`, unitsSpent: units };
+      const why = pace.message ?? stop?.message ?? null;
+      const holdSeconds = pace.message ? pace.seconds : stop?.retryAfterSeconds;
       return {
         ok: true,
         records,
         unitsSpent: units,
         failedExternalIds: failed,
-        ...(why ? { note: unprocessed.length ? `${why}; ${unprocessed.length} held for later` : why } : {}),
+        ...(paidMiss.length ? { paidMissExternalIds: paidMiss } : {}),
+        ...(why ? { note: `${why}${unprocessed.length && givenBack ? `; ${unprocessed.length} held for later` : ""}${stillViewed}` } : {}),
+        ...(pace.message || stop?.held ? { hold: { message: why as string, ...(holdSeconds != null ? { retryAfterSeconds: holdSeconds } : {}) } } : {}),
       };
     },
 

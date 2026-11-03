@@ -216,7 +216,7 @@ export function LeadOceanSourceCard({ variant = "standalone" }: { variant?: "sta
         <p><span className="font-medium text-foreground">Every row and every lookup counts.</span> A search row is one record and the lookup for its address another, so a person costs two. Velocity asks LeadOcean first, for free, whether it will apply every filter, and buys nothing if it will not.</p>
         <p><span className="font-medium text-foreground">It never starts on its own.</span> Saving a key adds LeadOcean to no campaign. Tick it on a campaign's Sources tab, or on Source search.</p>
         <p><span className="font-medium text-foreground">States are approximate.</span> LeadOcean filters on the employer's headquarters, so Velocity checks each person's own place afterwards. On a campaign, someone it can show is elsewhere is not looked up, unless that campaign's territory check is off.</p>
-        <p><span className="font-medium text-foreground">A person is pulled once.</span> LeadOcean keeps a list of who this workspace has seen, so a person dropped by one campaign's filters does not come back for another.</p>
+        <p><span className="font-medium text-foreground">A person is pulled once.</span> LeadOcean keeps a list of who this workspace has seen, so a person dropped by one campaign's filters does not come back for another. People you previewed stay on that search: reopen it on Source search to promote them.</p>
       </div>
 
       {isAdmin ? (
@@ -224,10 +224,13 @@ export function LeadOceanSourceCard({ variant = "standalone" }: { variant?: "sta
           <Button size="sm" className="gap-1.5" disabled={save.isPending || !seeded}
             onClick={() => {
               const n = Math.floor(Number(cap));
+              const nextCap = cap.trim() === "" || !(n > 0) ? null : n;
+              // Shown as saved: a 0 left in the box would read as a cap of zero.
+              setCap(nextCap == null ? "" : String(nextCap));
               save.mutate({
                 slug: "leadocean",
                 ...(key.trim() ? { apiKey: key.trim() } : {}),
-                config: { acceptedEmailStatuses: statuses, fetchPhones, dailyPeopleCap: cap.trim() === "" || !(n > 0) ? null : n },
+                config: { acceptedEmailStatuses: statuses, fetchPhones, dailyPeopleCap: nextCap },
               });
             }}>
             {save.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} Save

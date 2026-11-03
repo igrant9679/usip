@@ -125,7 +125,7 @@ export function ProspectSourceRegistryCard() {
                               <span className="font-medium">{slug}</span>{" "}
                               {p.skipped ? <span className="text-muted-foreground">skipped — {p.detail ?? p.skipped}</span>
                                 : p.error ? <span className="text-rose-700 dark:text-rose-400">{p.error}</span>
-                                : <span className="text-muted-foreground">{p.verdict} · searched {p.searched} · net-new {p.netNew} · acquired {p.acquired} · {p.unitsSpent} units{p.fundedBy ? ` (${p.fundedBy})` : ""}</span>}
+                                : <span className="text-muted-foreground">{p.verdict} · searched {p.searched} · net-new {p.netNew} · acquired {p.acquired} · {p.unitsSpent} units{p.fundedBy ? ` (${p.fundedBy})` : ""}{p.note ? ` · ${p.note}` : ""}</span>}
                             </div>
                           );
                         })}

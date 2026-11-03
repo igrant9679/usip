@@ -53,6 +53,7 @@ export function verdict(s: Source): { text: string; tone: "ok" | "muted" | "warn
   if (!s.selectedOnCampaign) return { text: "Not selected for this campaign", tone: "muted" };
   if (!s.enabledInWorkspace) return { text: "Disabled in workspace Settings", tone: "muted" };
   if (s.rest) {
+    if (s.heldByVendor) return { text: `Held by the vendor — next attempt ${when(s.rest.until)}`, tone: "warn" };
     return {
       text: `Resting after ${s.rest.emptyRuns} empty ${plural(s.rest.emptyRuns, "run", "runs")} — next attempt ${when(s.rest.until)}`,
       tone: "warn",

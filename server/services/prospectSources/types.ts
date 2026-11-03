@@ -99,6 +99,10 @@ export interface AcquisitionResult {
   failedExternalIds: string[];
   /** Why the batch stopped short, for the logs. */
   note?: string;
+  /** Looked up and billed, with no address to take. Asking again would bill again. */
+  paidMissExternalIds?: string[];
+  /** The vendor asked us to wait partway through. What came back still counts. */
+  hold?: { message: string; retryAfterSeconds?: number };
 }
 
 export interface BudgetSnapshot {
@@ -156,6 +160,8 @@ export interface VendorFailure {
   /** The vendor asked us to wait (a pace, a key's own quota). Nothing is broken,
    *  so the circuit breaker is not told, and it is not an empty result. */
   held?: boolean;
+  /** What had already been billed when it failed. */
+  unitsSpent?: number;
 }
 
 export type VendorResult<T> = ({ ok: true } & T) | VendorFailure;
