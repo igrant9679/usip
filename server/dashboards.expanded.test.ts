@@ -8,36 +8,13 @@
  *   - Widget type list completeness
  */
 import { describe, expect, it } from "vitest";
+import { resolvePresetDates as resolveInZone } from "@shared/dashboardPresets";
+
+// The real resolver, not a copy: the copy that lived here kept the bug it was
+// copied with. Clock changes and zones are covered in dashboardPresetDates.test.ts.
+const resolvePresetDates = (preset: string) => resolveInZone(preset, "UTC");
 
 /* ─── Inline copies of pure utilities (no React imports needed) ─────────── */
-
-function resolvePresetDates(preset: string): { dateFrom?: string; dateTo?: string } {
-  const today = new Date();
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  switch (preset) {
-    case "today":
-      return { dateFrom: fmt(today), dateTo: fmt(today) };
-    case "7d": {
-      const from = new Date(today); from.setDate(from.getDate() - 6);
-      return { dateFrom: fmt(from), dateTo: fmt(today) };
-    }
-    case "30d": {
-      const from = new Date(today); from.setDate(from.getDate() - 29);
-      return { dateFrom: fmt(from), dateTo: fmt(today) };
-    }
-    case "90d": {
-      const from = new Date(today); from.setDate(from.getDate() - 89);
-      return { dateFrom: fmt(from), dateTo: fmt(today) };
-    }
-    case "ytd": {
-      const from = new Date(today.getFullYear(), 0, 1);
-      return { dateFrom: fmt(from), dateTo: fmt(today) };
-    }
-    case "all":
-    default:
-      return {};
-  }
-}
 
 function defaultSize(type: string): { w: number; h: number } {
   switch (type) {
@@ -104,14 +81,12 @@ describe("resolvePresetDates", () => {
     expect(diffDays).toBe(29);
   });
 
-  it("returns ~90-day range for '90d'", () => {
+  it("returns 90-day range for '90d'", () => {
     const result = resolvePresetDates("90d");
     const from = new Date(result.dateFrom!);
     const to = new Date(result.dateTo!);
     const diffDays = Math.round((to.getTime() - from.getTime()) / 86400000);
-    // 89 days span (90 inclusive days) — allow ±1 for DST boundary edge cases
-    expect(diffDays).toBeGreaterThanOrEqual(88);
-    expect(diffDays).toBeLessThanOrEqual(90);
+    expect(diffDays).toBe(89);
   });
 
   it("returns YTD range starting Jan 1 for 'ytd'", () => {
