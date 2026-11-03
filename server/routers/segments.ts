@@ -7,6 +7,7 @@ import { eq, and, desc, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { segmentProblem } from "@shared/segmentRules";
 import { countSegment, segmentWhere } from "../services/segmentSql";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 
 // ─── Rule schema ──────────────────────────────────────────────────────────────
 const RuleSchema = z.object({
@@ -230,7 +231,7 @@ export const segmentsRouter = router({
           eq(audienceSegments.workspaceId, ctx.workspace.id),
         ));
       if (!seg) return [];
-      const where = segmentWhere(ctx.workspace.id, (seg.rules as Rule[]) ?? [], (seg.matchType ?? "all") as "all" | "any");
+      const where = segmentWhere(ctx.workspace.id, (seg.rules as Rule[]) ?? [], (seg.matchType ?? "all") as "all" | "any", await getWorkspaceTimezone(ctx.workspace.id));
       if (!where) return [];
       return db.select().from(contacts).where(where).orderBy(desc(contacts.id)).limit(input.limit);
     }),

@@ -23,6 +23,8 @@ import { and, eq, gte, isNotNull, isNull, like, lt, ne, notLike, or, sql, type S
 import type { MySqlColumn } from "drizzle-orm/mysql-core";
 import { contacts } from "../../drizzle/schema";
 import { SEGMENT_FIELDS, SEGMENT_OPERATORS, type SegmentRule } from "@shared/segmentRules";
+import { startOfCalendarDay } from "./calendarDeadline";
+import { getWorkspaceTimezone } from "./workspaceTimezone";
 
 const COLUMNS: Record<string, MySqlColumn> = {
   email: contacts.email, firstName: contacts.firstName, lastName: contacts.lastName, title: contacts.title,
@@ -34,7 +36,7 @@ const escapeLike = (v: string) => v.replace(/[\\%_]/g, (m) => `\\${m}`);
 const DAY = 86_400_000;
 
 /** One rule as a condition, or null when it can match nobody. */
-export function ruleSql(rule: SegmentRule): SQL | null {
+export function ruleSql(rule: SegmentRule, tz: string = "UTC"): SQL | null {
   const col = COLUMNS[rule.field];
   const kind = SEGMENT_FIELDS[rule.field];
   if (!col || !kind) return null;
@@ -49,9 +51,14 @@ export function ruleSql(rule: SegmentRule): SQL | null {
     return yes ? eq(col, true) : or(isNull(col), eq(col, false))!;
   }
   if (kind === "date") {
-    const day = Date.parse(`${rule.value}T00:00:00Z`);
-    if (Number.isNaN(day)) return null;
-    return rule.operator === "gt" ? gte(col, new Date(day + DAY)) : lt(col, new Date(day));
+    // A date in a rule is a day in the workspace's zone, read as the evaluator
+    // reads it. It was a UTC day, so "created after the 2nd" in New York started at
+    // 7pm on the 2nd. "After" starts where the next day does, however long this one is.
+    const start = startOfCalendarDay(rule.value ?? "", tz);
+    if (!start || Number.isNaN(Date.parse(`${rule.value}T00:00:00Z`))) return null;
+    if (rule.operator !== "gt") return lt(col, start);
+    const next = new Date(Date.parse(`${rule.value}T00:00:00Z`) + DAY).toISOString().slice(0, 10);
+    return gte(col, startOfCalendarDay(next, tz)!);
   }
   const want = (rule.value ?? "").toLowerCase();
   const pattern = `%${escapeLike(want)}%`;
@@ -73,17 +80,17 @@ export function ruleSql(rule: SegmentRule): SQL | null {
 }
 
 /** The whole segment as a condition on contacts, or null when it matches nobody. */
-export function segmentSql(rules: SegmentRule[], matchType: "all" | "any"): SQL | null {
+export function segmentSql(rules: SegmentRule[], matchType: "all" | "any", tz: string = "UTC"): SQL | null {
   if (!rules.length) return null;
-  const parts = rules.map(ruleSql);
+  const parts = rules.map((r) => ruleSql(r, tz));
   if (matchType === "all") return parts.some((p) => p == null) ? null : and(...(parts as SQL[]))!;
   const live = parts.filter((p): p is SQL => p != null);
   return live.length ? or(...live)! : null;
 }
 
 /** Contacts of this workspace in the segment, as a WHERE clause; null when none can be. */
-export function segmentWhere(ws: number, rules: SegmentRule[], matchType: "all" | "any"): SQL | null {
-  const seg = segmentSql(rules, matchType);
+export function segmentWhere(ws: number, rules: SegmentRule[], matchType: "all" | "any", tz: string): SQL | null {
+  const seg = segmentSql(rules, matchType, tz);
   return seg ? and(eq(contacts.workspaceId, ws), seg)! : null;
 }
 
@@ -91,7 +98,7 @@ type Db = { select: (...a: any[]) => any };
 
 /** How many contacts of this workspace the segment holds, counted in SQL. */
 export async function countSegment(db: Db, ws: number, rules: SegmentRule[], matchType: "all" | "any"): Promise<number> {
-  const where = segmentWhere(ws, rules, matchType);
+  const where = segmentWhere(ws, rules, matchType, await getWorkspaceTimezone(ws));
   if (!where) return 0;
   const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(contacts).where(where);
   return Number(n);
