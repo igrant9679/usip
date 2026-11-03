@@ -21,13 +21,11 @@ export function SequenceEnrollmentActions({ enrollment, sequenceId }: {
     utils.sequences.list.invalidate();
     utils.sequences.getPerformanceAnalytics.invalidate();
   };
-  const handlers = (done: string) => ({
-    onSuccess: () => { refresh(); toast.success(done); },
-    onError: (e: { message: string }) => { refresh(); toast.error(e.message); },
-  });
-  const pause = trpc.sequences.pauseEnrollment.useMutation(handlers(`Paused ${name}`));
-  const resume = trpc.sequences.resumeEnrollment.useMutation(handlers(`Resumed ${name}`));
-  const exit = trpc.sequences.exitEnrollment.useMutation(handlers(`Took ${name} out of this sequence`));
+  const done = (message: string) => () => { refresh(); toast.success(message); };
+  const failed = (e: { message: string }) => { refresh(); toast.error(e.message); };
+  const pause = trpc.sequences.pauseEnrollment.useMutation({ onSuccess: done(`Paused ${name}`), onError: failed });
+  const resume = trpc.sequences.resumeEnrollment.useMutation({ onSuccess: done(`Resumed ${name}`), onError: failed });
+  const exit = trpc.sequences.exitEnrollment.useMutation({ onSuccess: done(`Took ${name} out of this sequence`), onError: failed });
   const busy = pause.isPending || resume.isPending || exit.isPending;
 
   if (enrollment.status !== "active" && enrollment.status !== "paused") return null;

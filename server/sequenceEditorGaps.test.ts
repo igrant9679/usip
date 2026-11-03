@@ -167,8 +167,9 @@ describe("the buttons on a row", () => {
     expect(src).toContain("pause.mutate({ id: enrollment.id })");
     expect(src).toContain("resume.mutate({ id: enrollment.id })");
     expect(src).toContain("onConfirm={() => exit.mutate({ id: enrollment.id })}");
-    expect(src).toContain("onSuccess: () => { refresh(); toast.success(done); },");
-    expect(src).toContain("onError: (e: { message: string }) => { refresh(); toast.error(e.message); },");
+    expect(src).toContain("const done = (message: string) => () => { refresh(); toast.success(message); };");
+    expect(src).toContain("const failed = (e: { message: string }) => { refresh(); toast.error(e.message); };");
+    expect(src.match(/onError: failed/g)).toHaveLength(3);
     expect(src).toContain("utils.sequences.listEnrollments.invalidate({ sequenceId });");
     expect(src).not.toContain("pauseOnReply.");
   });
