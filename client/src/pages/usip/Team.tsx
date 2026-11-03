@@ -165,8 +165,8 @@ export default function Team() {
     {
       memberId: historyTarget?.memberId ?? 0,
       outcome: historyOutcome || undefined,
-      from: historyFrom ? new Date(historyFrom) : undefined,
-      to: historyTo ? new Date(historyTo + "T23:59:59") : undefined,
+      from: historyFrom || undefined,
+      to: historyTo || undefined,
     },
     { enabled: !!historyTarget }
   );

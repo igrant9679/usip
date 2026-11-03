@@ -8,10 +8,16 @@
  * The numbers are the ones the old code produced: sent counts drafts marked
  * sent; opens, clicks and bounces count every draft in the date range; a
  * date range keeps only drafts with a send time inside it.
+ *
+ * The range is picked as days, and they are the workspace's days. Read as UTC
+ * days, filtering a New York workspace on the 3rd counted the evening of the
+ * 2nd and dropped the evening of the 3rd.
  */
 import { and, asc, eq, gt, gte, inArray, isNotNull, lte, sql, type SQL } from "drizzle-orm";
 import { emailDrafts, enrollments, sequences } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { dayRangeBounds } from "./calendarDeadline";
+import { getWorkspaceTimezone } from "./workspaceTimezone";
 
 export type SequencePerformance = {
   sequenceId: number; sequenceName: string; status: string;
@@ -37,8 +43,11 @@ export async function sequencePerformance(
   const ids = seqs.map((s) => s.id);
 
   const drafts: SQL[] = [eq(emailDrafts.workspaceId, ws), inArray(emailDrafts.sequenceId, ids)];
-  if (opts.dateFrom) drafts.push(gte(emailDrafts.sentAt, new Date(opts.dateFrom)));
-  if (opts.dateTo) drafts.push(lte(emailDrafts.sentAt, new Date(`${opts.dateTo}T23:59:59Z`)));
+  if (opts.dateFrom || opts.dateTo) {
+    const range = dayRangeBounds(opts.dateFrom, opts.dateTo, await getWorkspaceTimezone(ws));
+    if (range.from) drafts.push(gte(emailDrafts.sentAt, range.from));
+    if (range.to) drafts.push(lte(emailDrafts.sentAt, range.to));
+  }
   const countWhere = (...more: SQL[]) =>
     db.select({ seq: emailDrafts.sequenceId, n: sql<number>`count(*)` }).from(emailDrafts)
       .where(and(...drafts, ...more)).groupBy(emailDrafts.sequenceId);

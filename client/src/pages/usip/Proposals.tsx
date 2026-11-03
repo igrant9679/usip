@@ -1,7 +1,9 @@
 import { Shell, PageHeader, QueryError, SubNav } from "@/components/usip/Shell";
 import { useState, useMemo, useEffect } from "react";
-import { localDayOf } from "@/lib/localDay";
+import { extendedExpiry } from "@/lib/localDay";
+import { zonedDayKey } from "@shared/availability";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
+import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
 import { useLocation, useSearch, Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -55,16 +57,6 @@ import {
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmButton } from "@/components/usip/Common";
-
-/**
- * The default new expiry for an extension: a week past the later of today and
- * the current expiry (audit 2026-10-20, R68). A week past an expiry already
- * gone defaulted to a date in the past.
- */
-function extendedExpiry(expiresAt: Date | string | null | undefined): string {
-  const base = Math.max(Date.now(), expiresAt ? new Date(expiresAt).getTime() : 0);
-  return localDayOf(base + 7 * 86400000);
-}
 
 // ── Status config ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
@@ -440,6 +432,10 @@ export default function Proposals() {
   const [, navigate] = useLocation();
   const searchStr = useSearch();
   const { current } = useWorkspace();
+  // An expiry picked as a day lasts to the end of that day in the workspace's
+  // zone, so today there is the earliest day that has not gone yet.
+  const { timezone, isLoading: zoneLoading } = useWorkspaceTimezone();
+  const today = zonedDayKey(timezone, Date.now());
   const [wizardOpen, setWizardOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>(() => {
@@ -885,7 +881,7 @@ export default function Proposals() {
                       {(p as any).expiresAt && (
                         <span className={cn("flex items-center gap-1", (p as any).isExpired ? "text-red-500" : (p as any).isExpiringSoon ? "text-orange-500" : "")}>
                           <Timer className="size-3" />
-                          Expires {new Date((p as any).expiresAt).toLocaleDateString()}
+                          Expires {new Date((p as any).expiresAt).toLocaleDateString(undefined, { timeZone: timezone })}
                         </span>
                       )}
                     </div>
@@ -938,7 +934,7 @@ export default function Proposals() {
                 value={bulkExpiryDate}
                 onChange={(e) => setBulkExpiryDate(e.target.value)}
                 className="mt-1"
-                min={new Date().toISOString().slice(0, 10)}
+                min={today}
               />
             </div>
             <p className="text-xs text-muted-foreground">
@@ -979,11 +975,11 @@ export default function Proposals() {
           ) : (
             <div className="space-y-3 py-2">
               <div className="flex justify-end">
-                <ConfirmButton size="sm" variant="outline" destructive={false} className="gap-1 text-xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10" disabled={approveAllExtMutation.isPending}
+                <ConfirmButton size="sm" variant="outline" destructive={false} className="gap-1 text-xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10" disabled={approveAllExtMutation.isPending || zoneLoading}
                   title={`Approve all ${extensionPending.length} extension request${extensionPending.length === 1 ? "" : "s"}?`}
                   description="Each proposal's expiry moves 7 days past its current date and the client is emailed the new date, exactly as a single approval would."
                   confirmLabel="Approve all"
-                  onConfirm={() => approveAllExtMutation.mutate({ items: extensionPending.map((req) => ({ proposalId: req.id, newExpiresAt: extendedExpiry(req.expiresAt) })) })}>
+                  onConfirm={() => approveAllExtMutation.mutate({ items: extensionPending.map((req) => ({ proposalId: req.id, newExpiresAt: extendedExpiry(req.expiresAt, timezone) })) })}>
                   <ThumbsUp className="size-3" /> Approve all ({extensionPending.length}, +7 days)
                 </ConfirmButton>
               </div>
@@ -999,7 +995,7 @@ export default function Proposals() {
                         size="sm"
                         variant="outline"
                         className="gap-1 text-xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10"
-                        onClick={() => setApproveDialogState({ proposalId: req.id, newDate: extendedExpiry(req.expiresAt), note: "" })}
+                        onClick={() => setApproveDialogState({ proposalId: req.id, newDate: extendedExpiry(req.expiresAt, timezone), note: "" })}
                       >
                         <ThumbsUp className="size-3" />
                         Approve
@@ -1062,7 +1058,7 @@ export default function Proposals() {
                   value={approveDialogState.newDate}
                   onChange={(e) => setApproveDialogState({ ...approveDialogState, newDate: e.target.value })}
                   className="mt-1"
-                  min={new Date().toISOString().slice(0, 10)}
+                  min={today}
                 />
               </div>
               <div>
