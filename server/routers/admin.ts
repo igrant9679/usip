@@ -59,6 +59,8 @@ import { defaultMemberNotifyPrefs, defaultNotifyPolicy, memberWantsEmail, member
 import { invalidateArchivedWorkspaceCache } from "../_core/workspaceArchive";
 import { formatSendDays } from "@shared/sendWindow";
 import { invalidateSendWindowCache } from "../services/sendWindow";
+import { dayRangeBounds } from "../services/calendarDeadline";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 
 /**
  * `status IN (…)` over the LIVE-work set, as bound parameters.
@@ -1940,8 +1942,9 @@ export const teamRouter = router({
     .input(z.object({
       memberId: z.number().int(),
       outcome: z.enum(["success", "failed", "expired_invite"]).optional(),
-      from: z.date().optional(),
-      to: z.date().optional(),
+      /** YYYY-MM-DD, days in the workspace's zone. The browser used to turn them into instants itself, the first at midnight UTC and the last on its own clock. */
+      from: z.string().optional(),
+      to: z.string().optional(),
       limit: z.number().int().min(1).max(500).default(200),
     }))
     .query(async ({ ctx, input }) => {
@@ -1954,8 +1957,11 @@ export const teamRouter = router({
       if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
       const conditions: ReturnType<typeof eq>[] = [eq(loginHistory.userId, member.userId) as any, (await loginHistoryScope(db, ctx.workspace.id, member.userId)) as any];
       if (input.outcome) conditions.push(eq(loginHistory.outcome, input.outcome) as any);
-      if (input.from) conditions.push(gte(loginHistory.createdAt, input.from) as any);
-      if (input.to) conditions.push(lte(loginHistory.createdAt, input.to) as any);
+      if (input.from || input.to) {
+        const range = dayRangeBounds(input.from, input.to, await getWorkspaceTimezone(ctx.workspace.id));
+        if (range.from) conditions.push(gte(loginHistory.createdAt, range.from) as any);
+        if (range.to) conditions.push(lte(loginHistory.createdAt, range.to) as any);
+      }
       return db
         .select()
         .from(loginHistory)

@@ -1,6 +1,8 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useLocation, useParams, Link } from "wouter";
-import { localDayOf } from "@/lib/localDay";
+import { deadlineDayOf } from "@/lib/localDay";
+import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
+import { zonedDayKey } from "@shared/availability";
 import { storedToCalendarDate } from "@shared/calendarDate";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -117,6 +119,7 @@ function StatusBadge({ status }: { status: ProposalStatus }) {
 
 // ── Overview Tab ─────────────────────────────────────────────────────────────
 function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => void }) {
+  const { timezone, isLoading: zoneLoading } = useWorkspaceTimezone();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
     title: proposal.title,
@@ -125,11 +128,12 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
     clientWebsite: proposal.clientWebsite ?? "",
     orgAbbr: proposal.orgAbbr ?? "",
     projectType: proposal.projectType ?? "",
-    // Deadlines read back on the viewer's local day; a completion date is a
-    // calendar day (R29). The UTC slice moved an expiry forward a day per edit.
-    rfpDeadline: localDayOf(proposal.rfpDeadline),
+    // Deadlines are filled in when Edit is pressed, once the workspace's zone is
+    // known, because saving writes them back; a completion date is a calendar
+    // day (R29). Any other zone moved an expiry forward a day per edit.
+    rfpDeadline: "",
     completionDate: storedToCalendarDate(proposal.completionDate) ?? "",
-    expiresAt: localDayOf(proposal.expiresAt),
+    expiresAt: "",
     skipAutoExtend: proposal.skipAutoExtend ?? false,
     budget: proposal.budget ? String(proposal.budget) : "",
     description: proposal.description ?? "",
@@ -240,7 +244,16 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
             {" · "}Updated {new Date(proposal.updatedAt).toLocaleDateString()}
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => setEditing(true)} className="gap-1.5">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={zoneLoading}
+          onClick={() => {
+            setForm((f) => ({ ...f, rfpDeadline: deadlineDayOf(proposal.rfpDeadline, timezone), expiresAt: deadlineDayOf(proposal.expiresAt, timezone) }));
+            setEditing(true);
+          }}
+          className="gap-1.5"
+        >
           <Edit2 className="size-3.5" />
           Edit
         </Button>
@@ -267,7 +280,7 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
             icon={DollarSign}
           />
         )}
-        {proposal.rfpDeadline && <InfoCard label="RFP Deadline" value={new Date(proposal.rfpDeadline).toLocaleDateString()} icon={Calendar} />}
+        {proposal.rfpDeadline && <InfoCard label="RFP Deadline" value={new Date(proposal.rfpDeadline).toLocaleDateString(undefined, { timeZone: timezone })} icon={Calendar} />}
         {proposal.completionDate && <InfoCard label="Completion Date" value={new Date(proposal.completionDate).toLocaleDateString()} icon={Calendar} />}
         {proposal.sentAt && (
           <InfoCard label="Sent to Client" value={new Date(proposal.sentAt).toLocaleString()} icon={Send} />
@@ -296,7 +309,7 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
                 Proposal Expiry
               </div>
               <div className={`text-sm font-medium ${isExpired ? "text-red-600" : daysLeft <= 7 ? "text-orange-600" : "text-foreground"}`}>
-                {expDate.toLocaleDateString()}
+                {expDate.toLocaleDateString(undefined, { timeZone: timezone })}
                 <span className="ml-2 text-xs font-normal opacity-80">({label})</span>
               </div>
             </div>
@@ -1625,6 +1638,7 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
   // the feed never loaded (audit 2026-10-20, X3.5).
   const { current } = useWorkspace();
   const [activeFilter, setActiveFilter] = useState<string>("all");
+  const { timezone } = useWorkspaceTimezone();
   const [approveOpen, setApproveOpen] = useState(false);
   const [denyOpen, setDenyOpen] = useState(false);
   const [approveDate, setApproveDate] = useState("");
@@ -1832,7 +1846,7 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
         <div className="space-y-3 py-2">
           <div>
             <Label>New Expiry Date</Label>
-            <Input aria-label="New Expiry Date" type="date" value={approveDate} onChange={(e) => setApproveDate(e.target.value)} className="mt-1" />
+            <Input aria-label="New Expiry Date" type="date" value={approveDate} min={zonedDayKey(timezone, Date.now())} onChange={(e) => setApproveDate(e.target.value)} className="mt-1" />
           </div>
           <div>
             <Label>Note to Client <span className="text-muted-foreground font-normal text-xs">(optional)</span></Label>

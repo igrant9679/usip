@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { todayLocal } from "@/lib/localDay";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -1992,7 +1993,7 @@ function DangerTab({ canEdit, isSuperAdmin }: { canEdit: boolean; isSuperAdmin: 
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `workspace-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `workspace-export-${todayLocal()}.json`;
       a.click();
       URL.revokeObjectURL(url);
       toast.success("Export downloaded");

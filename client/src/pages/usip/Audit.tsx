@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Section, StatusPill, fmtDate } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { todayLocal } from "@/lib/localDay";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
 import { Activity, ClipboardList, Download, Loader2, User } from "lucide-react";
@@ -43,7 +44,7 @@ export default function Audit() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = `audit-log-${todayLocal()}.csv`;
       a.click();
       URL.revokeObjectURL(url);
       if (r.capped) toast.warning(`Exported the ${r.rows} most recent of ${r.total} matching entries — narrow the filters to export the rest`);
