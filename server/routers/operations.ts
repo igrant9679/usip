@@ -50,6 +50,7 @@ import { centsToDecimal, computeQuoteTotals, formatMoney } from "@shared/quoteTo
 import { LIVE_TRIGGER_IDS, type LiveTrigger } from "@shared/workflowTriggers";
 import { zonedDowHour } from "@shared/availability";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { dayRangeBounds } from "../services/calendarDeadline";
 import crypto from "crypto";
 
 /**
@@ -1063,14 +1064,6 @@ async function orderedStageKeys(
   return out;
 }
 
-/** Build a date range condition for opportunity.createdAt or closeDate */
-function dateRange(from?: string, to?: string) {
-  const conds: any[] = [];
-  if (from) conds.push(sql`created_at >= ${new Date(from)}`);
-  if (to) conds.push(sql`created_at <= ${new Date(to)}`);
-  return conds;
-}
-
 async function resolveWidgetData(
   workspaceId: number,
   w: { type: string; config: any; title: string },
@@ -1083,14 +1076,20 @@ async function resolveWidgetData(
   // would otherwise be ten stage-flag reads on one page load. The index itself
   // is memoized ~60s per workspace on top of that.
   const stages = await stageIndexFor(db, workspaceId);
+  // Also hoisted, and memoized the same way. The range is days in this zone, and
+  // both ends count: `new Date("2026-11-02")` read each as midnight UTC, so "Today"
+  // ran from an instant to the same instant and matched nothing, and "Last 7 days"
+  // stopped when the seventh day began.
+  const tz = await getWorkspaceTimezone(workspaceId);
+  const range = dayRangeBounds(filters.dateFrom, filters.dateTo, tz);
 
   /* ── Helper: build base opportunity conditions with filters ── */
   const oppBase = () => {
     const conds: any[] = [eq(opportunities.workspaceId, workspaceId)];
     if (filters.ownerUserId) conds.push(eq(opportunities.ownerUserId, filters.ownerUserId));
     if (filters.stage) conds.push(eq(opportunities.stage, filters.stage as any));
-    if (filters.dateFrom) conds.push(sql`${opportunities.createdAt} >= ${new Date(filters.dateFrom)}`);
-    if (filters.dateTo) conds.push(sql`${opportunities.createdAt} <= ${new Date(filters.dateTo)}`);
+    if (range.from) conds.push(sql`${opportunities.createdAt} >= ${range.from}`);
+    if (range.to) conds.push(sql`${opportunities.createdAt} <= ${range.to}`);
     return and(...conds);
   };
 
@@ -1141,8 +1140,8 @@ async function resolveWidgetData(
       }
       case "activity_counts": {
         const actConds: any[] = [eq(activities.workspaceId, workspaceId)];
-        if (filters.dateFrom) actConds.push(sql`${activities.occurredAt} >= ${new Date(filters.dateFrom)}`);
-        if (filters.dateTo) actConds.push(sql`${activities.occurredAt} <= ${new Date(filters.dateTo)}`);
+        if (range.from) actConds.push(sql`${activities.occurredAt} >= ${range.from}`);
+        if (range.to) actConds.push(sql`${activities.occurredAt} <= ${range.to}`);
         const acts = await db.select().from(activities).where(and(...actConds));
         const calls = acts.filter((a) => a.type === "call").length;
         const emails = acts.filter((a) => a.type === "email").length;
@@ -1152,8 +1151,8 @@ async function resolveWidgetData(
       }
       case "meetings_booked": {
         const actConds: any[] = [eq(activities.workspaceId, workspaceId), eq(activities.type, "meeting")];
-        if (filters.dateFrom) actConds.push(sql`${activities.occurredAt} >= ${new Date(filters.dateFrom)}`);
-        if (filters.dateTo) actConds.push(sql`${activities.occurredAt} <= ${new Date(filters.dateTo)}`);
+        if (range.from) actConds.push(sql`${activities.occurredAt} >= ${range.from}`);
+        if (range.to) actConds.push(sql`${activities.occurredAt} <= ${range.to}`);
         const [r] = await db.select({ c: sql<number>`COUNT(*)` }).from(activities).where(and(...actConds));
         return { type: w.type, title: w.title, value: Number(r?.c ?? 0), format: "number" };
       }
@@ -1234,8 +1233,8 @@ async function resolveWidgetData(
     }
     if (cfg.metric === "activities") {
       const actConds: any[] = [eq(activities.workspaceId, workspaceId)];
-      if (filters.dateFrom) actConds.push(sql`${activities.occurredAt} >= ${new Date(filters.dateFrom)}`);
-      if (filters.dateTo) actConds.push(sql`${activities.occurredAt} <= ${new Date(filters.dateTo)}`);
+      if (range.from) actConds.push(sql`${activities.occurredAt} >= ${range.from}`);
+      if (range.to) actConds.push(sql`${activities.occurredAt} <= ${range.to}`);
       const acts = await db.select().from(activities).where(and(...actConds));
       const out = months.map((m) => ({ label: m.label, calls: 0, emails: 0, meetings: 0 }));
       for (const a of acts) {
@@ -1302,8 +1301,8 @@ async function resolveWidgetData(
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "heatmap") {
     const actConds: any[] = [eq(activities.workspaceId, workspaceId)];
-    if (filters.dateFrom) actConds.push(sql`${activities.occurredAt} >= ${new Date(filters.dateFrom)}`);
-    if (filters.dateTo) actConds.push(sql`${activities.occurredAt} <= ${new Date(filters.dateTo)}`);
+    if (range.from) actConds.push(sql`${activities.occurredAt} >= ${range.from}`);
+    if (range.to) actConds.push(sql`${activities.occurredAt} <= ${range.to}`);
     const acts = await db.select().from(activities).where(and(...actConds));
     // Build 7×24 grid, bucketed in the WORKSPACE's timezone.
     //
@@ -1312,7 +1311,6 @@ async function resolveWidgetData(
     // under local labels: a rep reading a 14:00 peak was looking at 10am their
     // own time, and every activity between 19:00 and midnight Eastern was
     // attributed to the NEXT DAY's column.
-    const tz = await getWorkspaceTimezone(workspaceId);
     const grid: number[][] = Array.from({ length: 7 }, () => Array(24).fill(0));
     for (const a of acts) {
       const { dow, hour } = zonedDowHour(a.occurredAt, tz);
@@ -1367,8 +1365,8 @@ async function resolveWidgetData(
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "activity_feed") {
     const actConds: any[] = [eq(activities.workspaceId, workspaceId)];
-    if (filters.dateFrom) actConds.push(sql`${activities.occurredAt} >= ${new Date(filters.dateFrom)}`);
-    if (filters.dateTo) actConds.push(sql`${activities.occurredAt} <= ${new Date(filters.dateTo)}`);
+    if (range.from) actConds.push(sql`${activities.occurredAt} >= ${range.from}`);
+    if (range.to) actConds.push(sql`${activities.occurredAt} <= ${range.to}`);
     const acts = await db.select().from(activities)
       .where(and(...actConds))
       .orderBy(desc(activities.occurredAt))

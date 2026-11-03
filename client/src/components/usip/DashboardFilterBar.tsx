@@ -24,12 +24,13 @@ import {
 import { Calendar, ChevronDown, Filter, X } from "lucide-react";
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { resolvePresetDates } from "@shared/dashboardPresets";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 export interface DashboardFilters {
   preset: string;        // "today" | "7d" | "30d" | "90d" | "ytd" | "all" | "custom"
-  dateFrom?: string;     // ISO date string (YYYY-MM-DD)
-  dateTo?: string;       // ISO date string (YYYY-MM-DD)
+  dateFrom?: string;     // YYYY-MM-DD, a day in the workspace's time zone
+  dateTo?: string;       // YYYY-MM-DD, a day in the workspace's time zone
   ownerUserId?: number;
   stage?: string;
   source?: string;
@@ -74,35 +75,6 @@ const SOURCES = [
   { label: "Email Campaign", value: "email_campaign" },
 ];
 
-/* ─── Preset → date range resolver ──────────────────────────────────────── */
-export function resolvePresetDates(preset: string): { dateFrom?: string; dateTo?: string } {
-  const today = new Date();
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  switch (preset) {
-    case "today":
-      return { dateFrom: fmt(today), dateTo: fmt(today) };
-    case "7d": {
-      const from = new Date(today); from.setDate(from.getDate() - 6);
-      return { dateFrom: fmt(from), dateTo: fmt(today) };
-    }
-    case "30d": {
-      const from = new Date(today); from.setDate(from.getDate() - 29);
-      return { dateFrom: fmt(from), dateTo: fmt(today) };
-    }
-    case "90d": {
-      const from = new Date(today); from.setDate(from.getDate() - 89);
-      return { dateFrom: fmt(from), dateTo: fmt(today) };
-    }
-    case "ytd": {
-      const from = new Date(today.getFullYear(), 0, 1);
-      return { dateFrom: fmt(from), dateTo: fmt(today) };
-    }
-    case "all":
-    default:
-      return {};
-  }
-}
-
 /* ─── Active filter count badge ──────────────────────────────────────────── */
 function activeCount(f: DashboardFilters): number {
   let n = 0;
@@ -124,12 +96,16 @@ export function DashboardFilterBar({ filters, onChange, members = [] }: Dashboar
   const pipe = trpc.crmPipelines.get.useQuery({} as any, { staleTime: 60_000 });
   const rows = ((pipe.data as any)?.stages ?? []) as Array<{ key: string; label: string }>;
   const stageOptions = rows.length > 0 ? rows.map((s) => ({ label: s.label, value: s.key })) : LEGACY_STAGES;
+  // The zone the server reads these days in. The buttons wait for it (only while
+  // it first loads), so a click can't pick days in the wrong zone; if the read
+  // fails, UTC is the column's default.
+  const settings = trpc.settings.get.useQuery(undefined, { staleTime: 60_000 });
 
   const update = (patch: Partial<DashboardFilters>) => {
     const next = { ...filters, ...patch };
     // When preset changes (not custom), clear custom dates
     if (patch.preset && patch.preset !== "custom") {
-      const dates = resolvePresetDates(patch.preset);
+      const dates = resolvePresetDates(patch.preset, settings.data?.timezone ?? "UTC");
       next.dateFrom = dates.dateFrom;
       next.dateTo = dates.dateTo;
     }
@@ -147,6 +123,7 @@ export function DashboardFilterBar({ filters, onChange, members = [] }: Dashboar
         {PRESETS.filter((p) => p.value !== "custom").map((p) => (
           <button
             key={p.value}
+            disabled={settings.isLoading}
             onClick={() => update({ preset: p.value })}
             className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
               filters.preset === p.value
