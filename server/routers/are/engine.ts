@@ -10,7 +10,7 @@ import { z } from "zod";
 import { areCampaigns, areEngineLogs, prospectIntelligence, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
-import { workspaceProcedure } from "../../_core/workspace";
+import { managerProcedure, workspaceProcedure } from "../../_core/workspace";
 import { enrollApprovedForCampaign, runAreEngine } from "../../areEngine";
 import type { AreEngineResult } from "../../areEngine";
 
@@ -40,8 +40,12 @@ export const engineRouter = router({
         .limit(input.limit);
     }),
 
-  /** Manual tick — same as campaigns.runEngine; kept here for symmetry. */
-  runOnce: workspaceProcedure.mutation(async () => runAreEngine()),
+  /**
+   * Manual tick — same as campaigns.runEngine; kept here for symmetry. It spends
+   * and sends, so it is for managers, and it runs this workspace only: any member
+   * used to run every workspace's campaigns and read back the platform's totals.
+   */
+  runOnce: managerProcedure.mutation(async ({ ctx }) => runAreEngine({ workspaceId: ctx.workspace.id })),
 
   /**
    * Run ONLY the enrol phase for one campaign — paused or not — and nothing

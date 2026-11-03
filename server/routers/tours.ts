@@ -30,6 +30,36 @@ const TOUR_BADGES: Record<string, string> = {
   custom: "🏆 Tour Complete",
 };
 
+/**
+ * What a tour step may carry, on every path that writes one. create and update
+ * took z.any() and spread it into the row, so a step could name its own tourId
+ * or any other column (audit 2026-10-20, G6).
+ */
+const TOUR_STEP = z.object({
+  id: z.number().optional(),
+  sortOrder: z.number(),
+  targetSelector: z.string().max(500).optional(),
+  targetDataTourId: z.string().max(200).optional(),
+  routeTo: z.string().max(200).optional(),
+  title: z.string().min(1).max(300),
+  bodyMarkdown: z.string().optional(),
+  visualTreatment: z.enum(["spotlight", "pulse", "arrow", "coach"]).default("spotlight"),
+  advanceCondition: z
+    .enum(["next_button", "element_clicked", "form_field_filled", "route_changed", "custom_event"])
+    .default("next_button"),
+  advanceConfig: z.any().optional(),
+  skipAllowed: z.boolean().default(true),
+  backAllowed: z.boolean().default(true),
+  branchingRules: z.any().optional(),
+});
+
+/** Steps are written by tourId, so the tour has to be proved this workspace's first. */
+async function assertTourHere(db: Awaited<ReturnType<typeof requireDb>>, tourId: number, workspaceId: number): Promise<void> {
+  const [tour] = await db.select({ id: tours.id }).from(tours)
+    .where(and(eq(tours.id, tourId), eq(tours.workspaceId, workspaceId))).limit(1);
+  if (!tour) throw new TRPCError({ code: "NOT_FOUND" });
+}
+
 export const toursRouter = router({
   /* ── Tour CRUD ──────────────────────────────────────────────────────────── */
 
@@ -103,27 +133,7 @@ export const toursRouter = router({
         prerequisiteTourId: z.number().optional(),
         status: z.enum(["draft", "published"]).default("draft"),
         pageKey: z.string().max(120).optional(),
-        steps: z
-          .array(
-            z.object({
-              id: z.number().optional(),
-              sortOrder: z.number(),
-              targetSelector: z.string().max(500).optional(),
-              targetDataTourId: z.string().max(200).optional(),
-              routeTo: z.string().max(200).optional(),
-              title: z.string().min(1).max(300),
-              bodyMarkdown: z.string().optional(),
-              visualTreatment: z.enum(["spotlight", "pulse", "arrow", "coach"]).default("spotlight"),
-              advanceCondition: z
-                .enum(["next_button", "element_clicked", "form_field_filled", "route_changed", "custom_event"])
-                .default("next_button"),
-              advanceConfig: z.any().optional(),
-              skipAllowed: z.boolean().default(true),
-              backAllowed: z.boolean().default(true),
-              branchingRules: z.any().optional(),
-            }),
-          )
-          .optional(),
+        steps: z.array(TOUR_STEP).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -133,6 +143,7 @@ export const toursRouter = router({
 
       let tourId = id;
       if (id) {
+        await assertTourHere(db, id, ctx.workspace.id);
         await db
           .update(tours)
           .set(rest)
@@ -410,7 +421,7 @@ export const toursRouter = router({
         estimatedMinutes: z.number().min(1).max(60).default(3),
         status: z.enum(["draft", "published"]).default("draft"),
         pageKey: z.string().max(120).optional(),
-        steps: z.array(z.any()).optional(),
+        steps: z.array(TOUR_STEP).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -439,12 +450,13 @@ export const toursRouter = router({
         estimatedMinutes: z.number().min(1).max(60).optional(),
         status: z.enum(["draft", "published"]).optional(),
         pageKey: z.string().max(120).optional(),
-        steps: z.array(z.any()).optional(),
+        steps: z.array(TOUR_STEP).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       const { id, steps, ...rest } = input;
+      await assertTourHere(db, id, ctx.workspace.id);
       await db.update(tours).set(rest).where(and(eq(tours.id, id), eq(tours.workspaceId, ctx.workspace.id)));
       if (steps) {
         for (const step of steps) {

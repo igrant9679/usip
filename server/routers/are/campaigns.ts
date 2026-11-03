@@ -20,7 +20,7 @@ async function assertResearchSectorInWorkspace(db: NonNullable<Awaited<ReturnTyp
 }
 import { getDb } from "../../db";
 import { router } from "../../_core/trpc";
-import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
+import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../../_core/workspace";
 import { DISCOVERY_REST_MS, ENGINE_LOG_RETENTION_DAYS, runAreEngine } from "../../areEngine";
 import { getWorkspaceSendWindow } from "../../services/sendWindow";
 import { getWorkspaceTimezone, startOfLocalDay } from "../../services/workspaceTimezone";
@@ -236,7 +236,7 @@ export const campaignsRouter = router({
       // phase 8 (discovery) fire within seconds — the 10-min cron picks up
       // every subsequent tick on its own.
       if (input.launch) {
-        runAreEngine().catch((e) =>
+        runAreEngine({ workspaceId: ctx.workspace.id }).catch((e) =>
           console.error("[campaigns.create] launch tick failed:", e),
         );
       }
@@ -1478,7 +1478,7 @@ export const campaignsRouter = router({
    * cron; this lets an operator drive it on demand and see the per-phase
    * counts (enriched / approved / enrolled / sent / …) come back immediately.
    */
-  runEngine: workspaceProcedure.mutation(async () => {
-    return runAreEngine();
+  runEngine: managerProcedure.mutation(async ({ ctx }) => {
+    return runAreEngine({ workspaceId: ctx.workspace.id });
   }),
 });

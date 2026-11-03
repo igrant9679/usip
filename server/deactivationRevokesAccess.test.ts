@@ -22,6 +22,11 @@
  *   _core/streamHelpers   resolveStreamAuth — all five SSE routes
  *   _core/storageProxy    customer documents
  *   unipileWebhook        connecting an account to the workspace
+ *
+ * 2026-11-03: streamHelpers and storageProxy no longer hold a lookup of their
+ * own. Both call workspaceDoorRefusal in _core/workspace.ts, which this file
+ * scans, because their copies had lost the pending-invite, archive and 2FA rules
+ * (audit G30).
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -35,8 +40,6 @@ const strip = (s: string) =>
 /** Every path whose membership lookup decides whether a request may proceed. */
 const AUTH_PATHS = [
   "server/_core/workspace.ts",
-  "server/_core/streamHelpers.ts",
-  "server/_core/storageProxy.ts",
   "server/unipileWebhook.ts",
   /**
    * `db.ts` was MISSED by the first pass of this fix. getUserWorkspaces is the
@@ -113,6 +116,14 @@ describe("the scanner has something to scan", () => {
     for (const rel of AUTH_PATHS) {
       const found = membershipLookups(strip(readFileSync(join(ROOT, rel), "utf8")));
       expect(found.length, `${rel} has no membership lookup — has it moved?`).toBeGreaterThan(0);
+    }
+  });
+
+  it("the stream routes and the file proxy use the shared door, and keep no lookup of their own", () => {
+    for (const rel of ["server/_core/streamHelpers.ts", "server/_core/storageProxy.ts"]) {
+      const src = strip(readFileSync(join(ROOT, rel), "utf8"));
+      expect(src, rel).toContain("workspaceDoorRefusal(db, user, workspaceId)");
+      expect(membershipLookups(src), rel).toEqual([]);
     }
   });
 });

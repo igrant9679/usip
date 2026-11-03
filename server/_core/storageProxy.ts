@@ -28,11 +28,10 @@
  * `window.open(pdfUrl)` in Quotes.tsx still carries it.
  */
 import type { Express } from "express";
-import { and, eq, isNull } from "drizzle-orm";
-import { workspaceMembers } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { ENV } from "./env";
 import { sdk } from "./sdk";
+import { workspaceDoorRefusal } from "./workspace";
 
 /** `ws-<id>/…` — the prefix every real writer uses. */
 const WORKSPACE_KEY = /^ws-(\d+)\//;
@@ -63,9 +62,9 @@ export function registerStorageProxy(app: Express) {
     }
 
     // ── Auth ──────────────────────────────────────────────────────────────
-    let userId: number;
+    let user: Awaited<ReturnType<typeof sdk.authenticateRequest>>;
     try {
-      userId = (await sdk.authenticateRequest(req)).id;
+      user = await sdk.authenticateRequest(req);
     } catch {
       res.status(401).send("Unauthorized");
       return;
@@ -90,22 +89,11 @@ export function registerStorageProxy(app: Express) {
         res.status(500).send("Storage proxy unavailable");
         return;
       }
-      const [member] = await db
-        .select({ id: workspaceMembers.id })
-        .from(workspaceMembers)
-        .where(
-          and(
-            eq(workspaceMembers.userId, userId),
-            eq(workspaceMembers.workspaceId, workspaceId),
-            // Deactivation revokes access — see resolveWorkspace.
-            isNull(workspaceMembers.deactivatedAt),
-          ),
-        )
-        .limit(1);
-      if (!member) {
-        console.warn(
-          `[StorageProxy] REFUSED ${key}: user ${userId} is not a member of workspace ${workspaceId}`,
-        );
+      // Deactivation, a pending invite, an archived workspace and required 2FA
+      // all stop this door as they stop workspaceProcedure.
+      const refused = await workspaceDoorRefusal(db, user, workspaceId);
+      if (refused) {
+        console.warn(`[StorageProxy] REFUSED ${key}: user ${user.id}, workspace ${workspaceId}: ${refused}`);
         res.status(403).send("Forbidden");
         return;
       }

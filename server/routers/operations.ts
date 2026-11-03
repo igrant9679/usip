@@ -39,7 +39,9 @@ import { checkPermission, getDb } from "../db";
 import { closedStageKeys, stageIndexFor } from "../_core/stageSemantics";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
-import { adminWsProcedure, managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, assertOwnerOrManager, managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
+import { escapeHtml } from "@shared/escapeHtml";
+import { assertRowInWorkspace } from "../services/foreignIds";
 import { storagePut } from "../storage";
 import { buildTransporter, decrypt } from "./smtpConfig";
 import { evalConditions, executeRuleActions, normalizeConditions } from "../services/workflowEngine";
@@ -637,6 +639,20 @@ export const campaignsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const { id, ...patch } = input;
+    // Every id this links must be this workspace's. They used to be saved as given,
+    // and getWithDetails then read another workspace's names and from-address back
+    // through them (audit 2026-10-20, P4).
+    await assertRowInWorkspace(db, "segment", input.audienceSegmentId, ctx.workspace.id);
+    await assertRowInWorkspace(db, "sequence", input.sequenceId, ctx.workspace.id);
+    await assertRowInWorkspace(db, "sending account", input.sendingAccountId, ctx.workspace.id);
+    await assertRowInWorkspace(db, "sender pool", input.senderPoolId, ctx.workspace.id);
+    if (input.audienceIds?.length) {
+      const owned = await db.select({ id: contacts.id }).from(contacts)
+        .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, input.audienceIds)));
+      if (owned.length !== new Set(input.audienceIds).size) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "One or more contacts are not in this workspace." });
+      }
+    }
     await db.update(campaigns).set(patch as any).where(and(eq(campaigns.id, id), eq(campaigns.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -693,10 +709,10 @@ export const campaignsRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [c] = await db.select().from(campaigns).where(and(eq(campaigns.id, input.id), eq(campaigns.workspaceId, ctx.workspace.id)));
     if (!c) throw new TRPCError({ code: "NOT_FOUND" });
-    const [seq] = c.sequenceId ? await db.select({ id: sequences.id, name: sequences.name, status: sequences.status, enrolledCount: sequences.enrolledCount }).from(sequences).where(eq(sequences.id, c.sequenceId)) : [];
-    const [acct] = c.sendingAccountId ? await db.select({ id: sendingAccounts.id, fromEmail: sendingAccounts.fromEmail, provider: sendingAccounts.provider }).from(sendingAccounts).where(eq(sendingAccounts.id, c.sendingAccountId)) : [];
-    const [pool] = c.senderPoolId ? await db.select({ id: senderPools.id, name: senderPools.name, rotationStrategy: senderPools.rotationStrategy }).from(senderPools).where(eq(senderPools.id, c.senderPoolId)) : [];
-    const [seg] = c.audienceSegmentId ? await db.select({ id: audienceSegments.id, name: audienceSegments.name }).from(audienceSegments).where(eq(audienceSegments.id, c.audienceSegmentId)) : [];
+    const [seq] = c.sequenceId ? await db.select({ id: sequences.id, name: sequences.name, status: sequences.status, enrolledCount: sequences.enrolledCount }).from(sequences).where(and(eq(sequences.id, c.sequenceId), eq(sequences.workspaceId, ctx.workspace.id))) : [];
+    const [acct] = c.sendingAccountId ? await db.select({ id: sendingAccounts.id, fromEmail: sendingAccounts.fromEmail, provider: sendingAccounts.provider }).from(sendingAccounts).where(and(eq(sendingAccounts.id, c.sendingAccountId), eq(sendingAccounts.workspaceId, ctx.workspace.id))) : [];
+    const [pool] = c.senderPoolId ? await db.select({ id: senderPools.id, name: senderPools.name, rotationStrategy: senderPools.rotationStrategy }).from(senderPools).where(and(eq(senderPools.id, c.senderPoolId), eq(senderPools.workspaceId, ctx.workspace.id))) : [];
+    const [seg] = c.audienceSegmentId ? await db.select({ id: audienceSegments.id, name: audienceSegments.name }).from(audienceSegments).where(and(eq(audienceSegments.id, c.audienceSegmentId), eq(audienceSegments.workspaceId, ctx.workspace.id))) : [];
     return { ...c, sequence: seq ?? null, sendingAccount: acct ?? null, senderPool: pool ?? null, audienceSegment: seg ?? null };
   }),
 
@@ -775,6 +791,30 @@ export const campaignsRouter = router({
 });
 /* ───── Custom Dashboards ─────────────────────────────────────────── */
 
+type DashboardCtx = Parameters<typeof assertOwnerOrManager>[0] & { workspace: { id: number } };
+type OpsDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+/**
+ * A dashboard anyone here can see, and only its owner or a manager can change:
+ * any member could rewrite or delete a colleague's, or one scheduled to outside
+ * addresses (audit 2026-10-20, G28). Another workspace's reads as not found, and
+ * that check is what stops a widget or schedule being written into it (G5).
+ */
+async function dashboardForEdit(db: OpsDb, ctx: DashboardCtx, dashboardId: number) {
+  const [d] = await db.select({ id: dashboards.id, ownerUserId: dashboards.ownerUserId }).from(dashboards)
+    .where(and(eq(dashboards.id, dashboardId), eq(dashboards.workspaceId, ctx.workspace.id)));
+  if (!d) throw new TRPCError({ code: "NOT_FOUND", message: "Dashboard not found" });
+  assertOwnerOrManager(ctx, d.ownerUserId, "Only this dashboard's owner or a manager can change it.");
+  return d;
+}
+
+async function widgetForEdit(db: OpsDb, ctx: DashboardCtx, widgetId: number) {
+  const [w] = await db.select({ dashboardId: dashboardWidgets.dashboardId }).from(dashboardWidgets)
+    .where(and(eq(dashboardWidgets.id, widgetId), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
+  if (!w) throw new TRPCError({ code: "NOT_FOUND", message: "Widget not found" });
+  await dashboardForEdit(db, ctx, w.dashboardId);
+}
+
 export const dashboardsRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
@@ -787,7 +827,8 @@ export const dashboardsRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [d] = await db.select().from(dashboards).where(and(eq(dashboards.id, input.id), eq(dashboards.workspaceId, ctx.workspace.id)));
     if (!d) return null;
-    const widgets = await db.select().from(dashboardWidgets).where(eq(dashboardWidgets.dashboardId, d.id));
+    const widgets = await db.select().from(dashboardWidgets)
+      .where(and(eq(dashboardWidgets.dashboardId, d.id), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
     return { ...d, widgets };
   }),
 
@@ -801,6 +842,7 @@ export const dashboardsRouter = router({
   rename: workspaceProcedure.input(z.object({ id: z.number(), name: z.string().min(1), description: z.string().optional() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await dashboardForEdit(db, ctx, input.id);
     await db.update(dashboards).set({ name: input.name, description: input.description }).where(and(eq(dashboards.id, input.id), eq(dashboards.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -816,9 +858,7 @@ export const dashboardsRouter = router({
     // scoped and simply matched nothing. The role gate above was considered;
     // the tenant boundary was not. `deleteWidget`, two procedures down, has
     // always scoped by workspaceId.
-    const [d] = await db.select({ id: dashboards.id }).from(dashboards)
-      .where(and(eq(dashboards.id, input.id), eq(dashboards.workspaceId, ctx.workspace.id)));
-    if (!d) throw new TRPCError({ code: "NOT_FOUND", message: "Dashboard not found" });
+    const d = await dashboardForEdit(db, ctx, input.id);
     await db.delete(dashboardWidgets)
       .where(and(eq(dashboardWidgets.dashboardId, d.id), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
     await db.delete(dashboards).where(and(eq(dashboards.id, d.id), eq(dashboards.workspaceId, ctx.workspace.id)));
@@ -840,6 +880,7 @@ export const dashboardsRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await dashboardForEdit(db, ctx, input.dashboardId);
     await db.insert(dashboardWidgets).values({ ...input, workspaceId: ctx.workspace.id, position: input.position ?? { x: 0, y: 0, w: 4, h: 3 } });
     return { ok: true };
   }),
@@ -859,6 +900,7 @@ export const dashboardsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     if (Object.keys(input.patch).length === 0) return { ok: true };
+    await widgetForEdit(db, ctx, input.id);
     await db.update(dashboardWidgets).set(input.patch).where(and(eq(dashboardWidgets.id, input.id), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -866,8 +908,9 @@ export const dashboardsRouter = router({
   saveLayout: workspaceProcedure.input(z.object({ dashboardId: z.number(), positions: z.array(z.object({ id: z.number(), x: z.number(), y: z.number(), w: z.number(), h: z.number() })) })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await dashboardForEdit(db, ctx, input.dashboardId);
     for (const p of input.positions) {
-      await db.update(dashboardWidgets).set({ position: { x: p.x, y: p.y, w: p.w, h: p.h } }).where(and(eq(dashboardWidgets.id, p.id), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
+      await db.update(dashboardWidgets).set({ position: { x: p.x, y: p.y, w: p.w, h: p.h } }).where(and(eq(dashboardWidgets.id, p.id), eq(dashboardWidgets.dashboardId, input.dashboardId), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
     }
     return { ok: true };
   }),
@@ -875,6 +918,7 @@ export const dashboardsRouter = router({
   deleteWidget: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await widgetForEdit(db, ctx, input.id);
     await db.delete(dashboardWidgets).where(and(eq(dashboardWidgets.id, input.id), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -913,6 +957,7 @@ export const dashboardsRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await dashboardForEdit(db, ctx, input.dashboardId);
     await db.insert(reportSchedules).values({ ...input, workspaceId: ctx.workspace.id, enabled: true });
     return { ok: true };
   }),
@@ -920,6 +965,14 @@ export const dashboardsRouter = router({
   toggleSchedule: workspaceProcedure.input(z.object({ id: z.number(), enabled: z.boolean() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // Starting a delivery is an export, so it is the owner's or a manager's. Stopping
+    // one stays open: a member who may not start one must still be able to stop it.
+    if (input.enabled) {
+      const [s] = await db.select({ dashboardId: reportSchedules.dashboardId }).from(reportSchedules)
+        .where(and(eq(reportSchedules.id, input.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));
+      if (!s) throw new TRPCError({ code: "NOT_FOUND", message: "Schedule not found" });
+      await dashboardForEdit(db, ctx, s.dashboardId);
+    }
     await db.update(reportSchedules).set({ enabled: input.enabled }).where(and(eq(reportSchedules.id, input.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -928,6 +981,13 @@ export const dashboardsRouter = router({
   // Sending a scheduled report blasts email to its distribution list.
   // Rep-gated to keep viewers from triggering bulk sends.
   sendScheduleNow: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+    // Sending is an export to whoever the schedule names, so it is the owner's or a manager's.
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [s] = await db.select({ dashboardId: reportSchedules.dashboardId }).from(reportSchedules)
+      .where(and(eq(reportSchedules.id, input.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));
+    if (!s) throw new TRPCError({ code: "NOT_FOUND", message: "Schedule not found" });
+    await dashboardForEdit(db, ctx, s.dashboardId);
     const r = await sendDashboardScheduleEmail(ctx.workspace.id, input.id, ctx.user.id);
     if (!r.ok) {
       if (r.reason === "db_unavailable" || r.reason === "decrypt_failed") throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: r.message });
@@ -967,7 +1027,8 @@ export async function sendDashboardScheduleEmail(
     if (recipients.length === 0) return { ok: false, reason: "no_recipients", message: "No recipients configured for this schedule. Edit the schedule to add recipients." };
     const [dash] = await db.select().from(dashboards).where(and(eq(dashboards.id, sched.dashboardId), eq(dashboards.workspaceId, workspaceId)));
     if (!dash) return { ok: false, reason: "not_found", message: "Dashboard not found." };
-    const widgets = await db.select().from(dashboardWidgets).where(eq(dashboardWidgets.dashboardId, sched.dashboardId));
+    const widgets = await db.select().from(dashboardWidgets)
+      .where(and(eq(dashboardWidgets.dashboardId, sched.dashboardId), eq(dashboardWidgets.workspaceId, workspaceId)));
     const resolved = await Promise.all(widgets.map((w) => resolveWidgetData(workspaceId, w, {})));
     const sentAt = new Date();
     const widgetHtml = resolved.map((r: any) => {
@@ -978,9 +1039,9 @@ export async function sendDashboardScheduleEmail(
         else if (typeof val === "number") valStr = val.toLocaleString();
         else valStr = JSON.stringify(val);
       }
-      return `<tr><td style="padding:8px 12px;border-bottom:1px solid #eee;font-size:14px;color:#555">${r?.title ?? "Widget"}</td><td style="padding:8px 12px;border-bottom:1px solid #eee;font-size:14px;font-weight:600;text-align:right">${valStr}</td></tr>`;
+      return `<tr><td style="padding:8px 12px;border-bottom:1px solid #eee;font-size:14px;color:#555">${escapeHtml(r?.title ?? "Widget")}</td><td style="padding:8px 12px;border-bottom:1px solid #eee;font-size:14px;font-weight:600;text-align:right">${escapeHtml(valStr)}</td></tr>`;
     }).join("");
-    const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;background:#f9f9f9;padding:24px"><div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)"><div style="background:#14B89A;padding:20px 24px"><h2 style="margin:0;color:#fff;font-size:18px">${dash.name} \u2014 Dashboard Report</h2><p style="margin:4px 0 0;color:rgba(255,255,255,.8);font-size:13px">${sentAt.toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</p></div><table style="width:100%;border-collapse:collapse">${widgetHtml}</table><p style="padding:16px 24px;font-size:12px;color:#aaa;margin:0">Sent by USIP Sales Intelligence Platform</p></div></body></html>`;
+    const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;background:#f9f9f9;padding:24px"><div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)"><div style="background:#14B89A;padding:20px 24px"><h2 style="margin:0;color:#fff;font-size:18px">${escapeHtml(dash.name)} \u2014 Dashboard Report</h2><p style="margin:4px 0 0;color:rgba(255,255,255,.8);font-size:13px">${sentAt.toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</p></div><table style="width:100%;border-collapse:collapse">${widgetHtml}</table><p style="padding:16px 24px;font-size:12px;color:#aaa;margin:0">Sent by USIP Sales Intelligence Platform</p></div></body></html>`;
     const [cfg] = await db.select().from(smtpConfigs).where(and(eq(smtpConfigs.workspaceId, workspaceId), eq(smtpConfigs.enabled, true)));
     if (!cfg) return { ok: false, reason: "not_found", message: "No active SMTP config. Configure SMTP in Settings \u2192 Email Delivery." };
     let password: string;

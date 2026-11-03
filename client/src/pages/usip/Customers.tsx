@@ -2,6 +2,8 @@ import { Button } from "@/components/ui/button";
 import { ConfirmButton, fmt$, fmtDate, Field, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, QueryError, Shell, StatCard, TableSkeleton } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { isAdminRole, rankOf } from "@shared/roleRank";
 import { trpc } from "@/lib/trpc";
 import { AlertTriangle, FolderOpen, Heart, TrendingUp, HeartHandshake, Trash2, RotateCcw } from "lucide-react";
 import { useState } from "react";
@@ -30,6 +32,7 @@ export default function Customers() {
     return { tier: "low", tone: "success" };
   };
   const addAmendment = trpc.cs.addAmendment.useMutation({ onSuccess: () => { utils.cs.listAmendments.invalidate({ customerId: selected! }); utils.cs.list.invalidate(); setAmendOpen(false); toast.success("Amendment added"); }, onError: (e) => toast.error(e.message) });
+  const { current } = useWorkspace();
   const removeCustomer = trpc.cs.delete.useMutation({
     onSuccess: (_d, vars) => {
       utils.cs.list.invalidate();
@@ -54,7 +57,7 @@ export default function Customers() {
       <PageHeader title="Customers" description="Track customer health scores, renewal risk, NPS trends, and expansion potential post-close. Identify at-risk accounts early and surface upsell opportunities before they go cold." pageKey="customers"
         icon={<HeartHandshake className="size-5" />}
       >
-        {(list?.length ?? 0) > 0 && (
+        {isAdminRole(current?.role) && (list?.length ?? 0) > 0 && (
           <ConfirmButton
             size="sm"
             variant="outline"
@@ -106,7 +109,7 @@ export default function Customers() {
                             column, so this cell was always empty. */}
                         <td className="px-3 py-2 text-right text-xs text-muted-foreground">{fmtDate(c.contractEnd)}</td>
                         <td className="px-1 py-2 text-right" onClick={(e) => e.stopPropagation()}>
-                          <ConfirmButton
+                          {rankOf(current?.role) >= rankOf("manager") && <ConfirmButton
                             className="text-muted-foreground hover:text-destructive p-1 h-auto rounded"
                             ariaLabel="Delete customer (CS overlay only — account stays)"
                             title="Delete this customer record?"
@@ -115,7 +118,7 @@ export default function Customers() {
                             onConfirm={() => removeCustomer.mutate({ id: c.id })}
                           >
                             <Trash2 className="size-3.5" />
-                          </ConfirmButton>
+                          </ConfirmButton>}
                         </td>
                       </tr>
                     ))}

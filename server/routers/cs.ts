@@ -7,7 +7,7 @@ import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
-import { repProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { renewalStageFor, type RenewalStage } from "@shared/renewalStage";
 
 function calcHealth(c: { usageScore: number; engagementScore: number; supportScore: number; npsScore: number }) {
@@ -268,11 +268,16 @@ export const csRouter = router({
    * support tickets, and contract amendments. The underlying accounts row
    * stays intact — only the customer-success overlay is removed.
    */
-  delete: repProcedure
+  // A manager's, and on the record: any rep could delete a customer with its QBRs,
+  // tickets and amendments, and nothing said who (audit 2026-10-20, R11).
+  delete: managerProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [before] = await db.select().from(customers)
+        .where(and(eq(customers.id, input.id), eq(customers.workspaceId, ctx.workspace.id)));
+      if (!before) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
       // Cascade delete child rows first so FK constraints don't trip.
       await db
         .delete(qbrs)
@@ -286,6 +291,14 @@ export const csRouter = router({
       await db
         .delete(customers)
         .where(and(eq(customers.id, input.id), eq(customers.workspaceId, ctx.workspace.id)));
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "delete",
+        entityType: "customer",
+        entityId: input.id,
+        before,
+      });
       return { ok: true };
     }),
 
@@ -294,15 +307,23 @@ export const csRouter = router({
    * customer, QBR, support ticket, and contract amendment. The underlying
    * accounts (and contacts / opportunities) are untouched.
    */
-  clearAll: repProcedure.mutation(async ({ ctx }) => {
+  clearAll: adminWsProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const wsId = ctx.workspace.id;
+    const existing = await db.select({ id: customers.id }).from(customers).where(eq(customers.workspaceId, wsId));
     await db.delete(qbrs).where(eq(qbrs.workspaceId, wsId));
     await db.delete(supportTickets).where(eq(supportTickets.workspaceId, wsId));
     await db.delete(contractAmendments).where(eq(contractAmendments.workspaceId, wsId));
     const res = await db.delete(customers).where(eq(customers.workspaceId, wsId));
     const deleted = Number((res as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0);
+    await recordAudit({
+      workspaceId: wsId,
+      actorUserId: ctx.user.id,
+      action: "delete",
+      entityType: "customer_success",
+      before: { customers: existing.length },
+    });
     return { ok: true, deletedCustomers: deleted };
   }),
 });

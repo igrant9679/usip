@@ -180,6 +180,8 @@ type Campaign = typeof areCampaigns.$inferSelect;
 type Prospect = typeof prospectQueue.$inferSelect;
 
 export interface AreEngineResult {
+  /** Another tick was already running, so this one did nothing. */
+  skipped?: boolean;
   campaignsProcessed: number;
   enriched: number;
   approved: number;
@@ -391,7 +393,11 @@ let engineRunning = false;
  */
 type EngineStep = (name: "enrich" | "screen" | "sequence" | "enroll" | "dispatch" | "complete" | "counters" | "discovery") => void;
 
-export async function runAreEngine(): Promise<AreEngineResult> {
+/**
+ * With a scope, a person asking for a tick of their own workspace. The schedule
+ * passes none and runs everyone.
+ */
+export async function runAreEngine(scope?: { workspaceId: number }): Promise<AreEngineResult> {
   const result: AreEngineResult = {
     campaignsProcessed: 0,
     enriched: 0,
@@ -404,7 +410,7 @@ export async function runAreEngine(): Promise<AreEngineResult> {
   };
   if (engineRunning) {
     console.log("[AreEngine] previous tick still running — skipping this run");
-    return result;
+    return { ...result, skipped: true };
   }
   const db = await getDb();
   if (!db) return result;
@@ -420,7 +426,7 @@ export async function runAreEngine(): Promise<AreEngineResult> {
       // LLM call at a time. Paused campaigns spend nothing until resumed.
       step("enrich");
       try {
-        await enrichPendingGlobally(result);
+        await enrichPendingGlobally(result, scope?.workspaceId);
       } catch (e) {
         console.error("[AreEngine] global enrich pass failed:", e);
       }
@@ -428,7 +434,7 @@ export async function runAreEngine(): Promise<AreEngineResult> {
       const active = await db
         .select()
         .from(areCampaigns)
-        .where(eq(areCampaigns.status, "active"));
+        .where(and(eq(areCampaigns.status, "active"), scope ? eq(areCampaigns.workspaceId, scope.workspaceId) : undefined));
 
       const archivedWs = await archivedWorkspaceIds();
       for (const campaign of active) {
@@ -471,7 +477,7 @@ export async function runAreEngine(): Promise<AreEngineResult> {
  * Bounded by ENRICH_PER_TICK so a large backlog drains steadily over multiple
  * ticks rather than stalling the rest of the engine in a single long tick.
  */
-async function enrichPendingGlobally(result: AreEngineResult): Promise<void> {
+async function enrichPendingGlobally(result: AreEngineResult, onlyWorkspaceId?: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
 
@@ -500,6 +506,7 @@ async function enrichPendingGlobally(result: AreEngineResult): Promise<void> {
     .where(
       and(
         eq(areCampaigns.status, "active"),
+        onlyWorkspaceId != null ? eq(prospectQueue.workspaceId, onlyWorkspaceId) : undefined,
         inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
         // A row a human (or the screen) rejected or canceled is a decision,
         // not a backlog: enriching it spends LLM + verification credits on

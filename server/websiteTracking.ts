@@ -13,7 +13,7 @@
  * vendor and is deliberately not stubbed.
  */
 import type { Express, Request, Response } from "express";
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, eq, gte, like, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { activities, contacts, leads, tasks, websiteVisits, workspaces } from "../drizzle/schema";
 import { pageIntent } from "@shared/pageIntent";
@@ -83,6 +83,15 @@ function parseVid(vid: string): { contactId: number | null; leadId: number | nul
   return out;
 }
 
+/**
+ * The most high-intent tasks the beacon may file for one workspace in a day. A
+ * visitor id is not signed yet, so anyone can name a record on this public route.
+ * One task per record per day is the existing limit, and walking sequential ids
+ * still filed one for every record. Past this the visits keep counting and the
+ * tasks stop (audit 2026-10-20, P5).
+ */
+export const MAX_INTENT_TASKS_PER_DAY = 50;
+
 export function registerWebsiteTrackingRoutes(app: Express): void {
   // Serve the tracker script.
   app.get("/v/track.js", (_req: Request, res: Response) => {
@@ -151,8 +160,12 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
           .select({ n: sql<number>`count(*)` })
           .from(websiteVisits)
           .where(and(eq(websiteVisits.workspaceId, ws.id), eq(websiteVisits.intent, "high"), recCond, gte(websiteVisits.createdAt, since)));
+        const [{ filed }] = await db
+          .select({ filed: sql<number>`count(*)` })
+          .from(tasks)
+          .where(and(eq(tasks.workspaceId, ws.id), like(tasks.title, "High-intent website visit:%"), gte(tasks.createdAt, since)));
         // count includes the row we just inserted; 1 ⇒ this is the first today.
-        if (Number(n) <= 1) {
+        if (Number(n) <= 1 && Number(filed) < MAX_INTENT_TASKS_PER_DAY) {
           let name = "A known prospect";
           let ownerUserId: number | null = null;
           if (contactId) {

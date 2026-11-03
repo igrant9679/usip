@@ -32,6 +32,9 @@ import { WidgetDataRenderer } from "@/components/usip/DashboardWidgets";
 import { confirmAction, Field, FormDialog, Section, SelectField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell, SubNav, HOME_DASHBOARD_KEY } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { rankOf } from "@shared/roleRank";
 import {
   BarChart2,
   Home,
@@ -312,12 +315,18 @@ export default function Dashboards() {
 
   const dash = trpc.dashboards.get.useQuery({ id: selected! }, { enabled: !!selected });
   const schedules = trpc.dashboards.listSchedules.useQuery();
+  // Anyone here can look at a dashboard. Only its owner or a manager can change
+  // it, so nobody else is offered a mode where every change is refused.
+  const { user } = useAuth();
+  const { current } = useWorkspace();
+  const canEdit = !!dash.data && (dash.data.ownerUserId === user?.id || rankOf(current?.role) >= rankOf("manager"));
 
   const [openNew, setOpenNew] = useState(false);
   const [openWidget, setOpenWidget] = useState(false);
   const [openSched, setOpenSched] = useState(false);
   const [openRename, setOpenRename] = useState(false);
   const [customizeMode, setCustomizeMode] = useState(false);
+  useEffect(() => { if (!canEdit) setCustomizeMode(false); }, [canEdit]);
   const [filters, setFilters] = useState<DashboardFilters>({ preset: "all" });
   const [homeDashboard, setHomeDashboard] = useState<string>(
     () => (typeof window !== "undefined" ? localStorage.getItem(HOME_DASHBOARD_KEY) : null) ?? "/"
@@ -409,11 +418,13 @@ export default function Dashboards() {
         <Button size="sm" variant="outline" onClick={() => setOpenSched(true)}>
           <Send className="h-3.5 w-3.5 mr-1" /> Schedule
         </Button>
-        <Button size="sm" variant={customizeMode ? "default" : "outline"}
-          onClick={() => setCustomizeMode((v) => !v)}>
-          <Settings2 className="h-3.5 w-3.5 mr-1" />
-          {customizeMode ? "Done editing" : "Customize"}
-        </Button>
+        {canEdit && (
+          <Button size="sm" variant={customizeMode ? "default" : "outline"}
+            onClick={() => setCustomizeMode((v) => !v)}>
+            <Settings2 className="h-3.5 w-3.5 mr-1" />
+            {customizeMode ? "Done editing" : "Customize"}
+          </Button>
+        )}
       </PageHeader>
       <SubNav items={[
         { href: "/email-analytics", label: "Email Analytics", title: "Open / click / reply rates per sequence and per step" },

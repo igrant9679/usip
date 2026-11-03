@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import { router } from "../_core/trpc";
-import { workspaceProcedure, roleRank } from "../_core/workspace";
+import { assertOwnerOrManager, workspaceProcedure, roleRank } from "../_core/workspace";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
 import { calendarAccounts, calendarEvents, activities, opportunities } from "../../drizzle/schema";
@@ -24,6 +24,13 @@ function resolveTargetUser(
   }
   return repUserId;
 }
+
+/**
+ * A calendar is its owner's and their managers'. Only disconnecting used to check,
+ * so any member could read a teammate's calendars and create, edit, delete or sync
+ * events on them (audit 2026-10-20, O19).
+ */
+const CALENDAR_NOT_YOURS = "That is someone else's calendar. Only they or a manager can use it.";
 
 async function getCalendarAccount(id: number, workspaceId: number) {
   const db = await getDb();
@@ -155,6 +162,7 @@ export const calendarRouter = router({
     .query(async ({ ctx, input }) => {
       resolveTargetUser(ctx, input.repUserId);
       const acc = await getCalendarAccount(input.accountId, ctx.workspace.id);
+      assertOwnerOrManager(ctx, acc.userId, CALENDAR_NOT_YOURS);
       const adapter = createCalendarAdapter(acc);
       return adapter.listCalendars();
     }),
@@ -205,6 +213,7 @@ export const calendarRouter = router({
       // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything"). Team-only mail still goes.
       await assertOutboundNotPausedFor(ctx.workspace.id, (input.attendees ?? []).map((a) => a.email));
       const acc = await getCalendarAccount(input.accountId, ctx.workspace.id);
+      assertOwnerOrManager(ctx, acc.userId, CALENDAR_NOT_YOURS);
       const adapter = createCalendarAdapter(acc);
       const result = await adapter.createEvent(input.calendarId, {
         title: input.title,
@@ -263,6 +272,7 @@ export const calendarRouter = router({
         ? input.attendees.map((a) => a.email)
         : await storedAttendeeEmails(ctx.workspace.id, input.dbId));
       const acc = await getCalendarAccount(input.accountId, ctx.workspace.id);
+      assertOwnerOrManager(ctx, acc.userId, CALENDAR_NOT_YOURS);
       const adapter = createCalendarAdapter(acc);
       const result = await adapter.updateEvent(input.calendarId, input.externalId, {
         title: input.title,
@@ -304,6 +314,7 @@ export const calendarRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       const acc = await getCalendarAccount(input.accountId, ctx.workspace.id);
+      assertOwnerOrManager(ctx, acc.userId, CALENDAR_NOT_YOURS);
       const adapter = createCalendarAdapter(acc);
       await adapter.deleteEvent(input.calendarId, input.externalId);
       if (input.dbId) {
@@ -326,6 +337,7 @@ export const calendarRouter = router({
     .input(z.object({ accountId: z.number(), from: z.date(), to: z.date() }))
     .mutation(async ({ ctx, input }) => {
       const acc = await getCalendarAccount(input.accountId, ctx.workspace.id);
+      assertOwnerOrManager(ctx, acc.userId, CALENDAR_NOT_YOURS);
       const adapter = createCalendarAdapter(acc);
       const calId = acc.calendarId ?? "primary";
       const events = await adapter.listEvents(calId, input.from, input.to);
@@ -367,6 +379,7 @@ export const calendarRouter = router({
       const [event] = await db.select().from(calendarEvents)
         .where(and(eq(calendarEvents.id, input.eventId), eq(calendarEvents.workspaceId, ctx.workspace.id)));
       if (!event) throw new TRPCError({ code: "NOT_FOUND", message: "Event not found" });
+      assertOwnerOrManager(ctx, event.userId, CALENDAR_NOT_YOURS);
 
       // Fetch linked opportunity notes if any
       let opportunityContext = "";
@@ -444,6 +457,7 @@ Be concise and professional. Use markdown formatting.`;
       const [event] = await db.select().from(calendarEvents)
         .where(and(eq(calendarEvents.id, input.eventId), eq(calendarEvents.workspaceId, ctx.workspace.id)));
       if (!event) throw new TRPCError({ code: "NOT_FOUND", message: "Event not found" });
+      assertOwnerOrManager(ctx, event.userId, CALENDAR_NOT_YOURS);
       if (!event.aiSummary) throw new TRPCError({ code: "BAD_REQUEST", message: "No AI summary exists for this event. Run Summarize first." });
       // Verify the opportunity belongs to this workspace
       const [opp] = await db.select({ id: opportunities.id, name: opportunities.name })

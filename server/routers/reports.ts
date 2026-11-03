@@ -19,7 +19,7 @@ import { checkPermission, getDb } from "../db";
 import { stageIndexFor } from "../_core/stageSemantics";
 import type { StageIndex } from "@shared/stageSemantics";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { assertOwnerOrManager, workspaceProcedure } from "../_core/workspace";
 
 /* ─── Object registry (the whitelist) ────────────────────────────────────── */
 
@@ -326,6 +326,20 @@ export const PRESET_REPORTS: Array<{ key: string; name: string; description: str
 
 /* ─── Router ─────────────────────────────────────────────────────────────── */
 
+const REPORT_NOT_YOURS = "Only this report's owner or a manager can change it.";
+
+/** A saved report anyone here can see and run, and only its owner or a manager can change or send (audit 2026-10-20, G28). */
+async function reportForEdit(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  ctx: Parameters<typeof assertOwnerOrManager>[0] & { workspace: { id: number } },
+  id: number,
+): Promise<void> {
+  const [r] = await db.select({ ownerUserId: savedReports.ownerUserId }).from(savedReports)
+    .where(and(eq(savedReports.id, id), eq(savedReports.workspaceId, ctx.workspace.id))).limit(1);
+  if (!r) throw new TRPCError({ code: "NOT_FOUND" });
+  assertOwnerOrManager(ctx, r.ownerUserId, REPORT_NOT_YOURS);
+}
+
 export const reportsRouter = router({
   /** Column catalog per object — drives the builder UI. */
   schema: workspaceProcedure.query(() => {
@@ -393,9 +407,7 @@ export const reportsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       if (input.id) {
-        const [existing] = await db.select({ id: savedReports.id }).from(savedReports)
-          .where(and(eq(savedReports.id, input.id), eq(savedReports.workspaceId, ctx.workspace.id))).limit(1);
-        if (!existing) throw new TRPCError({ code: "NOT_FOUND" });
+        await reportForEdit(db, ctx, input.id);
         await db.update(savedReports)
           .set({ name: input.name, object: input.spec.object, config: input.spec })
           .where(and(eq(savedReports.id, input.id), eq(savedReports.workspaceId, ctx.workspace.id)));
@@ -414,6 +426,7 @@ export const reportsRouter = router({
   remove: workspaceProcedure.input(z.object({ id: z.number().int() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
+    await reportForEdit(db, ctx, input.id);
     await db.delete(savedReports).where(and(eq(savedReports.id, input.id), eq(savedReports.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -437,9 +450,10 @@ export const reportsRouter = router({
       if (input.freq !== "none") await checkPermission(ctx, "export_data");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
-      const [r] = await db.select({ id: savedReports.id }).from(savedReports)
+      const [r] = await db.select({ ownerUserId: savedReports.ownerUserId }).from(savedReports)
         .where(and(eq(savedReports.id, input.id), eq(savedReports.workspaceId, ctx.workspace.id))).limit(1);
       if (!r) throw new TRPCError({ code: "NOT_FOUND" });
+      if (input.freq !== "none") assertOwnerOrManager(ctx, r.ownerUserId, REPORT_NOT_YOURS);
       await db.update(savedReports)
         .set({ scheduleFreq: input.freq, scheduleRecipients: input.recipients.trim() || null })
         .where(and(eq(savedReports.id, input.id), eq(savedReports.workspaceId, ctx.workspace.id)));
@@ -456,6 +470,9 @@ export const reportsRouter = router({
       // the CSV button the long way round to a file anyone could still mail
       // themselves.
       await checkPermission(ctx, "export_data");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
+      await reportForEdit(db, ctx, input.id);
       const { emailSavedReport } = await import("../services/reportScheduler");
       const res = await emailSavedReport(input.id, ctx.workspace.id);
       if (!res.ok) throw new TRPCError({ code: "BAD_REQUEST", message: res.reason ?? "Send failed" });
