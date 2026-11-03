@@ -213,13 +213,15 @@ describe("no destructive statement can be aimed at another tenant", () => {
     // Named explicitly: these are the sites the guard was written for, and a
     // regression in either should say so by name rather than as a generic hit.
     const ops = stripComments(readFileSync(join(ROOT, "server/routers/operations.ts"), "utf8"));
-    for (const [table, parent] of [["quoteLineItems", "quotes"], ["dashboardWidgets", "dashboards"]]) {
+    // 2026-11-03: the dashboard's check is dashboardForEdit now, which also asks
+    // whether this person may change it (audit G28).
+    for (const [table, ownership] of [["quoteLineItems", "select({ id: quotes.id })"], ["dashboardWidgets", "dashboardForEdit(db, ctx, input.id)"]]) {
       const at = ops.indexOf(`delete(${table})`);
       expect(at, table).toBeGreaterThan(-1);
       const stmt = ops.slice(at, at + 260);
       expect(stmt, table).toMatch(new RegExp(`${table}\\.workspaceId`));
       // …and the ownership check must still come FIRST, not just exist.
-      const check = ops.lastIndexOf(`select({ id: ${parent}.id })`, at);
+      const check = ops.lastIndexOf(ownership, at);
       expect(check, `${table}: ownership check must precede the delete`).toBeGreaterThan(-1);
       expect(at).toBeGreaterThan(check);
     }

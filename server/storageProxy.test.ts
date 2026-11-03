@@ -94,17 +94,18 @@ describe("the proxy requires a session", () => {
 
 describe("a ws-scoped key may only be read by a member of that workspace", () => {
   it("parses the workspace out of the key and checks membership", () => {
+    // 2026-11-03: the lookup moved to workspaceDoorRefusal, one rule for every
+    // door (audit G30). securityGroup.test.ts runs this handler against a real
+    // member table, and observes the refusal rather than locating it.
     expect(src).toContain("WORKSPACE_KEY");
-    expect(src).toContain("workspaceMembers");
-    expect(src).toMatch(/eq\(\s*workspaceMembers\.userId\s*,\s*userId\s*\)/);
-    expect(src).toMatch(/eq\(\s*workspaceMembers\.workspaceId\s*,\s*workspaceId\s*\)/);
+    expect(src).toContain("workspaceDoorRefusal");
     expect(src).toMatch(/res\.status\(403\)/);
   });
 
-  it("the value it gates on comes FROM that query", () => {
+  it("the value it gates on comes FROM that check", () => {
     // Presence and ordering are not enough — the webhook sweep had a mutation
     // pass by leaving the query in place and binding the result to a literal.
-    expect(src).toMatch(/const \[member\] = await [\s\S]{0,240}?from\(workspaceMembers\)/);
+    expect(src).toContain("const refused = await workspaceDoorRefusal(db, user, workspaceId);");
   });
 
   it("the refusal is CONDITIONED on the lookup result", () => {
@@ -119,7 +120,7 @@ describe("a ws-scoped key may only be read by a member of that workspace", () =>
       src,
       "\n\nThe 403 must be guarded by the membership RESULT — a branch that is\n" +
         "present and unreachable protects nothing.\n",
-    ).toContain("if (!member)");
+    ).toContain("if (refused)");
   });
 
   it("refuses before reaching the storage backend", () => {

@@ -51,6 +51,7 @@ function fakeDb(rows: unknown[]) {
   const chain: any = {
     select: () => chain,
     from: () => chain,
+    innerJoin: () => chain,
     where: (cond: unknown) => {
       (function walk(n: any, d = 0) {
         if (!n || d > 10 || typeof n !== "object") return;
@@ -152,7 +153,10 @@ describe("resolveStreamAuth", () => {
    */
   it("returns the resolved auth for a real member", async () => {
     authenticateRequest.mockResolvedValue({ id: 42 });
-    h.db = fakeDb([{ workspaceId: 7 }]);
+    // 2026-11-03: the lookup moved to workspaceDoorRefusal, one rule for every
+    // door (audit G30), and it reads the workspace too. securityGroup.test.ts
+    // runs the archive, 2FA and pending-invite gates against a real member table.
+    h.db = fakeDb([{ ws: { id: 7, archivedAt: null }, mb: { role: "super_admin" } }]);
     const { resolveStreamAuth } = await import("./_core/streamHelpers");
     const res = fakeRes();
     const auth = await resolveStreamAuth(req({ "x-workspace-id": "7" }), res as never);
@@ -169,7 +173,7 @@ describe("resolveStreamAuth", () => {
    */
   it("returns the REQUESTED workspace, not the row's", async () => {
     authenticateRequest.mockResolvedValue({ id: 42 });
-    h.db = fakeDb([{ workspaceId: 999 }]);
+    h.db = fakeDb([{ ws: { id: 999, archivedAt: null }, mb: { role: "super_admin" } }]);
     const { resolveStreamAuth } = await import("./_core/streamHelpers");
     const res = fakeRes();
     const auth = await resolveStreamAuth(req({ "x-workspace-id": "7" }), res as never);
@@ -186,13 +190,13 @@ describe("resolveStreamAuth", () => {
    */
   it("scopes the membership lookup by user AND workspace AND not-deactivated", async () => {
     authenticateRequest.mockResolvedValue({ id: 42 });
-    const db = fakeDb([{ workspaceId: 7 }]);
+    const db = fakeDb([{ ws: { id: 7, archivedAt: null }, mb: { role: "super_admin" } }]);
     h.db = db;
     const { resolveStreamAuth } = await import("./_core/streamHelpers");
     await resolveStreamAuth(req({ "x-workspace-id": "7" }), fakeRes() as never);
 
     expect(db.filteredOn.length, "the where clause was never inspected").toBeGreaterThan(0);
-    for (const col of ["userId", "workspaceId", "deactivatedAt"]) {
+    for (const col of ["userId", "workspaceId", "deactivatedAt", "inviteToken"]) {
       expect(
         db.filteredOn,
         `\n\nThe membership lookup no longer filters on ${col}.\n` +

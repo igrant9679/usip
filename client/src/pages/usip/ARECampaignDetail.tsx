@@ -76,6 +76,8 @@ import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { isHtmlBody } from "@shared/emailBody";
 import { CampaignSourcesCard } from "@/components/usip/are/CampaignSourcesCard";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { rankOf } from "@shared/roleRank";
 import { dayOffsetForPosition, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenceSteps";
 import {
@@ -1634,6 +1636,7 @@ function LogsTab({ campaignId }: { campaignId: number }) {
     });
   const { data: discoveryLogsForCampaign = [], refetch: refetchDiscovery, isLoading: loadingDiscovery } =
     trpc.discovery.getLogsForCampaign.useQuery({ campaignId, limit: 300 });
+  const { current } = useWorkspace();
   const runOnce = trpc.are.engine.runOnce.useMutation();
 
   // Merge the two feeds into one chronological timeline. Source tag is
@@ -1682,21 +1685,24 @@ function LogsTab({ campaignId }: { campaignId: number }) {
           <Button size="sm" variant="outline" onClick={() => { refetchEngine(); refetchDiscovery(); }}>
             <RefreshCw className="size-3 mr-1" /> Refresh
           </Button>
-          <Button
-            size="sm"
-            onClick={async () => {
-              try {
-                await runOnce.mutateAsync();
-                toast.success("Engine tick fired");
-                await refetchEngine();
-              } catch (e: any) {
-                toast.error(e?.message ?? "Failed");
-              }
-            }}
-            disabled={runOnce.isPending}
-          >
-            <Zap className="size-3 mr-1" /> Run engine now
-          </Button>
+          {rankOf(current?.role) >= rankOf("manager") && (
+            <Button
+              size="sm"
+              onClick={async () => {
+                try {
+                  const r = await runOnce.mutateAsync();
+                  if (r.skipped) toast.info("A run is already going. Try again in a minute.");
+                  else toast.success(`Ran ${r.campaignsProcessed} campaign${r.campaignsProcessed === 1 ? "" : "s"} in this workspace`);
+                  await refetchEngine();
+                } catch (e: any) {
+                  toast.error(e?.message ?? "Failed");
+                }
+              }}
+              disabled={runOnce.isPending}
+            >
+              <Zap className="size-3 mr-1" /> Run engine now
+            </Button>
+          )}
         </div>
       </div>
       {unified.length === 0 ? (

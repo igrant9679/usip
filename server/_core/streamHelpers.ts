@@ -18,10 +18,9 @@
  *     through the whole stream (matches existing Stop-doesn't-save semantics)
  */
 import type { Request, Response } from "express";
-import { and, eq, isNull } from "drizzle-orm";
-import { workspaceMembers } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { sdk } from "./sdk";
+import { workspaceDoorRefusal } from "./workspace";
 import { streamLLM } from "./llmStream";
 import type { Message, ProviderName } from "./llm";
 
@@ -93,10 +92,9 @@ export interface StreamAuth {
  */
 export async function resolveStreamAuth(req: Request, res: Response): Promise<StreamAuth | null> {
   // ── Auth ──────────────────────────────────────────────────────────────
-  let userId: number;
+  let user: Awaited<ReturnType<typeof sdk.authenticateRequest>>;
   try {
-    const user = await sdk.authenticateRequest(req);
-    userId = user.id;
+    user = await sdk.authenticateRequest(req);
   } catch {
     res.status(401).json({ error: "Unauthorized" });
     return null;
@@ -117,24 +115,15 @@ export async function resolveStreamAuth(req: Request, res: Response): Promise<St
     return null;
   }
 
-  const [member] = await db
-    .select({ workspaceId: workspaceMembers.workspaceId })
-    .from(workspaceMembers)
-    .where(
-      and(
-        eq(workspaceMembers.userId, userId),
-        eq(workspaceMembers.workspaceId, workspaceId),
-        // Deactivation revokes access — see resolveWorkspace.
-        isNull(workspaceMembers.deactivatedAt),
-      ),
-    )
-    .limit(1);
-  if (!member) {
-    res.status(403).json({ error: "Not a member of that workspace" });
+  // Deactivation, a pending invite, an archived workspace and required 2FA all
+  // stop this door as they stop workspaceProcedure.
+  const refused = await workspaceDoorRefusal(db, user, workspaceId);
+  if (refused) {
+    res.status(403).json({ error: refused });
     return null;
   }
 
-  return { userId, workspaceId, db };
+  return { userId: user.id, workspaceId, db };
 }
 
 /**

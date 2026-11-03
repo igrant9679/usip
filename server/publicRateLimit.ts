@@ -92,6 +92,22 @@ export const publicWriteLimiter = rateLimit({
   skip: () => process.env.NODE_ENV === "test",
 });
 
+/**
+ * The website visitor beacon (`/api/track`). Public by nature, and one page view
+ * is one call, so a whole office behind one address stays well under this.
+ */
+export const trackBeaconLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKey,
+  handler: (_req: Request, res: Response) => {
+    res.status(429).json({ ok: false });
+  },
+  skip: () => process.env.NODE_ENV === "test",
+});
+
 /** True when this tRPC request targets a public procedure that costs model spend. */
 export function isMeteredPublicPath(path: string): boolean {
   return METERED_PUBLIC_PROCEDURES.some((p) => path.includes(p));
@@ -157,6 +173,9 @@ export const voiceWebhookLimiter = rateLimit({
 });
 
 export function registerPublicRateLimits(app: Express): void {
+  app.use("/api/track", (req: Request, res: Response, next: NextFunction) =>
+    trackBeaconLimiter(req, res, next),
+  );
   app.use("/api/scheduled", (req: Request, res: Response, next: NextFunction) =>
     scheduledTaskLimiter(req, res, next),
   );

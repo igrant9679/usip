@@ -109,20 +109,23 @@ async function getAccount(accountId: number, workspaceId: number) {
 }
 
 /**
- * Verify the caller is allowed to write to this mailbox account.
+ * Verify the caller is allowed to use this mailbox account, to read it or to
+ * write to it.
  *
  * For Unipile-bridged personal mailboxes (Microsoft 365 etc.), the
  * account's underlying unipile_accounts.userId is the rep's id. Only
- * that rep — or a manager+ — may send / mark-read / move messages
- * from it. Without this, a rep with a stale accountId from a
+ * that rep — or a manager+ — may read it, or send / mark-read / move
+ * messages from it. Reads used to check nothing, so any member could pass a
+ * teammate's account id and read their mail (audit 2026-10-20, O18). Without this, a rep with a stale accountId from a
  * previous session could send from a teammate's mailbox.
  *
  * Non-Unipile (shared workspace SMTP) accounts skip the check — those
  * are shared outreach infrastructure by design.
  */
-async function assertMailboxWriteOwnership(
+async function assertMailboxOwnership(
   ctx: { user: { id: number }; member: { role: string } },
   account: { id: number; unipileAccountId: string | null },
+  refusal: string,
 ): Promise<void> {
   if (!account.unipileAccountId) return; // shared SMTP — anyone in workspace
   // Managers / admins can act on any rep's mailbox (matches the
@@ -142,12 +145,13 @@ async function assertMailboxWriteOwnership(
     });
   }
   if (row.userId !== ctx.user.id) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "You can only send from your own connected mailbox.",
-    });
+    throw new TRPCError({ code: "FORBIDDEN", message: refusal });
   }
 }
+const assertMailboxWriteOwnership = (ctx: Parameters<typeof assertMailboxOwnership>[0], account: Parameters<typeof assertMailboxOwnership>[1]) =>
+  assertMailboxOwnership(ctx, account, "You can only send from your own connected mailbox.");
+const assertMailboxReadOwnership = (ctx: Parameters<typeof assertMailboxOwnership>[0], account: Parameters<typeof assertMailboxOwnership>[1]) =>
+  assertMailboxOwnership(ctx, account, "You can only read your own connected mailbox.");
 
 export const mailboxRouter = router({
   /**
@@ -236,6 +240,7 @@ export const mailboxRouter = router({
     .query(async ({ ctx, input }) => {
       resolveTargetUser(ctx, input.repUserId);
       const acc = await getAccount(input.accountId, ctx.workspace.id);
+      await assertMailboxReadOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
       return adapter.listFolders();
     }),
@@ -252,6 +257,7 @@ export const mailboxRouter = router({
     .query(async ({ ctx, input }) => {
       resolveTargetUser(ctx, input.repUserId);
       const acc = await getAccount(input.accountId, ctx.workspace.id);
+      await assertMailboxReadOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
       // An adapter failure must NOT render as "This folder is empty" — an
       // empty folder and a broken fetch are different facts, and collapsing
@@ -279,6 +285,7 @@ export const mailboxRouter = router({
     .query(async ({ ctx, input }) => {
       resolveTargetUser(ctx, input.repUserId);
       const acc = await getAccount(input.accountId, ctx.workspace.id);
+      await assertMailboxReadOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
       return adapter.getThread(input.threadId, input.folder);
     }),
@@ -549,6 +556,7 @@ ${HUMAN_COPY_RULES}`,
     }))
     .query(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
+      await assertMailboxReadOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
       return adapter.searchThreads(input.query, input.folder, input.maxResults);
     }),
@@ -562,6 +570,7 @@ ${HUMAN_COPY_RULES}`,
     }))
     .query(async ({ ctx, input }) => {
       const acc = await getAccount(input.accountId, ctx.workspace.id);
+      await assertMailboxReadOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
       const { data, contentType, filename } = await adapter.getAttachment(input.messageId, input.attachmentId);
       // Return as base64 so it can be decoded in the browser
