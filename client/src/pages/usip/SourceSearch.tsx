@@ -67,9 +67,10 @@ export function SourceSearchPanel() {
   const [target, setTarget] = useState("25");
   const [runId, setRunId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  // Per-run source picker (owner ask 2026-09-22). null = every usable source,
-  // which is what the page ran before it had a picker. A source that is not
-  // usable (no key, disabled, circuit open, invalid key) cannot be chosen.
+  // Per-run source picker (owner ask 2026-09-22). null = every usable source
+  // whose preview is free, which is what the page ran before it had a picker. A
+  // source that bills its previews starts unticked, and one that is not usable
+  // (no key, disabled, circuit open, invalid key) cannot be chosen.
   const [chosen, setChosen] = useState<Set<ProspectSourceSlug> | null>(null);
 
   const describe = trpc.prospectSources.describe.useQuery({ criteria }, { placeholderData: (prev) => prev });
@@ -81,10 +82,15 @@ export function SourceSearchPanel() {
     () => sources.filter((s) => s.implemented && s.credential.configured && s.enabled && !s.circuit.open && s.credential.status !== "invalid").map((s) => s.slug),
     [sources],
   );
-  const chosenSet = useMemo(() => chosen ?? new Set<ProspectSourceSlug>(usableSlugs), [chosen, usableSlugs]);
+  const freeSlugs = useMemo(
+    () => usableSlugs.filter((slug) => sources.find((s) => s.slug === slug)?.capabilities.supportsFreePreview),
+    [usableSlugs, sources],
+  );
+  const chosenSet = useMemo(() => chosen ?? new Set<ProspectSourceSlug>(freeSlugs), [chosen, freeSlugs]);
   const runSources = usableSlugs.filter((slug) => chosenSet.has(slug));
+  const billedPreviews = runSources.filter((slug) => !freeSlugs.includes(slug));
   const toggleSource = (slug: ProspectSourceSlug) => setChosen((prev) => {
-    const next = new Set<ProspectSourceSlug>(prev ?? usableSlugs);
+    const next = new Set<ProspectSourceSlug>(prev ?? freeSlugs);
     if (next.has(slug)) next.delete(slug); else next.add(slug);
     return next;
   });
@@ -99,6 +105,9 @@ export function SourceSearchPanel() {
     onSuccess: (r) => { setRunId(r.runId); setSelected(new Set()); toast.success(`Search #${r.runId} started`); },
     onError: (e: any) => toast.error(e?.message ?? "Could not start the search"),
   });
+  // A staged search outlives this page. Rows from a billed preview will not come
+  // back in a later search, so an earlier run has to stay reachable to promote from.
+  const earlierRuns = trpc.prospectSources.listRuns.useQuery({ limit: 15 });
   const run = trpc.prospectSources.getRun.useQuery({ runId: runId ?? 0 }, {
     enabled: runId != null,
     refetchInterval: (q) => { const st = (q.state.data as any)?.run?.status; return st === "queued" || st === "running" ? 1500 : false; },
@@ -128,7 +137,7 @@ export function SourceSearchPanel() {
       <div className="rounded-xl border border-dashed border-border p-8 text-center space-y-3">
         <ShieldCheck className="size-6 mx-auto text-muted-foreground" />
         <div className="text-[14px] font-medium">No prospect-data vendor connected yet</div>
-        <p className="text-[12.5px] text-muted-foreground max-w-md mx-auto">Source search runs down your connected vendors in order and stops at your batch target. Add a WarmySender, QuickEnrich or Apollo key and this page fills in — it gets better with every key you add.</p>
+        <p className="text-[12.5px] text-muted-foreground max-w-md mx-auto">Source search runs down your connected vendors in order and stops at your batch target. Add a WarmySender, QuickEnrich, Apollo or LeadOcean key and this page fills in — it gets better with every key you add.</p>
         <Button asChild size="sm"><Link href="/v2/settings/data-sources">Open Settings → Data sources</Link></Button>
       </div>
     );
@@ -137,6 +146,9 @@ export function SourceSearchPanel() {
   const set = (key: keyof SearchCriteria, v: string[]) => setCriteria((c) => ({ ...c, [key]: v }));
   const netNewCount = results.filter((r) => r.isNetNew).length;
   const toAcquire = estimate.data?.units ?? 0;
+  /** Looked up and billed already, with nothing to take: selecting it again would buy nothing new. */
+  const lookedUpEmpty = (r: { normalized: unknown }) => (r.normalized as any)?.rawSourcePayload?.noAddressFound === true;
+  const selectableRows = results.filter((r) => r.isNetNew && !r.promotedProspectId && !lookedUpEmpty(r));
 
   return (
     <div className="space-y-5">
@@ -212,10 +224,21 @@ export function SourceSearchPanel() {
         </div>
         <Button size="sm" className="gap-1.5" disabled={start.isPending || active.length === 0 || runSources.length === 0 || status === "running" || status === "queued"}
           onClick={() => start.mutate({ criteria, batchTarget: targetNum, sources: runSources })}>
-          {start.isPending || status === "running" || status === "queued" ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} Run search (free preview)
+          {start.isPending || status === "running" || status === "queued" ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} {billedPreviews.length > 0 ? "Run search (billed preview)" : "Run search (free preview)"}
         </Button>
         {active.length === 0 && <span className="text-[11.5px] text-muted-foreground pb-2">Set at least one filter.</span>}
         {active.length > 0 && runSources.length === 0 && <span className="text-[11.5px] text-muted-foreground pb-2">Pick at least one source.</span>}
+        {billedPreviews.length > 0 && <span className="text-[11.5px] text-amber-700 dark:text-amber-400 pb-2">LeadOcean counts one record per preview row, up to {Math.min(targetNum, 100)} this run, if the sources before it leave slots open.</span>}
+        {(earlierRuns.data ?? []).length > 0 && (
+          <div className="ml-auto space-y-1">
+            <Label className="text-[11.5px]">Earlier searches</Label>
+            <select aria-label="Open an earlier search" className="h-8 rounded-md border border-input bg-background px-2 text-[12.5px]" value={runId ?? ""}
+              onChange={(e) => setRunId(e.target.value ? Number(e.target.value) : null)}>
+              <option value="">Choose a search</option>
+              {(earlierRuns.data ?? []).map((r) => <option key={r.id} value={r.id}>#{r.id} · {new Date(r.createdAt).toLocaleString()} · {r.recordsReturned} previewed</option>)}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* 4. Results */}
@@ -229,7 +252,7 @@ export function SourceSearchPanel() {
             {!!run.data?.run.perSource && (
               <span className="text-muted-foreground">
                 {Object.entries(run.data.run.perSource as Record<string, any>).map(([slug, p]) => (
-                  <span key={slug} className="mr-2">{slug}: {p.skipped ? `skipped (${p.detail ?? p.skipped})` : p.error ? `error — ${p.error}` : `${p.netNew} net-new / ${p.searched}`}</span>
+                  <span key={slug} className="mr-2">{slug}: {p.skipped ? `skipped (${p.detail ?? p.skipped})` : p.error ? `error — ${p.error}` : `${p.netNew} net-new / ${p.searched}${p.note ? ` — ${p.note}` : ""}`}</span>
                 ))}
               </span>
             )}
@@ -252,14 +275,14 @@ export function SourceSearchPanel() {
               </Button>
             </div>
           </div>
-          {(status === "queued" || status === "running") && <div className="px-4 py-6 text-[12.5px] text-muted-foreground flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> Walking your sources in order — free previews only, nothing is spent yet.</div>}
+          {(status === "queued" || status === "running") && <div className="px-4 py-6 text-[12.5px] text-muted-foreground flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> {billedPreviews.length > 0 ? "Walking your sources in order. No address is bought until you promote." : "Walking your sources in order — free previews only, nothing is spent yet."}</div>}
           {status === "complete" && results.length === 0 && <div className="px-4 py-6 text-[12.5px] text-muted-foreground">No results. Check the source strip above — a source that "cannot honour" a filter never runs; try removing the narrowest filter.</div>}
           {results.length > 0 && (
             <div className="overflow-x-auto">
               <table className="w-full text-[12px]">
                 <thead className="text-[10.5px] uppercase tracking-wide text-muted-foreground">
                   <tr className="text-left">
-                    <th className="px-3 py-2 w-8"><Checkbox aria-label="Select all" checked={selIds.length > 0 && selIds.length === results.filter((r) => r.isNetNew && !r.promotedProspectId).length} onCheckedChange={(v) => setSelected(v ? new Set(results.filter((r) => r.isNetNew && !r.promotedProspectId).map((r) => r.id)) : new Set())} /></th>
+                    <th className="px-3 py-2 w-8"><Checkbox aria-label="Select all" checked={selIds.length > 0 && selIds.length === selectableRows.length} onCheckedChange={(v) => setSelected(v ? new Set(selectableRows.map((r) => r.id)) : new Set())} /></th>
                     <th className="px-3 py-2 font-medium">Person</th>
                     <th className="px-3 py-2 font-medium">Company</th>
                     <th className="px-3 py-2 font-medium">Email</th>
@@ -271,15 +294,15 @@ export function SourceSearchPanel() {
                   {results.map((r) => {
                     const n = r.normalized as any;
                     const checked = selected.has(r.id);
-                    const selectable = r.isNetNew && !r.promotedProspectId;
+                    const selectable = r.isNetNew && !r.promotedProspectId && !lookedUpEmpty(r);
                     return (
                       <tr key={r.id} className={cn("border-t border-border/50", !r.isNetNew && "opacity-60")}>
                         <td className="px-3 py-1.5"><Checkbox aria-label="Select result" disabled={!selectable} checked={checked} onCheckedChange={(v) => setSelected((s) => { const n2 = new Set(s); if (v) n2.add(r.id); else n2.delete(r.id); return n2; })} /></td>
-                        <td className="px-3 py-1.5"><div className="font-medium">{n?.firstName} {n?.lastName}</div><div className="text-[10.5px] text-muted-foreground">{n?.jobTitle ?? "—"}</div></td>
-                        <td className="px-3 py-1.5"><div>{n?.companyName ?? "—"}</div><div className="text-[10.5px] text-muted-foreground">{n?.companyDomain ?? [n?.city, n?.stateProvince].filter(Boolean).join(", ")}</div></td>
+                        <td className="px-3 py-1.5"><div className="font-medium">{[n?.firstName, n?.lastName].filter(Boolean).join(" ") || "Name comes with the lookup"}</div><div className="text-[10.5px] text-muted-foreground">{n?.jobTitle ?? "—"}</div></td>
+                        <td className="px-3 py-1.5"><div>{n?.companyName ?? "—"}</div><div className="text-[10.5px] text-muted-foreground">{n?.companyDomain ?? [n?.city, n?.stateProvince].filter(Boolean).join(", ")}</div>{n?.rawSourcePayload?.placeCheck === "outside" && <div className="text-[10.5px] text-amber-700 dark:text-amber-400">Outside the states searched: {[n?.city, n?.stateProvince].filter(Boolean).join(", ")}</div>}</td>
                         <td className="px-3 py-1.5">{r.emailIsMasked ? <span className="inline-flex items-center gap-1 text-muted-foreground"><EyeOff className="size-3" /> masked until acquired</span> : n?.email ? <span>{n.email}</span> : <span className="text-muted-foreground">— (found in enrichment)</span>}</td>
                         <td className="px-3 py-1.5"><Badge variant="outline" className="text-[10px]">{r.sourceSlug}</Badge></td>
-                        <td className="px-3 py-1.5 text-[11px]">{r.promotedProspectId ? <span className="text-emerald-700 dark:text-emerald-400">promoted</span> : r.isNetNew ? <span className="text-emerald-700 dark:text-emerald-400">net-new</span> : <span className="text-muted-foreground" title={r.dedupeKey ?? ""}>already in People / a campaign</span>}{r.wasCharged ? <span className="text-muted-foreground"> · charged</span> : null}</td>
+                        <td className="px-3 py-1.5 text-[11px]">{r.promotedProspectId ? <span className="text-emerald-700 dark:text-emerald-400">promoted</span> : lookedUpEmpty(r) ? <span className="text-muted-foreground">looked up: no address you accept</span> : r.isNetNew ? <span className="text-emerald-700 dark:text-emerald-400">net-new</span> : <span className="text-muted-foreground" title={r.dedupeKey ?? ""}>already in People / a campaign</span>}{r.wasCharged ? <span className="text-muted-foreground"> · charged</span> : null}</td>
                       </tr>
                     );
                   })}

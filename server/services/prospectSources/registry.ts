@@ -33,12 +33,14 @@ import { remainingUnits } from "./ledger";
 import { createWarmySenderSource } from "./adapters/warmysender";
 import { createQuickEnrichSource } from "./adapters/quickenrich";
 import { createApolloSource } from "./adapters/apollo";
+import { createLeadOceanSource } from "./adapters/leadocean";
 import { createHunterSource, createLemlistSource } from "./adapters/stubs";
 
 const SOURCE_FACTORIES: Record<ProspectSourceSlug, () => ProspectSource> = {
   warmysender: createWarmySenderSource,
   quickenrich: createQuickEnrichSource,
   apollo: createApolloSource,
+  leadocean: createLeadOceanSource,
   hunter: createHunterSource,
   lemlist: createLemlistSource,
 };
@@ -207,6 +209,9 @@ export async function eligibleFor(
     const s = sources[i];
     if (!isImplemented(s)) { skipped.push({ slug: s.slug, reason: "not_implemented", detail: "registered, not implemented" }); continue; }
     if (only && !only.has(s.slug)) { skipped.push({ slug: s.slug, reason: "not_selected", detail: "not selected for this run" }); continue; }
+    // "Every eligible source" must not spend money nobody chose to spend: a
+    // source that bills its previews runs only when a person named it.
+    if (!only && !s.capabilities().supportsFreePreview) { skipped.push({ slug: s.slug, reason: "not_selected", detail: "bills its previews, so it runs only when chosen" }); continue; }
     if (mask[s.slug] === false) { skipped.push({ slug: s.slug, reason: "disabled", detail: "disabled in workspace Settings" }); continue; }
     const creds = await loadCredentials(workspaceId, s);
     if (!creds) { skipped.push({ slug: s.slug, reason: "no_credentials", detail: "no API key for this workspace" }); continue; }

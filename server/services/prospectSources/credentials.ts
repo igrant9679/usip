@@ -108,7 +108,7 @@ export async function credentialView(workspaceId: number, source: ProspectSource
   return {
     ...base,
     configured: !!secrets.apiKey,
-    masked: maskSecret(secrets.apiKey ?? ""),
+    masked: source.writeOnlyKey ? "" : maskSecret(secrets.apiKey ?? ""),
     status: row.status,
     lastValidatedAt: row.lastValidatedAt ?? null,
     validationError: row.validationError ?? null,
@@ -163,6 +163,8 @@ export async function recordValidation(
   slug: ProspectSourceSlug,
   result: CredentialValidationResult,
 ): Promise<void> {
+  // The vendor could not be asked: that is not a verdict on the key.
+  if (result.transient) return;
   const db = await getDb();
   if (!db) return;
   const [existing] = await db

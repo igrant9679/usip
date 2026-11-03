@@ -39,6 +39,9 @@ export interface CredentialValidationResult {
   discovered?: Record<string, unknown>;
   /** insufficient_scope / unauthorized are terminal: the key must be reissued. */
   terminal?: boolean;
+  /** The vendor could not be asked (5xx, network, rate limit). Says nothing about
+   *  the key, so its stored status stays as it was. */
+  transient?: boolean;
 }
 
 /**
@@ -77,8 +80,9 @@ export interface SearchResultPage {
   nextCursor: string | null;
   /** Total the vendor claims, when it says. */
   totalAvailable: number | null;
-  /** True when the vendor billed for this page already (no free preview);
-   *  the executor then skips acquire() for this source. */
+  /** True when this page IS the paid deliverable: the executor then skips
+   *  acquire() for this source. A vendor that bills its previews and still has
+   *  an address to sell (LeadOcean) is false here, with the bill in unitsSpent. */
   alreadyCharged: boolean;
   /** Units the search itself consumed (0 for free previews). */
   unitsSpent: number;
@@ -93,6 +97,12 @@ export interface AcquisitionResult {
   unitsSpent: number;
   /** Ids the vendor refused or could not find. */
   failedExternalIds: string[];
+  /** Why the batch stopped short, for the logs. */
+  note?: string;
+  /** Looked up and billed, with no address to take. Asking again would bill again. */
+  paidMissExternalIds?: string[];
+  /** The vendor asked us to wait partway through. What came back still counts. */
+  hold?: { message: string; retryAfterSeconds?: number };
 }
 
 export interface BudgetSnapshot {
@@ -147,6 +157,11 @@ export interface VendorFailure {
   message: string;
   retryAfterSeconds?: number;
   status?: number;
+  /** The vendor asked us to wait (a pace, a key's own quota). Nothing is broken,
+   *  so the circuit breaker is not told, and it is not an empty result. */
+  held?: boolean;
+  /** What had already been billed when it failed. */
+  unitsSpent?: number;
 }
 
 export type VendorResult<T> = ({ ok: true } & T) | VendorFailure;
@@ -195,4 +210,8 @@ export interface ProspectSource {
   /** Legacy sources meter pulls through are_scrape_jobs; the executor calls
    *  this after a search so every surface writes the ledger the caps read. */
   recordUsage?(workspaceId: number, records: number, query: string): Promise<void>;
+  /** Status reads report only that a key exists, never any part of it. */
+  readonly writeOnlyKey?: boolean;
+  /** Units acquiring this one record will spend, when it is not simply 1. */
+  estimateAcquireUnits?(externalId: string, c: SourceCredentials): number;
 }

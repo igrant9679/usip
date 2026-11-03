@@ -415,9 +415,9 @@ describe("an uninstrumented source is unknown, not ready (2026-10-31)", () => {
     const registered = new Set<string>(PROSPECT_SOURCE_SLUGS as readonly string[]);
     const uninstrumented = (ARE_SOURCE_IDS as readonly string[]).filter((id) => !registered.has(id));
     expect(uninstrumented).toEqual(["internal", "google_business", "linkedin", "news"]);
-    // And the other three are instrumented, so the split is real rather than
-    // an empty assertion about an empty set.
+    // And the others are instrumented, so the split is real rather than an
+    // empty assertion about an empty set. (LeadOcean joined them 2026-11-02.)
     const instrumented = (ARE_SOURCE_IDS as readonly string[]).filter((id) => registered.has(id));
-    expect(instrumented).toEqual(["apollo", "quickenrich", "warmysender"]);
+    expect(instrumented).toEqual(["apollo", "quickenrich", "warmysender", "leadocean"]);
   });
 });

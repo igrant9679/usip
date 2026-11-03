@@ -61,6 +61,7 @@ export const PROSPECT_SOURCE_SLUGS = [
   "warmysender",
   "quickenrich",
   "apollo",
+  "leadocean",
   "hunter",
   "lemlist",
 ] as const;
@@ -84,6 +85,75 @@ export interface SourceCapabilities {
   supportsVerification: boolean;
   maxBatchSize: number;
   geographicCoverage: string[];
+}
+
+/**
+ * LeadOcean's manifest (read from https://api.leadocean.io/openapi.json,
+ * 2026-11-02). Its preview is NOT free: every search row counts one record, so
+ * a person costs two, the row and the lookup that finds their address. That is
+ * why it never starts ticked anywhere (ARE_OPT_IN_SOURCES, eligibleFor).
+ *
+ * Three filters are declared approximated, each for a real reason:
+ *   stateProvince — there is no person-level state filter. `hqState` filters the
+ *                   EMPLOYER's headquarters; the adapter checks the person's own
+ *                   address afterwards.
+ *   department    — mapped onto LeadOcean's closed list of job functions.
+ *   industry      — free text goes to `companyKeywords` unless every value is an
+ *                   exact label in its industry list.
+ */
+export const LEADOCEAN_CAPABILITIES: SourceCapabilities = {
+  supportedFilters: ["jobTitle", "seniority", "country", "city", "companyName", "companyDomain", "headcountRange", "keyword", "hasEmail", "hasPhone", "technology"],
+  approximatedFilters: ["stateProvince", "department", "industry"],
+  supportsFreePreview: false,
+  returnsMaskedPreview: true,
+  supportsMobilePhone: true,
+  supportsVerification: false,
+  maxBatchSize: 100,
+  geographicCoverage: [],
+};
+
+/** The email statuses a workspace may accept from LeadOcean, safest first. */
+export const LEADOCEAN_EMAIL_STATUSES = ["verified", "catch_all_valid", "catch_all", "untested", "role", "risky", "derived", "unknown"] as const;
+export type LeadoceanEmailStatus = (typeof LEADOCEAN_EMAIL_STATUSES)[number];
+
+/** LeadOcean's own words for each (x-enum-labels in its spec). */
+export const LEADOCEAN_EMAIL_STATUS_LABELS: Record<LeadoceanEmailStatus, string> = {
+  verified: "Deliverable",
+  catch_all_valid: "Catch-all, mailbox confirmed",
+  catch_all: "Catch-all domain",
+  untested: "Not yet checked",
+  role: "Role address",
+  risky: "Risky",
+  derived: "Derived, not verified",
+  unknown: "Unknown",
+};
+
+export const LEADOCEAN_DEFAULT_EMAIL_STATUSES: LeadoceanEmailStatus[] = ["verified"];
+
+/** Never accepted, whatever a workspace's settings say. */
+export const LEADOCEAN_NEVER_ACCEPT = ["invalid", "disposable", "spam_trap", "abuse"] as const;
+
+/** All the work-email door ever answers with; anything looser needs the full lookup. */
+export const LEADOCEAN_WORK_EMAIL_STATUSES: readonly string[] = ["verified", "catch_all_valid", "catch_all"];
+
+/**
+ * What a stored setting means: known statuses only, none of the never-accepted
+ * ones, and `verified` when nothing usable is left. `catch_all` brings
+ * `catch_all_valid` with it, because a mailbox confirmed on a catch-all domain
+ * is strictly better, and LeadOcean's own filter treats them the same way.
+ */
+export function leadoceanAcceptedStatuses(raw: unknown): LeadoceanEmailStatus[] {
+  const known = new Set<string>(LEADOCEAN_EMAIL_STATUSES);
+  const picked = Array.isArray(raw) ? raw.filter((s): s is LeadoceanEmailStatus => typeof s === "string" && known.has(s)) : [];
+  if (picked.length === 0) return [...LEADOCEAN_DEFAULT_EMAIL_STATUSES];
+  const out = Array.from(new Set<LeadoceanEmailStatus>(picked));
+  if (out.indexOf("catch_all") !== -1 && out.indexOf("catch_all_valid") === -1) out.push("catch_all_valid");
+  return out;
+}
+
+/** Phones, or a status the work-email door never returns, need the full lookup. */
+export function leadoceanUsesFullLookup(accepted: readonly string[], fetchPhones: boolean): boolean {
+  return fetchPhones || accepted.some((s) => LEADOCEAN_WORK_EMAIL_STATUSES.indexOf(s) === -1);
 }
 
 /** The normalized search every adapter receives. Empty arrays mean "not set". */

@@ -4093,6 +4093,7 @@ export const prospectQueue = mysqlTable(
       "apollo", "zoominfo", "clay", "ai_research",
       "quickenrich", // migration 0148
       "warmysender", // migration 0179
+      "leadocean", // migration 0219
     ]).notNull(),
     sourceId: varchar("sourceId", { length: 256 }), // external ID from data provider
     sourceUrl: text("sourceUrl"),                    // original URL scraped
@@ -4464,6 +4465,7 @@ export const areScrapeJobs = mysqlTable(
       "apollo", "internal", // migration 0124
       "quickenrich", // migration 0148
       "warmysender", // migration 0179
+      "leadocean", // migration 0219
     ]).notNull(),
     query: text("query").notNull(),          // search query or URL
     status: mysqlEnum("status", ["pending", "running", "complete", "failed"]).default("pending").notNull(),

@@ -153,12 +153,12 @@ export async function estimatePromotion(workspaceId: number, runId: number, resu
   if (!db || resultIds.length === 0) return { units: 0, perSource: [] as Array<{ slug: string; toAcquire: number; free: number; remaining: number | null }> };
   const rows = await db.select().from(prospectSearchResults)
     .where(and(eq(prospectSearchResults.workspaceId, workspaceId), eq(prospectSearchResults.runId, runId), inArray(prospectSearchResults.id, resultIds)));
-  const per = new Map<string, { toAcquire: number; free: number }>();
+  const per = new Map<string, { toAcquire: number; free: number; ids: string[] }>();
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     const s = getSource(r.sourceSlug as ProspectSourceSlug);
-    const e = per.get(r.sourceSlug) ?? { toAcquire: 0, free: 0 };
-    if (s.acquisition === "on_demand" && !r.wasCharged && !r.promotedProspectId) e.toAcquire += 1; else e.free += 1;
+    const e = per.get(r.sourceSlug) ?? { toAcquire: 0, free: 0, ids: [] };
+    if (s.acquisition === "on_demand" && !r.wasCharged && !r.promotedProspectId) { e.toAcquire += 1; e.ids.push(r.externalId); } else e.free += 1;
     per.set(r.sourceSlug, e);
   }
   const perSource: Array<{ slug: string; toAcquire: number; free: number; remaining: number | null }> = [];
@@ -168,12 +168,14 @@ export async function estimatePromotion(workspaceId: number, runId: number, resu
     const [slug, e] = entries[i];
     const s = getSource(slug as ProspectSourceSlug);
     let remaining: number | null = null;
+    let cost = e.toAcquire;
     const creds = await loadCredentials(workspaceId, s);
     if (creds) {
       const periods = s.budgetPeriods({ now: new Date(), credentials: creds });
       if (periods.length > 0) remaining = (await remainingUnits(workspaceId, s.slug, "leads", periods)).total;
+      if (s.estimateAcquireUnits) cost = e.ids.reduce((n, id) => n + s.estimateAcquireUnits!(id, creds), 0);
     }
-    units += e.toAcquire;
+    units += cost;
     perSource.push({ slug, toAcquire: e.toAcquire, free: e.free, remaining });
   }
   return { units, perSource };
@@ -188,7 +190,8 @@ export async function promoteResults(workspaceId: number, userId: number | null,
   if (!db) throw new Error("DB unavailable");
   const rows = await db.select().from(prospectSearchResults)
     .where(and(eq(prospectSearchResults.workspaceId, workspaceId), eq(prospectSearchResults.runId, runId), inArray(prospectSearchResults.id, resultIds.length ? resultIds : [-1])));
-  const todo = rows.filter((r) => !r.promotedProspectId);
+  // A row already looked up and billed with nothing to take is not bought twice.
+  const todo = rows.filter((r) => !r.promotedProspectId && !(r.normalized as ProspectRecord | null)?.rawSourcePayload?.noAddressFound);
   if (todo.length === 0) return { promoted: 0, acquired: 0, unitsSpent: 0, failed: 0, discoveryRunId: null as number | null, errors: [] as string[] };
 
   const errors: string[] = [];
@@ -220,12 +223,23 @@ export async function promoteResults(workspaceId: number, userId: number | null,
     }
     if (hold) await commit(workspaceId, hold, acq.unitsSpent);
     unitsSpent += acq.unitsSpent;
+    if (acq.note) errors.push(`${s.displayName}: ${acq.note}`);
+    const paidMisses = new Set(acq.paidMissExternalIds ?? []);
     const byId = new Map<string, ProspectRecord>();
     for (let i = 0; i < acq.records.length; i++) byId.set(acq.records[i].externalId.replace(/#\d+$/, ""), acq.records[i]);
     const { mergeAcquired } = await import("./executor");
     for (let i = 0; i < needs.length; i++) {
       const full = byId.get(needs[i].externalId.replace(/#\d+$/, ""));
-      if (!full) { failed += 1; finalRecords.delete(needs[i].id); continue; }
+      if (!full) {
+        failed += 1;
+        finalRecords.delete(needs[i].id);
+        if (paidMisses.has(needs[i].externalId)) {
+          const held = needs[i].normalized as ProspectRecord;
+          await db.update(prospectSearchResults).set({ wasCharged: true, normalized: { ...held, rawSourcePayload: { ...held.rawSourcePayload, noAddressFound: true } } as never } as never)
+            .where(and(eq(prospectSearchResults.id, needs[i].id), eq(prospectSearchResults.workspaceId, workspaceId)));
+        }
+        continue;
+      }
       const merged = mergeAcquired(needs[i].normalized as ProspectRecord, full);
       finalRecords.set(needs[i].id, merged);
       acquired += 1;

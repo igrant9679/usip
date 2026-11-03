@@ -1325,7 +1325,7 @@ export const campaignsRouter = router({
       const mask = (wsRow?.mask && typeof wsRow.mask === "object" ? wsRow.mask : {}) as Record<string, unknown>;
 
       const state = (campaign.discoveryQueryState ?? {}) as {
-        src?: Record<string, { empty: number; nextAt: number | null }>;
+        src?: Record<string, { empty: number; nextAt: number | null; held?: boolean }>;
         lastRunAt?: number;
         lastRunNew?: number;
       };
@@ -1429,6 +1429,8 @@ export const campaignsRouter = router({
           rest: rest && rest.nextAt
             ? { emptyRuns: rest.empty, until: new Date(rest.nextAt).toISOString() }
             : null,
+          /** That rest is the vendor's own wait, not a run of empty results. */
+          heldByVendor: !!rest?.held,
           lastAttempt: attempt
             ? { raw: attempt.raw, kept: attempt.new, error: attempt.error ?? null, skipped: attempt.skipped ?? null }
             : null,

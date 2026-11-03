@@ -42,6 +42,9 @@ export interface SourceOutcome {
   fundedBy: "plan" | "credits" | "uncapped" | null;
   error?: string;
   errorReason?: VendorFailure["reason"];
+  /** The vendor asked us to wait: the search was refused, not empty (VendorFailure.held). */
+  held?: boolean;
+  retryAfterSeconds?: number;
   nextCursor?: string | null;
   /** The source's own note on the search (SearchResultPage.note). */
   note?: string;
@@ -91,7 +94,6 @@ export interface WaterfallOptions {
 }
 
 export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallResult> {
-  const overfetch = opts.overfetch ?? DEFAULT_OVERFETCH;
   const collected: CollectedRecord[] = [];
   const duplicates: CollectedRecord[] = [];
   const perSource: SourceOutcome[] = [];
@@ -109,6 +111,9 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
     perSource.push(outcome);
 
     const caps = e.capabilities;
+    // Overfetching costs nothing on a free preview. Where each row is billed it
+    // buys people this run cannot take, so ask for exactly the slots left.
+    const overfetch = caps.supportsFreePreview === false ? 1 : (opts.overfetch ?? DEFAULT_OVERFETCH);
     let ask = Math.min(caps.maxBatchSize, Math.max(1, Math.ceil(remaining * overfetch)));
     if (e.leadsRemaining != null) ask = Math.min(ask, e.leadsRemaining);
     if (ask <= 0) { outcome.error = "no budget headroom"; outcome.errorReason = "budget_exhausted"; continue; }
@@ -125,7 +130,7 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
       if (smaller > 0) hold = await reserve(opts.workspaceId, s.slug, "leads", smaller, periods);
       if (!hold) { outcome.error = "allowance exhausted for this period"; outcome.errorReason = "budget_exhausted"; continue; }
     }
-    outcome.fundedBy = hold ? hold.fundedBy : (periods.length === 0 ? "uncapped" : null);
+    outcome.fundedBy = hold ? hold.fundedBy : (periods.length === 0 && e.leadsRemaining == null ? "uncapped" : null);
 
     const ctx: SearchContext = { ...(opts.ctx ?? {}), cursor: opts.cursors?.[s.slug] ?? null };
     let page;
@@ -136,6 +141,9 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
     }
     if (!page.ok) {
       outcome.error = page.message; outcome.errorReason = page.reason;
+      if (page.held) outcome.held = true;
+      if (page.retryAfterSeconds != null) outcome.retryAfterSeconds = page.retryAfterSeconds;
+      if (page.unitsSpent) outcome.unitsSpent = page.unitsSpent;
       if (hold) await release(opts.workspaceId, hold);
       await noteFailure(opts.workspaceId, s, page);
       if (page.reason === "budget_exhausted" && periods.length > 0) await markExhausted(opts.workspaceId, s.slug, "leads", periods);
@@ -145,6 +153,9 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
     outcome.searched = page.records.length;
     outcome.nextCursor = page.nextCursor;
     if (page.note) outcome.note = page.note;
+    // What the search itself billed. It stands whatever happens next: a failed
+    // acquisition does not un-spend the rows the vendor already delivered.
+    if (page.unitsSpent) outcome.unitsSpent = page.unitsSpent;
     // The legacy pull ledger feeds the Apollo/QuickEnrich DAILY CAPS that
     // campaigns run on. A preview is free and fills no queue, so it must not
     // spend them (audit P69): only an acquiring run records its pulls.
@@ -180,6 +191,9 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
       }
       if (!acq.ok) {
         outcome.error = `acquire: ${acq.message}`; outcome.errorReason = acq.reason;
+        if (acq.held) outcome.held = true;
+        if (acq.retryAfterSeconds != null) outcome.retryAfterSeconds = acq.retryAfterSeconds;
+        if (acq.unitsSpent) outcome.unitsSpent += acq.unitsSpent;
         if (hold) await release(opts.workspaceId, hold);
         await noteFailure(opts.workspaceId, s, acq);
         if (acq.reason === "budget_exhausted" && periods.length > 0) await markExhausted(opts.workspaceId, s.slug, "leads", periods);
@@ -198,7 +212,12 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
       }
       toTake = merged;
       outcome.acquired = merged.length;
-      outcome.unitsSpent = acq.unitsSpent;
+      outcome.unitsSpent += acq.unitsSpent;
+      if (acq.note) outcome.note = outcome.note ? `${outcome.note}; ${acq.note}` : acq.note;
+      if (acq.hold) {
+        outcome.held = true;
+        if (acq.hold.retryAfterSeconds != null) outcome.retryAfterSeconds = acq.hold.retryAfterSeconds;
+      }
       charged = acq.unitsSpent > 0;
       if (hold) await commit(opts.workspaceId, hold, acq.unitsSpent);
     } else if (hold) {
@@ -230,6 +249,7 @@ export function mergeAcquired(preview: ProspectRecord, full: ProspectRecord): Pr
 }
 
 async function noteFailure(workspaceId: number, s: EligibleSource["source"], f: VendorFailure): Promise<void> {
+  if (f.held) return;
   if (isTerminalFailure(f.reason)) {
     if (s.credentialMode === "table") {
       await recordValidation(workspaceId, s.slug, { ok: false, message: `${f.reason}: ${f.message}`, terminal: true });

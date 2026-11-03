@@ -13,6 +13,7 @@ import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
 import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
 import { WarmySenderSourceCard } from "@/components/usip/settings/WarmySenderSourceCard";
+import { LeadOceanSourceCard } from "@/components/usip/settings/LeadOceanSourceCard";
 import { ARE_SEQUENCE_TEMPLATES, DEFAULT_ARE_SEQUENCE_TEMPLATE } from "@shared/areSequenceTemplates";
 import { UNSENDABLE_CHANNEL_REASON } from "@shared/areSequenceSteps";
 import { ARE_SOURCES, ARE_SOURCE_IDS, resolveSourceOrder } from "@shared/areSources";
@@ -45,7 +46,7 @@ import {
   Sliders,
   Sparkles,
   Star,
-  Zap, Settings2, MailCheck, Radar, ChevronUp, ChevronDown, Flame
+  Zap, Settings2, MailCheck, Radar, ChevronUp, ChevronDown, Flame, Waves
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
@@ -613,7 +614,7 @@ export default function ARESettings() {
         <Section
           icon={Search}
           title="Prospect Sources & Checking Order"
-          description="Sources are checked top-to-bottom: when two find the same person, the higher one's record wins. A source toggled off never runs anywhere in this workspace — discovery, Find prospects, or campaigns — whatever a campaign selected. New campaigns start with the enabled sources pre-selected."
+          description="Sources are checked top-to-bottom: when two find the same person, the higher one's record wins. A source toggled off never runs anywhere in this workspace — discovery, Find prospects, or campaigns — whatever a campaign selected. New campaigns start with the enabled sources pre-selected, except LeadOcean, which a person ticks per campaign because it bills its previews."
         >
           <div className="space-y-2">
             {sourceOrder.map((key, idx) => {
@@ -628,6 +629,7 @@ export default function ARESettings() {
                 apollo: { icon: Database, color: "text-violet-500" },
                 quickenrich: { icon: Radar, color: "text-cyan-600" },
                 warmysender: { icon: Flame, color: "text-orange-500" },
+                leadocean: { icon: Waves, color: "text-sky-600" },
               };
               const { icon: Icon, color } = iconFor[key] ?? { icon: Database, color: "text-slate-500" };
               const active = !!scraperSources[key];
@@ -705,6 +707,15 @@ export default function ARESettings() {
           description="Campaigns preview WarmySender's lead database for free (masked) and spend one lead unit per net-new person acquired, metered by the budget ledger against the plan's daily pace and monthly allowance."
         >
           <WarmySenderSourceCard variant="bare" />
+        </Section>
+
+        {/* -- 8f. LeadOcean connection (feeds the "LeadOcean" source above) -- */}
+        <Section
+          icon={Waves}
+          title="LeadOcean"
+          description="This workspace's own LeadOcean key. Every search row and lookup counts as a record, so it runs only on a campaign or a Source search that ticks it."
+        >
+          <LeadOceanSourceCard variant="bare" />
         </Section>
 
         {/* -- 9. ICP Regen Schedule -- */}

@@ -12,7 +12,7 @@
  * reprinting it.
  *
  * Three things it says out loud rather than implying:
- *   • four of the seven sources are not instrumented at all — they are
+ *   • four of the eight sources are not instrumented at all — they are
  *     hand-written branches in the engine with no credential row, breaker or
  *     ledger — and they are listed anyway, because leaving them out would
  *     answer "which sources earn their cost" by omission;
@@ -29,7 +29,7 @@ import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { Link } from "wouter";
 import { Database, Loader2 } from "lucide-react";
 
-const ORDINAL = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th"];
+const ORDINAL = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th"];
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
 function when(iso: string): string {
@@ -53,6 +53,7 @@ export function verdict(s: Source): { text: string; tone: "ok" | "muted" | "warn
   if (!s.selectedOnCampaign) return { text: "Not selected for this campaign", tone: "muted" };
   if (!s.enabledInWorkspace) return { text: "Disabled in workspace Settings", tone: "muted" };
   if (s.rest) {
+    if (s.heldByVendor) return { text: `Held by the vendor — next attempt ${when(s.rest.until)}`, tone: "warn" };
     return {
       text: `Resting after ${s.rest.emptyRuns} empty ${plural(s.rest.emptyRuns, "run", "runs")} — next attempt ${when(s.rest.until)}`,
       tone: "warn",
@@ -148,8 +149,9 @@ function SourceRow({ s }: { s: Source }) {
           </>
         ) : (
           /* All-null buckets are the adapters' way of saying the vendor
-             publishes no allowance — never "0 left". */
-          <span className="text-muted-foreground">tracked locally — the vendor publishes no allowance</span>
+             publishes no allowance — never "0 left". An adapter that does know
+             why there is no number (LeadOcean, no cap set) says so instead. */
+          <span className="text-muted-foreground">{leads?.fundedBy ?? "tracked locally — the vendor publishes no allowance"}</span>
         )}
       </td>
       <td className="py-2 pr-3 text-[11px]">

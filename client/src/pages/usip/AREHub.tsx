@@ -679,7 +679,7 @@ export default function AREHub() {
                  three vendor databases, which are the sources that actually return
                  rows. Pinned by server/discoveryLauncherCopy.test.ts — which bans both
                  phrases outright, so this note names the source ids instead. */
-              { step: "02", title: "Prospect Discovery", desc: "Campaigns source prospects from your CRM, QuickEnrich, Apollo, WarmySender, Google Business, LinkedIn and news monitoring — whichever your workspace has enabled, in its checking order.", color: "#60A5FA", icon: Radar },
+              { step: "02", title: "Prospect Discovery", desc: "Campaigns source prospects from your CRM, QuickEnrich, Apollo, WarmySender, LeadOcean, Google Business, LinkedIn and news monitoring — whichever your workspace has enabled, in its checking order.", color: "#60A5FA", icon: Radar },
               { step: "03", title: "Enrich & Sequence", desc: "The Enrich Agent builds an intelligence dossier per prospect. The Sequence Agent writes personalised outreach and self-evaluates quality.", color: "#34D399", icon: Sparkles },
               { step: "04", title: "Send & Learn", desc: "Messages go out on the configured channels. Every reply is analysed by the Signal Feedback Agent, which updates the ICP and suppression list.", color: "#F59E0B", icon: Activity },
             ].map(({ step, title, desc, color, icon: Icon }) => (

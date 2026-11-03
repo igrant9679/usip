@@ -341,7 +341,7 @@ export async function scrapeIndustryEvents(
 /** The scrape job's own source vocabulary — the `are_scrape_jobs` enum. */
 export type ScrapeSourceType =
   | "google_business" | "linkedin_company" | "linkedin_people" | "web_scrape"
-  | "news" | "industry_events" | "apollo" | "internal" | "quickenrich" | "warmysender";
+  | "news" | "industry_events" | "apollo" | "internal" | "quickenrich" | "warmysender" | "leadocean";
 
 /**
  * Sources that still exist in the enum and in stored history but cannot run,
@@ -468,6 +468,7 @@ export async function saveScrapeJobAndQueue(
       internal: "internal_contact",
       quickenrich: "quickenrich",
       warmysender: "warmysender",
+      leadocean: "leadocean",
     };
 
     // The internal-CRM source yields a MIX of contacts and leads in one batch,
@@ -482,6 +483,7 @@ export async function saveScrapeJobAndQueue(
       "apollo", "zoominfo", "clay", "ai_research",
       "quickenrich",
       "warmysender",
+      "leadocean",
     ]);
     const rowSourceType = (p: Record<string, unknown>) => {
       const override = String(p.__queueSourceType ?? "");

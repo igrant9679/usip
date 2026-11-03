@@ -149,6 +149,8 @@ export const METER_LABEL: Record<string, string> = {
   searches: "Search requests",
   leads: "Leads exported",
   profile_lookups: "Profile lookups",
+  search_records: "Search records (1 per row)",
+  lookups: "Lookups (1 record each)",
 };
 
 export const VENDOR_LABEL: Record<string, string> = {
@@ -159,5 +161,6 @@ export const VENDOR_LABEL: Record<string, string> = {
   quickenrich: "QuickEnrich",
   apollo: "Apollo",
   warmysender: "WarmySender",
+  leadocean: "LeadOcean",
   linkedin: "LinkedIn (Unipile)",
 };

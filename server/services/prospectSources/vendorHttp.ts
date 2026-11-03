@@ -80,6 +80,9 @@ export interface VendorFetchOptions {
   errorCode?: (json: unknown) => string | null | undefined;
   /** Pull retry-after seconds out of a failed JSON body. */
   retryAfter?: (json: unknown) => number | null | undefined;
+  /** Shown every failed answer. True means do not ask again, even where the
+   *  status would normally retry (a vendor that says "do not retry into a pace"). */
+  noRetry?: (answer: { status: number; headers: Headers; json: unknown }) => boolean;
   /** Test seam: replaces global fetch. */
   fetchImpl?: typeof fetch;
   /** Test seam: replaces the sleep between attempts. */
@@ -154,7 +157,8 @@ export async function vendorFetch<T = unknown>(
       ...(retryAfterSeconds != null ? { retryAfterSeconds } : {}),
     };
     logVendorCall({ workspaceId: opts.workspaceId, source: opts.source, endpoint: opts.endpoint, durationMs, status: res.status, ok: false, reason });
-    if (!isRetryable(reason) || attempt >= attempts - 1) return last;
+    const refused = opts.noRetry ? opts.noRetry({ status: res.status, headers: res.headers, json }) : false;
+    if (refused || !isRetryable(reason) || attempt >= attempts - 1) return last;
     // Rate limits say how long to wait; cap it so one call can't hold a
     // tick for a minute — beyond that the circuit breaker is the right tool.
     const wait = retryAfterSeconds != null ? Math.min(retryAfterSeconds * 1000, 10_000) : backoffMs(attempt);

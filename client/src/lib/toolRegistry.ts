@@ -109,7 +109,7 @@ export const TOOLS: Tool[] = [
   // connected data providers in order, previews for free, and shows what a
   // selection will spend before anything is acquired.
   { href: "/v2/data-enrichment?tab=source-search", label: "Source Search", icon: Radar, group: "Prospecting",
-    description: "Search your connected data vendors in order — free preview, pay only for net-new people.", keywords: ["warmysender", "quickenrich", "vendor", "leads", "waterfall", "budget"] },
+    description: "Search your connected data vendors in order — free preview, pay only for net-new people.", keywords: ["warmysender", "quickenrich", "leadocean", "vendor", "leads", "waterfall", "budget"] },
   // Folded into Data Enrichment (2026-08-21) — deliberately NOT primary, so
   // the rail shows one entry for the merged surface; Ctrl+K and the Library
   // still find "Import Contacts" by name and land on its tab.

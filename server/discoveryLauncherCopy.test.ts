@@ -165,12 +165,12 @@ describe("the discovery launcher describes the run it actually performs", () => 
     const i = hub.indexOf('title: "Prospect Discovery"');
     expect(i, "the Prospect Discovery card").toBeGreaterThan(-1);
     const card = hub.slice(i, hub.indexOf("},", i));
-    for (const word of ["CRM", "QuickEnrich", "Apollo", "WarmySender", "Google Business", "LinkedIn", "news"]) {
+    for (const word of ["CRM", "QuickEnrich", "Apollo", "WarmySender", "LeadOcean", "Google Business", "LinkedIn", "news"]) {
       expect(card, word).toContain(word);
     }
-    // One word per ARE source, so an eighth source makes this fail rather than
-    // leaving the explainer quietly short.
-    expect(ARE_SOURCE_IDS).toHaveLength(7);
+    // One word per ARE source, so a ninth source makes this fail rather than
+    // leaving the explainer quietly short. (Eight since LeadOcean, 2026-11-02.)
+    expect(ARE_SOURCE_IDS).toHaveLength(8);
   });
 
   it("no copy file advertises a source that was taken out", () => {
