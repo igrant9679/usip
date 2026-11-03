@@ -32,7 +32,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { ARE_SOURCES, ARE_SOURCE_IDS, ARE_DEFAULT_SOURCES } from "@shared/areSources";
+import { ARE_SOURCES, ARE_SOURCE_IDS, ARE_DEFAULT_SOURCES, DISCOVERY_OFF_NOTE, toggledSources } from "@shared/areSources";
 import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenceSteps";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
@@ -296,12 +296,7 @@ export default function ARECampaigns() {
   });
 
   const toggleSource = (id: string) => {
-    setForm((f) => ({
-      ...f,
-      prospectSources: f.prospectSources.includes(id)
-        ? f.prospectSources.filter((s) => s !== id)
-        : [...f.prospectSources, id],
-    }));
+    setForm((f) => ({ ...f, prospectSources: toggledSources(f.prospectSources, id) }));
   };
 
   // Build the create payload — folds the wizard's targeting fields into
@@ -613,6 +608,9 @@ export default function ARECampaigns() {
                     </label>
                   ))}
                 </div>
+                {form.prospectSources.length === 0 && (
+                  <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{DISCOVERY_OFF_NOTE}</p>
+                )}
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Autonomy</Label>
@@ -713,7 +711,7 @@ export default function ARECampaigns() {
                   <div><dt>Industries</dt><dd>{form.targetIndustries.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
                   <div><dt>Company size</dt><dd>{EMPLOYEE_BANDS.find((b) => b.value === form.employeeBand)?.label}</dd></div>
                   <div><dt>Keywords</dt><dd>{form.keywords.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
-                  <div><dt>Sources</dt><dd>{form.prospectSources.join(", ") || <span className="text-muted-foreground italic">none</span>}</dd></div>
+                  <div><dt>Sources</dt><dd>{form.prospectSources.join(", ") || <span className="text-muted-foreground italic">none, so discovery is off</span>}</dd></div>
                   <div><dt>Target / Daily cap</dt><dd>{form.targetProspectCount} prospects · {form.dailySendCap}/day</dd></div>
                   <div><dt>Approve floor</dt><dd>ICP ≥ {form.autoApproveThreshold}/100</dd></div>
                 </dl>
