@@ -111,6 +111,9 @@ describe.each(MACHINES)("on a machine in %s", (machine) => {
     it("no expiry counts from today, and the clock defaults to now", () => {
       expect(extendedExpiry(null, NY, Date.parse("2026-11-03T00:30:00Z"))).toBe("2026-11-09");
       expect(extendedExpiry(undefined, NY, Date.parse("2026-11-03T00:30:00Z"))).toBe("2026-11-09");
+      // An expiry that cannot be read is no expiry, not a crash in the approve button.
+      expect(extendedExpiry("not a date", NY, Date.parse("2026-11-03T00:30:00Z"))).toBe("2026-11-09");
+      expect(extendedExpiry(new Date(NaN), NY, Date.parse("2026-11-03T00:30:00Z"))).toBe("2026-11-09");
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-11-03T00:30:00Z"));
       try {

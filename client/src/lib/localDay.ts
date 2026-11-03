@@ -26,7 +26,8 @@ export function deadlineDayOf(value: Date | string | number | null | undefined, 
  * from the end of a day lands on the eighth day across a spring clock change.
  */
 export function extendedExpiry(expiresAt: Date | string | null | undefined, tz: string, now: number = Date.now()): string {
-  const base = Math.max(now, expiresAt ? new Date(expiresAt).getTime() : 0);
+  const held = expiresAt ? new Date(expiresAt).getTime() : 0;
+  const base = Number.isNaN(held) ? now : Math.max(now, held);
   const [y, m, d] = zonedDayKey(tz, base).split("-").map(Number) as [number, number, number];
   return new Date(Date.UTC(y, m - 1, d + 7)).toISOString().slice(0, 10);
 }
