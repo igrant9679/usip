@@ -1637,8 +1637,8 @@ function ActivityFeed({ proposalId }: { proposalId: number }) {
   // The context has `current`, not `workspaceId`: gated on the missing field,
   // the feed never loaded (audit 2026-10-20, X3.5).
   const { current } = useWorkspace();
-  const { timezone } = useWorkspaceTimezone();
   const [activeFilter, setActiveFilter] = useState<string>("all");
+  const { timezone } = useWorkspaceTimezone();
   const [approveOpen, setApproveOpen] = useState(false);
   const [denyOpen, setDenyOpen] = useState(false);
   const [approveDate, setApproveDate] = useState("");
