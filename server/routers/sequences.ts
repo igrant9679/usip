@@ -1427,7 +1427,13 @@ export const sequencesRouter = router({
     // resumeAt: null on all three manual transitions — a rep acting on a row
     // that an OOO snooze had already stamped must not inherit its pending
     // wake-up (0181). Their decision is the later one.
-    // Active only: "pausing" a finished or exited row used to re-open it.
+    // Active only: "pausing" a finished or exited row used to re-open it. And it
+    // says so, as Resume does: a stale tab must not report a pause that didn't
+    // happen. pauseOnReply is not this: it files a "Reply detected" task.
+    const [enr] = await db.select({ status: enrollments.status }).from(enrollments)
+      .where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
+    if (!enr) throw new TRPCError({ code: "NOT_FOUND" });
+    if (enr.status !== "active") throw new TRPCError({ code: "BAD_REQUEST", message: `Only an active enrolment can be paused (this one is ${enr.status}).` });
     await db.update(enrollments).set({ status: "paused", resumeAt: null }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id), eq(enrollments.status, "active")));
     return { ok: true };
   }),
@@ -1453,7 +1459,14 @@ export const sequencesRouter = router({
   exitEnrollment: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.update(enrollments).set({ status: "exited", resumeAt: null }).where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
+    // Active or paused only. A stale tab must not rewrite someone who finished
+    // as exited, which also moves the sequence's exit rate.
+    const [enr] = await db.select({ status: enrollments.status }).from(enrollments)
+      .where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id)));
+    if (!enr) throw new TRPCError({ code: "NOT_FOUND" });
+    if (enr.status !== "active" && enr.status !== "paused") throw new TRPCError({ code: "BAD_REQUEST", message: `Only an active or paused enrolment can be exited (this one is ${enr.status}).` });
+    await db.update(enrollments).set({ status: "exited", resumeAt: null })
+      .where(and(eq(enrollments.id, input.id), eq(enrollments.workspaceId, ctx.workspace.id), inArray(enrollments.status, ["active", "paused"])));
     return { ok: true };
   }),
 
