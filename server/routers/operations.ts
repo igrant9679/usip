@@ -10,6 +10,7 @@ import {
   campaignComponents,
   campaignStepStats,
   campaigns,
+  leads,
   contacts,
   crmPipelineStages,
   emailDrafts,
@@ -41,6 +42,7 @@ import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, assertOwnerOrManager, managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { escapeHtml } from "@shared/escapeHtml";
+import { filtersNotApplied } from "@shared/dashboardPresets";
 import { assertRowInWorkspace } from "../services/foreignIds";
 import { storagePut } from "../storage";
 import { buildTransporter, decrypt } from "./smtpConfig";
@@ -938,9 +940,21 @@ export const dashboardsRouter = router({
     if (!db) return null;
     const [w] = await db.select().from(dashboardWidgets).where(and(eq(dashboardWidgets.id, input.id), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
     if (!w) return null;
-    // Merge widget-level saved filters with per-query override filters
-    const mergedFilters = { ...(w.filters as any ?? {}), ...(input.filters ?? {}) };
-    return resolveWidgetData(ctx.workspace.id, w, mergedFilters);
+    // Merge widget-level saved filters with per-query override filters. An unset
+    // filter on the bar leaves a saved one alone.
+    const overrides = Object.fromEntries(Object.entries(input.filters ?? {}).filter(([, v]) => v !== undefined));
+    const mergedFilters = { ...(w.filters as any ?? {}), ...overrides };
+    const data = await resolveWidgetData(ctx.workspace.id, w, mergedFilters);
+    return data && { ...data, notApplied: filtersNotApplied(w, mergedFilters) };
+  }),
+
+  /** The sources this workspace's leads really have, for the filter bar. Free text, so it can't be a fixed list. */
+  leadSources: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return [];
+    const rows = await db.select({ source: leads.source, n: sql<number>`count(*)` }).from(leads)
+      .where(eq(leads.workspaceId, ctx.workspace.id)).groupBy(leads.source);
+    return rows.map((r: { source: string | null }) => r.source).filter((s: string | null): s is string => !!s?.trim()).sort();
   }),
 
   /** Schedules. */
@@ -1145,12 +1159,32 @@ async function resolveWidgetData(
   const range = dayRangeBounds(filters.dateFrom, filters.dateTo, tz);
 
   /* ── Helper: build base opportunity conditions with filters ── */
+  // A deal has no source of its own, only the lead it was converted from. With a
+  // source picked, a deal that didn't come from such a lead isn't in the numbers.
+  // This filter was offered and never read. [-1] is "none", which inArray can say.
+  const sourceDealIds: number[] | null = filters.source
+    ? (await db.select({ id: leads.convertedOpportunityId }).from(leads)
+        .where(and(eq(leads.workspaceId, workspaceId), eq(leads.source, filters.source))))
+        .map((l: { id: number | null }) => l.id).filter((id: number | null): id is number => id != null)
+    : null;
+  if (sourceDealIds && sourceDealIds.length === 0) sourceDealIds.push(-1);
+
   const oppBase = () => {
     const conds: any[] = [eq(opportunities.workspaceId, workspaceId)];
     if (filters.ownerUserId) conds.push(eq(opportunities.ownerUserId, filters.ownerUserId));
     if (filters.stage) conds.push(eq(opportunities.stage, filters.stage as any));
+    if (sourceDealIds) conds.push(inArray(opportunities.id, sourceDealIds));
     if (range.from) conds.push(sql`${opportunities.createdAt} >= ${range.from}`);
     if (range.to) conds.push(sql`${opportunities.createdAt} <= ${range.to}`);
+    return and(...conds);
+  };
+
+  /* ── Helper: base activity conditions (dates, and the person who did it) ── */
+  const actBase = (...more: any[]) => {
+    const conds: any[] = [eq(activities.workspaceId, workspaceId), ...more];
+    if (filters.ownerUserId) conds.push(eq(activities.actorUserId, filters.ownerUserId));
+    if (range.from) conds.push(sql`${activities.occurredAt} >= ${range.from}`);
+    if (range.to) conds.push(sql`${activities.occurredAt} <= ${range.to}`);
     return and(...conds);
   };
 
@@ -1200,10 +1234,8 @@ async function resolveWidgetData(
         return { type: w.type, title: w.title, value: Math.round(avgDays), format: "days" };
       }
       case "activity_counts": {
-        const actConds: any[] = [eq(activities.workspaceId, workspaceId)];
-        if (range.from) actConds.push(sql`${activities.occurredAt} >= ${range.from}`);
-        if (range.to) actConds.push(sql`${activities.occurredAt} <= ${range.to}`);
-        const acts = await db.select().from(activities).where(and(...actConds));
+        const actConds = actBase();
+        const acts = await db.select().from(activities).where(actConds);
         const calls = acts.filter((a) => a.type === "call").length;
         const emails = acts.filter((a) => a.type === "email").length;
         const meetings = acts.filter((a) => a.type === "meeting").length;
@@ -1211,10 +1243,8 @@ async function resolveWidgetData(
           breakdown: { calls, emails, meetings } };
       }
       case "meetings_booked": {
-        const actConds: any[] = [eq(activities.workspaceId, workspaceId), eq(activities.type, "meeting")];
-        if (range.from) actConds.push(sql`${activities.occurredAt} >= ${range.from}`);
-        if (range.to) actConds.push(sql`${activities.occurredAt} <= ${range.to}`);
-        const [r] = await db.select({ c: sql<number>`COUNT(*)` }).from(activities).where(and(...actConds));
+        const actConds = actBase(eq(activities.type, "meeting"));
+        const [r] = await db.select({ c: sql<number>`COUNT(*)` }).from(activities).where(actConds);
         return { type: w.type, title: w.title, value: Number(r?.c ?? 0), format: "number" };
       }
       case "response_rate": {
@@ -1293,10 +1323,8 @@ async function resolveWidgetData(
       return { type: w.type, title: w.title, series: out };
     }
     if (cfg.metric === "activities") {
-      const actConds: any[] = [eq(activities.workspaceId, workspaceId)];
-      if (range.from) actConds.push(sql`${activities.occurredAt} >= ${range.from}`);
-      if (range.to) actConds.push(sql`${activities.occurredAt} <= ${range.to}`);
-      const acts = await db.select().from(activities).where(and(...actConds));
+      const actConds = actBase();
+      const acts = await db.select().from(activities).where(actConds);
       const out = months.map((m) => ({ label: m.label, calls: 0, emails: 0, meetings: 0 }));
       for (const a of acts) {
         const k = `${a.occurredAt.getFullYear()}-${a.occurredAt.getMonth()}`;
@@ -1361,10 +1389,8 @@ async function resolveWidgetData(
      Heatmap (activity by day-of-week × hour)
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "heatmap") {
-    const actConds: any[] = [eq(activities.workspaceId, workspaceId)];
-    if (range.from) actConds.push(sql`${activities.occurredAt} >= ${range.from}`);
-    if (range.to) actConds.push(sql`${activities.occurredAt} <= ${range.to}`);
-    const acts = await db.select().from(activities).where(and(...actConds));
+    const actConds = actBase();
+    const acts = await db.select().from(activities).where(actConds);
     // Build 7×24 grid, bucketed in the WORKSPACE's timezone.
     //
     // This was `getDay()` / `getHours()` — the container's clock, which is UTC in
@@ -1425,11 +1451,9 @@ async function resolveWidgetData(
      Activity Feed (recent activities)
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "activity_feed") {
-    const actConds: any[] = [eq(activities.workspaceId, workspaceId)];
-    if (range.from) actConds.push(sql`${activities.occurredAt} >= ${range.from}`);
-    if (range.to) actConds.push(sql`${activities.occurredAt} <= ${range.to}`);
+    const actConds = actBase();
     const acts = await db.select().from(activities)
-      .where(and(...actConds))
+      .where(actConds)
       .orderBy(desc(activities.occurredAt))
       .limit(cfg.limit ?? 20);
     return { type: "activity_feed", title: w.title, items: acts.map((a) => ({
@@ -1468,6 +1492,7 @@ async function resolveWidgetData(
         sql`${opportunities.closeDate} <= ${to}`,
       ];
       if (filters.ownerUserId) conds.push(eq(opportunities.ownerUserId, filters.ownerUserId));
+      if (sourceDealIds) conds.push(inArray(opportunities.id, sourceDealIds));
       const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
         .from(opportunities).where(and(...conds));
       return Number(r?.s ?? 0);
@@ -1484,7 +1509,7 @@ async function resolveWidgetData(
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "rep_performance") {
     const allOpps = await db.select().from(opportunities).where(oppBase());
-    const allActs = await db.select().from(activities).where(eq(activities.workspaceId, workspaceId));
+    const allActs = await db.select().from(activities).where(actBase());
     const memberRows = await db.select({ userId: workspaceMembers.userId, name: users.name })
       .from(workspaceMembers)
       .innerJoin(users, eq(users.id, workspaceMembers.userId))

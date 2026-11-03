@@ -35,6 +35,7 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { rankOf } from "@shared/roleRank";
+import { widgetFilters } from "@shared/dashboardPresets";
 import {
   BarChart2,
   Home,
@@ -137,16 +138,7 @@ interface WidgetCardProps {
 }
 
 function WidgetCard({ widgetId, filters, customizeMode, onRemove }: WidgetCardProps) {
-  const resolvedFilters = useMemo(() => {
-    if (filters.preset === "all") return undefined;
-    return {
-      dateFrom: filters.dateFrom,
-      dateTo: filters.dateTo,
-      ownerUserId: filters.ownerUserId,
-      stage: filters.stage,
-      source: filters.source,
-    };
-  }, [filters]);
+  const resolvedFilters = useMemo(() => widgetFilters(filters), [filters]);
 
   const { data, isLoading } = trpc.dashboards.resolveWidget.useQuery(
     { id: widgetId, filters: resolvedFilters },
@@ -176,6 +168,12 @@ function WidgetCard({ widgetId, filters, customizeMode, onRemove }: WidgetCardPr
           </button>
         )}
       </div>
+
+      {(data as any)?.notApplied?.length > 0 && (
+        <div className="px-3 pb-1 text-[10px] text-muted-foreground shrink-0">
+          Not filtered by {(data as any).notApplied.join(" or ")}
+        </div>
+      )}
 
       <div className="flex-1 overflow-auto px-3 pb-3 min-h-0">
         {isLoading && (

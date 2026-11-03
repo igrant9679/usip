@@ -64,17 +64,6 @@ const LEGACY_STAGES = [
   { label: "Lost", value: "lost" },
 ];
 
-const SOURCES = [
-  { label: "Inbound", value: "inbound" },
-  { label: "Outbound", value: "outbound" },
-  { label: "Referral", value: "referral" },
-  { label: "Partner", value: "partner" },
-  { label: "Event", value: "event" },
-  { label: "Website", value: "website" },
-  { label: "Cold Call", value: "cold_call" },
-  { label: "Email Campaign", value: "email_campaign" },
-];
-
 /* ─── Active filter count badge ──────────────────────────────────────────── */
 function activeCount(f: DashboardFilters): number {
   let n = 0;
@@ -100,6 +89,9 @@ export function DashboardFilterBar({ filters, onChange, members = [] }: Dashboar
   // it first loads), so a click can't pick days in the wrong zone; if the read
   // fails, UTC is the column's default.
   const settings = trpc.settings.get.useQuery(undefined, { staleTime: 60_000 });
+
+  // Lead sources are free text, so the list is what this workspace's leads have.
+  const sources = trpc.dashboards.leadSources.useQuery(undefined, { staleTime: 60_000 });
 
   const update = (patch: Partial<DashboardFilters>) => {
     const next = { ...filters, ...patch };
@@ -210,13 +202,13 @@ export function DashboardFilterBar({ filters, onChange, members = [] }: Dashboar
         value={filters.source ?? "all"}
         onValueChange={(v) => update({ source: v === "all" ? undefined : v })}
       >
-        <SelectTrigger className="h-7 w-[130px] text-xs">
+        <SelectTrigger className="h-7 w-[130px] text-xs" title="The source of the lead a deal was converted from">
           <SelectValue placeholder="Source" />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">All sources</SelectItem>
-          {SOURCES.map((s) => (
-            <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+          {(sources.data ?? []).map((s) => (
+            <SelectItem key={s} value={s}>{s}</SelectItem>
           ))}
         </SelectContent>
       </Select>

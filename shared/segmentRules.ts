@@ -12,6 +12,8 @@
  * the hourly enrolment on the other.
  */
 
+import { zonedDayKey } from "./availability";
+
 export type SegmentFieldKind = "text" | "select" | "boolean" | "date";
 
 export const SEGMENT_FIELDS: Record<string, SegmentFieldKind> = {
@@ -72,7 +74,8 @@ const timeOf = (v: unknown): number => {
   return new Date(String(v)).getTime();
 };
 
-export function applySegmentRule(contact: Record<string, unknown>, rule: SegmentRule): boolean {
+/** `tz` is the workspace's: a date in a rule is a day there. */
+export function applySegmentRule(contact: Record<string, unknown>, rule: SegmentRule, tz: string = "UTC"): boolean {
   const raw = contact[rule.field];
   const kind = SEGMENT_FIELDS[rule.field] ?? "text";
   const empty = raw === null || raw === undefined || raw === "";
@@ -87,11 +90,12 @@ export function applySegmentRule(contact: Record<string, unknown>, rule: Segment
   }
   if (kind === "date") {
     const t = timeOf(raw);
-    const day = Date.parse(`${rule.value}T00:00:00Z`);
-    if (Number.isNaN(t) || Number.isNaN(day)) return false;
+    if (Number.isNaN(t) || !ISO_DAY.test(rule.value ?? "") || Number.isNaN(Date.parse(`${rule.value}T00:00:00Z`))) return false;
     // "after" the 1st means from the 2nd; "before" the 1st means up to the 31st.
-    if (rule.operator === "gt") return t >= day + 86_400_000;
-    if (rule.operator === "lt") return t < day;
+    // Compared as days in the workspace's zone, because these strings sort as dates.
+    const day = zonedDayKey(tz, t);
+    if (rule.operator === "gt") return day > rule.value!;
+    if (rule.operator === "lt") return day < rule.value!;
     return false;
   }
   const val = empty ? "" : String(raw).toLowerCase();
@@ -107,7 +111,7 @@ export function applySegmentRule(contact: Record<string, unknown>, rule: Segment
 }
 
 /** A contact in the segment. No rules matches nobody. */
-export function matchesSegment(contact: Record<string, unknown>, rules: SegmentRule[], matchType: "all" | "any"): boolean {
+export function matchesSegment(contact: Record<string, unknown>, rules: SegmentRule[], matchType: "all" | "any", tz: string = "UTC"): boolean {
   if (rules.length === 0) return false;
-  return matchType === "any" ? rules.some((r) => applySegmentRule(contact, r)) : rules.every((r) => applySegmentRule(contact, r));
+  return matchType === "any" ? rules.some((r) => applySegmentRule(contact, r, tz)) : rules.every((r) => applySegmentRule(contact, r, tz));
 }

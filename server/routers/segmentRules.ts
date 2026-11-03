@@ -27,6 +27,7 @@ import { type SegmentRule } from "@shared/segmentRules";
 import { segmentWhere } from "../services/segmentSql";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 
 /* ─── Rule evaluation: the SQL segments.ts counts with (P19, P52) ─────── */
 type Rule = SegmentRule;
@@ -88,7 +89,7 @@ export async function runSegmentEnrollmentForWorkspace(workspaceId: number): Pro
     }
 
     // The segment's contacts, found in SQL: ids only, never the whole table (P52).
-    const where = segmentWhere(workspaceId, segRules, matchType);
+    const where = segmentWhere(workspaceId, segRules, matchType, await getWorkspaceTimezone(workspaceId));
     const matchingContacts = where ? await db.select({ id: contacts.id }).from(contacts).where(where) : [];
 
     if (matchingContacts.length === 0) {
