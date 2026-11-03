@@ -17,6 +17,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 import type { TrpcContext } from "./_core/context";
 
 const h = vi.hoisted(() => {
@@ -116,6 +117,30 @@ describe("running the engine by hand (A9)", () => {
     expect(a.skipped).toBeUndefined();
     expect(b.skipped).toBe(true);
     expect(b.campaignsProcessed).toBe(0);
+  });
+
+  it("a manual run asks for this workspace's enrichment only, and the schedule still asks for everyone's", async () => {
+    // Enrichment spends AI budget, so read what the engine actually asks for. The
+    // fake can't evaluate this query's raw SQL, and the engine logs that and moves on.
+    const enrichQueries: { sql: string; params: unknown[] }[] = [];
+    const real = h.db.select;
+    h.db.select = (p?: Record<string, unknown>) => {
+      const b = real(p);
+      const where = b.where;
+      b.where = (cond: any) => {
+        const q = new MySqlDialect().sqlToQuery(cond);
+        if (q.sql.includes("`prospect_queue`.`enrichmentStatus`") && q.sql.includes("`are_campaigns`.`status`")) enrichQueries.push(q);
+        return where.call(b, cond);
+      };
+      return b;
+    };
+    await caller(MANAGER).are.engine.runOnce();
+    expect(enrichQueries).toHaveLength(1);
+    expect(enrichQueries[0]!.sql).toContain("`prospect_queue`.`workspaceId` = ?");
+    expect(enrichQueries[0]!.params).toContain(LSI);
+    await runAreEngine();
+    expect(enrichQueries).toHaveLength(2);
+    expect(enrichQueries[1]!.sql).not.toContain("`prospect_queue`.`workspaceId` = ?");
   });
 
   it("launching a campaign kicks its own workspace, and nothing else starts a whole tick for a person", () => {
