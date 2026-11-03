@@ -1515,7 +1515,7 @@ async function resolveWidgetData(
       .innerJoin(users, eq(users.id, workspaceMembers.userId))
       .where(eq(workspaceMembers.workspaceId, workspaceId));
 
-    const rows = memberRows.filter((m) => !filters.ownerUserId || m.userId === filters.ownerUserId).map((m) => {
+    const rows = memberRows.map((m) => {
       const myOpps = allOpps.filter((o) => o.ownerUserId === m.userId);
       const myWon = myOpps.filter((o) => stages.isWon(o.stage));
       const myClosed = myOpps.filter((o) => stages.isClosed(o.stage));
