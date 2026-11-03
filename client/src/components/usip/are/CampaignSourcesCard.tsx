@@ -24,7 +24,7 @@ export function CampaignSourcesCard({ stored, draft, onChange }: {
       </CardHeader>
       <CardContent className="px-4 pb-4 space-y-3">
         <p className="text-xs text-muted-foreground leading-relaxed">
-          Where discovery finds new prospects for this campaign. Changes apply on the next discovery run — discovery fires when the send queue drains below the daily cap.
+          Where discovery finds new prospects for this campaign. Discovery runs on every engine tick while this campaign has fewer working prospects than its target, so a change applies on the next run.
         </p>
         <div className="space-y-2">
           {ARE_SOURCES.map((s) => (

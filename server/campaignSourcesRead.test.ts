@@ -197,6 +197,13 @@ describe("what a campaign with no source says", () => {
     }
   });
 
+  it("says when discovery really runs, which is below the target and not when a queue drains (A15)", () => {
+    expect(card(["internal"]).html).toContain("Discovery runs on every engine tick while this campaign has fewer working prospects than its target");
+    expect(card(["internal"]).html).not.toContain("drains");
+    // The engine's own condition, so the sentence can't outlive it unnoticed.
+    expect(read("server/areEngine.ts")).toContain("if (working < campaign.targetProspectCount) {");
+  });
+
   it("the new-campaign wizard says it too, on the step and on the review", () => {
     const src = read("client/src/pages/usip/ARECampaigns.tsx");
     expect(src).toContain("{form.prospectSources.length === 0 && (");
