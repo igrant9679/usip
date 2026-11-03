@@ -431,8 +431,9 @@ describe("every path that moves a deal into a closing stage consults the flags",
     expect(pie).not.toMatch(/"negotiation", "won"/);
 
     // The seed order is a DISPLAY fallback for an unseeded pipeline only; the
-    // helper must still read the table first.
-    const helper = windowBetween(src, "async function orderedStageKeys(", "function dateRange(");
+    // helper must still read the table first. (2026-11-02: the window ended at
+    // dateRange(), a dead helper removed with the dashboard date fix.)
+    const helper = windowBetween(src, "async function orderedStageKeys(", "async function resolveWidgetData(");
     expect(helper).toContain("from(crmPipelineStages)");
     expect(helper).toContain("defs.length > 0 ? defs.map((d) => d.key) : DEFAULT_STAGE_ORDER");
   });
