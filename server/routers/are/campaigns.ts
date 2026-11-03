@@ -31,7 +31,7 @@ import { campaignCapMessage, campaignHeadroom } from "../../services/are/campaig
 import { getAreHubFunnelTotals } from "../../services/performanceMetrics";
 import { recordAudit } from "../../audit";
 import { invokeLLM, contentText } from "../../_core/llm";
-import { ARE_DEFAULT_SOURCES, ARE_SOURCES, normalizeSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
+import { ARE_DEFAULT_SOURCES, ARE_SOURCES, campaignSources, discoveryIsOff, normalizeSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 import { MIN_STEP_GAP_DAYS, MAX_STEP_GAP_DAYS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { areExecutionQueue, spendLedger } from "../../../drizzle/schema";
 import { describeSources } from "../../services/prospectSources/registry";
@@ -1307,13 +1307,11 @@ export const campaignsRouter = router({
 
       // The campaign's selection read the ENGINE's way, including the rule that
       // an EXPLICIT empty list means "no discovery" while a null or
-      // dead-ids-only list falls back to the defaults (areEngine.ts:2296-2300).
+      // dead-ids-only list falls back to the defaults (shared/areSources).
       // Reading it any other way would show sources that will not run, or hide
       // ones that will.
-      const rawSources = campaign.prospectSources;
-      const explicitlyNone = Array.isArray(rawSources) && rawSources.length === 0;
-      const configured = normalizeSources(rawSources);
-      const selected = configured.length > 0 ? configured : explicitlyNone ? [] : [...ARE_DEFAULT_SOURCES];
+      const explicitlyNone = discoveryIsOff(campaign.prospectSources);
+      const selected = campaignSources(campaign.prospectSources);
       const [wsRow] = await db
         .select({ order: workspaceSettings.areSourceOrder, mask: workspaceSettings.areScraperSources })
         .from(workspaceSettings)

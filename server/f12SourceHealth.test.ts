@@ -183,8 +183,11 @@ describe("all seven ARE sources are listed, instrumented or not", () => {
     // will not run, or hide ones that will. The explicit-empty rule matters:
     // an engine-proposed campaign stores [] on purpose, and reading that as
     // "every source" once pulled 68 strangers into a 32-person campaign.
-    expect(router).toContain("const explicitlyNone = Array.isArray(rawSources) && rawSources.length === 0;");
-    expect(router).toContain("configured.length > 0 ? configured : explicitlyNone ? [] : [...ARE_DEFAULT_SOURCES]");
+    // 2026-11-03: the rule moved to shared/areSources so the tab reads it too, and
+    // campaignSourcesRead.test.ts runs it through the router and the engine.
+    expect(router).toContain("const explicitlyNone = discoveryIsOff(campaign.prospectSources);");
+    expect(router).toContain("const selected = campaignSources(campaign.prospectSources);");
+    expect(engine).toContain("const sources: string[] = campaignSources(campaign.prospectSources);");
     expect(router).toContain("resolveSourceOrder(wsRow?.order, wsRow?.mask, selected as AreSourceId[])");
     expect(engine).toContain("resolveSourceOrder(wsSourceRow?.order, wsSourceRow?.mask, sources as AreSourceId[])");
   });

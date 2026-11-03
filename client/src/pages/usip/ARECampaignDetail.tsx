@@ -75,7 +75,7 @@ import {
 import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { isHtmlBody } from "@shared/emailBody";
-import { ARE_SOURCES, ARE_DEFAULT_SOURCES, normalizeSources } from "@shared/areSources";
+import { CampaignSourcesCard } from "@/components/usip/are/CampaignSourcesCard";
 import { dayOffsetForPosition, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenceSteps";
 import {
@@ -2373,8 +2373,6 @@ export default function ARECampaignDetail() {
   // Mirrors the engine exactly (areEngine.runDiscovery): a stored list that
   // normalizes to empty means "run every default source", so that is what the
   // checkboxes must show — anything else would be a lying surface.
-  const storedSources = normalizeSources((campaign as any)?.prospectSources);
-  const activeSources = sourcesDraft ?? (storedSources.length > 0 ? storedSources : [...ARE_DEFAULT_SOURCES]);
 
   const statusColor = campaign.status === "active" ? "#34D399" : campaign.status === "paused" ? "#F59E0B" : "#94A3B8";
   const autonomyColor =
@@ -3371,48 +3369,7 @@ export default function ARECampaignDetail() {
               {campaign && <CampaignTargetingCard campaign={campaign} />}
 
               {/* Prospect sources */}
-              <Card className="bg-card border">
-                <CardHeader className="pb-2 pt-4 px-4">
-                  <CardTitle className="text-sm flex items-center gap-2">
-                    <Globe className="size-4 text-blue-500" />
-                    Prospect Sources
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="px-4 pb-4 space-y-3">
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    Where discovery finds new prospects for this campaign. Changes apply on the next discovery run — discovery fires when the send queue drains below the daily cap.
-                  </p>
-                  <div className="space-y-2">
-                    {ARE_SOURCES.map((s) => (
-                      <label key={s.id} className="flex items-start gap-2.5 cursor-pointer">
-                        <Checkbox
-                          className="mt-0.5"
-                          checked={activeSources.includes(s.id)}
-                          onCheckedChange={() =>
-                            setSourcesDraft(
-                              activeSources.includes(s.id)
-                                ? activeSources.filter((x) => x !== s.id)
-                                : [...activeSources, s.id],
-                            )
-                          }
-                        />
-                        <span className="space-y-0.5">
-                          <span className="block text-xs font-medium text-foreground">{s.label}</span>
-                          <span className="block text-[11px] text-muted-foreground leading-snug">{s.description}</span>
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                  {sourcesDraft !== null && sourcesDraft.length === 0 && (
-                    <div className="flex items-start gap-2 p-2.5 rounded-lg border border-amber-500/20 bg-amber-500/5 text-xs">
-                      <Zap className="size-3.5 text-amber-500 mt-0.5 shrink-0" />
-                      <span className="text-amber-700 dark:text-amber-300">
-                        Nothing selected does not mean off — discovery falls back to running <strong>every</strong> source. Leave at least one box ticked to narrow it.
-                      </span>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+              <CampaignSourcesCard stored={(campaign as any)?.prospectSources} draft={sourcesDraft} onChange={setSourcesDraft} />
 
               {/* Save button */}
               {(thresholdDraft !== null || minConfDraft !== null || s2oEnabled !== null || sourcesDraft !== null || autonomyDraft !== null || gapDraft !== null) && (

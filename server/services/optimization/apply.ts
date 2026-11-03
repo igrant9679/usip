@@ -15,6 +15,7 @@
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../../db";
 import { areCampaigns, optimizationRecommendations, sequences } from "../../../drizzle/schema";
+import { normalizeSources } from "@shared/areSources";
 
 export interface ApplyOutcome {
   ok: boolean;
@@ -116,11 +117,13 @@ const deprioritiseSource: Handler = {
       const list = Array.isArray(c.prospectSources) ? (c.prospectSources as any[]) : [];
       if (!list.includes(source)) continue;
       // Never strip a campaign's LAST source — that would silently stop it
-      // sourcing anything at all, which is a bigger change than proposed.
-      if (list.length <= 1) continue;
+      // sourcing anything at all, which is a bigger change than proposed. Only
+      // live ids count: a list left holding dead ones reads as every default.
+      const left = list.filter((s) => s !== source);
+      if (normalizeSources(left).length === 0) continue;
       await db
         .update(areCampaigns)
-        .set({ prospectSources: list.filter((s) => s !== source) } as never)
+        .set({ prospectSources: left } as never)
         .where(eq(areCampaigns.id, c.id));
       touched.push(c.id);
     }
@@ -154,6 +157,9 @@ const deprioritiseSource: Handler = {
       if (!c) continue;
       const list = Array.isArray(c.prospectSources) ? (c.prospectSources as any[]) : [];
       if (list.includes(source)) continue;
+      // Someone has since turned discovery off here, or gone back to the
+      // defaults. One source added back would switch it on, or narrow it to that.
+      if (list.length === 0) continue;
       await db
         .update(areCampaigns)
         .set({ prospectSources: [...list, source] } as never)

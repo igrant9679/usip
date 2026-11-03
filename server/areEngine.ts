@@ -66,7 +66,7 @@ import { sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
 import { dispatchLinkedInStep, HEALABLE_NO_LINKEDIN } from "./services/are/linkedinStep";
 import { injectTracking, isDeferredSenderToken, renderSequenceOptOut, resolveSenderTokens, scrubForSend } from "./mergeVars";
 import { resolveBookingUrl } from "./mergeVars";
-import { ARE_DEFAULT_SOURCES, normalizeSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
+import { campaignSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 // One rule for a step's index + variant key, shared with the A/B metadata
 // upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
 import { normalizeSequence } from "@shared/areSequenceSteps";
@@ -2287,20 +2287,10 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // duplicate prospects. Each source still gets its own scrape_jobs
   // row so the Scraper tab shows per-source activity.
   // Campaigns created before the vocabulary was unified may carry dead ids
-  // ('ai_research', 'events') or null. normalizeSources strips the dead ones;
-  // a campaign with nothing left falls back to the full default set rather
-  // than the old lone "linkedin" guess.
-  //
-  // An EXPLICIT empty list is different: it means "no discovery". A campaign
-  // the engine proposed (campaignProposals) exists to absorb the people it
-  // was proposed for and stores [] on purpose; on 2026-09-04 the fallback
-  // below read that as "every source" and pulled 68 strangers into a
-  // 32-person campaign within one tick. Only null / dead-ids-only lists —
-  // the legacy shapes the fallback was written for — still get the defaults.
-  const rawSources = campaign.prospectSources;
-  const explicitlyNone = Array.isArray(rawSources) && rawSources.length === 0;
-  const configured = normalizeSources(rawSources);
-  const sources: string[] = configured.length > 0 ? configured : explicitlyNone ? [] : [...ARE_DEFAULT_SOURCES];
+  // ('ai_research', 'events') or null. Those get the full default set rather
+  // than the old lone "linkedin" guess. An EXPLICIT empty list is different: it
+  // means "no discovery" (see shared/areSources, which the screens read too).
+  const sources: string[] = campaignSources(campaign.prospectSources);
 
   // Seed the dedup index with everything already in the queue for the WHOLE
   // workspace, remembering which campaign owns each identity. Two jobs in
