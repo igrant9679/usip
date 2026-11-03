@@ -101,6 +101,41 @@ export function normalizeSources(raw: unknown): AreSourceId[] {
 }
 
 /**
+ * An EXPLICIT empty list means "no discovery". A campaign the engine proposed
+ * (campaignProposals) exists to absorb the people it was proposed for and stores
+ * [] on purpose; on 2026-09-04 a fallback read that as "every source" and pulled
+ * 68 strangers into a 32-person campaign within one tick.
+ */
+export function discoveryIsOff(raw: unknown): boolean {
+  return Array.isArray(raw) && raw.length === 0;
+}
+
+/**
+ * The sources a campaign has selected: the ONE reading of its stored list. The
+ * engine runs what this returns; Source Health and the Sources tab show it. Null
+ * and dead-ids-only lists, the legacy shapes, get the defaults.
+ *
+ * It used to be three copies, and the tab's had lost the explicit-empty rule. A
+ * campaign with discovery off showed every box ticked, so unticking one to narrow
+ * it saved the rest and switched discovery on, which is the same strangers by
+ * another door.
+ */
+export function campaignSources(raw: unknown): AreSourceId[] {
+  const configured = normalizeSources(raw);
+  if (configured.length > 0) return configured;
+  return discoveryIsOff(raw) ? [] : [...ARE_DEFAULT_SOURCES];
+}
+
+/** A box ticked or unticked, for the two screens that pick a campaign's sources. */
+export function toggledSources(list: readonly string[], id: string): string[] {
+  return list.includes(id) ? list.filter((s) => s !== id) : [...list, id];
+}
+
+/** What a campaign with no source ticked does, wherever someone can tick them. */
+export const DISCOVERY_OFF_NOTE =
+  "Discovery is off for this campaign: with no source ticked, it won't look for anyone new. People already in it, and anyone you add, still go through it. Tick a source to turn discovery on.";
+
+/**
  * The default CHECKING order (owner decision 2026-08-24): QuickEnrich first.
  *
  * Order is not cosmetics — runDiscovery builds its source tasks in this

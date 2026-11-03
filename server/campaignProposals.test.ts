@@ -103,9 +103,9 @@ describe("the plumbing", () => {
     // …and the engine must READ [] as "no discovery". It did not: the legacy
     // fallback turned [] into every default source and pulled 68 strangers
     // into a 32-person proposal campaign within one tick (2026-09-04).
-    const engine = read("areEngine.ts");
-    expect(engine).toContain("const explicitlyNone = Array.isArray(rawSources) && rawSources.length === 0;");
-    expect(engine).toContain("configured.length > 0 ? configured : explicitlyNone ? [] : [...ARE_DEFAULT_SOURCES]");
+    // 2026-11-03: the rule moved to shared/areSources so the tab reads it too, and
+    // campaignSourcesRead.test.ts runs it through the router and the engine.
+    expect(read("areEngine.ts")).toContain("const sources: string[] = campaignSources(campaign.prospectSources);");
     expect(fn).toContain('status: "active"');
     expect(fn).toContain('await import("./are/pushPeople")');
     expect(fn).toContain("pushPeopleIntoCampaign(workspaceId, campaignId, ids.slice(i, i + 100), { generateSequence: true })");
