@@ -330,7 +330,7 @@ async function promoteClaimedResults(
   } as never).$returningId();
   const discoveryRunId = dr.id;
   const { toRawFindRow, associateDiscoveredPeople } = await import("../discovery/index");
-  const { processRun, skippedCount } = await import("../discovery/consolidate");
+  const { processRun } = await import("../discovery/consolidate");
   const rawRows: Array<ReturnType<typeof toRawFindRow>> = [];
   for (let i = 0; i < ids.length; i++) {
     const rec = finalRecords.get(ids[i])!;
@@ -394,17 +394,15 @@ async function promoteClaimedResults(
   }
   const promoted = stamped.length;
   const notSaved = ids.length - unstorable - promoted;
-  if (notSaved > 0 && skippedCount(persisted) > 0) {
-    const why = [
-      persisted.prospectsSkippedSuppressed ? `${persisted.prospectsSkippedSuppressed} on a suppression list` : "",
-      persisted.prospectsSkippedNameOnly ? `${persisted.prospectsSkippedNameOnly} matching someone in People by name only` : "",
-      persisted.prospectsSkippedNoName ? `${persisted.prospectsSkippedNoName} with no full name` : "",
-      persisted.prospectsSkippedArchived ? `${persisted.prospectsSkippedArchived} archived` : "",
-    ].filter(Boolean).join(", ");
-    errors.push(`${notSaved} not saved to People: ${why}`);
-  } else if (notSaved > 0) {
-    errors.push(`${notSaved} not saved to People`);
-  }
+  // The reasons are read off the result directly, so promote needs nothing
+  // from the consolidation but processRun (areE1Sources mocks it alone).
+  const why = [
+    persisted?.prospectsSkippedSuppressed ? `${persisted.prospectsSkippedSuppressed} on a suppression list` : "",
+    persisted?.prospectsSkippedNameOnly ? `${persisted.prospectsSkippedNameOnly} matching someone in People by name only` : "",
+    persisted?.prospectsSkippedNoName ? `${persisted.prospectsSkippedNoName} with no full name` : "",
+    persisted?.prospectsSkippedArchived ? `${persisted.prospectsSkippedArchived} archived` : "",
+  ].filter(Boolean).join(", ");
+  if (notSaved > 0) errors.push(`${notSaved} not saved to People${why ? `: ${why}` : ""}`);
   const { saved: _saved, ...counts } = persisted;
   return { promoted, acquired, unitsSpent, failed, discoveryRunId, errors, persisted: counts };
 }
