@@ -80,8 +80,12 @@ describe("pipeline alerts point at something real (report #3)", () => {
   it("orphaned alerts are not returned", () => {
     const src = read("server/routers/pipelineAlerts.ts");
     const { text } = slice(src, "list: workspaceProcedure", "/** Dismiss an alert */");
-    expect(text).toMatch(/\.filter\(\(a\) => oppMap\[a\.opportunityId\]\)/);
-    expect(text).not.toMatch(/opportunity: oppMap\[a\.opportunityId\] \?\? null/);
+    // 2026-11-06 (audit R15, R66): the orphan drop moved into the query — an
+    // inner join to the alert's deal, which also keeps closed deals out and
+    // lets the limit count shown alerts. The guarantee is the same: no alert
+    // without a deal (pipelineAlertsFixes.test.ts runs it).
+    expect(text).toContain(".innerJoin(opportunities, eq(opportunities.id, pipelineAlerts.opportunityId))");
+    expect(text).not.toMatch(/\.leftJoin\(opportunities/);
   });
 
   it("View Opp links to the opportunity, not the board", () => {

@@ -363,7 +363,6 @@ export function buildPrintHTML(opts: {
 
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <title>${esc(proposal.title)} — ${esc(proposal.clientName)}</title>
-<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;800&display=swap" rel="stylesheet">
 <style>${CSS}</style></head>
 <body><div class="page">
 

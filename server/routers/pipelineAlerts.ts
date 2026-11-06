@@ -1,6 +1,7 @@
 /**
  * Pipeline Health Alerts (CRMA-012)
- * Detects: no_activity, closing_soon_regression, amount_change, no_champion
+ * Detects: no_activity, closing_soon_regression, past_close_date, no_champion
+ * (the sweep), and amount_change (when a deal's amount is written).
  */
 import { z } from "zod";
 import { router } from "../_core/trpc";
@@ -9,8 +10,13 @@ import { getDb } from "../db";
 import { changeOpportunityStage } from "../services/stageChange";
 import { refreshDaysInStage } from "../services/dealDates";
 import { closedStageKeys, stageIndexFor } from "../_core/stageSemantics";
+import { workspaceNotifyUserId } from "../_core/activeMembers";
+import { escapeHtml } from "@shared/escapeHtml";
+import { storedToCalendarDate } from "@shared/calendarDate";
+import { zonedYmd } from "../services/dealMetrics";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { TRPCError } from "@trpc/server";
-import { eq, and, inArray, isNull, desc, lt, gte, notInArray, sql } from "drizzle-orm";
+import { eq, and, count, inArray, isNull, isNotNull, desc, gte, notInArray, or } from "drizzle-orm";
 import {
   pipelineAlerts,
   opportunities,
@@ -24,30 +30,50 @@ import {
 const ALERT_THRESHOLDS = {
   noActivityDays: 14,        // no activity in 14 days
   closingSoonDays: 30,       // closing within 30 days
-  regressionThreshold: 10,   // win prob dropped by 10+ points
+  // A person's dismissal holds this long; after it the alert comes back if the
+  // deal still needs it (audit 2026-10-20, R15).
+  snoozeDays: 7,
+  // A change of at least this share of a deal's amount raises amount_change.
+  amountChangeShare: 0.2,
 };
 
-/**
- * Workspace-scoped pipeline-alert scan. Extracted from the `scan` tRPC
- * mutation so the cron job can iterate workspaces without going through
- * a request context. Returns { scanned, created }.
- *
- * Idempotent: each (opportunity, alertType) pair only gets a new row
- * while the previous one is undismissed, so re-running the scan in a
- * tight loop does not flood the alerts table.
- */
+/** The types the sweep decides from the deal's facts; amount_change is raised when the amount is written. */
+const SCANNED_TYPES = ["no_activity", "closing_soon_regression", "past_close_date", "no_champion"] as const;
+type ScannedType = (typeof SCANNED_TYPES)[number];
+
 /** Deals read together by the 15-minute alert sweep. */
 const ALERT_CHUNK = 500;
 
-export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ scanned: number; created: number }> {
+const DAY_MS = 86_400_000;
+const dayNumber = (ymd: string) => Math.round(Date.parse(`${ymd}T00:00:00Z`) / DAY_MS);
+
+/**
+ * Workspace-scoped pipeline-alert scan, run by the 15-minute sweep and by the
+ * page's "Run Health Scan". Returns { scanned, created, resolved }.
+ *
+ * Each (deal, type) pair has one live alert at most. What changed for R15:
+ *   • a dismissal is a snooze — a person's dismissal holds for snoozeDays, and
+ *     only then may the alert come back, if its cause has not cleared. Every
+ *     scan regenerated it, so a dismissed alert was back within 15 minutes;
+ *   • an alert whose cause has cleared (activity logged, a contact role added,
+ *     a close date or win % changed) resolves itself, and so does every alert
+ *     on a deal that has closed or is gone. Resolved alerts carry no
+ *     dismissedByUserId, so they do not snooze anything.
+ * And for R38: a close date that has passed is past_close_date, not "closing
+ * soon"; closing soon means within closingSoonDays from today.
+ */
+export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ scanned: number; created: number; resolved: number }> {
   const db = await getDb();
-  if (!db) return { scanned: 0, created: 0 };
+  if (!db) return { scanned: 0, created: 0, resolved: 0 };
   const now = new Date();
   // Days in stage, counted from when the deal entered it (R14) — before
   // anything below, or the stuck-deal rules read yesterday's number.
   await refreshDaysInStage(db, wsId, now);
-  const noActivityCutoff = new Date(now.getTime() - ALERT_THRESHOLDS.noActivityDays * 86400000);
-  const closingSoonCutoff = new Date(now.getTime() + ALERT_THRESHOLDS.closingSoonDays * 86400000);
+  const noActivityCutoff = new Date(now.getTime() - ALERT_THRESHOLDS.noActivityDays * DAY_MS);
+  const snoozeCutoff = new Date(now.getTime() - ALERT_THRESHOLDS.snoozeDays * DAY_MS);
+  // Close dates are calendar dates; "today" is the workspace's.
+  const { y, m, day } = zonedYmd(await getWorkspaceTimezone(wsId), now);
+  const today = dayNumber(`${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
 
   // The deals' facts in three reads per ALERT_CHUNK deals, not three or four
   // reads per deal (audit 2026-10-20, R66, X4.4): this runs every 15 minutes
@@ -58,12 +84,20 @@ export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ sc
   }).from(opportunities).where(eq(opportunities.workspaceId, wsId));
   const stages = await stageIndexFor(db, wsId);
   const activeOpps = opps.filter((o) => stages.isOpen(o.stage));
+  const activeIds = new Set(activeOpps.map((o) => o.id));
   let created = 0;
+  const toResolve: number[] = [];
+
+  // Live alerts on a deal that has closed, or no longer exists, are resolved.
+  const live = await db.select({ id: pipelineAlerts.id, opportunityId: pipelineAlerts.opportunityId })
+    .from(pipelineAlerts)
+    .where(and(eq(pipelineAlerts.workspaceId, wsId), isNull(pipelineAlerts.dismissedAt)));
+  for (const a of live) if (!activeIds.has(a.opportunityId)) toResolve.push(a.id);
 
   for (let i = 0; i < activeOpps.length; i += ALERT_CHUNK) {
     const chunk = activeOpps.slice(i, i + ALERT_CHUNK);
     const ids = chunk.map((o) => o.id);
-    const [recent, open, roles] = await Promise.all([
+    const [recent, held, roles] = await Promise.all([
       db.select({ id: activities.relatedId }).from(activities)
         .where(and(
           eq(activities.workspaceId, wsId),
@@ -71,44 +105,151 @@ export async function scanPipelineAlertsForWorkspace(wsId: number): Promise<{ sc
           inArray(activities.relatedId, ids),
           gte(activities.createdAt, noActivityCutoff),
         )).groupBy(activities.relatedId),
-      db.select({ id: pipelineAlerts.opportunityId, type: pipelineAlerts.alertType }).from(pipelineAlerts)
-        .where(and(inArray(pipelineAlerts.opportunityId, ids), isNull(pipelineAlerts.dismissedAt))),
+      // Live alerts, and those a person dismissed within the snooze.
+      db.select({ id: pipelineAlerts.id, opp: pipelineAlerts.opportunityId, type: pipelineAlerts.alertType, dismissedAt: pipelineAlerts.dismissedAt })
+        .from(pipelineAlerts)
+        .where(and(
+          eq(pipelineAlerts.workspaceId, wsId),
+          inArray(pipelineAlerts.opportunityId, ids),
+          or(
+            isNull(pipelineAlerts.dismissedAt),
+            and(isNotNull(pipelineAlerts.dismissedByUserId), gte(pipelineAlerts.dismissedAt, snoozeCutoff)),
+          ),
+        )),
       db.select({ id: opportunityContactRoles.opportunityId }).from(opportunityContactRoles)
         .where(inArray(opportunityContactRoles.opportunityId, ids)).groupBy(opportunityContactRoles.opportunityId),
     ]);
     const active = new Set(recent.map((r) => r.id));
-    const alerted = new Set(open.map((r) => `${r.id}:${r.type}`));
+    const blocked = new Set(held.map((r) => `${r.opp}:${r.type}`));
     const championed = new Set(roles.map((r) => r.id));
     const fresh: (typeof pipelineAlerts.$inferInsert)[] = [];
     for (const opp of chunk) {
-      // No-activity check
-      if (!active.has(opp.id) && !alerted.has(`${opp.id}:no_activity`)) {
-        fresh.push({
-          workspaceId: wsId, opportunityId: opp.id, alertType: "no_activity",
-          details: { daysSinceActivity: ALERT_THRESHOLDS.noActivityDays, oppName: opp.name },
-        });
+      const closeDay = storedToCalendarDate(opp.closeDate);
+      const daysUntilClose = closeDay ? dayNumber(closeDay) - today : null;
+      const due: Partial<Record<ScannedType, Record<string, unknown>>> = {};
+      if (!active.has(opp.id)) {
+        due.no_activity = { daysSinceActivity: ALERT_THRESHOLDS.noActivityDays, oppName: opp.name };
       }
-      // Closing-soon-with-low-prob check
-      if (opp.closeDate && opp.closeDate <= closingSoonCutoff && opp.winProb < 50 && !alerted.has(`${opp.id}:closing_soon_regression`)) {
-        const daysUntilClose = Math.ceil((opp.closeDate.getTime() - now.getTime()) / 86400000);
-        fresh.push({
-          workspaceId: wsId, opportunityId: opp.id, alertType: "closing_soon_regression",
-          details: { daysUntilClose, winProb: opp.winProb, closeDate: opp.closeDate.toISOString(), oppName: opp.name },
-        });
+      if (daysUntilClose !== null && daysUntilClose < 0) {
+        due.past_close_date = { daysPastClose: -daysUntilClose, winProb: opp.winProb, closeDate: closeDay, oppName: opp.name };
+      } else if (daysUntilClose !== null && daysUntilClose <= ALERT_THRESHOLDS.closingSoonDays && opp.winProb < 50) {
+        due.closing_soon_regression = { daysUntilClose, winProb: opp.winProb, closeDate: closeDay, oppName: opp.name };
       }
-      // No-champion check
-      if (!championed.has(opp.id) && !alerted.has(`${opp.id}:no_champion`)) {
-        fresh.push({
-          workspaceId: wsId, opportunityId: opp.id, alertType: "no_champion",
-          details: { oppName: opp.name, stage: opp.stage },
-        });
+      if (!championed.has(opp.id)) {
+        due.no_champion = { oppName: opp.name, stage: opp.stage };
+      }
+      for (const type of SCANNED_TYPES) {
+        const details = due[type];
+        if (details && !blocked.has(`${opp.id}:${type}`)) {
+          fresh.push({ workspaceId: wsId, opportunityId: opp.id, alertType: type, details });
+        }
+      }
+      // A live alert whose cause has cleared resolves.
+      for (const r of held) {
+        if (r.opp === opp.id && r.dismissedAt == null && (SCANNED_TYPES as readonly string[]).includes(r.type) && !due[r.type as ScannedType]) {
+          toResolve.push(r.id);
+        }
       }
     }
     if (fresh.length) await db.insert(pipelineAlerts).values(fresh);
     created += fresh.length;
   }
 
-  return { scanned: activeOpps.length, created };
+  for (let i = 0; i < toResolve.length; i += ALERT_CHUNK) {
+    await db.update(pipelineAlerts).set({ dismissedAt: now, dismissedByUserId: null })
+      .where(and(eq(pipelineAlerts.workspaceId, wsId), inArray(pipelineAlerts.id, toResolve.slice(i, i + ALERT_CHUNK))));
+  }
+
+  return { scanned: activeOpps.length, created, resolved: toResolve.length };
+}
+
+/**
+ * A deal's amount was written (audit 2026-10-20, R38: amount_change was named
+ * on the alerts page and never raised). An open deal whose amount moves by at
+ * least amountChangeShare of what it was gets one live amount_change alert; a
+ * further change updates that alert's current amount. Best-effort: an alert
+ * must never fail the write that caused it.
+ */
+export async function noteAmountChange(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  wsId: number,
+  opp: { id: number; name: string; stage: string },
+  previous: number,
+  current: number,
+): Promise<void> {
+  try {
+    if (!(previous > 0) || !Number.isFinite(current)) return;
+    if (Math.abs(current - previous) < previous * ALERT_THRESHOLDS.amountChangeShare) return;
+    if (!(await stageIndexFor(db, wsId)).isOpen(opp.stage)) return;
+    const [open] = await db.select({ id: pipelineAlerts.id, details: pipelineAlerts.details }).from(pipelineAlerts)
+      .where(and(
+        eq(pipelineAlerts.workspaceId, wsId),
+        eq(pipelineAlerts.opportunityId, opp.id),
+        eq(pipelineAlerts.alertType, "amount_change"),
+        isNull(pipelineAlerts.dismissedAt),
+      )).limit(1);
+    if (open) {
+      const was = Number((open.details as { previousAmount?: number } | null)?.previousAmount ?? previous);
+      await db.update(pipelineAlerts).set({ details: { previousAmount: was, currentAmount: current, oppName: opp.name } })
+        .where(and(eq(pipelineAlerts.id, open.id), eq(pipelineAlerts.workspaceId, wsId)));
+      return;
+    }
+    await db.insert(pipelineAlerts).values({
+      workspaceId: wsId, opportunityId: opp.id, alertType: "amount_change",
+      details: { previousAmount: previous, currentAmount: current, oppName: opp.name },
+    });
+  } catch (e) {
+    console.error("[PipelineAlerts] amount change alert failed:", (e as Error).message);
+  }
+}
+
+/**
+ * Days in stage before an open deal counts as stuck (R38). A rule for the
+ * deal's stage decides for that stage; the other stages take the lowest rule
+ * that names no stage, else `defaultMinDays`. A rule for one stage used to
+ * lower every stage's threshold, because the fallback was the minimum over
+ * every rule.
+ */
+export function stuckThresholds(
+  rules: Array<{ triggerConfig: unknown }>,
+  defaultMinDays: number,
+): (stage: string | null | undefined) => number {
+  const byStage: Record<string, number> = {};
+  let anyStage: number | null = null;
+  for (const rule of rules) {
+    const cfg = (rule.triggerConfig ?? {}) as { stage?: string; days?: number };
+    const days = cfg.days ?? defaultMinDays;
+    if (cfg.stage) byStage[cfg.stage] = Math.min(byStage[cfg.stage] ?? Infinity, days);
+    else anyStage = Math.min(anyStage ?? Infinity, days);
+  }
+  const fallback = anyStage ?? defaultMinDays;
+  return (stage) => (stage && byStage[stage] !== undefined ? byStage[stage]! : fallback);
+}
+
+/** Open deals past their stuck threshold, with the threshold each was held to. */
+async function loadStuckDeals(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, wsId: number, defaultMinDays: number) {
+  const rules = await db
+    .select({ triggerConfig: workflowRules.triggerConfig })
+    .from(workflowRules)
+    .where(and(eq(workflowRules.workspaceId, wsId), eq(workflowRules.enabled, true), eq(workflowRules.triggerType, "deal_stuck")));
+  const thresholdFor = stuckThresholds(rules, defaultMinDays);
+  const openOpps = await db
+    .select({
+      id: opportunities.id,
+      name: opportunities.name,
+      stage: opportunities.stage,
+      value: opportunities.value,
+      winProb: opportunities.winProb,
+      closeDate: opportunities.closeDate,
+      daysInStage: opportunities.daysInStage,
+      ownerId: opportunities.ownerUserId,
+      pipelineId: opportunities.pipelineId,
+    })
+    .from(opportunities)
+    .where(and(eq(opportunities.workspaceId, wsId), notInArray(opportunities.stage, await closedStageKeys(db, wsId))));
+  return openOpps
+    .map((d) => ({ ...d, threshold: thresholdFor(d.stage) }))
+    .filter((d) => (d.daysInStage ?? 0) >= d.threshold);
 }
 
 /**
@@ -131,140 +272,15 @@ export async function runPipelineAlertsCron(): Promise<void> {
 }
 
 export const pipelineAlertsRouter = router({
-  /** Run health scan for all active opportunities in the workspace */
+  /**
+   * Run the health scan now — the same scan as the sweep. This was a second
+   * copy that read three or four rows per deal (R66) and, unlike the sweep,
+   * never snoozed or resolved anything.
+   */
   scan: workspaceProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-
-    const wsId = ctx.workspace.id;
-    const now = new Date();
-    const noActivityCutoff = new Date(now.getTime() - ALERT_THRESHOLDS.noActivityDays * 86400000);
-    const closingSoonCutoff = new Date(now.getTime() + ALERT_THRESHOLDS.closingSoonDays * 86400000);
-    // Same as the sweep: days in stage first, so "stuck" reads today's count.
-    await refreshDaysInStage(db, wsId, now);
-
-    // Get all active opportunities
-    const opps = await db
-      .select()
-      .from(opportunities)
-      .where(
-        and(
-          eq(opportunities.workspaceId, wsId),
-          // Only active stages
-        )
-      );
-
-    const stages = await stageIndexFor(db, wsId);
-    const activeOpps = opps.filter((o) => stages.isOpen(o.stage));
-
-    let created = 0;
-
-    for (const opp of activeOpps) {
-      // Check 1: No activity in N days
-      const recentActivities = await db
-        .select()
-        .from(activities)
-        .where(
-          and(
-            eq(activities.workspaceId, wsId),
-            eq(activities.relatedType, "opportunity"),
-            eq(activities.relatedId, opp.id),
-            gte(activities.createdAt, noActivityCutoff)
-          )
-        )
-        .limit(1);
-
-      if (recentActivities.length === 0) {
-        // Check if this alert already exists (undismissed)
-        const existing = await db
-          .select()
-          .from(pipelineAlerts)
-          .where(
-            and(
-              eq(pipelineAlerts.opportunityId, opp.id),
-              eq(pipelineAlerts.alertType, "no_activity"),
-              isNull(pipelineAlerts.dismissedAt)
-            )
-          )
-          .limit(1);
-
-        if (existing.length === 0) {
-          await db.insert(pipelineAlerts).values({
-            workspaceId: wsId,
-            opportunityId: opp.id,
-            alertType: "no_activity",
-            details: { daysSinceActivity: ALERT_THRESHOLDS.noActivityDays, oppName: opp.name },
-          });
-          created++;
-        }
-      }
-
-      // Check 2: Closing soon with low win probability
-      if (opp.closeDate && opp.closeDate <= closingSoonCutoff && opp.winProb < 50) {
-        const existing = await db
-          .select()
-          .from(pipelineAlerts)
-          .where(
-            and(
-              eq(pipelineAlerts.opportunityId, opp.id),
-              eq(pipelineAlerts.alertType, "closing_soon_regression"),
-              isNull(pipelineAlerts.dismissedAt)
-            )
-          )
-          .limit(1);
-
-        if (existing.length === 0) {
-          const daysUntilClose = Math.ceil(
-            (opp.closeDate.getTime() - now.getTime()) / 86400000
-          );
-          await db.insert(pipelineAlerts).values({
-            workspaceId: wsId,
-            opportunityId: opp.id,
-            alertType: "closing_soon_regression",
-            details: {
-              daysUntilClose,
-              winProb: opp.winProb,
-              closeDate: opp.closeDate.toISOString(),
-              oppName: opp.name,
-            },
-          });
-          created++;
-        }
-      }
-
-      // Check 3: No champion contact linked
-      const roles = await db
-        .select()
-        .from(opportunityContactRoles)
-        .where(eq(opportunityContactRoles.opportunityId, opp.id))
-        .limit(1);
-
-      if (roles.length === 0) {
-        const existing = await db
-          .select()
-          .from(pipelineAlerts)
-          .where(
-            and(
-              eq(pipelineAlerts.opportunityId, opp.id),
-              eq(pipelineAlerts.alertType, "no_champion"),
-              isNull(pipelineAlerts.dismissedAt)
-            )
-          )
-          .limit(1);
-
-        if (existing.length === 0) {
-          await db.insert(pipelineAlerts).values({
-            workspaceId: wsId,
-            opportunityId: opp.id,
-            alertType: "no_champion",
-            details: { oppName: opp.name, stage: opp.stage },
-          });
-          created++;
-        }
-      }
-    }
-
-    return { scanned: activeOpps.length, created };
+    return scanPipelineAlertsForWorkspace(ctx.workspace.id);
   }),
 
   /** List active (undismissed) alerts for the workspace */
@@ -277,29 +293,6 @@ export const pipelineAlertsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      const alerts = await db
-        .select()
-        .from(pipelineAlerts)
-        .where(
-          and(
-            eq(pipelineAlerts.workspaceId, ctx.workspace.id),
-            isNull(pipelineAlerts.dismissedAt)
-          )
-        )
-        .orderBy(desc(pipelineAlerts.createdAt))
-        .limit(input?.limit ?? 50);
-
-      // Attach opportunity names
-      const oppIds = Array.from(new Set(alerts.map((a) => a.opportunityId)));
-      const opps =
-        oppIds.length > 0
-          ? await db
-              .select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value, winProb: opportunities.winProb })
-              .from(opportunities)
-              .where(eq(opportunities.workspaceId, ctx.workspace.id))
-          : [];
-      const oppMap = Object.fromEntries(opps.map((o) => [o.id, o]));
-
       /**
        * An alert about an opportunity that no longer exists is not an alert,
        * it is debris. These rows survive the opportunity being deleted (no FK
@@ -309,17 +302,34 @@ export const pipelineAlertsRouter = router({
        * orphans of the sample-data removal, each offering a "View Opp" link
        * to nothing.
        *
-       * Dropped on read rather than deleted: the row is evidence of what the
-       * engine once saw, and this procedure is a reader. Whatever removes
-       * opportunities should dismiss their alerts; until it does, this stops
-       * them being presented as live work.
+       * Neither is an alert on a deal that has closed (audit 2026-10-20, R15):
+       * the sweep resolves those, and until it runs this does not offer them.
+       * Joined in the query, so the limit counts alerts that are shown, and
+       * only the alerted deals are read, not the whole workspace's.
        */
-      return alerts
-        .filter((a) => oppMap[a.opportunityId])
-        .map((a) => ({
-          ...a,
-          opportunity: oppMap[a.opportunityId]!,
-        }));
+      const closed = await closedStageKeys(db, ctx.workspace.id);
+      const rows = await db
+        .select({
+          alert: pipelineAlerts,
+          oppId: opportunities.id, oppName: opportunities.name, oppStage: opportunities.stage,
+          oppValue: opportunities.value, oppWinProb: opportunities.winProb,
+        })
+        .from(pipelineAlerts)
+        .innerJoin(opportunities, eq(opportunities.id, pipelineAlerts.opportunityId))
+        .where(
+          and(
+            eq(pipelineAlerts.workspaceId, ctx.workspace.id),
+            eq(opportunities.workspaceId, ctx.workspace.id),
+            isNull(pipelineAlerts.dismissedAt),
+            closed.length > 0 ? notInArray(opportunities.stage, closed) : undefined,
+          )
+        )
+        .orderBy(desc(pipelineAlerts.createdAt))
+        .limit(input?.limit ?? 50);
+      return rows.map((r) => ({
+        ...r.alert,
+        opportunity: { id: r.oppId, name: r.oppName, stage: r.oppStage, value: r.oppValue, winProb: r.oppWinProb },
+      }));
     }),
 
   /** Dismiss an alert */
@@ -359,29 +369,37 @@ export const pipelineAlertsRouter = router({
       return { ok: true };
     }),
 
-  /** Get alert count summary */
+  /** Live alerts by type — the same alerts the list shows, counted in SQL. */
   summary: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const alerts = await db
-      .select()
+    const closed = await closedStageKeys(db, ctx.workspace.id);
+    const rows = await db
+      .select({ type: pipelineAlerts.alertType, n: count() })
       .from(pipelineAlerts)
+      .innerJoin(opportunities, eq(opportunities.id, pipelineAlerts.opportunityId))
       .where(
         and(
           eq(pipelineAlerts.workspaceId, ctx.workspace.id),
-          isNull(pipelineAlerts.dismissedAt)
+          eq(opportunities.workspaceId, ctx.workspace.id),
+          isNull(pipelineAlerts.dismissedAt),
+          closed.length > 0 ? notInArray(opportunities.stage, closed) : undefined,
         )
-      );
+      )
+      .groupBy(pipelineAlerts.alertType);
     const counts: Record<string, number> = {
       no_activity: 0,
       closing_soon_regression: 0,
+      past_close_date: 0,
       amount_change: 0,
       no_champion: 0,
     };
-    for (const a of alerts) {
-      counts[a.alertType] = (counts[a.alertType] ?? 0) + 1;
+    let total = 0;
+    for (const r of rows) {
+      counts[r.type] = (counts[r.type] ?? 0) + Number(r.n);
+      total += Number(r.n);
     }
-    return { total: alerts.length, byType: counts };
+    return { total, byType: counts };
   }),
 
   /**
@@ -394,74 +412,18 @@ export const pipelineAlertsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      // Gather all deal_stuck rules to determine the lowest threshold
-      const rules = await db
-        .select()
-        .from(workflowRules)
-        .where(
-          and(
-            eq(workflowRules.workspaceId, ctx.workspace.id),
-            eq(workflowRules.enabled, true),
-            eq(workflowRules.triggerType, "deal_stuck"),
-          )
-        );
-
-      // Build per-stage thresholds from rules; default to input.minDays ?? 7
-      const defaultMinDays = input.minDays ?? 7;
-      const stageThresholds: Record<string, number> = {};
-      for (const rule of rules) {
-        const cfg = (rule.triggerConfig ?? {}) as { stage?: string; days?: number };
-        const days = cfg.days ?? defaultMinDays;
-        if (cfg.stage) {
-          stageThresholds[cfg.stage] = Math.min(stageThresholds[cfg.stage] ?? Infinity, days);
-        }
-      }
-      const globalMin = rules.length > 0
-        ? Math.min(...rules.map((r) => ((r.triggerConfig ?? {}) as { days?: number }).days ?? defaultMinDays))
-        : defaultMinDays;
-
-      // Fetch all open opportunities
-      const openOpps = await db
-        .select({
-          id: opportunities.id,
-          name: opportunities.name,
-          stage: opportunities.stage,
-          value: opportunities.value,
-          winProb: opportunities.winProb,
-          closeDate: opportunities.closeDate,
-          daysInStage: opportunities.daysInStage,
-          ownerId: opportunities.ownerUserId,
-        })
-        .from(opportunities)
-        .where(
-          and(
-            eq(opportunities.workspaceId, ctx.workspace.id),
-            notInArray(opportunities.stage, await closedStageKeys(db, ctx.workspace.id)),
-          )
-        );
-
-      // Filter to stuck deals
-      const stuckDeals = openOpps.filter((opp) => {
-        const days = opp.daysInStage ?? 0;
-        const threshold = opp.stage && stageThresholds[opp.stage] !== undefined
-          ? stageThresholds[opp.stage]!
-          : globalMin;
-        return days >= threshold;
-      });
+      const stuckDeals = await loadStuckDeals(db, ctx.workspace.id, input.minDays ?? 7);
 
       // Attach owner names
       const ownerIds = Array.from(new Set(stuckDeals.map((d) => d.ownerId).filter(Boolean) as number[]));
       const owners = ownerIds.length > 0
-        ? await db.select({ id: users.id, name: users.name }).from(users).where(sql`${users.id} IN (${sql.join(ownerIds.map((id) => sql`${id}`), sql`, `)})`)
+        ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, ownerIds))
         : [];
       const ownerMap = Object.fromEntries(owners.map((u) => [u.id, u.name]));
 
       return stuckDeals.map((d) => ({
         ...d,
         ownerName: d.ownerId ? (ownerMap[d.ownerId] ?? null) : null,
-        threshold: d.stage && stageThresholds[d.stage] !== undefined
-          ? stageThresholds[d.stage]!
-          : globalMin,
       }));
     }),
 
@@ -521,8 +483,8 @@ export const pipelineAlertsRouter = router({
     }),
 
   /**
-   * Send a digest email of stuck deals to the workspace owner (or configured notif email).
-   * Uses the workspace system sender account if configured.
+   * Send a digest email of stuck deals to the workspace's owner — a member of
+   * this workspace — through its system sender.
    */
   sendDigest: workspaceProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
@@ -530,52 +492,31 @@ export const pipelineAlertsRouter = router({
 
     const wsId = ctx.workspace.id;
 
-    // Gather stuck deals (reuse same logic as getStuckDeals)
-    const rules = await db
-      .select()
-      .from(workflowRules)
-      .where(and(eq(workflowRules.workspaceId, wsId), eq(workflowRules.enabled, true), eq(workflowRules.triggerType, "deal_stuck")));
-
-    const defaultMinDays = 7;
-    const stageThresholds: Record<string, number> = {};
-    for (const rule of rules) {
-      const cfg = (rule.triggerConfig ?? {}) as { stage?: string; days?: number };
-      const days = cfg.days ?? defaultMinDays;
-      if (cfg.stage) stageThresholds[cfg.stage] = Math.min(stageThresholds[cfg.stage] ?? Infinity, days);
-    }
-    const globalMin = rules.length > 0
-      ? Math.min(...rules.map((r) => ((r.triggerConfig ?? {}) as { days?: number }).days ?? defaultMinDays))
-      : defaultMinDays;
-
-    const openOpps = await db
-      .select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value, daysInStage: opportunities.daysInStage, ownerId: opportunities.ownerUserId })
-      .from(opportunities)
-      .where(and(eq(opportunities.workspaceId, wsId), notInArray(opportunities.stage, await closedStageKeys(db, wsId))));
-
-    const stuckDeals = openOpps.filter((opp) => {
-      const days = opp.daysInStage ?? 0;
-      const threshold = opp.stage && stageThresholds[opp.stage] !== undefined ? stageThresholds[opp.stage]! : globalMin;
-      return days >= threshold;
-    });
+    // The same stuck deals, by the same thresholds, as the page lists.
+    const stuckDeals = await loadStuckDeals(db, wsId, 7);
 
     if (stuckDeals.length === 0) {
       return { ok: true, sent: false, reason: "No stuck deals found" };
     }
 
-    // Find the workspace owner's email (user with ownerOpenId or the calling user)
-    const { ENV } = await import("../_core/env");
-    const [ownerUser] = await db
-      .select({ id: users.id, email: users.email, name: users.name })
-      .from(users)
-      .where(sql`${users.openId} = ${ENV.ownerOpenId}`);
-    const recipientEmail = ownerUser?.email ?? ctx.user.email;
+    /**
+     * The workspace's own owner, resolved to someone still in it, else the
+     * member asking (audit 2026-10-20, R2). This read the PLATFORM owner
+     * (ENV.ownerOpenId), the operator of the whole install, so every
+     * workspace's stuck deals were mailed to one person outside it.
+     */
+    const ownerId = await workspaceNotifyUserId(wsId);
+    const [ownerUser] = ownerId
+      ? await db.select({ email: users.email }).from(users).where(eq(users.id, ownerId)).limit(1)
+      : [];
+    const recipientEmail = ownerUser?.email || ctx.user.email;
     if (!recipientEmail) {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No recipient email found for workspace owner" });
     }
 
     // Build email HTML
     const rows = stuckDeals
-      .map((d) => `<tr><td style="padding:4px 8px;border-bottom:1px solid #eee">${d.name}</td><td style="padding:4px 8px;border-bottom:1px solid #eee">${d.stage}</td><td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">${d.daysInStage ?? 0} days</td><td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">$${Number(d.value ?? 0).toLocaleString()}</td></tr>`)
+      .map((d) => `<tr><td style="padding:4px 8px;border-bottom:1px solid #eee">${escapeHtml(d.name)}</td><td style="padding:4px 8px;border-bottom:1px solid #eee">${escapeHtml(d.stage)}</td><td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">${d.daysInStage ?? 0} days</td><td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">$${Number(d.value ?? 0).toLocaleString()}</td></tr>`)
       .join("");
     const html = `<h2 style="font-family:sans-serif">Pipeline Alerts Digest</h2>
 <p style="font-family:sans-serif">${stuckDeals.length} deal${stuckDeals.length !== 1 ? "s" : ""} are stuck in their current stage as of ${new Date().toLocaleDateString()}.</p>

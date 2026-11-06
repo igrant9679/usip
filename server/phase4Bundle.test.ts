@@ -106,8 +106,9 @@ describe("pages load on demand", () => {
       if (rel !== "client/src/components/usip/RichTextEditor.tsx") {
         expect(src, rel).not.toMatch(/from "[^"]*RichTextEditorImpl"/);
       }
-      // AIChatBox is imported by nothing (audit X6.1).
-      if (rel !== "client/src/components/usip/LazyStreamdown.tsx" && rel !== "client/src/components/AIChatBox.tsx") {
+      // AIChatBox, imported by nothing (audit X6.1), was exempt here until it
+      // was deleted on 2026-11-06 (audit G67); LazyStreamdown is the one home.
+      if (rel !== "client/src/components/usip/LazyStreamdown.tsx") {
         expect(src, rel).not.toMatch(/from "streamdown"/);
       }
     }

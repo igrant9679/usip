@@ -33,6 +33,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import type { ReactNode } from "react";
+import { chartText } from "@/lib/chartText";
 
 /* ─── Shared palette ─────────────────────────────────────────────────────── */
 const PALETTE = [
@@ -403,6 +405,31 @@ function SingleValueWidget({ data }: { data: any }) {
   );
 }
 
+/* ─── Text alternative ───────────────────────────────────────────────────── */
+/**
+ * A drawn chart is named by its summary and followed by a visually hidden
+ * table of what it plots; the SVG itself is hidden from assistive tech, which
+ * met it as an unlabelled graphic (G64; the words come from @/lib/chartText).
+ */
+function ChartFigure({ data, children }: { data: any; children: ReactNode }) {
+  const text = chartText(data);
+  if (!text) return <>{children}</>;
+  return (
+    <figure className="m-0" aria-label={text.summary}>
+      <div aria-hidden="true">{children}</div>
+      <table className="sr-only">
+        <caption>{text.summary}</caption>
+        <thead><tr>{text.columns.map((c) => <th key={c} scope="col">{c}</th>)}</tr></thead>
+        <tbody>
+          {text.rows.map((r, i) => (
+            <tr key={i}>{r.map((cell, j) => (j === 0 ? <th key={j} scope="row">{cell}</th> : <td key={j}>{cell}</td>))}</tr>
+          ))}
+        </tbody>
+      </table>
+    </figure>
+  );
+}
+
 /* ─── Empty state ────────────────────────────────────────────────────────── */
 function EmptyChart() {
   return (
@@ -424,6 +451,10 @@ export interface DashboardChartRendererProps {
 
 export function DashboardChartRenderer({ data, height }: DashboardChartRendererProps) {
   if (!data) return <EmptyChart />;
+  return <ChartFigure data={data}><ChartBody data={data} height={height} /></ChartFigure>;
+}
+
+function ChartBody({ data, height }: DashboardChartRendererProps) {
   const type = data.type as string;
 
   switch (type) {

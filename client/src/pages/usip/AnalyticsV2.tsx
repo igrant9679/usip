@@ -18,6 +18,7 @@
 import { useMemo } from "react";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { formatAmount } from "@shared/money";
 import { cn } from "@/lib/utils";
 import {
   BarChart3, TrendingUp, Users, Mail, MessageSquare, CalendarCheck, Trophy, ArrowDown, Share2,
@@ -47,12 +48,9 @@ const FUNNEL_LOOK: Record<string, { icon: typeof Mail; color: string }> = {
   closed: { icon: Trophy, color: "#d97706" },
 };
 
+// The shared compact format (R98).
 function money(v: number | string | null | undefined): string {
-  const n = Number(v ?? 0);
-  if (!Number.isFinite(n)) return "$0";
-  if (n >= 1_000_000) return "$" + (n / 1_000_000).toFixed(1) + "M";
-  if (n >= 1000) return "$" + (n / 1000).toFixed(n >= 100_000 ? 0 : 1) + "k";
-  return "$" + n.toFixed(0);
+  return formatAmount(v, { compact: true });
 }
 
 export default function AnalyticsV2() {

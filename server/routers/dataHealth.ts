@@ -1,12 +1,13 @@
 import { TRPCError } from "@trpc/server";
-import { and, count, eq, sql } from "drizzle-orm";
+import { and, count, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { contacts, prospects, prospectQueue } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { mergeContacts } from "../services/contactMerge";
+import { DUPLICATE_GROUP_SCAN_CAP, healthMetricsFrom } from "../services/dataHealthMetrics";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
-import { adminWsProcedure, repProcedure, requireMinRole, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, managerProcedure, repProcedure, requireMinRole, workspaceProcedure } from "../_core/workspace";
 
 export const dataHealthRouter = router({
   /**
@@ -46,52 +47,29 @@ export const dataHealthRouter = router({
         verifiedRisky: sql<number>`SUM(CASE WHEN ${prospects.emailStatus} = 'risky' THEN 1 ELSE 0 END)`,
         verifiedInvalid: sql<number>`SUM(CASE WHEN ${prospects.emailStatus} = 'invalid' THEN 1 ELSE 0 END)`,
         verifiedUnknown: sql<number>`SUM(CASE WHEN ${prospects.emailStatus} IS NULL OR ${prospects.emailStatus} = 'unknown' THEN 1 ELSE 0 END)`,
-        enrichedLast90Days: sql<number>`SUM(CASE WHEN ${prospects.updatedAt} >= DATE_SUB(NOW(), INTERVAL 90 DAY) THEN 1 ELSE 0 END)`,
+        // Enriched means an enrichment pass ran, which stamps lastEnrichedAt.
+        // updatedAt moved on any edit, so a renamed title counted as enriched
+        // (audit 2026-10-20, P78).
+        enrichedLast90Days: sql<number>`SUM(CASE WHEN ${prospects.lastEnrichedAt} >= DATE_SUB(NOW(), INTERVAL 90 DAY) THEN 1 ELSE 0 END)`,
       })
       .from(prospects)
       .where(eq(prospects.workspaceId, wsId));
 
-    // Estimate duplicates: people sharing the same email (excluding nulls)
-    const [dupEmailResult] = await db.execute(
-      sql`SELECT COUNT(*) as cnt FROM (
-        SELECT email FROM ${prospects}
-        WHERE workspaceId = ${wsId} AND email IS NOT NULL AND email != ''
-        GROUP BY email HAVING COUNT(*) > 1
-      ) t`
-    ) as any;
-    const dupEmailGroups = Number((dupEmailResult as any[])?.[0]?.cnt ?? 0);
+    // Addresses held by more than one People row, grouped as planPeopleMerge
+    // groups them; mergeableEmailGroups drops what that merge never takes.
+    const dupEmailRows = await db
+      .select({ email: prospects.email })
+      .from(prospects)
+      .where(and(
+        eq(prospects.workspaceId, wsId),
+        sql`${prospects.email} IS NOT NULL AND ${prospects.email} <> ''`,
+        sql`${prospects.email} LIKE '%@%.%'`,
+      ))
+      .groupBy(prospects.email)
+      .having(sql`COUNT(*) > 1`)
+      .limit(DUPLICATE_GROUP_SCAN_CAP + 1);
 
-    // People sharing the same firstName+lastName+company
-    const [dupNameResult] = await db.execute(
-      sql`SELECT COUNT(*) as cnt FROM (
-        SELECT firstName, lastName, company FROM ${prospects}
-        WHERE workspaceId = ${wsId} AND firstName IS NOT NULL AND lastName IS NOT NULL AND company IS NOT NULL AND company != ''
-        GROUP BY firstName, lastName, company HAVING COUNT(*) > 1
-      ) t`
-    ) as any;
-    const dupNameGroups = Number((dupNameResult as any[])?.[0]?.cnt ?? 0);
-
-    const t = totals;
-    const total = Number(t.total);
-    return {
-      total,
-      withEmail: Number(t.withEmail),
-      withPhone: Number(t.withPhone),
-      withCompany: Number(t.withCompany),
-      withTitle: Number(t.withTitle),
-      withLinkedIn: Number(t.withLinkedIn),
-      verifiedValid: Number(t.verifiedValid),
-      verifiedAcceptAll: Number(t.verifiedAcceptAll),
-      verifiedRisky: Number(t.verifiedRisky),
-      verifiedInvalid: Number(t.verifiedInvalid),
-      verifiedUnknown: Number(t.verifiedUnknown),
-      enrichedLast90Days: Number(t.enrichedLast90Days),
-      estimatedDuplicates: dupEmailGroups + dupNameGroups,
-      pctWithEmail: total > 0 ? Math.round((Number(t.withEmail) / total) * 100) : 0,
-      pctWithPhone: total > 0 ? Math.round((Number(t.withPhone) / total) * 100) : 0,
-      pctEnriched: total > 0 ? Math.round((Number(t.enrichedLast90Days) / total) * 100) : 0,
-      pctVerified: total > 0 ? Math.round(((Number(t.verifiedValid) + Number(t.verifiedAcceptAll) + Number(t.verifiedRisky) + Number(t.verifiedInvalid)) / total) * 100) : 0,
-    };
+    return healthMetricsFrom(totals, dupEmailRows);
   }),
 
   /**
@@ -112,6 +90,27 @@ export const dataHealthRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       return mergeContacts(db, ctx.workspace.id, { ...input, actorUserId: ctx.user.id });
+    }),
+
+  /**
+   * Every record in a duplicate-contact group, for the merge dialog. It
+   * loaded the first two and said "only the first two are shown" (audit
+   * 2026-10-20, P95). The fields are the ones a merge can carry over.
+   */
+  duplicateGroupRecords: workspaceProcedure
+    .input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(50) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      return db
+        .select({
+          id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName, email: contacts.email,
+          title: contacts.title, phone: contacts.phone, linkedinUrl: contacts.linkedinUrl, city: contacts.city,
+          seniority: contacts.seniority, accountId: contacts.accountId, createdAt: contacts.createdAt,
+        })
+        .from(contacts)
+        .where(and(eq(contacts.workspaceId, ctx.workspace.id), inArray(contacts.id, input.ids)))
+        .orderBy(contacts.createdAt, contacts.id);
     }),
 
   /**
@@ -370,14 +369,25 @@ export const dataHealthRouter = router({
 
   /**
    * "Link all unlinked" — the existing backfill, not a second batch loop.
-   * `linkUnlinkedContacts` is already keyset-drained, already isolates per-row
-   * failures, and already runs after every CSV import and nightly; the only
-   * thing it was missing was a button.
+   * `linkUnlinkedContacts` is already keyset-drained and already isolates
+   * per-row failures.
+   *
+   * Audit 2026-10-20, P93: any rep could run it, it scanned up to 10,000
+   * contacts inside one request, and it linked a contact to a People row on a
+   * name match, merging the contact's values onto what may be another human.
+   * Now: managers only; one page per call, with a cursor to carry on from;
+   * and only on an address or a LinkedIn profile. A contact whose only match
+   * is by name is left alone and counted, for someone to look at. The nightly
+   * backfill is unchanged.
    */
-  relinkAllUnlinked: repProcedure.mutation(async ({ ctx }) => {
-    const { linkUnlinkedContacts } = await import("../services/personLink");
-    return linkUnlinkedContacts({ workspaceId: ctx.workspace.id });
-  }),
+  relinkAllUnlinked: managerProcedure
+    .input(z.object({ afterId: z.number().int().min(0).default(0) }).default({ afterId: 0 }))
+    .mutation(async ({ ctx, input }) => {
+      const { linkUnlinkedContacts, RELINK_PAGE } = await import("../services/personLink");
+      return linkUnlinkedContacts({
+        workspaceId: ctx.workspace.id, afterId: input.afterId, limit: RELINK_PAGE, maxPages: 1, keysOnly: true,
+      });
+    }),
 
   /**
    * PEOPLE MERGE — plan (read-only) and execute (destructive).

@@ -15,6 +15,7 @@ import { router } from "../../_core/trpc";
 import { workspaceProcedure } from "../../_core/workspace";
 import {
   getAbVariantStats,
+  getAreStepStats,
   getReplyMix,
   getRevenueFunnel,
   getSequenceStepStats,
@@ -24,7 +25,13 @@ import {
 } from "../../services/performanceMetrics";
 
 export const metricsRouter = router({
-  /** Per-step sequence performance — which step actually books meetings. */
+  /**
+   * The Revenue Engine's per-step performance, from its own sends (audit
+   * 2026-10-20, A22): what What's Working reports as the engine's steps.
+   */
+  areSteps: workspaceProcedure.query(async ({ ctx }) => getAreStepStats(ctx.workspace.id)),
+
+  /** Per-step CRM Sequence performance (email_drafts) — the Sequences product, not the engine. */
   sequenceSteps: workspaceProcedure
     .input(z.object({ sequenceId: z.number().int().optional() }).optional())
     .query(async ({ ctx, input }) =>

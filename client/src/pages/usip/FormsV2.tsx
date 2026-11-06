@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { confirmAction } from "@/components/usip/Common";
+import { SubmissionExtras } from "@/components/usip/SubmissionExtras";
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from "@/components/ui/select";
@@ -48,6 +49,16 @@ function publicUrl(publicId: string): string {
   return `${origin}/f/${publicId}`;
 }
 
+/**
+ * An iframe that puts the form on another site (G71: there was no way to embed
+ * one from the app). /f/ pages are served frameable on purpose
+ * (server/_core/securityHeaders.ts EMBEDDABLE).
+ */
+export function formEmbedCode(publicId: string, title: string): string {
+  const safeTitle = title.replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[c]!);
+  return `<iframe src="${publicUrl(publicId)}" title="${safeTitle}" width="100%" height="640" style="border:0" loading="lazy"></iframe>`;
+}
+
 export default function FormsV2() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
@@ -72,6 +83,11 @@ export default function FormsV2() {
     const url = publicUrl(publicId);
     if (navigator?.clipboard) navigator.clipboard.writeText(url).then(() => toast.success("Public link copied")).catch(() => toast.message(url));
     else toast.message(url);
+  };
+  const copyEmbed = (f: Form) => {
+    const code = formEmbedCode(f.publicId, f.title);
+    if (navigator?.clipboard) navigator.clipboard.writeText(code).then(() => toast.success("Embed code copied — paste it into your site's HTML")).catch(() => toast.message(code));
+    else toast.message(code);
   };
 
   return (
@@ -126,6 +142,7 @@ export default function FormsV2() {
                   </div>
                   <div className="flex items-center gap-1.5 mt-2.5 pt-2.5 border-t">
                     <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" onClick={() => copyUrl(f.publicId)}><Copy className="size-3" /> Copy link</Button>
+                    <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" onClick={() => copyEmbed(f)}><Copy className="size-3" /> Embed</Button>
                     <a href={publicUrl(f.publicId)} target="_blank" rel="noreferrer"><Button size="sm" variant="ghost" className="h-7 gap-1 text-[11px]"><ExternalLink className="size-3" /> Preview</Button></a>
                     <Button size="sm" variant="ghost" className="h-7 gap-1 text-[11px]" onClick={() => setSubsFor(f)}><Inbox className="size-3" /> Submissions</Button>
                     <div className="flex-1" />
@@ -236,10 +253,11 @@ function SubmissionsDialog({ form, onClose }: { form: Form | null; onClose: () =
           ) : rows.length === 0 ? (
             <div className="text-center py-10 text-xs text-muted-foreground">No submissions yet. Share the form link to start capturing leads.</div>
           ) : rows.map((r: any) => (
-            <div key={r.id} className="flex items-center gap-3 px-3 py-2 border-b border-border/60 last:border-0">
+            <div key={r.id} className="flex items-start gap-3 px-3 py-2 border-b border-border/60 last:border-0">
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium truncate">{r.name || r.email || "Anonymous"}</div>
                 <div className="text-[11px] text-muted-foreground truncate">{[r.email, r.company].filter(Boolean).join(" · ")}</div>
+                <SubmissionExtras data={r.data} />
               </div>
               {r.leadId && <span className="shrink-0 text-[10px] rounded px-1.5 py-0.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">lead #{r.leadId}</span>}
               <div className="shrink-0 text-[10px] text-muted-foreground tabular-nums">{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : ""}</div>

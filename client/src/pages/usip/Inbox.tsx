@@ -52,7 +52,7 @@ function parseMentionBody(body: string | null | undefined): {
 export default function Inbox() {
   const utils = trpc.useUtils();
   const [filter, setFilter] = useState<FilterKind>("all");
-  const { data } = trpc.notifications.list.useQuery();
+  const { data, isLoading, isError, error } = trpc.notifications.list.useQuery();
   // Read-state only. The invalidate on success is what corrects the badge, so a
   // failure self-heals on the next load and is not worth a toast.
   const markAll = trpc.notifications.markAllRead.useMutation({ onSuccess: () => utils.notifications.invalidate(), meta: { silentError: true } });
@@ -93,7 +93,12 @@ export default function Inbox() {
             </button>
           ))}
         </div>
-        {filtered.length === 0 ? (
+        {/* Not read yet is not "Inbox zero" (audit 2026-10-20, O56). */}
+        {isLoading ? (
+          <div className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">Loading notifications…</div>
+        ) : isError ? (
+          <div className="rounded-lg border bg-card p-4 text-sm text-destructive">Notifications could not be loaded{error?.message ? `: ${error.message}` : "."}</div>
+        ) : filtered.length === 0 ? (
           <EmptyState icon={filter === "email_reply" ? MailOpen : filter === "mention" ? AtSign : InboxIcon}
             title={filter === "email_reply" ? "No email replies" : filter === "mention" ? "No mentions" : "Inbox zero"}
             description={
@@ -121,11 +126,14 @@ export default function Inbox() {
                 ? parseMentionBody(n.body)
                 : { deepLink: null, displayBody: n.body ?? "" };
 
-              // Deep-link for ARE event notifications with relatedType=are_campaign
+              // Deep-link for ARE event notifications: the campaign, or the
+              // person the notice is about (A57).
               const areDeepLink =
                 isAreEvent && n.relatedType === "are_campaign" && n.relatedId
                   ? `/are/campaigns/${n.relatedId}`
-                  : null;
+                  : isAreEvent && n.relatedType === "prospect_queue" && n.relatedId
+                    ? `/are/prospects/${n.relatedId}`
+                    : null;
 
               return (
                 <li key={n.id} className={cn("p-3 flex items-start gap-3 transition-colors", isUnread && "bg-primary/5")}>
@@ -159,7 +167,7 @@ export default function Inbox() {
                       )}
                       {isAreEvent && areDeepLink && (
                         <Link href={areDeepLink} className="text-[11px] text-violet-600 hover:underline flex items-center gap-1">
-                          <Sparkles className="size-3" /> View Campaign
+                          <Sparkles className="size-3" /> {n.relatedType === "prospect_queue" ? "View prospect" : "View Campaign"}
                         </Link>
                       )}
                       {isVoiceCall && (
