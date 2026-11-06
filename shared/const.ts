@@ -9,3 +9,10 @@ export const NOT_ADMIN_ERR_MSG = 'You do not have required permission (10002)';
  * and reusing the NOT_ADMIN code would have shown it to anyone lacking a role.
  */
 export const MFA_REQUIRED_ERR_MSG = 'Two-factor authentication is required (10003)';
+/**
+ * The workspace a tab asked for (`x-workspace-id`) is not one this person may
+ * use any more, so the request is refused rather than answered from another
+ * workspace (audit 2026-10-20, G11). The client reloads its workspace list on
+ * this exact string and moves the tab somewhere the person still belongs.
+ */
+export const WORKSPACE_UNAVAILABLE_ERR_MSG = "This tab's workspace is no longer available to you (10004)";
