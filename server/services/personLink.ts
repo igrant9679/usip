@@ -232,6 +232,13 @@ export async function upsertPersonForRow(
      * garbage than a person. The caller vouches for name quality.
      */
     allowNameOnly?: boolean;
+    /**
+     * Link only on an address or a LinkedIn profile: a name match, unique or
+     * ambiguous, links nothing and creates nothing (returns null). For a
+     * bulk action someone clicks, where the name tiers would fold one
+     * person's values into another's (audit 2026-10-20, P93).
+     */
+    keysOnly?: boolean;
   },
 ): Promise<{ personId: number; created: boolean; tier: string } | null> {
   if (!hasPersonIdentity(row) && !opts?.allowNameOnly) return null;
@@ -240,6 +247,7 @@ export async function upsertPersonForRow(
   const now = new Date().toISOString();
 
   const match = await findPersonForRow(workspaceId, row);
+  if (opts?.keysOnly && (match.tier === "name_domain" || match.tier === "name_company" || match.tier === "ambiguous")) return null;
   if (match.person) {
     // Existing person: contribute the row's data through the merge — the
     // ledger decides what (if anything) improves.
@@ -560,6 +568,7 @@ export const CONTACT_PROVENANCE = { source: "crm_contact", confidence: CONFIDENC
 export async function upsertPersonForContact(
   workspaceId: number,
   c: ContactPersonShape,
+  opts?: { keysOnly?: boolean },
 ): Promise<{ personId: number; created: boolean; tier: string } | null> {
   const db = await getDb();
   if (!db) return null;
@@ -584,7 +593,7 @@ export async function upsertPersonForContact(
     firstName: c.firstName, lastName: c.lastName,
     email: c.email, linkedinUrl: c.linkedinUrl, phone: c.phone,
     title: c.title, companyName: c.companyName, companyDomain: c.companyDomain,
-  }, CONTACT_PROVENANCE, { allowNameOnly: hasRealName });
+  }, CONTACT_PROVENANCE, { allowNameOnly: hasRealName && !opts?.keysOnly, keysOnly: opts?.keysOnly });
   if (!result) return null;
 
   await db.update(contacts).set({ personProspectId: result.personId } as never)
@@ -619,8 +628,10 @@ export async function linkUnlinkedContacts(opts: {
    * actually imported.
    */
   afterId?: number;
-} = {}): Promise<LinkSummary> {
-  const summary: LinkSummary = { scanned: 0, linked: 0, created: 0, skippedNoIdentity: 0, failed: 0 };
+  /** Link only on an address or a LinkedIn profile; see upsertPersonForRow. */
+  keysOnly?: boolean;
+} = {}): Promise<LinkSummary & { skippedNameOnly: number; nextAfterId: number; more: boolean }> {
+  const summary = { scanned: 0, linked: 0, created: 0, skippedNoIdentity: 0, failed: 0, skippedNameOnly: 0, nextAfterId: opts.afterId ?? 0, more: false };
   const db = await getDb();
   if (!db) return summary;
 
@@ -645,8 +656,16 @@ export async function linkUnlinkedContacts(opts: {
     for (const row of rows) {
       lastId = row.id;
       try {
-        const result = await upsertPersonForContact(row.workspaceId, row);
-        if (!result) { summary.skippedNoIdentity++; continue; }
+        // With keysOnly, a named contact that no key places is left for a
+        // person to look at, whether it has no key or only a name match.
+        const named = !!(row.firstName?.trim() || row.lastName?.trim());
+        const keyed = !!(usableEmailOrNull(row.email) || row.linkedinUrl?.trim());
+        if (opts.keysOnly && !keyed) { if (named) summary.skippedNameOnly++; else summary.skippedNoIdentity++; continue; }
+        const result = await upsertPersonForContact(row.workspaceId, row, { keysOnly: opts.keysOnly });
+        if (!result) {
+          if (opts.keysOnly && named) summary.skippedNameOnly++; else summary.skippedNoIdentity++;
+          continue;
+        }
         summary.linked++;
         if (result.created) summary.created++;
       } catch (e) {
@@ -654,7 +673,13 @@ export async function linkUnlinkedContacts(opts: {
         console.error(`[personLink] contact ${row.id} failed:`, (e as Error)?.message ?? e);
       }
     }
+    summary.nextAfterId = lastId;
+    // A full last page means there may be more past the cursor.
+    summary.more = rows.length === pageSize && page === maxPages - 1;
     if (rows.length < pageSize) break;
   }
   return summary;
 }
+
+/** One click of "Link all unlinked" reads this many contacts (P93). */
+export const RELINK_PAGE = 500;

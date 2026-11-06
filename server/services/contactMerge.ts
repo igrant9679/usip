@@ -19,12 +19,13 @@
 import { TRPCError } from "@trpc/server";
 import { and, eq, getTableName, inArray } from "drizzle-orm";
 import {
-  activities, aiPipelineJobs, attachments, auditLog, calendarEvents, contactAccountLinks, contacts, crmNotes,
+  activities, aiPipelineJobs, areSuppressionList, attachments, auditLog, calendarEvents, contactAccountLinks, contacts, crmNotes,
   emailDrafts, emailLog, emailReplies, emailSuppressions, enrollments, leads, meetings, opportunityContactRoles,
   proposals, prospectQueue, prospects, recordFiles, recordListMembers, researchPipelines, tasks, unipileInvites,
   unipileMessages, voiceCalls, websiteVisits,
 } from "../../drizzle/schema";
 import type { getDb } from "../db";
+import { normalizeSuppressionEmail } from "../unsubscribe";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -58,8 +59,12 @@ export const CONTACT_POLY_REFS = [
   { table: crmNotes, type: crmNotes.entityType, id: crmNotes.entityId, ws: crmNotes.workspaceId, idKey: "entityId" },
 ] as const;
 
-/** Fields the survivor takes from the duplicate when its own is blank (or when asked to). */
-export const CONTACT_FILLABLE = ["title", "phone", "linkedinUrl", "city", "seniority", "accountId"] as const;
+/**
+ * Fields the survivor takes from the duplicate when its own is blank (or when
+ * asked to). The address joined them so the person merging can choose which
+ * one the survivor keeps (audit 2026-10-20, P95).
+ */
+export const CONTACT_FILLABLE = ["email", "title", "phone", "linkedinUrl", "city", "seniority", "accountId"] as const;
 
 const affected = (r: unknown) => Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
 const blank = (v: unknown) => v === null || v === undefined || v === "";
@@ -95,6 +100,37 @@ export async function mergeContacts(
 
     if (Object.keys(patch).length > 0) {
       await tx.update(contacts).set(patch as never).where(and(eq(contacts.id, primaryId), eq(contacts.workspaceId, ws)));
+    }
+
+    // The address the survivor keeps carries any opt-out the address it drops
+    // had. Suppression is keyed by address, so keeping one and deleting the
+    // other left a person who unsubscribed on the deleted one mailable on the
+    // kept one (P95, by P86's rule). A bounce stays with the address it is about.
+    const kept = normalizeSuppressionEmail((patch.email ?? primary.email) as string | null);
+    const dropped = [primary.email, secondary.email].map(normalizeSuppressionEmail).filter((e) => e && e !== kept);
+    if (kept && dropped.length > 0) {
+      const optOut = (await tx.select({ email: emailSuppressions.email, reason: emailSuppressions.reason }).from(emailSuppressions)
+        .where(and(eq(emailSuppressions.workspaceId, ws), inArray(emailSuppressions.email, dropped))))
+        .find((r) => String(r.reason) !== "bounce");
+      const alreadyKept = optOut && await tx.select({ id: emailSuppressions.id }).from(emailSuppressions)
+        .where(and(eq(emailSuppressions.workspaceId, ws), eq(emailSuppressions.email, kept), eq(emailSuppressions.reason, optOut.reason)))
+        .limit(1);
+      if (optOut && alreadyKept && alreadyKept.length === 0) {
+        await tx.insert(emailSuppressions).values({
+          workspaceId: ws, email: kept, reason: optOut.reason, source: "merge", contactId: primaryId,
+          notes: `Carried from ${optOut.email} when contact ${secondaryId} was merged into ${primaryId}.`,
+        } as never);
+      }
+      // The Revenue Engine's do-not-contact list, keyed the same way.
+      const dnc = (await tx.select({ reason: areSuppressionList.reason }).from(areSuppressionList)
+        .where(and(eq(areSuppressionList.workspaceId, ws), inArray(areSuppressionList.email, dropped))))
+        .find((r) => String(r.reason) !== "bounce");
+      const dncKept = dnc && await tx.select({ id: areSuppressionList.id }).from(areSuppressionList)
+        .where(and(eq(areSuppressionList.workspaceId, ws), eq(areSuppressionList.email, kept)))
+        .limit(1);
+      if (dnc && dncKept && dncKept.length === 0) {
+        await tx.insert(areSuppressionList).values({ workspaceId: ws, email: kept, reason: dnc.reason, addedByUserId: input.actorUserId } as never);
+      }
     }
 
     const moved: Record<string, number> = {};

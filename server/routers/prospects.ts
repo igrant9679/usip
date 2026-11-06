@@ -81,6 +81,18 @@ export async function deriveLifecycle(
 }
 
 /**
+ * The People list's email-status filter. "unknown" includes people never
+ * verified at all (NULL): Data Health counts them as not verified, and its
+ * "Verify Now" opens this filter, which listed only the literal 'unknown'
+ * rows (audit 2026-10-20, P81).
+ */
+export function emailStatusCondition(status: string): SQL {
+  return status === "unknown"
+    ? or(isNull(prospects.emailStatus), eq(prospects.emailStatus, "unknown"))!
+    : eq(prospects.emailStatus, status);
+}
+
+/**
  * ORDER BY for the People list: the chosen column, then the id the same way
  * (audit 2026-10-20, R61). Most sorts tie — blank titles, a shared company,
  * one import's createdAt — and rows that tie came back in a different order
@@ -665,7 +677,7 @@ export const prospectsRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
       const conditions = [eq(prospects.workspaceId, ctx.workspace.id)];
-      if (input.emailStatus) conditions.push(eq(prospects.emailStatus, input.emailStatus));
+      if (input.emailStatus) conditions.push(emailStatusCondition(input.emailStatus));
       // '' counts as missing on BOTH sides: imports write empty strings, and
       // a "has email" filter that returns unmailable rows (or a "missing
       // email" view that hides them) sends the user chasing ghosts.
