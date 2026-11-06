@@ -12,6 +12,7 @@ import { DrawerTimeline } from "./detail/DrawerTimeline";
 import { LinkedInActionsPanel } from "./detail/LinkedInActionsPanel";
 import { useLocation } from "wouter";
 import { LEAD_TIERS, leadTierLabel, type LeadTier } from "@shared/leadTier";
+import { savedScoreLine, type SavedScore } from "@/lib/leadScoreText";
 import { ContactOverview } from "./detail/ContactOverview";
 import { AccountOverview } from "./detail/AccountOverview";
 import { OpportunityOverview } from "./detail/OpportunityOverview";
@@ -45,9 +46,11 @@ function LeadScorePanel({ leadId }: { leadId: number }) {
   // The label comes from @shared/leadTier rather than a local special case for
   // "sales_ready" plus a capitalise-the-first-letter fallback — which is how
   // one surface ends up saying "Sales Ready" and another "Sales_ready".
-  const tierLabel = leadTierLabel((LEAD_TIERS as readonly string[]).includes(tier) ? (tier as LeadTier) : null);
-  const tierCls = tier === "sales_ready" ? "bg-emerald-100 text-emerald-800" : tier === "hot" ? "bg-orange-100 text-orange-800" : tier === "warm" ? "bg-yellow-100 text-yellow-800" : "bg-slate-200 text-slate-700";
-  const max = (bd.firmographic.max ?? 40) + (bd.behavioral.max ?? 30) + (bd.aiFit.max ?? 30);
+  // A lead never scored says so rather than Cold (audit 2026-10-20, P119).
+  const tierLabel = bd.saved.scored ? leadTierLabel((LEAD_TIERS as readonly string[]).includes(tier) ? (tier as LeadTier) : null) : "Not scored";
+  const tierCls = !bd.saved.scored ? "bg-muted text-muted-foreground" : tier === "sales_ready" ? "bg-emerald-100 text-emerald-800" : tier === "hot" ? "bg-orange-100 text-orange-800" : tier === "warm" ? "bg-yellow-100 text-yellow-800" : "bg-slate-200 text-slate-700";
+  // The server's sum of the three maximums (P22).
+  const max = bd.maxSum;
   const sparkW = 540, sparkH = 36;
   const vals = (bd.history ?? []).map((h: any) => h.total);
   const sparkPts = vals.length ? vals.map((v: number, i: number) => `${(i * sparkW) / Math.max(1, vals.length - 1)},${sparkH - (v / 100) * (sparkH - 4)}`).join(" ") : "";
@@ -57,7 +60,8 @@ function LeadScorePanel({ leadId }: { leadId: number }) {
         <div>
           <div className="text-xs text-muted-foreground">Total score</div>
           <div className="text-2xl font-mono tabular-nums">{bd.total}<span className="text-sm text-muted-foreground">/100</span> <span className={`text-xs ml-2 px-1.5 rounded ${tierCls}`}>{tierLabel}</span></div>
-          <div className="text-[11px] text-muted-foreground mt-1">Max possible: {max} pts · Grade {bd.grade ?? "—"}</div>
+          <div className="text-[11px] text-muted-foreground mt-1">The three below added up, capped at 100 (max possible {max} pts) · Grade {bd.grade ?? "—"}</div>
+          <div className="text-[11px] text-muted-foreground">{savedScoreLine(bd.saved as SavedScore, bd.total)}</div>
         </div>
         <Button size="sm" variant="outline" className="bg-card" onClick={() => recompute.mutate({ leadId })} disabled={recompute.isPending}>
           <RefreshCw className={`size-3.5 ${recompute.isPending ? "animate-spin" : ""}`} /> Recompute
@@ -65,8 +69,9 @@ function LeadScorePanel({ leadId }: { leadId: number }) {
       </div>
 
       <Accordion open={openSec === "firmo"} onToggle={() => setOpenSec(openSec === "firmo" ? null : "firmo")} title="Firmographic" value={bd.firmographic.value} max={bd.firmographic.max} reasons={bd.firmographic.reasons} />
-      <Accordion open={openSec === "behav"} onToggle={() => setOpenSec(openSec === "behav" ? null : "behav")} title="Behavioral" value={Math.max(0, bd.behavioral.value)} max={bd.behavioral.max} reasons={bd.behavioral.reasons} />
-      <Accordion open={openSec === "ai"} onToggle={() => setOpenSec(openSec === "ai" ? null : "ai")} title="AI Fit" value={bd.aiFit.value} max={bd.aiFit.max} reasons={[`Tier: ${tierLabel}`]} />
+      {/* Behaviour below zero is shown as it is: it lowers the total (P33). */}
+      <Accordion open={openSec === "behav"} onToggle={() => setOpenSec(openSec === "behav" ? null : "behav")} title="Behavioral" value={bd.behavioral.value} max={bd.behavioral.max} reasons={bd.behavioral.reasons} />
+      <Accordion open={openSec === "ai"} onToggle={() => setOpenSec(openSec === "ai" ? null : "ai")} title="AI Fit" value={bd.aiFit.value} max={bd.aiFit.max} reasons={bd.aiFit.reasons} />
 
       <div className="rounded border bg-card p-3">
         <div className="text-xs font-semibold mb-1">90-day history</div>

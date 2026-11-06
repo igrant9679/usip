@@ -35,7 +35,9 @@ export function TotpSetupDialog({
   onConfirmed?: () => void;
 }) {
   const utils = trpc.useUtils();
-  const [enroll, setEnroll] = useState<{ secret: string; otpauthUrl: string } | null>(null);
+  // `reused`: the key from an earlier, unconfirmed attempt — the entry the
+  // person already added to their app still works (tracker 2026-11-06, 16).
+  const [enroll, setEnroll] = useState<{ secret: string; otpauthUrl: string; reused?: boolean } | null>(null);
   const [code, setCode] = useState("");
   const start = trpc.profile.startTotpEnrollment.useMutation({
     onSuccess: (r: any) => setEnroll(r),
@@ -98,6 +100,11 @@ export function TotpSetupDialog({
               <p className="text-xs text-muted-foreground">
                 On this device? <a href={enroll.otpauthUrl} className="font-medium text-foreground underline underline-offset-2">Open in authenticator app</a>
               </p>
+              {enroll.reused && (
+                <p className="text-xs text-muted-foreground">
+                  This is the same key as your last attempt. If Velocity is already in your app, use that entry — no need to add it again.
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label>Verification code</Label>

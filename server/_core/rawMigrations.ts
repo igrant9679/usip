@@ -4909,6 +4909,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0280: When a lead was last scored (audit 2026-10-20, P12) ───────────
+  // Scores only changed when a rep pressed Recompute. The hourly re-score
+  // takes leads never scored (NULL) or not scored for a day, oldest first,
+  // per workspace, which is what the index serves; the lead panel shows it.
+  // Nullable with no default, so existing rows read "never" and the first
+  // sweeps score them.
+  {
+    name: "0280_lead_scored_at.sql",
+    statements: [
+      "ALTER TABLE `leads` ADD COLUMN `scoredAt` timestamp NULL",
+      "CREATE INDEX `ix_lead_scored` ON `leads` (`workspaceId`, `scoredAt`)",
+    ],
+  },
+
   // A deal whose close date has passed was alerted as "closing soon" (audit
   // 2026-10-20, R38). Appending an enum value is in place in MySQL: no copy,
   // and every stored value keeps its meaning.

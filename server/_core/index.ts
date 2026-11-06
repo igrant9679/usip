@@ -863,6 +863,21 @@ async function startServer() {
   setTimeout(runRenewalStages, 27 * 60 * 1000); // stagger: 27 minutes after boot
   setInterval(runRenewalStages, 6 * 60 * 60 * 1000); // every 6h; bounded per run
 
+  // Lead scores keep themselves current (audit 2026-10-20, P12): they only
+  // changed when a rep pressed Recompute, so decay, Sales-Ready alerts and
+  // score-triggered sequences never happened on their own. Each tick re-scores
+  // leads that engaged since the last one, then leads not scored for a day,
+  // capped per workspace, with no model calls.
+  const runLeadRescore = guardOverlap("LeadRescore", () =>
+    import("../routers/leadScoring")
+      .then((m) => m.runLeadRescoreTick())
+      .then((r) => {
+        if (r.engaged || r.swept || r.failed) console.log(`[LeadRescore] engaged=${r.engaged} swept=${r.swept} failed=${r.failed} pausedSkips=${r.pausedSkips}`);
+      }),
+  );
+  setTimeout(runLeadRescore, 29 * 60 * 1000); // stagger: 29 minutes after boot
+  setInterval(runLeadRescore, 60 * 60 * 1000); // hourly; bounded per run
+
   // Inbound reply poller: check IMAP/Gmail inboxes every 60s for new replies
   startInboundReplyPoller();
 }
