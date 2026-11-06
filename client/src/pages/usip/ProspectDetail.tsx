@@ -22,6 +22,9 @@ import { ProfileImageUploader, ProfileImageSourceBadge } from "@/components/usip
 import { LinkedInEnrichmentFullPanel } from "@/components/usip/people/LinkedInEnrichment";
 import { ProspectScoringPanel } from "@/components/usip/scoring/ProspectScoringPanel";
 import { IntelligenceDossier } from "@/components/usip/are/IntelligenceDossier";
+import { CustomFieldsPanel } from "@/components/usip/CustomFieldsPanel";
+import { confirmAction } from "@/components/usip/Common";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -34,6 +37,8 @@ import {
   ArrowLeft,
   Pencil,
   Archive,
+  ArchiveRestore,
+  ShieldCheck,
   RefreshCw,
   ExternalLink,
   Linkedin,
@@ -84,12 +89,24 @@ export default function ProspectDetail() {
     { ids: [id] },
     { enabled: !Number.isNaN(id) && id > 0 },
   );
+  // A changed address comes back unverified (R51); say so where Verify is.
   const update = trpc.prospects.update.useMutation({
-    onSuccess: () => { toast.success("Saved"); utils.prospects.get.invalidate({ id }); setEditing(null); },
+    onSuccess: (r) => { toast.success(r.emailUnverified ? "Saved — the new email is unverified until you verify it" : "Saved"); utils.prospects.get.invalidate({ id }); setEditing(null); },
     onError: (e) => toast.error(e.message),
   });
   const archive = trpc.prospects.archive.useMutation({
-    onSuccess: () => { toast.success("Archived"); utils.prospects.get.invalidate({ id }); },
+    onSuccess: () => { toast.success("Archived — hidden from People until restored"); utils.prospects.get.invalidate({ id }); utils.prospects.list.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+  const unarchive = trpc.prospects.unarchive.useMutation({
+    onSuccess: () => { toast.success("Restored to People, back in review"); utils.prospects.get.invalidate({ id }); utils.prospects.list.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+  // Verify on the person page (R47, R51): the contact page that had it is
+  // retired, and an edited address needs it. prospects.verifyEmail is manager+.
+  const { isManager } = useWorkspaceRole();
+  const verify = trpc.prospects.verifyEmail.useMutation({
+    onSuccess: (r) => { toast.success(`Email ${r.status.replace(/_/g, " ")}`); utils.prospects.get.invalidate({ id }); },
     onError: (e) => toast.error(e.message),
   });
   const approve = trpc.prospects.review.useMutation({
@@ -187,9 +204,17 @@ export default function ProspectDetail() {
               <CheckCircle2 className="size-3.5" /> Approve
             </Button>
           )}
-          <Button variant="outline" size="sm" onClick={() => archive.mutate({ id })} disabled={archive.isPending} className="gap-1.5 text-destructive">
-            <Archive className="size-3.5" /> Archive
-          </Button>
+          {/* Asked first, and undoable (R64): one click hid the person. */}
+          {p.verificationStatus === "rejected" ? (
+            <Button variant="outline" size="sm" onClick={() => unarchive.mutate({ id })} disabled={unarchive.isPending} className="gap-1.5">
+              <ArchiveRestore className="size-3.5" /> Restore
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" disabled={archive.isPending} className="gap-1.5 text-destructive"
+              onClick={() => confirmAction({ title: `Archive ${fullName}?`, description: "They're hidden from People and from outreach pickers. Restore them from People → Stage → Archived.", confirmLabel: "Archive", destructive: false }, () => { archive.mutate({ id }); })}>
+              <Archive className="size-3.5" /> Archive
+            </Button>
+          )}
         </>}
       />
 
@@ -204,7 +229,17 @@ export default function ProspectDetail() {
             </ProfileField>
             <ProfileField icon={Building2} label="Industry">{p.industry || <Muted />}</ProfileField>
             <ProfileField icon={Mail} label="Email">
-              {p.email ? <a className="hover:underline" href={`mailto:${p.email}`}>{p.email}</a> : <Muted />}
+              {p.email ? (
+                <span className="inline-flex items-center gap-2 flex-wrap">
+                  <a className="hover:underline" href={`mailto:${p.email}`}>{p.email}</a>
+                  <Badge variant="outline" className="text-[10px] font-normal">{p.emailStatus ? p.emailStatus.replace(/_/g, " ") : "unverified"}</Badge>
+                  {isManager && (
+                    <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px] gap-1" disabled={verify.isPending} onClick={() => verify.mutate({ prospectId: id })}>
+                      {verify.isPending ? <Loader2 className="size-3 animate-spin" /> : <ShieldCheck className="size-3" />} Verify
+                    </Button>
+                  )}
+                </span>
+              ) : <Muted />}
             </ProfileField>
             <ProfileField icon={Phone} label="Phone">
               {p.phone ? <a className="hover:underline" href={`tel:${p.phone}`}>{p.phone}</a> : <Muted />}
@@ -217,6 +252,10 @@ export default function ProspectDetail() {
             </ProfileField>
           </div>
         </DetailSection>
+
+        {/* The CRM contact's custom fields, shown nowhere since the contact
+            pages were retired (R47). Renders nothing when none are defined. */}
+        {p.linkedContactId ? <CustomFieldsPanel entityType="contact" entityId={p.linkedContactId} /> : null}
 
         {/* LinkedIn enrichment (Unipile) — optional metadata, daily-checked */}
         <LinkedInEnrichmentFullPanel prospectId={id} />

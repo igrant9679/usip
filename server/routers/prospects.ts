@@ -13,14 +13,14 @@
  *   bulkDelete        — remove many prospects at once
  */
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, like, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, like, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { MySqlColumn } from "drizzle-orm/mysql-core";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, isAdminRole, requireMinRole, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { closedStageKeys } from "../_core/stageSemantics";
-import { contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings, prospectLinkedinEnrichments, prospectFieldHistory } from "../../drizzle/schema";
+import { accounts, contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings, prospectLinkedinEnrichments, prospectFieldHistory } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { runComprehensiveEnrichment } from "../services/enrichment/comprehensivePass";
 import { CONFIDENCE } from "../services/enrichment/fieldMerge";
@@ -36,6 +36,55 @@ import { reoonCheckBalance, getReoonKey } from "../services/reoon";
 import { resolveProspectProfileImage } from "../services/profileImage";
 import { SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimits";
 import { promoteProspectRow } from "../services/prospectPromotion";
+import { describeWriteError } from "../services/dbWriteError";
+
+/**
+ * A People search term as a LIKE pattern that means what was typed: % and _
+ * are literal characters, not wildcards (audit 2026-10-20, R85). Searching
+ * "50%" matched every row containing "50", and "a_b" matched "axb".
+ */
+const escapeLike = (v: string) => v.replace(/[\\%_]/g, (m) => `\\${m}`);
+const contains = (v: string) => `%${escapeLike(v)}%`;
+
+/**
+ * The People list's repairs, written after the list has answered (audit
+ * 2026-10-20, R86). The list filled company blanks and healed names with an
+ * UPDATE per row INSIDE the read, so every page view waited on up to a page
+ * of writes and two views of one page wrote the same rows twice. The page
+ * still shows the repaired values at once; the writes queue here, one per
+ * person however many views asked, and run on the next turn of the event loop.
+ */
+const pendingRepairs = new Map<string, { ws: number; id: number; patch: Record<string, unknown> }>();
+let repairFlush: Promise<void> | null = null;
+export function flushProspectRepairs(): Promise<void> {
+  if (repairFlush) return repairFlush;
+  repairFlush = new Promise<void>((resolve) => setImmediate(resolve))
+    .then(async () => {
+      const batch = Array.from(pendingRepairs.values());
+      pendingRepairs.clear();
+      const db = await getDb();
+      if (!db) return;
+      for (const { ws, id, patch } of batch) {
+        await db.update(prospects).set(patch as never)
+          .where(and(eq(prospects.workspaceId, ws), eq(prospects.id, id)))
+          .catch((err) => console.warn(`[prospects.list] read-repair failed for ${id}:`, err));
+      }
+    })
+    .finally(() => {
+      repairFlush = null;
+      if (pendingRepairs.size) void flushProspectRepairs();
+    });
+  return repairFlush;
+}
+function queueProspectRepair(ws: number, id: number, patch: Record<string, unknown>) {
+  const key = `${ws}:${id}`;
+  pendingRepairs.set(key, { ws, id, patch: { ...(pendingRepairs.get(key)?.patch ?? {}), ...patch } });
+  void flushProspectRepairs();
+}
+
+/** An edited text field: trimmed, and a cleared one stored as NULL, not "" (R87). */
+const editText = (max: number) => z.string().trim().max(max).nullable().optional()
+  .transform((v) => (v === "" ? null : v));
 
 /**
  * Where a person is on the CRM spine, derived from the linkages that already
@@ -100,6 +149,11 @@ export function emailStatusCondition(status: string): SQL {
  */
 export function peopleOrder(sortField?: string | null, sortDir?: string | null): SQL[] {
   const sdir = sortDir === "asc" ? asc : desc;
+  // Number of employees is the person's company's (R96): it sorted by the
+  // company NAME, under a label promising headcount.
+  if (sortField === "employees") {
+    return [sdir(sql`(SELECT ${accounts.employeeCount} FROM ${accounts} WHERE ${accounts.id} = ${prospects.accountId})`), sdir(prospects.id)];
+  }
   const col = ({
     fit: [prospects.confidenceScore], name: [prospects.firstName, prospects.lastName], title: [prospects.title],
     company: [prospects.company], email: [prospects.email], phone: [prospects.phone], industry: [prospects.industry],
@@ -390,23 +444,27 @@ export const prospectsRouter = router({
     }),
 
   /** Manual edit of any user-facing field. Persists who/when via audit log
-   *  but does NOT touch confidence/verification fields — those reflect
-   *  pipeline truth and should only change via re-enrichment. */
+   *  but does NOT touch confidence fields — those reflect pipeline truth and
+   *  should only change via re-enrichment. The one exception is the email
+   *  verdict: it belongs to the address it was given for (R51).
+   *
+   *  Limits are the columns' (R87): title allowed 200 against a 120 column,
+   *  so a long title came back as the raw database error. */
   update: workspaceProcedure
     .input(z.object({
       id: z.number().int(),
-      firstName: z.string().min(1).max(80).optional(),
-      lastName: z.string().min(1).max(80).optional(),
-      title: z.string().max(200).nullable().optional(),
-      company: z.string().max(200).nullable().optional(),
-      companyDomain: z.string().max(200).nullable().optional(),
-      linkedinUrl: z.string().max(500).nullable().optional(),
-      email: z.string().max(320).nullable().optional(),
-      phone: z.string().max(40).nullable().optional(),
-      city: z.string().max(80).nullable().optional(),
-      state: z.string().max(80).nullable().optional(),
-      country: z.string().max(80).nullable().optional(),
-      industry: z.string().max(80).nullable().optional(),
+      firstName: z.string().trim().min(1).max(80).optional(),
+      lastName: z.string().trim().min(1).max(80).optional(),
+      title: editText(120),
+      company: editText(200),
+      companyDomain: editText(200),
+      linkedinUrl: editText(500),
+      email: editText(320),
+      phone: editText(40),
+      city: editText(80),
+      state: editText(80),
+      country: editText(80),
+      industry: editText(80),
       verificationStatus: z.enum(["verified", "needs_review", "rejected"]).optional(),
       verificationNotes: z.string().max(2000).nullable().optional(),
     }))
@@ -428,8 +486,26 @@ export const prospectsRouter = router({
       if (patch.verificationStatus !== undefined) {
         Object.assign(patch, { verificationSetBy: "human", verificationSetByUserId: ctx.user.id, verificationSetAt: new Date() });
       }
-      await db.update(prospects).set(patch)
-        .where(and(eq(prospects.id, id), eq(prospects.workspaceId, ctx.workspace.id)));
+      // A new address is unverified (audit 2026-10-20, R51). It kept the old
+      // address's "valid", so the outreach gates passed an address nobody had
+      // checked. The ledger entry loses its verdict for the same reason.
+      const emailChanged = patch.email !== undefined
+        && (patch.email ?? "").toLowerCase() !== (before.email ?? "").toLowerCase();
+      if (emailChanged) {
+        const ledger = { ...((before.fieldProvenance ?? {}) as Record<string, unknown>) };
+        if (patch.email) ledger.email = { source: "user", confidence: CONFIDENCE.user, at: new Date().toISOString() };
+        else delete ledger.email;
+        Object.assign(patch, { emailStatus: null, emailVerifiedAt: null, fieldProvenance: ledger });
+      }
+      try {
+        await db.update(prospects).set(patch)
+          .where(and(eq(prospects.id, id), eq(prospects.workspaceId, ctx.workspace.id)));
+      } catch (e) {
+        // The reason, not the SQL (R87).
+        const why = describeWriteError(e);
+        console.error(`[prospects.update] ${id}:`, (e as Error)?.cause ?? e);
+        throw new TRPCError({ code: why ? "BAD_REQUEST" : "INTERNAL_SERVER_ERROR", message: why ? `Couldn't save: ${why}.` : "Couldn't save this person. Try again." });
+      }
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,
@@ -439,7 +515,7 @@ export const prospectsRouter = router({
         before,
         after: { ...before, ...patch },
       });
-      return { ok: true };
+      return { ok: true, emailUnverified: emailChanged && !!patch.email };
     }),
 
   /**
@@ -535,6 +611,28 @@ export const prospectsRouter = router({
       await db.update(prospects)
         .set({ verificationStatus: "rejected", verificationSetBy: "human", verificationSetByUserId: ctx.user.id, verificationSetAt: new Date() } as never)
         .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id)));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "prospect_archive", entityId: input.id, after: { archived: true } });
+      return { ok: true };
+    }),
+
+  /**
+   * Undo an archive (audit 2026-10-20, R64). The person goes back to review —
+   * "needs review", set by a human — rather than to a verdict nobody gave.
+   * Only an archived person: this is not a way to clear a verified one.
+   */
+  unarchive: workspaceProcedure
+    .input(z.object({ id: z.number().int() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [p] = await db.select({ id: prospects.id, verificationStatus: prospects.verificationStatus }).from(prospects)
+        .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id))).limit(1);
+      if (!p) throw new TRPCError({ code: "NOT_FOUND" });
+      if (p.verificationStatus !== "rejected") throw new TRPCError({ code: "BAD_REQUEST", message: "This person isn't archived." });
+      await db.update(prospects)
+        .set({ verificationStatus: "needs_review", verificationSetBy: "human", verificationSetByUserId: ctx.user.id, verificationSetAt: new Date() } as never)
+        .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.verificationStatus, "rejected")));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "prospect_archive", entityId: input.id, after: { archived: false } });
       return { ok: true };
     }),
 
@@ -693,7 +791,7 @@ export const prospectsRouter = router({
         /** Seniority contains-match against ANY of these tokens (e.g. "vp"). */
         seniorities: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
         /** Whole-dataset sort (replaces the client-side loaded-page sort). */
-        sortField: z.enum(["created", "fit", "name", "title", "company", "email", "phone", "industry"]).optional(),
+        sortField: z.enum(["created", "fit", "name", "title", "company", "email", "phone", "industry", "employees"]).optional(),
         sortDir: z.enum(["asc", "desc"]).optional(),
         /** Score filter/sort against the primary person Fit model (scoring). */
         scoreMinRating: z.enum(["fair", "good", "excellent"]).optional(),
@@ -728,7 +826,10 @@ export const prospectsRouter = router({
         input.promoted === true ? [savedExpr]
           : input.promoted === false ? [sql`(${prospects.linkedLeadId} IS NULL AND ${prospects.linkedContactId} IS NULL)`]
             : [];
+      // Archived people stay out of the list unless the Archived stage is
+      // asked for (audit 2026-10-20, R64): archiving hid nobody.
       if (input.verificationStatus) conditions.push(eq(prospects.verificationStatus, input.verificationStatus));
+      else conditions.push(or(isNull(prospects.verificationStatus), ne(prospects.verificationStatus, "rejected"))!);
       if (input.discoveryRunId) conditions.push(eq(prospects.lastDiscoveryRunId, input.discoveryRunId));
       // Sequence membership — join via enrollments.prospectId (migration 0085).
       if (input.enrolled === "yes") {
@@ -742,7 +843,7 @@ export const prospectsRouter = router({
       }
       // Text filters — case-insensitive contains (MySQL default _ci collation).
       if (input.search) {
-        const s = `%${input.search}%`;
+        const s = contains(input.search);
         conditions.push(
           or(
             like(prospects.firstName, s),
@@ -757,18 +858,18 @@ export const prospectsRouter = router({
           )!,
         );
       }
-      if (input.titleQ) conditions.push(like(prospects.title, `%${input.titleQ}%`));
-      if (input.companyQ) conditions.push(like(prospects.company, `%${input.companyQ}%`));
-      if (input.industryQ) conditions.push(like(prospects.industry, `%${input.industryQ}%`));
-      if (input.educationQ) conditions.push(like(prospects.education, `%${input.educationQ}%`));
-      if (input.linkedinQ) conditions.push(like(prospects.linkedinUrl, `%${input.linkedinQ}%`));
+      if (input.titleQ) conditions.push(like(prospects.title, contains(input.titleQ)));
+      if (input.companyQ) conditions.push(like(prospects.company, contains(input.companyQ)));
+      if (input.industryQ) conditions.push(like(prospects.industry, contains(input.industryQ)));
+      if (input.educationQ) conditions.push(like(prospects.education, contains(input.educationQ)));
+      if (input.linkedinQ) conditions.push(like(prospects.linkedinUrl, contains(input.linkedinQ)));
       if (input.locationQ) {
-        const s = `%${input.locationQ}%`;
+        const s = contains(input.locationQ);
         conditions.push(or(like(prospects.city, s), like(prospects.state, s), like(prospects.country, s))!);
       }
       if (input.tiers?.length) conditions.push(inArray(prospects.confidenceTier, input.tiers));
       if (input.seniorities?.length) {
-        conditions.push(or(...input.seniorities.map((s) => like(prospects.seniority, `%${s}%`)))!);
+        conditions.push(or(...input.seniorities.map((s) => like(prospects.seniority, contains(s))))!);
       }
 
       const offset = (input.page - 1) * input.perPage;
@@ -798,8 +899,9 @@ export const prospectsRouter = router({
        * runner, which logs and continues on failure). The list is the
        * surface the owner keeps catching this on, so the list is where it
        * self-heals: blanks are filled from the enrichment row for DISPLAY,
-       * and the same values are persisted fill-if-empty (with provenance) so
-       * each page render permanently repairs the rows it shows. Names stored
+       * and the same values are persisted fill-if-empty (with provenance),
+       * queued to be written once the list has answered (R86), so each page
+       * render permanently repairs the rows it shows. Names stored
        * with vendor credential suffixes ("Flournoy, PSP") heal the same way.
        */
       const repairCompanyBlanks = async (rowsIn: (typeof prospects.$inferSelect)[]) => {
@@ -818,7 +920,6 @@ export const prospectsRouter = router({
             inArray(prospectLinkedinEnrichments.prospectId, blanks.map((r) => r.id)),
           ));
         const byId = new Map(enrRows.map((e) => [e.prospectId, e]));
-        const heals: Array<Promise<unknown>> = [];
         for (const r of rowsIn) {
           const e = byId.get(r.id);
           const patch: Record<string, unknown> = {};
@@ -871,15 +972,27 @@ export const prospectsRouter = router({
               }
               patch.fieldProvenance = ledger;
             }
-            heals.push(
-              db.update(prospects).set(patch as never)
-                .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.id, r.id)))
-                .catch((err) => console.warn(`[prospects.list] read-repair failed for ${r.id}:`, err)),
-            );
+            // Persisted after the response, not inside it (R86).
+            queueProspectRepair(ctx.workspace.id, r.id, patch);
           }
         }
-        if (heals.length) await Promise.all(heals);
         return rowsIn;
+      };
+
+      /** The company headcount the "Number of employees" column shows (R60/R96),
+       *  read from each row's linked account in one query. */
+      const companyEmployees = async (rowsIn: Array<{ id: number; accountId: number | null }>) => {
+        const out = new Map<number, number>();
+        const accountIds = Array.from(new Set(rowsIn.map((r) => r.accountId).filter((id): id is number => id != null)));
+        if (accountIds.length === 0) return out;
+        const accs = await db.select({ id: accounts.id, employeeCount: accounts.employeeCount }).from(accounts)
+          .where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, accountIds)));
+        const byAccount = new Map(accs.map((a) => [a.id, a.employeeCount]));
+        for (const r of rowsIn) {
+          const n = r.accountId != null ? byAccount.get(r.accountId) : null;
+          if (n != null) out.set(r.id, n);
+        }
+        return out;
       };
 
       // List rows never expose the raw image columns; they carry only the
@@ -939,8 +1052,10 @@ export const prospectsRouter = router({
           .from(prospects).leftJoin(scoreResults, joinCond).where(and(...scoreConds));
 
         await repairCompanyBlanks(joined.map((row) => row.prospects));
+        const employeesOf = await companyEmployees(joined.map((row) => row.prospects));
         const data = joined.map((row) => ({
           ...withResolvedImg(row.prospects),
+          companyEmployees: employeesOf.get(row.prospects.id) ?? null,
           fitScore: row.score_results ? Number(row.score_results.normalizedScore) : null,
           fitRating: row.score_results?.rating ?? null,
         }));
@@ -962,7 +1077,8 @@ export const prospectsRouter = router({
 
       await repairCompanyBlanks(rows);
       // Raw image columns stay server-side; rows carry the resolved image only.
-      const data = rows.map(withResolvedImg);
+      const employeesOf = await companyEmployees(rows);
+      const data = rows.map((r) => ({ ...withResolvedImg(r), companyEmployees: employeesOf.get(r.id) ?? null }));
 
       return { data, total: Number(total), page: input.page, perPage: input.perPage, savedCount, netNewCount };
     }),
@@ -1230,7 +1346,9 @@ export const prospectsRouter = router({
           .catch(() => { /* workflow firing is best-effort */ });
       }
 
-      return { leadId: leadId!, created: true };
+      // Whether a lead was made, not whether the click worked (R56): an
+      // existing lead matched by email is not a new one.
+      return { leadId: leadId!, created: createdLead };
     }),
 
   /**

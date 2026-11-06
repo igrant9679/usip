@@ -41,8 +41,13 @@ import {
   Clock, Search, FileText, Download, Paperclip, X, Phone,
 } from "lucide-react";
 import { Link } from "wouter";
-import { rankOf, ROLE_RANK } from "@shared/roleRank";
+import { NoMailboxConnected } from "@/components/usip/NoMailboxConnected";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
+import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
+import {
+  MAILBOX_ATTACHMENT_LIMIT_BYTES, attachmentLimitProblem, composeBodyHtml, forwardedBlock, replyAddressing,
+} from "@shared/mailCompose";
 
 /** Compact "Agent call-backs" rail link — only renders when Grok voice agents
  *  have actually logged inbound calls, so mailboxes without voice stay clean. */
@@ -74,7 +79,10 @@ interface Account {
   email: string;
   provider: string;
   inboxEnabled: boolean;
+  /** False when the mailbox is switched off in Sending Accounts — it can't send. */
+  enabled?: boolean;
 }
+
 
 interface EmailThread {
   threadId: string;
@@ -194,7 +202,10 @@ function SnoozePopover({ accountId, thread, onSnoozed }: {
 /** The first address in a To field ("Ana <ana@x.org>, bo@y.com" → "ana@x.org"), for the AI's research lookup. */
 const firstEmail = (to: string) => to.match(/[^\s<>,;"]+@[^\s<>,;"]+/)?.[0];
 
-function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () => void }) {
+function ComposeDialog({ state, account, onClose }: { state: ComposeState; account?: Account; onClose: () => void }) {
+  // Switched off in Sending Accounts: the server refuses the send (O34), so
+  // say so before the rep writes anything.
+  const accountOff = account?.enabled === false;
   const [to, setTo] = useState(state.to);
   const [subject, setSubject] = useState(state.subject);
   const [body, setBody] = useState(state.body);
@@ -321,16 +332,32 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
   function handleSend() {
     if (!to.trim()) { toast.error("Recipient required"); return; }
     if (!subject.trim()) { toast.error("Subject required"); return; }
-    const bodyHtml = body.replace(/\n/g, "<br/>");
+    // The editor's HTML as it is; an AI draft or template is plain text and
+    // is escaped, so a typed "<" or "&" is sent as text, not markup (O59).
+    const bodyHtml = composeBodyHtml(body);
+    const bodyText = isHtmlBody(body) ? htmlBodyToText(body) : body;
     const atts = attachments.length > 0 ? attachments.map(({ filename, contentType, content }) => ({ filename, contentType, content })) : undefined;
+    // Forward carries the original under the rep's note (O35); it used to be
+    // shown below as a preview and left out of the email.
+    const o = state.mode === "forward" ? state.originalMessage : undefined;
+    const quoted = o
+      ? forwardedBlock({
+          fromName: o.fromName, fromEmail: o.fromEmail, toEmail: o.toEmail, ccEmail: o.ccEmail,
+          dateLabel: o.date ? new Date(o.date).toLocaleString() : "",
+          subject: o.subject,
+          bodyHtml: o.bodyHtml ? sanitizeEmailHtml(o.bodyHtml) : "",
+          bodyText: o.bodyText,
+        })
+      : undefined;
     if (state.mode === "new") {
-      sendNew.mutate({ accountId: state.accountId, to, subject, bodyHtml, bodyText: body, cc: cc || undefined, attachments: atts });
+      sendNew.mutate({ accountId: state.accountId, to, subject, bodyHtml, bodyText, cc: cc || undefined, attachments: atts });
     } else {
       sendReply.mutate({
         accountId: state.accountId, threadId: state.threadId ?? "",
-        to, subject, bodyHtml, bodyText: body, cc: cc || undefined,
+        to, subject, bodyHtml, bodyText, cc: cc || undefined,
         inReplyTo: state.inReplyTo, references: state.references,
         attachments: atts,
+        quoted,
       });
     }
   }
@@ -373,6 +400,15 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
 
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
+    // Refused here, before reading, at the limit the server enforces (O59):
+    // past it the send failed as "request too large" after the whole upload.
+    const total = attachments.reduce((n, a) => n + a.size, 0) + files.reduce((n, f) => n + f.size, 0);
+    const tooBig = attachmentLimitProblem(total);
+    if (tooBig) {
+      toast.error(`${tooBig} Remove a file or share a link instead.`);
+      e.target.value = "";
+      return;
+    }
     files.forEach((file) => {
       const reader = new FileReader();
       reader.onload = (ev) => {
@@ -478,6 +514,7 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
                 <Paperclip className="size-3.5" /> Attach file
               </Button>
               <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
+              <span className="text-[11px] text-muted-foreground">Up to {MAILBOX_ATTACHMENT_LIMIT_BYTES / (1024 * 1024)} MB in all</span>
             </div>
             {attachments.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
@@ -500,12 +537,19 @@ function ComposeDialog({ state, onClose }: { state: ComposeState; onClose: () =>
               <div>From: {state.originalMessage.fromName || state.originalMessage.fromEmail}</div>
               <div>Subject: {state.originalMessage.subject}</div>
               <div>Date: {new Date(state.originalMessage.date).toLocaleString()}</div>
+              <div>Quoted in full below your message.{state.originalMessage.attachments?.length ? " Its attachments are not forwarded — attach them again if they are needed." : ""}</div>
+            </div>
+          )}
+          {accountOff && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+              <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+              <span>This mailbox is switched off in Sending Accounts, so it can't send. Switch it back on there to use it.</span>
             </div>
           )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSend} disabled={isLoading || aiLoading}>
+          <Button onClick={handleSend} disabled={isLoading || aiLoading || accountOff}>
             {isLoading ? <Loader2 className="size-4 animate-spin mr-2" /> : <Send className="size-4 mr-2" />}
             Send
           </Button>
@@ -561,9 +605,12 @@ function AttachmentBadge({ accountId, messageId, attachment, index }: {
 // ─── Thread Reading Pane ───────────────────────────────────────────────────────
 
 function ThreadView({
-  accountId, threadId, folder, folders, onBack, onCompose, onDeleted, onMoved,
+  accountId, ownEmail, threadId, folder, folders, onBack, onCompose, onDeleted, onMoved,
 }: {
-  accountId: number; threadId: string; folder: string;
+  accountId: number;
+  /** This mailbox's own address, so Reply answers someone else (O35). */
+  ownEmail?: string;
+  threadId: string; folder: string;
   folders: Array<{ name: string; path: string }>;
   onBack: () => void; onCompose: (s: ComposeState) => void;
   onDeleted: () => void; onMoved: () => void;
@@ -619,6 +666,8 @@ function ThreadView({
   const lastMsg = messages[messages.length - 1];
   const firstMsg = messages[0];
   const moveFolders = folders.filter((f) => f.path !== folder && f.name !== folder);
+  // The last message someone else sent, and the full References chain (O35).
+  const reply = replyAddressing(messages, ownEmail);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -633,10 +682,10 @@ function ThreadView({
         <div className="flex items-center gap-1 shrink-0">
           <Button variant="ghost" size="sm" className="gap-1.5 text-xs"
             onClick={() => onCompose({
-              mode: "reply", accountId, to: lastMsg.fromEmail,
+              mode: "reply", accountId, to: reply?.to ?? lastMsg.fromEmail,
               subject: "Re: " + lastMsg.subject.replace(/^Re:\s*/i, ""),
               body: "", cc: "", threadId,
-              inReplyTo: lastMsg.messageId, references: lastMsg.references,
+              inReplyTo: reply?.inReplyTo, references: reply?.references,
               threadMessages: messages,
             })}>
             <Reply className="size-3.5" />
@@ -1006,7 +1055,8 @@ export default function MailboxPage() {
   const { data: folders = [] } = trpc.mailbox.listFolders.useQuery({ accountId: currentAccountId!, repUserId }, { enabled: !!currentAccountId });
   const { data: teamData } = trpc.team.list.useQuery(undefined, { enabled: true });
 
-  const isManager = rankOf((user as any)?.role) >= ROLE_RANK.manager;
+  // The workspace role, as mailbox's resolveTargetUser checks it (R10).
+  const isManager = useWorkspaceRole().isManager;
 
   const folderList: Array<{ name: string; path: string }> = (folders as any[]).length
     ? (folders as Array<{ name: string; path: string }>)
@@ -1022,7 +1072,7 @@ export default function MailboxPage() {
   function clearThread() { setSelectedThreadId(undefined); setSelectedThreadAccountId(undefined); }
   function openCompose(accountId?: number) {
     const accId = accountId ?? currentAccountId ?? (accounts as Account[])[0]?.id;
-    if (!accId) { toast.error("No account selected"); return; }
+    if (!accId) { toast.error("Connect a mailbox on Connected Accounts first."); return; }
     setComposeState({ mode: "new", accountId: accId, to: "", subject: "", body: "", cc: "" });
   }
 
@@ -1045,7 +1095,8 @@ export default function MailboxPage() {
         {/* Left panel */}
         <div className="w-52 shrink-0 border-r bg-muted/20 flex flex-col overflow-hidden">
           <div className="p-2.5 border-b space-y-2">
-            <Button size="sm" className="w-full" onClick={() => openCompose()} disabled={!(accounts as Account[]).length}>
+            <Button size="sm" className="w-full" onClick={() => openCompose()} disabled={!(accounts as Account[]).length}
+              title={(accounts as Account[]).length ? "Write a new email" : "Connect a mailbox on Connected Accounts to compose"}>
               <Pencil className="size-3.5 mr-2" /> Compose
             </Button>
             {isManager && (teamData as any[])?.length > 0 && (
@@ -1103,9 +1154,7 @@ export default function MailboxPage() {
                   ))}
                 </>
               ) : (
-                <p className="text-xs text-muted-foreground px-2 py-2">
-                  No inbox-enabled accounts. Configure IMAP in Sending Accounts.
-                </p>
+                <NoMailboxConnected viewingRep={!!repUserId} />
               )}
 
               {selectedView.type === "account" && (
@@ -1140,7 +1189,9 @@ export default function MailboxPage() {
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-2 p-4">
                 <MailOpen className="size-8 opacity-30" />
-                <p className="text-xs text-center">No inbox-enabled accounts configured.</p>
+                <p className="text-xs text-center">
+                  {accountsLoading ? "Loading mailboxes…" : repUserId ? "This rep hasn't connected a mailbox yet." : "Connect your Microsoft 365 / Outlook mailbox on Connected Accounts to read and send mail here."}
+                </p>
               </div>
             )
           ) : (
@@ -1156,6 +1207,7 @@ export default function MailboxPage() {
           {selectedThreadId && readingPaneAccountId ? (
             <ThreadView
               accountId={readingPaneAccountId} threadId={selectedThreadId}
+              ownEmail={(accounts as Account[]).find((a) => a.id === readingPaneAccountId)?.email}
               folder={selectedView.type === "account" ? selectedFolder : "INBOX"}
               folders={folderList} onBack={clearThread}
               onCompose={(s) => setComposeState(s)} onDeleted={clearThread} onMoved={clearThread} />
@@ -1176,7 +1228,13 @@ export default function MailboxPage() {
         </div>
       </div>
 
-      {composeState && <ComposeDialog state={composeState} onClose={() => setComposeState(null)} />}
+      {composeState && (
+        <ComposeDialog
+          state={composeState}
+          account={(accounts as Account[]).find((a) => a.id === composeState.accountId)}
+          onClose={() => setComposeState(null)}
+        />
+      )}
     </Shell>
   );
 }

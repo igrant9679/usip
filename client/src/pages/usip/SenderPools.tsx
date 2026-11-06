@@ -27,6 +27,8 @@ import {
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { confirmAction } from "@/components/usip/Common";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { isAdminRole, rankOf, ROLE_RANK } from "@shared/roleRank";
 import {
   AlertCircle,
   CheckCircle2,
@@ -336,7 +338,7 @@ function PoolFormDialog({
 
 // ─── Pool Card ────────────────────────────────────────────────────────────────
 
-function PoolCard({ pool }: { pool: any }) {
+function PoolCard({ pool, canDelete }: { pool: any; canDelete: boolean }) {
   const utils = trpc.useUtils();
   const [expanded, setExpanded] = useState(false);
 
@@ -388,7 +390,7 @@ function PoolCard({ pool }: { pool: any }) {
             >
               {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
             </Button>
-            <Button
+            {canDelete && <Button
               size="icon"
               variant="ghost"
               className="h-7 w-7 text-destructive hover:text-destructive"
@@ -400,7 +402,7 @@ function PoolCard({ pool }: { pool: any }) {
               }}
             >
               <Trash2 className="w-3.5 h-3.5" />
-            </Button>
+            </Button>}
           </div>
         </div>
 
@@ -454,6 +456,11 @@ export default function SenderPools() {
   const [showCreate, setShowCreate] = useState(false);
   const { data: pools = [], isLoading } = trpc.senderPools.list.useQuery();
   const { data: accounts = [] } = trpc.sendingAccounts.list.useQuery();
+  // The server's rule (audit 2026-10-20, G52/O43): a manager builds and edits
+  // pools, only an admin deletes one. Reps see them read-only.
+  const { current } = useWorkspace();
+  const canEdit = rankOf(current?.role) >= ROLE_RANK.manager;
+  const canDelete = isAdminRole(current?.role);
 
   const totalCapacity = accounts
     .filter((a) => a.enabled)
@@ -468,9 +475,9 @@ export default function SenderPools() {
         
         icon={<Layers className="size-5" />}
       >
-          <Button onClick={() => setShowCreate(true)} className="gap-2" disabled={accounts.length < 2}>
+          {canEdit && <Button onClick={() => setShowCreate(true)} className="gap-2" disabled={accounts.length < 2}>
             <Plus className="w-4 h-4" /> Create pool
-          </Button>
+          </Button>}
         </PageHeader>
 
         {/* Info banner if not enough accounts */}
@@ -532,7 +539,7 @@ export default function SenderPools() {
                   Create a pool to enable rotation across multiple accounts in campaigns.
                 </p>
               </div>
-              {accounts.length >= 2 && (
+              {canEdit && accounts.length >= 2 && (
                 <Button onClick={() => setShowCreate(true)} className="gap-2 mt-2">
                   <Plus className="w-4 h-4" /> Create your first pool
                 </Button>
@@ -542,7 +549,7 @@ export default function SenderPools() {
         ) : (
           <div className="space-y-3">
             {pools.map((p) => (
-              <PoolCard key={p.id} pool={p} />
+              <PoolCard key={p.id} pool={p} canDelete={canDelete} />
             ))}
           </div>
         )}

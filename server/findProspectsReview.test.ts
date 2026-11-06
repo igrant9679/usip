@@ -79,7 +79,8 @@ describe("the screens", () => {
 
   it("each row and a selection can be approved or archived", () => {
     expect(queue).toContain('onClick={() => decide([p.id], "verified")}');
-    expect(queue).toContain('onClick={() => decide([p.id], "rejected")}');
+    // Archiving one person asks first, as the person page does (R64).
+    expect(queue).toContain('confirmLabel: "Archive", destructive: false }, () => decide([p.id], "rejected"))}>');
     expect(queue).toContain('onClick={() => decide(chosen, "verified")}');
     expect(queue).toContain('}, () => decide(chosen, "rejected"))}>');
     expect(queue).toContain("const review = trpc.prospects.review.useMutation({");

@@ -5,6 +5,7 @@
  */
 import type { DownstreamMarketExtras } from "@shared/downstreamMap";
 import { Section } from "./ResearchFields";
+import { ExtLink } from "./ReportBits";
 
 const STAT_LABEL: Record<string, string> = {
   organizations: "Organizations",
@@ -51,7 +52,7 @@ export function MarketExtras({ extras }: { extras: DownstreamMarketExtras | null
           {extras.funders.map((f) => (
             <div key={f.ref} className="rounded-md border p-2.5 text-xs space-y-1">
               <div className="font-medium">
-                {f.website ? <a href={f.website} target="_blank" rel="noopener noreferrer" className="underline">{f.name}</a> : f.name}
+                <ExtLink url={f.website ?? undefined}>{f.name}</ExtLink>
                 {f.shortName && f.shortName !== f.name ? <span className="text-muted-foreground"> ({f.shortName})</span> : null}
               </div>
               {f.summary && <p className="text-muted-foreground">{f.summary}</p>}

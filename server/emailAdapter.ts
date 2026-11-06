@@ -40,9 +40,9 @@ export function decryptField(ciphertext: string): string {
  * Mailbox passwords are encrypted when written from 2026-10-24 (audit
  * 2026-10-20, C4: every SMTP and IMAP password sat in plaintext — the
  * schema's "AES-256-GCM encrypted" note on imapPassword described the reader,
- * not the writers). Rows saved before that stay readable as they are until
- * they are next saved, which the owner's rotation of the exposed passwords
- * will do.
+ * not the writers), and OAuth tokens from 2026-11-06. Rows saved before that
+ * are encrypted in place at boot (services/secretBackfill); until that has
+ * run they still read as they are.
  */
 export function readStoredSecret(value: string | null | undefined): string | null {
   if (!value) return null;

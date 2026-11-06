@@ -3,6 +3,7 @@ import { usePageTitle } from "@/lib/usePageTitle";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { canOpenWorkspace } from "@/lib/activeWorkspace";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { HelpHover } from "@/components/usip/HelpTip";
@@ -837,11 +838,15 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             </button>
             </PopoverTrigger>
               <PopoverContent align="start" sideOffset={4} className="w-64 p-1 shadow-lg">
+                {/* An archived workspace is badged, and only a super admin may
+                    open it: everyone else is refused inside (audit 2026-10-20,
+                    G36). It was listed like any other. */}
                 {workspaces.map((w) => (
                   <button
                     key={w.id}
+                    disabled={!canOpenWorkspace(w)}
                     onClick={() => { setWsOpen(false); if (current?.id !== w.id) switchTo(w.id); }}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm hover:bg-secondary"
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm hover:bg-secondary disabled:opacity-60 disabled:hover:bg-transparent"
                   >
                     {current?.id === w.id ? <Check className="size-3.5 text-primary" /> : <span className="size-3.5" />}
                     {(w as { logoUrl?: string | null }).logoUrl && (
@@ -851,6 +856,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                       <div>{w.name}</div>
                       <div className="text-[11px] text-muted-foreground">{w.role} · {w.plan}</div>
                     </div>
+                    {w.archivedAt && (
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">Archived</span>
+                    )}
                   </button>
                 ))}
                 {/* Creation is super_admin-only server-side; hiding it for

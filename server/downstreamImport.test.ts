@@ -21,7 +21,7 @@ vi.mock("./db", async (importActual) => ({
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { accounts } from "../drizzle/schema";
 import { appRouter } from "./routers";
-import { __clearDownstreamDrafts } from "./services/research/downstreamImport";
+import { DRAFT_BYTES_MAX, __clearDownstreamDrafts, __downstreamDraftCount, commitDownstream, previewDownstream } from "./services/research/downstreamImport";
 import { __clearResearchContextCache, researchContextFor } from "./services/research/context";
 import { downstreamAccountFor } from "./services/research/downstreamAccounts";
 import { parseDownstreamFile } from "@shared/downstreamContract";
@@ -460,5 +460,145 @@ describe("the award reaches the copy", () => {
     const engine = read("server/areEngine.ts");
     expect(engine).toContain('if (ds?.fit?.flags?.includes("financial-distress")) {');
     expect(engine).toContain('rejectionReason: "Downstream: the organization is in financial distress — do not contact now"');
+  });
+});
+
+/* ── Audit 2026-10-20: P14, P23, P24, P108, P109, P110 ─────────────────── */
+
+const MARKET_REF = "regional-authorities";
+
+describe("a market deleted here (P14)", () => {
+  it("the preview shows it with a bring-back box, and bringing it back imports", async () => {
+    await commit(4, (await caller(4).research.downstream.preview({ fileText: exportFile() })).token, { assign: true });
+    await caller(4).research.markets.delete({ id: h.db.rowsOf("research_markets")[0].id });
+
+    const p = await caller(4).research.downstream.preview({ fileText: exportFile() });
+    expect(p.market).toEqual({ ref: MARKET_REF, name: "Regional Authorities", state: "deleted", relinked: false });
+    await expect(commit(4, p.token)).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining('Tick "Bring it back"') });
+
+    const again = await caller(4).research.downstream.preview({ fileText: exportFile() });
+    await commit(4, again.token, { takeDownstream: [MARKET_REF, K12] });
+    expect(h.db.rowsOf("research_markets").map((m: any) => m.name)).toEqual(["Regional Authorities"]);
+    expect(h.db.rowsOf("research_sectors")).toHaveLength(1);
+
+    const ui = read("client/src/components/usip/research/DownstreamSection.tsx");
+    expect(ui).toContain("<Checkbox checked={take.has(p.market.ref)} onCheckedChange={(v) => toggle(take, setTake, p.market.ref, !!v)} />");
+    expect(ui).toContain('const marketGone = p?.market.state === "deleted" && !take.has(p.market.ref);');
+    expect(ui).toContain("const blocked = (needsLink && !assign) || marketGone;");
+  });
+});
+
+describe("a paused link's personas and awards are not used (P23)", () => {
+  it("writers lose its persona and the engine its award until it is resumed", async () => {
+    await commit(4, (await caller(4).research.downstream.preview({ fileText: exportFile() })).token, { assign: true });
+    const persona = h.db.rowsOf("personas")[0];
+    const use = { surface: "outreach" as const, prospectTitle: "Director of Federal Programs" };
+    __clearResearchContextCache();
+    expect((await researchContextFor(4, use)).personaId).toBe(persona.id);
+    expect(await downstreamAccountFor(4, { companyDomain: "angelicministries.org" })).not.toBeNull();
+
+    const linkId = h.db.rowsOf("downstream_links")[0].id;
+    await caller(4).research.downstream.setStatus({ id: linkId, status: "paused" });
+    expect(await researchContextFor(4, use)).toMatchObject({ personaId: null, block: "" });
+    expect(await researchContextFor(4, { surface: "outreach", personaId: persona.id })).toMatchObject({ personaId: null, block: "" });
+    expect(await downstreamAccountFor(4, { companyDomain: "angelicministries.org" })).toBeNull();
+
+    await caller(4).research.downstream.setStatus({ id: linkId, status: "active" });
+    expect((await researchContextFor(4, use)).personaId).toBe(persona.id);
+    expect((await downstreamAccountFor(4, { companyDomain: "angelicministries.org" }))?.award?.program).toBe("INSPIRE");
+  });
+});
+
+describe("unlinking, then linking again (P24)", () => {
+  it("finds the same market, sector and persona instead of copying them", async () => {
+    await commit(4, (await caller(4).research.downstream.preview({ fileText: exportFile() })).token, { assign: true });
+    const count = () => ({ m: h.db.rowsOf("research_markets").length, s: h.db.rowsOf("research_sectors").length, p: h.db.rowsOf("personas").length });
+    const before = count();
+    await caller(4).research.downstream.remove({ id: h.db.rowsOf("downstream_links")[0].id });
+
+    let p = await caller(4).research.downstream.preview({ fileText: exportFile() });
+    expect(p.link.state).toBe("unassigned");
+    expect(p.market).toMatchObject({ state: "conflict", relinked: true });
+    const k12 = p.segments.find((s) => s.ref === K12)!;
+    expect(k12).toMatchObject({ state: "conflict", relinked: true });
+    expect(k12.personas.map((x) => [x.state, x.relinked])).toEqual([["unchanged", true]]);
+
+    // Kept as they are unless the person takes Downstream's version.
+    const r = await commit(4, p.token, { assign: true });
+    expect(r.counts).toMatchObject({ created: 0, keptYours: 2, unchanged: 1 });
+    expect(count()).toEqual(before);
+    expect(h.db.rowsOf("research_markets").map((m: any) => m.name)).toEqual(["Regional Authorities"]);
+
+    p = await caller(4).research.downstream.preview({ fileText: exportFile() });
+    expect(p.market.state).toBe("conflict");
+    await commit(4, p.token, { takeDownstream: [MARKET_REF, K12] });
+    p = await caller(4).research.downstream.preview({ fileText: exportFile() });
+    expect([p.market.state, p.segments.find((s) => s.ref === K12)!.state]).toEqual(["unchanged", "unchanged"]);
+    expect(count()).toEqual(before);
+  });
+
+  it("another workspace's records are never found", async () => {
+    await commit(4, (await caller(4).research.downstream.preview({ fileText: exportFile() })).token, { assign: true });
+    const p = await caller(2).research.downstream.preview({ fileText: exportFile() });
+    expect(p.market).toMatchObject({ state: "new", relinked: false });
+    expect(p.segments.find((s) => s.ref === K12)!.personas.map((x) => x.state)).toEqual(["new"]);
+  });
+});
+
+describe("previews held in memory are bounded (P108)", () => {
+  it("one per person: a newer preview replaces the older", async () => {
+    const first = await caller(4).research.downstream.preview({ fileText: exportFile() });
+    const second = await caller(4).research.downstream.preview({ fileText: exportFile() });
+    expect(__downstreamDraftCount()).toBe(1);
+    await expect(commit(4, first.token, { assign: true })).rejects.toMatchObject({ code: "NOT_FOUND", message: expect.stringContaining("replaced by a newer one") });
+    await expect(commit(4, second.token, { assign: true })).resolves.toMatchObject({ counts: expect.anything() });
+  });
+
+  it("the files held never add up past the cap: the oldest goes first", async () => {
+    const big = exportFile() + " ".repeat(14 * 1024 * 1024);
+    const tokens: string[] = [];
+    for (const userId of [1, 2, 3, 4]) tokens.push((await previewDownstream(h.db, 4, userId, "CommunityForce", big)).token);
+    expect(4 * big.length).toBeGreaterThan(DRAFT_BYTES_MAX);
+    expect(__downstreamDraftCount()).toBe(3);
+    const choices = { assign: true, useSellerMessaging: false, segments: [K12], importOrganizations: false, takeDownstream: [] };
+    await expect(commitDownstream(h.db, 4, 1, true, { token: tokens[0], ...choices })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(commitDownstream(h.db, 4, 4, true, { token: tokens[3], ...choices })).resolves.toMatchObject({ linkId: expect.any(Number) });
+  });
+});
+
+describe("organizations as accounts (P109)", () => {
+  it("the preview counts matched against new, and a first import leaves the box unticked", async () => {
+    await h.db.insert(accounts).values({ workspaceId: 4, name: "Angelic Ministries", normalizedName: "angelic ministries", domain: "angelicministries.org", normalizedDomain: "angelicministries.org", customFields: {} });
+    const p = await caller(4).research.downstream.preview({ fileText: exportFile() });
+    expect(p.segments.find((s) => s.ref === K12)).toMatchObject({ organizations: 2, organizationsMatched: 1, organizationsNew: 1 });
+    expect(p.organizationsImportedBefore).toBe(false);
+    await commit(4, p.token, { assign: true });
+    const again = await caller(4).research.downstream.preview({ fileText: exportFile() });
+    expect(again.segments.find((s) => s.ref === K12)).toMatchObject({ organizationsMatched: 2, organizationsNew: 0 });
+    expect(again.organizationsImportedBefore).toBe(true);
+
+    const ui = read("client/src/components/usip/research/DownstreamSection.tsx");
+    expect(ui).toContain("const [orgs, setOrgs] = useState(false);");
+    expect(ui).toContain("setOrgs(p.organizationsImportedBefore);");
+    expect(ui).toContain("{orgMatched} match accounts you already have");
+  });
+
+  it("matches by name and state as the import does, and only in this workspace", async () => {
+    await h.db.insert(accounts).values([
+      { workspaceId: 2, name: "Struggling County Schools", normalizedName: "struggling county schools", customFields: {} },
+      { workspaceId: 4, name: "Angelic Ministries", normalizedName: "angelic ministries", hqState: "KY", customFields: {} },
+    ]);
+    const p = await caller(4).research.downstream.preview({ fileText: exportFile() });
+    // Angelic Ministries is in TN in the file; the KY one is another organization.
+    expect(p.segments.find((s) => s.ref === K12)).toMatchObject({ organizationsMatched: 0, organizationsNew: 2 });
+  });
+});
+
+describe("the help says what linking does (P110)", () => {
+  it("does not promise one-to-one linking", () => {
+    const help = read("server/seedHelpContent.ts");
+    expect(help).not.toContain("One Downstream workspace, one Velocity workspace");
+    expect(help).not.toContain("its files import only here");
+    expect(help).toContain("**Each workspace links its own.**");
   });
 });

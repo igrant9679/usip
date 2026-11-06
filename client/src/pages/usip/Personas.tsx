@@ -29,7 +29,7 @@ import { toast } from "sonner";
 import { Users, Plus, Pencil, Trash2, Sparkles, ChevronDown, ArrowUp, ArrowDown, FolderPlus, Telescope } from "lucide-react";
 import { PersonaResultsBadge, usePersonaResultSummaries } from "@/components/usip/research/ResearchResults";
 import { confirmAction } from "@/components/usip/Common";
-import { ResearchSubNav } from "@/components/usip/research/ResearchFields";
+import { ResearchSubNav, reportDropped } from "@/components/usip/research/ResearchFields";
 import { EMPTY_PERSONA, PersonaFormFields, personaFormFrom, personaPayload, type PersonaForm } from "@/components/usip/research/PersonaFormFields";
 import { icpLabels } from "@shared/icpShape";
 
@@ -87,6 +87,7 @@ export default function Personas() {
   const updateCategory = trpc.personas.updateCategory.useMutation();
   const deleteCategory = trpc.personas.deleteCategory.useMutation();
   const reorderCategories = trpc.personas.reorderCategories.useMutation();
+  const utils = trpc.useUtils();
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -131,11 +132,12 @@ export default function Personas() {
   const save = async () => {
     if (!form.name.trim()) { toast.error("Name is required"); return; }
     try {
+      // What the cleaner removed as personal data is said (audit 2026-10-20, P125).
       if (editingId) {
-        await update.mutateAsync({ id: editingId, ...personaPayload(form) });
+        reportDropped((await update.mutateAsync({ id: editingId, ...personaPayload(form) })).dropped);
         toast.success("Persona updated");
       } else {
-        await create.mutateAsync(personaPayload(form));
+        reportDropped((await create.mutateAsync(personaPayload(form))).dropped);
         toast.success("Persona created");
       }
       setOpen(false);
@@ -146,6 +148,8 @@ export default function Personas() {
   };
 
   const applyPreset = async (key: string) => {
+    // One click, one persona: a second click while the first is saving made two (P125).
+    if (fromPreset.isPending) return;
     try {
       await fromPreset.mutateAsync({ presetKey: key });
       toast.success("Preset added to your personas");
@@ -155,10 +159,27 @@ export default function Personas() {
     }
   };
 
-  const remove = (id: number) => {
-    confirmAction({ title: "Delete this persona?", description: "This targeting template will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, async () => {
+  const remove = async (id: number) => {
+    // Which campaigns' writers use it, said before it goes; an active one stops it (P32).
+    let campaigns: { name: string; status: string }[] = [];
+    try {
+      campaigns = (await utils.personas.usage.fetch({ id })).campaigns;
+    } catch (e: any) {
+      toast.error(e?.message ?? "Couldn't check which campaigns use this persona");
+      return;
+    }
+    const live = campaigns.filter((c) => c.status === "active");
+    if (live.length) {
+      toast.error(`${live.length === 1 ? `The active campaign "${live[0].name}" uses` : `${live.length} active campaigns use`} this persona. Pause ${live.length === 1 ? "it" : "them"}, or give ${live.length === 1 ? "it" : "them"} another persona, first.`);
+      return;
+    }
+    const used = campaigns.length
+      ? ` ${campaigns.length === 1 ? `The campaign "${campaigns[0].name}" uses` : `${campaigns.length} campaigns use`} it and will be left with no persona.`
+      : "";
+    confirmAction({ title: "Delete this persona?", description: `This targeting template will be permanently deleted.${used} This cannot be undone.`, confirmLabel: "Delete" }, async () => {
       try {
         await del.mutateAsync({ id });
+        toast.success("Persona deleted");
         await refetch();
       } catch (e: any) {
         toast.error(e?.message ?? "Delete failed");
@@ -316,7 +337,8 @@ export default function Personas() {
                 <button
                   key={p.key}
                   onClick={() => applyPreset(p.key)}
-                  className="text-left border rounded p-3 hover:bg-accent transition"
+                  disabled={fromPreset.isPending}
+                  className="text-left border rounded p-3 hover:bg-accent transition disabled:opacity-60 disabled:pointer-events-none"
                 >
                   <div className="font-medium text-sm">{p.name}</div>
                   <div className="text-xs text-muted-foreground mt-1">{p.description}</div>

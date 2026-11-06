@@ -2,22 +2,27 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
 import { ConfirmButton, fmtDate, StatusPill } from "./Common";
-import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Sparkles, Trash2, Users, XCircle, ShieldCheck, FileText, Download, Send, Wand2, Sparkle, Linkedin, UserPlus } from "lucide-react";
+import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Sparkles, Trash2, Users, XCircle, ShieldCheck, Send, Wand2, Sparkle, Linkedin, UserPlus } from "lucide-react";
 import { EmailVerificationBadge } from "./EmailVerificationBadge";
 import { RichTextEditor } from "./RichTextEditor";
 import { isEmptyEmailBody } from "@shared/emailBody";
 import { RecordFiles } from "./MicrosoftGraph";
+import { RecordAttachments, RecordNotes } from "./EntityDetail";
+import { DrawerTimeline } from "./detail/DrawerTimeline";
+import { LinkedInActionsPanel } from "./detail/LinkedInActionsPanel";
+import { useLocation } from "wouter";
 import { LEAD_TIERS, leadTierLabel, type LeadTier } from "@shared/leadTier";
+import { savedScoreLine, type SavedScore } from "@/lib/leadScoreText";
 import { ContactOverview } from "./detail/ContactOverview";
 import { AccountOverview } from "./detail/AccountOverview";
 import { OpportunityOverview } from "./detail/OpportunityOverview";
 import { ActivityTimeline } from "./detail/ActivityTimeline";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
-import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
 import { tablistProps, tabProps } from "@/lib/tabs";
+import { AccountBriefPanel } from "./company/AccountBriefPanel";
 
 type RelatedType = "lead" | "contact" | "account" | "opportunity" | "customer";
 
@@ -41,9 +46,11 @@ function LeadScorePanel({ leadId }: { leadId: number }) {
   // The label comes from @shared/leadTier rather than a local special case for
   // "sales_ready" plus a capitalise-the-first-letter fallback — which is how
   // one surface ends up saying "Sales Ready" and another "Sales_ready".
-  const tierLabel = leadTierLabel((LEAD_TIERS as readonly string[]).includes(tier) ? (tier as LeadTier) : null);
-  const tierCls = tier === "sales_ready" ? "bg-emerald-100 text-emerald-800" : tier === "hot" ? "bg-orange-100 text-orange-800" : tier === "warm" ? "bg-yellow-100 text-yellow-800" : "bg-slate-200 text-slate-700";
-  const max = (bd.firmographic.max ?? 40) + (bd.behavioral.max ?? 30) + (bd.aiFit.max ?? 30);
+  // A lead never scored says so rather than Cold (audit 2026-10-20, P119).
+  const tierLabel = bd.saved.scored ? leadTierLabel((LEAD_TIERS as readonly string[]).includes(tier) ? (tier as LeadTier) : null) : "Not scored";
+  const tierCls = !bd.saved.scored ? "bg-muted text-muted-foreground" : tier === "sales_ready" ? "bg-emerald-100 text-emerald-800" : tier === "hot" ? "bg-orange-100 text-orange-800" : tier === "warm" ? "bg-yellow-100 text-yellow-800" : "bg-slate-200 text-slate-700";
+  // The server's sum of the three maximums (P22).
+  const max = bd.maxSum;
   const sparkW = 540, sparkH = 36;
   const vals = (bd.history ?? []).map((h: any) => h.total);
   const sparkPts = vals.length ? vals.map((v: number, i: number) => `${(i * sparkW) / Math.max(1, vals.length - 1)},${sparkH - (v / 100) * (sparkH - 4)}`).join(" ") : "";
@@ -53,7 +60,8 @@ function LeadScorePanel({ leadId }: { leadId: number }) {
         <div>
           <div className="text-xs text-muted-foreground">Total score</div>
           <div className="text-2xl font-mono tabular-nums">{bd.total}<span className="text-sm text-muted-foreground">/100</span> <span className={`text-xs ml-2 px-1.5 rounded ${tierCls}`}>{tierLabel}</span></div>
-          <div className="text-[11px] text-muted-foreground mt-1">Max possible: {max} pts · Grade {bd.grade ?? "—"}</div>
+          <div className="text-[11px] text-muted-foreground mt-1">The three below added up, capped at 100 (max possible {max} pts) · Grade {bd.grade ?? "—"}</div>
+          <div className="text-[11px] text-muted-foreground">{savedScoreLine(bd.saved as SavedScore, bd.total)}</div>
         </div>
         <Button size="sm" variant="outline" className="bg-card" onClick={() => recompute.mutate({ leadId })} disabled={recompute.isPending}>
           <RefreshCw className={`size-3.5 ${recompute.isPending ? "animate-spin" : ""}`} /> Recompute
@@ -61,8 +69,9 @@ function LeadScorePanel({ leadId }: { leadId: number }) {
       </div>
 
       <Accordion open={openSec === "firmo"} onToggle={() => setOpenSec(openSec === "firmo" ? null : "firmo")} title="Firmographic" value={bd.firmographic.value} max={bd.firmographic.max} reasons={bd.firmographic.reasons} />
-      <Accordion open={openSec === "behav"} onToggle={() => setOpenSec(openSec === "behav" ? null : "behav")} title="Behavioral" value={Math.max(0, bd.behavioral.value)} max={bd.behavioral.max} reasons={bd.behavioral.reasons} />
-      <Accordion open={openSec === "ai"} onToggle={() => setOpenSec(openSec === "ai" ? null : "ai")} title="AI Fit" value={bd.aiFit.value} max={bd.aiFit.max} reasons={[`Tier: ${tierLabel}`]} />
+      {/* Behaviour below zero is shown as it is: it lowers the total (P33). */}
+      <Accordion open={openSec === "behav"} onToggle={() => setOpenSec(openSec === "behav" ? null : "behav")} title="Behavioral" value={bd.behavioral.value} max={bd.behavioral.max} reasons={bd.behavioral.reasons} />
+      <Accordion open={openSec === "ai"} onToggle={() => setOpenSec(openSec === "ai" ? null : "ai")} title="AI Fit" value={bd.aiFit.value} max={bd.aiFit.max} reasons={bd.aiFit.reasons} />
 
       <div className="rounded border bg-card p-3">
         <div className="text-xs font-semibold mb-1">90-day history</div>
@@ -287,186 +296,6 @@ function OppIntelligencePanel({ opportunityId }: { opportunityId: number }) {
               </div>
             </div>
           )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─── Account Brief Panel ──────────────────────────────────────────────── */
-function AccountBriefPanel({ accountId }: { accountId: number }) {
-  const utils = trpc.useUtils();
-  const { data: brief, isLoading } = trpc.accountBriefs.getLatest.useQuery({ accountId });
-  const exportPdf = trpc.accountBriefs.exportPdf.useMutation({
-    onSuccess: (data) => {
-      window.open(data.url, "_blank");
-      toast.success("PDF ready");
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
-  // Streaming generation — replaces the trpc.accountBriefs.generate mutation.
-  // Tokens fill `streamingContent` live; on completion the route saves to DB
-  // and we invalidate the getLatest query so the saved row replaces the buffer.
-  const [streaming, setStreaming] = useState(false);
-  const [streamingContent, setStreamingContent] = useState("");
-  const abortRef = useRef<AbortController | null>(null);
-
-  const handleGenerate = async () => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    setStreamingContent("");
-    setStreaming(true);
-
-    const wsId = getActiveWorkspaceId();
-
-    let accumulated = "";
-    try {
-      const res = await fetch(`/api/accounts/${accountId}/brief/stream`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-          ...(wsId ? { "x-workspace-id": wsId } : {}),
-        },
-        credentials: "include",
-        signal: controller.signal,
-      });
-
-      if (!res.ok || !res.body) {
-        const errText = await res.text().catch(() => "");
-        throw new Error(errText || `Stream failed: ${res.status}`);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        let nl: number;
-        while ((nl = buffer.indexOf("\n")) !== -1) {
-          const rawLine = buffer.slice(0, nl).replace(/\r$/, "");
-          buffer = buffer.slice(nl + 1);
-          if (!rawLine.startsWith("data:")) continue;
-          const data = rawLine.slice(5).trimStart();
-          if (!data) continue;
-          try {
-            const ev = JSON.parse(data) as
-              | { type: "delta"; text: string }
-              | { type: "saved"; briefId: number }
-              | { type: "done" }
-              | { type: "error"; error: string };
-            if (ev.type === "delta") {
-              accumulated += ev.text;
-              setStreamingContent(accumulated);
-            } else if (ev.type === "saved") {
-              // Server persisted the brief — refresh the query so the
-              // streaming buffer is replaced by the canonical DB row.
-              utils.accountBriefs.getLatest.invalidate({ accountId });
-              toast.success("Account brief saved");
-            } else if (ev.type === "error") {
-              toast.error(ev.error);
-            }
-          } catch {
-            // ignore malformed events / heartbeats
-          }
-        }
-      }
-    } catch (err) {
-      if (!controller.signal.aborted) {
-        toast.error(err instanceof Error ? err.message : "Generation failed");
-      }
-    } finally {
-      setStreaming(false);
-      if (abortRef.current === controller) abortRef.current = null;
-    }
-  };
-
-  const handleStop = () => {
-    abortRef.current?.abort();
-    setStreaming(false);
-  };
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center gap-2 text-sm text-muted-foreground py-6">
-        <Loader2 className="size-3 animate-spin" /> Loading…
-      </div>
-    );
-  }
-
-  // Show streaming buffer while in flight; show saved brief when idle.
-  const showStreaming = streaming || (streamingContent && !brief);
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-semibold">AI Account Brief</p>
-          {brief && !streaming && (
-            <p className="text-xs text-muted-foreground">
-              Generated {new Date(brief.generatedAt).toLocaleDateString()}
-            </p>
-          )}
-          {streaming && (
-            <p className="text-xs text-muted-foreground">Generating…</p>
-          )}
-        </div>
-        <div className="flex gap-2">
-          {streaming && (
-            <Button size="sm" variant="ghost" onClick={handleStop}>
-              Stop
-            </Button>
-          )}
-          {brief && !streaming && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => exportPdf.mutate({ briefId: brief.id })}
-              disabled={exportPdf.isPending}
-            >
-              {exportPdf.isPending ? <Loader2 className="size-3 animate-spin mr-1" /> : <Download className="size-3 mr-1" />}
-              PDF
-            </Button>
-          )}
-          <Button size="sm" onClick={handleGenerate} disabled={streaming}>
-            {streaming ? <Loader2 className="size-3 animate-spin mr-1" /> : <Brain className="size-3 mr-1" />}
-            {brief ? "Regenerate" : "Generate Brief"}
-          </Button>
-        </div>
-      </div>
-
-      {!brief && !streaming && !streamingContent && (
-        <div className="rounded-lg border bg-muted/30 p-6 text-center">
-          <FileText className="size-8 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground">No brief generated yet.</p>
-          <p className="text-xs text-muted-foreground/70 mt-1">
-            Click "Generate Brief" to create an AI-powered 300-word executive account summary.
-          </p>
-        </div>
-      )}
-
-      {showStreaming && (
-        <div className="rounded-lg border bg-card p-4">
-          <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed whitespace-pre-wrap">
-            {streamingContent || (
-              <span className="text-muted-foreground italic">Connecting…</span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {brief && !showStreaming && (
-        <div className="rounded-lg border bg-card p-4">
-          <div className="prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed whitespace-pre-wrap">
-            {brief.content}
-          </div>
         </div>
       )}
     </div>
@@ -744,6 +573,12 @@ function RecordDrawerForRecord({
     { id: relatedId ?? 0 },
     { enabled: relatedType === "account" && !!relatedId },
   );
+  // A lead's LinkedIn profile, for the LinkedIn tab (R44).
+  const leadData = trpc.leads.get.useQuery(
+    { id: relatedId ?? 0 },
+    { enabled: relatedType === "lead" && !!relatedId },
+  );
+  const [, navigate] = useLocation();
   const opportunityWithRelated = trpc.opportunities.getWithRelated.useQuery(
     { id: relatedId ?? 0 },
     { enabled: relatedType === "opportunity" && !!relatedId },
@@ -780,9 +615,6 @@ function RecordDrawerForRecord({
 
   const logCall = trpc.activities.logCall.useMutation({ onSuccess: () => { refresh(); toast.success("Call logged"); setTab("timeline"); }, onError: (e) => toast.error(e.message) });
   const logMeeting = trpc.activities.logMeeting.useMutation({ onSuccess: () => { refresh(); toast.success("Meeting logged"); setTab("timeline"); }, onError: (e) => toast.error(e.message) });
-  const addNote = trpc.activities.addNote.useMutation({ onSuccess: () => { refresh(); toast.success("Note added"); setTab("timeline"); }, onError: (e) => toast.error(e.message) });
-  const upload = trpc.attachments.upload.useMutation({ onSuccess: () => { refresh(); toast.success("File attached"); }, onError: (e) => toast.error(e.message) });
-  const delAtt = trpc.attachments.delete.useMutation({ onSuccess: () => refresh(), onError: (e) => toast.error(e.message) });
   const delActivity = trpc.activities.delete.useMutation({
     onSuccess: () => { refresh(); toast.success("Activity deleted"); },
     onError: (e) => toast.error(e.message),
@@ -815,21 +647,6 @@ function RecordDrawerForRecord({
     else if (relatedType === "account") delAccount.mutate({ id: relatedId }, opts);
     else if (relatedType === "lead") delLead.mutate({ id: relatedId }, opts);
     else if (relatedType === "opportunity") delOpp.mutate({ id: relatedId }, opts);
-  };
-
-  const fileInput = useRef<HTMLInputElement>(null);
-
-  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f || !relatedId) return;
-    if (f.size > 5 * 1024 * 1024) { toast.error("Max 5MB per file"); return; }
-    const buf = await f.arrayBuffer();
-    const bytes = new Uint8Array(buf);
-    let bin = "";
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
-    const b64 = btoa(bin);
-    upload.mutate({ relatedType, relatedId, fileName: f.name, mimeType: f.type || "application/octet-stream", base64: b64 });
-    e.target.value = "";
   };
 
   return (
@@ -868,7 +685,7 @@ function RecordDrawerForRecord({
             { k: "timeline", label: "Timeline" },
             { k: "call", label: "Log call" },
             { k: "meeting", label: "Log meeting" },
-            { k: "note", label: "Add note" },
+            { k: "note", label: "Notes" },
             { k: "files", label: `Files (${files.data?.length ?? 0})` },
             ...(relatedType === "lead" ? [{ k: "score", label: "Score" }] : []),
             ...(relatedType === "opportunity" ? [{ k: "opp-timeline", label: "Deal Timeline" }] : []),
@@ -892,33 +709,8 @@ function RecordDrawerForRecord({
             <>
               {acts.isLoading && <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-3 animate-spin" /> Loading…</div>}
               {acts.data?.length === 0 && <div className="text-sm text-muted-foreground py-8 text-center">No activity logged yet. Use the tabs above to log a call, meeting, or note.</div>}
-              {acts.data?.map((a: any) => (
-                <div key={a.id} className="border rounded-md p-3 bg-card group">
-                  <div className="flex items-center gap-2 text-xs">
-                    {a.kind === "call" && <Phone className="size-3 text-[#14B89A]" />}
-                    {a.kind === "meeting" && <Calendar className="size-3 text-blue-600" />}
-                    {a.kind === "note" && <MessageSquare className="size-3 text-amber-600" />}
-                    <span className="font-semibold uppercase tracking-wide">{a.kind}</span>
-                    {a.disposition && <StatusPill tone={a.disposition === "connected" ? "success" : a.disposition === "not_interested" ? "danger" : "warning"}>{a.disposition.replace(/_/g, " ")}</StatusPill>}
-                    <span className="ml-auto text-muted-foreground">{fmtDate(a.createdAt)}</span>
-                    <ConfirmButton
-                      ariaLabel="Delete activity"
-                      className="text-muted-foreground hover:text-destructive p-0.5 h-auto rounded opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
-                      title="Delete this activity?"
-                      description="This activity will be permanently removed from the timeline. This cannot be undone."
-                      confirmLabel="Delete"
-                      onConfirm={() => delActivity.mutate({ id: a.id })}
-                    >
-                      <Trash2 className="size-3" />
-                    </ConfirmButton>
-                  </div>
-                  {a.subject && <div className="text-sm font-semibold mt-1">{a.subject}</div>}
-                  {a.notes && <div className="text-sm whitespace-pre-wrap mt-1 text-foreground/90">{a.notes}</div>}
-                  {Array.isArray(a.mentions) && a.mentions.length > 0 && (
-                    <div className="text-[11px] text-muted-foreground mt-1">Notified: {a.mentions.length} user(s)</div>
-                  )}
-                </div>
-              ))}
+              {/* Reads type / body / callDisposition, the row's columns (R7). */}
+              {acts.data && <DrawerTimeline rows={acts.data as any[]} onDelete={(id) => delActivity.mutate({ id })} />}
             </>
           )}
 
@@ -1018,20 +810,13 @@ function RecordDrawerForRecord({
             </form>
           )}
 
-          {tab === "note" && (
-            <form onSubmit={(e) => {
-              e.preventDefault();
-              if (!relatedId) return;
-              const fd = new FormData(e.currentTarget);
-              addNote.mutate({
-                relatedType, relatedId,
-                body: String(fd.get("body") || ""),
-              });
-            }} className="space-y-3">
+          {/* The record's notes, the same store its detail page reads (R45):
+              the drawer wrote activities rows the detail page never showed. */}
+          {tab === "note" && relatedId && (
+            <div className="space-y-2">
               <div className="text-xs text-muted-foreground">Use <code className="bg-secondary px-1 rounded">@[Name](user:1)</code> to @-mention a teammate. They'll get an in-app notification.</div>
-              <textarea aria-label="Update" name="body" required rows={6} placeholder="Quick update on this account…" className="w-full border rounded-md px-3 py-2 text-sm" />
-              <Button type="submit" disabled={addNote.isPending}>{addNote.isPending ? "Saving…" : "Add note"}</Button>
-            </form>
+              <RecordNotes entityType={relatedType} entityId={relatedId} />
+            </div>
           )}
 
           {tab === "overview" && relatedType === "contact" && (
@@ -1039,10 +824,9 @@ function RecordDrawerForRecord({
               contact={contactWithAccount.data?.contact ?? contactData.data ?? { id: relatedId ?? 0, firstName: "", lastName: "" }}
               account={contactWithAccount.data?.account ?? null}
               isLoading={contactWithAccount.isLoading}
-              onAccountClick={(accountId) => {
-                // Navigate to account drawer — caller can handle via onOpenChange + re-open
-                toast.info(`Account ID ${accountId} — open from the Accounts list`);
-              }}
+              // The live pages (R46): the toasts sent people to the retired
+              // Accounts and Contacts lists.
+              onAccountClick={(accountId) => navigate(`/v2/companies/${accountId}`)}
             />
           )}
 
@@ -1051,9 +835,7 @@ function RecordDrawerForRecord({
               account={accountWithContacts.data?.account ?? { id: relatedId ?? 0, name: title }}
               contacts={accountWithContacts.data?.contacts ?? []}
               isLoading={accountWithContacts.isLoading}
-              onContactClick={(contactId) => {
-                toast.info(`Contact ID ${contactId} — open from the Contacts list`);
-              }}
+              onContactClick={(contactId) => navigate(`/contacts/${contactId}`)}
             />
           )}
 
@@ -1063,12 +845,8 @@ function RecordDrawerForRecord({
               account={opportunityWithRelated.data?.account ?? null}
               contactRoles={opportunityWithRelated.data?.contactRoles ?? []}
               isLoading={opportunityWithRelated.isLoading}
-              onAccountClick={(accountId) => {
-                toast.info(`Account ID ${accountId} — open from the Accounts list`);
-              }}
-              onContactClick={(contactId) => {
-                toast.info(`Contact ID ${contactId} — open from the Contacts list`);
-              }}
+              onAccountClick={(accountId) => navigate(`/v2/companies/${accountId}`)}
+              onContactClick={(contactId) => navigate(`/contacts/${contactId}`)}
             />
           )}
 
@@ -1118,8 +896,16 @@ function RecordDrawerForRecord({
             />
           )}
 
-          {tab === "files" && relatedId && ["contact", "lead", "account", "opportunity"].includes(relatedType) && (
-            <RecordFiles relatedType={relatedType as "contact" | "lead" | "account" | "opportunity"} relatedId={relatedId} />
+          {/* One Files list (R46): the attachments every detail page shows,
+              whose delete asks first. OneDrive links appear beneath it only
+              for a workspace that connected Microsoft 365. */}
+          {tab === "files" && relatedId && (
+            <div className="space-y-3">
+              <RecordAttachments entityType={relatedType} entityId={relatedId} />
+              {["contact", "lead", "account", "opportunity"].includes(relatedType) && (
+                <RecordFiles relatedType={relatedType as "contact" | "lead" | "account" | "opportunity"} relatedId={relatedId} onlyWhenConnected />
+              )}
+            </div>
           )}
           {tab === "verify" && relatedType === "contact" && (
             <ContactVerifyPanel
@@ -1142,35 +928,11 @@ function RecordDrawerForRecord({
             <LinkedInActionsPanel
               relatedType={relatedType}
               relatedId={relatedId ?? 0}
-              linkedinUrl={(contactData.data as any)?.linkedinUrl ?? (contactData.data as any)?.linkedin_url ?? ""}
+              linkedinUrl={relatedType === "lead" ? (leadData.data as any)?.linkedinUrl ?? "" : (contactData.data as any)?.linkedinUrl ?? (contactData.data as any)?.linkedin_url ?? ""}
               name={title}
             />
           )}
 
-          {tab === "files" && (
-            <>
-              <div className="flex items-center gap-2">
-                <input ref={fileInput} type="file" className="hidden" onChange={onFile} />
-                <Button onClick={() => fileInput.current?.click()} disabled={upload.isPending}>
-                  <Paperclip className="size-3 mr-1" /> {upload.isPending ? "Uploading…" : "Attach file"}
-                </Button>
-                <span className="text-xs text-muted-foreground">5 MB max per file. Stored in S3.</span>
-              </div>
-              {files.data?.length === 0 && <div className="text-sm text-muted-foreground py-8 text-center">No files attached.</div>}
-              <div className="space-y-2">
-                {files.data?.map((f: any) => (
-                  <div key={f.id} className="flex items-center gap-2 border rounded-md p-2 bg-card">
-                    <Paperclip className="size-3 text-muted-foreground" />
-                    <a href={f.url} target="_blank" rel="noreferrer" className="text-sm font-medium hover:underline flex-1 truncate">{f.fileName}</a>
-                    <span className="text-[11px] text-muted-foreground">{Math.round(((f.sizeBytes ?? 0) / 1024))} KB</span>
-                    <button aria-label="Delete attachment" onClick={() => delAtt.mutate({ id: f.id })} className="text-muted-foreground hover:text-rose-600">
-                      <Trash2 className="size-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
         </div>
       </SheetContent>
     </Sheet>
@@ -1244,7 +1006,8 @@ function LeadEmailTab({
             onChange={(e) => onAiPromptChange(e.target.value)}
             rows={3}
           />
-          <Button size="sm" className="w-full" onClick={() => generate.mutate({ prompt: aiPrompt })} disabled={!aiPrompt.trim() || generate.isPending}>
+          {/* Written for this lead, and saved nowhere: the copy fills this form (R50). */}
+          <Button size="sm" className="w-full" onClick={() => generate.mutate({ prompt: aiPrompt, toLeadId: leadId, previewOnly: true })} disabled={!aiPrompt.trim() || generate.isPending}>
             {generate.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Wand2 className="size-4 mr-1" />}
             Generate Email
           </Button>
@@ -1337,7 +1100,8 @@ function ContactEmailTab({
             onChange={(e) => onAiPromptChange(e.target.value)}
             rows={3}
           />
-          <Button size="sm" className="w-full" onClick={() => generate.mutate({ prompt: aiPrompt })} disabled={!aiPrompt.trim() || generate.isPending}>
+          {/* Written for this contact, and saved nowhere (R50). */}
+          <Button size="sm" className="w-full" onClick={() => generate.mutate({ prompt: aiPrompt, toContactId: contactId, previewOnly: true })} disabled={!aiPrompt.trim() || generate.isPending}>
             {generate.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Wand2 className="size-4 mr-1" />}
             Generate Email
           </Button>
@@ -1359,157 +1123,6 @@ function ContactEmailTab({
         {send.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Send className="size-4 mr-1" />}
         Send Email
       </Button>
-    </div>
-  );
-}
-
-/* ─── LinkedIn Actions Panel ─────────────────────────────────────────────── */
-function LinkedInActionsPanel({
-  relatedType,
-  relatedId,
-  linkedinUrl,
-  name,
-}: {
-  relatedType: string;
-  relatedId: number;
-  linkedinUrl?: string;
-  name: string;
-}) {
-  const utils = trpc.useUtils();
-  const { data: accounts = [] } = trpc.unipile.listConnectedAccounts.useQuery();
-  const linkedInAccounts = accounts.filter((a: any) => a.provider === "LINKEDIN");
-
-  const [selectedAccountId, setSelectedAccountId] = useState<string>(linkedInAccounts[0]?.unipileAccountId ?? "");
-  const [inviteMessage, setInviteMessage] = useState("");
-  const [dmText, setDmText] = useState("");
-  const [profileId, setProfileId] = useState(linkedinUrl ?? "");
-
-  const sendInvite = trpc.unipile.sendLinkedInInvite.useMutation({
-    onSuccess: () => {
-      toast.success("Connection request sent!");
-      setInviteMessage("");
-      utils.activities.list.invalidate({ relatedType: relatedType as any, relatedId });
-    },
-    onError: (err) => toast.error("Failed to send invite", { description: err.message }),
-  });
-
-  const sendDm = trpc.unipile.sendMessage.useMutation({
-    onSuccess: () => {
-      toast.success("Direct message sent!");
-      setDmText("");
-      utils.activities.list.invalidate({ relatedType: relatedType as any, relatedId });
-    },
-    onError: (err) => toast.error("Failed to send DM", { description: err.message }),
-  });
-
-  if (linkedInAccounts.length === 0) {
-    return (
-      <div className="rounded-md border border-dashed p-6 text-center space-y-2">
-        <Linkedin className="size-8 mx-auto text-[#0A66C2]" />
-        <p className="text-sm font-medium">No LinkedIn account connected</p>
-        <p className="text-xs text-muted-foreground">Go to <strong>Engage → Connected Accounts</strong> to link your LinkedIn account via Unipile.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      {/* Account selector */}
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium text-muted-foreground">Send from LinkedIn account</label>
-        <select aria-label="Send from LinkedIn account"
-          className="w-full border rounded-md px-3 py-2 text-sm h-10 bg-background"
-          value={selectedAccountId}
-          onChange={(e) => setSelectedAccountId(e.target.value)}
-        >
-          {linkedInAccounts.map((a: any) => (
-            <option key={a.unipileAccountId} value={a.unipileAccountId}>
-              {a.accountName ?? a.unipileAccountId}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Profile ID / URL */}
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium text-muted-foreground">LinkedIn Profile URL or ID</label>
-        <input aria-label="LinkedIn Profile URL or ID"
-          className="w-full border rounded-md px-3 py-2 text-sm h-10 bg-background"
-          placeholder="https://linkedin.com/in/username or profile_id"
-          value={profileId}
-          onChange={(e) => setProfileId(e.target.value)}
-        />
-        <p className="text-[11px] text-muted-foreground">Pre-filled from contact's LinkedIn URL if available.</p>
-      </div>
-
-      {/* Send Connection Request */}
-      <div className="rounded-md border bg-card p-3 space-y-2">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <UserPlus className="size-4 text-[#0A66C2]" />
-          Send Connection Request
-        </div>
-        <Textarea aria-label="Personal note"
-          placeholder="Add a personal note (optional, max 300 chars)…"
-          value={inviteMessage}
-          onChange={(e) => setInviteMessage(e.target.value.slice(0, 300))}
-          rows={3}
-        />
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] text-muted-foreground">{inviteMessage.length}/300</span>
-          <Button
-            size="sm"
-            className="bg-[#0A66C2] hover:bg-[#0856a8] text-white"
-            disabled={!selectedAccountId || !profileId.trim() || sendInvite.isPending}
-            onClick={() => sendInvite.mutate({
-              unipileAccountId: selectedAccountId,
-              recipientProviderId: profileId.trim(),
-              recipientName: name,
-              message: inviteMessage || undefined,
-              ...(relatedType === "contact" ? { linkedContactId: relatedId } : {}),
-              ...(relatedType === "lead" ? { linkedLeadId: relatedId } : {}),
-            })}
-          >
-            {sendInvite.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : <UserPlus className="size-3.5 mr-1" />}
-            Send Request
-          </Button>
-        </div>
-      </div>
-
-      {/* Send Direct Message */}
-      <div className="rounded-md border bg-card p-3 space-y-2">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <MessageSquare className="size-4 text-[#0A66C2]" />
-          Send Direct Message
-        </div>
-        <Textarea aria-label={`Message to ${name}`}
-          placeholder={`Write a message to ${name}…`}
-          value={dmText}
-          onChange={(e) => setDmText(e.target.value)}
-          rows={4}
-        />
-        <div className="flex justify-end">
-          <Button
-            size="sm"
-            className="bg-[#0A66C2] hover:bg-[#0856a8] text-white"
-            disabled={!selectedAccountId || !profileId.trim() || !dmText.trim() || sendDm.isPending}
-            onClick={() => sendDm.mutate({
-              unipileAccountId: selectedAccountId,
-              chatId: profileId.trim(),
-              text: dmText.trim(),
-              ...(relatedType === "contact" ? { linkedContactId: relatedId } : {}),
-              ...(relatedType === "lead" ? { linkedLeadId: relatedId } : {}),
-              ...(relatedType === "opportunity" ? { linkedOpportunityId: relatedId } : {}),
-            })}
-          >
-            {sendDm.isPending ? <Loader2 className="size-3.5 animate-spin mr-1" /> : <Send className="size-3.5 mr-1" />}
-            Send DM
-          </Button>
-        </div>
-      </div>
-
-      <p className="text-[11px] text-muted-foreground">
-        LinkedIn actions are tracked as activities on this record and appear in the Timeline tab.
-      </p>
     </div>
   );
 }

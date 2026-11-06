@@ -22,7 +22,7 @@ import { MarketExtras } from "@/components/usip/research/MarketExtras";
 import { confirmAction } from "@/components/usip/Common";
 import {
   Crumbs, HistoryButton, LinesInput, RowsEditor, SaveBar, Section, StatusBadge,
-  reportDropped, useResearchDraft, useResearchRoles,
+  deleteImpact, reportDropped, useResearchDraft, useResearchRoles,
 } from "@/components/usip/research/ResearchFields";
 import {
   RESEARCH_PART_LABEL, RESEARCH_STATUSES, RESEARCH_STATUS_LABEL, SECTOR_SCORE_KEYS, SECTOR_SCORE_LABEL,
@@ -37,21 +37,33 @@ export default function ResearchMarket() {
   const { canEdit, canDelete } = useResearchRoles();
   const q = trpc.research.markets.get.useQuery({ id }, { enabled: Number.isFinite(id) && id > 0 });
   const market = q.data?.market;
-  const draft = useResearchDraft<MarketContent>(market?.content, market?.revision);
+  const draft = useResearchDraft<MarketContent>(market?.content, market?.revision, q.refetch);
   const c = draft.value;
+  const utils = trpc.useUtils();
 
   const save = trpc.research.markets.update.useMutation({
-    onError: (e) => toast.error(e.message),
+    onError: (e) => {
+      toast.error(e.message);
+      // Re-read the saved market, keeping the draft, so the page says a newer
+      // version exists instead of failing the same way again (audit 2026-10-20, P26).
+      if (e.data?.code === "CONFLICT") q.refetch();
+    },
     onSuccess: async (r) => {
       reportDropped(r.dropped);
       toast.success(r.changed.length ? `Saved as version ${r.revision}` : "Nothing changed");
       draft.discard();
-      await q.refetch();
+      // Lists and pickers elsewhere show the new name and status (P27).
+      await utils.research.invalidate();
     },
   });
   const del = trpc.research.markets.delete.useMutation({
     onError: (e) => toast.error(e.message),
-    onSuccess: () => { toast.success("Market deleted"); navigate("/research"); },
+    onSuccess: async () => {
+      toast.success("Market deleted");
+      navigate("/research");
+      // The market and its sectors leave every list and picker (P27).
+      await Promise.all([utils.research.invalidate(), utils.personas.invalidate()]);
+    },
   });
 
   const [sectorOpen, setSectorOpen] = useState(false);
@@ -59,7 +71,7 @@ export default function ResearchMarket() {
   const [sectorShort, setSectorShort] = useState("");
   const createSector = trpc.research.sectors.create.useMutation({
     onError: (e) => toast.error(e.message),
-    onSuccess: (r) => { reportDropped(r.dropped); setSectorOpen(false); navigate(`/research/sectors/${r.id}`); },
+    onSuccess: async (r) => { reportDropped(r.dropped); setSectorOpen(false); navigate(`/research/sectors/${r.id}`); await utils.research.invalidate(); },
   });
   const openSector = (name = "") => { setSectorName(name); setSectorShort(""); setSectorOpen(true); };
   const [runTarget, setRunTarget] = useState<RunTarget | null>(null);
@@ -88,14 +100,19 @@ export default function ResearchMarket() {
   const suggestions = c.suggestedSectors.filter((s) => s.name.trim() && !sectorNames.has(s.name.trim().toLowerCase()));
   const ro = !canEdit;
 
-  const remove = () => confirmAction(
-    {
-      title: `Delete "${market.content.name}"?`,
-      description: `This deletes the market, its ${sectors.length} ${sectors.length === 1 ? "sector" : "sectors"} and all their versions. Personas linked to those sectors are kept but unlinked. This cannot be undone.`,
-      confirmLabel: "Delete market",
-    },
-    () => del.mutate({ id }),
-  );
+  // The confirmation names the campaigns and accounts it touches, and an
+  // active campaign stops it (P29).
+  const remove = async () => {
+    let impact: { blocked: boolean; text: string };
+    try {
+      impact = deleteImpact("market", await utils.research.markets.dependents.fetch({ id }));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't check what uses this market");
+      return;
+    }
+    if (impact.blocked) { toast.error(impact.text); return; }
+    confirmAction({ title: `Delete "${market.content.name}"?`, description: impact.text, confirmLabel: "Delete market" }, () => del.mutate({ id }));
+  };
 
   return (
     <Shell title={market.content.name}>

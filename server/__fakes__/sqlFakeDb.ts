@@ -124,7 +124,7 @@ export function makeSqlFakeDb(opts: {
       const day = v instanceof Date ? v.toISOString().slice(0, 10) : v == null ? null : String(v).slice(0, 10);
       return day === String(params[pi.i++]).slice(0, 10);
     }
-    // SQL function names are case-insensitive: drizzle's lower() and a raw LOWER() alike.
+    // lower() or LOWER(): sql`` templates write either.
     if ((m = clause.match(new RegExp(`^lower\\(${REF}\\) = \\?$`, "i")))) {
       const v = lookup(ctx, m[1]);
       // Take the param before the NULL check, or the next clause reads this one.

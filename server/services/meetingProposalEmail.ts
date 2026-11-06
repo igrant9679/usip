@@ -51,9 +51,10 @@ type Account = typeof sendingAccounts.$inferSelect;
 /**
  * The mailbox the proposal goes from: the owner's own connected mailbox,
  * else the workspace's first enabled one (the same precedence and the same
- * `enabled` rule as a person's email from a record).
+ * `enabled` rule as a person's email from a record). Exported for the booking
+ * confirmation (services/bookingConfirmationEmail), which goes the same way.
  */
-async function proposalSender(workspaceId: number, ownerUserId: number | null): Promise<Account | null> {
+export async function proposalSender(workspaceId: number, ownerUserId: number | null): Promise<Account | null> {
   const db = await getDb();
   if (!db) return null;
   if (ownerUserId) {
@@ -80,7 +81,7 @@ async function proposalSender(workspaceId: number, ownerUserId: number | null): 
 }
 
 /** The owner's signature, else the workspace's. */
-async function signatureFor(workspaceId: number, ownerUserId: number | null): Promise<string> {
+export async function signatureFor(workspaceId: number, ownerUserId: number | null): Promise<string> {
   const db = await getDb();
   if (!db) return "";
   if (ownerUserId) {

@@ -75,6 +75,7 @@ vi.mock("./routers/smtpConfig", async (importActual) => ({
 
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { appRouter } from "./routers";
+import { WORKSPACE_UNAVAILABLE_ERR_MSG } from "@shared/const";
 import { processSignal, promoteProspectToCrm } from "./routers/are/execution";
 import { ensureCustomerForWonOpp } from "./services/wonToCustomer";
 
@@ -204,8 +205,13 @@ describe("C1: an admin cannot take over an account through team.invite", () => {
 
   it("an invitation is not a membership: the victim cannot be steered into LSI Media until they accept it", async () => {
     const { token } = await inviteVictim();
-    const before = await caller(VICTIM, LSI).workspace.current();
-    expect(before.workspace.id, "a pending invite must not resolve as the active workspace").toBe(CF);
+    // 2026-11-06 (audit G11): a tab asking for a workspace it can't use is now
+    // REFUSED rather than answered from the person's first workspace, so the
+    // pending invite is still not the active workspace, and nothing else is
+    // either. Before, this read `toBe(CF)`, which was the silent fallback.
+    const before = await refusal(caller(VICTIM, LSI).workspace.current());
+    expect(before.code, "a pending invite must not resolve as the active workspace").toBe("FORBIDDEN");
+    expect(before.message).toBe(WORKSPACE_UNAVAILABLE_ERR_MSG);
     await caller(VICTIM, LSI).team.finaliseAcceptance({ token });
     const after = await caller(VICTIM, LSI).workspace.current();
     expect(after.workspace.id).toBe(LSI);

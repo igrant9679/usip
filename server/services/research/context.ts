@@ -72,6 +72,15 @@ export function __clearResearchContextCache(): void {
   cache.clear();
 }
 
+/**
+ * Drops one workspace's snapshot, so a save reaches the writers on their next
+ * call instead of up to a minute later (audit 2026-10-20, P106: new avoid
+ * rules applied late). Called by every research and persona write.
+ */
+export function forgetResearchContext(workspaceId: number): void {
+  cache.delete(workspaceId);
+}
+
 const USABLE = ["researched", "verified"] as const;
 
 async function snapshot(workspaceId: number): Promise<Snapshot | null> {
@@ -107,10 +116,13 @@ async function snapshot(workspaceId: number): Promise<Snapshot | null> {
       pains: personas.pains,
       objections: personas.objections,
       angle: personas.angle,
+      source: personas.source,
+      sourceRef: personas.sourceRef,
     })
     .from(personas)
     .where(eq(personas.workspaceId, workspaceId));
-  const personaList: PersonaRow[] = personaRows.map((p) => {
+  // A paused link's personas are kept but not used, like its sectors (audit 2026-10-20, P23).
+  const personaList: PersonaRow[] = personaRows.filter((p) => !isPaused(p)).map((p) => {
     const r = cleanPersonaResearch(p).content;
     return { id: p.id, name: p.name, sectorId: p.sectorId ?? null, titles: icpLabels(p.targetTitles, "title"), ...r };
   });

@@ -25,6 +25,7 @@ import { router, publicProcedure } from "../_core/trpc";
 import { adminWsProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, isActiveMember } from "../_core/activeMembers";
 import { getDb } from "../db";
+import { isWorkspaceLive } from "../_core/workspaceArchive";
 import {
   activities, bookingLinks, chatAgentKnowledge, chatAgents, chatSessions, enrollments, leads, notifications, tasks, workspaces,
 } from "../../drizzle/schema";
@@ -404,7 +405,7 @@ export const chatAgentsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [a] = await db.select().from(chatAgents).where(eq(chatAgents.slug, input.slug));
-    if (!a || a.status !== "published" || a.mode === "off") {
+    if (!a || a.status !== "published" || a.mode === "off" || !(await isWorkspaceLive(a.workspaceId))) {
       throw new TRPCError({ code: "NOT_FOUND", message: "This chat is not available." });
     }
     return {
@@ -436,7 +437,8 @@ export const chatAgentsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [agent] = await db.select().from(chatAgents).where(eq(chatAgents.slug, input.slug));
-      if (!agent || agent.status !== "published" || agent.mode === "off") {
+      // Archived workspaces don't chat (audit 2026-10-20, G36).
+      if (!agent || agent.status !== "published" || agent.mode === "off" || !(await isWorkspaceLive(agent.workspaceId))) {
         throw new TRPCError({ code: "NOT_FOUND", message: "This chat is not available." });
       }
 
@@ -760,9 +762,13 @@ async function createLeadForSession(
   );
   if (agent.autoRoute) {
     try {
-      const { routeLeadOwner } = await import("./leadScoring");
+      const { routeLeadOwner, createTimeScore } = await import("./leadScoring");
+      // Rules on Score see the score the lead is created with (audit P13).
+      const { total: score } = await createTimeScore(agent.workspaceId, {
+        company: visitor.company, email: visitor.email, phone: visitor.phone, source: `chat:${agent.slug}`,
+      });
       const routed = await routeLeadOwner(agent.workspaceId, {
-        title: null, company: visitor.company, source: "chat", score: 0,
+        title: null, company: visitor.company, source: "chat", score,
         industry: null, country: null, state: null, city: null,
       } as any);
       if (routed) ownerUserId = routed;
@@ -789,6 +795,8 @@ async function createLeadForSession(
     console.error("[chatAgents] lead insert failed:", (e as Error).message);
     return null;
   }
+  // Scored on creation (audit P12), without a model call; never throws.
+  if (leadId) await (await import("./leadScoring")).rescoreLead(agent.workspaceId, leadId);
 
   // One lead per chat session. Placed below the insert so the
   // departedOwnerCascade source window on `db.insert(leads)` is untouched.

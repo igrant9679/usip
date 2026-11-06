@@ -253,6 +253,10 @@ describe("C1: a reset link travels only through a workspace the person belongs t
     expect(delivery).toContain("logPreview: opts.logPreview,");
   });
 
+  // 2026-11-06 (audit G10): workspace.list now calls ensureUserHasWorkspace
+  // only for those seed.ts mayBootstrapOwnWorkspace allows (the platform owner,
+  // or the first sign-in on an empty database). For them, this guard still
+  // decides: an unaccepted invitation does not count as having a workspace.
   it("someone with only an unaccepted invitation still gets a workspace of their own", () => {
     const seed = strip(read("server/seed.ts"));
     const fn = seed.slice(seed.indexOf("export async function ensureUserHasWorkspace"));

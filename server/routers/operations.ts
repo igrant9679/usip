@@ -42,6 +42,7 @@ import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, assertOwnerOrManager, managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { escapeHtml } from "@shared/escapeHtml";
+import { csvCell } from "@shared/csvCell";
 import { filtersNotApplied } from "@shared/dashboardPresets";
 import { assertRowInWorkspace } from "../services/foreignIds";
 import { storagePut } from "../storage";
@@ -56,6 +57,7 @@ import { zonedDowHour } from "@shared/availability";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { dayRangeBounds } from "../services/calendarDeadline";
 import crypto from "crypto";
+import { hashScimToken } from "../scimHttp";
 
 /**
  * SCIM bearer token. This authenticates `/api/scim/v2` (see scimHttp.ts), which
@@ -1879,11 +1881,8 @@ function auditWhere(workspaceId: number, input?: { entityType?: string; actorUse
  * produces a file Excel opens wrong.
  */
 function auditToCsv(columns: { key: string; label: string }[], rows: Record<string, unknown>[]): string {
-  const esc = (v: unknown) => {
-    if (v == null) return "";
-    const s = v instanceof Date ? v.toISOString() : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
+  // Formula cells neutralised too (audit 2026-10-20, G49): @shared/csvCell.
+  const esc = csvCell;
   return [columns.map((c) => esc(c.label)).join(","), ...rows.map((r) => columns.map((c) => esc(r[c.key])).join(","))].join("\n");
 }
 
@@ -2064,18 +2063,34 @@ export const notificationsRouter = router({
   }),
 });
 
+/**
+ * SCIM provider tokens are shown ONCE, when made, and stored as a hash
+ * (audit 2026-10-20, G49): they were stored as issued and listProviders sent
+ * every one back to the page. Who made, rotated, switched or removed a
+ * provider is audited, since a provider's token creates and removes people.
+ */
+const scimAudit = (ctx: { workspace: { id: number }; user: { id: number } }, action: "create" | "update" | "delete", id: number, after: Record<string, unknown>) =>
+  recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action, entityType: "scim_provider", entityId: id, after });
+
 export const scimRouter = router({
   listProviders: adminWsProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
-    return db.select().from(scimProviders).where(eq(scimProviders.workspaceId, ctx.workspace.id));
+    return db
+      .select({
+        id: scimProviders.id, workspaceId: scimProviders.workspaceId, name: scimProviders.name,
+        enabled: scimProviders.enabled, lastEventAt: scimProviders.lastEventAt, createdAt: scimProviders.createdAt,
+      })
+      .from(scimProviders)
+      .where(eq(scimProviders.workspaceId, ctx.workspace.id));
   }),
 
   createProvider: adminWsProcedure.input(z.object({ name: z.string().min(1) })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const token = newScimBearerToken();
-    await db.insert(scimProviders).values({ ...input, workspaceId: ctx.workspace.id, bearerToken: token, enabled: true });
+    const [res] = (await db.insert(scimProviders).values({ ...input, workspaceId: ctx.workspace.id, bearerToken: hashScimToken(token), enabled: true })) as any;
+    await scimAudit(ctx, "create", Number(res?.insertId ?? 0), { name: input.name });
     return { ok: true, bearerToken: token };
   }),
 
@@ -2083,6 +2098,7 @@ export const scimRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.update(scimProviders).set({ enabled: input.enabled }).where(and(eq(scimProviders.id, input.id), eq(scimProviders.workspaceId, ctx.workspace.id)));
+    await scimAudit(ctx, "update", input.id, { enabled: input.enabled });
     return { ok: true };
   }),
 
@@ -2090,7 +2106,8 @@ export const scimRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const token = newScimBearerToken();
-    await db.update(scimProviders).set({ bearerToken: token }).where(and(eq(scimProviders.id, input.id), eq(scimProviders.workspaceId, ctx.workspace.id)));
+    await db.update(scimProviders).set({ bearerToken: hashScimToken(token) }).where(and(eq(scimProviders.id, input.id), eq(scimProviders.workspaceId, ctx.workspace.id)));
+    await scimAudit(ctx, "update", input.id, { tokenRotated: true });
     return { ok: true, bearerToken: token };
   }),
 
@@ -2106,6 +2123,7 @@ export const scimRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(scimProviders).where(and(eq(scimProviders.id, input.id), eq(scimProviders.workspaceId, ctx.workspace.id)));
+    await scimAudit(ctx, "delete", input.id, { deleted: true });
     return { ok: true };
   }),
 });

@@ -54,6 +54,24 @@ export async function holdProspectSteps(db: Db, workspaceId: number, prospectQue
 }
 
 /**
+ * Stop a prospect's unsent steps for good — scheduled and held alike are
+ * skipped with `reason` (audit 2026-10-20, A51): a prospect taken out of a
+ * campaign by a reject, a skip or a dedupe must not keep getting its steps.
+ * Sent steps stay as history. Returns how many were stopped.
+ */
+export async function stopProspectSteps(db: Db, workspaceId: number, prospectQueueId: number, reason: string): Promise<number> {
+  const res = await db
+    .update(areExecutionQueue)
+    .set({ status: "skipped", failureReason: reason.slice(0, 500), executedAt: new Date() })
+    .where(and(
+      eq(areExecutionQueue.workspaceId, workspaceId),
+      eq(areExecutionQueue.prospectQueueId, prospectQueueId),
+      inArray(areExecutionQueue.status, ["scheduled", "paused"]),
+    ));
+  return affectedOf(res);
+}
+
+/**
  * Put a prospect's held steps back, the first at `startAt` (or its own time
  * if later) and each later one keeping its distance from the one before, so
  * time spent held never turns into steps due together. Scheduled steps of the

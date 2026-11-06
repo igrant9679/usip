@@ -480,6 +480,29 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
   }
 }
 
+/**
+ * Who may be given a workspace of their own just by signing in (audit
+ * 2026-10-20, G10). Decided 2026-11-06, conservatively, from the policy the
+ * code already states (workspace.create: "the agency shape, one workspace per
+ * client, spun up by the operator — not self-serve tenant signup"):
+ *
+ *   · the platform owner (`users.role = "admin"`), and
+ *   · anyone at all on a database with no workspace yet, so a fresh install's
+ *     first sign-in still works.
+ *
+ * Everyone else joins by invitation, an activation link or SCIM. Sign-up still
+ * creates the account; it no longer makes a stranger super_admin of a seeded
+ * workspace running on the platform's AI keys. To open self-serve sign-up
+ * again, return true here.
+ */
+export async function mayBootstrapOwnWorkspace(user: { role?: string | null }): Promise<boolean> {
+  if (user.role === "admin") return true;
+  const db = await getDb();
+  if (!db) return false;
+  const [any] = await db.select({ id: workspaces.id }).from(workspaces).limit(1);
+  return !any;
+}
+
 export async function ensureUserHasWorkspace(userId: number, userName: string | null) {
   const db = await getDb();
   if (!db) return;

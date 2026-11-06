@@ -293,13 +293,15 @@ describe("background model calls name their workspace", () => {
   const REQUEST_SCOPED = "Inside a workspace procedure: the request context supplies the workspace.";
   const ALLOWED: Record<string, string> = {
     "server/llmStreamRoute.ts::/api/llm/stream": "Passes the route's workspaceId inside params.",
-    "server/routers/researchPipeline.ts::llmJson": "Called only from researchPipeline.start, a workspace procedure.",
+    // 2026-11-06 (audit P144): researchPipeline's llmJson left this list. Its
+    // stages now run after the response, so it names the workspace itself.
   };
   for (const k of [
     "accountBriefs.ts::generate", "aiFeatures.ts::scoreChurnRisk", "aiFeatures.ts::bulkScoreChurnRisk", "aiFeatures.ts::suggestNextAction",
     "aiFeatures.ts::scoreRelStrength", "aiFeatures.ts::suggestPricing", "aiFeatures.ts::generateCommentary", "aiFeatures.ts::triageThread",
     "aiFeatures.ts::bulkTriage", "aiPipeline.ts::regenerateDraft", "aiPipeline.ts::scoreDraft", "calendar.ts::summarizeMeeting",
-    "crm.ts::enrich", "crm.ts::rescore", "cs.ts::generateQbrPrep", "emailBuilder.ts::rewriteBlock", "emailBuilder.ts::generate",
+    // crm.ts::rescore left 2026-11-06 with the procedure (audit P39, R84).
+    "crm.ts::enrich", "cs.ts::generateQbrPrep", "emailBuilder.ts::rewriteBlock", "emailBuilder.ts::generate",
     "helpCenter.ts::askAI", "helpCenter.ts::generateArticleDraft", "mailbox.ts::aiDraftReply", "mailbox.ts::aiDraftForward",
     "opportunityIntelligence.ts::generateIntelligence", "proposals.ts::generateSectionContent", "subjectAB.ts::generate",
   ]) ALLOWED[`server/routers/${k}`] = REQUEST_SCOPED;

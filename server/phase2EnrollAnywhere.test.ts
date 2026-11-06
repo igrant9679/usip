@@ -38,7 +38,10 @@ describe("one shared Add-to action, on every person surface", () => {
       expect(client(...segs), label).toContain("<AddToMenu");
     }
     // Company profile and Leads pass NON-prospect ids — the point of the change.
-    expect(client("pages", "usip", "CompanyProfile.tsx")).toContain("contactIds={(contacts ?? []).map(");
+    // 2026-11-06 (audit R3): the profile passed EVERY id as a contact id,
+    // People rows included, which enrolled the wrong people. It splits them
+    // by kind now; companyPeopleTargets.test.ts renders it.
+    expect(client("pages", "usip", "CompanyProfile.tsx")).toContain("prospectIds={targets.prospectIds} contactIds={targets.contactIds}");
     expect(client("pages", "usip", "Leads.tsx")).toContain("leadIds={Array.from(selectedIds)}");
   });
 });

@@ -507,6 +507,10 @@ describe("no unattended path reads workspaces.ownerUserId raw any more", () => {
     // workspaces' senders carries their reset link — the raw column is the
     // question, and a stand-in owner would be the wrong answer.
     ["server/passwordAuth.ts", "pickResetSenderWorkspace compares the column to the account being reset; it addresses nothing to the owner"],
+    // 2026-11-06 (audit G7): SCIM deprovisioning now deactivates, and refuses
+    // the owner as team.deactivate and team.delete do. The raw column is the
+    // question there too; it addresses nothing to the owner.
+    ["server/scimHttp.ts", "setScimActive refuses to deprovision the workspace's owner, comparing the column to the person being deprovisioned"],
   ]);
 
   it("every raw read is either gone or allowlisted with a reason", () => {
