@@ -40,6 +40,8 @@ import { toast } from "sonner";
 import { Link } from "wouter";
 import { ConfirmButton } from "@/components/usip/Common";
 import { pressable } from "@/lib/pressable";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 
 const ALERT_CONFIG: Record<
   string,
@@ -211,6 +213,10 @@ function AlertCard({ alert, onDismiss }: { alert: any; onDismiss: () => void }) 
     onSuccess: () => { toast.success("Alert dismissed"); onDismiss(); },
     onError: (e) => toast.error(e.message),
   });
+  // Clearing an alert hides it from everyone: the deal's owner or a manager (R37).
+  const { user } = useAuth();
+  const isManager = useWorkspaceRole().isManager;
+  const canDismiss = isManager || (alert.opportunity?.ownerUserId != null && alert.opportunity.ownerUserId === user?.id);
 
   return (
     <div className={`flex items-start gap-3 p-3 rounded-lg border ${config.bg}`}>
@@ -253,20 +259,22 @@ function AlertCard({ alert, onDismiss }: { alert: any; onDismiss: () => void }) 
                 View Opp
               </Button>
             </Link>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 text-xs px-2 text-muted-foreground hover:text-foreground"
-              onClick={() => dismiss.mutate({ alertId: alert.id })}
-              disabled={dismiss.isPending}
-            >
-              {dismiss.isPending ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <XCircle className="h-3 w-3" />
-              )}
-              Dismiss
-            </Button>
+            {canDismiss && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 text-xs px-2 text-muted-foreground hover:text-foreground"
+                onClick={() => dismiss.mutate({ alertId: alert.id })}
+                disabled={dismiss.isPending}
+              >
+                {dismiss.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <XCircle className="h-3 w-3" />
+                )}
+                Dismiss
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -308,6 +316,8 @@ export default function PipelineAlerts() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Clear all hard-deletes every alert: an admin's (R37).
+  const isAdmin = useWorkspaceRole().isAdmin;
   const clearAll = trpc.pipelineAlerts.clearAll.useMutation({
     onSuccess: (data) => {
       toast.success(`Deleted ${data.deleted} alert${data.deleted === 1 ? "" : "s"}`);
@@ -341,7 +351,7 @@ export default function PipelineAlerts() {
           <RefreshCw className="h-4 w-4 mr-1" />
           Refresh
         </Button>
-        {totalAlerts > 0 && (
+        {isAdmin && totalAlerts > 0 && (
           <ConfirmButton
             variant="outline"
             size="sm"

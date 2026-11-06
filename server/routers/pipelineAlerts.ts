@@ -4,7 +4,7 @@
  */
 import { z } from "zod";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, assertOwnerOrManager, managerProcedure, workspaceProcedure } from "../_core/workspace";
 import { getDb } from "../db";
 import { changeOpportunityStage } from "../services/stageChange";
 import { refreshDaysInStage } from "../services/dealDates";
@@ -20,6 +20,23 @@ import {
   users,
   crmPipelineStages,
 } from "../../drizzle/schema";
+
+/**
+ * Clearing an alert hides it from everyone (audit 2026-10-20, R37), so it is
+ * for the deal's owner or a manager, as with anything one person owns. A deal
+ * that no longer exists, or isn't here, leaves nothing to clear.
+ */
+async function assertMayClearForDeal(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  ctx: { workspace: { id: number }; user: { id: number }; member: { role: string } },
+  opportunityId: number,
+): Promise<boolean> {
+  const [opp] = await db.select({ ownerUserId: opportunities.ownerUserId }).from(opportunities)
+    .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+  if (!opp) return false;
+  assertOwnerOrManager(ctx, opp.ownerUserId, "Only the deal's owner or a manager can clear its alerts.");
+  return true;
+}
 
 const ALERT_THRESHOLDS = {
   noActivityDays: 14,        // no activity in 14 days
@@ -294,7 +311,8 @@ export const pipelineAlertsRouter = router({
       const opps =
         oppIds.length > 0
           ? await db
-              .select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value, winProb: opportunities.winProb })
+              // The owner too, so a card offers Dismiss only to who may (R37).
+              .select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value, winProb: opportunities.winProb, ownerUserId: opportunities.ownerUserId })
               .from(opportunities)
               .where(eq(opportunities.workspaceId, ctx.workspace.id))
           : [];
@@ -328,6 +346,11 @@ export const pipelineAlertsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [alert] = await db.select({ opportunityId: pipelineAlerts.opportunityId }).from(pipelineAlerts)
+        .where(and(eq(pipelineAlerts.id, input.alertId), eq(pipelineAlerts.workspaceId, ctx.workspace.id)));
+      if (!alert) return { ok: true };
+      // An alert on a deal that is gone is debris; anyone may clear it.
+      await assertMayClearForDeal(db, ctx, alert.opportunityId);
       await db
         .update(pipelineAlerts)
         .set({ dismissedAt: new Date(), dismissedByUserId: ctx.user.id })
@@ -346,6 +369,7 @@ export const pipelineAlertsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertMayClearForDeal(db, ctx, input.opportunityId);
       await db
         .update(pipelineAlerts)
         .set({ dismissedAt: new Date(), dismissedByUserId: ctx.user.id })
@@ -601,8 +625,8 @@ export const pipelineAlertsRouter = router({
     return { ok: true, sent: true, count: stuckDeals.length, recipient: recipientEmail };
   }),
 
-  /** Dismiss every undismissed alert for the whole workspace. */
-  dismissAll: workspaceProcedure.mutation(async ({ ctx }) => {
+  /** Dismiss every undismissed alert for the whole workspace: a manager's (R37). */
+  dismissAll: managerProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const res = await db
@@ -620,8 +644,8 @@ export const pipelineAlertsRouter = router({
     return { ok: true, dismissed };
   }),
 
-  /** Hard-delete every alert row for the workspace (dismissed or not). */
-  clearAll: workspaceProcedure.mutation(async ({ ctx }) => {
+  /** Hard-delete every alert row for the workspace (dismissed or not): an admin's (R37). */
+  clearAll: adminWsProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const res = await db

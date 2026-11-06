@@ -14,14 +14,39 @@
  */
 import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
-import { accounts, audienceSegments, contacts, crmPipelines, customers, senderPools, sendingAccounts, sequences, territories } from "../../drizzle/schema";
+import { accounts, audienceSegments, contacts, crmPipelines, customers, leads, opportunities, proposals, prospects, senderPools, sendingAccounts, sequences, territories } from "../../drizzle/schema";
 import { isActiveMember } from "../_core/activeMembers";
 import type { getDb } from "../db";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
-const TABLES = { account: accounts, contact: contacts, pipeline: crmPipelines, territory: territories, customer: customers, sequence: sequences, segment: audienceSegments, "sending account": sendingAccounts, "sender pool": senderPools } as const;
+const TABLES = { account: accounts, contact: contacts, pipeline: crmPipelines, territory: territories, customer: customers, sequence: sequences, segment: audienceSegments, "sending account": sendingAccounts, "sender pool": senderPools, lead: leads, deal: opportunities, person: prospects, proposal: proposals } as const;
 export type ForeignKind = keyof typeof TABLES;
+
+/** A task's relatedType, as the kinds above. A mailbox thread's id is its mailbox's. */
+const RELATED_KINDS: Record<string, ForeignKind> = {
+  account: "account", contact: "contact", lead: "lead", opportunity: "deal", prospect: "person",
+  customer: "customer", proposal: "proposal", mailbox_thread: "sending account",
+};
+
+/**
+ * The record a task is about (audit 2026-10-20, R73): a type this knows, and
+ * an id that is that kind's row in this workspace. Both were stored as given,
+ * so a task could point at another tenant's deal or at a type nothing reads.
+ * No-op when neither is set.
+ */
+export async function assertRelatedInWorkspace(
+  db: Db,
+  relatedType: string | null | undefined,
+  relatedId: number | null | undefined,
+  workspaceId: number,
+): Promise<void> {
+  if (relatedType == null && relatedId == null) return;
+  // Own keys only: "constructor" is on every object.
+  const kind = relatedType != null && Object.prototype.hasOwnProperty.call(RELATED_KINDS, relatedType) ? RELATED_KINDS[relatedType] : undefined;
+  if (!kind) throw new TRPCError({ code: "BAD_REQUEST", message: "A task can be about an account, contact, lead, deal, person, customer, proposal or mailbox thread." });
+  await assertRowInWorkspace(db, kind, relatedId, workspaceId);
+}
 
 /** No-op for null/undefined (clearing a link is always allowed). */
 export async function assertRowInWorkspace(

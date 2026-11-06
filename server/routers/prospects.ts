@@ -18,7 +18,7 @@ import type { MySqlColumn } from "drizzle-orm/mysql-core";
 import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, isAdminRole, requireMinRole, workspaceProcedure } from "../_core/workspace";
-import { getDb } from "../db";
+import { checkPermission, getDb } from "../db";
 import { closedStageKeys } from "../_core/stageSemantics";
 import { accounts, contacts, leads, prospects, scoreResults, scoreModels, workspaceSettings, prospectLinkedinEnrichments, prospectFieldHistory } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
@@ -1126,6 +1126,10 @@ export const prospectsRouter = router({
   exportSelected: workspaceProcedure
     .input(z.object({ prospectIds: z.array(z.number().int().positive()).min(1).max(5000) }))
     .query(async ({ ctx, input }) => {
+      // This read exists only to build the People export, so it can be refused,
+      // not just hidden (audit 2026-10-20, R63): up to 5,000 people's addresses
+      // and phones at once.
+      await checkPermission(ctx, "export_data");
       const db = await getDb();
       if (!db) return [];
       return db

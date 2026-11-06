@@ -26,6 +26,7 @@ import { ConvertLeadDialog } from "@/components/usip/ConvertLeadDialog";
 import { EditLeadDialog } from "@/components/usip/EditLeadDialog";
 import { pressable } from "@/lib/pressable";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { csvCell } from "@shared/csvCell";
 
 const NEUTRAL_TONE = "bg-slate-200 text-slate-700";
 /** leads.sendAdHocEmailBulk's cap (server/routers/crm.ts LEAD_BULK_SEND_MAX). */
@@ -238,7 +239,8 @@ export default function Leads() {
           const rows = await utils.leads.list.fetch({ search: query || undefined, limit: 5000 }).finally(() => setExporting(false));
           if (!rows.length) return;
           const cols = ["id", "firstName", "lastName", "email", "phone", "company", "title", "source", "score", "status", "createdAt"];
-          const lines = [cols.join(","), ...rows.map((r: any) => cols.map((c) => JSON.stringify(r[c] ?? "")).join(","))];
+          // One CSV cell rule (R63): quotes doubled, formulas neutralised.
+          const lines = [cols.join(","), ...rows.map((r: any) => cols.map((c) => csvCell(r[c])).join(","))];
           const blob = new Blob([lines.join("\n")], { type: "text/csv" });
           const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `leads-${Date.now()}.csv`; a.click();
         }} disabled={!total || exporting}>

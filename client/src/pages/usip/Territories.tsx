@@ -4,6 +4,7 @@ import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
 import { LEAD_ASSIGNMENT_NAV } from "@/lib/leadAssignmentNav";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { Map, Plus, Trash2, Zap } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -15,6 +16,8 @@ export default function Territories() {
   const { data: members } = trpc.team.list.useQuery();
   const [open, setOpen] = useState(false);
   const [ruleOpen, setRuleOpen] = useState(false);
+  // Territories and their rules are a manager's to change (R37).
+  const canEdit = useWorkspaceRole().isManager;
   const create = trpc.territories.create.useMutation({ onSuccess: () => { utils.territories.list.invalidate(); setOpen(false); toast.success("Territory created"); }, onError: (e) => toast.error(e.message) });
   const del = trpc.territories.delete.useMutation({ onSuccess: () => utils.territories.list.invalidate(), onError: (e) => toast.error(e.message) });
   const createRule = trpc.crmTerritoryRules.create.useMutation({
@@ -28,8 +31,8 @@ export default function Territories() {
       <PageHeader title="Territories" description="Define geographic or account-based territories and assign reps accordingly. Territory rules automatically route new leads and accounts to the correct owner on creation." pageKey="territories"
         icon={<Map className="size-5" />}
       >
-        <Button variant="outline" onClick={() => setRuleOpen(true)}><Zap className="size-4" /> New routing rule</Button>
-        <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New territory</Button>
+        {canEdit && <Button variant="outline" onClick={() => setRuleOpen(true)}><Zap className="size-4" /> New routing rule</Button>}
+        {canEdit && <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New territory</Button>}
       </PageHeader>
       <SubNav items={LEAD_ASSIGNMENT_NAV} />
       <div className="p-4 md:p-5 space-y-6">
@@ -42,7 +45,7 @@ export default function Territories() {
                     <div className="font-medium">{t.name}</div>
                     <div className="text-xs text-muted-foreground mt-0.5">Rules: {JSON.stringify(t.rules ?? {})}</div>
                   </div>
-                  <Button aria-label="Delete territory" size="sm" variant="ghost" onClick={() => del.mutate({ id: t.id })}><Trash2 className="size-3.5" /></Button>
+                  {canEdit && <Button aria-label="Delete territory" size="sm" variant="ghost" onClick={() => del.mutate({ id: t.id })}><Trash2 className="size-3.5" /></Button>}
                 </li>
               ))}
             </ul>
@@ -71,7 +74,7 @@ export default function Territories() {
                     <div className="text-xs text-muted-foreground text-right">
                       → {terr?.name ?? "(no territory)"} / {(owner as any)?.name ?? "(no owner)"}
                     </div>
-                    <Button aria-label="Delete rule" size="sm" variant="ghost" onClick={() => delRule.mutate({ id: r.id })}><Trash2 className="size-3.5" /></Button>
+                    {canEdit && <Button aria-label="Delete rule" size="sm" variant="ghost" onClick={() => delRule.mutate({ id: r.id })}><Trash2 className="size-3.5" /></Button>}
                   </li>
                 );
               })}

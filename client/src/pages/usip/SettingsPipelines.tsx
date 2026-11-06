@@ -27,11 +27,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { confirmAction, Field, FormDialog, SelectField } from "@/components/usip/Common";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { toast } from "sonner";
 import { Plus, Star, Trash2, KanbanSquare, ChevronUp, ChevronDown, Check, X } from "lucide-react";
 
 export default function SettingsPipelines() {
   const utils = trpc.useUtils();
+  // Pipelines and stages are an admin's to change (R37); everyone else reads them.
+  const canEdit = useWorkspaceRole().isAdmin;
   const { data: pipelines } = trpc.crmPipelines.list.useQuery();
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const activeId = selectedId ?? pipelines?.find((p) => p.isDefault)?.id ?? pipelines?.[0]?.id ?? null;
@@ -118,7 +121,7 @@ export default function SettingsPipelines() {
     <Shell title="Pipelines">
       <PageHeader title="Pipelines" description="Define the stages opportunities move through. Each workspace can have multiple pipelines for different sales motions." icon={<KanbanSquare className="size-5" />}>
         <Button asChild variant="outline" size="sm"><Link href="/pipeline">Back to pipeline</Link></Button>
-        <Button size="sm" onClick={() => setNewOpen(true)}><Plus className="size-4 mr-1" /> New pipeline</Button>
+        {canEdit && <Button size="sm" onClick={() => setNewOpen(true)}><Plus className="size-4 mr-1" /> New pipeline</Button>}
       </PageHeader>
 
       <div className="p-4 md:p-5 grid grid-cols-1 md:grid-cols-[280px_1fr] gap-4">
@@ -146,6 +149,7 @@ export default function SettingsPipelines() {
                   <h3 className="font-medium text-lg">{detail.pipeline.name}</h3>
                   {detail.pipeline.isDefault && <Badge variant="outline" className="text-[10px]">default</Badge>}
                 </div>
+                {canEdit ? (
                 <div className="flex items-center gap-1">
                   {!detail.pipeline.isDefault && (
                     <Button size="sm" variant="ghost"
@@ -170,17 +174,20 @@ export default function SettingsPipelines() {
                     </Button>
                   )}
                 </div>
+                ) : (
+                  <span className="text-xs text-muted-foreground">An admin changes pipelines and stages.</span>
+                )}
               </div>
 
               <ul className="rounded-lg border bg-background divide-y">
                 {stages.map((s, idx) => (
                   <li key={s.id} className="p-3 flex items-center gap-3">
-                    <div className="flex flex-col">
+                    {canEdit && <div className="flex flex-col">
                       <button aria-label="Move stage up" className="text-muted-foreground hover:text-foreground disabled:opacity-30"
                         disabled={idx === 0} onClick={() => move(s.id, -1)}><ChevronUp className="size-3.5" /></button>
                       <button aria-label="Move stage down" className="text-muted-foreground hover:text-foreground disabled:opacity-30"
                         disabled={idx === stages.length - 1} onClick={() => move(s.id, 1)}><ChevronDown className="size-3.5" /></button>
-                    </div>
+                    </div>}
                     <div className="flex-1 min-w-0">
                       {editingId === s.id ? (
                         <div className="flex gap-2">
@@ -190,40 +197,47 @@ export default function SettingsPipelines() {
                           </Button>
                           <Button aria-label="Cancel" size="sm" variant="ghost" onClick={() => setEditingId(null)}><X className="size-3.5" /></Button>
                         </div>
-                      ) : (
+                      ) : canEdit ? (
                         <button className="text-sm font-medium text-left hover:underline" onClick={() => { setEditingId(s.id); setEditLabel(s.label); }}>
                           {s.label}
                         </button>
+                      ) : (
+                        <span className="text-sm font-medium">{s.label}</span>
                       )}
                       <div className="text-[11px] text-muted-foreground mt-0.5">key: <code>{s.key}</code> · {plural(s.dealCount)}</div>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-muted-foreground">Win %</span>
                       <Input aria-label="Win %" type="number" min={0} max={100} className="w-16 h-7 text-xs"
+                        disabled={!canEdit}
                         defaultValue={s.defaultWinProb}
                         onBlur={(e) => {
                           const v = Number(e.target.value);
                           if (Number.isFinite(v) && v !== s.defaultWinProb) updateStage.mutate({ id: s.id, patch: { defaultWinProb: v } });
                         }} />
                       <label className="text-xs flex items-center gap-1">
-                        <input type="checkbox" checked={s.isWon} onChange={(e) => setFlags(s, { isWon: e.target.checked, isLost: e.target.checked ? false : s.isLost })} />
+                        <input type="checkbox" disabled={!canEdit} checked={s.isWon} onChange={(e) => setFlags(s, { isWon: e.target.checked, isLost: e.target.checked ? false : s.isLost })} />
                         Won
                       </label>
                       <label className="text-xs flex items-center gap-1">
-                        <input type="checkbox" checked={s.isLost} onChange={(e) => setFlags(s, { isLost: e.target.checked, isWon: e.target.checked ? false : s.isWon })} />
+                        <input type="checkbox" disabled={!canEdit} checked={s.isLost} onChange={(e) => setFlags(s, { isLost: e.target.checked, isWon: e.target.checked ? false : s.isWon })} />
                         Lost
                       </label>
-                      <Button aria-label="Delete stage" size="icon" variant="ghost" className="size-7 text-destructive"
-                        onClick={() => askDeleteStage(s)}>
-                        <Trash2 className="size-3.5" />
-                      </Button>
+                      {canEdit && (
+                        <Button aria-label="Delete stage" size="icon" variant="ghost" className="size-7 text-destructive"
+                          onClick={() => askDeleteStage(s)}>
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      )}
                     </div>
                   </li>
                 ))}
               </ul>
-              <div className="mt-3">
-                <Button size="sm" variant="outline" onClick={() => setNewStageOpen(true)}><Plus className="size-3.5 mr-1" /> Add stage</Button>
-              </div>
+              {canEdit && (
+                <div className="mt-3">
+                  <Button size="sm" variant="outline" onClick={() => setNewStageOpen(true)}><Plus className="size-3.5 mr-1" /> Add stage</Button>
+                </div>
+              )}
             </>
           )}
         </CardContent></Card>

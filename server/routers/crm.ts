@@ -45,7 +45,7 @@ import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { linkEmailLogToDraft } from "../services/email/logSend";
 import { router } from "../_core/trpc";
-import { repProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { assertOwnerInWorkspace, assertRowInWorkspace } from "../services/foreignIds";
 import { defaultPipelineId, invalidateStageIndex, resolvedStageFor, stageIndexFor, stageResolver } from "../_core/stageSemantics";
@@ -2488,6 +2488,8 @@ export const opportunitiesRouter = router({
 
 /* ──────────────────────────────────────────────────────────────────────── */
 
+// Territories and their routing rules decide who owns new leads and accounts:
+// a manager's (audit 2026-10-20, R37). Any member could change them.
 export const territoriesRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
@@ -2495,7 +2497,7 @@ export const territoriesRouter = router({
     return db.select().from(territories).where(eq(territories.workspaceId, ctx.workspace.id));
   }),
 
-  create: workspaceProcedure
+  create: managerProcedure
     .input(z.object({ name: z.string().min(1), rules: z.record(z.string(), z.any()).optional(), ownerUserId: z.number().optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -2505,7 +2507,7 @@ export const territoriesRouter = router({
       return { ok: true };
     }),
 
-  update: workspaceProcedure.input(z.object({ id: z.number(), patch: TERRITORY_PATCH })).mutation(async ({ ctx, input }) => {
+  update: managerProcedure.input(z.object({ id: z.number(), patch: TERRITORY_PATCH })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await assertOwnerInWorkspace(ctx.workspace.id, input.patch.ownerUserId);
@@ -2514,7 +2516,7 @@ export const territoriesRouter = router({
     return { ok: true };
   }),
 
-  delete: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  delete: managerProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(territories).where(and(eq(territories.id, input.id), eq(territories.workspaceId, ctx.workspace.id)));
@@ -2608,7 +2610,7 @@ export const crmTerritoryRulesRouter = router({
       .orderBy(crmTerritoryRules.priority, crmTerritoryRules.id);
   }),
 
-  create: repProcedure
+  create: managerProcedure
     .input(z.object({
       name: z.string().min(1).max(120),
       priority: z.number().int().default(100),
@@ -2629,7 +2631,7 @@ export const crmTerritoryRulesRouter = router({
       return { id: Number((r as any)[0]?.insertId ?? 0) };
     }),
 
-  update: repProcedure.input(z.object({ id: z.number(), patch: TERRITORY_RULE_PATCH })).mutation(async ({ ctx, input }) => {
+  update: managerProcedure.input(z.object({ id: z.number(), patch: TERRITORY_RULE_PATCH })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await assertRowInWorkspace(db, "territory", input.patch.territoryId, ctx.workspace.id);
@@ -2639,7 +2641,7 @@ export const crmTerritoryRulesRouter = router({
     return { ok: true };
   }),
 
-  delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  delete: managerProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(crmTerritoryRules).where(and(eq(crmTerritoryRules.id, input.id), eq(crmTerritoryRules.workspaceId, ctx.workspace.id)));
@@ -2795,6 +2797,9 @@ async function assertStageKeyFree(db: NonNullable<Awaited<ReturnType<typeof getD
   if (clash) throw new TRPCError({ code: "CONFLICT", message: `This pipeline already has a stage with the key "${key}".` });
 }
 
+// Pipelines and stages are the workspace's configuration: which stages count as
+// won and lost, and where deals go when one is deleted. An admin's (audit
+// 2026-10-20, R37); any rep could change them.
 export const crmPipelinesRouter = router({
   /** Returns all pipelines for the workspace, seeding the Default one if none exist. */
   list: workspaceProcedure.query(async ({ ctx }) => {
@@ -2828,7 +2833,7 @@ export const crmPipelinesRouter = router({
       return { pipeline, stages, dealCount: onBoard.length };
     }),
 
-  createPipeline: repProcedure
+  createPipeline: adminWsProcedure
     .input(z.object({ name: z.string().min(1).max(120), cloneFromPipelineId: z.number().optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -2854,7 +2859,7 @@ export const crmPipelinesRouter = router({
       return { id: pipelineId };
     }),
 
-  renamePipeline: repProcedure
+  renamePipeline: adminWsProcedure
     .input(z.object({ id: z.number(), name: z.string().min(1).max(120) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -2863,7 +2868,7 @@ export const crmPipelinesRouter = router({
       return { ok: true };
     }),
 
-  setDefault: repProcedure
+  setDefault: adminWsProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -2877,7 +2882,7 @@ export const crmPipelinesRouter = router({
       return { ok: true };
     }),
 
-  deletePipeline: repProcedure
+  deletePipeline: adminWsProcedure
     .input(z.object({ id: z.number(), moveToPipelineId: z.number().int().positive().optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -2908,7 +2913,7 @@ export const crmPipelinesRouter = router({
       return { ok: true, moved };
     }),
 
-  createStage: repProcedure
+  createStage: adminWsProcedure
     .input(z.object({
       pipelineId: z.number(),
       key: z.string().min(1).max(60),
@@ -2930,7 +2935,7 @@ export const crmPipelinesRouter = router({
       return { id: Number((r as any)[0]?.insertId ?? 0) };
     }),
 
-  updateStage: repProcedure
+  updateStage: adminWsProcedure
     .input(z.object({
       id: z.number(),
       patch: z.object({
@@ -2972,7 +2977,7 @@ export const crmPipelinesRouter = router({
    * the same pipeline — a won deal to another Won stage, so past revenue stays
    * revenue — and a pipeline keeps at least one Won stage.
    */
-  deleteStage: repProcedure
+  deleteStage: adminWsProcedure
     .input(z.object({ id: z.number(), moveToKey: z.string().min(1).max(60).optional() }))
     .mutation(async ({ ctx, input }) => {
     const db = await getDb();
@@ -3010,7 +3015,7 @@ export const crmPipelinesRouter = router({
   }),
 
   /** Bulk reorder — pass [{id, sortOrder}]. */
-  reorderStages: repProcedure
+  reorderStages: adminWsProcedure
     .input(z.object({ items: z.array(z.object({ id: z.number(), sortOrder: z.number().int() })).min(1) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();

@@ -362,12 +362,16 @@ export const reportsRouter = router({
      * /reports CSV button in every workspace — deliberate, and announced.
      *
      * ⚠️ THIS IS NOT A COMPLETE BOUNDARY, and saying otherwise would be the
-     * half-fix that reads as complete. The Leads, Contacts, Pipeline and
-     * people-selection exports build the CSV IN THE BROWSER out of rows the
-     * list query already returned (see client/src/pages/usip/Leads.tsx —
+     * half-fix that reads as complete. The Leads, Contacts and Pipeline
+     * exports build the CSV IN THE BROWSER out of rows the list query already
+     * returned (see client/src/pages/usip/Leads.tsx —
      * `new Blob([...], { type: "text/csv" })`), so there is no server call to
      * refuse. Those buttons are HIDDEN on `export_data === false`, which is UX,
      * not enforcement: the user already holds the rows.
+     *
+     * The people-selection export is built in the browser too, but from a read
+     * that exists only for it, prospects.exportSelected, so since 2026-11-06
+     * (audit R63) that read is gated as well.
      *
      * The campaign-rejection export used to be listed above as browser-built.
      * It is not: are.prospects.exportRejections renders that CSV server-side,
