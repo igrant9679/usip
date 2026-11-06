@@ -13,7 +13,9 @@
  *
  * Why in-memory cache and not a temp DB table:
  *   - 10k rows × ~500 B per MappedProspect ≈ 5 MB per pending import
- *   - 15-min TTL + per-workspace single-import semantics caps memory
+ *   - 15-min TTL, a 20 MB upload cap and ONE pending preview per person per
+ *     workspace cap memory (audit 2026-10-20, R90): the cap was 50 MB and
+ *     every re-upload left another preview behind until the TTL
  *   - Single-server deployment (no horizontal scaling) means in-memory is fine
  * If we ever shard the server, swap this for a `prospect_import_drafts`
  * table keyed by token.
@@ -34,6 +36,17 @@ import {
   type MappedProspect,
 } from "../services/leadrocks";
 import { recordAudit } from "../audit";
+import { linkedinUrlVariants, normalizeLinkedinUrl } from "../services/suppression";
+import { describeWriteError } from "../services/dbWriteError";
+
+/** The largest CSV a preview accepts (R90). A LeadRocks export of 20,000 rows
+ *  is about 10 MB. */
+export const PREVIEW_CSV_MAX = 20_000_000;
+
+/** One profile, however the URL was written: "in/jane-doe" (R54). Raw URLs
+ *  differing only in scheme, www, case, a trailing slash or a tracking query
+ *  were imported as different people. */
+const profileKey = (url: string) => normalizeLinkedinUrl(url) ?? url.trim().toLowerCase();
 
 /* ─── In-memory draft cache ────────────────────────────────────────────── */
 
@@ -76,7 +89,7 @@ export const prospectImportsRouter = router({
   parsePreview: workspaceProcedure
     .input(
       z.object({
-        csv: z.string().min(1).max(50_000_000), // 50 MB hard cap
+        csv: z.string().min(1).max(PREVIEW_CSV_MAX, "This file is larger than 20 MB. Split it into smaller batches."),
         filename: z.string().max(255).optional(),
       }),
     )
@@ -128,7 +141,7 @@ export const prospectImportsRouter = router({
       const deduped: MappedProspect[] = [];
       let duplicateInFile = 0;
       for (const m of mapped) {
-        const key = m.linkedinUrl.toLowerCase();
+        const key = profileKey(m.linkedinUrl);
         if (seen.has(key)) {
           duplicateInFile++;
           continue;
@@ -141,13 +154,15 @@ export const prospectImportsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
+      // Existing People rows are matched on the same key: each profile is
+      // looked up in every spelling an older row may hold.
       const existing = new Set<string>();
       if (deduped.length > 0) {
         // Drizzle inArray() with thousands of strings can blow the param limit;
-        // chunk in groups of 1,000 to stay safe.
-        for (let i = 0; i < deduped.length; i += 1000) {
-          const chunk = deduped.slice(i, i + 1000);
-          const urls = chunk.map((m) => m.linkedinUrl);
+        // a profile has about a dozen spellings, so chunk in groups of 100.
+        for (let i = 0; i < deduped.length; i += 100) {
+          const chunk = deduped.slice(i, i + 100);
+          const urls = Array.from(new Set(chunk.flatMap((m) => [m.linkedinUrl, ...linkedinUrlVariants(m.linkedinUrl)])));
           const rowsExisting = await db
             .select({ url: prospects.linkedinUrl })
             .from(prospects)
@@ -158,12 +173,12 @@ export const prospectImportsRouter = router({
               ),
             );
           for (const r of rowsExisting) {
-            if (r.url) existing.add(r.url.toLowerCase());
+            if (r.url) existing.add(profileKey(r.url));
           }
         }
       }
 
-      const toImport = deduped.filter((m) => !existing.has(m.linkedinUrl.toLowerCase()));
+      const toImport = deduped.filter((m) => !existing.has(profileKey(m.linkedinUrl)));
       const withEmail = toImport.filter((m) => m.email).length;
 
       const token = randomUUID();
@@ -182,6 +197,10 @@ export const prospectImportsRouter = router({
         sample: toImport.slice(0, 10),
         createdAt: Date.now(),
       };
+      // A new preview replaces this person's previous one here (R90).
+      for (const [t, d] of Array.from(draftCache.entries())) {
+        if (d.workspaceId === ctx.workspace.id && d.userId === ctx.user.id) draftCache.delete(t);
+      }
       draftCache.set(token, draft);
 
       return {
@@ -225,6 +244,9 @@ export const prospectImportsRouter = router({
       const BATCH = 500;
       let created = 0;
       let errored = 0;
+      // Why rows failed, counted by reason (R54): the result screen guessed
+      // "a race-condition duplicate" for every failure.
+      const reasons = new Map<string, number>();
 
       for (let i = 0; i < draft.toImport.length; i += BATCH) {
         const chunk = draft.toImport.slice(i, i + BATCH);
@@ -271,8 +293,10 @@ export const prospectImportsRouter = router({
                 phone: m.phone ?? undefined,
               } as never);
               created++;
-            } catch {
+            } catch (rowErr) {
               errored++;
+              const why = describeWriteError(rowErr) ?? "the database refused the row";
+              reasons.set(why, (reasons.get(why) ?? 0) + 1);
             }
           }
           void e;
@@ -309,13 +333,20 @@ export const prospectImportsRouter = router({
         attempted: draft.toImport.length,
         created,
         errored,
+        failureReasons: Array.from(reasons.entries()).map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count),
       };
     }),
 
-  /** Discard a pending preview without importing. */
+  /** Discard a pending preview without importing. Only its owner, in its
+   *  workspace, may (R90): a token was enough to throw away someone else's. */
   discard: workspaceProcedure
     .input(z.object({ importToken: z.string().uuid() }))
-    .mutation(({ input }) => {
+    .mutation(({ ctx, input }) => {
+      const draft = draftCache.get(input.importToken);
+      if (!draft) return { ok: true };
+      if (draft.workspaceId !== ctx.workspace.id || draft.userId !== ctx.user.id) {
+        throw new TRPCError({ code: "FORBIDDEN" });
+      }
       draftCache.delete(input.importToken);
       return { ok: true };
     }),

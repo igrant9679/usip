@@ -146,9 +146,15 @@ describe("the bugs behind the other errors are fixed", () => {
 
   it("Leads' Send Email sends one per lead, the input the server takes", () => {
     const s = read("client/src/pages/usip/Leads.tsx");
-    expect(s).toContain("for (const leadId of leadIds) {\n      try { await send.mutateAsync({ leadId, subject, body }); }");
-    expect(s).not.toContain("send.mutate({ leadIds, subject, body })");
-    expect(s).toContain("compose.mutate({ prompt: aiPrompt, toLeadId: leadIds.length === 1 ? leadIds[0] : undefined })");
+    // 2026-11-06 (audit R5): one call to the capped bulk procedure, which
+    // takes leadIds and sends one per lead on the server, instead of a loop
+    // here. Still the input the server takes: leadIds only reach the bulk one.
+    expect(s).toContain("const send = trpc.leads.sendAdHocEmailBulk.useMutation({");
+    expect(s).toContain("send.mutate({ leadIds, subject, body, aiGenerated: compose.isSuccess });");
+    expect(read("server/routers/crm.ts")).toMatch(/sendAdHocEmailBulk: repProcedure\n    \.input\(z\.object\(\{\n      leadIds: z\.array/);
+    expect(s).not.toContain("trpc.leads.sendAdHocEmail.useMutation");
+    // 2026-11-06 (R50): the AI copy is a preview; it saves no draft.
+    expect(s).toContain("compose.mutate({ prompt: aiPrompt, toLeadId: leadIds.length === 1 ? leadIds[0] : undefined, previewOnly: true })");
   });
 
   it("a reconnect link names one provider; the precondition code is tRPC's", () => {

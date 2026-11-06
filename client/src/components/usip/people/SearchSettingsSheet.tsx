@@ -357,9 +357,6 @@ function FieldsView({
                   );
                 })}
               </div>
-              <div className="border-t p-2 flex justify-end">
-                <Button variant="outline" size="sm">Create field</Button>
-              </div>
             </div>
           )}
         </div>

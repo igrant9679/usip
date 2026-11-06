@@ -60,6 +60,7 @@ type CommitResult = {
   attempted: number;
   created: number;
   errored: number;
+  failureReasons?: Array<{ reason: string; count: number }>;
 };
 
 export function ProspectImportDialog({
@@ -118,8 +119,9 @@ export function ProspectImportDialog({
       toast.error("Please pick a .csv file.");
       return;
     }
-    if (file.size > 50 * 1024 * 1024) {
-      toast.error("File is larger than 50 MB. Split it into smaller batches.");
+    // The server's preview cap (prospectImports PREVIEW_CSV_MAX, R90).
+    if (file.size > 20_000_000) {
+      toast.error("File is larger than 20 MB. Split it into smaller batches.");
       return;
     }
     setFilename(file.name);
@@ -324,9 +326,12 @@ export function ProspectImportDialog({
                   <div className="font-medium">
                     {result.errored.toLocaleString()} row{result.errored === 1 ? "" : "s"} failed
                   </div>
-                  <div className="text-xs">
-                    Likely a race-condition duplicate. Re-importing the same file should be a no-op.
-                  </div>
+                  {/* The database's reasons, not a guess (R54). */}
+                  <ul className="text-xs list-disc pl-4">
+                    {(result.failureReasons ?? []).map((r) => (
+                      <li key={r.reason}>{r.count.toLocaleString()} — {r.reason}</li>
+                    ))}
+                  </ul>
                 </div>
               </div>
             )}

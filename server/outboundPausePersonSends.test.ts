@@ -74,6 +74,8 @@ const GUARD = "await assertOutboundNotPaused(ctx.workspace.id);";
 const SURFACES: Array<{ file: string; start: string; occurrence?: number; guard?: string; before: string; what: string }> = [
   { file: "routers/crm.ts", start: "  sendAdHocEmail: repProcedure", occurrence: 1, before: "adapter.sendEmail(", what: "email from a contact" },
   { file: "routers/crm.ts", start: "  sendAdHocEmail: repProcedure", occurrence: 2, before: "adapter.sendEmail(", what: "email from a lead" },
+  // 2026-11-06 (audit R5): several leads at once, through the single send.
+  { file: "routers/crm.ts", start: "  sendAdHocEmailBulk: repProcedure", before: "caller.leads.sendAdHocEmail(", what: "email to several leads" },
   { file: "routers/mailbox.ts", start: "  sendNew: workspaceProcedure", guard: "await assertOutboundNotPausedFor(ctx.workspace.id, [input.to, input.cc, input.bcc]);", before: "adapter.sendEmail(", what: "mailbox new message" },
   { file: "routers/mailbox.ts", start: "  sendReply: workspaceProcedure", guard: "await assertOutboundNotPausedFor(ctx.workspace.id, [input.to, input.cc]);", before: "adapter.sendEmail(", what: "mailbox reply and forward" },
   { file: "routers/smtpConfig.ts", start: "  sendDraft: workspaceProcedure", before: "transporter.sendMail(", what: "an approved draft by SMTP" },
