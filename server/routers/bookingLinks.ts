@@ -124,6 +124,41 @@ export async function openSlotsForLink(link: BookingLink, nowMs = Date.now()): P
     startHour: link.startHour,
     endHour: link.endHour,
     workDays: parseWorkDays(link.workDays),
+    maxSlots: BOOKING_LINK_MAX_SLOTS,
+  });
+}
+
+/**
+ * Enough slots for the whole two-week horizon (G42). The shared default of 40
+ * covered about two and a half working days of 30-minute slots, so the page
+ * that says "the next two weeks" showed two days, and a later slot could not be
+ * booked even by a direct POST (bookSlotForLink re-validates against this
+ * list). 15-minute slots over a 12-hour day for ten workdays is 480.
+ */
+export const BOOKING_LINK_MAX_SLOTS = 500;
+
+/**
+ * Whether a live meeting of this rep, created before `meetingId`, overlaps
+ * [start, start + durationMin). The re-validation above runs before the insert,
+ * so two prospects booking the same slot at once both passed it (G42); each
+ * now checks after its own insert, and the later row gives way.
+ */
+async function earlierOverlap(link: BookingLink, start: Date, durationMin: number, meetingId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const endMs = start.getTime() + durationMin * 60000;
+  const rows = await db.select({ id: meetings.id, scheduledAt: meetings.scheduledAt, durationMin: meetings.durationMin, status: meetings.status })
+    .from(meetings)
+    .where(and(
+      eq(meetings.workspaceId, link.workspaceId),
+      eq(meetings.ownerUserId, link.userId),
+      gte(meetings.scheduledAt, new Date(start.getTime() - 24 * 3600000)),
+      lte(meetings.scheduledAt, new Date(endMs)),
+    ));
+  return rows.some((m) => {
+    if (m.id >= meetingId || !m.scheduledAt || !isLiveMeetingStatus(m.status as string)) return false;
+    const s = new Date(m.scheduledAt).getTime();
+    return s < endMs && start.getTime() < s + (m.durationMin ?? 30) * 60000;
   });
 }
 
@@ -237,6 +272,13 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
   } as never);
   const meetingId = Number((ins as any)[0]?.insertId ?? 0) || 0;
   if (!meetingId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the meeting." });
+  if (await earlierOverlap(link, start, link.durationMin, meetingId)) {
+    // Someone booked this time a moment earlier: this row stands down before
+    // any invite goes out, and the visitor picks another slot.
+    await db.update(meetings).set({ status: "cancelled" } as never)
+      .where(and(eq(meetings.workspaceId, link.workspaceId), eq(meetings.id, meetingId)));
+    throw new TRPCError({ code: "CONFLICT", message: "That time was just booked by someone else — please pick another slot." });
+  }
 
   // Book the real calendar event (no-op-safe if no calendar is connected).
   let result: { sent: boolean; scheduledAt: string | null; reason?: string } = { sent: false, scheduledAt: start.toISOString() };

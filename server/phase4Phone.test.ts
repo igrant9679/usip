@@ -233,7 +233,12 @@ describe("the audit's screens each use the fix (O58, R78, G65, P45, P59, A65)", 
       const s = read(f);
       expect(s, f).toContain('"w-full md:w-72 shrink-0 border-r border-border flex-col bg-card/40", selectedId ? "hidden md:flex" : "flex"');
       expect(s, f).toContain('cn("flex-1 min-w-0 overflow-auto", !selectedId && "hidden md:block")');
-      expect(s, f).toMatch(/className="md:hidden -ml-2 h-7 gap-1" onClick=\{\(\) => setSelectedId\(null\)\}/);
+      // 2026-11-06 (audit G60): Landing pages' back button asks before dropping
+      // unsaved edits, so it goes through leaveEditor; it still clears the selection.
+      const back = f.endsWith("LandingPages.tsx")
+        ? /className="md:hidden -ml-2 h-7 gap-1" onClick=\{\(\) => leaveEditor\(\(\) => setSelectedId\(null\)\)\}/
+        : /className="md:hidden -ml-2 h-7 gap-1" onClick=\{\(\) => setSelectedId\(null\)\}/;
+      expect(s, f).toMatch(back);
     }
     const inbox = read("client/src/pages/usip/UnifiedInbox.tsx");
     expect(inbox).toContain('cn("w-full md:w-80 flex-shrink-0 border-r flex-col min-h-0", selectedChat ? "hidden md:flex" : "flex")');

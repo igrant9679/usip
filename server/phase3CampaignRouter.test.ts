@@ -90,10 +90,15 @@ describe("the dial, the triggers, and the queue", () => {
   it("Off / Approve / Auto in the Autonomy Center, included in the bulk setters", () => {
     const page = client("pages", "usip", "WorkflowsV2.tsx");
     expect(page).toContain('key: "routing", label: "Campaign Routing"');
-    const setAll = page.slice(page.indexOf("const setAll = "), page.indexOf("const turnOnFullAutonomy"));
-    expect(setAll).toContain("setRoutingAp.mutate({ mode: mode as any })");
+    // 2026-11-06 (audit G62): the bulk setters no longer list each mutation;
+    // runBulk runs every row of `autopilots` through its awaitable setter, and
+    // "Turn on full autonomy" is setAll("approval"). Still pinned: routing is a
+    // row with one, so both bulk paths set it.
+    expect(page).toContain("setAsync: (m: string) => setRoutingAp.mutateAsync({ mode: m as any })");
+    const bulk = page.slice(page.indexOf("const runBulk = "), page.indexOf("const setAll = "));
+    expect(bulk).toContain("autopilots.map((a) => ({ label: a.label, run: () => a.setAsync(mode) }))");
     const full = page.slice(page.indexOf("const turnOnFullAutonomy"), page.indexOf("const areSettings = "));
-    expect(full).toContain('setRoutingAp.mutate({ mode: "approval" as any })');
+    expect(full).toContain('setAll("approval"');
   });
   it("the cron sweep is scheduled and honors mode + daily cap", () => {
     const idx = read("_core", "index.ts");

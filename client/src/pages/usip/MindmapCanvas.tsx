@@ -48,6 +48,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
+import { SaveTracker, confirmLeaveWhile } from "@/lib/saveTracker";
 import {
   ArrowLeft,
   CheckSquare,
@@ -185,6 +186,29 @@ function dbEdgesToFlow(dbEdges: any[]): Edge[] {
   }));
 }
 
+function canvasPayload(nodes: Node<MindmapNodeData>[], edges: Edge[]) {
+  return {
+    nodes: nodes.map((n) => ({
+      id: n.id,
+      type: n.data.nodeType,
+      label: n.data.label,
+      notes: n.data.notes,
+      posX: Math.round(n.position.x),
+      posY: Math.round(n.position.y),
+      color: n.data.color,
+      parentId: n.data.parentId,
+      linkedEntityType: n.data.linkedEntityType,
+      linkedEntityId: n.data.linkedEntityId,
+    })),
+    edges: edges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      label: typeof e.label === "string" ? e.label : undefined,
+    })),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Main canvas component
 // ---------------------------------------------------------------------------
@@ -192,15 +216,29 @@ export default function MindmapCanvas() {
   const params = useParams<{ id: string }>();
   const mapId = Number(params.id);
 
-  const { data: canvasData, isLoading } = trpc.mindmaps.getCanvas.useQuery({ id: mapId });
+  // Always re-read on open: a copy cached from before the last save would
+  // otherwise load, and the next save would put it back over the newer one (G22).
+  const canvasQuery = trpc.mindmaps.getCanvas.useQuery({ id: mapId }, { refetchOnMount: "always" });
+  const { data: canvasData, isLoading } = canvasQuery;
+  const utils = trpc.useUtils();
   const saveCanvasMut = trpc.mindmaps.saveCanvas.useMutation();
   const createTaskMut = trpc.mindmaps.createLinkedTask.useMutation();
   const createNoteMut = trpc.mindmaps.createLinkedNote.useMutation();
 
   const [nodes, setNodes] = useState<Node<MindmapNodeData>[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
-  const [dirty, setDirty] = useState(false);
+  // Edits are counted, not flagged, so one made during a save stays unsaved
+  // (G60). `dirty` mirrors the tracker for rendering.
+  const tracker = useRef(new SaveTracker()).current;
+  const [dirty, setDirtyState] = useState(false);
+  const markEdited = useCallback(() => { tracker.edit(); setDirtyState(true); }, [tracker]);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  /** The version the canvas on screen was built from; sent with each save (G22). */
+  const versionRef = useRef<number | undefined>(undefined);
+  /** Set when a save was refused because the map was saved elsewhere since. */
+  const [conflict, setConflict] = useState(false);
+  const latest = useRef({ nodes: [] as Node<MindmapNodeData>[], edges: [] as Edge[] });
   const [selectedNode, setSelectedNode] = useState<Node<MindmapNodeData> | null>(null);
 
   // Side panel edit state
@@ -221,38 +259,63 @@ export default function MindmapCanvas() {
 
   const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load canvas data
-  useEffect(() => {
-    if (!canvasData) return;
-    setNodes(dbNodesToFlow(canvasData.nodes));
-    setEdges(dbEdgesToFlow(canvasData.edges));
-    setDirty(false);
-  }, [canvasData]);
+  latest.current = { nodes, edges };
 
-  // Auto-save every 15 s when dirty
+  // Load canvas data. A refetch that lands while there are unsaved edits is not
+  // applied over them; the next save carries the version they were built on.
+  const applyCanvas = useCallback((data: NonNullable<typeof canvasData>) => {
+    setNodes(dbNodesToFlow(data.nodes));
+    setEdges(dbEdgesToFlow(data.edges));
+    versionRef.current = data.version;
+    tracker.reset();
+    setDirtyState(false);
+  }, [tracker]);
+  useEffect(() => {
+    if (!canvasData || tracker.dirty) return;
+    applyCanvas(canvasData);
+  }, [canvasData, applyCanvas, tracker]);
+
+  // Auto-save every 15 s when dirty (not while a save is refused for a conflict)
   useEffect(() => {
     if (autoSaveRef.current) clearInterval(autoSaveRef.current);
     autoSaveRef.current = setInterval(() => {
-      if (dirty) doSave();
+      if (dirty && !conflict) doSave();
     }, 15_000);
     return () => { if (autoSaveRef.current) clearInterval(autoSaveRef.current); };
-  }, [dirty, nodes, edges]);
+  }, [dirty, conflict, nodes, edges]);
+
+  // Leaving with unsaved work: the browser asks on close/reload, and leaving the
+  // page inside the app saves what is there (G60: nothing guarded either).
+  useEffect(() => {
+    const onBeforeUnload = confirmLeaveWhile(() => tracker.dirty);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [tracker]);
+  useEffect(() => () => {
+    if (!tracker.dirty) return;
+    utils.client.mindmaps.saveCanvas
+      .mutate({ id: mapId, baseVersion: versionRef.current, ...canvasPayload(latest.current.nodes, latest.current.edges) })
+      .then(() => utils.mindmaps.getCanvas.invalidate({ id: mapId }))
+      .catch((e: any) => toast.error(`Your last mind map changes were not saved: ${e?.message ?? "save failed"}`));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapId]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setNodes((nds) => applyNodeChanges(changes, nds) as Node<MindmapNodeData>[]);
-    setDirty(true);
-  }, []);
+    // Selecting a node or React Flow measuring one is not an edit.
+    if (changes.some((c) => c.type !== "select" && c.type !== "dimensions")) markEdited();
+  }, [markEdited]);
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     setEdges((eds) => applyEdgeChanges(changes, eds));
-    setDirty(true);
-  }, []);
+    if (changes.some((c) => c.type !== "select")) markEdited();
+  }, [markEdited]);
 
   const onConnect = useCallback((params: any) => {
     setEdges((eds) =>
       addEdge({ ...params, id: edgeId(params.source, params.target), type: "smoothstep", style: { stroke: "#94A3B8", strokeWidth: 2 } }, eds)
     );
-    setDirty(true);
+    markEdited();
   }, []);
 
   // Double-click on canvas background to add a topic node
@@ -268,7 +331,7 @@ export default function MindmapCanvas() {
       data: { label: "New Topic", nodeType: "topic" },
     };
     setNodes((nds) => [...nds, newNode]);
-    setDirty(true);
+    markEdited();
   }, []);
 
   function addNode(type: NodeType) {
@@ -281,7 +344,7 @@ export default function MindmapCanvas() {
       data: { label: NODE_TYPE_LABELS[type], nodeType: type },
     };
     setNodes((nds) => [...nds, newNode]);
-    setDirty(true);
+    markEdited();
   }
 
   function onNodeClick(_: React.MouseEvent, node: Node<MindmapNodeData>) {
@@ -301,40 +364,47 @@ export default function MindmapCanvas() {
       )
     );
     setSelectedNode((prev) => prev ? { ...prev, data: { ...prev.data, label: editLabel, notes: editNotes, color: editColor || undefined } } : null);
-    setDirty(true);
+    markEdited();
   }
 
-  async function doSave() {
+  /** opts.overwrite: save over a newer copy saved elsewhere (the conflict banner's choice). */
+  async function doSave(opts: { overwrite?: boolean } = {}) {
+    if (savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
+    const upTo = tracker.begin();
     try {
-      await saveCanvasMut.mutateAsync({
+      const res = await saveCanvasMut.mutateAsync({
         id: mapId,
-        nodes: nodes.map((n) => ({
-          id: n.id,
-          type: n.data.nodeType,
-          label: n.data.label,
-          notes: n.data.notes,
-          posX: Math.round(n.position.x),
-          posY: Math.round(n.position.y),
-          color: n.data.color,
-          parentId: n.data.parentId,
-          linkedEntityType: n.data.linkedEntityType,
-          linkedEntityId: n.data.linkedEntityId,
-        })),
-        edges: edges.map((e) => ({
-          id: e.id,
-          source: e.source,
-          target: e.target,
-          label: typeof e.label === "string" ? e.label : undefined,
-        })),
+        baseVersion: opts.overwrite ? undefined : versionRef.current,
+        ...canvasPayload(nodes, edges),
       });
-      setDirty(false);
+      versionRef.current = res?.version;
+      tracker.saved(upTo);
+      setDirtyState(tracker.dirty);
+      setConflict(false);
+      // The cached copy is now older than the map; refresh it (G22).
+      void utils.mindmaps.getCanvas.invalidate({ id: mapId });
       toast.success("Saved");
-    } catch {
-      toast.error("Save failed");
+    } catch (e: any) {
+      if (e?.data?.code === "CONFLICT") {
+        setConflict(true);
+        toast.error("This map was saved somewhere else after you opened it. Choose which version to keep.");
+      } else {
+        toast.error(`Save failed: ${e?.message ?? "unknown error"}`);
+      }
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
+  }
+
+  async function loadSavedVersion() {
+    tracker.reset();
+    setDirtyState(false);
+    setConflict(false);
+    const r = await canvasQuery.refetch();
+    if (r.data) applyCanvas(r.data);
   }
 
   function handleCreateTask() {
@@ -364,7 +434,7 @@ export default function MindmapCanvas() {
           );
           setShowTaskDialog(false);
           setTaskTitle(""); setTaskDesc(""); setTaskDue(""); setTaskPriority("normal");
-          setDirty(true);
+          markEdited();
         },
         onError: () => toast.error("Failed to create task"),
       }
@@ -390,7 +460,7 @@ export default function MindmapCanvas() {
           );
           setShowNoteDialog(false);
           setNoteBody("");
-          setDirty(true);
+          markEdited();
         },
         onError: () => toast.error("Failed to create note"),
       }
@@ -438,11 +508,19 @@ export default function MindmapCanvas() {
           ))}
         </div>
 
-        <Button size="sm" onClick={doSave} disabled={saving || !dirty} className="shrink-0">
+        <Button size="sm" onClick={() => doSave()} disabled={saving || !dirty} className="shrink-0">
           {saving ? <Loader2 className="size-4 animate-spin mr-1" /> : <Save className="size-4 mr-1" />}
           Save
         </Button>
       </div>
+
+      {conflict && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 px-4 py-2 border-b bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-100 text-sm">
+          <span className="flex-1 min-w-0">This map was saved somewhere else after you opened it. Your changes here are not saved.</span>
+          <Button size="sm" variant="outline" className="h-7" onClick={() => void loadSavedVersion()}>Load the saved version</Button>
+          <Button size="sm" className="h-7" onClick={() => doSave({ overwrite: true })} disabled={saving}>Keep mine</Button>
+        </div>
+      )}
 
       {/* Canvas + side panel */}
       <div className="flex flex-1 overflow-hidden">
