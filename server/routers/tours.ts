@@ -60,6 +60,33 @@ async function assertTourHere(db: Awaited<ReturnType<typeof requireDb>>, tourId:
   if (!tour) throw new TRPCError({ code: "NOT_FOUND" });
 }
 
+/**
+ * Write a tour's steps from the builder, which sends the whole list: a step that
+ * carries its id is updated, one without is inserted, and a saved step missing
+ * from the list was removed in the builder, so it is deleted. Without the last
+ * part a removed step came back on the next load (G20, 2026-11-06).
+ */
+async function writeSteps(
+  db: Awaited<ReturnType<typeof requireDb>>,
+  tourId: number,
+  steps: z.infer<typeof TOUR_STEP>[],
+): Promise<void> {
+  const kept = new Set(steps.map((s) => s.id).filter((id): id is number => typeof id === "number"));
+  const saved = await db.select({ id: tourSteps.id }).from(tourSteps).where(eq(tourSteps.tourId, tourId));
+  const removed = saved.map((s) => s.id).filter((id) => !kept.has(id));
+  if (removed.length) {
+    await db.delete(tourSteps).where(and(eq(tourSteps.tourId, tourId), inArray(tourSteps.id, removed)));
+  }
+  for (const step of steps) {
+    const { id: stepId, ...stepRest } = step;
+    if (stepId) {
+      await db.update(tourSteps).set(stepRest).where(and(eq(tourSteps.id, stepId), eq(tourSteps.tourId, tourId)));
+    } else {
+      await db.insert(tourSteps).values({ ...stepRest, tourId });
+    }
+  }
+}
+
 export const toursRouter = router({
   /* ── Tour CRUD ──────────────────────────────────────────────────────────── */
 
@@ -132,7 +159,7 @@ export const toursRouter = router({
         estimatedMinutes: z.number().min(1).max(60).default(3),
         prerequisiteTourId: z.number().optional(),
         status: z.enum(["draft", "published"]).default("draft"),
-        pageKey: z.string().max(120).optional(),
+        pageKey: z.string().max(120).nullable().optional(),
         steps: z.array(TOUR_STEP).optional(),
       }),
     )
@@ -153,20 +180,7 @@ export const toursRouter = router({
         tourId = (res as any).insertId as number;
       }
 
-      // Upsert steps
-      if (steps && tourId) {
-        for (const step of steps) {
-          const { id: stepId, ...stepRest } = step;
-          if (stepId) {
-            await db
-              .update(tourSteps)
-              .set(stepRest)
-              .where(and(eq(tourSteps.id, stepId), eq(tourSteps.tourId, tourId)));
-          } else {
-            await db.insert(tourSteps).values({ ...stepRest, tourId });
-          }
-        }
-      }
+      if (steps && tourId) await writeSteps(db, tourId, steps);
 
       return { id: tourId };
     }),
@@ -420,7 +434,7 @@ export const toursRouter = router({
         roleTags: z.array(z.string()).optional(),
         estimatedMinutes: z.number().min(1).max(60).default(3),
         status: z.enum(["draft", "published"]).default("draft"),
-        pageKey: z.string().max(120).optional(),
+        pageKey: z.string().max(120).nullable().optional(),
         steps: z.array(TOUR_STEP).optional(),
       }),
     )
@@ -449,7 +463,7 @@ export const toursRouter = router({
         roleTags: z.array(z.string()).optional(),
         estimatedMinutes: z.number().min(1).max(60).optional(),
         status: z.enum(["draft", "published"]).optional(),
-        pageKey: z.string().max(120).optional(),
+        pageKey: z.string().max(120).nullable().optional(),
         steps: z.array(TOUR_STEP).optional(),
       }),
     )
@@ -458,16 +472,7 @@ export const toursRouter = router({
       const { id, steps, ...rest } = input;
       await assertTourHere(db, id, ctx.workspace.id);
       await db.update(tours).set(rest).where(and(eq(tours.id, id), eq(tours.workspaceId, ctx.workspace.id)));
-      if (steps) {
-        for (const step of steps) {
-          const { id: stepId, ...stepRest } = step;
-          if (stepId) {
-            await db.update(tourSteps).set(stepRest).where(and(eq(tourSteps.id, stepId), eq(tourSteps.tourId, id)));
-          } else {
-            await db.insert(tourSteps).values({ ...stepRest, tourId: id });
-          }
-        }
-      }
+      if (steps) await writeSteps(db, id, steps);
       return { id };
     }),
 
