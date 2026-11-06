@@ -4970,6 +4970,26 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // A deal whose close date has passed was alerted as "closing soon" (audit
+  // 2026-10-20, R38). Appending an enum value is in place in MySQL: no copy,
+  // and every stored value keeps its meaning.
+  {
+    name: "0300_pipeline_alert_past_close.sql",
+    statements: [
+      "ALTER TABLE `pipeline_alerts` MODIFY COLUMN `alertType` enum('no_activity','closing_soon_regression','amount_change','no_champion','past_close_date') NOT NULL",
+    ],
+  },
+
+  // A rep's forecast category on a deal (audit 2026-10-20, R41): Commit was
+  // "90% or more" and no stage defaults that high. Nullable with no default,
+  // so every existing deal keeps being counted by its win %.
+  {
+    name: "0301_opportunity_forecast_category.sql",
+    statements: [
+      "ALTER TABLE `opportunities` ADD COLUMN `forecastCategory` varchar(16) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
