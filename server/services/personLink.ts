@@ -36,6 +36,7 @@ import { cleanPlaceholder, normalizeJobTitle } from "./enrichment/recordNormaliz
 import { cleanScrapedField, isPlaceholderToken, usableEmailOrNull } from "@shared/fieldHygiene";
 import { normalizeCompanyDisplayName, normalizeCompanyName, normalizeDomain } from "./company/normalize";
 import { extractLinkedInIdentifier } from "./linkedinLookup";
+import { suppressionBlockingNewEmail } from "./suppression";
 
 /** How many same-name people the name tiers will reason about. Past this the
  *  tiers refuse rather than decide — see the ORDER BY / cap + 1 read in
@@ -243,13 +244,16 @@ export async function upsertPersonForRow(
     // Existing person: contribute the row's data through the merge — the
     // ledger decides what (if anything) improves.
     const p = match.person;
+    // A row matched on LinkedIn or name can carry a different address; a
+    // suppressed person keeps theirs (P86, emailChangeRefused).
+    const keepEmail = await emailChangeRefused(workspaceId, p, row.email);
     const merged = mergeAll(
       {
         email: p.email, phone: p.phone, company: p.company,
         companyDomain: p.companyDomain, title: p.title, linkedinUrl: p.linkedinUrl,
       },
       (p.fieldProvenance ?? {}) as ProvenanceMap,
-      candidatesFromRow(row, now, provenance),
+      candidatesFromRow(row, now, provenance).filter((c) => !(keepEmail && c.field === "email")),
     );
     if (Object.keys(merged.fields).length > 0) {
       const WIDTHS: Record<string, number> = { title: 120, email: 320 };
@@ -293,6 +297,23 @@ export async function upsertPersonForRow(
 }
 
 /**
+ * A suppressed person's address is not changed by a merge (audit 2026-10-20,
+ * P86): the new address would be on no list, so they would be mailable again.
+ * Asked only when the address would actually change.
+ */
+async function emailChangeRefused(
+  workspaceId: number,
+  person: Pick<PersonRow, "email" | "linkedinUrl" | "companyDomain">,
+  email: string | null | undefined,
+): Promise<boolean> {
+  const next = (email ?? "").trim().toLowerCase();
+  if (!next || next === (person.email ?? "").trim().toLowerCase()) return false;
+  return !!(await suppressionBlockingNewEmail(workspaceId, {
+    email: person.email, linkedinUrl: person.linkedinUrl, companyDomain: person.companyDomain,
+  }));
+}
+
+/**
  * Contribute freshly-resolved values to a linked person through the merge —
  * used by the ARE enrich agent so its findings land on the canonical record,
  * not only on the campaign copy. Verified emails carry their verdict (and
@@ -320,7 +341,7 @@ export async function mergeIntoPerson(
     if (!p) return;
     const now = new Date().toISOString();
     const cands: Candidate[] = [];
-    if (data.email?.trim()) {
+    if (data.email?.trim() && !(await emailChangeRefused(workspaceId, p, data.email))) {
       const v = data.emailVerification ?? undefined;
       const conf = v === "valid" ? CONFIDENCE.patternReoonValid
         : v === "accept_all" ? CONFIDENCE.emailAcceptAll
