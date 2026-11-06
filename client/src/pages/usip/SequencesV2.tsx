@@ -1,11 +1,16 @@
 /**
  * SequencesV2 — the Engage → "Sequences" surface (/v2/sequences).
  *
- * Modelled on Apollo's Sequences index: header tabs (All Sequences / Analytics
- * / Diagnostics), a left filter rail (Starred, Owned by, Tags, Status,
- * Performance, Folders, Shared by) and a sequences table with an empty state.
- * Wired to the existing sequences router (list + create). The full multi-step
- * create-sequence builder is a follow-up; "Create sequence" makes a draft here.
+ * Modelled on Apollo's Sequences index: a left filter rail (Owned by, Status)
+ * and a sequences table with an empty state. Wired to the existing sequences
+ * router (list + create). The full multi-step create-sequence builder is a
+ * follow-up; "Create sequence" makes a draft here.
+ *
+ * Only controls that do something are shown (audit 2026-10-20, O55). Saved
+ * views, starred / tags / folders / performance / shared-by filters, row
+ * checkboxes with nothing to act on, and Analytics and Diagnostics tabs that
+ * were placeholders all looked like features and did nothing; they went.
+ * Each sequence's own Report tab has its numbers.
  */
 import { useMemo, useState } from "react";
 import { forbiddenMessage } from "@/lib/forbidden";
@@ -16,6 +21,7 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
+import { SequenceDraftsNote } from "@/components/usip/SequenceDraftsNote";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,8 +35,8 @@ import {
   DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import {
-  Send, Plus, Search, Filter, Save, ArrowUpDown, Settings2, ChevronDown,
-  Star, UserCircle2, Tag, Activity, BarChart3, Folder, Share2, X,
+  Send, Plus, Search, Filter, ArrowUpDown, ChevronDown,
+  UserCircle2, Activity, Share2, X,
   MoreHorizontal, ExternalLink, Layers, Users, Sparkles, BookOpen, PenLine,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -38,7 +44,6 @@ import { isAdminRole } from "@shared/roleRank";
 import { pressable } from "@/lib/pressable";
 import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import { useIsMobile } from "@/hooks/useMobile";
-import { tablistProps, tabProps } from "@/lib/tabs";
 
 const AI_STEPS = [
   { type: "email", subject: "Quick question, {{first_name}}", body: "Hi {{first_name}},\n\nNoticed {{company}} is scaling — wanted to share how teams like yours speed up pipeline. Worth a quick chat?\n\nBest," },
@@ -114,8 +119,6 @@ function FGroup({ label, icon: Icon, open, onToggle, count, children }: { label:
 }
 
 const STATUSES = ["active", "paused", "draft", "archived"] as const;
-const TABS = ["All Sequences", "Analytics", "Diagnostics"] as const;
-type Tab = (typeof TABS)[number];
 
 export default function SequencesV2() {
   const [, setLocation] = useLocation();
@@ -168,7 +171,6 @@ export default function SequencesV2() {
     onError: (e) => toast.error(forbiddenMessage(e, "Only managers can assign")),
   });
 
-  const [tab, setTab] = useState<Tab>("All Sequences");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("updated");
   const [statusSel, setStatusSel] = useState<Set<string>>(new Set());
@@ -178,7 +180,6 @@ export default function SequencesV2() {
   const phone = useIsMobile();
   const [filtersSheet, setFiltersSheet] = useState(false);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(["Status", "Owned by"]));
-  const [checked, setChecked] = useState<Set<number>>(new Set());
   // sequences.create / fork refuse a member whose manage_sequences is denied.
   const { can } = usePermissions();
   const [choiceOpen, setChoiceOpen] = useState(false);
@@ -211,13 +212,10 @@ export default function SequencesV2() {
   const activeCount = statusSel.size + (ownerMine ? 1 : 0) + (search ? 1 : 0);
   const clearFilters = () => { setStatusSel(new Set()); setOwnerMine(false); setSearch(""); };
 
-  const allChecked = rows.length > 0 && rows.every((r) => checked.has(r.id));
-  const toggleAll = () => setChecked((p) => { const n = new Set(p); if (allChecked) rows.forEach((r) => n.delete(r.id)); else rows.forEach((r) => n.add(r.id)); return n; });
-
   return (
     <Shell title="Sequences">
       <div className="flex flex-col h-full min-h-0" style={{ ["--seq-accent" as any]: accent }}>
-        {/* header + tabs */}
+        {/* header */}
         <div className="relative shrink-0 px-4 pt-2 border-b border-border bg-card/40">
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <div className="flex items-center gap-2">
@@ -226,170 +224,129 @@ export default function SequencesV2() {
             <div className="flex-1" />
             {can("manage_sequences") && <Button size="sm" className="h-7 gap-1.5" style={{ backgroundColor: accent }} onClick={() => setChoiceOpen(true)}><Plus className="size-3.5" /> Create sequence</Button>}
           </div>
-          <div {...tablistProps("Sequences")} className="flex items-center gap-1 mt-1.5">
-            {TABS.map((t) => (
-              <button {...tabProps(tab === t)} key={t} onClick={() => setTab(t)} className={cn("relative px-3 py-2 text-[13px] transition-colors", tab === t ? "font-semibold" : "text-muted-foreground hover:text-foreground")} style={tab === t ? { color: accent } : undefined}>
-                {t}
-                {tab === t && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full" style={{ backgroundColor: accent }} />}
-              </button>
-            ))}
-          </div>
+          <div className="h-2" />
         </div>
 
         {/* Which is which: this page vs Revenue Engine campaigns vs a campaign's sequences (owner ask 2026-09-04). */}
         <div className="px-4 pt-3"><OutreachExplainer current="sequences" /></div>
+        <div className="px-4 pt-2"><SequenceDraftsNote /></div>
 
-        {tab === "All Sequences" ? (
-          <>
-            {/* toolbar */}
-            <div className="shrink-0 border-b border-border px-3 py-1.5 flex items-center gap-1.5 flex-wrap bg-card/40 [&_button]:h-7">
-              <Button variant="outline" size="sm" className="gap-1.5">All Sequences <ChevronDown className="size-3.5 opacity-60" /></Button>
-              <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => (phone ? setFiltersSheet(true) : setHideFilters((v) => !v))}><Filter className="size-4" /> {phone ? "Filters" : `${hideFilters ? "Show" : "Hide"} filters`}{activeCount ? ` (${activeCount})` : ""}</Button>
-              <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-sm min-w-0 flex-1 max-w-xs">
-                <Search className="size-4 text-muted-foreground shrink-0" />
-                <input aria-label="Search sequences" value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search sequences…" />
-                {search && <button aria-label="Clear search" onClick={() => setSearch("")}><X className="size-3.5 text-muted-foreground" /></button>}
-              </div>
-              <div className="flex-1" />
-              <Button variant="ghost" size="sm" className="gap-1.5"><Save className="size-4" /> Save as new view</Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild><Button variant="ghost" size="sm" className="gap-1.5"><ArrowUpDown className="size-4" /> Sort</Button></DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>Sort by</DropdownMenuLabel>
-                  <DropdownMenuRadioGroup value={sort} onValueChange={setSort}>
-                    <DropdownMenuRadioItem value="updated">Last updated</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="name">Name (A → Z)</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="enrolled">Enrolled (most)</DropdownMenuRadioItem>
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <Button variant="ghost" size="icon-sm" title="View options"><Settings2 className="size-4" /></Button>
-            </div>
-
-            <div className="flex flex-1 min-h-0">
-              {/* filter rail */}
-              {(phone || !hideFilters) && (
-                <ResponsiveRail
-                  title="Filters"
-                  open={filtersSheet}
-                  onOpenChange={setFiltersSheet}
-                  className="w-60 shrink-0 border-r border-border flex-col min-h-0 bg-card/30"
-                >
-                  <div className="flex-1 min-h-0 overflow-y-auto">
-                    <FGroup label="Starred" icon={Star} open={openGroups.has("Starred")} onToggle={() => toggleGroup("Starred")}>
-                      <p className="text-[12px] text-muted-foreground">Star sequences to pin them here.</p>
-                    </FGroup>
-                    <FGroup label="Owned by" icon={UserCircle2} open={openGroups.has("Owned by")} onToggle={() => toggleGroup("Owned by")} count={ownerMine ? 1 : 0}>
-                      <label className="flex items-center gap-2 text-[13px] cursor-pointer py-0.5"><Checkbox checked={ownerMine} onCheckedChange={() => setOwnerMine((v) => !v)} className="size-3.5" /> Owned by me</label>
-                    </FGroup>
-                    <FGroup label="Tags" icon={Tag} open={openGroups.has("Tags")} onToggle={() => toggleGroup("Tags")}>
-                      <p className="text-[12px] text-muted-foreground">No tags yet.</p>
-                    </FGroup>
-                    <FGroup label="Status" icon={Activity} open={openGroups.has("Status")} onToggle={() => toggleGroup("Status")} count={statusSel.size}>
-                      {STATUSES.map((s) => (
-                        <label key={s} className="flex items-center gap-2 text-[13px] cursor-pointer py-0.5 capitalize"><Checkbox checked={statusSel.has(s)} onCheckedChange={() => toggleStatus(s)} className="size-3.5" /> {s}</label>
-                      ))}
-                    </FGroup>
-                    <FGroup label="Performance" icon={BarChart3} open={openGroups.has("Performance")} onToggle={() => toggleGroup("Performance")}>
-                      <p className="text-[12px] text-muted-foreground">Filter by open / reply rate (coming soon).</p>
-                    </FGroup>
-                    <FGroup label="Folders" icon={Folder} open={openGroups.has("Folders")} onToggle={() => toggleGroup("Folders")}>
-                      <p className="text-[12px] text-muted-foreground">No folders yet.</p>
-                    </FGroup>
-                    <FGroup label="Shared by" icon={Share2} open={openGroups.has("Shared by")} onToggle={() => toggleGroup("Shared by")}>
-                      <p className="text-[12px] text-muted-foreground">Shared sequences appear here.</p>
-                    </FGroup>
-                  </div>
-                  <div className="shrink-0 border-t border-border p-2">
-                    <Button variant="outline" size="sm" className="w-full h-7" disabled={activeCount === 0} onClick={clearFilters}>Clear filters</Button>
-                  </div>
-                </ResponsiveRail>
-              )}
-
-              {/* table / empty */}
-              <div className="flex-1 min-w-0 overflow-auto">
-                {isLoading ? (
-                  <div className="p-3 space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-11 rounded bg-muted/50 animate-pulse" />)}</div>
-                ) : rows.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center text-center py-20 px-4">
-                    <Send className="size-9 text-muted-foreground opacity-40 mb-3" />
-                    <p className="text-sm text-muted-foreground">{sequences.length === 0 ? "No sequences yet!" : "No sequences match your filters."}</p>
-                    <p className="text-sm text-muted-foreground">Create a new sequence to start engaging.</p>
-                    <div className="mt-4 flex items-center gap-2">
-                      <Button size="sm" style={{ backgroundColor: accent }} onClick={() => setChoiceOpen(true)}>Create a sequence</Button>
-                      {activeCount > 0 && <Button variant="outline" size="sm" onClick={clearFilters}>Clear filters</Button>}
-                    </div>
-                  </div>
-                ) : (
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 z-10 bg-card border-b border-border">
-                      <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                        <th className="w-10 px-3 py-1.5"><Checkbox aria-label="Select all" checked={allChecked} onCheckedChange={toggleAll} className="size-3.5" /></th>
-                        <th className="px-2 py-1.5 font-medium">Name</th>
-                        <th className="px-2 py-1.5 font-medium">Status</th>
-                        <th className="px-2 py-1.5 font-medium text-right">Steps</th>
-                        <th className="px-2 py-1.5 font-medium text-right">Enrolled</th>
-                        <th className="px-2 py-1.5 font-medium">Updated</th>
-                        <th className="w-8 px-2 py-1.5" />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((s) => (
-                        <tr key={s.id} className="border-b border-border/60 hover:bg-muted/40 cursor-pointer" {...pressable(() => setLocation(`/v2/sequences/${s.id}`), { row: true })}>
-                          <td className="px-3 py-1.5" onClick={(e) => e.stopPropagation()}>
-                            <Checkbox aria-label={`Select ${s.name}`} checked={checked.has(s.id)} onCheckedChange={() => setChecked((p) => { const n = new Set(p); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; })} className="size-3.5" />
-                          </td>
-                          <td className="px-2 py-1.5 font-medium">
-                            <div className="max-w-[280px] truncate" title={s.name}>{s.name}</div>
-                            {s.assignedToUserId ? <div className="text-[10px] text-muted-foreground flex items-center gap-0.5 mt-0.5"><UserCircle2 className="size-2.5" /> {memberName(s.assignedToUserId)}</div> : null}
-                          </td>
-                          <td className="px-2 py-1.5">{statusBadge(s.status)}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground"><span className="inline-flex items-center gap-1 justify-end"><Layers className="size-3" /> {s.steps?.length ?? 0}</span></td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground"><span className="inline-flex items-center gap-1 justify-end"><Users className="size-3" /> {(s.enrolledCount ?? 0).toLocaleString()}</span></td>
-                          <td className="px-2 py-1.5 text-xs text-muted-foreground">{fmtWhen(s.updatedAt)}</td>
-                          <td className="px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild><Button aria-label="Sequence actions" variant="ghost" size="icon-sm"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => setLocation(`/v2/sequences/${s.id}`)}><ExternalLink className="size-4 mr-2" /> Open in builder</DropdownMenuItem>
-                                {/* Phase 6: a sequence is a fixed-copy campaign in the one engine. */}
-                                <DropdownMenuItem disabled={convertMut.isPending} onClick={() => convertMut.mutate({ sequenceId: s.id })}><ExternalLink className="size-4 mr-2" /> Convert to fixed-copy campaign</DropdownMenuItem>
-                                {isAdmin && <DropdownMenuItem onClick={() => publishMut.mutate({ id: s.id })}><BookOpen className="size-4 mr-2" /> Publish as team template</DropdownMenuItem>}
-                                {isManager && (
-                                  <>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuSub>
-                                      <DropdownMenuSubTrigger><Users className="size-4 mr-2" /> Assign to rep</DropdownMenuSubTrigger>
-                                      <DropdownMenuSubContent className="max-h-64 overflow-auto">
-                                        {members.length === 0 ? <DropdownMenuItem disabled>No team members</DropdownMenuItem> : members.map((m) => (
-                                          <DropdownMenuItem key={m.userId} onClick={() => assignMut.mutate({ id: s.id, userId: m.userId })}>{m.name}{s.assignedToUserId === m.userId ? " ✓" : ""}</DropdownMenuItem>
-                                        ))}
-                                        {s.assignedToUserId ? <><DropdownMenuSeparator /><DropdownMenuItem onClick={() => assignMut.mutate({ id: s.id, userId: null })}>Unassign</DropdownMenuItem></> : null}
-                                      </DropdownMenuSubContent>
-                                    </DropdownMenuSub>
-                                  </>
-                                )}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 min-h-0 overflow-auto flex items-center justify-center p-6">
-            <div className="text-center max-w-md">
-              <div className="mx-auto size-12 rounded-full bg-secondary flex items-center justify-center mb-3">{tab === "Analytics" ? <BarChart3 className="size-5 text-muted-foreground" /> : <Activity className="size-5 text-muted-foreground" />}</div>
-              <h2 className="text-sm font-semibold">{tab}</h2>
-              <p className="text-sm text-muted-foreground mt-1">{tab === "Analytics" ? "Sequence performance — open, reply and meeting rates across your cadences." : "Deliverability diagnostics and step-level health for your sequences."}</p>
-              <Button variant="outline" size="sm" className="mt-3" onClick={() => setLocation("/sequences")}>Open full sequences</Button>
-            </div>
+        {/* toolbar */}
+        <div className="shrink-0 border-b border-border px-3 py-1.5 mt-3 flex items-center gap-1.5 flex-wrap bg-card/40 [&_button]:h-7">
+          <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => (phone ? setFiltersSheet(true) : setHideFilters((v) => !v))}><Filter className="size-4" /> {phone ? "Filters" : `${hideFilters ? "Show" : "Hide"} filters`}{activeCount ? ` (${activeCount})` : ""}</Button>
+          <div className="flex items-center gap-2 px-2.5 h-7 rounded-md border bg-background text-sm min-w-0 flex-1 max-w-xs">
+            <Search className="size-4 text-muted-foreground shrink-0" />
+            <input aria-label="Search sequences" value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent outline-none flex-1 min-w-0 text-[13px]" placeholder="Search sequences…" />
+            {search && <button aria-label="Clear search" onClick={() => setSearch("")}><X className="size-3.5 text-muted-foreground" /></button>}
           </div>
-        )}
+          <div className="flex-1" />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild><Button variant="ghost" size="sm" className="gap-1.5"><ArrowUpDown className="size-4" /> Sort</Button></DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={sort} onValueChange={setSort}>
+                <DropdownMenuRadioItem value="updated">Last updated</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="name">Name (A → Z)</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="enrolled">Enrolled (most)</DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        <div className="flex flex-1 min-h-0">
+          {/* filter rail */}
+          {(phone || !hideFilters) && (
+            <ResponsiveRail
+              title="Filters"
+              open={filtersSheet}
+              onOpenChange={setFiltersSheet}
+              className="w-60 shrink-0 border-r border-border flex-col min-h-0 bg-card/30"
+            >
+              <div className="flex-1 min-h-0 overflow-y-auto">
+                <FGroup label="Owned by" icon={UserCircle2} open={openGroups.has("Owned by")} onToggle={() => toggleGroup("Owned by")} count={ownerMine ? 1 : 0}>
+                  <label className="flex items-center gap-2 text-[13px] cursor-pointer py-0.5"><Checkbox checked={ownerMine} onCheckedChange={() => setOwnerMine((v) => !v)} className="size-3.5" /> Owned by me</label>
+                </FGroup>
+                <FGroup label="Status" icon={Activity} open={openGroups.has("Status")} onToggle={() => toggleGroup("Status")} count={statusSel.size}>
+                  {STATUSES.map((s) => (
+                    <label key={s} className="flex items-center gap-2 text-[13px] cursor-pointer py-0.5 capitalize"><Checkbox checked={statusSel.has(s)} onCheckedChange={() => toggleStatus(s)} className="size-3.5" /> {s}</label>
+                  ))}
+                </FGroup>
+              </div>
+              <div className="shrink-0 border-t border-border p-2">
+                <Button variant="outline" size="sm" className="w-full h-7" disabled={activeCount === 0} onClick={clearFilters}>Clear filters</Button>
+              </div>
+            </ResponsiveRail>
+          )}
+
+          {/* table / empty */}
+          <div className="flex-1 min-w-0 overflow-auto">
+            {isLoading ? (
+              <div className="p-3 space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-11 rounded bg-muted/50 animate-pulse" />)}</div>
+            ) : rows.length === 0 ? (
+              <div className="flex flex-col items-center justify-center text-center py-20 px-4">
+                <Send className="size-9 text-muted-foreground opacity-40 mb-3" />
+                <p className="text-sm text-muted-foreground">{sequences.length === 0 ? "No sequences yet!" : "No sequences match your filters."}</p>
+                <p className="text-sm text-muted-foreground">Create a new sequence to start engaging.</p>
+                <div className="mt-4 flex items-center gap-2">
+                  <Button size="sm" style={{ backgroundColor: accent }} onClick={() => setChoiceOpen(true)}>Create a sequence</Button>
+                  {activeCount > 0 && <Button variant="outline" size="sm" onClick={clearFilters}>Clear filters</Button>}
+                </div>
+              </div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-card border-b border-border">
+                  <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <th className="px-3 py-1.5 font-medium">Name</th>
+                    <th className="px-2 py-1.5 font-medium">Status</th>
+                    <th className="px-2 py-1.5 font-medium text-right">Steps</th>
+                    <th className="px-2 py-1.5 font-medium text-right">Enrolled</th>
+                    <th className="px-2 py-1.5 font-medium">Updated</th>
+                    <th className="w-8 px-2 py-1.5" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((s) => (
+                    <tr key={s.id} className="border-b border-border/60 hover:bg-muted/40 cursor-pointer" {...pressable(() => setLocation(`/v2/sequences/${s.id}`), { row: true })}>
+                      <td className="px-3 py-1.5 font-medium">
+                        <div className="max-w-[280px] truncate" title={s.name}>{s.name}</div>
+                        {s.assignedToUserId ? <div className="text-[10px] text-muted-foreground flex items-center gap-0.5 mt-0.5"><UserCircle2 className="size-2.5" /> {memberName(s.assignedToUserId)}</div> : null}
+                      </td>
+                      <td className="px-2 py-1.5">{statusBadge(s.status)}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground"><span className="inline-flex items-center gap-1 justify-end"><Layers className="size-3" /> {s.steps?.length ?? 0}</span></td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground"><span className="inline-flex items-center gap-1 justify-end"><Users className="size-3" /> {(s.enrolledCount ?? 0).toLocaleString()}</span></td>
+                      <td className="px-2 py-1.5 text-xs text-muted-foreground">{fmtWhen(s.updatedAt)}</td>
+                      <td className="px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild><Button aria-label="Sequence actions" variant="ghost" size="icon-sm"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => setLocation(`/v2/sequences/${s.id}`)}><ExternalLink className="size-4 mr-2" /> Open in builder</DropdownMenuItem>
+                            {/* Phase 6: a sequence is a fixed-copy campaign in the one engine. */}
+                            <DropdownMenuItem disabled={convertMut.isPending} onClick={() => convertMut.mutate({ sequenceId: s.id })}><ExternalLink className="size-4 mr-2" /> Convert to fixed-copy campaign</DropdownMenuItem>
+                            {isAdmin && <DropdownMenuItem onClick={() => publishMut.mutate({ id: s.id })}><BookOpen className="size-4 mr-2" /> Publish as team template</DropdownMenuItem>}
+                            {isManager && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuSub>
+                                  <DropdownMenuSubTrigger><Users className="size-4 mr-2" /> Assign to rep</DropdownMenuSubTrigger>
+                                  <DropdownMenuSubContent className="max-h-64 overflow-auto">
+                                    {members.length === 0 ? <DropdownMenuItem disabled>No team members</DropdownMenuItem> : members.map((m) => (
+                                      <DropdownMenuItem key={m.userId} onClick={() => assignMut.mutate({ id: s.id, userId: m.userId })}>{m.name}{s.assignedToUserId === m.userId ? " ✓" : ""}</DropdownMenuItem>
+                                    ))}
+                                    {s.assignedToUserId ? <><DropdownMenuSeparator /><DropdownMenuItem onClick={() => assignMut.mutate({ id: s.id, userId: null })}>Unassign</DropdownMenuItem></> : null}
+                                  </DropdownMenuSubContent>
+                                </DropdownMenuSub>
+                              </>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* 1 — "Create a sequence" choice modal */}

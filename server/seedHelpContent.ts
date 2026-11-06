@@ -599,7 +599,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     tags: ["sequences", "outreach", "cadence"],
     pageKey: "sequences",
     tourName: "Build Your First Sequence",
-    bodyMarkdown: `**Sequences** (sidebar → Engage) are multi-step cadences. Click **New sequence**, then add steps: email steps (subject + body, with \`{{firstName}}\`, \`{{company}}\`, \`{{senderName}}\` merge fields), **wait** steps (delays), and **task** steps (manual to-dos). Apply an Email Builder template to a step, or write inline. Use the **Canvas** view for a visual builder or the list/Edit view — they stay in sync. Set day caps and auto-stop rules so replies pause the sequence. When ready, **Activate** it, then enroll prospects/contacts/leads (see "Enroll prospects into a sequence"). The engine creates and sends drafts on cadence.`,
+    bodyMarkdown: `**Sequences** (sidebar → Engage) are multi-step cadences. Click **New sequence**, then add steps: email steps (subject + body, with \`{{firstName}}\`, \`{{company}}\`, \`{{senderName}}\` merge fields), **wait** steps (delays), and **task** steps (manual to-dos). Apply an Email Builder template to a step, or write inline. Use the **Canvas** view for a visual builder or the list/Edit view — they stay in sync. Set a daily cap; a reply pauses the person while reply detection is on. When ready, **Activate** it, then enroll prospects/contacts/leads (see "Enroll prospects into a sequence"). Email steps write **drafts** on cadence: nothing is sent until someone reviews and sends them (Emails → Needs review), or auto-send does if it is switched on.`,
   },
   {
     slug: "sequences-vs-campaigns",
