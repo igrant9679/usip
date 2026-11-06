@@ -27,6 +27,7 @@ import { getWorkspaceTimezone, startOfLocalDay } from "../../services/workspaceT
 import { describeSendWindow, isWithinSendWindow, nextSendWindowOpening } from "@shared/sendWindow";
 import { promoteApprovedProspects } from "../../services/are/approvePromotion";
 import { respaceOverdueSteps } from "../../services/are/stepHold";
+import { recountCampaignCounters } from "../../services/are/campaignCounters";
 import { campaignCapMessage, campaignHeadroom } from "../../services/are/campaignConcurrency";
 import { getAreHubFunnelTotals } from "../../services/performanceMetrics";
 import { recordAudit } from "../../audit";
@@ -99,7 +100,15 @@ export const campaignsRouter = router({
         .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!campaign) throw new TRPCError({ code: "NOT_FOUND" });
-      return campaign;
+      // The header's counters, recounted now (A50): the engine only recounts
+      // active campaigns, so a paused one's header froze. Stored back, so the
+      // campaign list and the hub read the same numbers. A failed recount
+      // leaves the stored ones: the page still opens.
+      const counters = await recountCampaignCounters(db, ctx.workspace.id, campaign.id).catch((e) => {
+        console.error(`[are.campaigns.get] recount failed for campaign ${campaign.id}:`, (e as Error)?.message ?? e);
+        return {};
+      });
+      return { ...campaign, ...counters };
     }),
 
   create: workspaceProcedure
@@ -866,21 +875,9 @@ export const campaignsRouter = router({
       // Recount from the queue instead of writing the batch size — the old
       // `prospectsApproved: input.prospectIds.length` RESET the counter on
       // every batch (10 approved + 5 more showed 5). A recount is drift-proof
-      // and idempotent. Workspace-scoped (the old update wasn't).
-      const [{ n }] = await db
-        .select({ n: sql<number>`count(*)` })
-        .from(prospectQueue)
-        .where(
-          and(
-            eq(prospectQueue.campaignId, input.campaignId),
-            eq(prospectQueue.workspaceId, ctx.workspace.id),
-            eq(prospectQueue.sequenceStatus, "approved"),
-          ),
-        );
-      await db
-        .update(areCampaigns)
-        .set({ prospectsApproved: Number(n) })
-        .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)));
+      // and idempotent, and it is the engine's recount (A50): this one used
+      // to count status `approved` only, a second meaning of the word.
+      await recountCampaignCounters(db, ctx.workspace.id, input.campaignId);
 
       // Approved people's companies go to the Companies page (2026-09-15).
       // Fire-and-forget: association is metadata, never blocks the approval;
@@ -934,10 +931,8 @@ export const campaignsRouter = router({
         eq(prospectQueue.enrichmentStatus, "complete"),
       ));
       const approved = Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
-      const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(prospectQueue)
-        .where(and(eq(prospectQueue.campaignId, input.campaignId), eq(prospectQueue.workspaceId, ctx.workspace.id), eq(prospectQueue.sequenceStatus, "approved")));
-      await db.update(areCampaigns).set({ prospectsApproved: Number(n) })
-        .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)));
+      // The one recount (A50) — "Approved" kept its meaning after Approve all.
+      await recountCampaignCounters(db, ctx.workspace.id, input.campaignId);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_campaign", entityId: input.campaignId, after: { approveAllPending: approved } });
       // Companies for the newly-approved people — see approveBatch above.
       void promoteApprovedProspects(ctx.workspace.id, { campaignId: input.campaignId, limit: 500 });

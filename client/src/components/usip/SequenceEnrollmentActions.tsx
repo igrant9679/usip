@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
+import { invalidateEnrollmentReads } from "@/lib/enrollmentCache";
 import { toast } from "sonner";
 
 /**
@@ -16,11 +17,8 @@ export function SequenceEnrollmentActions({ enrollment, sequenceId }: {
   const utils = trpc.useUtils();
   const name = enrollment.personName || "this person";
   // Also after a refusal: it means the row moved on, and the list is stale.
-  const refresh = () => {
-    utils.sequences.listEnrollments.invalidate({ sequenceId });
-    utils.sequences.list.invalidate();
-    utils.sequences.getPerformanceAnalytics.invalidate();
-  };
+  // Through the shared list, which has the two legacy reads this one missed.
+  const refresh = () => invalidateEnrollmentReads(utils, sequenceId);
   const done = (message: string) => () => { refresh(); toast.success(message); };
   const failed = (e: { message: string }) => { refresh(); toast.error(e.message); };
   const pause = trpc.sequences.pauseEnrollment.useMutation({ onSuccess: done(`Paused ${name}`), onError: failed });

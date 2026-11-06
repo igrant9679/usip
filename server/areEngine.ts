@@ -120,6 +120,7 @@ import { downstreamAccountFor, hasSellerDownstreamLink } from "./services/resear
 import { pickFallback, researchTargeting, workspaceIcpFallback } from "./services/research/targetingPrior";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { inSendWindow } from "./services/sendWindow";
+import { recountCampaignCounters } from "./services/are/campaignCounters";
 import { parseTargetPlaces, placeFit, placeStringOf } from "./services/placeFit";
 import { cleanScrapedField } from "@shared/fieldHygiene";
 import { buildMergeLookup, isEmptyLinkToken, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
@@ -2031,43 +2032,11 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
   /* ── Phase 6: COUNTERS — recompute the campaign funnel ─────────────── */
   step("counters");
   try {
-    const [agg] = await db
-      .select({
-        total: sql<number>`count(*)`,
-        enriched: sql<number>`sum(case when ${prospectQueue.enrichmentStatus} = 'complete' then 1 else 0 end)`,
-        approved: sql<number>`sum(case when ${prospectQueue.sequenceStatus} in ('approved','enrolled','completed','replied') then 1 else 0 end)`,
-        enrolled: sql<number>`sum(case when ${prospectQueue.sequenceStatus} in ('enrolled','completed','replied') then 1 else 0 end)`,
-        replied: sql<number>`sum(case when ${prospectQueue.sequenceStatus} = 'replied' then 1 else 0 end)`,
-      })
-      .from(prospectQueue)
-      .where(and(eq(prospectQueue.campaignId, campId), eq(prospectQueue.workspaceId, wsId)));
-    const [contacted] = await db
-      .select({ n: sql<number>`count(distinct ${areExecutionQueue.prospectQueueId})` })
-      .from(areExecutionQueue)
-      .where(
-        and(
-          // Campaign ids are globally unique, so this is defence in depth
-          // rather than a live leak — but every other count in this phase
-          // carries the tenant and a recompute that does not is one refactor
-          // away from being the exception that matters.
-          eq(areExecutionQueue.workspaceId, wsId),
-          eq(areExecutionQueue.campaignId, campId),
-          eq(areExecutionQueue.status, "sent"),
-        ),
-      );
-    // Only the funnel counters this engine owns are recomputed; meetingsBooked
-    // and opportunitiesCreated are incremented by the Signal Feedback Agent.
-    await db
-      .update(areCampaigns)
-      .set({
-        prospectsDiscovered: Number(agg?.total ?? 0),
-        prospectsEnriched: Number(agg?.enriched ?? 0),
-        prospectsApproved: Number(agg?.approved ?? 0),
-        prospectsEnrolled: Number(agg?.enrolled ?? 0),
-        prospectsContacted: Number(contacted?.n ?? 0),
-        prospectsReplied: Number(agg?.replied ?? 0),
-      })
-      .where(eq(areCampaigns.id, campId));
+    // The one recount (A50): campaigns.get and the approve-all paths use it
+    // too, so "Approved" means one thing and a paused campaign's header
+    // doesn't freeze. It carries the workspace on every count, the
+    // contacted recompute included (eq(areExecutionQueue.workspaceId, ...)).
+    await recountCampaignCounters(db, wsId, campId);
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} counter phase failed:`, e);
   }
