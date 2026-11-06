@@ -6,7 +6,8 @@ import { z } from "zod";
 import { activities, attachments, notifications, tasks, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
-import { storagePut } from "../storage";
+import { storageErase, storagePut } from "../storage";
+import { ATTACHMENT_MAX_BASE64, ATTACHMENT_MAX_BYTES, attachmentType } from "../services/attachmentType";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { generateTasksForWorkspace } from "../services/taskAutopilot";
@@ -605,17 +606,24 @@ export const attachmentsRouter = router({
     .input(z.object({
       relatedType: z.string(),
       relatedId: z.number(),
-      fileName: z.string().min(1),
+      fileName: z.string().min(1).max(255),
+      /** Ignored (R100): the server decides the type from the file itself. */
       mimeType: z.string().optional(),
-      base64: z.string().min(1), // raw base64 (no data: prefix)
+      // raw base64 (no data: prefix). Capped here (R100): the only limit was
+      // the browser's, and the API took a file as large as the body parser.
+      base64: z.string().min(1).max(ATTACHMENT_MAX_BASE64, "Files must be under 8 MB"),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const buf = Buffer.from(input.base64, "base64");
+      if (buf.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "The file is empty." });
+      if (buf.length > ATTACHMENT_MAX_BYTES) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "Files must be under 8 MB." });
+      const type = attachmentType(input.fileName, buf);
+      if (!type.ok) throw new TRPCError({ code: "BAD_REQUEST", message: type.reason });
       const safeName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
       const key = `ws-${ctx.workspace.id}/${input.relatedType}-${input.relatedId}/${Date.now()}-${safeName}`;
-      const put = await storagePut(key, buf, input.mimeType ?? "application/octet-stream");
+      const put = await storagePut(key, buf, type.mimeType);
       const r = await db.insert(attachments).values({
         workspaceId: ctx.workspace.id,
         relatedType: input.relatedType,
@@ -623,7 +631,7 @@ export const attachmentsRouter = router({
         fileKey: put.key,
         url: put.url,
         fileName: input.fileName,
-        mimeType: input.mimeType,
+        mimeType: type.mimeType,
         sizeBytes: buf.length,
         uploadedByUserId: ctx.user.id,
       });
@@ -640,10 +648,10 @@ export const attachmentsRouter = router({
    * so the entry says which file was removed, what it was attached to and who
    * uploaded it. None of that is recoverable afterwards.
    *
-   * NOTE, recorded and not acted on: this deletes the DATABASE ROW only. The
-   * stored object behind `fileKey` is left where it is, so the file survives its
-   * attachment and stays reachable by `url`. Whether a delete should also remove
-   * the object is a product and retention decision, not an audit fix.
+   * The stored file goes too (R100). It used to stay where it was, reachable
+   * by `url` after its attachment was deleted. It is erased FIRST, and when
+   * that fails nothing is deleted, so a record never outlives its file the
+   * other way round either and the delete can be tried again.
    */
   delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
@@ -655,6 +663,14 @@ export const attachmentsRouter = router({
       .where(and(eq(attachments.id, input.id), eq(attachments.workspaceId, ctx.workspace.id)))
       .limit(1);
     if (!doomed) return { ok: true };
+    if (doomed.fileKey) {
+      try {
+        await storageErase(doomed.fileKey);
+      } catch (e) {
+        console.error(`[attachments.delete] erasing ${doomed.fileKey} failed:`, e);
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't remove the file from storage, so nothing was deleted. Try again." });
+      }
+    }
     await db.delete(attachments).where(and(eq(attachments.id, input.id), eq(attachments.workspaceId, ctx.workspace.id)));
     await recordAudit({
       workspaceId: ctx.workspace.id,
