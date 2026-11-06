@@ -71,7 +71,8 @@ describe("bulk approvals are whole-queue, not page-scoped", () => {
     expect(proc).toContain('eq(prospectQueue.sequenceStatus, "pending")');
     expect(proc).toContain('eq(prospectQueue.enrichmentStatus, "complete")');
     expect(proc).toContain("COALESCE(${prospectQueue.approvedAt}, NOW())");
-    // Counter recount, same as approveBatch — the batch-size write is the bug that reset it.
+    // Counter recount — the batch-size write is the bug that reset it (approveBatch,
+    // which had it first, was removed 2026-11-06, audit A69).
     expect(proc).toContain("prospectsApproved: Number(n)");
     expect(server).toContain("pendingApprovalCount:");
     const client = read("../client/src/pages/usip/ARECampaignDetail.tsx");
