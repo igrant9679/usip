@@ -562,7 +562,12 @@ Make the 3 suggestions distinct from existing rules and target real meeting-book
 });
 
 /**
- * One suggestion → one enabled workflow rule, suggestion marked applied.
+ * One suggestion → one workflow rule, switched OFF, suggestion marked applied.
+ *
+ * Off (audit 2026-10-20, G19): a suggestion is the model's guess, and its
+ * actions can name a webhook URL nobody chose, carrying lead data out. It
+ * used to go live the moment someone pressed Add. Now a person reads the rule
+ * and turns it on.
  * Shared by applySuggestion and applyAllSuggestions so the two can never
  * drift (the live-trigger fallback below is the kind of rule that drifts).
  */
@@ -595,7 +600,7 @@ async function applySuggestionRow(
     triggerConfig: triggerConfig as object,
     conditions: sug.conditions as object,
     actions: sug.actions as object,
-    enabled: true,
+    enabled: false,
   }).$returningId();
 
   await db

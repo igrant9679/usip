@@ -65,6 +65,7 @@
 import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { safeFetch } from "./scraper/ssrfGuard";
+import { safeWebhookHeaders } from "./webhookHeaders";
 import { archivedWorkspaceIds, isWorkspaceArchived } from "../_core/workspaceArchive";
 import { notifyIfEnabled } from "./policyNotify";
 import {
@@ -170,7 +171,8 @@ async function runAction(
         // Through the SSRF guard (audit 2026-10-20): the URL is whatever a
         // member typed into the rule, and a plain fetch would POST to cloud
         // metadata or the private network.
-        const resp = await safeFetch(String(url), { method: "POST", headers: { "Content-Type": "application/json", ...(p.headers ?? {}) }, body, signal: AbortSignal.timeout(10_000), maxRedirects: 0 });
+        // The rule's own headers are filtered, and can't replace Content-Type (G19).
+        const resp = await safeFetch(String(url), { method: "POST", headers: { ...safeWebhookHeaders(p.headers), "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(10_000), maxRedirects: 0 });
         return resp.ok ? null : `webhook ${url} returned ${resp.status}`;
       }
       case "post_slack": {
