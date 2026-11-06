@@ -107,10 +107,13 @@ async function snapshot(workspaceId: number): Promise<Snapshot | null> {
       pains: personas.pains,
       objections: personas.objections,
       angle: personas.angle,
+      source: personas.source,
+      sourceRef: personas.sourceRef,
     })
     .from(personas)
     .where(eq(personas.workspaceId, workspaceId));
-  const personaList: PersonaRow[] = personaRows.map((p) => {
+  // A paused link's personas are kept but not used, like its sectors (audit 2026-10-20, P23).
+  const personaList: PersonaRow[] = personaRows.filter((p) => !isPaused(p)).map((p) => {
     const r = cleanPersonaResearch(p).content;
     return { id: p.id, name: p.name, sectorId: p.sectorId ?? null, titles: icpLabels(p.targetTitles, "title"), ...r };
   });
