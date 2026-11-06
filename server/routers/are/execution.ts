@@ -1024,6 +1024,30 @@ export const executionRouter = router({
    * "Email open 50" would mean "50 of them fit", which is the same lie the
    * unordered LIMIT told on the Active tab.
    */
+  /**
+   * The hub's signal numbers for the whole workspace (audit 2026-10-20, A61):
+   * "positive signals" and "meetings booked" were counted over the 30 signals
+   * the feed had loaded, so they stopped at 30 and fell as new neutral ones
+   * pushed older positives off the page.
+   */
+  signalSummary: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { total: 0, positive: 0, meetings: 0 };
+    const rows = await db
+      .select({ signalType: areSignalLog.signalType, sentiment: areSignalLog.sentiment, n: sql<number>`count(*)` })
+      .from(areSignalLog)
+      .where(eq(areSignalLog.workspaceId, ctx.workspace.id))
+      .groupBy(areSignalLog.signalType, areSignalLog.sentiment);
+    let total = 0, positive = 0, meetings = 0;
+    for (const r of rows) {
+      const n = Number(r.n) || 0;
+      total += n;
+      if (r.sentiment === "positive") positive += n;
+      if (r.signalType === "meeting_booked") meetings += n;
+    }
+    return { total, positive, meetings };
+  }),
+
   getSignalCounts: workspaceProcedure
     .input(z.object({ campaignId: z.number().optional() }))
     .query(async ({ ctx, input }) => {
