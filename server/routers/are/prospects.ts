@@ -2690,7 +2690,8 @@ export const prospectsRouter = router({
           }
         }
       }
-      return { imported, skippedDuplicates: skippedDup, skippedEmpty, skippedOtherCampaign, withEmail: rows.filter((r) => r.email).length };
+      // `failed`: rows the per-row fallback could not insert, said rather than lost (A54).
+      return { imported, skippedDuplicates: skippedDup, skippedEmpty, skippedOtherCampaign, failed: rows.length - imported, withEmail: rows.filter((r) => r.email).length };
     }),
 
   /** Reject a prospect with an optional reason */

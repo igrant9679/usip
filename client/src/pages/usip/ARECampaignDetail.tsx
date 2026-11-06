@@ -72,6 +72,7 @@ import { useConfirmActivate } from "@/components/usip/are/activateConfirm";
 import { CampaignSourceHealth } from "@/components/usip/are/CampaignSourceHealth";
 import { PlaceVerdictBadge } from "@/components/usip/are/PlaceVerdictBadge";
 import { CampaignTargetingCard } from "@/components/usip/are/CampaignTargetingCard";
+import { targetingFromOverrides } from "@shared/campaignTargeting";
 import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
 import {
@@ -88,6 +89,7 @@ import { dayOffsetForPosition, sanitizeDayOffsets } from "@shared/areStepCadence
 import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenceSteps";
 import { APPROVE_THRESHOLD_EXPLAINER, APPROVE_THRESHOLD_START, approveThresholdSummary } from "@shared/areApproveThreshold";
 import { EMPTY_FIXED_COPY, fixedStepDay, usableFixedSteps } from "@shared/areFixedCopy";
+import { IMPORT_CHUNK, addImportTotals, emptyImportTotals, importSummary } from "./areImportModel";
 import {
   signalMeta, describeSignal, actionLabel, signalSourceLabel, stepLabelFromPayload,
   type AreSignalChannel,
@@ -1155,12 +1157,14 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
   const [genElapsed, setGenElapsed] = useState(0);
   useEffect(() => {
     if (generatingId == null) { setGeneratingStartedAt(null); setGenElapsed(0); return; }
-    setGeneratingStartedAt(Date.now());
-    const id = setInterval(() => {
-      setGenElapsed((prev) => generatingStartedAt ? Math.round((Date.now() - generatingStartedAt) / 1000) : prev + 1);
-    }, 500);
+    // Seconds since THIS start (audit 2026-10-20, A74): the interval read a
+    // stale generatingStartedAt (null) and added 1 every 500 ms, so the timer
+    // ran at double speed.
+    const started = Date.now();
+    setGeneratingStartedAt(started);
+    setGenElapsed(0);
+    const id = setInterval(() => setGenElapsed(Math.round((Date.now() - started) / 1000)), 500);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [generatingId]);
 
   // Counts per status for the summary strip — the server's, for every row
@@ -1601,12 +1605,19 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
     onError: (e) => toast.error(e.message),
   });
 
-  const o = (campaign?.icpOverrides ?? {}) as any;
-  const titles: string[] = o.targetTitles ?? [];
-  const industries: string[] = o.targetIndustries ?? [];
-  const geos: string[] = o.targetGeographies ?? [];
-  const keywords: string[] = o.keywords ?? [];
+  // The shared targeting reader (audit 2026-10-20, A56): the lists can hold
+  // weighted objects copied from an ICP or persona, which this read raw and
+  // rendered as React children (a crash) or sent as "[object Object]".
+  const t = targetingFromOverrides(campaign?.icpOverrides);
+  const titles = t.titles;
+  const industries = t.industries;
+  const geos = t.places;
+  const keywords = t.keywords;
   const ready = titles.length > 0 || industries.length > 0 || geos.length > 0 || keywords.length > 0;
+  // One run searches one title, industry and place (discovery.search takes one
+  // of each), so the card names the ones it will use rather than implying all.
+  const searched = [titles[0], industries[0], geos[0]].filter(Boolean) as string[];
+  const notSearched = Math.max(0, titles.length - 1) + Math.max(0, industries.length - 1) + Math.max(0, geos.length - 1);
 
   return (
     <Card className="border-violet-500/30 bg-violet-500/5">
@@ -1624,10 +1635,17 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
               this campaign's Logs tab.
             </div>
             {ready ? (
-              <div className="flex flex-wrap gap-1 mt-2">
-                {titles.slice(0, 3).map((t) => <Badge key={"t" + t} variant="outline" className="text-[10px]">{t}</Badge>)}
-                {industries.slice(0, 2).map((t) => <Badge key={"i" + t} variant="outline" className="text-[10px]">{t}</Badge>)}
-                {geos.slice(0, 1).map((t) => <Badge key={"g" + t} variant="outline" className="text-[10px]">{t}</Badge>)}
+              <div className="mt-2 space-y-1">
+                <div className="flex flex-wrap items-center gap-1">
+                  <span className="text-[10px] text-muted-foreground">This run searches:</span>
+                  {searched.map((v) => <Badge key={v} variant="outline" className="text-[10px]">{v}</Badge>)}
+                  {keywords.length > 0 && <span className="text-[10px] text-muted-foreground">+ {keywords.length} keyword{keywords.length === 1 ? "" : "s"}</span>}
+                </div>
+                {notSearched > 0 && (
+                  <div className="text-[10px] text-muted-foreground">
+                    {notSearched} more targeting value{notSearched === 1 ? " is" : "s are"} not in this run (it takes the first title, industry and place); the campaign's own discovery uses all of them.
+                  </div>
+                )}
               </div>
             ) : (
               <div className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
@@ -2337,10 +2355,11 @@ function ARECampaignDetailPage() {
   // filters and pages; this tab used to render every rejection at once.
   const [rejPage, setRejPage] = useState(1);
   useClearOnChange({ reasonFilter }, () => setRejPage(1));
-  const { data: rejectionStats } = trpc.are.prospects.getRejectionStats.useQuery(
+  const rejectionQ = trpc.are.prospects.getRejectionStats.useQuery(
     { campaignId, reason: reasonFilter, page: rejPage, perPage: REJECTION_PAGE },
     { placeholderData: (prev) => prev },
   );
+  const rejectionStats = rejectionQ.data;
   const rejPages = Math.max(1, Math.ceil((rejectionStats?.itemsTotal ?? 0) / REJECTION_PAGE));
   // Mass-action selection over the rejections on this page.
   const rejectionIds = useMemo(() => ((rejectionStats?.items ?? []) as Array<{ id: number }>).map((item) => item.id), [rejectionStats]);
@@ -2463,21 +2482,38 @@ function ARECampaignDetailPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [importParsed, setImportParsed] = useState<ImportRow[]>([]);
   const [importFileName, setImportFileName] = useState("");
+  // The whole multi-chunk import, so a second click between chunks does nothing (A54, A74).
+  const [importing, setImporting] = useState(false);
+  /**
+   * The whole file, in chunks of the server's 2,000-row limit, one after
+   * another, with every count in the result (audit 2026-10-20, A54). Rows past
+   * 2,000 were dropped without a word, and the toast named duplicates only,
+   * not the rows skipped as empty or as already in another campaign.
+   */
   const importRowsMut = trpc.are.prospects.importRows.useMutation({
-    onSuccess: (d) => {
-      toast.success(
-        `Imported ${d.imported} prospect${d.imported === 1 ? "" : "s"}` +
-        (d.withEmail ? ` (${d.withEmail} with email)` : "") +
-        (d.skippedDuplicates ? ` · ${d.skippedDuplicates} duplicate${d.skippedDuplicates === 1 ? "" : "s"} skipped` : ""),
-      );
+    // runImport reports a failure, with how far the import got before it.
+    onError: () => {},
+  });
+  const runImport = async () => {
+    if (importing) return;
+    setImporting(true);
+    const totals = emptyImportTotals();
+    try {
+      for (let i = 0; i < importParsed.length; i += IMPORT_CHUNK) {
+        addImportTotals(totals, await importRowsMut.mutateAsync({ campaignId, rows: importParsed.slice(i, i + IMPORT_CHUNK) }));
+      }
+      toast.success(importSummary(totals), { duration: 8000 });
       setImportOpen(false);
       setImportParsed([]);
       setImportFileName("");
+    } catch (e) {
+      toast.error(`${(e as Error).message}${totals.imported > 0 || totals.skippedDuplicates > 0 ? `. Before it stopped: ${importSummary(totals)}` : ""}`, { duration: 10000 });
+    } finally {
+      setImporting(false);
       utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
       utils.are.campaigns.get.invalidate({ id: campaignId });
-    },
-    onError: (e) => toast.error(e.message),
-  });
+    }
+  };
 
   const scrape = trpc.are.scraper.run.useMutation({
     onSuccess: (d) => {
@@ -3626,7 +3662,14 @@ function ARECampaignDetailPage() {
           </TabsContent>
           {/* -- Rejections audit trail tab -- */}
           <TabsContent value="rejections" className="mt-4">
-            {(rejectionStats?.total ?? 0) === 0 ? (
+            {/* Loading and a failed read are not "no rejections" (A74). */}
+            {rejectionQ.isLoading ? (
+              <div className="flex items-center gap-2 text-muted-foreground py-12 justify-center text-sm">
+                <Loader2 className="size-4 animate-spin" /> Loading rejections…
+              </div>
+            ) : rejectionQ.error && !rejectionStats ? (
+              <QueryError compact what="the rejections" message={rejectionQ.error.message} onRetry={() => rejectionQ.refetch()} />
+            ) : (rejectionStats?.total ?? 0) === 0 ? (
               <EmptyState
                 icon={XCircle}
                 title="No rejections yet"
@@ -3842,8 +3885,9 @@ function ARECampaignDetailPage() {
                         {item.contactName || [item.firstName, item.lastName].filter(Boolean).join(" ") || "Unknown"}
                       </div>
                       <div className="text-xs text-muted-foreground truncate">{item.companyName ?? "—"}</div>
-                      {item.contactTitle && (
-                        <div className="text-[10px] text-muted-foreground">{item.contactTitle}</div>
+                      {/* The column is title (A74); contactTitle is not one. */}
+                      {item.title && (
+                        <div className="text-[10px] text-muted-foreground">{item.title}</div>
                       )}
                     </div>
                     <div className="shrink-0 text-right space-y-0.5">
@@ -4018,6 +4062,7 @@ function ARECampaignDetailPage() {
                 <div className="font-medium text-foreground mb-1">
                   {importParsed.length} row{importParsed.length === 1 ? "" : "s"} parsed
                   {" · "}{importParsed.filter((r) => r.email).length} with email
+                  {importParsed.length > IMPORT_CHUNK ? ` · sent in ${Math.ceil(importParsed.length / IMPORT_CHUNK)} parts of up to ${IMPORT_CHUNK.toLocaleString()}` : ""}
                 </div>
                 <div className="text-muted-foreground">
                   Preview: {importParsed.slice(0, 3).map((r) => `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.email || "—").join(", ")}
@@ -4030,10 +4075,10 @@ function ARECampaignDetailPage() {
             <Button variant="outline" size="sm" onClick={() => setImportOpen(false)}>Cancel</Button>
             <Button
               size="sm" className="gap-1.5"
-              disabled={importParsed.length === 0 || importRowsMut.isPending}
-              onClick={() => importRowsMut.mutate({ campaignId, rows: importParsed.slice(0, 2000) })}
+              disabled={importParsed.length === 0 || importing}
+              onClick={() => void runImport()}
             >
-              {importRowsMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
+              {importing ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
               Import {importParsed.length > 0 ? importParsed.length : ""}
             </Button>
           </DialogFooter>
