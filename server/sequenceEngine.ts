@@ -846,9 +846,22 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           relatedType = "contact";
           relatedId = enrollment.contactId;
         } else if (enrollment.leadId) {
+          // A lead has no linkedinUrl column. Leads imported from LinkedIn
+          // search keep the profile in customFields.linkedinUrl, and this
+          // branch read nothing, so every LinkedIn step skipped them (audit
+          // 2026-10-20, O24). Steps already skipped have moved on and stay so.
+          const [lead] = await db
+            .select({
+              customFields: leads.customFields, email: leads.email,
+              firstName: leads.firstName, lastName: leads.lastName, title: leads.title, company: leads.company,
+            })
+            .from(leads)
+            .where(and(eq(leads.id, enrollment.leadId), eq(leads.workspaceId, enrollment.workspaceId)));
+          linkedinUrl = String((lead?.customFields as Record<string, unknown> | null)?.linkedinUrl ?? "").trim() || null;
+          email = lead?.email;
+          person = { firstName: lead?.firstName, lastName: lead?.lastName, title: lead?.title, company: lead?.company };
           relatedType = "lead";
           relatedId = enrollment.leadId;
-          // Leads don't have a linkedinUrl field — skip gracefully
         } else if (enrollment.prospectId) {
           const [prospect] = await db
             .select({

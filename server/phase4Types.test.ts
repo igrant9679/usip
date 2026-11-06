@@ -137,11 +137,13 @@ describe("the bugs behind the other errors are fixed", () => {
   });
 
   it("IMAP search answering false is no match, not a crash (X3.8)", () => {
-    expect(read("server/inboundReplyPoller.ts")).toContain("const uids = (await client.search({ seen: false }, { uid: true })) || [];");
+    // 2026-11-06 (audit O36): the poller searches everything since a date
+    // instead of UNSEEN, and notes a message with no source as skipped; the
+    // `|| []` and the source guard are what this pins, and both are kept.
+    expect(read("server/inboundReplyPoller.ts")).toContain("const uids = (await client.search({ since }, { uid: true })) || [];");
     expect(read("server/emailAdapter.ts")).toContain("const uids = (await client.search({ text: query }, { uid: true })) || [];");
-    for (const f of ["server/inboundReplyPoller.ts", "server/emailAdapter.ts"]) {
-      expect(read(f).match(/if \(!msg\.source\) continue;\n\s+const parsed = await simpleParser\(msg\.source\);/g)?.length, f).toBe(f.includes("Poller") ? 1 : 2);
-    }
+    expect(read("server/inboundReplyPoller.ts").match(/if \(!msg\.source\) \{ skip\(\); continue; \}\n\s+const parsed = await simpleParser\(msg\.source\);/g)?.length).toBe(1);
+    expect(read("server/emailAdapter.ts").match(/if \(!msg\.source\) continue;\n\s+const parsed = await simpleParser\(msg\.source\);/g)?.length).toBe(2);
   });
 
   it("Leads' Send Email sends one per lead, the input the server takes", () => {

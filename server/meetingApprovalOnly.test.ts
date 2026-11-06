@@ -38,7 +38,8 @@ const between = (src: string, from: string, to: string) => {
 describe("the engine sends only in Autonomous, and only what it just drafted", () => {
   it("the proposing loop sends a proposal it has just created, only when asked to", () => {
     const fn = between(svc, "export async function runMeetingAutopilotForWorkspace(", "/** Cron entry:");
-    expect(fn).toContain("  opts: { send?: boolean } = {},");
+    // 2026-11-06 (audit O29): the run can be kept to the people a confirm named.
+    expect(fn).toContain("  opts: { send?: boolean; onlyProspectIds?: number[] } = {},");
     expect(fn).toContain("    if (opts.send) {\n      const r = await sendMeetingInvite(workspaceId, id);");
     // One send, on the id this loop just created: never the queue.
     expect(fn.split("sendMeetingInvite(").length - 1).toBe(1);
@@ -54,8 +55,10 @@ describe("the engine sends only in Autonomous, and only what it just drafted", (
   it("the Find button honours the workspace's mode", () => {
     const ep = between(router, "generateProposals: repProcedure", "updateProposal: repProcedure");
     // Paused (2026-10-06, "Block everything"): Autonomous drafts instead of sending.
-    expect(ep).toContain('const send = s?.mode === "auto" && !paused;');
-    expect(ep).toContain("runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id, { send })");
+    // 2026-11-06 (audit O29): and when the page did not confirm a send
+    // (allowSend: false); a confirmed run goes only to the people it named.
+    expect(ep).toContain('const send = s?.mode === "auto" && !paused && input?.allowSend !== false;');
+    expect(ep).toContain("runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id, { send, onlyProspectIds: input?.prospectIds })");
   });
 
   it("besides the engine, only human approval paths reach sendMeetingInvite in the router", () => {

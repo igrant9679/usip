@@ -37,8 +37,9 @@ describe("the Find-meetings button follows the workspace's mode", () => {
     const fn = router.slice(router.indexOf("generateProposals:"), router.indexOf("updateProposal:"));
     expect(fn.length).toBeGreaterThan(100);
     // Paused (2026-10-06, "Block everything"): Autonomous drafts instead of sending.
-    expect(fn).toContain('const send = s?.mode === "auto" && !paused;');
-    expect(fn).toContain("runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id, { send })");
+    // 2026-11-06 (audit O29): and when the page did not confirm the send.
+    expect(fn).toContain('const send = s?.mode === "auto" && !paused && input?.allowSend !== false;');
+    expect(fn).toContain("runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id, { send, onlyProspectIds: input?.prospectIds })");
     // The send itself is the engine's, never a second path here.
     expect(fn).not.toContain("sendMeetingInvite(");
   });

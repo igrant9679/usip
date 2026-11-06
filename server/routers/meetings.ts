@@ -10,7 +10,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { activeTaskStatuses } from "@shared/taskStatus";
-import { and, desc, eq, gt, inArray, isNull, like, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNull, like, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { calendarAccounts, calendarEvents, meetings, prospects, tasks, users, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -18,7 +18,7 @@ import { recordAudit } from "../audit";
 import { activeMemberIds } from "../_core/activeMembers";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
-import { proposeMeetingForProspect, regenerateMeetingProposal, regenerateProposalsNotSince, regenerateStaleProposals, runMeetingAutopilotForWorkspace, sendMeetingInvite, startsInProposalWindow } from "../services/meetingScheduler";
+import { previewMeetingCandidates, proposeMeetingForProspect, regenerateMeetingProposal, regenerateProposalsNotSince, regenerateStaleProposals, runMeetingAutopilotForWorkspace, sendMeetingInvite, startsInProposalWindow } from "../services/meetingScheduler";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { assertOutboundNotPaused, assertOutboundNotPausedFor, isOutboundPaused } from "../services/outboundPause";
 import { deleteMeetingEvent, hasCalendarEvent, moveMeetingEvent, type CalendarOutcome } from "../services/meetingCalendarEvent";
@@ -94,16 +94,32 @@ export const meetingsRouter = router({
   list: workspaceProcedure
     .input(z.object({
       status: z.enum(MEETING_STATUSES).optional(),
+      /** Several at once: the Meetings page reads the live ones, and the closed ones it shows. */
+      statuses: z.array(z.enum(MEETING_STATUSES)).optional(),
       ownerOnly: z.boolean().optional(),
+      /** Only meetings scheduled in [from, to): the weeks the Calendar shows. */
+      scheduledFrom: z.date().optional(),
+      scheduledTo: z.date().optional(),
+      limit: z.number().int().min(1).max(1000).default(1000),
     }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
-      let rows = await db.select().from(meetings)
-        .where(eq(meetings.workspaceId, ctx.workspace.id))
-        .orderBy(desc(meetings.createdAt));
-      if (input?.status) rows = rows.filter((m) => m.status === input.status);
-      if (input?.ownerOnly) rows = rows.filter((m) => m.ownerUserId === ctx.user.id);
+      // Filtered and bounded in SQL (audit 2026-10-20, O41): this read every
+      // meeting the workspace ever had and filtered in JS, for a page that
+      // shows the live ones and fifteen past, and a calendar that shows weeks.
+      const statuses = input?.statuses ?? (input?.status ? [input.status] : null);
+      if (statuses && !statuses.length) return [];
+      const rows = await db.select().from(meetings)
+        .where(and(
+          eq(meetings.workspaceId, ctx.workspace.id),
+          statuses ? inArray(meetings.status, statuses) : undefined,
+          input?.ownerOnly ? eq(meetings.ownerUserId, ctx.user.id) : undefined,
+          input?.scheduledFrom ? gte(meetings.scheduledAt, input.scheduledFrom) : undefined,
+          input?.scheduledTo ? lt(meetings.scheduledAt, input.scheduledTo) : undefined,
+        ))
+        .orderBy(desc(meetings.createdAt))
+        .limit(input?.limit ?? 1000);
       // The reply that produced each meeting (emailReplies.meetingId is set
       // when a positive reply's action books one). A meeting with no way back
       // to the conversation was one of the audit's missing next-step links.
@@ -166,7 +182,18 @@ export const meetingsRouter = router({
    * outbound is paused: then it drafts proposals for approval (2026-10-06).
    */
   generateProposals: repProcedure
-    .input(z.object({ limit: z.number().int().min(1).max(20).optional() }).optional())
+    .input(z.object({
+      limit: z.number().int().min(1).max(20).optional(),
+      /**
+       * The confirm before an Autonomous send (audit 2026-10-20, O29): the
+       * Meetings page names who it would send to (previewFindMeetings) and
+       * passes those people, so the run proposes to no one else, and
+       * `allowSend: false` when the person did not confirm a send, so a
+       * mode switched to Autonomous in between drafts instead of sending.
+       */
+      prospectIds: z.array(z.number().int()).max(20).optional(),
+      allowSend: z.boolean().optional(),
+    }).optional())
     .mutation(async ({ ctx, input }) => {
       // Honours the workspace's mode like the 45-minute cron: in Autonomous
       // what the button finds is sent at once (every send guard still
@@ -176,10 +203,27 @@ export const meetingsRouter = router({
         .from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id)).limit(1) : [];
       // Paused: draft for approval instead of sending (owner, 2026-10-06: "Block everything").
       const paused = await isOutboundPaused(ctx.workspace.id);
-      const send = s?.mode === "auto" && !paused;
-      const res = await runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id, { send });
+      const send = s?.mode === "auto" && !paused && input?.allowSend !== false;
+      const res = await runMeetingAutopilotForWorkspace(ctx.workspace.id, input?.limit ?? 8, ctx.user.id, { send, onlyProspectIds: input?.prospectIds });
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "meeting", entityId: 0, after: { ...res, send, findMeetings: true } });
       return { ...res, send, paused };
+    }),
+
+  /**
+   * What Find meetings would do, before it does it (audit 2026-10-20, O29):
+   * whether it would send (Autonomous, not paused) and to whom. Reads only.
+   * In Autonomous the button sent up to 8 invites on one click, with only a
+   * toast afterwards.
+   */
+  previewFindMeetings: repProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(20).optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      const [s] = db ? await db.select({ mode: workspaceSettings.meetingAutopilotMode })
+        .from(workspaceSettings).where(eq(workspaceSettings.workspaceId, ctx.workspace.id)).limit(1) : [];
+      const paused = await isOutboundPaused(ctx.workspace.id);
+      const candidates = await previewMeetingCandidates(ctx.workspace.id, input?.limit ?? 8);
+      return { send: s?.mode === "auto" && !paused, paused, candidates };
     }),
 
   /**

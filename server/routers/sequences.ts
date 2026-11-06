@@ -1235,8 +1235,12 @@ export const sequencesRouter = router({
   listEnrollments: workspaceProcedure.input(z.object({ sequenceId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
-    const rows = await db.select().from(enrollments).where(eq(enrollments.workspaceId, ctx.workspace.id));
-    const scoped = input?.sequenceId ? rows.filter((r) => r.sequenceId === input.sequenceId) : rows;
+    // The sequence filter in SQL (audit 2026-10-20, O41): every caller names a
+    // sequence, and this read every enrolment in the workspace to keep one's.
+    const scoped = await db.select().from(enrollments).where(and(
+      eq(enrollments.workspaceId, ctx.workspace.id),
+      input?.sequenceId ? eq(enrollments.sequenceId, input.sequenceId) : undefined,
+    ));
     // Resolve WHO each enrollment is (owner ask 2026-09-20): the panel used
     // to render "Enrollment #372" — an id with no name and no way to open
     // the person. One batched lookup per referenced table; personId is the
@@ -1998,7 +2002,7 @@ async function sendClaimedDraft(
   const senderName = senderRow?.name ?? fromAccount.fromName ?? fromAccount.name ?? "";
   const senderEmail = senderRow?.email ?? fromAccount.fromEmail ?? "";
   const [wsSettings] = await db
-    .select({ emailSignature: workspaceSettings.emailSignature })
+    .select({ emailSignature: workspaceSettings.emailSignature, emailOpenTracking: workspaceSettings.emailOpenTracking, emailClickTracking: workspaceSettings.emailClickTracking })
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
@@ -2109,7 +2113,9 @@ async function sendClaimedDraft(
       subject: renderedSubject,
       bodyHtml: fullBodyHtml,
       bodyText: fullBodyText,
-      track: true,
+      // The workspace's tracking switches (Settings, migration 0117), as the old
+      // bulk Send approved honoured them: with both off, nothing is tracked (2026-11-06).
+      track: wsSettings?.emailOpenTracking !== false || wsSettings?.emailClickTracking !== false,
       // Sitewide email log (migration 0163). The draft exists before the send
       // on this path, so the log row can point straight at it — which is what
       // lets the Emails page show this row's live opens and clicks.
@@ -2508,21 +2514,42 @@ export async function autoSendForAllWorkspaces(): Promise<{
   };
 }
 
+/**
+ * The statuses a draft-list filter means. "pending_review" means AWAITING
+ * REVIEW — the status PAIR the one draft vocabulary uses everywhere else
+ * (attention panel, Emails page). The dashboards' draft cards under-counted
+ * by exactly the ai_pending_review rows until this matched (audit 2026-09-20).
+ */
+const draftListStatuses = (status?: "pending_review" | "approved" | "rejected" | "sent") =>
+  status === "pending_review" ? ["pending_review", "ai_pending_review"] : status ? [status] : null;
+
 export const emailDraftsRouter = router({
-  list: workspaceProcedure.input(z.object({ status: z.enum(["pending_review", "approved", "rejected", "sent"]).optional() }).optional()).query(async ({ ctx, input }) => {
+  /**
+   * Filtered, ordered and bounded in SQL (audit 2026-10-20, O41). It read every
+   * draft in the workspace, bodies included, and filtered in JS, on every
+   * Dashboard load, for a card that shows five.
+   */
+  list: workspaceProcedure.input(z.object({
+    status: z.enum(["pending_review", "approved", "rejected", "sent"]).optional(),
+    limit: z.number().int().min(1).max(200).default(100),
+  }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
-    let rows = await db.select().from(emailDrafts).where(eq(emailDrafts.workspaceId, ctx.workspace.id)).orderBy(desc(emailDrafts.createdAt));
-    // "pending_review" means AWAITING REVIEW — the status PAIR the one draft
-    // vocabulary uses everywhere else (attention panel, Emails page). The
-    // dashboards' draft cards under-counted by exactly the ai_pending_review
-    // rows until this matched (audit 2026-09-20).
-    if (input?.status === "pending_review") {
-      rows = rows.filter((r) => r.status === "pending_review" || r.status === "ai_pending_review");
-    } else if (input?.status) {
-      rows = rows.filter((r) => r.status === input.status);
-    }
-    return rows;
+    const statuses = draftListStatuses(input?.status);
+    return db.select().from(emailDrafts)
+      .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), statuses ? inArray(emailDrafts.status, statuses as never) : undefined))
+      .orderBy(desc(emailDrafts.createdAt))
+      .limit(input?.limit ?? 100);
+  }),
+
+  /** How many drafts a status filter matches, counted in SQL (O41): the Dashboard badge. */
+  count: workspaceProcedure.input(z.object({ status: z.enum(["pending_review", "approved", "rejected", "sent"]).optional() }).optional()).query(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) return { count: 0 };
+    const statuses = draftListStatuses(input?.status);
+    const [r] = await db.select({ n: sql<number>`count(*)` }).from(emailDrafts)
+      .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), statuses ? inArray(emailDrafts.status, statuses as never) : undefined));
+    return { count: Number(r?.n ?? 0) };
   }),
 
   /** Server-side AI compose. */

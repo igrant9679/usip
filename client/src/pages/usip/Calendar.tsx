@@ -17,7 +17,7 @@ import { NoCalendarConnected } from "@/components/usip/NoCalendarConnected";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { loadPerUserPref, savePerUserPref } from "@/lib/perUserPref";
-import { REMINDABLE_MEETING_STATUSES } from "@shared/meetingStatus";
+import { REMINDABLE_MEETING_STATUSES, remindableMeetingStatuses } from "@shared/meetingStatus";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,6 +35,7 @@ import { Streamdown } from "@/components/usip/LazyStreamdown";
 import { confirmAction } from "@/components/usip/Common";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { pressable } from "@/lib/pressable";
+import { storedAttendees } from "@shared/calendarAttendees";
 
 // ─── Connect Calendar Dialog ───────────────────────────────────────────────────
 
@@ -215,8 +216,10 @@ function EventDialog({
     toLocalInput(new Date(event?.endAt ?? initialEnd ?? new Date(Date.now() + 3600_000)))
   );
   const [allDay, setAllDay] = useState(event?.allDay ?? false);
+  // Already an array from the JSON column; JSON.parse on it crashed the
+  // dialog for every synced event with attendees (audit 2026-10-20, O20).
   const [attendees, setAttendees] = useState<string>(
-    event?.attendees ? JSON.parse(event.attendees).map((a: any) => a.email).join(", ") : ""
+    storedAttendees(event?.attendees).map((a) => a.email).filter(Boolean).join(", ")
   );
 
   const [aiSummary, setAiSummary] = useState<string | null>(event?.aiSummary ?? null);
@@ -491,7 +494,11 @@ export default function CalendarPage() {
   // for everyone who never completed the external-calendar connect flow —
   // while their actual meetings sat one page away on /v2/meetings, invisible
   // here. Read-only on the calendar: clicking one opens the Meetings page.
-  const { data: velocityMeetings } = trpc.meetings.list.useQuery({});
+  // Only the weeks on screen, filtered in SQL (audit 2026-10-20, O41): this
+  // read every meeting the workspace ever had.
+  const { data: velocityMeetings } = trpc.meetings.list.useQuery({
+    statuses: remindableMeetingStatuses(), scheduledFrom: dateRange.from, scheduledTo: dateRange.to,
+  });
 
   // Map DB events to FullCalendar format
   const fcEvents = useMemo(() => {

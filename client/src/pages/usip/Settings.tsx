@@ -52,7 +52,7 @@ function SendWindowSection({ settings, save, canEdit }: { settings: any; save: (
   return (
     <Section
       title="Send window"
-      description={`When Velocity may send to prospects on its own, in this workspace's time zone (${tz}). Outside it, Revenue Engine emails, sequence auto-sends and LinkedIn DMs, Autonomous meeting invites, meeting reminders, booking-link replies and chat follow-ups wait, and go out once it opens. Anything a person sends by hand is not held.`}
+      description={`When Velocity may send to prospects on its own, in this workspace's time zone (${tz}). Outside it, Revenue Engine emails, sequence auto-sends and LinkedIn DMs, Autonomous meeting invites, meeting reminders, booking-link replies and chat follow-ups wait, and go out once it opens. A Social Autopilot opener that comes due outside it becomes a task for you to send instead. Anything a person sends by hand is not held.`}
       right={
         canEdit ? (
           <Button size="sm" disabled={!valid || !dirty}
@@ -70,8 +70,8 @@ function SendWindowSection({ settings, save, canEdit }: { settings: any; save: (
             <div className={cn("text-sm font-medium", paused && "text-rose-700 dark:text-rose-300")}>Pause all outbound</div>
             <div className="text-xs text-muted-foreground">
               {paused
-                ? `Paused since ${new Date(pausedAt as string).toLocaleString()}. Nothing goes to prospects: what Velocity sends on its own waits and goes once you switch this off (inside the window below), and what a person sends is refused. Mail to your own team, and AI calls (their own switch), still go.`
-                : "Stops everything that goes to prospects in this workspace until you switch it off: what Velocity sends on its own waits (nothing is dropped), and what a person sends is refused. Mail to your own team, and AI calls (their own switch), still go."}
+                ? `Paused since ${new Date(pausedAt as string).toLocaleString()}. Nothing goes to prospects. Most of what Velocity sends on its own waits and goes once you switch this off (inside the window below); a Social Autopilot opener held now becomes a task for you to send instead, and a booking-link reply held more than a week is dropped. What a person sends is refused. Mail to your own team, and AI calls (their own switch), still go.`
+                : "Stops everything that goes to prospects in this workspace until you switch it off. Most of what Velocity sends on its own waits and goes once it is off; a held Social Autopilot opener becomes a task for you to send instead, and a booking-link reply held more than a week is dropped. What a person sends is refused. Mail to your own team, and AI calls (their own switch), still go."}
             </div>
           </div>
         </div>

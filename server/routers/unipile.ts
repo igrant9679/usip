@@ -4,7 +4,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, gte, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "../db";
 import {
@@ -922,14 +922,32 @@ export const unipileRouter = router({
     }),
 
   withdrawInvitation: workspaceProcedure
-    .input(z.object({ invitationId: z.string(), unipileAccountId: z.string().optional() }))
+    .input(z.object({
+      invitationId: z.string(),
+      unipileAccountId: z.string().optional(),
+      /** The invitee as our invite rows name them: their public id and/or provider id. */
+      recipient: z.array(z.string().trim().min(1).max(500)).max(4).optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
       if (!acct) throw new TRPCError({ code: "NOT_FOUND", message: "No connected LinkedIn account." });
       await cancelSentInvitation({ accountId: acct, invitationId: input.invitationId });
-      return { ok: true };
+      // The stored invite stayed "pending" after a withdraw (audit 2026-10-20,
+      // O49), so the Revenue Engine's LinkedIn step kept waiting for an accept
+      // that could not come. Only this account's pending rows for this person.
+      let withdrawn = 0;
+      if (input.recipient?.length) {
+        const res = await db.update(unipileInvites).set({ status: "withdrawn" } as never).where(and(
+          eq(unipileInvites.workspaceId, ctx.workspace.id),
+          eq(unipileInvites.unipileAccountId, acct),
+          eq(unipileInvites.status, "pending"),
+          inArray(unipileInvites.recipientProviderId, input.recipient),
+        ));
+        withdrawn = Number((res as any)?.[0]?.affectedRows ?? (res as any)?.affectedRows ?? 0);
+      }
+      return { ok: true, withdrawn };
     }),
 
   listRelations: workspaceProcedure
