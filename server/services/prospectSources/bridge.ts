@@ -106,6 +106,11 @@ export function recordToQueueRow(r: ProspectRecord): Record<string, unknown> {
     companySize: r.headcount,
     industry: r.industry,
     geography: geography || null,
+    // The parts as the vendor gave them, so the save writes People's city,
+    // state and country without re-parsing the joined string (P65).
+    city: r.city,
+    stateProvince: r.stateProvince,
+    country: r.country,
     sourceUrl: r.linkedinUrl ?? "",
     externalId: r.externalId,
   };

@@ -22,6 +22,7 @@
  * credential so the source strip can say so.
  */
 import type { ProspectSourceSlug, SearchCriteria } from "@shared/prospectSources";
+import { canonicalText } from "@shared/canonicalText";
 import type { ProspectRecord, SearchContext, VendorFailure } from "./types";
 import type { EligibleSource } from "./registry";
 import { Deduper } from "./dedupe";
@@ -201,11 +202,9 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
         // is not a prospect we can contact. Give their keys back.
         continue;
       }
-      const byId = new Map<string, ProspectRecord>();
-      for (let a = 0; a < acq.records.length; a++) byId.set(acq.records[a].externalId.replace(/#\d+$/, ""), acq.records[a]);
       const merged: typeof toTake = [];
       for (let t = 0; t < toTake.length; t++) {
-        const full = byId.get(toTake[t].record.externalId.replace(/#\d+$/, ""));
+        const full = acquiredFor(toTake[t].record, acq.records);
         if (full) merged.push({ ...toTake[t], record: mergeAcquired(toTake[t].record, full) });
         // Records the vendor could not unmask are dropped from the batch:
         // they were never charged and would enter the queue email-less.
@@ -231,6 +230,31 @@ export async function runWaterfall(opts: WaterfallOptions): Promise<WaterfallRes
     // is fine within a run (we do not want them from the next source either).
   }
   return { collected, duplicates, perSource, target, reachedTarget: collected.length >= target };
+}
+
+/**
+ * The acquired record for one preview. A business's several people share its
+ * lead id ("B1", "B1#2" … "B1#5"), and keying the export by that id alone gave
+ * every one of them the LAST person's record — five previews in, one person
+ * five times out (found with N2, 2026-11-06). The same externalId wins (for a
+ * numbered person, only if the name agrees: an export may number a business's
+ * people differently from the search); else the one person of that business
+ * with the same name; else its only person whose name does not disagree;
+ * else none.
+ */
+export function acquiredFor(preview: ProspectRecord, records: ProspectRecord[]): ProspectRecord | undefined {
+  const name = (r: ProspectRecord) => canonicalText(`${r.firstName ?? ""} ${r.lastName ?? ""}`);
+  const pn = name(preview);
+  const agrees = (r: ProspectRecord) => !pn || !name(r) || name(r) === pn;
+  const numbered = /#\d+$/.test(preview.externalId);
+  const exact = records.find((r) => r.externalId === preview.externalId && (!numbered || agrees(r)));
+  if (exact) return exact;
+  const base = (id: string) => id.replace(/#\d+$/, "");
+  const same = records.filter((r) => base(r.externalId) === base(preview.externalId));
+  const named = pn ? same.filter((r) => name(r) === pn) : [];
+  if (named.length === 1) return named[0];
+  const possible = same.filter(agrees);
+  return possible.length === 1 ? possible[0] : undefined;
 }
 
 /** Acquired detail wins for fields it fills; preview fields fill the rest. */
