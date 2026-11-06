@@ -41,8 +41,9 @@ export default function LeadRouting() {
   const remove = trpc.leadRouting.remove.useMutation({ onSuccess: () => { utils.leadRouting.list.invalidate(); toast.success("Rule deleted"); }, onError: (e) => toast.error(e.message) });
   const reorder = trpc.leadRouting.reorder.useMutation({ onSuccess: () => utils.leadRouting.list.invalidate(), onError: (e) => toast.error(e.message) });
   // One reorder at a time from this page (P124): a second click before the
-  // first is saved would send an order built from the stale list.
-  const reordering = reorder.isPending;
+  // first is saved, and the list read back, would send an order built from
+  // the stale list.
+  const reordering = reorder.isPending || rulesQ.isFetching;
 
   const move = (idx: number, dir: -1 | 1) => {
     if (!rules || reordering) return;
