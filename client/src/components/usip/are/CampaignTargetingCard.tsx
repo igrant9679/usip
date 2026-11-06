@@ -76,8 +76,13 @@ export function CampaignTargetingCard({ campaign }: { campaign: { id: number; ic
         </CardTitle>
       </CardHeader>
       <CardContent className="px-4 pb-4 space-y-4">
+        {/* What the engine does with it (A73): the card said found prospects were unaffected, which
+            was not true of never-target words: the screen pass applies them
+            to people still waiting. */}
         <p className="text-xs text-muted-foreground leading-relaxed">
-          Who discovery looks for. Changes apply on the next discovery run; prospects already found stay. A field left empty falls back to the workspace's ICP (or research, per the ICP page).
+          Who discovery looks for and what new prospects are scored against, from the next run. Never-target words also
+          reject people still waiting in the queue the next time they are screened; anyone approved or in a sequence is
+          not affected. A field left empty falls back to the workspace's ICP (or research, per the ICP page).
         </p>
         <TagInput label="Job titles" value={t.titles} onChange={(v) => patch({ titles: v })} placeholder="County Administrator, IT Director…" />
         <TagInput label="Industries" value={t.industries} onChange={(v) => patch({ industries: v })} placeholder="Government Administration…" />

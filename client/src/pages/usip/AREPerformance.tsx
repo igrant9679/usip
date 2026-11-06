@@ -19,7 +19,8 @@ import { Link } from "wouter";
 import { forbiddenMessage } from "@/lib/forbidden";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
-import { Shell, PageHeader, SubNav, StatCard, EmptyState, useAccentColor } from "@/components/usip/Shell";
+import { Shell, PageHeader, StatCard, EmptyState, useAccentColor } from "@/components/usip/Shell";
+import { AreSubNav } from "@/components/usip/are/AreSubNav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -188,13 +189,7 @@ export default function AREPerformance() {
         description="Measured outcomes of the Revenue Engine — which campaign steps, sources and replies actually produce meetings. Reported as-is: no estimates, no projections. CRM Sequences are shown separately."
         icon={<TrendingUp className="size-5" />}
       />
-      <SubNav items={[
-        { href: "/are", label: "Hub", title: "Revenue Engine command centre" },
-        { href: "/are/performance", label: "What's Working", title: "Measured performance across the engine" },
-        { href: "/are/icp", label: "ICP Agent", title: "Manage the Ideal Customer Profile agent" },
-        { href: "/are/campaigns", label: "Campaigns", title: "All ARE-managed outbound campaigns" },
-        { href: "/are/settings", label: "ARE Settings", title: "ARE configuration, throttles, and limits" },
-      ]} />
+      <AreSubNav />
 
       <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
         {metricsError && !loading && (

@@ -76,8 +76,9 @@ const POOL_HELD_MARKER = "email steps held and re-scheduled: ";
 const DISCOVERY_SUMMARY_MARKER = "Discovery slice ";
 
 export const campaignsRouter = router({
+  /** A page of campaigns, newest first; `count` is how many there are (audit 2026-10-20, A62). */
   list: workspaceProcedure
-    .input(z.object({ status: z.string().optional(), limit: z.number().default(50) }))
+    .input(z.object({ status: z.string().optional(), limit: z.number().int().min(1).max(200).default(50), offset: z.number().int().min(0).default(0) }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -89,8 +90,23 @@ export const campaignsRouter = router({
         .select()
         .from(areCampaigns)
         .where(and(...conditions))
-        .orderBy(desc(areCampaigns.createdAt))
-        .limit(input.limit);
+        // The id breaks createdAt ties, so a campaign is on exactly one page.
+        .orderBy(desc(areCampaigns.createdAt), desc(areCampaigns.id))
+        .limit(input.limit)
+        .offset(input.offset);
+    }),
+
+  count: workspaceProcedure
+    .input(z.object({ status: z.string().optional() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const conditions = [eq(areCampaigns.workspaceId, ctx.workspace.id)];
+      if (input.status) {
+        conditions.push(eq(areCampaigns.status, input.status as "draft" | "active" | "paused" | "completed"));
+      }
+      const [row] = await db.select({ n: sql<number>`count(*)` }).from(areCampaigns).where(and(...conditions));
+      return { total: Number(row?.n ?? 0) };
     }),
 
   /**

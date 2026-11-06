@@ -73,6 +73,7 @@ import { CampaignSourceHealth } from "@/components/usip/are/CampaignSourceHealth
 import { PlaceVerdictBadge } from "@/components/usip/are/PlaceVerdictBadge";
 import { CampaignTargetingCard } from "@/components/usip/are/CampaignTargetingCard";
 import { targetingFromOverrides } from "@shared/campaignTargeting";
+import { areAutonomyLabel, areStatusLabel } from "@shared/areCampaignLabels";
 import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
 import {
@@ -2597,11 +2598,11 @@ function ARECampaignDetailPage() {
           </Button>
         </Link>
         <Badge variant="outline" className={`text-[10px] px-2 py-0.5 border ${autonomyColor}`}>
-          {campaign.autonomyMode?.replace(/_/g, " ")}
+          {areAutonomyLabel(campaign.autonomyMode)}
         </Badge>
         <Badge variant="outline" className="text-[10px] px-2 py-0.5 border-0"
           style={{ backgroundColor: statusColor + "22", color: statusColor }}>
-          {campaign.status}
+          {areStatusLabel(campaign.status)}
         </Badge>
         {campaign.status === "active" ? (
           <Button size="sm" variant="outline" className="gap-1.5 text-xs"
@@ -3580,12 +3581,12 @@ function ARECampaignDetailPage() {
                 </CardHeader>
                 <CardContent className="px-4 pb-4 space-y-4">
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    When a <strong>meeting_booked</strong> signal is received, the AI automatically creates a CRM account, contact, and opportunity pre-filled with the prospect’s intelligence dossier (hooks, pain signals, recommended timing). The campaign owner is notified via in-app notification.
+                    A booked meeting always adds the person to your CRM as a contact, with their company. With this on, a discovery-stage opportunity is opened too, pre-filled from their intelligence dossier. The campaign's owner is notified in the Inbox either way.
                   </p>
                   <div className="flex items-center justify-between p-3 rounded-xl border bg-muted/30">
                     <div className="space-y-0.5">
                       <div className="text-xs font-medium">Auto-create opportunity on meeting booked</div>
-                      <div className="text-[11px] text-muted-foreground">Creates account + contact + opportunity in the CRM pipeline</div>
+                      <div className="text-[11px] text-muted-foreground">Opens an opportunity in the pipeline as well as adding the contact and company</div>
                     </div>
                     <button aria-label="Auto-create opportunity on meeting booked"
                       onClick={() => setS2oEnabled(!s2oActive)}

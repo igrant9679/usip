@@ -36,7 +36,8 @@ const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
  */
 const KNOWN_UNENFORCED: Record<string, string> = {
   areSequenceQualityThreshold:
-    "No reader. Nothing scores or gates generated sequences against it.",
+    "No reader. Nothing scores or gates generated sequences against it. " +
+    "Since 2026-11-06 (audit A60) ARE Settings no longer shows a control for it either.",
   // 2026-09-20: areIcpRegenSchedule left this list. runIcpInferenceAllWorkspaces
   // now joins workspace_settings and branches on it — "manual" skips the
   // workspace entirely, "weekly" raises the age floor to 164h, "on_new_deal"
@@ -61,6 +62,8 @@ const KNOWN_UNENFORCED: Record<string, string> = {
 const NON_CONSUMERS = [
   "server/routers/admin.ts",
   "client/src/pages/usip/ARESettings.tsx",
+  // 2026-11-06 (audit A60): the settings page's form model, an editor like the page.
+  "client/src/pages/usip/areSettingsModel.ts",
   "drizzle/schema.ts",
   "server/_core/rawMigrations.ts",
 ];

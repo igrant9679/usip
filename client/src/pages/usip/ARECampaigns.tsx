@@ -42,7 +42,11 @@ import { useConfirmActivate } from "@/components/usip/are/activateConfirm";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { ROLE_RANK, rankOf } from "@shared/roleRank";
 import { APPROVE_THRESHOLD_START, approveThresholdSummary } from "@shared/areApproveThreshold";
-import { wizardDefaults } from "./areCampaignsModel";
+import { EMPLOYEE_BANDS, employeeRangeOf, personaToTargeting, wizardDefaults, type EmployeeBand } from "./areCampaignsModel";
+import { AreSubNav } from "@/components/usip/are/AreSubNav";
+import { areAutonomyLabel, areStatusLabel } from "@shared/areCampaignLabels";
+
+const CAMPAIGN_PAGE = 50;
 
 const STATUS_COLOR: Record<string, string> = {
   draft: "#94A3B8",
@@ -55,16 +59,7 @@ const STATUS_COLOR: Record<string, string> = {
 // box always corresponds to a source that actually runs. See shared/areSources.ts.
 const SOURCE_OPTIONS = ARE_SOURCES;
 
-const EMPLOYEE_BANDS = [
-  { value: "any", label: "Any size", min: undefined, max: undefined },
-  { value: "1-10", label: "1–10", min: 1, max: 10 },
-  { value: "11-50", label: "11–50", min: 11, max: 50 },
-  { value: "51-200", label: "51–200", min: 51, max: 200 },
-  { value: "201-500", label: "201–500", min: 201, max: 500 },
-  { value: "501-1000", label: "501–1,000", min: 501, max: 1000 },
-  { value: "1001-5000", label: "1,001–5,000", min: 1001, max: 5000 },
-  { value: "5000+", label: "5,000+", min: 5000, max: undefined },
-] as const;
+// EMPLOYEE_BANDS: areCampaignsModel.ts, beside the persona mapping that reads them (A62).
 
 /** Persona picker for the wizard step 2 — applies a saved/preset persona's
  *  targeting fields onto the form in one click. */
@@ -172,8 +167,20 @@ function TagInput({
 export default function ARECampaigns() {
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
-  const { data: campaigns, isLoading } = trpc.are.campaigns.list.useQuery({});
-  const [showCreate, setShowCreate] = useState(false);
+  // A page at a time, with the count (audit 2026-10-20, A62): the list showed
+  // the newest 50 and nothing said there were more.
+  const [listPage, setListPage] = useState(1);
+  const { data: campaigns, isLoading } = trpc.are.campaigns.list.useQuery(
+    { limit: CAMPAIGN_PAGE, offset: (listPage - 1) * CAMPAIGN_PAGE },
+    { placeholderData: (prev) => prev },
+  );
+  const { data: campaignCount } = trpc.are.campaigns.count.useQuery({});
+  const listPages = Math.max(1, Math.ceil((campaignCount?.total ?? 0) / CAMPAIGN_PAGE));
+  // ?new=1 (the hub's New Campaign, A76) opens the wizard, once.
+  const [showCreate, setShowCreate] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1");
+  useEffect(() => {
+    if (showCreate && new URLSearchParams(window.location.search).get("new") === "1") navigate("/are/campaigns", { replace: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ARE Settings → "Default Scraper Sources" is the workspace default for new
   // campaigns. This read is the thing that makes that description true — and it
@@ -237,8 +244,12 @@ export default function ARECampaigns() {
     targetTitles: [] as string[],
     targetIndustries: [] as string[],
     targetGeographies: [] as string[],
-    employeeBand: "any" as (typeof EMPLOYEE_BANDS)[number]["value"],
+    employeeBand: "any" as EmployeeBand,
     keywords: [] as string[],
+    // From an applied persona (A62): its id, and its size when no band fits it.
+    personaId: null as number | null,
+    personaEmployeeMin: null as number | null,
+    personaEmployeeMax: null as number | null,
   });
   const [form, setForm] = useState(blankForm);
   // AI targeting generation — describe the audience, AI fills the filters.
@@ -285,12 +296,12 @@ export default function ARECampaigns() {
     onSuccess: (data) => {
       toast.success(
         // Every 3 minutes, inside the send window (A73): the copy said every
-        // 10 minutes, 24/7.
+        // 10 minutes and round the clock.
         data.launched
           ? "Campaign launched. The engine runs it now and then every 3 minutes; email goes out only inside your send window."
           : "Campaign saved as draft. Activate it whenever you're ready.",
       );
-      utils.are.campaigns.list.invalidate();
+      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
       setShowCreate(false);
       navigate(`/are/campaigns/${data.id}`);
     },
@@ -304,7 +315,7 @@ export default function ARECampaigns() {
   const setStatus = trpc.are.campaigns.setStatus.useMutation({
     onSuccess: (_r, vars) => {
       toast.success(vars.status === "active" ? "Campaign activated. The engine picks it up within 3 minutes." : vars.status === "paused" ? "Campaign paused. Nothing more is sent from it." : "Campaign updated");
-      utils.are.campaigns.list.invalidate();
+      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
       utils.are.campaigns.get.invalidate({ id: vars.id });
     },
     onError: (e, vars) => {
@@ -322,7 +333,7 @@ export default function ARECampaigns() {
   const deleteCampaign = trpc.are.campaigns.delete.useMutation({
     onSuccess: (r) => {
       toast.success(`Campaign deleted. ${r.stepsStopped} unsent step${r.stepsStopped === 1 ? "" : "s"} stopped; ${r.peopleReleased} ${r.peopleReleased === 1 ? "person is" : "people are"} free to join another campaign.`);
-      utils.are.campaigns.list.invalidate();
+      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -334,13 +345,11 @@ export default function ARECampaigns() {
   // Build the create payload — folds the wizard's targeting fields into
   // icpOverrides (where the engine's discovery phase reads them).
   const submitCampaign = (launch: boolean) => {
-    const band = EMPLOYEE_BANDS.find((b) => b.value === form.employeeBand);
     const icpOverrides = {
       targetTitles: form.targetTitles,
       targetIndustries: form.targetIndustries,
       targetGeographies: form.targetGeographies,
-      ...(band?.min !== undefined ? { employeeMin: band.min } : {}),
-      ...(band?.max !== undefined ? { employeeMax: band.max } : {}),
+      ...employeeRangeOf(form.employeeBand, form.personaEmployeeMin, form.personaEmployeeMax),
       keywords: form.keywords,
     };
     create.mutate({
@@ -363,6 +372,8 @@ export default function ARECampaigns() {
       sequenceTemplate: wsDefaults.sequenceTemplate,
       signalToOpportunityEnabled: wsDefaults.signalToOpportunityEnabled,
       icpOverrides,
+      // The persona the targeting came from, so its research reaches the writers.
+      ...(form.personaId != null ? { personaId: form.personaId } : {}),
       launch,
     });
   };
@@ -379,6 +390,7 @@ export default function ARECampaigns() {
           <Plus className="size-4" /> New Campaign
         </Button>
       </PageHeader>
+      <AreSubNav />
 
       <div className="p-4 md:p-6 space-y-4 max-w-5xl">
         {/* Which is which: sequences vs campaigns vs a campaign's sequences (owner ask 2026-09-04). */}
@@ -404,8 +416,8 @@ export default function ARECampaigns() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                     <span className="text-sm font-medium text-foreground truncate">{c.name}</span>
-                    <Badge variant="outline" className="text-[10px] capitalize">{c.status}</Badge>
-                    <Badge variant="secondary" className="text-[10px]">{c.autonomyMode}</Badge>
+                    <Badge variant="outline" className="text-[10px]">{areStatusLabel(c.status)}</Badge>
+                    <Badge variant="secondary" className="text-[10px]">{areAutonomyLabel(c.autonomyMode)}</Badge>
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {c.prospectsDiscovered} discovered · {c.prospectsEnriched} enriched · {c.prospectsContacted} contacted · {c.prospectsReplied} replied · {c.meetingsBooked} meetings
@@ -457,6 +469,15 @@ export default function ARECampaigns() {
                 </div>
               </div>
             ))}
+            {listPages > 1 && (
+              <div className="flex items-center justify-between pt-2 text-xs text-muted-foreground">
+                <span>{campaignCount?.total ?? 0} campaigns · page {listPage} of {listPages}</span>
+                <div className="flex gap-1">
+                  <Button size="sm" variant="outline" className="h-7 text-xs" disabled={listPage <= 1} onClick={() => setListPage((n) => n - 1)}>Previous</Button>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" disabled={listPage >= listPages} onClick={() => setListPage((n) => n + 1)}>Next</Button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -577,12 +598,7 @@ export default function ARECampaigns() {
                 </span>
               </div>
               <PersonaApplyPicker
-                onApply={(p) => setForm((f) => ({
-                  ...f,
-                  targetTitles: (p.targetTitles as string[]) ?? f.targetTitles,
-                  targetIndustries: (p.targetIndustries as string[]) ?? f.targetIndustries,
-                  keywords: (p.keywords as string[]) ?? f.keywords,
-                }))}
+                onApply={(p) => setForm((f) => ({ ...f, ...personaToTargeting(p) }))}
               />
               <div>
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Job Titles</Label>
@@ -621,6 +637,9 @@ export default function ARECampaigns() {
                     {EMPLOYEE_BANDS.map((b) => (
                       <SelectItem key={b.value} value={b.value}>{b.label}</SelectItem>
                     ))}
+                    {form.employeeBand === "persona" && (
+                      <SelectItem value="persona">The persona's size: {form.personaEmployeeMin ?? "any"}–{form.personaEmployeeMax ?? "any"}</SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -769,10 +788,11 @@ export default function ARECampaigns() {
                 </div>
                 <dl className="text-xs space-y-1 [&>div]:flex [&>div]:gap-2 [&_dt]:w-32 [&_dt]:text-muted-foreground [&_dd]:flex-1">
                   <div><dt>Goal</dt><dd className="capitalize">{form.goalType.replace(/_/g, " ")}</dd></div>
-                  <div><dt>Autonomy</dt><dd className="capitalize">{form.autonomyMode.replace(/_/g, " ")}</dd></div>
+                  <div><dt>Autonomy</dt><dd>{areAutonomyLabel(form.autonomyMode)}</dd></div>
                   <div><dt>Titles</dt><dd>{form.targetTitles.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
                   <div><dt>Industries</dt><dd>{form.targetIndustries.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
-                  <div><dt>Company size</dt><dd>{EMPLOYEE_BANDS.find((b) => b.value === form.employeeBand)?.label}</dd></div>
+                  <div><dt>Places</dt><dd>{form.targetGeographies.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
+                  <div><dt>Company size</dt><dd>{form.employeeBand === "persona" ? `${form.personaEmployeeMin ?? "any"}–${form.personaEmployeeMax ?? "any"} (from the persona)` : EMPLOYEE_BANDS.find((b) => b.value === form.employeeBand)?.label}</dd></div>
                   <div><dt>Keywords</dt><dd>{form.keywords.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
                   <div><dt>Sources</dt><dd>{form.prospectSources.join(", ") || <span className="text-muted-foreground italic">none, so discovery is off</span>}</dd></div>
                   <div><dt>Target / Daily cap</dt><dd>{form.targetProspectCount} prospects · {form.dailySendCap}/day for this campaign, within the workspace's Revenue Engine cap</dd></div>

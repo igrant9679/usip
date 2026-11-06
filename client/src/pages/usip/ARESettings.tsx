@@ -9,6 +9,7 @@
  *  5. Notification preferences — which ARE events trigger in-app notifications
  */
 import { Shell, PageHeader, QueryError } from "@/components/usip/Shell";
+import { AreSubNav } from "@/components/usip/are/AreSubNav";
 import { ApolloSourceCard } from "@/components/usip/settings/ApolloSourceCard";
 import { ReoonVerifierCard } from "@/components/usip/settings/ReoonVerifierCard";
 import { QuickEnrichSourceCard } from "@/components/usip/settings/QuickEnrichSourceCard";
@@ -46,12 +47,13 @@ import {
   Shield,
   Sliders,
   Sparkles,
-  Star,
   Zap, Settings2, MailCheck, Radar, ChevronUp, ChevronDown, Flame, Waves
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { areSettingsDraft, changedAreSettings, type AreSettingsDraft } from "./areSettingsModel";
 import { Link } from "wouter";
 import { toast } from "sonner";
+import { confirmAction } from "@/components/usip/Common";
 
 /** Descriptions keyed by source id, so this page and the campaign wizard
  *  describe the same source the same way. */
@@ -183,41 +185,29 @@ export default function ARESettings() {
   // this card stores NULL and the cron runs it daily, so displaying "Weekly"
   // was showing a cadence nothing was on (2026-09-20).
   const [icpRegenSchedule, setIcpRegenSchedule] = useState<IcpRegenSchedule>("daily");
-  const [sequenceQualityThreshold, setSequenceQualityThreshold] = useState(65);
   const [dirty, setDirty] = useState(false);
 
-  // Sync from server on load
-  useEffect(() => {
-    if (!settings) return;
-    setAutonomyMode((settings.areDefaultAutonomyMode as AutonomyMode) ?? "batch_approval");
-    setDailySendCap(settings.areDefaultDailySendCap ?? 50);
-    setAutoApproveThreshold(settings.areDefaultAutoApproveThreshold ?? null);
-    setSignalToOpportunity(settings.areDefaultSignalToOpportunity ?? false);
-    setChannels((settings.areDefaultChannels as Record<string, boolean>) ?? { email: true, linkedin: false, sms: false, voice: false });
-    setMaxConcurrent(settings.areMaxConcurrentCampaigns ?? 5);
-    setNotifyMeeting(settings.areNotifyOnMeetingBooked ?? true);
-    setNotifyAutoApprove(settings.areNotifyOnAutoApprove ?? false);
-    setNotifyIcpUpdate(settings.areNotifyOnIcpUpdate ?? true);
-    setSequenceTemplate((settings.areDefaultSequenceTemplate as string) ?? "standard_7step");
-    // Saved values may predate the unified vocabulary (linkedin_company /
-    // linkedin_people / events). Read only the live ids and default anything
-    // absent to on, so an old row doesn't silently disable a working source.
-    {
-      const saved = ((settings as any).areScraperSources ?? {}) as Record<string, boolean>;
-      setScraperSources(
-        Object.fromEntries(ARE_SOURCE_IDS.map((id) => [id, saved[id] ?? true])),
-      );
-    }
-    setSourceOrder(resolveSourceOrder((settings as any).areSourceOrder ?? null, {}, ARE_SOURCE_IDS));
-    // A row written before the domain closed could hold anything 20 chars long;
-    // anything unrecognised reads as the cadence the cron actually runs for it.
-    {
-      const saved = (settings as any).areIcpRegenSchedule ?? "daily";
-      setIcpRegenSchedule(ICP_REGEN_SCHEDULES.indexOf(saved) >= 0 ? saved : "daily");
-    }
-    setSequenceQualityThreshold((settings as any).areSequenceQualityThreshold ?? 65);
+  // The form from the loaded settings (areSettingsModel, A60). Discard calls
+  // this directly: refetching relied on an effect that never ran when the
+  // refetch came back unchanged, so Discard reverted nothing.
+  const hydrate = (d: AreSettingsDraft) => {
+    setAutonomyMode(d.areDefaultAutonomyMode);
+    setDailySendCap(d.areDefaultDailySendCap);
+    setAutoApproveThreshold(d.areDefaultAutoApproveThreshold);
+    setSignalToOpportunity(d.areDefaultSignalToOpportunity);
+    setChannels(d.areDefaultChannels);
+    setMaxConcurrent(d.areMaxConcurrentCampaigns);
+    setNotifyMeeting(d.areNotifyOnMeetingBooked);
+    setNotifyAutoApprove(d.areNotifyOnAutoApprove);
+    setNotifyIcpUpdate(d.areNotifyOnIcpUpdate);
+    setSequenceTemplate(d.areDefaultSequenceTemplate);
+    setScraperSources(d.areScraperSources);
+    setSourceOrder(d.areSourceOrder);
+    setIcpRegenSchedule(d.areIcpRegenSchedule);
     setDirty(false);
-  }, [settings]);
+  };
+  const loaded = useMemo(() => (settings ? areSettingsDraft(settings as Record<string, any>) : null), [settings]);
+  useEffect(() => { if (loaded) hydrate(loaded); }, [loaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = trpc.settings.updateAreSettings.useMutation({
     onSuccess: () => {
@@ -228,8 +218,11 @@ export default function ARESettings() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Only what changed (A60): writing every field put back values someone
+  // else had changed since this page loaded.
   const handleSave = () => {
-    save.mutate({
+    if (!loaded) return;
+    const patch = changedAreSettings(loaded, {
       areDefaultAutonomyMode: autonomyMode,
       areDefaultDailySendCap: dailySendCap,
       areDefaultAutoApproveThreshold: autoApproveThreshold,
@@ -243,9 +236,23 @@ export default function ARESettings() {
       areScraperSources: scraperSources,
       areSourceOrder: sourceOrder,
       areIcpRegenSchedule: icpRegenSchedule,
-      areSequenceQualityThreshold: sequenceQualityThreshold,
     });
+    if (Object.keys(patch).length === 0) { setDirty(false); return; }
+    save.mutate(patch);
   };
+
+  // Reset All (A60): it only ever showed an error toast. Now it sets
+  // every campaign and the default for new ones to Batch approval, which has
+  // no approve line, so nothing is approved without a person.
+  const resetAll = trpc.are.campaigns.setAllAutonomy.useMutation({
+    onSuccess: (r) => {
+      toast.success(`${r.campaignsUpdated} campaign${r.campaignsUpdated === 1 ? "" : "s"} set to Batch approval, and new campaigns default to it.`);
+      utils.settings.getAreSettings.invalidate();
+      utils.are.campaigns.list.invalidate();
+      utils.are.campaigns.get.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const mark = () => setDirty(true);
 
@@ -280,6 +287,7 @@ export default function ARESettings() {
           <Bot className="size-3" /> Autonomous Revenue Engine
         </Badge>
       </PageHeader>
+      <AreSubNav />
 
       <div className="p-4 md:p-6 max-w-3xl mx-auto space-y-6">
 
@@ -457,7 +465,7 @@ export default function ARESettings() {
                 Auto-create opportunity on meeting booked
               </div>
               <div className="text-[11px] text-muted-foreground">
-                When a <code className="bg-muted px-1 rounded text-[10px]">meeting_booked</code> signal is received, the AI automatically creates a CRM account, contact, and discovery-stage opportunity pre-filled with the intelligence dossier.
+                The default for new campaigns. A booked meeting always adds the person to your CRM as a contact, with their company; with this on, a discovery-stage opportunity pre-filled from the intelligence dossier is opened too.
               </div>
             </div>
             <Toggle label="Auto-create opportunity on meeting booked" checked={signalToOpportunity} onChange={() => { setSignalToOpportunity(!signalToOpportunity); mark(); }} color="bg-violet-500" />
@@ -566,24 +574,13 @@ export default function ARESettings() {
             })}
           </div>
 
-          {/* Sequence quality threshold */}
-          <div className="space-y-2 pt-3 border-t">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs font-medium flex items-center gap-1.5"><Star className="size-3.5 text-amber-500" /> Sequence Quality Threshold</div>
-                <div className="text-[11px] text-muted-foreground">The AI self-evaluates each sequence. Steps scoring below this threshold are automatically rewritten before sending.</div>
-              </div>
-              <span className="text-sm font-bold tabular-nums" style={{ color: sequenceQualityThreshold >= 70 ? "#34D399" : sequenceQualityThreshold >= 50 ? "#F59E0B" : "#F87171" }}>{sequenceQualityThreshold}</span>
-            </div>
-            <input aria-label="Sequence quality threshold" type="range" min={0} max={100} step={5} value={sequenceQualityThreshold}
-              onChange={(e) => { setSequenceQualityThreshold(parseInt(e.target.value)); mark(); }}
-              className="w-full accent-amber-500" />
-            <div className="flex justify-between text-[10px] text-muted-foreground">
-              <span>0 — send anything</span>
-              <span>50 — moderate</span>
-              <span>100 — perfect only</span>
-            </div>
-          </div>
+          {/* The Sequence Quality Threshold slider is gone (audit 2026-10-20,
+              A60): nothing ever read it, while it said low-scoring steps were
+              rewritten before sending. The score itself is real and shown. */}
+          <p className="pt-3 border-t text-[11px] text-muted-foreground">
+            The AI scores each sequence it writes (out of 40, on the prospect's dossier). No threshold acts on that score:
+            nothing is rewritten or held because of it.
+          </p>
         </Section>
 
         {/* -- 7. Brand Voice --
@@ -775,7 +772,7 @@ export default function ARESettings() {
             {dirty && (
               <Button
                 variant="ghost" size="sm" className="text-xs text-muted-foreground"
-                onClick={() => { utils.settings.getAreSettings.invalidate(); setDirty(false); }}
+                onClick={() => { if (loaded) hydrate(loaded); }}
               >
                 Discard
               </Button>
@@ -803,18 +800,25 @@ export default function ARESettings() {
           <CardContent className="px-5 pb-5">
             <div className="flex items-center justify-between p-3 rounded-xl border border-destructive/20 bg-background">
               <div className="space-y-0.5 flex-1 min-w-0 pr-4">
-                <div className="text-xs font-medium">Reset all campaigns to Manual Review</div>
+                <div className="text-xs font-medium">Set every campaign to Batch approval</div>
                 <div className="text-[11px] text-muted-foreground">
-                  Sets every active campaign's autonomy mode to <strong>Review &amp; Release</strong> and disables auto-approve. This cannot be undone in bulk.
+                  Sets every campaign, and the default for new ones, to <strong>Batch approval</strong>, so nobody is approved
+                  for sending without a person. Each campaign keeps its auto-approve threshold in case you switch it back.
+                  There is no undo for all of them at once. Admins only.
                 </div>
               </div>
               <Button
                 variant="outline"
                 size="sm"
                 className="shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10 text-xs gap-1.5"
-                onClick={() => toast.error("This action requires confirmation — contact your admin.")}
+                disabled={resetAll.isPending}
+                onClick={() => confirmAction({
+                  title: "Set every campaign to Batch approval?",
+                  description: "Every campaign in this workspace, and the default for new ones, switches to Batch approval: nothing is approved for sending until a person approves it. Fully autonomous campaigns stop approving on their own.",
+                  confirmLabel: "Set all to Batch approval",
+                }, () => resetAll.mutate({ mode: "batch_approval" }))}
               >
-                <Shield className="size-3.5" />
+                {resetAll.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Shield className="size-3.5" />}
                 Reset All
               </Button>
             </div>
