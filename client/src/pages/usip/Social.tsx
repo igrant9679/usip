@@ -160,7 +160,7 @@ export default function Social() {
             />
             <div className="flex items-center justify-between">
               <span className="text-[11px] text-muted-foreground">{postBody.length}/3000 · posts to your own account</span>
-              <ConfirmButton size="default" variant="default" destructive={false} className="h-8 px-3"
+              <ConfirmButton size="sm" variant="default" destructive={false}
                 disabled={!postBody.trim() || createLinkedInPost.isPending}
                 title="Publish this post to LinkedIn?"
                 description="It goes on your own LinkedIn feed, visible to your network, straight away."
