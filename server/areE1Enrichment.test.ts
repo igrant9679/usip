@@ -53,7 +53,7 @@ vi.mock("./_core/llm", async (a) => ({
 
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { ENRICH_STALE_MS, runEnrichAgent } from "./routers/are/prospects";
-import { rejectExhaustedEnrichment, roundRobinByWorkspace } from "./areEngine";
+import { enrichmentRetryable, rejectExhaustedEnrichment, roundRobinByWorkspace } from "./areEngine";
 import { ENRICH_MAX_ATTEMPTS, retryBackoffMs } from "./services/are/retryBackoff";
 
 const WS = 2;
@@ -164,8 +164,8 @@ describe("the screen pass's part (A27)", () => {
   // their wiring is read: the give-up waits for the retries, and the reject runs.
   const engine = readFileSync(join(__dirname, "areEngine.ts"), "utf8").replace(/\r\n/g, "\n");
   const screen = engine.slice(engine.indexOf("/* ── Phase 1: SCREEN"), engine.indexOf("/* ── Phase 2")).replace(/\\`/g, "`");
-  it("the no-email door gives up on a failed row only after its last try", () => {
-    expect(screen).toContain("AND `enrichmentStatus` IN ('complete', 'failed')\n        AND (`enrichmentStatus` = 'complete' OR `enrichAttempts` >= ${ENRICH_MAX_ATTEMPTS})`);");
+  it("the no-email door gives up on a failed row after its last try, and on one that failed before retries existed", () => {
+    expect(screen).toContain("AND `enrichmentStatus` IN ('complete', 'failed')\n        AND (`enrichmentStatus` = 'complete' OR `enrichAttempts` >= ${ENRICH_MAX_ATTEMPTS} OR `enrichRetryAt` IS NULL)`);");
   });
   it("rejects the exhausted ones every tick", () => {
     expect(screen).toContain("const exhausted = await rejectExhaustedEnrichment(db, wsId, campId);");
@@ -202,8 +202,24 @@ describe("the global enrichment pass (A7)", () => {
     const { sql, params } = seen[0]!;
     expect(sql).toContain("`prospect_queue`.`workspaceId` not in (?)");
     expect(params).toContain(9);
-    expect(sql).toContain("(`prospect_queue`.`enrichmentStatus` = ? and `prospect_queue`.`enrichAttempts` < ?)");
+    // The failed arm is enrichmentRetryable (run below), in the selector.
+    expect(sql).toContain("(`prospect_queue`.`enrichmentStatus` = ? and `prospect_queue`.`enrichAttempts` < ? and `prospect_queue`.`enrichRetryAt` is not null and `prospect_queue`.`enrichRetryAt` <= ?)");
     expect(params).toContain(ENRICH_MAX_ATTEMPTS);
     expect(sql).toContain("(`prospect_queue`.`enrichRetryAt` is null or `prospect_queue`.`enrichRetryAt` <= ?)");
+  });
+
+  it("retries only failures recorded under the retry scheme: the old failed backlog is left alone", async () => {
+    const { prospectQueue } = await import("../drizzle/schema");
+    const past = new Date(Date.now() - 60_000);
+    const later = new Date(Date.now() + 60 * 60_000);
+    const f = (id: number, enrichAttempts: number, enrichRetryAt: Date | null, enrichmentStatus = "failed") =>
+      rows("prospect_queue").push({ id, workspaceId: WS, campaignId: 7, enrichmentStatus, sequenceStatus: "pending", enrichAttempts, enrichRetryAt });
+    f(11, 0, null);              // failed before this deploy: no stamp, no attempts
+    f(12, 1, past);              // failed under the scheme, wait over
+    f(13, 2, later);             // failed under the scheme, still waiting
+    f(14, ENRICH_MAX_ATTEMPTS, past); // out of tries
+    f(15, 1, past, "complete");  // not failed
+    const picked = await h.db.select({ id: prospectQueue.id }).from(prospectQueue).where(enrichmentRetryable(new Date()));
+    expect(picked.map((r: { id: number }) => r.id)).toEqual([12]);
   });
 });

@@ -528,8 +528,9 @@ async function enrichPendingGlobally(result: AreEngineResult, onlyWorkspaceId?: 
         or(
           inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
           // A failed enrichment is tried again (A27), up to the limit; then
-          // the screen pass rejects the prospect with the reason.
-          and(eq(prospectQueue.enrichmentStatus, "failed"), lt(prospectQueue.enrichAttempts, ENRICH_MAX_ATTEMPTS)),
+          // the screen pass rejects the prospect with the reason. Only one
+          // that failed under the retry scheme — see enrichmentRetryable.
+          enrichmentRetryable(now),
         ),
         // A row that keeps failing waits its turn (A7) instead of taking a
         // slot at the head of the page on every tick.
@@ -584,6 +585,23 @@ async function enrichPendingGlobally(result: AreEngineResult, onlyWorkspaceId?: 
     await emitLog(b.ws, campId, "enrich", "info",
       `Enriched ${b.ok}/${b.total} prospects (serial, global pass)`);
   }
+}
+
+/**
+ * A failed enrichment the engine may try again (audit A27): one that failed
+ * under the retry scheme — every new failure stamps `enrichRetryAt` — with
+ * tries left and its wait over. Rows that were already `failed` before the
+ * scheme have no stamp and 0 attempts, and are NOT picked up: retrying that
+ * backlog would be AI spend nobody asked for (coordinator review 2026-11-06).
+ * They stay as they were; only a person's Enrich touches them.
+ */
+export function enrichmentRetryable(now: Date) {
+  return and(
+    eq(prospectQueue.enrichmentStatus, "failed"),
+    lt(prospectQueue.enrichAttempts, ENRICH_MAX_ATTEMPTS),
+    isNotNull(prospectQueue.enrichRetryAt),
+    lte(prospectQueue.enrichRetryAt, now),
+  );
 }
 
 /**
@@ -1318,6 +1336,9 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
       await emitLog(wsId, campId, "screen", "info",
         `${admitted} prospect${admitted === 1 ? "" : "s"} admitted to the queue — an email address was found.`);
     }
+    // A failed row under the retry scheme (A27) is given up after its last
+    // try; one that failed before the scheme (no enrichRetryAt) is never
+    // retried, so it is given up now, as it always was.
     const [giveUp] = await db.execute(sql`
       UPDATE \`prospect_queue\`
       SET \`sequenceStatus\` = 'skipped',
@@ -1328,7 +1349,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         AND \`sequenceStatus\` = 'sourcing'
         AND (\`email\` IS NULL OR \`email\` = '')
         AND \`enrichmentStatus\` IN ('complete', 'failed')
-        AND (\`enrichmentStatus\` = 'complete' OR \`enrichAttempts\` >= ${ENRICH_MAX_ATTEMPTS})`);
+        AND (\`enrichmentStatus\` = 'complete' OR \`enrichAttempts\` >= ${ENRICH_MAX_ATTEMPTS} OR \`enrichRetryAt\` IS NULL)`);
     const gaveUp = (giveUp as { affectedRows?: number })?.affectedRows ?? 0;
     if (gaveUp > 0) {
       result.rejected += gaveUp;

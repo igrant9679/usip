@@ -37,6 +37,13 @@ vi.mock("./lib/unipile", async (a) => ({
   sendLinkedInInvitation: async (x: any) => { h.invites.push(x); return {}; },
   searchLinkedInPeople: async (_acct: string, p: any) => { h.searches.push(p); return h.searchReply ? h.searchReply(p) : { items: [] }; },
 }));
+// Outbound live and the window open, so the only thing that can stop the opener is the rule under test.
+vi.mock("./services/sendWindow", async (a) => ({
+  ...(await a<typeof import("./services/sendWindow")>()),
+  getWorkspaceSendWindow: async () => ({ timezone: "UTC", window: {}, paused: false }),
+  inSendWindow: async () => true,
+}));
+vi.mock("./_core/llm", async (a) => ({ ...(await a<typeof import("./_core/llm")>()), invokeLLM: async () => ({ choices: [{ message: { content: "Thanks for connecting, Dana." } }] }) }));
 
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { handleNewRelation } from "./services/socialAutopilot";
@@ -92,5 +99,45 @@ describe("an accepted connection request (A6)", () => {
     );
     await handleNewRelation({ account_id: "acct-1", user_provider_id: "ACoAAB-dana", user_public_identifier: "dana-reyes", user_full_name: "Dana Reyes" } as any);
     expect(rows("unipile_invites").map((r) => r.status)).toEqual(["pending", "pending"]);
+  });
+});
+
+describe("Social Autopilot's opener and a Revenue Engine prospect (A6 follow-up)", () => {
+  const accept = { account_id: "acct-1", user_provider_id: "ACoAAB-dana", user_public_identifier: "dana-reyes", user_full_name: "Dana Reyes" } as any;
+  const inCampaign = (over: Record<string, unknown> = {}) => rows("prospect_queue").push({
+    id: 9, workspaceId: WS, campaignId: 7, firstName: "Dana", lastName: "Reyes", linkedinUrl: "https://www.linkedin.com/in/dana-reyes", sequenceStatus: "enrolled", ...over,
+  });
+  beforeEach(() => {
+    rows("unipile_accounts").push({ id: 1, workspaceId: WS, userId: 20, unipileAccountId: "acct-1", provider: "LINKEDIN" });
+    rows("workspace_settings").push({ workspaceId: WS, socialAutopilotMode: "auto", socialAutopilotDailyCap: 50 });
+    rows("unipile_invites").push({ id: 5, workspaceId: WS, userId: 20, unipileAccountId: "acct-1", recipientProviderId: "dana-reyes", status: "pending", sentAt: new Date() });
+  });
+
+  it.each([["enrolled"], ["paused"]])("sends no opener to someone %s in a campaign, says why, and still records the accept", async (status) => {
+    inCampaign({ sequenceStatus: status });
+    expect(await handleNewRelation(accept)).toBe("are_enrolled");
+    expect(h.dms).toEqual([]);
+    expect(rows("tasks")).toEqual([]);
+    expect(rows("unipile_invites")[0].status).toBe("accepted");
+    const log = rows("are_engine_logs").find((l) => l.campaignId === 7);
+    expect(log?.message).toContain("Social Autopilot sent no opener to Dana Reyes");
+  });
+
+  it("on Approve, drafts no task for them either", async () => {
+    rows("workspace_settings")[0].socialAutopilotMode = "approval";
+    inCampaign({ linkedinUrl: "https://linkedin.com/in/dana-reyes/" });
+    expect(await handleNewRelation(accept)).toBe("are_enrolled");
+    expect(rows("tasks")).toEqual([]);
+  });
+
+  it.each([
+    ["finished in a campaign", { sequenceStatus: "completed" }],
+    ["rejected from one", { sequenceStatus: "skipped" }],
+    ["in another workspace's campaign", { workspaceId: 4 }],
+    ["only a longer slug starting with theirs", { linkedinUrl: "https://www.linkedin.com/in/dana-reyes-2" }],
+  ])("still gets the opener when %s", async (_name, over) => {
+    inCampaign(over);
+    expect(await handleNewRelation(accept)).toBe("opener_sent");
+    expect(h.dms).toHaveLength(1);
   });
 });
