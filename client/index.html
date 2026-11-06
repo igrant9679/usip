@@ -27,10 +27,30 @@
         var ep = "%VITE_ANALYTICS_ENDPOINT%";
         var id = "%VITE_ANALYTICS_WEBSITE_ID%";
         if (!ep || ep.indexOf("%") !== -1) return;
+        // Pages whose URL is a credential (a proposal or meeting link, a
+        // reset, invite, join or email-confirm token) are never reported,
+        // and no URL is reported with its query string or fragment (audit
+        // 2026-10-20, G45). Umami recorded the full URL, token and all.
+        var TOKEN_PAGE = /^\/(p|m)\/[^/]+|^\/(reset-password|invite\/accept|join|confirm-email)(\/|$)/;
+        var pathOf = function (u) {
+          try { return new URL(u, location.origin).pathname; } catch (e) { return ""; }
+        };
+        var bare = function (u) { return String(u).split(/[?#]/)[0]; };
+        if (TOKEN_PAGE.test(location.pathname)) return;
+        window.__velocityAnalyticsBeforeSend = function (type, payload) {
+          if (!payload) return payload;
+          if (payload.url && TOKEN_PAGE.test(pathOf(payload.url))) return false;
+          if (payload.url) payload.url = bare(payload.url);
+          if (payload.referrer) payload.referrer = TOKEN_PAGE.test(pathOf(payload.referrer)) ? "" : bare(payload.referrer);
+          return payload;
+        };
         var s = document.createElement("script");
         s.defer = true;
         s.src = ep + "/umami";
         s.setAttribute("data-website-id", id.indexOf("%") === -1 ? id : "");
+        s.setAttribute("data-exclude-search", "true");
+        s.setAttribute("data-exclude-hash", "true");
+        s.setAttribute("data-before-send", "__velocityAnalyticsBeforeSend");
         document.body.appendChild(s);
       })();
     </script>

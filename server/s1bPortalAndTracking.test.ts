@@ -36,6 +36,7 @@ vi.mock("./services/workflowEngine", async (a) => ({
 }));
 
 import express from "express";
+import { readFileSync } from "node:fs";
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { appRouter } from "./routers";
 import { PORTAL_UNAVAILABLE, portalView } from "./services/proposalPortal";
@@ -43,6 +44,7 @@ import { isPublicWritePath, publicTrpcLimiters, publicWriteLimiter } from "./pub
 import { registerEmailTrackingRoutes } from "./emailTracking";
 import { injectTracking } from "./mergeVars";
 import { clickSignature, isSignedClick } from "./services/trackedLinks";
+import { isSignedVid, registerWebsiteTrackingRoutes, signVisitorId } from "./websiteTracking";
 
 const LSI = 2;
 const REP = 21;
@@ -277,5 +279,87 @@ describe("G43: no open redirects through the tracking routes", () => {
     expect(getRoute).toContain("TRACK_UNSUB_CONFIRM(");
     expect(getRoute).not.toContain("recordUnsubscribeByToken");
     expect(src).toContain("<body><h1>Unsubscribe <strong>${escapeHtml(email)}</strong>?</h1>");
+  });
+});
+
+/* ─── P5 ───────────────────────────────────────────────────────────────── */
+
+describe("P5: the visitor beacon files a task only for an id we signed", () => {
+  const beacon = async (body: Record<string, unknown>) => {
+    let handler: any;
+    registerWebsiteTrackingRoutes({ get: () => {}, options: () => {}, post: (_p: string, h2: any) => { handler = h2; } } as any);
+    const res: any = { setHeader: () => {}, status: () => res, json: () => res, end: () => res };
+    await handler({ body, headers: {} }, res);
+  };
+  const intentTasks = () => rows("tasks").filter((t) => String(t.title).startsWith("High-intent website visit"));
+  beforeEach(() => {
+    for (let id = 1; id <= 3; id++) rows("leads").push({ id, workspaceId: LSI, firstName: `L${id}`, lastName: "X", ownerUserId: null });
+    rows("workspaces").push({ id: 4, name: "Other", slug: "other", ownerUserId: 99, archivedAt: null });
+  });
+
+  it("walking plain ids records the visits and files nothing", async () => {
+    for (const vid of ["l1", "2", "l3"]) await beacon({ slug: "lsi", visitorId: "v", path: "/pricing", vid });
+    expect(rows("website_visits").map((v) => v.leadId)).toEqual([1, 2, 3]);
+    expect(intentTasks()).toHaveLength(0);
+  });
+
+  it("a signed id files one, saying it was signed", async () => {
+    await beacon({ slug: "lsi", visitorId: "v", path: "/pricing", vid: signVisitorId(LSI, "l", 2) });
+    expect(intentTasks().map((t) => [t.relatedId, t.description])).toEqual([[2, "Viewed /pricing — reach out while intent is hot. The visit was matched by a signed id in the link."]]);
+  });
+
+  it("a signature for another workspace, another record, or a forged one files nothing", async () => {
+    const forOther = signVisitorId(4, "l", 1);
+    const [, sig] = signVisitorId(LSI, "l", 1).split(".");
+    for (const vid of [forOther, `l2.${sig}`, "l1.AAAAAAAAAAAAAAAA", `c1.${sig}`]) {
+      expect(isSignedVid(LSI, vid), vid).toBe(false);
+      await beacon({ slug: "lsi", visitorId: "v", path: "/pricing", vid });
+    }
+    expect(intentTasks()).toHaveLength(0);
+    expect(isSignedVid(LSI, signVisitorId(LSI, "c", 7))).toBe(true);
+  });
+});
+
+/* ─── G45 ──────────────────────────────────────────────────────────────── */
+
+describe("G45: analytics never sees a token", () => {
+  const html = () => readFileSync(new URL("../client/index.html", import.meta.url), "utf8");
+  /** Run the page's analytics loader as Vite would serve it, with the endpoint configured. */
+  function load(pathname: string) {
+    const src = /<script>\s*([\s\S]*?)<\/script>/.exec(html())![1]
+      // Every occurrence, as Vite does: the comment above the code names one too.
+      .split("%VITE_ANALYTICS_ENDPOINT%").join("https://umami.example")
+      .split("%VITE_ANALYTICS_WEBSITE_ID%").join("site-1");
+    const appended: any[] = [];
+    const win: any = {};
+    const doc = {
+      createElement: () => { const attrs: Record<string, string> = {}; return { attrs, setAttribute: (k: string, v: string) => { attrs[k] = v; } }; },
+      body: { appendChild: (n: any) => appended.push(n) },
+    };
+    new Function("window", "document", "location", "URL", src)(win, doc, { pathname, origin: "https://app.velocity.test" }, URL);
+    return { appended, beforeSend: win.__velocityAnalyticsBeforeSend as ((t: string, p: any) => any) | undefined };
+  }
+
+  it("a page whose URL is a credential loads no analytics at all", () => {
+    for (const p of ["/p/0123abcd", "/m/tok-77", "/reset-password", "/invite/accept", "/join", "/confirm-email"]) {
+      expect(load(p).appended, p).toHaveLength(0);
+    }
+  });
+
+  it("elsewhere it loads, told to drop query strings and fragments, with a hook that scrubs what's left", () => {
+    const { appended, beforeSend } = load("/v2/home");
+    expect(appended).toHaveLength(1);
+    expect(appended[0].attrs).toMatchObject({ "data-exclude-search": "true", "data-exclude-hash": "true", "data-before-send": "__velocityAnalyticsBeforeSend" });
+    expect(beforeSend!("pageview", { url: "/v2/people?q=secret#x", referrer: "https://app.velocity.test/p/abc?x=1" }))
+      .toEqual({ url: "/v2/people", referrer: "" });
+    expect(beforeSend!("pageview", { url: "/m/tok-9", referrer: "" }), "a later navigation onto a token page is not sent").toBe(false);
+    expect(beforeSend!("pageview", { url: "/join?token=abc", referrer: "" })).toBe(false);
+  });
+
+  it("control: unconfigured, nothing loads (the 2026-09-20 rule)", () => {
+    const src = /<script>\s*([\s\S]*?)<\/script>/.exec(html())![1];
+    const appended: any[] = [];
+    new Function("window", "document", "location", "URL", src)({}, { createElement: () => ({}), body: { appendChild: (n: any) => appended.push(n) } }, { pathname: "/v2/home", origin: "x" }, URL);
+    expect(appended).toHaveLength(0);
   });
 });

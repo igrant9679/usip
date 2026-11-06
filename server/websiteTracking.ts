@@ -6,16 +6,17 @@
  *
  * The workspace slug is the public key (data-workspace="<slug>"). Visits that
  * carry a `vid` param — a lead/contact id in the link — are attributed to that
- * record. Nothing in Velocity adds the id to outbound links, and the id is not
- * signed, so anyone can claim any record in the workspace; the visitors page
- * says so rather than promising "known prospect" matching (audit 2026-10-20,
- * P88). Signing the id, then adding it to links, is the work left. A
- * high-intent attributed visit (pricing/demo/contact pages) files a follow-up
- * task for the record owner. This is the honest, provider-free half of the feature;
+ * record. An id may be SIGNED (signVisitorId, audit 2026-10-20 P5): only a
+ * signed id files a follow-up task, when the visit is to a high-intent page
+ * (pricing/demo/contact). An unsigned id is a claim anyone can make, so its
+ * visit is still recorded, and the visitors page calls it unverified (P88),
+ * but it files nothing. Nothing in Velocity adds a signed id to outbound links
+ * yet; that is the work left. This is the honest, provider-free half of the feature;
  * anonymous IP→company de-anonymization would need a paid IP-intelligence
  * vendor and is deliberately not stubbed.
  */
 import type { Express, Request, Response } from "express";
+import { createHmac, timingSafeEqual } from "crypto";
 import { and, eq, gte, like, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { activities, contacts, leads, tasks, websiteVisits, workspaces } from "../drizzle/schema";
@@ -116,11 +117,11 @@ async function verifyVisitorIdentity(
   return out;
 }
 
-/** Parse a `vid` param of the form "c123" (contact) or "l456" (lead), or a bare number (lead). */
+/** Parse a `vid` param of the form "c123" (contact) or "l456" (lead), or a bare number (lead), optionally signed ("l456.<sig>"). */
 function parseVid(vid: string): { contactId: number | null; leadId: number | null } {
   const out = { contactId: null as number | null, leadId: null as number | null };
   if (!vid) return out;
-  const m = /^([cl]?)(\d+)$/.exec(vid.trim());
+  const m = /^([cl]?)(\d+)(?:\.[A-Za-z0-9_-]{16})?$/.exec(vid.trim());
   if (!m) return out;
   const n = Number(m[2]);
   if (!n) return out;
@@ -130,11 +131,38 @@ function parseVid(vid: string): { contactId: number | null; leadId: number | nul
 }
 
 /**
- * The most high-intent tasks the beacon may file for one workspace in a day. A
- * visitor id is not signed yet, so anyone can name a record on this public route.
- * One task per record per day is the existing limit, and walking sequential ids
- * still filed one for every record. Past this the visits keep counting and the
- * tasks stop (audit 2026-10-20, P5).
+ * A link id the beacon can trust (audit 2026-10-20, P5): "l123.<sig>" or
+ * "c123.<sig>", the signature an HMAC over the workspace and the id. Walking
+ * sequential ids named a real record on every guess, and each named record
+ * filed a high-priority task for its owner; a signed id can only come from
+ * us. Bound to the workspace, so one tenant's id is nothing in another.
+ */
+function vidSecret(): string {
+  const k = process.env.JWT_SECRET || process.env.ENCRYPTION_KEY || "";
+  if (!k && process.env.NODE_ENV === "production") throw new Error("No server secret for visitor ids");
+  return `visitor-id:${k || "dev-only"}`;
+}
+function vidSignature(workspaceId: number, base: string): string {
+  return createHmac("sha256", vidSecret()).update(`${workspaceId}:${base}`).digest("base64url").slice(0, 16);
+}
+export function signVisitorId(workspaceId: number, kind: "c" | "l", id: number): string {
+  const base = `${kind}${id}`;
+  return `${base}.${vidSignature(workspaceId, base)}`;
+}
+/** True only for an id signed for THIS workspace. */
+export function isSignedVid(workspaceId: number, vid: string): boolean {
+  const m = /^([cl]\d+)\.([A-Za-z0-9_-]{16})$/.exec(String(vid ?? "").trim());
+  if (!m) return false;
+  const want = Buffer.from(vidSignature(workspaceId, m[1]));
+  const got = Buffer.from(m[2]);
+  return want.length === got.length && timingSafeEqual(want, got);
+}
+
+/**
+ * The most high-intent tasks the beacon may file for one workspace in a day.
+ * Only a signed id files one now (P5), so this is a second fence: one task per
+ * record per day is the other limit. Past this the visits keep counting and
+ * the tasks stop (audit 2026-10-20, P5).
  */
 export const MAX_INTENT_TASKS_PER_DAY = 50;
 
@@ -185,6 +213,8 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
       // rejected — the beacon must stay silent and keep counting page views.
       const claimed = parseVid(String(b.vid ?? ""));
       const { contactId, leadId } = await verifyVisitorIdentity(db, ws.id, claimed);
+      // Only an id we signed can file a task (P5); an unsigned one is recorded and files nothing.
+      const signed = isSignedVid(ws.id, String(b.vid ?? ""));
       const intent = pageIntent(path);
 
       await db.insert(websiteVisits).values({
@@ -202,7 +232,7 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
       // spawn one follow-up task/day (deduped) for the record owner. Dedup uses
       // prior high-intent visits for this record in the last 24h, so at most one
       // task fires per prospect per day regardless of page count.
-      if (intent === "high" && (contactId || leadId)) {
+      if (intent === "high" && (contactId || leadId) && signed) {
         const since = new Date(Date.now() - 86400000);
         const recCond = contactId ? eq(websiteVisits.contactId, contactId) : eq(websiteVisits.leadId, leadId as number);
         const [{ n }] = await db
@@ -232,9 +262,8 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
           await db.insert(tasks).values({
             workspaceId: ws.id,
             title: `High-intent website visit: ${name}`,
-            // The id came from a link parameter anyone can set; it is not
-            // signed, so the task says so (P88).
-            description: `Viewed ${path} — reach out while intent is hot. The visit was matched by an id in the link, which is not verified.`,
+            // Only a signed link id reaches here (P5).
+            description: `Viewed ${path} — reach out while intent is hot. The visit was matched by a signed id in the link.`,
             type: "follow_up",
             priority: "high",
             status: "open",

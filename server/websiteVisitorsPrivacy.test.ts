@@ -25,7 +25,7 @@ vi.mock("./db", async (a) => ({ ...(await a<typeof import("./db")>()), getDb: as
 
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import {
-  purgeOldWebsiteVisits, registerWebsiteTrackingRoutes, VISITOR_COOKIE_DAYS, WEBSITE_VISIT_RETENTION_DAYS, withoutQuery,
+  purgeOldWebsiteVisits, registerWebsiteTrackingRoutes, signVisitorId, VISITOR_COOKIE_DAYS, WEBSITE_VISIT_RETENTION_DAYS, withoutQuery,
 } from "./websiteTracking";
 
 const WS = 2;
@@ -112,18 +112,21 @@ describe("the /api/track route", () => {
     expect(withoutQuery("?only=query")).toBe("");
   });
 
+  // 2026-11-06 (S1b, P5): only a signed link id can file a task now, so both
+  // cases below use one; an unsigned id filing nothing would make the
+  // suppression case pass for the wrong reason. The task's wording follows.
   it("files no task for someone who unsubscribed, and still counts the visit", async () => {
     rows("email_suppressions").push({ id: 1, workspaceId: WS, email: "ann@acme.example", reason: "unsubscribe" });
-    await beacon({ slug: "lsi", visitorId: "v1", path: "/pricing", vid: "l1" });
+    await beacon({ slug: "lsi", visitorId: "v1", path: "/pricing", vid: signVisitorId(WS, "l", 1) });
     expect(rows("website_visits")).toHaveLength(1);
     expect(intentTasks()).toHaveLength(0);
     expect(rows("activities")).toHaveLength(0);
   });
 
-  it("control: an unsuppressed record still gets the task, which says the match is not verified", async () => {
-    await beacon({ slug: "lsi", visitorId: "v1", path: "/pricing", vid: "l2" });
+  it("control: an unsuppressed record still gets the task, which says how it was matched", async () => {
+    await beacon({ slug: "lsi", visitorId: "v1", path: "/pricing", vid: signVisitorId(WS, "l", 2) });
     expect(intentTasks()).toHaveLength(1);
-    expect(intentTasks()[0].description).toContain("matched by an id in the link, which is not verified");
+    expect(intentTasks()[0].description).toContain("matched by a signed id in the link");
   });
 });
 
