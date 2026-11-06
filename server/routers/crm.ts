@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, isNull, isNotNull, like, lt, lte, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, isNotNull, like, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { invokeLLM } from "../_core/llm";
 import {
@@ -49,7 +49,7 @@ import { rankOf, repProcedure, ROLE_RANK, workspaceProcedure } from "../_core/wo
 import { FORECAST_CATEGORIES } from "@shared/forecastCategory";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { assertOwnerInWorkspace, assertRowInWorkspace } from "../services/foreignIds";
-import { defaultPipelineId, invalidateStageIndex, resolvedStageFor, stageIndexFor, stageResolver } from "../_core/stageSemantics";
+import { closedStageKeys, defaultPipelineId, invalidateStageIndex, resolvedStageFor, stageIndexFor, stageResolver } from "../_core/stageSemantics";
 import { isSuppressed, makeUnsubscribeUrl, unsubscribeHeaders } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
 import {
@@ -1933,15 +1933,34 @@ async function scopedMetricDeals(db: NonNullable<Awaited<ReturnType<typeof getDb
 }
 
 export const opportunitiesRouter = router({
+  /**
+   * Deals, newest first. Every filter runs in SQL (audit 2026-10-20, R66):
+   * this read every deal in the workspace and filtered in JS, and the company
+   * page loaded all of them to show one account's. `accountId`, `openOnly`
+   * and `limit` let a page ask for what it shows.
+   */
   list: workspaceProcedure
-    .input(z.object({ stage: z.string().optional(), ownerOnly: z.boolean().optional() }).optional())
+    .input(z.object({
+      stage: z.string().optional(),
+      ownerOnly: z.boolean().optional(),
+      accountId: z.number().int().positive().optional(),
+      openOnly: z.boolean().optional(),
+      limit: z.number().int().min(1).max(1000).optional(),
+    }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
-      let rows = await db.select().from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id)).orderBy(desc(opportunities.updatedAt));
-      if (input?.stage) rows = rows.filter((o) => o.stage === input.stage);
-      if (input?.ownerOnly) rows = rows.filter((o) => o.ownerUserId === ctx.user.id);
-      return rows;
+      const closed = input?.openOnly ? await closedStageKeys(db, ctx.workspace.id) : [];
+      const q = db.select().from(opportunities)
+        .where(and(
+          eq(opportunities.workspaceId, ctx.workspace.id),
+          input?.stage ? eq(opportunities.stage, input.stage) : undefined,
+          input?.ownerOnly ? eq(opportunities.ownerUserId, ctx.user.id) : undefined,
+          input?.accountId ? eq(opportunities.accountId, input.accountId) : undefined,
+          closed.length > 0 ? notInArray(opportunities.stage, closed) : undefined,
+        ))
+        .orderBy(desc(opportunities.updatedAt), desc(opportunities.id));
+      return input?.limit ? q.limit(input.limit) : q;
     }),
 
   /**

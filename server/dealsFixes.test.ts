@@ -25,6 +25,7 @@
  *   R41 — a rep's forecast is their own; a deal's forecast category decides
  *         Commit and Best case, and an unmarked deal keeps the win % rule.
  *   R101 — pipeline rename is a dialog; settings dialogs close when saved.
+ *   R66 — the deal list filters in SQL; the company page and Home ask for theirs.
  *
  * Procedures run through the real router against the SQL-evaluating fake;
  * screens render with a stub trpc.
@@ -565,5 +566,35 @@ describe("R101: pipeline settings save before they close", () => {
     expect(dialog).not.toContain("setNewStageOpen(false)");
     expect(src).toContain("const renameStage = trpc.crmPipelines.updateStage.useMutation({ onSuccess: () => { invalidateAll(); setEditingId(null); }");
     expect(src).not.toContain("updateStage.mutate({ id: s.id, patch: { label: editLabel } }); setEditingId(null);");
+  });
+});
+
+/* ── R66: opportunities.list asks the database ─────────────────────────── */
+
+describe("R66: the deal list filters in SQL", () => {
+  beforeEach(() => {
+    deal(1, { accountId: 1, ownerUserId: ME, updatedAt: new Date("2026-10-01T00:00:00Z") });
+    deal(2, { accountId: 3, ownerUserId: REP, stage: "signed", updatedAt: new Date("2026-10-03T00:00:00Z") });
+    deal(3, { accountId: 3, ownerUserId: ME, stage: "negotiation", updatedAt: new Date("2026-10-02T00:00:00Z") });
+    rows("opportunities").push({ id: 4, workspaceId: OTHER, accountId: 3, name: "Theirs", stage: "discovery", value: "1", updatedAt: new Date() });
+  });
+
+  it("one account's, open only, mine, a stage, or the newest few", async () => {
+    const ids = async (input?: Parameters<ReturnType<typeof caller>["opportunities"]["list"]>[0]) => (await caller().opportunities.list(input)).map((o) => o.id);
+    expect(await ids()).toEqual([2, 3, 1]);
+    expect(await ids({ accountId: 3 })).toEqual([2, 3]);
+    expect(await ids({ openOnly: true })).toEqual([3, 1]);
+    expect(await ids({ ownerOnly: true })).toEqual([3, 1]);
+    expect(await ids({ stage: "negotiation" })).toEqual([3]);
+    expect(await ids({ openOnly: true, limit: 1 })).toEqual([3]);
+  });
+
+  it("the company page and the Home widget ask for what they show", () => {
+    expect(read("client/src/pages/usip/CompanyProfile.tsx")).toContain("trpc.opportunities.list.useQuery({ accountId: id },");
+    expect(read("client/src/pages/usip/CompanyProfile.tsx")).not.toContain("filter((o) => o.accountId === id)");
+    expect(read("client/src/pages/usip/Home.tsx")).toContain("trpc.opportunities.list.useQuery({ openOnly: true, limit: 5 })");
+    const list = read("server/routers/crm.ts");
+    const proc = list.slice(list.indexOf("export const opportunitiesRouter = router({"), list.indexOf("  /**\n   * Kanban board grouped by stage"));
+    expect(proc).not.toMatch(/rows = rows\.filter/);
   });
 });
