@@ -70,9 +70,16 @@ describe("wiring — the drawer exists, is mounted, and honors the app's lessons
   const card = readFileSync("client/src/components/usip/enrichment/ActionCard.tsx", "utf8");
   const nav = readFileSync("client/src/components/usip/enrichment/JobStepNav.tsx", "utf8");
 
-  it("the page opens the drawer from the Automate menu — no dangling redirect on that item", () => {
-    expect(page).toContain("<EnrichmentJobDrawer open={jobDrawerOpen} onOpenChange={setJobDrawerOpen} />");
-    expect(page).toContain("setJobDrawerOpen(true)");
+  it("the Automate menu's schedule item goes somewhere real — no dangling redirect on that item", () => {
+    // 2026-11-06 (audit P89): the page no longer mounts this drawer. Its
+    // Create is disabled because nothing saves a job, so the menu item that
+    // opened it promised a schedule it could not make. The item now opens the
+    // enrichment sweep's settings, the scheduled enrichment that exists. The
+    // drawer and its flow rules stay for when a job backend is built. What
+    // this protected still holds: the item is no bare redirect to Data Health.
+    expect(page).not.toContain("<EnrichmentJobDrawer");
+    expect(page).toContain('onClick={() => setLocation(SWEEP_SETTINGS)}><Activity className="size-4 mr-2" /> Schedule the enrichment sweep');
+    expect(page).toContain('const SWEEP_SETTINGS = "/v2/settings/enrichment-sweep";');
     expect(page).not.toMatch(/setLocation\("\/data-health"\)}><Activity/);
   });
 
