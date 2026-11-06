@@ -5,7 +5,7 @@
  *   list, get, create, update, setStatus
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { areCampaigns, areEngineLogs, campaignRoutingSuggestions, personas, prospectIntelligence, prospectQueue, prospects, researchSectors, sequences, workspaceSettings } from "../../../drizzle/schema";
 
@@ -51,6 +51,7 @@ import { invokeLLM, contentText } from "../../_core/llm";
 import { ARE_DEFAULT_SOURCES, ARE_SOURCES, campaignSources, discoveryIsOff, normalizeSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 import { MIN_STEP_GAP_DAYS, MAX_STEP_GAP_DAYS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { areExecutionQueue, spendLedger } from "../../../drizzle/schema";
+import { EMPTY_FIXED_COPY, usableFixedSteps } from "@shared/areFixedCopy";
 import { describeSources } from "../../services/prospectSources/registry";
 import { spendDay } from "../../services/spend";
 
@@ -620,6 +621,25 @@ export const campaignsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const { id, ...rest } = input;
+      // A fixed-copy campaign with no usable step fails every prospect's
+      // sequence (audit 2026-10-20, A47), so it is refused here, whichever of
+      // the two fields this save changes.
+      if (rest.copyMode !== undefined || rest.fixedSteps !== undefined) {
+        let mode: string | null | undefined = rest.copyMode;
+        let steps: unknown = rest.fixedSteps;
+        if (mode === undefined || steps === undefined) {
+          const [cur] = await db
+            .select({ copyMode: areCampaigns.copyMode, fixedSteps: areCampaigns.fixedSteps })
+            .from(areCampaigns)
+            .where(and(eq(areCampaigns.id, id), eq(areCampaigns.workspaceId, ctx.workspace.id)))
+            .limit(1);
+          mode ??= cur?.copyMode;
+          if (steps === undefined) steps = cur?.fixedSteps;
+        }
+        if (mode === "fixed" && usableFixedSteps(steps) === 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: EMPTY_FIXED_COPY });
+        }
+      }
       const updates: Partial<typeof areCampaigns.$inferInsert> = {};
       if (rest.name !== undefined) updates.name = rest.name;
       if (rest.description !== undefined) updates.description = rest.description;
@@ -690,6 +710,33 @@ export const campaignsRouter = router({
         .set(updates)
         .where(and(eq(areCampaigns.id, id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
       return { success: true };
+    }),
+
+  /**
+   * How many prospects a fit gate of `minConfidence` would reject (audit
+   * 2026-10-20, A14). The engine's screen pass rejects, within a tick, every
+   * row scored above 0 and below the gate that is not enriched yet
+   * (areEngine, "1a. Reject what can never be enriched"), so moving the slider
+   * up is a mass rejection. Same predicate, counted, so Settings can say how
+   * many before it saves.
+   */
+  fitGatePreview: workspaceProcedure
+    .input(z.object({ id: z.number().int(), minConfidence: z.number().int().min(0).max(100) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .where(and(
+          eq(prospectQueue.campaignId, input.id),
+          eq(prospectQueue.workspaceId, ctx.workspace.id),
+          inArray(prospectQueue.sequenceStatus, ["pending", "sourcing"]),
+          inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
+          gt(prospectQueue.icpMatchScore, 0),
+          lt(prospectQueue.icpMatchScore, input.minConfidence),
+        ));
+      return { wouldReject: Number(row?.n ?? 0) };
     }),
 
   /**
