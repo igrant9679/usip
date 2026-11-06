@@ -56,6 +56,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { tablistProps, tabProps } from "@/lib/tabs";
 import { RejectProspectDialog, type RejectTarget } from "@/components/usip/are/RejectProspectDialog";
 import { ENRICHMENT_STATES, PROSPECT_VIEW_KEYS, PROSPECT_VIEW_LABEL, type EnrichmentState, type ProspectView } from "@shared/areProspectViews";
 import { trpc } from "@/lib/trpc";
@@ -2619,10 +2620,10 @@ export default function ARECampaignDetail() {
                 counted by the server (tracker 12, 13; A45). The enrichment
                 chips were a legend you could not click. */}
             <div className="flex flex-wrap items-center gap-2 mb-2">
-              <div role="group" aria-label="Show prospects" className="flex flex-wrap gap-1">
+              <div {...tablistProps("Show prospects")} className="flex flex-wrap gap-1">
                 {PROSPECT_VIEW_KEYS.map((v) => (
-                  <Button key={v} size="sm" variant={prospectView === v ? "default" : "outline"} className="h-7 px-2 text-[11px]"
-                    aria-pressed={prospectView === v} onClick={() => setProspectView(v)}>
+                  <Button key={v} {...tabProps(prospectView === v)} size="sm" variant={prospectView === v ? "default" : "outline"} className="h-7 px-2 text-[11px]"
+                    onClick={() => setProspectView(v)}>
                     {PROSPECT_VIEW_LABEL[v]} <span className="ml-1 opacity-70 tabular-nums">{(queueCounts?.byView?.[v] ?? 0).toLocaleString()}</span>
                   </Button>
                 ))}
