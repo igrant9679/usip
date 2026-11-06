@@ -11,7 +11,6 @@ import { ATTACHMENT_MAX_BASE64, ATTACHMENT_MAX_BYTES, attachmentType } from "../
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { generateTasksForWorkspace } from "../services/taskAutopilot";
-import { endOfZonedDay } from "@shared/availability";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { assertOutboundNotPaused } from "../services/outboundPause";
 import { assertOwnerInWorkspace } from "../services/foreignIds";
