@@ -282,6 +282,14 @@ describe("the Manus runtime and debug collector stay out of production", () => {
     expect(names({ command: "serve", mode: "development" }).filter((n) => /manus/i.test(n)).length).toBe(2);
   });
 
+  it("nor does the JSX location plugin: no data-loc source paths in production (X2.3)", async () => {
+    const mod: any = await import("../vite.config");
+    const names = (env: { command: string; mode: string }) =>
+      (mod.default(env).plugins as any[]).flat(Infinity).filter(Boolean).map((p: any) => p.name as string);
+    expect(names({ command: "build", mode: "production" })).not.toContain("vite-plugin-jsx-loc");
+    expect(names({ command: "serve", mode: "development" })).toContain("vite-plugin-jsx-loc");
+  });
+
   it("the collector script is no longer in the public folder that every build copies", () => {
     expect(existsSync(join(ROOT, "client/public/__manus__/debug-collector.js"))).toBe(false);
     expect(existsSync(join(ROOT, "client/dev/__manus__/debug-collector.js"))).toBe(true);
