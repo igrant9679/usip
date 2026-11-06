@@ -341,6 +341,14 @@ async function startServer() {
       .catch((e) => console.error("[dealDates] backfill failed:", e));
   }, 45_000);
 
+  // Mailbox passwords and OAuth tokens saved before they were encrypted are
+  // encrypted once (audit 2026-10-20, C4). Idempotent: plaintext only.
+  setTimeout(() => {
+    import("../services/secretBackfill")
+      .then((m) => m.encryptLegacyMailboxSecrets())
+      .catch((e) => console.error("[secretBackfill] failed:", e));
+  }, 50_000);
+
   // Scheduled report emails (daily/weekly/monthly via the system sender).
   const runReports = () => {
     runReportScheduler().catch((e: unknown) => console.error("[ReportScheduler] tick failed:", e));

@@ -17,6 +17,7 @@
  * list is the save, and Add to… is the email. Horizontally scrollable so it
  * never wraps at desktop widths.
  */
+import { csvCell } from "@shared/csvCell";
 import { useMemo, useState, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
 import { invalidateEnrollmentReads } from "@/lib/enrollmentCache";
@@ -57,7 +58,8 @@ const CSV_COLS: Array<{ key: string; label: string }> = [
   { key: "industry", label: "Industry" }, { key: "seniority", label: "Seniority" },
 ];
 function toCsv(rows: any[]): string {
-  const esc = (v: any) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  // Formula cells neutralised too (audit 2026-10-20, G49).
+  const esc = csvCell;
   return [CSV_COLS.map((c) => c.label).join(","), ...rows.map((r) => CSV_COLS.map((c) => esc(r[c.key])).join(","))].join("\n");
 }
 

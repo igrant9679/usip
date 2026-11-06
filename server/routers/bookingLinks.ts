@@ -22,6 +22,7 @@ import { router, publicProcedure } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { isActiveMember } from "../_core/activeMembers";
 import { getDb } from "../db";
+import { isWorkspaceLive } from "../_core/workspaceArchive";
 import { activities, bookingLinks, calendarEvents, leads, meetings, notifications, users, type BookingLink } from "../../drizzle/schema";
 import { sendMeetingInvite } from "../services/meetingScheduler";
 import { hostedPageChatSlug } from "../services/hostedChat";
@@ -153,6 +154,12 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
   const start = opts.startAt;
+
+  // An archived workspace takes no bookings (audit 2026-10-20, G36). Here,
+  // in the shared path, so the chat agent's bookings are refused too.
+  if (!(await isWorkspaceLive(link.workspaceId))) {
+    throw new TRPCError({ code: "NOT_FOUND", message: BOOKING_UNAVAILABLE });
+  }
 
   // Re-validate against the CURRENT open slots: enforces busy-conflicts,
   // the working-hours window/timezone, workdays, lead time, and horizon in
@@ -375,6 +382,8 @@ export const bookingLinksRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [link] = await db.select().from(bookingLinks).where(eq(bookingLinks.slug, input.slug));
       if (!link || !link.active) throw new TRPCError({ code: "NOT_FOUND", message: BOOKING_UNAVAILABLE });
+      // …and when the workspace is archived (audit 2026-10-20, G36).
+      if (!(await isWorkspaceLive(link.workspaceId))) throw new TRPCError({ code: "NOT_FOUND", message: BOOKING_UNAVAILABLE });
       /**
        * Same refusal, same words, when the host has left the workspace — a
        * stranger must not be able to tell "no such link" from "that rep left",
