@@ -233,7 +233,8 @@ function DonutChartWidget({ data, height = 180 }: { data: any; height?: number }
    FUNNEL CHART
 ═══════════════════════════════════════════════════════════════════════════ */
 function FunnelChartWidget({ data, height = 180 }: { data: any; height?: number }) {
-  const series = (data.series ?? []) as Array<{ stage: string; count: number; value: number }>;
+  // `value` is a deal widget's money; a report's funnel has only its measure, in `count`.
+  const series = (data.series ?? []) as Array<{ stage: string; count: number; value?: number }>;
   if (series.length === 0) return <EmptyChart />;
   const maxCount = Math.max(...series.map((s) => s.count), 1);
   return (
@@ -247,8 +248,10 @@ function FunnelChartWidget({ data, height = 180 }: { data: any; height?: number 
               style={{ width: `${(s.count / maxCount) * 100}%`, background: PALETTE[i % PALETTE.length] }}
             />
           </div>
-          <span className="font-mono tabular-nums w-8 text-right shrink-0">{s.count}</span>
-          <span className="font-mono tabular-nums w-16 text-right text-muted-foreground shrink-0">{fmtCurrency(s.value)}</span>
+          <span className="font-mono tabular-nums w-12 text-right shrink-0">{fmtNumber(s.count)}</span>
+          {typeof s.value === "number" && (
+            <span className="font-mono tabular-nums w-16 text-right text-muted-foreground shrink-0">{fmtCurrency(s.value)}</span>
+          )}
         </li>
       ))}
     </ul>
@@ -346,7 +349,10 @@ function GaugeWidget({ data }: { data: any }) {
   const value = Number(data.value ?? 0);
   const format = data.format ?? "percent";
   const displayValue = format === "currency" ? fmtCurrency(value) : format === "percent" ? `${value}%` : fmtNumber(value);
-  const pct = format === "percent" ? Math.min(100, value) : 75; // default arc fill for non-percent
+  // A gauge fills to a share of something. A percentage is its own share; any
+  // other number has no whole to fill against, so the arc stays empty and says
+  // so. It drew three quarters full for every such value (G55).
+  const pct = format === "percent" ? Math.max(0, Math.min(100, value)) : 0;
   const gaugeData = [
     { name: "Value", value: pct, fill: "#14B89A" },
     { name: "Remaining", value: 100 - pct, fill: "hsl(var(--secondary))" },
@@ -360,6 +366,7 @@ function GaugeWidget({ data }: { data: any }) {
       </ResponsiveContainer>
       <div className="-mt-8 text-center">
         <div className="text-2xl font-mono font-bold tabular-nums">{displayValue}</div>
+        {format !== "percent" && <div className="text-[10px] text-muted-foreground">Not a percentage, so the gauge isn't filled</div>}
         {data.breakdown && (
           <div className="flex gap-3 mt-1 text-xs text-muted-foreground">
             <span>Calls: {data.breakdown.calls}</span>
