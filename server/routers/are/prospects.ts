@@ -187,7 +187,11 @@ import { parseTargetPlaces, placeFit, placeStringOf } from "../../services/place
 const NO_REASON = "No reason given";
 
 /** Why Regenerate is refused for a sequence already on the calendar (A40). */
-/** The approve line when a campaign has none, as the engine's (areEngine DEFAULT_APPROVE_THRESHOLD). */
+/**
+ * The re-qualify line when a campaign has no approve threshold. Not an approve
+ * line: a re-qualified prospect goes back to review, and with no threshold the
+ * engine approves nobody (audit 2026-10-20, A16).
+ */
 const DEFAULT_REEVAL_THRESHOLD = 70;
 /** How every engine score rejection's reason begins (the screen pass and the enrichment gate). */
 export const AUTO_SCORE_REJECTION = "Auto-screened: ICP match";
@@ -3160,7 +3164,7 @@ export const prospectsRouter = router({
       if (!effectiveIcp) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No active ICP profile or campaign targeting" });
       const match = await scoreIcpMatch(prospect, effectiveIcp, ctx.workspace.id);
       // The campaign's own approve line (audit A75); 70 only when it has none,
-      // as in Re-evaluate All and the engine.
+      // as in Re-evaluate All. Either way the row returns to review, not approval.
       const autoApproveThreshold = reCamp?.autoApproveThreshold ?? DEFAULT_REEVAL_THRESHOLD;
       // Re-grading moves only a prospect that is not in a sequence (audit
       // 2026-10-20, A2): sending one who had replied, completed or was

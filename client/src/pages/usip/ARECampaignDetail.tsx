@@ -85,6 +85,7 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { rankOf } from "@shared/roleRank";
 import { dayOffsetForPosition, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenceSteps";
+import { APPROVE_THRESHOLD_EXPLAINER, APPROVE_THRESHOLD_START, approveThresholdSummary } from "@shared/areApproveThreshold";
 import {
   signalMeta, describeSignal, actionLabel, signalSourceLabel, stepLabelFromPayload,
   type AreSignalChannel,
@@ -3223,7 +3224,7 @@ export default function ARECampaignDetail() {
                   </p>
                   <div className="space-y-2">
                     {([
-                      { v: "full", title: "Fully autonomous", body: "Everyone at or above the auto-approve threshold is approved, sequenced, enrolled and sent — nobody reviews. Below the threshold is skipped." },
+                      { v: "full", title: "Fully autonomous", body: "With an auto-approve threshold set, prospects at or above it are approved, sequenced, enrolled and sent with nobody reviewing, and prospects below it are rejected. With no threshold, nothing is approved automatically." },
                       { v: "batch_approval", title: "Batch approval", body: "The engine screens out obvious misses; you approve the rest in batches before anything is sequenced or sent." },
                     ] as const).map((o) => (
                       <button
@@ -3243,7 +3244,7 @@ export default function ARECampaignDetail() {
                   {autonomyDraft === "full" && campaign?.autonomyMode !== "full" && (
                     <label className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed cursor-pointer">
                       <input type="checkbox" className="mt-0.5" checked={fullAck} onChange={(e) => setFullAck(e.target.checked)} />
-                      <span>I understand that with <strong>Fully autonomous</strong> this campaign will approve and email prospects on its own, up to {campaign?.dailySendCap ?? 50}/day, with no human review between discovery and send. The auto-approve threshold {autoThreshold !== null ? `(${autoThreshold})` : "(currently off — set one below, or everyone is approved)"} is the only gate.</span>
+                      <span>I understand that with <strong>Fully autonomous</strong> this campaign will approve and email prospects on its own, up to {campaign?.dailySendCap ?? 50}/day, with no human review between discovery and send. The auto-approve threshold is the only gate: {approveThresholdSummary(autoThreshold)}.</span>
                     </label>
                   )}
                 </CardContent>
@@ -3356,7 +3357,9 @@ export default function ARECampaignDetail() {
                 </CardContent>
               </Card>
 
-              {/* Auto-approve threshold */}
+              {/* Auto-approve threshold. Only Full Auto has one (A16): the
+                  engine ignores it in Batch approval, so it is not offered. */}
+              {autonomyActive === "full" && (
               <Card className="bg-card border">
                 <CardHeader className="pb-2 pt-4 px-4">
                   <CardTitle className="text-sm flex items-center gap-2">
@@ -3366,7 +3369,7 @@ export default function ARECampaignDetail() {
                 </CardHeader>
                 <CardContent className="px-4 pb-4 space-y-4">
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    Prospects whose ICP match score meets or exceeds this threshold are automatically approved and skip the manual review queue. Set to <strong>Off</strong> to require manual approval for all prospects.
+                    {APPROVE_THRESHOLD_EXPLAINER}
                   </p>
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
@@ -3377,11 +3380,11 @@ export default function ARECampaignDetail() {
                             {autoThreshold}
                           </span>
                         ) : (
-                          <span className="text-xs text-muted-foreground">Off (manual review)</span>
+                          <span className="text-xs text-muted-foreground">Off</span>
                         )}
                         <Button
                           size="sm" variant="outline" className="h-6 px-2 text-[10px]"
-                          onClick={() => setThresholdDraft(autoThreshold === null ? 70 : null)}
+                          onClick={() => setThresholdDraft(autoThreshold === null ? APPROVE_THRESHOLD_START : null)}
                         >
                           {autoThreshold === null ? "Enable" : "Disable"}
                         </Button>
@@ -3402,17 +3405,14 @@ export default function ARECampaignDetail() {
                         </div>
                         <div className="flex items-center gap-2 p-2 rounded-lg bg-muted/50 text-xs">
                           <div className="size-2 rounded-full shrink-0" style={{ backgroundColor: autoThreshold >= 70 ? "#34D399" : autoThreshold >= 40 ? "#F59E0B" : "#F87171" }} />
-                          <span>
-                            {autoThreshold >= 70 ? "High precision — only strong ICP matches will be auto-approved."
-                              : autoThreshold >= 40 ? "Balanced — moderate and strong matches will be auto-approved."
-                              : "High volume — most prospects will be auto-approved regardless of fit."}
-                          </span>
+                          <span>{approveThresholdSummary(autoThreshold)}.</span>
                         </div>
                       </div>
                     )}
                   </div>
                 </CardContent>
               </Card>
+              )}
 
               {/* Enrichment score gate (minConfidence) */}
               <Card className="bg-card border">
@@ -4008,11 +4008,11 @@ export default function ARECampaignDetail() {
                 person made, and rejections for any other reason, are left as they are.
               </span>
               <span className="block">
-                Auto-approve threshold for this campaign:{" "}
+                Re-qualify line for this run:{" "}
                 <strong className="text-violet-600 dark:text-violet-400">
-                  {autoThreshold !== null ? `${autoThreshold} / 100` : "not set (default 70)"}
+                  {autoThreshold !== null ? `${autoThreshold} / 100 (the auto-approve threshold)` : "70 / 100 (no auto-approve threshold is set)"}
                 </strong>.
-                Prospects scoring at or above this will be moved back to the pending queue.
+                Prospects scoring at or above it go back to the pending queue, where this campaign's usual screening applies.
               </span>
               <span className="block">
                 <span className="text-xs text-muted-foreground">Override threshold for this run only (0–100):</span>

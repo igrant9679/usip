@@ -201,6 +201,12 @@ export async function getAccountSentLastHour(
  * make every rep's Inbox compose throw TOO_MANY_REQUESTS. Widening or
  * re-pointing this cap is a separate decision, not a side effect of unifying
  * the per-ACCOUNT number.
+ *
+ * Owner decision 2026-11-06 (audit A19): the same column now also caps the
+ * Revenue Engine, on the engine's own count (areEngine.areWorkspaceSendsLeft).
+ * This cap on manual and Sequence mail is kept exactly as it was while
+ * outbound is paused; ARE Settings and the refusal below say which mail each
+ * count is.
  */
 export async function getWorkspaceSentToday(workspaceId: number): Promise<number> {
   const db = await getDb();
@@ -252,7 +258,7 @@ export async function assertSendAllowed(
   if (wsSent >= wsCap) {
     throw new TRPCError({
       code: "TOO_MANY_REQUESTS",
-      message: `Workspace daily send cap reached (${wsSent}/${wsCap}). Try again tomorrow or raise the cap in ARE settings.`,
+      message: `Workspace daily cap for manual and Sequence email reached (${wsSent}/${wsCap}). Try again tomorrow, or raise the Daily Send Cap in ARE Settings (it also caps the Revenue Engine, counted separately).`,
     });
   }
 

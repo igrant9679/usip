@@ -16,6 +16,7 @@ import { WarmySenderSourceCard } from "@/components/usip/settings/WarmySenderSou
 import { LeadOceanSourceCard } from "@/components/usip/settings/LeadOceanSourceCard";
 import { ARE_SEQUENCE_TEMPLATES, DEFAULT_ARE_SEQUENCE_TEMPLATE } from "@shared/areSequenceTemplates";
 import { UNSENDABLE_CHANNEL_REASON } from "@shared/areSequenceSteps";
+import { APPROVE_THRESHOLD_EXPLAINER, APPROVE_THRESHOLD_START, approveThresholdSummary } from "@shared/areApproveThreshold";
 import { ARE_SOURCES, ARE_SOURCE_IDS, resolveSourceOrder } from "@shared/areSources";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -74,7 +75,7 @@ const AUTONOMY_OPTIONS: { value: AutonomyMode; label: string; description: strin
   {
     value: "full",
     label: "Full Autonomy",
-    description: "The AI discovers, enriches, sequences, and sends without any human approval. Best for high-volume campaigns where you trust the ICP model.",
+    description: "With an auto-approve threshold set, the AI approves, sequences and sends everyone at or above it with no human review, and rejects the rest. Without one, nothing is approved automatically.",
     color: "border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300",
   },
   {
@@ -308,12 +309,17 @@ export default function ARESettings() {
             ))}
           </div>
 
-          {/* Auto-approve threshold */}
+          {/* Auto-approve threshold: Full Auto's only (A16), so shown only for it. */}
+          {autonomyMode !== "full" ? (
+            <p className="pt-3 border-t text-[11px] text-muted-foreground">
+              Batch approval has no auto-approve threshold: nothing is approved until a person approves it.
+            </p>
+          ) : (
           <div className="space-y-3 pt-3 border-t">
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-xs font-medium">Default Auto-Approve Threshold</div>
-                <div className="text-[11px] text-muted-foreground">Prospects above this ICP match score are auto-approved in new campaigns.</div>
+                <div className="text-[11px] text-muted-foreground">{APPROVE_THRESHOLD_EXPLAINER}</div>
               </div>
               <div className="flex items-center gap-2">
                 {autoApproveThreshold !== null ? (
@@ -324,11 +330,11 @@ export default function ARESettings() {
                     {autoApproveThreshold}
                   </span>
                 ) : (
-                  <span className="text-xs text-muted-foreground italic">Disabled</span>
+                  <span className="text-xs text-muted-foreground italic">Off</span>
                 )}
                 <Button
                   size="sm" variant="outline" className="h-6 px-2 text-[10px]"
-                  onClick={() => { setAutoApproveThreshold(autoApproveThreshold === null ? 70 : null); mark(); }}
+                  onClick={() => { setAutoApproveThreshold(autoApproveThreshold === null ? APPROVE_THRESHOLD_START : null); mark(); }}
                 >
                   {autoApproveThreshold === null ? "Enable" : "Disable"}
                 </Button>
@@ -352,24 +358,24 @@ export default function ARESettings() {
                     className="size-2 rounded-full shrink-0"
                     style={{ backgroundColor: autoApproveThreshold >= 70 ? "#34D399" : autoApproveThreshold >= 40 ? "#F59E0B" : "#F87171" }}
                   />
-                  <span>
-                    {autoApproveThreshold >= 70
-                      ? "High precision — only strong ICP matches will be auto-approved."
-                      : autoApproveThreshold >= 40
-                      ? "Balanced — moderate and strong matches will be auto-approved."
-                      : "High volume — most prospects will be auto-approved regardless of fit."}
-                  </span>
+                  <span>{approveThresholdSummary(autoApproveThreshold)}.</span>
                 </div>
               </div>
             )}
           </div>
+          )}
 
           {/* Daily send cap */}
           <div className="space-y-2 pt-3 border-t">
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-xs font-medium">Daily Send Cap</div>
-                <div className="text-[11px] text-muted-foreground">Maximum emails sent per day across all active ARE campaigns.</div>
+                {/* Two caps read this number, each counted on its own (A19). */}
+                <div className="text-[11px] text-muted-foreground">
+                  The most the Revenue Engine sends in a day across all its campaigns, email and LinkedIn steps
+                  together; each campaign's own daily cap still applies. The same number separately caps the
+                  emails reps send by hand and through Sequences each day.
+                </div>
               </div>
               <span className="text-sm font-bold tabular-nums text-primary">{dailySendCap}</span>
             </div>

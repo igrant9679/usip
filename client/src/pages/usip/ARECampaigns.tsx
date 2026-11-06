@@ -38,6 +38,8 @@ import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
 import { askLaunchOnUtc } from "@/components/usip/are/launchTimezone";
+import { APPROVE_THRESHOLD_START, approveThresholdSummary } from "@shared/areApproveThreshold";
+import { wizardDefaults } from "./areCampaignsModel";
 
 const STATUS_COLOR: Record<string, string> = {
   draft: "#94A3B8",
@@ -178,7 +180,12 @@ export default function ARECampaigns() {
   // list — exactly the state the comment claimed to have fixed.
   // Same procedure ARESettings.tsx reads and invalidates on save, so changing
   // the default there is reflected here rather than in a second opinion.
-  const { data: wsSettings } = trpc.settings.getAreSettings.useQuery();
+  const wsSettingsQ = trpc.settings.getAreSettings.useQuery();
+  const wsSettings = wsSettingsQ.data;
+  // Still loading, or failed: the wizard starts on the most manual values and
+  // says so (audit 2026-10-20, A17).
+  const defaultsMissing = !wsSettings;
+  const defaultsFailed = !wsSettings && !!wsSettingsQ.error;
   const defaultSources = useMemo(() => {
     const saved = ((wsSettings as any)?.areScraperSources ?? null) as Record<string, boolean> | null;
     if (!saved) return [...ARE_DEFAULT_SOURCES];
@@ -204,26 +211,12 @@ export default function ARECampaigns() {
    * review_release still got new campaigns created FULLY AUTONOMOUS. A safety
    * setting that silently inverts is worse than no setting.
    *
-   * Fallbacks below are exactly the values the wizard used to hardcode, so a
-   * workspace that has never opened ARE Settings behaves as before.
+   * The fallbacks were the values the wizard used to hardcode — Full Auto at a
+   * 60 threshold — so a slow or failed settings read made a campaign that
+   * approved and sent on its own. They are the most manual ones now
+   * (areCampaignsModel.wizardDefaults; A16, A17).
    */
-  const wsDefaults = useMemo(() => {
-    const s = (wsSettings ?? {}) as Record<string, any>;
-    const channels = (s.areDefaultChannels ?? null) as Record<string, boolean> | null;
-    return {
-      autonomyMode: (s.areDefaultAutonomyMode ?? "full") as "full" | "batch_approval" | "review_release",
-      dailySendCap: Number(s.areDefaultDailySendCap ?? 50) || 50,
-      autoApproveThreshold: s.areDefaultAutoApproveThreshold ?? 60,
-      channelsEnabled: {
-        email: channels?.email ?? true,
-        linkedin: channels?.linkedin ?? false,
-        sms: channels?.sms ?? false,
-        voice: channels?.voice ?? false,
-      },
-      sequenceTemplate: (s.areDefaultSequenceTemplate ?? "standard_7step") as string,
-      signalToOpportunityEnabled: Boolean(s.areDefaultSignalToOpportunity ?? false),
-    };
-  }, [wsSettings]);
+  const wsDefaults = useMemo(() => wizardDefaults(wsSettings), [wsSettings]);
 
   const [step, setStep] = useState(1);
   const TOTAL_STEPS = 4;
@@ -268,6 +261,19 @@ export default function ARECampaigns() {
       setForm(blankForm());
     }
   }, [showCreate]);
+  // Defaults that arrive after the wizard opened are applied while the person
+  // has not reached the step that shows them (A17); after that their choices stand.
+  useEffect(() => {
+    if (!showCreate || !wsSettings || step >= 3) return;
+    setForm((f) => ({
+      ...f,
+      autonomyMode: wsDefaults.autonomyMode,
+      dailySendCap: wsDefaults.dailySendCap,
+      autoApproveThreshold: wsDefaults.autoApproveThreshold,
+      prospectSources: [...defaultSources],
+      channelsEnabled: { ...wsDefaults.channelsEnabled },
+    }));
+  }, [wsSettings]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // A first launch on the UTC default asks first (A31); a yes sends it again with confirmTimezone.
   const retryCreate = useRef<((v: any) => void) | null>(null);
@@ -275,8 +281,10 @@ export default function ARECampaigns() {
   const create = trpc.are.campaigns.create.useMutation({
     onSuccess: (data) => {
       toast.success(
+        // Every 3 minutes, inside the send window (A73): the copy said every
+        // 10 minutes, 24/7.
         data.launched
-          ? "Campaign launched — engine is running. First tick fires now, then every 10 min."
+          ? "Campaign launched. The engine runs it now and then every 3 minutes; email goes out only inside your send window."
           : "Campaign saved as draft. Activate it whenever you're ready.",
       );
       utils.are.campaigns.list.invalidate();
@@ -330,7 +338,10 @@ export default function ARECampaigns() {
       goalType: form.goalType,
       targetProspectCount: form.targetProspectCount,
       dailySendCap: form.dailySendCap,
-      autoApproveThreshold: form.autoApproveThreshold,
+      // Only Full Auto has a threshold (A16): a Batch campaign stores none, so
+      // switching it to Full Auto later does not start approving at a number
+      // nobody chose for it.
+      autoApproveThreshold: form.autonomyMode === "full" ? form.autoApproveThreshold : null,
       prospectSources: form.prospectSources,
       channelsEnabled: form.channelsEnabled,
       // The wizard has no field for these two, so they come straight from the
@@ -639,25 +650,45 @@ export default function ARECampaigns() {
                   </SelectContent>
                 </Select>
                 <p className="text-[11px] text-muted-foreground mt-1">
-                  Full Auto is required for true 24/7 unattended operation.
+                  Full Auto approves and sends with nobody reviewing, but only once an auto-approve threshold is set.
+                  Either way, sending happens only inside the workspace's send window.
                 </p>
+                {defaultsMissing && (
+                  <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-1">
+                    {defaultsFailed
+                      ? "Your ARE Settings defaults didn't load, so this campaign starts on Batch approval with no auto-approve threshold. Check ARE Settings, or choose here."
+                      : "Your ARE Settings defaults haven't loaded yet, so this starts on Batch approval with no auto-approve threshold."}
+                  </p>
+                )}
               </div>
+              {/* The threshold is Full Auto's only (A16), and unset means off. */}
+              {form.autonomyMode === "full" && (
               <div>
-                <Label className="text-xs text-muted-foreground mb-1.5 block">
-                  Auto-approve ICP score floor: <span className="font-semibold text-foreground">{form.autoApproveThreshold}</span>
-                </Label>
-                <input aria-label="Auto-approve ICP score floor"
-                  type="range"
-                  min={1}
-                  max={100}
-                  value={form.autoApproveThreshold}
-                  onChange={(e) => setForm((f) => ({ ...f, autoApproveThreshold: parseInt(e.target.value) }))}
-                  className="w-full"
-                />
+                <div className="flex items-center justify-between mb-1.5">
+                  <Label className="text-xs text-muted-foreground block">
+                    Auto-approve threshold: <span className="font-semibold text-foreground">{form.autoApproveThreshold ?? "Off"}</span>
+                  </Label>
+                  <Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[10px]"
+                    onClick={() => setForm((f) => ({ ...f, autoApproveThreshold: f.autoApproveThreshold === null ? APPROVE_THRESHOLD_START : null }))}>
+                    {form.autoApproveThreshold === null ? "Enable" : "Turn off"}
+                  </Button>
+                </div>
+                {form.autoApproveThreshold !== null && (
+                  <input aria-label="Auto-approve threshold"
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={form.autoApproveThreshold}
+                    onChange={(e) => setForm((f) => ({ ...f, autoApproveThreshold: parseInt(e.target.value) }))}
+                    className="w-full"
+                  />
+                )}
                 <p className="text-[11px] text-muted-foreground mt-0.5">
-                  In Full Auto, enriched prospects ≥ this score are auto-approved. Lower = looser, higher = stricter.
+                  {approveThresholdSummary(form.autoApproveThreshold)}.
                 </p>
               </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label className="text-xs text-muted-foreground mb-1.5 block">Target prospects</Label>
@@ -668,7 +699,7 @@ export default function ARECampaigns() {
                   />
                 </div>
                 <div>
-                  <Label className="text-xs text-muted-foreground mb-1.5 block">Daily send cap</Label>
+                  <Label className="text-xs text-muted-foreground mb-1.5 block" title="This campaign's own cap. ARE Settings' Daily Send Cap also limits every campaign together.">Daily send cap (this campaign)</Label>
                   <Input aria-label="Daily send cap"
                     type="number"
                     value={form.dailySendCap}
@@ -724,17 +755,21 @@ export default function ARECampaigns() {
                   <div><dt>Company size</dt><dd>{EMPLOYEE_BANDS.find((b) => b.value === form.employeeBand)?.label}</dd></div>
                   <div><dt>Keywords</dt><dd>{form.keywords.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
                   <div><dt>Sources</dt><dd>{form.prospectSources.join(", ") || <span className="text-muted-foreground italic">none, so discovery is off</span>}</dd></div>
-                  <div><dt>Target / Daily cap</dt><dd>{form.targetProspectCount} prospects · {form.dailySendCap}/day</dd></div>
-                  <div><dt>Approve floor</dt><dd>ICP ≥ {form.autoApproveThreshold}/100</dd></div>
+                  <div><dt>Target / Daily cap</dt><dd>{form.targetProspectCount} prospects · {form.dailySendCap}/day for this campaign, within the workspace's Revenue Engine cap</dd></div>
+                  <div><dt>Auto-approve</dt><dd>{form.autonomyMode === "full" ? approveThresholdSummary(form.autoApproveThreshold) : "None: you approve every prospect"}</dd></div>
                 </dl>
               </div>
               <div className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 flex items-start gap-2">
                 <Zap className="size-3.5 mt-0.5 flex-shrink-0" />
                 <span>
-                  <strong>Launch now</strong> activates the campaign immediately. The ARE engine will
-                  fire once within seconds and then continue every 10 minutes <strong>24/7 until you
-                  pause or complete it</strong> — scraping prospects, enriching, generating A/B
-                  sequence variants, enrolling, and dispatching email autonomously.
+                  <strong>Launch</strong> activates the campaign now. The engine runs it within seconds
+                  and then every 3 minutes until you pause or complete it — finding prospects, enriching
+                  them, writing each person's sequence and enrolling them. Email is sent only inside your
+                  workspace's send window, up to the daily cap, and nothing is sent while outbound is
+                  paused for the workspace.
+                  {form.autonomyMode !== "full" || form.autoApproveThreshold === null
+                    ? " Nobody is approved for sending until you approve them."
+                    : ` Prospects scoring ${form.autoApproveThreshold} or more are approved and sent with no review.`}
                 </span>
               </div>
             </div>
@@ -772,7 +807,7 @@ export default function ARECampaigns() {
                   className="gap-2"
                 >
                   {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Rocket className="size-4" />}
-                  Launch 24/7
+                  Launch
                 </Button>
               </>
             )}
