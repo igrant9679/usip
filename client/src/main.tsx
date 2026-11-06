@@ -7,7 +7,7 @@ import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
 import { getLoginUrl } from "./const";
-import { MFA_REQUIRED_EVENT, isMfaRequiredError, shouldRedirectToLogin } from "./lib/authRedirect";
+import { MFA_REQUIRED_EVENT, isMfaRequiredError, returnPathFor, shouldRedirectToLogin } from "./lib/authRedirect";
 import { shouldRetryQuery } from "./lib/queryRetry";
 import "./index.css";
 
@@ -19,7 +19,9 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   if (!(error instanceof TRPCClientError)) return;
   if (typeof window === "undefined") return;
   if (error.message !== UNAUTHED_ERR_MSG) return;
-  const loginUrl = getLoginUrl();
+  // Carries the page being left, so signing back in returns to it (G33).
+  const back = returnPathFor(window.location);
+  const loginUrl = getLoginUrl(back === "/" ? undefined : back);
   // Never navigate to the page we are already on. getLoginUrl() is "/", which
   // IS the sign-in page — so without this, a protected query failing on the
   // sign-in page reloaded that page, which re-ran the query, which reloaded

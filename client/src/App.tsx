@@ -16,6 +16,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import { WorkspaceBrandingSync } from "@/components/usip/WorkspaceBrandingSync";
 import { ConfirmProvider } from "@/components/usip/Common";
 import { safeReturnPath } from "@shared/returnPath";
+import { returnPathFor } from "@/lib/authRedirect";
 import { usePageTitle } from "@/lib/usePageTitle";
 import { lazyChunk } from "@/lib/lazyChunk";
 
@@ -138,11 +139,12 @@ const MindmapCanvas = lazyChunk(() => import("@/pages/usip/MindmapCanvas"));
 const INVITE_RETURN_KEY = "usip_invite_return";
 
 function Landing() {
-  const params = new URLSearchParams(window.location.search);
   // Sanitised at the READ, not at the use: this value reaches
   // `window.location.href` below as the fallback when the server sends no
   // redirect, and `//evil.com` starts with "/". See @shared/returnPath.
-  const returnPath = safeReturnPath(params.get("returnPath"));
+  // A deep link opened signed-out shows this form AT that link, so with no
+  // ?returnPath= the current page is where to go back to (G33).
+  const returnPath = returnPathFor(window.location);
 
   const [mode, setMode] = useState<"signin" | "signup" | "forgot">("signin");
   usePageTitle(mode === "signup" ? "Create account" : mode === "forgot" ? "Reset password" : "Sign in");
