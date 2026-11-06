@@ -14,15 +14,19 @@ import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 
-const PersonaInput = z.object({
+// No .default() on PersonaFields: update and a preset's overrides take
+// PersonaFields.partial(), and Zod 4's .partial() still applies a default. With
+// [] defaults here, linking a persona to a sector ({id, sectorId}) emptied its
+// titles, industries, places and keywords (same flaw as audit N4/N5).
+const PersonaFields = z.object({
   name: z.string().min(2).max(120),
   description: z.string().optional(),
-  targetTitles: z.array(z.string()).default([]),
-  targetIndustries: z.array(z.string()).default([]),
-  targetGeographies: z.array(z.string()).default([]),
+  targetTitles: z.array(z.string()),
+  targetIndustries: z.array(z.string()),
+  targetGeographies: z.array(z.string()),
   employeeMin: z.number().int().min(1).nullable().optional(),
   employeeMax: z.number().int().min(1).nullable().optional(),
-  keywords: z.array(z.string()).default([]),
+  keywords: z.array(z.string()),
   categoryId: z.number().int().nullable().optional(),
   // Research (migration 0201): the sector this buyer belongs to and what the
   // AI writers will need about them. Cleaned by the shared research shape,
@@ -32,6 +36,12 @@ const PersonaInput = z.object({
   pains: z.array(z.string().max(1000)).max(60).optional(),
   objections: z.array(z.string().max(1000)).max(60).optional(),
   angle: z.string().max(4000).optional(),
+});
+const PersonaInput = PersonaFields.extend({
+  targetTitles: PersonaFields.shape.targetTitles.default([]),
+  targetIndustries: PersonaFields.shape.targetIndustries.default([]),
+  targetGeographies: PersonaFields.shape.targetGeographies.default([]),
+  keywords: PersonaFields.shape.keywords.default([]),
 });
 
 /** The research fields present in an input, cleaned; absent ones stay absent. */
@@ -185,7 +195,7 @@ export const personasRouter = router({
 
   /** Create from a preset key (also accepts overrides if user customized). */
   createFromPreset: workspaceProcedure
-    .input(z.object({ presetKey: z.string(), overrides: PersonaInput.partial().optional() }))
+    .input(z.object({ presetKey: z.string(), overrides: PersonaFields.partial().optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -222,7 +232,7 @@ export const personasRouter = router({
     }),
 
   update: workspaceProcedure
-    .input(z.object({ id: z.number() }).merge(PersonaInput.partial()))
+    .input(z.object({ id: z.number() }).merge(PersonaFields.partial()))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });

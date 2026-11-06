@@ -246,16 +246,22 @@ const PoolMemberInput = z.object({
   position: z.number().int().optional(),
 });
 
-const PoolCreateInput = z.object({
+// rotationStrategy carries no default here for the reason AccountCreateInput's
+// dailySendLimit doesn't: update takes PoolFields.partial(), which would fill it
+// in and turn a weighted pool round-robin on a rename (same flaw as audit N4).
+const PoolFields = z.object({
   name: z.string().min(1).max(120),
   description: z.string().optional(),
-  rotationStrategy: z.enum(["round_robin", "weighted", "random"]).default("round_robin"),
+  rotationStrategy: z.enum(["round_robin", "weighted", "random"]),
   /**
    * Members can be set in one shot when creating/updating a pool. The
    * UI takes this path; the separate addMember/removeMember endpoints
    * exist for incremental edits but aren't currently used by the page.
    */
   members: z.array(PoolMemberInput).optional(),
+});
+const PoolCreateInput = PoolFields.extend({
+  rotationStrategy: PoolFields.shape.rotationStrategy.default("round_robin"),
 });
 
 // ─── Sending Accounts Router ─────────────────────────────────────────────────
@@ -1176,7 +1182,7 @@ export const senderPoolsRouter = router({
     }),
 
   update: workspaceProcedure
-    .input(PoolCreateInput.partial().extend({ id: z.number().int() }))
+    .input(PoolFields.partial().extend({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
