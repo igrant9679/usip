@@ -342,11 +342,39 @@ export function extractTotal(payload: unknown): number | null {
   return typeof v === "number" ? v : null;
 }
 
+/**
+ * A business's 2nd to 5th people when the row carries them flat —
+ * `contact2_name`, `contact2_email` … `contact5_linkedin` (N2, 2026-11-06:
+ * live rows do, and only the first person was ever imported). Each becomes
+ * a contact of its own with the prefix taken off, keyed by its number.
+ */
+export function flatContacts(row: Record<string, unknown>): Array<{ n: number; contact: Record<string, unknown> }> {
+  const out: Array<{ n: number; contact: Record<string, unknown> }> = [];
+  const keys = Object.keys(row);
+  for (let n = 2; n <= 5; n++) {
+    const contact: Record<string, unknown> = {};
+    const prefix = new RegExp(`^contact[_ ]?${n}(?![0-9])[_ ]?`, "i");
+    for (let k = 0; k < keys.length; k++) {
+      const m = keys[k].match(prefix);
+      if (!m) continue;
+      const field = keys[k].slice(m[0].length);
+      if (field) contact[field] = row[keys[k]];
+    }
+    if (Object.keys(contact).length > 0) out.push({ n, contact });
+  }
+  return out;
+}
+
 /** Their lead row (5 contacts per business are possible) → our record(s). */
 export function mapLeadRow(row: Record<string, unknown>): ProspectRecord[] {
-  const contacts = Array.isArray(row.contacts) && (row.contacts as unknown[]).length > 0
+  const listed = Array.isArray(row.contacts) && (row.contacts as unknown[]).length > 0
     ? (row.contacts as Array<Record<string, unknown>>)
-    : [row];
+    : null;
+  // A contacts array keys its people #0, #1, …; flat fields keep their own
+  // numbers (#2 to #5), the row itself being the first person (N2).
+  const flat = listed ? [] : flatContacts(row);
+  const contacts = listed ?? [row].concat(flat.map((f) => f.contact));
+  const suffixes = listed ? listed.map((_, i) => (listed.length > 1 ? `#${i}` : "")) : [""].concat(flat.map((f) => `#${f.n}`));
   const out: ProspectRecord[] = [];
   const companyName = str(pick(row, ["company", "company_name", "business_name", "name", "business"]));
   const website = str(pick(row, ["website", "domain", "company_domain", "url"]));
@@ -373,23 +401,26 @@ export function mapLeadRow(row: Record<string, unknown>): ProspectRecord[] {
     }
     firstName = stripNameCredentials(firstName) ?? "";
     lastName = stripNameCredentials(lastName) ?? "";
-    const rawEmail = str(pick(c, ["email", "work_email", "email_address"]));
+    const rawEmail = str(pick(c, ["email", "work_email", "email_address", "contact_email"]));
     const masked = looksMasked(rawEmail);
-    const id = str(pick(c, ["id", "lead_id", "contact_id", "leadId"])) ?? str(pick(row, ["id", "lead_id", "business_id"])) ?? "";
-    const idSuffix = contacts.length > 1 && c !== row ? `#${i}` : "";
-    if (!firstName && !lastName && !rawEmail && !pick(c, ["linkedin", "linkedin_url"])) continue;
+    // A flat contact is exported through its business's lead id (the suffix
+    // is stripped for export_leads), so it carries the row's id.
+    const rowId = str(pick(row, ["id", "lead_id", "business_id"])) ?? "";
+    const id = listed ? str(pick(c, ["id", "lead_id", "contact_id", "leadId"])) ?? rowId : rowId;
+    const idSuffix = suffixes[i];
+    if (!firstName && !lastName && !rawEmail && !pick(c, ["linkedin", "linkedin_url", "contact_linkedin"])) continue;
     out.push({
       externalId: `${id}${idSuffix}`,
       firstName, lastName,
-      jobTitle: str(pick(c, ["job_title", "title", "role", "position"])),
+      jobTitle: str(pick(c, ["job_title", "title", "role", "position", "contact_title"])),
       seniority: str(pick(c, ["seniority"])),
       companyName, companyDomain,
       email: masked ? null : rawEmail,
       emailIsMasked: masked,
       emailVerifiedAt: null,
       mobilePhone: null, // coverage is business phones only (docs)
-      businessPhone: str(pick(c, ["phone", "business_phone", "direct_phone"])) ?? businessPhone,
-      linkedinUrl: str(pick(c, ["linkedin", "linkedin_url", "linkedinUrl"])),
+      businessPhone: str(pick(c, ["phone", "business_phone", "direct_phone", "contact_phone"])) ?? businessPhone,
+      linkedinUrl: str(pick(c, ["linkedin", "linkedin_url", "linkedinUrl", "contact_linkedin"])),
       city, stateProvince: state, country, industry, headcount,
       rawSourcePayload: { ...row, ...(c !== row ? { contact: c } : {}), ...(masked && rawEmail ? { email_masked: rawEmail } : {}) },
     });

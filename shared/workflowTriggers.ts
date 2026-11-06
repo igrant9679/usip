@@ -162,6 +162,34 @@ export function recordFieldsFor(triggerType: string, entity: string | null | und
 }
 
 /**
+ * The keys each non-record trigger's payload carries, read off its dispatch
+ * site (G61: the editor offered one list of nineteen fields for every trigger,
+ * so "task overdue where stage = …" or "deal stuck where industry = …" compared
+ * against a key the event never carries and could never match).
+ *
+ *   stage_changed   services/workflowEngine.ts fireStageChanged
+ *   deal_stuck      routers/operations.ts checkDealAging (both paths)
+ *   task_overdue    services/workflowEngine.ts (the overdue sweep)
+ *   signal_received jobChangeReengagement.ts (job_change), brandReconciler.ts
+ *                   (brand_change), are/execution.ts (meeting_booked, email_reply);
+ *                   each signal carries only its own keys beside `signal`.
+ *
+ * A key belongs here only if its dispatch site sets it.
+ */
+export const TRIGGER_FIELDS: Record<string, readonly string[]> = {
+  stage_changed: ["entity", "id", "name", "stage", "fromStage", "value", "winProb", "isWon", "isLost"],
+  deal_stuck: ["entity", "id", "name", "stage", "daysInStage", "value", "winProb", "ownerUserId"],
+  task_overdue: ["entity", "taskId", "title", "type", "priority", "dueAt"],
+  signal_received: ["signal", "entity", "name", "title", "oldCompany", "newCompany", "oldName", "newName", "oldDomain", "newDomain", "campaignId", "sentiment"],
+};
+
+/** The condition fields to offer for any trigger: what its payload carries. */
+export function conditionFieldsFor(triggerType: string, entity: string | null | undefined): string[] {
+  if (triggerType === "record_created" || triggerType === "record_updated") return recordFieldsFor(triggerType, entity);
+  return (TRIGGER_FIELDS[triggerType] ?? []).slice();
+}
+
+/**
  * Which records each action can act on, mirroring the engine's own allowlists
  * (workflowEngine.runAction: update_field's ALLOWED map, enroll_sequence's
  * person check, send_email_draft's contact-or-lead check). `enroll_sequence`

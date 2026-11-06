@@ -307,7 +307,10 @@ describe("the detector reads; the repair is the one matcher", () => {
     expect(q).toContain("workspaceProcedure.query(");
     const m = router.slice(router.indexOf("linkPersonContactPairs:"), router.indexOf("relinkAllUnlinked:"));
     expect(m).toContain("repProcedure");
-    expect(router.slice(router.indexOf("relinkAllUnlinked:"))).toContain("repProcedure");
+    // 2026-11-06 (audit P93): the bulk link is a manager's now — it folds
+    // contacts into People across the workspace. The per-row repair above
+    // stays at rep.
+    expect(router.slice(router.indexOf("relinkAllUnlinked:"))).toContain("relinkAllUnlinked: managerProcedure");
   });
 
   it("the repair re-classifies server-side and refuses needs_merge", () => {
@@ -336,8 +339,12 @@ describe("the detector reads; the repair is the one matcher", () => {
   });
 
   it("the bulk action is the EXISTING backfill, not a second batch loop", () => {
-    const b = router.slice(router.indexOf("relinkAllUnlinked:"));
-    expect(b).toContain("linkUnlinkedContacts({ workspaceId:");
+    const b = router.slice(router.indexOf("relinkAllUnlinked:"), router.indexOf("planPeopleMerge:"));
+    // 2026-11-06 (audit P93): still the existing backfill, now called with a
+    // cursor and a page bound, so the call spans lines.
+    expect(b).toContain("linkUnlinkedContacts({");
+    expect(b).toContain("workspaceId: ctx.workspace.id");
+    expect(b).not.toMatch(/for \(/);
   });
 
   it("the email tier is ordered, so detection can predict which person it picks", () => {
@@ -352,7 +359,8 @@ describe("a detector nobody renders is not a detector", () => {
 
   it("Data Health queries the procedure and mounts the section", () => {
     expect(page).toContain("personContactDuplicates.useQuery");
-    expect(page).toContain("<SplitPeopleSection />");
+    // 2026-11-06 (audit P93): it is told whether the viewer may link in bulk.
+    expect(page).toContain("<SplitPeopleSection canLinkAll={canLinkAll} />");
     expect(page).toContain("linkPersonContactPairs.useMutation");
     expect(page).toContain("relinkAllUnlinked.useMutation");
   });
@@ -361,7 +369,8 @@ describe("a detector nobody renders is not a detector", () => {
     // Before this, a card labelled "Duplicates" (People) sat directly above a
     // list of duplicate CONTACTS, so merging from the list never moved the
     // number and the page read as broken.
-    expect(page).toContain('label="Duplicate People"');
+    // 2026-11-06 (audit P80): the card also says what it groups on.
+    expect(page).toContain('"Duplicate People (same email)"');
     expect(page).toContain("Duplicate contacts");
   });
 

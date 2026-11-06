@@ -22,6 +22,8 @@ import {
   X,
 } from "lucide-react";
 import { useParams, useLocation, Link } from "wouter";
+import { NotFoundState, isNotFoundError } from "@/components/usip/QueryState";
+import { EMAIL_STATUS_VALUES as STATUS_VALUES } from "@shared/segmentRules";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type RuleField =
@@ -77,12 +79,12 @@ const DATE_OPERATORS: { value: RuleOperator; label: string }[] = [
   { value: "is_not_empty", label: "is not empty" },
 ];
 
-const EMAIL_STATUS_VALUES = [
-  { value: "valid", label: "Valid" },
-  { value: "accept_all", label: "Accept-All" },
-  { value: "risky", label: "Risky" },
-  { value: "invalid", label: "Invalid" },
-];
+// Exactly the statuses the server accepts, Unknown among them (audit
+// 2026-10-20, P140): verification writes "unknown" and nothing could pick it.
+const EMAIL_STATUS_LABELS: Record<string, string> = {
+  valid: "Valid", accept_all: "Accept-All", risky: "Risky", invalid: "Invalid", unknown: "Unknown",
+};
+const EMAIL_STATUS_VALUES = STATUS_VALUES.map((value) => ({ value, label: EMAIL_STATUS_LABELS[value] ?? value }));
 
 function getOperators(field: RuleField) {
   const f = FIELDS.find((x) => x.value === field);
@@ -362,7 +364,7 @@ function SegmentBuilderModal({
 
             {form.rules.length === 0 ? (
               <div className="rounded-lg border border-dashed p-6 text-center text-xs text-muted-foreground">
-                No rules yet — this segment will match all contacts.
+                No rules yet. A segment needs at least one.
                 <br />
                 Click "Add Rule" to filter by specific criteria.
               </div>
@@ -391,7 +393,7 @@ function SegmentBuilderModal({
             </Button>
             {previewCount !== null && (
               <span className="text-sm font-medium">
-                <span className="text-primary font-bold">{previewCount.toLocaleString()}</span> contacts match
+                <span className="text-primary font-bold">{previewCount.toLocaleString()}</span> CRM contacts match
               </span>
             )}
           </div>
@@ -409,8 +411,102 @@ function SegmentBuilderModal({
   );
 }
 
+// ─── Members ──────────────────────────────────────────────────────────────────
+const MEMBERS_PER_PAGE = 50;
+
+/**
+ * A segment's own page, /segments/:id: who is in it now, a page at a time.
+ * View sent people to /contacts?segment=id, which dropped the id on its way to
+ * People, and /segments/:id showed the index, so members could not be seen
+ * (audit 2026-10-20, P20). The total is counted when the page loads.
+ */
+function SegmentMembers({ id }: { id: number }) {
+  const [page, setPage] = useState(1);
+  const segmentsQ = trpc.segments.list.useQuery();
+  const seg = segmentsQ.data?.find((s) => s.id === id);
+  const membersQ = trpc.segments.getContacts.useQuery(
+    { id, page, perPage: MEMBERS_PER_PAGE },
+    { enabled: Number.isFinite(id), placeholderData: (prev) => prev },
+  );
+  const rows = membersQ.data?.rows ?? [];
+  const total = membersQ.data?.total ?? 0;
+  const pages = Math.max(1, Math.ceil(total / MEMBERS_PER_PAGE));
+
+  if (!Number.isFinite(id) || (membersQ.error && isNotFoundError(membersQ.error)) || (segmentsQ.isFetched && !segmentsQ.error && !seg)) {
+    return <Shell title="Segment"><NotFoundState what="segment" backHref="/segments" backLabel="All segments" /></Shell>;
+  }
+
+  return (
+    <Shell title={seg?.name ?? "Segment"}>
+      <PageHeader title={seg?.name ?? "Segment"} description={seg?.description ?? undefined} icon={<Filter className="size-5" />}>
+        <Button asChild size="sm" variant="outline"><Link href="/segments">All segments</Link></Button>
+      </PageHeader>
+      <div className="p-4 md:p-6 space-y-3">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <Badge variant="secondary" className="text-xs"><Users className="size-3 mr-1" />{membersQ.data ? `${total.toLocaleString()} CRM contacts now` : "Counting…"}</Badge>
+          <span className="text-xs text-muted-foreground">
+            Segments read CRM contacts, not People: someone who is only in People is never in a segment. A contact linked to a People record opens it.
+          </span>
+        </div>
+        {membersQ.isLoading ? (
+          <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 rounded" />)}</div>
+        ) : membersQ.error && !membersQ.data ? (
+          <QueryError what="this segment's contacts" message={membersQ.error.message} onRetry={() => membersQ.refetch()} />
+        ) : rows.length === 0 ? (
+          <EmptyState icon={Users} title="No one is in this segment now" description="No CRM contact matches its rules today." />
+        ) : (
+          <div className="rounded-lg border bg-card overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b border-border">
+                <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                  <th className="px-3 py-1.5 font-medium">Name</th>
+                  <th className="px-2 py-1.5 font-medium">Title</th>
+                  <th className="px-2 py-1.5 font-medium">Company</th>
+                  <th className="px-2 py-1.5 font-medium">Email</th>
+                  <th className="px-2 py-1.5 font-medium">Email status</th>
+                  <th className="px-2 py-1.5 font-medium">People</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((c) => (
+                  <tr key={c.id} className="border-b border-border/60 last:border-0">
+                    <td className="px-3 py-1.5 font-medium">{`${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || "—"}</td>
+                    <td className="px-2 py-1.5"><div className="max-w-[160px] truncate">{c.title || "—"}</div></td>
+                    <td className="px-2 py-1.5"><div className="max-w-[160px] truncate">{c.companyName || "—"}</div></td>
+                    <td className="px-2 py-1.5 text-xs"><div className="max-w-[200px] truncate">{c.email || "—"}</div></td>
+                    <td className="px-2 py-1.5 text-xs">{c.emailVerificationStatus ? (EMAIL_STATUS_LABELS[c.emailVerificationStatus] ?? c.emailVerificationStatus) : "—"}</td>
+                    <td className="px-2 py-1.5 text-xs">
+                      {c.personProspectId ? <Link href={`/prospects/${c.personProspectId}`} className="underline">Open</Link> : <span className="text-muted-foreground">Not in People</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {pages > 1 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>{(page - 1) * MEMBERS_PER_PAGE + 1}–{(page - 1) * MEMBERS_PER_PAGE + rows.length} of {total.toLocaleString()}</span>
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="outline" className="h-7" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
+              <span className="px-2">Page {page} of {pages}</span>
+              <Button size="sm" variant="outline" className="h-7" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Shell>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function Segments() {
+  const { id } = useParams<{ id?: string }>();
+  if (id !== undefined) return <SegmentMembers id={Number(id)} />;
+  return <SegmentIndex />;
+}
+
+function SegmentIndex() {
   const [, setLocation] = useLocation();
   const [builderOpen, setBuilderOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
@@ -424,6 +520,8 @@ export default function Segments() {
     onError: (e) => toast.error(e.message),
   });
 
+  // The page said segments update automatically while a card's count changed
+  // only on save, and this had no button (audit 2026-10-20, P53).
   const refreshMut = trpc.segments.refresh.useMutation({
     onSuccess: () => { utils.segments.list.invalidate(); toast.success("Segment counts refreshed"); },
     onError: (e) => toast.error(e.message),
@@ -433,10 +531,16 @@ export default function Segments() {
     <Shell title="Segments">
       <PageHeader
         title="Segments" pageKey="segments"
-        description="Build dynamic audience segments using CRM fields, behaviour signals, and AI-generated scores. Segments update automatically and can be used as campaign audiences or workflow triggers."
-      
+        description="Rule-based audiences of your CRM contacts. Who is in a segment is worked out each time it is used, by auto-enrol rules and on its own page; the count on a card is from its last save or refresh."
+
         icon={<Filter className="size-5" />}
       >
+        {segments && segments.length > 0 && (
+          <Button size="sm" variant="outline" onClick={() => refreshMut.mutate({})} disabled={refreshMut.isPending}>
+            <RefreshCw className={`size-3.5 mr-1.5${refreshMut.isPending ? " animate-spin" : ""}`} />
+            Refresh counts
+          </Button>
+        )}
         <Button size="sm" onClick={() => { setEditing(null); setBuilderOpen(true); }}>
           <Plus className="size-3.5 mr-1.5" />
           New Segment
@@ -447,6 +551,10 @@ export default function Segments() {
       ]} />
 
       <div className="p-4 md:p-6">
+        {/* Said here as well as in the header, whose text an admin can replace (P21). */}
+        <p className="text-xs text-muted-foreground mb-4">
+          Segments read CRM contacts, not People. Someone who is only in People is never in a segment, and an auto-enroll rule never enrols them.
+        </p>
         {isLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {Array.from({ length: 6 }).map((_, i) => (
@@ -470,7 +578,7 @@ export default function Segments() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {segments.map((seg) => (
-              <Card key={seg.id} className="hover:shadow-md transition-shadow cursor-pointer group">
+              <Card key={seg.id} className="hover:shadow-md transition-shadow group">
                 <CardHeader className="pb-2 flex flex-row items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <CardTitle className="text-sm font-semibold truncate">{seg.name}</CardTitle>
@@ -506,7 +614,7 @@ export default function Segments() {
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary" className="text-xs">
                         <Users className="size-3 mr-1" />
-                        {(seg.contactCount ?? 0).toLocaleString()} contacts
+                        {(seg.contactCount ?? 0).toLocaleString()} CRM contacts
                       </Badge>
                       <Badge variant="outline" className="text-xs">
                         {(seg.rules as Rule[])?.length ?? 0} rule{((seg.rules as Rule[])?.length ?? 0) !== 1 ? "s" : ""}
@@ -516,14 +624,15 @@ export default function Segments() {
                       variant="ghost"
                       size="sm"
                       className="h-7 text-xs"
-                      onClick={() => setLocation(`/contacts?segment=${seg.id}`)}
+                      aria-label={`View the contacts in ${seg.name}`}
+                      onClick={() => setLocation(`/segments/${seg.id}`)}
                     >
                       View <ChevronRight className="size-3 ml-0.5" />
                     </Button>
                   </div>
                   {seg.lastEvaluatedAt && (
                     <div className="text-[11px] text-muted-foreground mt-2">
-                      Last evaluated {new Date(seg.lastEvaluatedAt).toLocaleDateString()}
+                      Counted {new Date(seg.lastEvaluatedAt).toLocaleDateString()}
                     </div>
                   )}
                 </CardContent>
@@ -559,7 +668,7 @@ export default function Segments() {
           <DialogHeader>
             <DialogTitle>Delete Segment?</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">This will permanently delete the segment. Contacts are not affected.</p>
+          <p className="text-sm text-muted-foreground">This will permanently delete the segment. Contacts are not affected. A segment an auto-enroll rule uses can't be deleted until that rule is.</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmDelete(null)}>Cancel</Button>
             <Button

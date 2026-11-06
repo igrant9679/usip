@@ -71,8 +71,9 @@ describe("bulk approvals are whole-queue, not page-scoped", () => {
     expect(proc).toContain('eq(prospectQueue.sequenceStatus, "pending")');
     expect(proc).toContain('eq(prospectQueue.enrichmentStatus, "complete")');
     expect(proc).toContain("COALESCE(${prospectQueue.approvedAt}, NOW())");
-    // Counter recount, same as approveBatch — the batch-size write is the bug that reset it.
-    // 2026-11-06 (audit A50): both now run the engine's recount, so "Approved"
+    // Counter recount — the batch-size write is the bug that reset it. approveBatch,
+    // which had it first, was removed 2026-11-06 (audit A69).
+    // 2026-11-06 (audit A50): this runs the engine's recount, so "Approved"
     // has one meaning; server/areProspectReview.test.ts pins the numbers.
     expect(proc).toContain("await recountCampaignCounters(db, ctx.workspace.id, input.campaignId);");
     expect(proc).not.toContain("prospectsApproved: input.prospectIds.length");

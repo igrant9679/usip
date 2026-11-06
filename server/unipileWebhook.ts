@@ -32,6 +32,7 @@ import {
   workspaceSettings,
 } from "../drizzle/schema";
 import { processInboundReply } from "./inboundReplyPoller";
+import { escapeHtml } from "@shared/escapeHtml";
 import { ensureMicrosoftBridge } from "./services/microsoftBridge";
 import { processBounceEvent } from "./emailTracking";
 import { bumpCampaignCounter } from "./campaignCounters";
@@ -445,8 +446,8 @@ export function registerUnipileWebhookRoutes(app: Express) {
           html: `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px">
   <h2 style="margin-bottom:8px">Your ${providerLabel} account needs attention</h2>
-  <p>Hi ${user.name ?? user.email.split("@")[0]},</p>
-  <p>Your <strong>${providerLabel}</strong> account <em>${accountLabel}</em> has been disconnected due to ${statusLabel}.</p>
+  <p>Hi ${escapeHtml(user.name ?? user.email.split("@")[0])},</p>
+  <p>Your <strong>${escapeHtml(providerLabel)}</strong> account <em>${escapeHtml(accountLabel)}</em> has been disconnected due to ${statusLabel}.</p>
   <p>To restore access and continue receiving messages and updates, please reconnect your account:</p>
   <p style="margin:24px 0">
     <a href="${reconnectUrl}"

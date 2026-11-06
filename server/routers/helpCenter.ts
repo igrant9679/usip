@@ -20,8 +20,20 @@ import { invokeLLM } from "../_core/llm";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { PRODUCT_KNOWLEDGE } from "../productKnowledge";
+import { noteHelpOverride } from "../services/helpSeedOverrides";
+import { isAdminRole } from "@shared/roleRank";
 
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
+
+/**
+ * Tell the boot seed a person changed this article, by the slug it has now, so
+ * the next deploy neither reverts the edit nor restores a delete (G21).
+ */
+async function noteArticleChanged(db: Awaited<ReturnType<typeof requireDb>>, workspaceId: number, id: number, action: "edited" | "deleted", userId: number) {
+  const [row] = await db.select({ slug: helpArticles.slug }).from(helpArticles)
+    .where(and(eq(helpArticles.id, id), eq(helpArticles.workspaceId, workspaceId))).limit(1);
+  if (row) await noteHelpOverride(db, workspaceId, "article", row.slug, action, userId);
+}
 
 async function requireDb() {
   const db = await getDb();
@@ -87,7 +99,8 @@ export const helpCenterRouter = router({
         categoryId: z.number().optional(),
         status: z.enum(["draft", "published", "all"]).default("published"),
         pageKey: z.string().optional(),
-        limit: z.number().min(1).max(100).default(50),
+        // 500: the admin list shows every article; the seed alone ships ~90 (G59).
+        limit: z.number().min(1).max(500).default(50),
         offset: z.number().default(0),
       }),
     )
@@ -95,7 +108,10 @@ export const helpCenterRouter = router({
       const db = await requireDb();
       const conditions = [eq(helpArticles.workspaceId, ctx.workspace.id)];
       if (input.categoryId) conditions.push(eq(helpArticles.categoryId, input.categoryId));
-      if (input.status !== "all") conditions.push(eq(helpArticles.status, input.status));
+      // Drafts and archived articles are an admin's to see (the Admin tab asks
+      // for "all"); anyone else gets published, whatever they ask for.
+      const status = isAdminRole(ctx.member.role) ? input.status : "published";
+      if (status !== "all") conditions.push(eq(helpArticles.status, status));
       if (input.pageKey) conditions.push(eq(helpArticles.pageKey, input.pageKey));
       return db
         .select()
@@ -203,6 +219,7 @@ export const helpCenterRouter = router({
         tags: rest.tags ?? [],
       };
       if (id) {
+        await noteArticleChanged(db, ctx.workspace.id, id, "edited", ctx.user.id);
         await db
           .update(helpArticles)
           .set(payload)
@@ -217,6 +234,7 @@ export const helpCenterRouter = router({
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
+      await noteArticleChanged(db, ctx.workspace.id, input.id, "deleted", ctx.user.id);
       await db
         .delete(helpArticles)
         .where(and(eq(helpArticles.id, input.id), eq(helpArticles.workspaceId, ctx.workspace.id)));
@@ -306,7 +324,7 @@ export const helpCenterRouter = router({
       // a large body slice. Replaces the old top-20-by-viewCount/600-char
       // approach that hid new articles entirely.
       const articles = await db
-        .select({ id: helpArticles.id, title: helpArticles.title, summary: helpArticles.summary, bodyMarkdown: helpArticles.bodyMarkdown, tags: helpArticles.tags, pageKey: helpArticles.pageKey })
+        .select({ id: helpArticles.id, slug: helpArticles.slug, title: helpArticles.title, summary: helpArticles.summary, bodyMarkdown: helpArticles.bodyMarkdown, tags: helpArticles.tags, pageKey: helpArticles.pageKey })
         .from(helpArticles)
         .where(and(eq(helpArticles.workspaceId, ctx.workspace.id), eq(helpArticles.status, "published")))
         // 80 was the seeded count's headroom in 0130; the Operator's Manual
@@ -432,10 +450,20 @@ ${articleContext}`;
           eq(aiHelpConversations.workspaceId, ctx.workspace.id),
         ));
 
+      // Titles and slugs for the articles cited, so the answer can link them
+      // instead of printing ids (G71). An id the model made up names nothing
+      // in this workspace's catalogue and is left out.
+      const catalogue = new Map(articles.map((a) => [a.id, a]));
+      const citedArticles = citedArticleIds
+        .map((id) => catalogue.get(Number(id)))
+        .filter((a): a is NonNullable<typeof a> => !!a)
+        .map((a) => ({ id: a.id, slug: a.slug, title: a.title }));
+
       return {
         messageId: (msgRes as any).insertId as number,
         answer,
         citedArticleIds,
+        citedArticles,
         confidence,
       };
     }),
@@ -682,6 +710,7 @@ Keep the article under 600 words. Be friendly and action-oriented.`,
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       const { id, ...rest } = input;
+      await noteArticleChanged(db, ctx.workspace.id, id, "edited", ctx.user.id);
       await db.update(helpArticles).set(rest).where(and(eq(helpArticles.id, id), eq(helpArticles.workspaceId, ctx.workspace.id)));
       return { id };
     }),

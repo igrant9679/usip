@@ -16,6 +16,7 @@ import { trpc } from "../../lib/trpc";
 import { useTourEngine, type Tour } from "./TourEngine";
 import { toast } from "sonner";
 import { ChatMarkdown } from "@/components/usip/ChatMarkdown";
+import { CitedArticles, type CitedArticle } from "@/components/usip/CitedArticles";
 import { tablistProps, tabProps } from "@/lib/tabs";
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
@@ -126,7 +127,7 @@ function SearchTab({ pageKey }: { pageKey: string }) {
 
 /* ─── Ask AI Tab ─────────────────────────────────────────────────────────── */
 
-type Message = { role: "user" | "assistant"; body: string; citedArticleIds?: number[] };
+type Message = { role: "user" | "assistant"; body: string; citedArticles?: CitedArticle[] };
 
 const SUGGESTED_PROMPTS = [
   "How do I work the Needs Review queue?",
@@ -166,7 +167,7 @@ function AskAITab({ pageKey }: { pageKey: string }) {
       const res = await askAI.mutateAsync({ conversationId: convId, message: userMsg, pageKey });
       setMessages((m) => [
         ...m,
-        { role: "assistant", body: res.answer, citedArticleIds: res.citedArticleIds },
+        { role: "assistant", body: res.answer, citedArticles: res.citedArticles },
       ]);
     } catch {
       setMessages((m) => [
@@ -217,11 +218,7 @@ function AskAITab({ pageKey }: { pageKey: string }) {
               {msg.role === "user"
                 ? <p className="whitespace-pre-wrap leading-relaxed">{msg.body}</p>
                 : <ChatMarkdown text={msg.body} />}
-              {msg.citedArticleIds && msg.citedArticleIds.length > 0 && (
-                <p className="text-xs mt-1 opacity-60">
-                  Sources: Article {msg.citedArticleIds.join(", ")}
-                </p>
-              )}
+              <CitedArticles articles={msg.citedArticles} className="text-xs mt-1 opacity-70" />
             </div>
           </div>
         ))}

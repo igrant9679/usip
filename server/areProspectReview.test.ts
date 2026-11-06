@@ -231,9 +231,15 @@ describe("the header counts one funnel, and a paused campaign's is fresh", () =>
     expect(campaign().prospectsEnrolled).toBe(3);
   });
 
-  it("approveBatch uses the same recount", async () => {
-    await caller().are.campaigns.approveBatch({ campaignId: CAMPAIGN, prospectIds: [1] });
-    expect(campaign().prospectsApproved).toBe(5);
+  // 2026-11-06 (audit A69, batch E1): approveBatch was removed — no screen
+  // called it, and it approved rows in any state. What this pinned still
+  // holds: no door in the campaigns router writes the Approved counter itself;
+  // the one recount does.
+  it("no other door writes the Approved counter itself (approveBatch is gone)", () => {
+    const src = read("server/routers/are/campaigns.ts");
+    expect(src).not.toContain("approveBatch: workspaceProcedure");
+    expect(src).not.toMatch(/prospectsApproved:\s/);
+    expect(src).toContain("await recountCampaignCounters(db, ctx.workspace.id, input.campaignId);");
   });
 });
 

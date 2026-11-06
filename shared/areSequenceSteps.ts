@@ -48,6 +48,21 @@ export function isSendableChannel(ch: unknown): boolean {
 }
 
 /**
+ * Whether a campaign's stored `channelsEnabled` turns a channel on — the ONE
+ * reading, for the template writer and the dispatcher alike (audit 2026-10-20,
+ * A71). They disagreed on a null or partial map: the writer offered every
+ * channel not set to false, the dispatcher sent LinkedIn only when it was set
+ * to true, so a template could be written around LinkedIn steps that were all
+ * skipped as "disabled". Email is on unless switched off, as it always was at
+ * dispatch; every other channel only when ticked.
+ */
+export function campaignChannelOn(channelsEnabled: unknown, channel: string): boolean {
+  const map = (channelsEnabled && typeof channelsEnabled === "object" ? channelsEnabled : {}) as Record<string, unknown>;
+  const ch = String(channel ?? "").toLowerCase();
+  return ch === "email" ? map.email !== false : map[ch] === true;
+}
+
+/**
  * One sentence per unsendable channel, worded to match the help centre
  * verbatim (seedHelpContent.ts: "no SMS gateway is connected") so the product
  * and the docs cannot drift into two different explanations of one fact.

@@ -244,26 +244,12 @@ function TooltipCard({
   const isLast = stepIndex === totalSteps - 1;
   const progress = ((stepIndex + 1) / totalSteps) * 100;
 
-  // Position tooltip: prefer below target, fall back to above, then center
-  let style: React.CSSProperties = { position: "fixed", zIndex: 9995 };
-  if (targetRect) {
-    const spaceBelow = window.innerHeight - targetRect.bottom;
-    const tooltipH = 200;
-    const tooltipW = 340;
-    const left = Math.min(Math.max(targetRect.left, 16), window.innerWidth - tooltipW - 16);
-    if (spaceBelow > tooltipH + 20) {
-      style = { ...style, top: targetRect.bottom + 16, left };
-    } else {
-      style = { ...style, top: Math.max(targetRect.top - tooltipH - 16, 16), left };
-    }
-  } else {
-    style = { ...style, top: "50%", left: "50%", transform: "translate(-50%, -50%)" };
-  }
+  const style: React.CSSProperties = { position: "fixed", zIndex: 9995, ...tourTooltipBox(targetRect, window.innerWidth, window.innerHeight) };
 
   return (
     <div
       style={style}
-      className="w-[340px] rounded-xl bg-white shadow-2xl border border-violet-100 overflow-hidden"
+      className="rounded-xl bg-white shadow-2xl border border-violet-100 overflow-hidden"
     >
       {/* Progress bar */}
       <div className="h-1 bg-violet-100">
@@ -366,6 +352,25 @@ export function TourNudge({
 
 /* ─── TourEngine Provider ────────────────────────────────────────────────── */
 
+/**
+ * Where the step tooltip goes: below the target, else above it, else centred.
+ * Never wider than the screen less a 16 px gutter each side, and never left of
+ * that gutter (G65: a fixed 340 px with a clamp that went negative on a 320 px
+ * phone pushed it off the left edge).
+ */
+export function tourTooltipBox(
+  target: { top: number; bottom: number; left: number } | null,
+  viewportW: number,
+  viewportH: number,
+): React.CSSProperties {
+  const width = Math.max(0, Math.min(340, viewportW - 32));
+  if (!target) return { width, top: "50%", left: "50%", transform: "translate(-50%, -50%)" };
+  const tooltipH = 200;
+  const left = Math.max(16, Math.min(target.left, viewportW - width - 16));
+  const top = viewportH - target.bottom > tooltipH + 20 ? target.bottom + 16 : Math.max(target.top - tooltipH - 16, 16);
+  return { width, top, left };
+}
+
 export function TourEngineProvider({ children }: { children: React.ReactNode }) {
   const [activeTour, setActiveTour] = useState<Tour | null>(null);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
@@ -377,6 +382,7 @@ export function TourEngineProvider({ children }: { children: React.ReactNode }) 
   // Tour progress writes are deliberately silent. The worst case if one fails is
   // that a tour offers itself again later; an error toast fired mid-tour would
   // land on top of the spotlight and break the very walkthrough it interrupts.
+  const startMut = trpc.tours.startTour.useMutation({ meta: { silentError: true } });
   const completeMut = trpc.tours.completeTour.useMutation({ meta: { silentError: true } });
   const skipMut = trpc.tours.skipTour.useMutation({ meta: { silentError: true } });
   const advanceMut = trpc.tours.advanceStep.useMutation({ meta: { silentError: true } });
@@ -446,13 +452,16 @@ export function TourEngineProvider({ children }: { children: React.ReactNode }) 
     (tour: Tour) => {
       setActiveTour(tour);
       setCurrentStepIndex(0);
+      // The progress row advanceStep and completeTour update (G59: never created,
+      // so neither ever recorded anything).
+      startMut.mutate({ tourId: tour.id });
       // Navigate to the first step's route if specified
       const firstStep = tour.steps[0];
       if (firstStep?.routeTo) {
         navigate(firstStep.routeTo);
       }
     },
-    [navigate],
+    [navigate, startMut],
   );
 
   const endTour = useCallback(() => {
@@ -506,6 +515,14 @@ export function TourEngineProvider({ children }: { children: React.ReactNode }) 
     setTargetRect(null);
     cancelAnimationFrame(rafRef.current);
   }, [activeTour, skipMut]);
+
+  // Escape leaves the tour, as it closes any other overlay (G71).
+  useEffect(() => {
+    if (!activeTour) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") skipTour(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeTour, skipTour]);
 
   // Suppress unused-variable warning for navigateToStep (used by external callers via context if needed)
   void navigateToStep;
