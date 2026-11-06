@@ -9,13 +9,13 @@ import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { z } from "zod";
-import { listMemberPage } from "../services/listMembers";
+import { listMemberCounts, listMemberPage } from "../services/listMembers";
 import { getDb } from "../db";
 import { recordLists, recordListMembers, prospects, accounts } from "../../drizzle/schema";
-import { eq, and, inArray, desc, sql } from "drizzle-orm";
+import { eq, and, inArray, desc, isNull } from "drizzle-orm";
 
 export const recordListsRouter = router({
-  /** All lists in the workspace, each with a live member count. */
+  /** All lists in the workspace, each with a live member count: the members its page shows (P46). */
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
@@ -24,12 +24,7 @@ export const recordListsRouter = router({
       .from(recordLists)
       .where(eq(recordLists.workspaceId, ctx.workspace.id))
       .orderBy(desc(recordLists.updatedAt));
-    const counts = await db
-      .select({ listId: recordListMembers.listId, c: sql<number>`count(*)` })
-      .from(recordListMembers)
-      .where(eq(recordListMembers.workspaceId, ctx.workspace.id))
-      .groupBy(recordListMembers.listId);
-    const cmap = new Map(counts.map((r) => [r.listId, Number(r.c)]));
+    const cmap = await listMemberCounts(db, ctx.workspace.id);
     return lists.map((l) => ({ ...l, memberCount: cmap.get(l.id) ?? 0 }));
   }),
 
@@ -105,7 +100,15 @@ export const recordListsRouter = router({
     }))
     .query(({ ctx, input }) => listMemberPage(ctx.workspace.id, input)),
 
-  /** Add records to a list (de-duplicated against existing membership). */
+  /**
+   * Add records to a list (de-duplicated against existing membership).
+   *
+   * Only what the list can show is added (audit 2026-10-20, P46, P50): a
+   * People list takes this workspace's people, a Companies list its
+   * companies that aren't archived. Anything else used to be stored and
+   * counted on the index while the page hid it. The rest are reported back
+   * as `skipped`, and the ones already on the list as `alreadyOn`.
+   */
   addMembers: workspaceProcedure
     .input(z.object({
       listId: z.number(),
@@ -115,6 +118,20 @@ export const recordListsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
+      const [list] = await db.select({ entityType: recordLists.entityType }).from(recordLists)
+        .where(and(eq(recordLists.id, input.listId), eq(recordLists.workspaceId, ctx.workspace.id)));
+      if (!list) throw new TRPCError({ code: "NOT_FOUND", message: "That list is not in this workspace." });
+      const wants = list.entityType === "companies" ? "account" : "prospect";
+      if (input.recordType !== wants) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `A ${list.entityType === "companies" ? "Companies" : "People"} list holds ${list.entityType === "companies" ? "companies" : "people"} only.` });
+      }
+      const ids = Array.from(new Set(input.recordIds));
+      const live = wants === "account"
+        ? await db.select({ id: accounts.id }).from(accounts)
+            .where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, ids), isNull(accounts.archivedAt)))
+        : await db.select({ id: prospects.id }).from(prospects)
+            .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, ids)));
+      const liveIds = new Set(live.map((r) => r.id));
       const existing = await db
         .select({ rid: recordListMembers.recordId })
         .from(recordListMembers)
@@ -124,7 +141,8 @@ export const recordListsRouter = router({
           eq(recordListMembers.recordType, input.recordType),
         ));
       const have = new Set(existing.map((e) => e.rid));
-      const toAdd = input.recordIds.filter((id) => !have.has(id));
+      const toAdd = ids.filter((id) => liveIds.has(id) && !have.has(id));
+      const alreadyOn = ids.filter((id) => liveIds.has(id) && have.has(id)).length;
       if (toAdd.length) {
         await db.insert(recordListMembers).values(
           toAdd.map((id) => ({
@@ -138,13 +156,18 @@ export const recordListsRouter = router({
         // bump the list's updatedAt
         await db.update(recordLists).set({ updatedAt: new Date() }).where(and(eq(recordLists.id, input.listId), eq(recordLists.workspaceId, ctx.workspace.id)));
       }
-      return { added: toAdd.length };
+      return { added: toAdd.length, alreadyOn, skipped: ids.length - liveIds.size };
     }),
 
+  /** Returns what it removed, so the page can offer Undo (audit 2026-10-20, P139). */
   removeMember: workspaceProcedure.input(z.object({ memberId: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new Error("Database unavailable");
+    const [removed] = await db
+      .select({ listId: recordListMembers.listId, recordType: recordListMembers.recordType, recordId: recordListMembers.recordId })
+      .from(recordListMembers)
+      .where(and(eq(recordListMembers.id, input.memberId), eq(recordListMembers.workspaceId, ctx.workspace.id)));
     await db.delete(recordListMembers).where(and(eq(recordListMembers.id, input.memberId), eq(recordListMembers.workspaceId, ctx.workspace.id)));
-    return { ok: true };
+    return { ok: true, removed: removed ?? null };
   }),
 });

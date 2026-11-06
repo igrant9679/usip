@@ -45,8 +45,13 @@ export function classifyHttpFailure(status: number, code?: string | null): Vendo
   const c = (code ?? "").toLowerCase();
   if (c === "insufficient_scope") return "insufficient_scope";
   if (c === "unauthorized" || status === 401) return "unauthorized";
-  if (c === "plan_upgrade_required" || c === "verifier_access_required" && status === 402) return "plan_required";
+  // `a || b && c` reads as `a || (b && c)` (audit 2026-10-20, A72): a
+  // verifier_access_required on any status but 402 fell through, and a bare 402
+  // read as a plain HTTP error. Either code asks for a plan, and so does a 402
+  // that carries no allowance code of its own.
+  if (c === "plan_upgrade_required" || c === "verifier_access_required") return "plan_required";
   if (c === "allowance_exhausted" || c === "exceeds_today" || c === "prospect_limit_reached") return "budget_exhausted";
+  if (status === 402) return "plan_required";
   if (c === "rate_limited" || c === "verification_rate_limited" || status === 429) return "rate_limited";
   if (c === "temporarily_unavailable" || status === 503 || status === 502 || status === 504 || status === 500) return "unavailable";
   if (c === "validation_error" || c === "invalid_params" || status === 400 || status === 422) return "invalid_params";

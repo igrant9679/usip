@@ -4909,6 +4909,41 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, A7/A27/A28: a prospect whose enrichment or sequence
+  // generation keeps failing was retried on every tick, holding the head of the
+  // page; a failed enrichment was never retried and held its queue slot for
+  // ever. Each now counts its failed attempts and waits before the next.
+  {
+    name: "0245_are_attempt_backoff.sql",
+    statements: [
+      "ALTER TABLE `prospect_queue` ADD COLUMN `enrichAttempts` int NOT NULL DEFAULT 0",
+      "ALTER TABLE `prospect_queue` ADD COLUMN `enrichRetryAt` timestamp NULL",
+      "ALTER TABLE `prospect_queue` ADD COLUMN `sequenceAttempts` int NOT NULL DEFAULT 0",
+      "ALTER TABLE `prospect_queue` ADD COLUMN `sequenceRetryAt` timestamp NULL",
+    ],
+  },
+
+  // Audit A59: a double click on Promote bought the same leads twice. A
+  // promotion claims its rows first (a token, conditional on nobody holding
+  // them), and lets go when it ends.
+  {
+    name: "0246_search_result_promote_claim.sql",
+    statements: [
+      "ALTER TABLE `prospect_search_results` ADD COLUMN `promoteClaim` varchar(64) NULL",
+      "ALTER TABLE `prospect_search_results` ADD COLUMN `promoteClaimedAt` timestamp NULL",
+    ],
+  },
+
+  // Audit A72: a hold leaked by a crashed run was released only once the row
+  // had not been written for two hours, which a busy monthly or credits row
+  // never reaches. The hold's own start time is kept instead.
+  {
+    name: "0247_ledger_held_at.sql",
+    statements: [
+      "ALTER TABLE `prospect_source_budget_ledger` ADD COLUMN `heldAt` timestamp NULL",
+    ],
+  },
+
   // ── 0280: When a lead was last scored (audit 2026-10-20, P12) ───────────
   // Scores only changed when a rep pressed Recompute. The hourly re-score
   // takes leads never scored (NULL) or not scored for a day, oldest first,

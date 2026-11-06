@@ -2,12 +2,28 @@
  * ARE — Campaigns Router
  *
  * Manages autonomous prospecting campaign lifecycle:
- *   list, get, create, update, setStatus, approveBatch
+ *   list, get, create, update, setStatus
  */
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { areCampaigns, areEngineLogs, campaignRoutingSuggestions, personas, prospectIntelligence, prospectQueue, prospects, researchSectors, sequences, workspaceSettings } from "../../../drizzle/schema";
+
+/**
+ * A first launch asks for the workspace's time zone while it is still the UTC
+ * default (audit 2026-10-20, A31). The cap and the window moved to the
+ * workspace's zone, but a workspace that never chose one still ran on UTC with
+ * nothing saying so. A workspace that wants UTC launches with confirmTimezone.
+ */
+async function assertTimezoneChosen(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number): Promise<void> {
+  const [row] = await db
+    .select({ timezone: workspaceSettings.timezone })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId))
+    .limit(1);
+  const tz = String(row?.timezone ?? "").trim();
+  if (!tz || tz === "UTC") throw new TRPCError({ code: "PRECONDITION_FAILED", message: TIMEZONE_UNSET_ON_LAUNCH });
+}
 
 /** A caller-chosen research sector must be this workspace's. */
 async function assertResearchSectorInWorkspace(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, sectorId: number, workspaceId: number) {
@@ -24,7 +40,7 @@ import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../../_c
 import { DISCOVERY_REST_MS, ENGINE_LOG_RETENTION_DAYS, runAreEngine } from "../../areEngine";
 import { getWorkspaceSendWindow } from "../../services/sendWindow";
 import { getWorkspaceTimezone, startOfLocalDay } from "../../services/workspaceTimezone";
-import { describeSendWindow, isWithinSendWindow, nextSendWindowOpening } from "@shared/sendWindow";
+import { TIMEZONE_UNSET_ON_LAUNCH, describeSendWindow, isWithinSendWindow, nextSendWindowOpening } from "@shared/sendWindow";
 import { promoteApprovedProspects } from "../../services/are/approvePromotion";
 import { respaceOverdueSteps } from "../../services/are/stepHold";
 import { recountCampaignCounters } from "../../services/are/campaignCounters";
@@ -167,11 +183,14 @@ export const campaignsRouter = router({
          * 10-minute cron tick.
          */
         launch: z.boolean().default(false),
+        /** Launch even though the workspace's zone is still the UTC default (A31). */
+        confirmTimezone: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      if (input.launch && !input.confirmTimezone) await assertTimezoneChosen(db, ctx.workspace.id);
 
       // Resolve persona → seed icpOverrides if a personaId was supplied.
       let icpOverrides: any = input.icpOverrides;
@@ -743,7 +762,12 @@ export const campaignsRouter = router({
     }),
 
   setStatus: workspaceProcedure
-    .input(z.object({ id: z.number(), status: z.enum(["draft", "active", "paused", "completed"]) }))
+    .input(z.object({
+      id: z.number(),
+      status: z.enum(["draft", "active", "paused", "completed"]),
+      /** Launch even though the workspace's zone is still the UTC default (A31). */
+      confirmTimezone: z.boolean().optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -752,10 +776,15 @@ export const campaignsRouter = router({
         // slot it is being counted against, so a no-op re-save (or a second
         // click on Start) would fail at exactly the limit and look like a bug.
         const [current] = await db
-          .select({ status: areCampaigns.status })
+          .select({ status: areCampaigns.status, startedAt: areCampaigns.startedAt })
           .from(areCampaigns)
           .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)))
           .limit(1);
+        // A first launch only: a campaign that has run before already ran in
+        // whatever zone the workspace has, and resuming it is not the moment.
+        if (current && !current.startedAt && current.status !== "active" && !input.confirmTimezone) {
+          await assertTimezoneChosen(db, ctx.workspace.id);
+        }
         if (current && current.status !== "active") {
           const h = await campaignHeadroom(ctx.workspace.id);
           if (!h.hasRoom) throw new TRPCError({ code: "FORBIDDEN", message: campaignCapMessage(h) });
@@ -845,47 +874,10 @@ export const campaignsRouter = router({
       };
     }),
 
-  /** Approve a batch of prospects for enrollment */
-  approveBatch: workspaceProcedure
-    .input(z.object({ campaignId: z.number(), prospectIds: z.array(z.number()) }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      if (input.prospectIds.length === 0) return { approved: 0 };
-
-      let approved = 0;
-      for (const pid of input.prospectIds) {
-        const result = await db
-          .update(prospectQueue)
-          .set({
-            sequenceStatus: "approved",
-            approvedAt: new Date(),
-            approvedByUserId: ctx.user.id,
-          })
-          .where(
-            and(
-              eq(prospectQueue.id, pid),
-              eq(prospectQueue.campaignId, input.campaignId),
-              eq(prospectQueue.workspaceId, ctx.workspace.id),
-            ),
-          );
-        if ((result[0] as { affectedRows?: number }).affectedRows) approved++;
-      }
-
-      // Recount from the queue instead of writing the batch size — the old
-      // `prospectsApproved: input.prospectIds.length` RESET the counter on
-      // every batch (10 approved + 5 more showed 5). A recount is drift-proof
-      // and idempotent, and it is the engine's recount (A50): this one used
-      // to count status `approved` only, a second meaning of the word.
-      await recountCampaignCounters(db, ctx.workspace.id, input.campaignId);
-
-      // Approved people's companies go to the Companies page (2026-09-15).
-      // Fire-and-forget: association is metadata, never blocks the approval;
-      // the engine's per-tick sweep catches anything this misses.
-      void promoteApprovedProspects(ctx.workspace.id, { campaignId: input.campaignId, queueIds: input.prospectIds });
-
-      return { approved };
-    }),
+  // approveBatch was removed (audit 2026-10-20, A69): no screen called it, and
+  // it approved any row of the campaign whatever its state — rejected,
+  // enrolled or finished. Approving goes through are.prospects.approve,
+  // bulkApprove and approveAllPending, which check.
 
   /**
    * How many people an "Approve all" would approve right now: enriched and
@@ -913,7 +905,7 @@ export const campaignsRouter = router({
    * the tab loads 100 rows, so a client-driven "all" was never all. The
    * COALESCE stamps match `are.prospects.approve` — a row that was already
    * approved keeps its original decision record. Recounts the campaign's
-   * denormalised counter the same way approveBatch does.
+   * denormalised counter from the queue rather than writing a batch size.
    */
   approveAllPending: workspaceProcedure
     .input(z.object({ campaignId: z.number() }))
@@ -934,7 +926,8 @@ export const campaignsRouter = router({
       // The one recount (A50) — "Approved" kept its meaning after Approve all.
       await recountCampaignCounters(db, ctx.workspace.id, input.campaignId);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_campaign", entityId: input.campaignId, after: { approveAllPending: approved } });
-      // Companies for the newly-approved people — see approveBatch above.
+      // Companies for the newly-approved people (2026-09-15). Fire-and-forget:
+      // association never blocks the approval; the engine's sweep catches misses.
       void promoteApprovedProspects(ctx.workspace.id, { campaignId: input.campaignId, limit: 500 });
       return { approved };
     }),
@@ -1170,6 +1163,10 @@ export const campaignsRouter = router({
         .select({
           working: sql<number>`sum(case when ${prospectQueue.sequenceStatus} <> 'skipped' then 1 else 0 end)`,
           rejected: sql<number>`sum(case when ${prospectQueue.sequenceStatus} = 'skipped' then 1 else 0 end)`,
+          // Staged rows count toward "working" (the engine counts them) but the
+          // Prospects list hides them, so "queue full" over a near-empty list
+          // read as a lie (audit 2026-10-20, A26). Counted apart, and said.
+          staged: sql<number>`sum(case when ${prospectQueue.sequenceStatus} = 'sourcing' then 1 else 0 end)`,
         })
         .from(prospectQueue)
         .where(and(...scoped));
@@ -1201,6 +1198,8 @@ export const campaignsRouter = router({
           working,
           target: campaign.targetProspectCount,
           rejected: Number(queue?.rejected ?? 0),
+          /** Of `working`: discovered without an email, staged while one is found, not on the Prospects list. */
+          staged: Number(queue?.staged ?? 0),
           full: working >= campaign.targetProspectCount,
           /** Below target does not mean searching: discovery rests after an empty run. */
           discoveryRestingUntil: restUntilMs && restUntilMs > Date.now() ? new Date(restUntilMs).toISOString() : null,
