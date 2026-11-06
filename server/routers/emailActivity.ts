@@ -597,6 +597,10 @@ export const emailActivityRouter = {
       const sentTotal = num(draftEng[0]?.sent) + num(execEng[0]?.sent);
       const openedTotal = num(draftEng[0]?.opened) + num(execEng[0]?.opened);
       const clickedTotal = num(draftEng[0]?.clicked);
+      // Over draft-path sends only (audit 2026-10-20, O42): a campaign send
+      // records no click of its own, so counting it in the denominator pulled
+      // the rate down by every campaign email. Email Analytics divides the same way.
+      const clickableTotal = num(draftEng[0]?.sent);
 
       return {
         sent: num(totals[0]?.sent),
@@ -606,7 +610,7 @@ export const emailActivityRouter = {
         inbound: num(inbound[0]?.count),
         bounced: num(draftEng[0]?.bounced),
         openRate: sentTotal ? Math.round((openedTotal / sentTotal) * 100) : 0,
-        clickRate: sentTotal ? Math.round((clickedTotal / sentTotal) * 100) : 0,
+        clickRate: clickableTotal ? Math.round((clickedTotal / clickableTotal) * 100) : 0,
         bySource: chips,
       };
     }),

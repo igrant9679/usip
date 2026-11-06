@@ -103,7 +103,9 @@ describe("the three notification switches actually gate something", () => {
     // inserted between them breaks that pin; pinning the order here means a
     // later edit fails HERE, where the reason is written down.
     const gate = NOTIFY.indexOf("const col = notifyGateColumn(");
-    const recipient = NOTIFY.indexOf("const recipient = await workspaceNotifyUserId");
+    // 2026-11-06 (audit A57): the recipient is the campaign's owner, through
+    // areNotifyRecipient; the switch must still be read before it.
+    const recipient = NOTIFY.indexOf("const recipient = await areNotifyRecipient(");
     expect(gate).toBeGreaterThan(-1);
     expect(recipient).toBeGreaterThan(gate);
   });

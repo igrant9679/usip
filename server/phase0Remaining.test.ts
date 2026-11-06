@@ -284,6 +284,26 @@ describe("the Manus runtime and debug collector stay out of production", () => {
     expect(names({ command: "serve", mode: "development" }).filter((n) => /manus/i.test(n)).length).toBe(2);
   });
 
+  it("nor does the JSX location plugin: no data-loc source paths in production (X2.3)", async () => {
+    const mod: any = await import("../vite.config");
+    const names = (env: { command: string; mode: string }) =>
+      (mod.default(env).plugins as any[]).flat(Infinity).filter(Boolean).map((p: any) => p.name as string);
+    expect(names({ command: "build", mode: "production" })).not.toContain("vite-plugin-jsx-loc");
+    expect(names({ command: "serve", mode: "development" })).toContain("vite-plugin-jsx-loc");
+  });
+
+  it("Streamdown's code highlighting builds Shiki's 56-language web bundle, not all ~300 (X2.5)", async () => {
+    const mod: any = await import("../vite.config");
+    const alias = mod.default({ command: "build", mode: "production" }).resolve.alias as Array<{ find: string | RegExp; replacement: string }>;
+    const shiki = alias.find((a) => a.find instanceof RegExp && a.find.test("shiki"));
+    expect(shiki?.replacement).toBe("shiki/bundle/web");
+    // Only the bare specifier: the engine import Streamdown also makes is left alone.
+    expect((shiki!.find as RegExp).test("shiki/engine/javascript")).toBe(false);
+    // The app's own aliases survived the move to the array form.
+    expect(alias.find((a) => a.find === "@")?.replacement).toMatch(/client[\\/]src$/);
+    expect(alias.find((a) => a.find === "@shared")?.replacement).toMatch(/shared$/);
+  });
+
   it("the collector script is no longer in the public folder that every build copies", () => {
     expect(existsSync(join(ROOT, "client/public/__manus__/debug-collector.js"))).toBe(false);
     expect(existsSync(join(ROOT, "client/dev/__manus__/debug-collector.js"))).toBe(true);

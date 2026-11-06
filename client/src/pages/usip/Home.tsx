@@ -240,7 +240,8 @@ export default function Home() {
   const notifs = (trpc.notifications.list.useQuery().data ?? []) as any[];
   // Feed the four widgets that used to render hardcoded emptiness/zeros.
   const replies = (trpc.conversations.list.useQuery({ filter: "unhandled" }).data ?? []) as any[];
-  const deals = (trpc.opportunities.list.useQuery({}).data ?? []) as any[];
+  // The widget shows five open deals; it read every deal (R66).
+  const deals = (trpc.opportunities.list.useQuery({ openOnly: true, limit: 5 }).data ?? []) as any[];
   const dealStages = (((trpc.crmPipelines.get.useQuery({} as any, { staleTime: 60_000 }).data as any)?.stages ?? []) as StageFlagRow[]);
   const calls = ((trpc.voiceAgents.listCalls.useQuery({ limit: 50 }).data ?? []) as any[]);
   const attention = trpc.attention.summary.useQuery().data as any;

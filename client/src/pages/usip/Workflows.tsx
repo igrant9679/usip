@@ -3,7 +3,7 @@ import { Switch } from "@/components/ui/switch";
 import { ConfirmButton, Field, fmtDate, FormDialog, Section, SelectField, StatusPill } from "@/components/usip/Common";
 import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { actionSupportsEntity, CONDITION_OPS, isDeadTrigger, LIVE_TRIGGERS, RECORD_ENTITIES, recordFieldsFor } from "@shared/workflowTriggers";
+import { actionSupportsEntity, CONDITION_OPS, conditionFieldsFor, isDeadTrigger, LIVE_TRIGGERS, RECORD_ENTITIES } from "@shared/workflowTriggers";
 import { Play, Plus, Save, Trash2, Workflow, GitBranch, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -46,13 +46,9 @@ const OPS = CONDITION_OPS.map((o) => [o.id, o.label] as const);
  * dispatch payload is built from (@shared/workflowTriggers). The two used to
  * be independent hand-written lists with nothing in common, so every
  * conditioned record rule compared against `undefined` and never matched
- * (2026-09-20). A per-trigger map for the remaining four is its own item.
+ * (2026-09-20). The other four triggers now take theirs from TRIGGER_FIELDS
+ * in the same file, so every trigger offers only what its event carries (G61).
  */
-const FIELDS = [
-  "stage", "value", "winProb", "ownerUserId", "status", "score", "grade", "source",
-  "company", "title", "industry", "region", "daysInStage", "changed", "signal",
-  "priority", "healthScore", "renewalDate", "npsScore",
-];
 
 const ACTION_TYPES = [
   ["create_task", "Create task"],
@@ -80,7 +76,7 @@ export default function Workflows() {
     onError: (e: any) => toast.error(e.message),
   });
   const runs = trpc.workflows.runs.useQuery({ ruleId: selected ?? undefined });
-  const create = trpc.workflows.create.useMutation({ onSuccess: () => { utils.workflows.list.invalidate(); setOpenNew(false); toast.success("Rule created"); }, onError: (e) => toast.error(e.message) });
+  const create = trpc.workflows.create.useMutation({ onSuccess: () => { utils.workflows.list.invalidate(); setOpenNew(false); toast.success("Rule created, switched off — set its conditions and actions, then turn it on"); }, onError: (e) => toast.error(e.message) });
   const update = trpc.workflows.update.useMutation({ onSuccess: () => { utils.workflows.list.invalidate(); toast.success("Rule saved"); }, onError: (e) => toast.error(e.message) });
   const toggle = trpc.workflows.toggle.useMutation({ onSuccess: () => utils.workflows.list.invalidate(), onError: (e) => toast.error(e.message) });
   // A test runs nothing (audit G19): it says what the rule would do.
@@ -217,13 +213,16 @@ export default function Workflows() {
             triggerConfig: t === "record_created" || t === "record_updated" ? { entity: "lead" } : {},
             conditions: [],
             actions: [{ type: "create_task", params: { title: "Follow up" } }],
-            enabled: true,
+            // Off until someone turns it on: with the placeholder action above
+            // and no conditions, a live rule made a "Follow up" task on every
+            // stage change the moment it was created (G61).
+            enabled: false,
           });
         }}>
         <Field name="name" label="Name" required />
         <Field name="description" label="Description" />
         <SelectField name="triggerType" label="Trigger" options={TRIGGERS.map(([v, l]) => ({ value: v, label: l }))} defaultValue="stage_changed" />
-        <div className="text-xs text-muted-foreground">After creating, you'll be able to add conditions and actions in the visual editor.</div>
+        <div className="text-xs text-muted-foreground">The rule is created switched off. Add its conditions and actions in the visual editor, then turn it on.</div>
       </FormDialog>
     </Shell>
   );
@@ -250,7 +249,7 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
    */
   const isRecordTrigger = trigger === "record_created" || trigger === "record_updated";
   const entity = isRecordTrigger ? (triggerConfig.entity ?? "lead") : null;
-  const fieldOptions = isRecordTrigger ? recordFieldsFor(trigger, entity) : FIELDS;
+  const fieldOptions = conditionFieldsFor(trigger, entity);
 
   const dirty =
     trigger !== rule.triggerType ||

@@ -28,6 +28,7 @@ import {
 } from "../drizzle/schema";
 import { getDb } from "./db";
 import { seedHelpContent } from "./seedHelpContent";
+import { churnRiskFor, healthTierFor } from "@shared/customerHealth";
 
 const COMPANIES = [
   { name: "Avalon Foundation", industry: "Nonprofit", domain: "avalonfnd.org", region: "Northeast" },
@@ -94,10 +95,9 @@ export function computeHealth(input: { productUsage: number; engagement: number;
   return Math.round(productUsage * 0.35 + engagement * 0.25 + supportHealth * 0.2 + ((npsScore + 100) / 2) * 0.2);
 }
 
+// The shared tiers, not a second set of cut-offs (audit 2026-10-20, R58).
 export function churnRiskFromScore(score: number): "low" | "medium" | "high" {
-  if (score < 45) return "high";
-  if (score < 65) return "medium";
-  return "low";
+  return churnRiskFor(healthTierFor(score));
 }
 
 function rand<T>(arr: readonly T[]): T {
@@ -280,7 +280,7 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
     const supp = randInt(40, 95);
     const nps = randInt(-20, 70);
     const score = computeHealth({ productUsage: usage, engagement: eng, supportHealth: supp, npsScore: nps });
-    const tier = score >= 75 ? "healthy" : score >= 55 ? "watch" : score >= 35 ? "at_risk" : "critical";
+    const tier = healthTierFor(score);
     const daysToRenewal = Math.round((end.getTime() - Date.now()) / 86400000);
     // The four time buckets agree with @shared/renewalStage at every boundary,
     // so seeded rows do not jump when the derivation runs over them.

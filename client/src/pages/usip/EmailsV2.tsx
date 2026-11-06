@@ -41,6 +41,7 @@ import { EMAIL_SOURCES, emailSourceLabel, type EmailFeedRow } from "@shared/emai
 import { ConfirmButton } from "@/components/usip/Common";
 import { AiComposeDialog, DraftEditorTools } from "@/components/usip/emails/DraftEditorTools";
 import { pressable } from "@/lib/pressable";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 
 /* ─── vocabulary ───────────────────────────────────────────────────────────── */
 
@@ -265,6 +266,9 @@ function EmailDetail({ row, onClose }: { row: EmailFeedRow | null; onClose: () =
 export default function EmailsV2() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
+  // "Send approved" is admin-only on the server (adminWsProcedure); a rep saw
+  // the button and got a refusal (audit 2026-10-20, O47).
+  const { isAdmin } = useWorkspaceRole();
 
   // The three filters initialise from the URL (phase 4): Email Drafts and
   // AI Pipeline became saved filters of this page — /v2/emails?status=…
@@ -304,10 +308,20 @@ export default function EmailsV2() {
   // sequence drafts, or both. Any other chip (crm, inbound…) has no drafts.
   const approveAllSource = source === "ai_draft" ? "ai_draft" : source === "sequence" ? "sequence" : "all";
   const send = trpc.emailDrafts.send.useMutation({ onSuccess: () => { invalidate(); toast.success("Email sent"); }, onError: (e) => toast.error(e.message) });
-  // "Send All Approved" from the retired drafts pages — workspace-wide.
+  // "Send All Approved" from the retired drafts pages — workspace-wide. Each
+  // draft goes the way its own Send would (deliverEmailDraft, O47), at most 25
+  // a run, oldest first (O16): say what is left rather than imply it all went.
   const sendBulkApproved = trpc.smtpConfig.sendBulkApproved.useMutation({
-    onSuccess: (r) => { invalidate(); toast.success(`Sent ${r.sent} email${r.sent === 1 ? "" : "s"}${r.failed ? `, ${r.failed} failed` : ""}`); },
-    onError: (e) => toast.error(e.message.includes("No active SMTP") ? "SMTP not configured — set up in Settings → Email delivery" : e.message),
+    onSuccess: (r) => {
+      invalidate();
+      toast.success(`Sent ${r.sent} email${r.sent === 1 ? "" : "s"}${r.failed ? `, ${r.failed} failed` : ""}${r.skipped ? `, ${r.skipped} not sent (held, suppressed, taken or over a limit)` : ""}`, {
+        description: [
+          r.remaining ? `${r.remaining} still approved — press Send approved again to send the next ones.` : "",
+          r.inProgress ? `${r.inProgress} already being sent.` : "",
+        ].filter(Boolean).join(" ") || undefined,
+      });
+    },
+    onError: (e) => toast.error(e.message),
   });
   const updateSettings = trpc.emailAutoSend.updateAutoSendSettings.useMutation({
     onSuccess: () => { utils.emailAutoSend.getAutoSendSettings.invalidate(); toast.success("Auto-send updated"); },
@@ -372,14 +386,16 @@ export default function EmailsV2() {
           <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={() => setComposeOpen(true)}>
             <Bot className="size-3.5" /> AI compose
           </Button>
-          <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5 text-xs"
-            disabled={sendBulkApproved.isPending}
-            title="Send every approved draft now?"
-            description="All approved drafts in this workspace are sent immediately through your configured email delivery — not only the rows on this page."
-            confirmLabel="Send approved"
-            onConfirm={() => sendBulkApproved.mutate({})}>
-            <Send className="size-3.5" /> Send approved
-          </ConfirmButton>
+          {isAdmin && (
+            <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5 text-xs"
+              disabled={sendBulkApproved.isPending}
+              title="Send approved drafts now?"
+              description="Up to 25 approved drafts in this workspace, oldest first, are sent now, one a second — not only the rows on this page. Each goes exactly as its own Send button would send it: the same mailbox, footer and daily limits. Press it again for the rest. Drafts still awaiting review are not sent."
+              confirmLabel="Send approved"
+              onConfirm={() => sendBulkApproved.mutate({})}>
+              <Send className="size-3.5" /> Send approved
+            </ConfirmButton>
+          )}
           <Select value={direction} onValueChange={(v) => setFilter(() => setDirection(v))}>
             <SelectTrigger className="h-7 w-[120px] text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>{DIRECTIONS.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
@@ -399,9 +415,12 @@ export default function EmailsV2() {
             <div className="min-w-0 flex-1">
               <div className="text-sm font-medium">Autonomous AI auto-send</div>
               <div className="text-[12px] text-muted-foreground">
+                {/* What autoSendForAllWorkspaces does (audit 2026-10-20, O25): sequence
+                    drafts still awaiting review, scored by lead score or contact
+                    relationship strength; prospects have no score. */}
                 {s?.aiAutoSendEnabled
-                  ? `On — AI drafts send automatically when lead score ≥ ${s?.aiAutoSendScoreMin ?? 70}.`
-                  : "Off — AI drafts wait for your approval before sending."}
+                  ? `On — sequence drafts still awaiting review send on their own, inside the send window, when the recipient's score is at least ${s?.aiAutoSendScoreMin ?? 70} (a lead's score, or a contact's relationship strength). ${s?.aiAutoSendAllowUnscored ? "Recipients with no score, prospects among them, send too." : "Drafts to prospects have no score, so they wait for you."} Approving a draft takes it out of auto-send: it then goes when someone presses Send.`
+                  : "Off — no draft sends until someone presses Send."}
               </div>
             </div>
             <Switch aria-label="AI auto-send" checked={!!s?.aiAutoSendEnabled} onCheckedChange={toggleAutoSend} disabled={updateSettings.isPending || !settings.data} />
@@ -428,7 +447,7 @@ export default function EmailsV2() {
               </span>
               <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5" disabled={approveAll.isPending}
                 title={`Approve all ${approveAllSource === "ai_draft" ? "AI Pipeline" : approveAllSource === "sequence" ? "sequence" : "awaiting"} drafts?`}
-                description="Every draft still waiting for review in this workspace is marked approved — not only the rows on this page. Approved drafts are sent by auto-send, the sequence engine, or Send All Approved; this step emails nobody."
+                description={`Every draft still waiting for review in this workspace is marked approved — not only the rows on this page. This step emails nobody, and auto-send does not pick up approved drafts: each goes when someone presses its Send${isAdmin ? " or Send approved" : " (or an admin presses Send approved)"}.`}
                 confirmLabel="Approve all" onConfirm={() => approveAll.mutate({ source: approveAllSource })}>
                 <Check className="size-3.5 text-emerald-500" /> Approve all
               </ConfirmButton>
@@ -548,7 +567,7 @@ export default function EmailsV2() {
                     {pending && row.draftId && (
                       <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                         <Button size="sm" variant="outline" className="h-7 gap-1" disabled={send.isPending} onClick={() => send.mutate({ id: row.draftId! })}><Send className="size-3.5" /> Send</Button>
-                        <Button size="icon" variant="ghost" className="size-7" title="Approve" onClick={() => approve.mutate({ id: row.draftId! })}><Check className="size-4 text-emerald-500" /></Button>
+                        <Button size="icon" variant="ghost" className="size-7" title="Approve (sends nothing; it then waits for Send, and auto-send skips it)" aria-label="Approve" onClick={() => approve.mutate({ id: row.draftId! })}><Check className="size-4 text-emerald-500" /></Button>
                         <Button size="icon" variant="ghost" className="size-7" title="Reject" onClick={() => reject.mutate({ id: row.draftId! })}><X className="size-4 text-muted-foreground" /></Button>
                         {/* The full editor (subject A/B, research context, regenerate)
                             renders inline in the drawer — click the row to open it. */}

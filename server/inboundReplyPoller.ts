@@ -83,7 +83,32 @@ async function pollAllAccounts() {
   }
 }
 
-async function pollImapAccount(account: any) {
+/**
+ * What one poll reads (audit 2026-10-20, O36). It read only UNSEEN messages,
+ * 50 at most, so a reply opened on a phone before the poll came round was
+ * never seen and its sequence kept sending. It now reads every message from
+ * the last REPLY_LOOKBACK_DAYS, seen or not, skipping the ones already
+ * recorded, newest first and bounded both ways.
+ */
+export const REPLY_LOOKBACK_DAYS = 2;
+const SCAN_MAX = 200; // newest UIDs considered per poll
+const FETCH_MAX = 50; // full messages downloaded per poll
+
+/**
+ * Messages read and deliberately not recorded (warmup, our own mailboxes, a
+ * reply another path already recorded), by account and UIDVALIDITY. Without
+ * this they stay "unrecorded" for the whole look-back window, are downloaded
+ * again on every poll, and enough of them would crowd a real reply out of
+ * the newest FETCH_MAX. In memory: after a restart each is read once more.
+ */
+const skippedUids = new Map<string, Set<number>>();
+function skippedFor(key: string): Set<number> {
+  let s = skippedUids.get(key);
+  if (!s || s.size > 5000) { s = new Set(); skippedUids.set(key, s); }
+  return s;
+}
+
+export async function pollImapAccount(account: any) {
   let password: string;
   try { password = decryptField(account.imapPassword); } catch { password = account.imapPassword; }
 
@@ -94,16 +119,33 @@ async function pollImapAccount(account: any) {
 
   await client.connect();
   try {
-    const lock = await client.getMailboxLock("INBOX");
+    // Read-only (EXAMINE): the poll must never mark a message seen or change
+    // the mailbox, and fetching the source reads it with BODY.PEEK anyway.
+    const lock = await client.getMailboxLock("INBOX", { readOnly: true });
     try {
-      // Unseen messages. search() answers false, not [], when there are none,
-      // and .slice threw on every poll of a mailbox with nothing new (X3.8).
-      // { seen: false } is UNSEEN, the form imapflow's types know.
-      const uids = (await client.search({ seen: false }, { uid: true })) || [];
+      // Everything since the cut-off, seen or not (O36). search() answers
+      // false, not [], when there are none, and .slice threw on every poll of
+      // a mailbox with nothing new (X3.8). SINCE is by date, so the window is
+      // whole days.
+      const since = new Date(Date.now() - REPLY_LOOKBACK_DAYS * 86_400_000);
+      const uids = (await client.search({ since }, { uid: true })) || [];
       if (uids.length === 0) return;
 
-      const recentUids = uids.slice(-50); // Process up to 50 at a time
+      // Skip what is already recorded before downloading anything: a seen
+      // message stays in the window for days, and each poll would fetch it again.
+      const newest = uids.slice(-SCAN_MAX);
+      const dbSeen = await getDb();
+      if (!dbSeen) return;
+      const recorded = new Set(
+        (await dbSeen.select({ uid: emailReplies.imapUid }).from(emailReplies)
+          .where(and(eq(emailReplies.sendingAccountId, account.id), inArray(emailReplies.imapUid, newest))))
+          .map((r) => Number(r.uid)),
+      );
+      const skipped = skippedFor(`${account.id}:${String(client.mailbox ? client.mailbox.uidValidity : "")}`);
+      const recentUids = newest.filter((u) => !recorded.has(Number(u)) && !skipped.has(Number(u))).slice(-FETCH_MAX);
+      if (recentUids.length === 0) return;
       for await (const msg of client.fetch(recentUids.join(","), { uid: true, flags: true, source: true }, { uid: true })) {
+        const skip = () => { skipped.add(Number(msg.uid)); };
         try {
           // Dedup pass — two paths can record the same reply:
           //   (a) IMAP poller for SMTP-served accounts (this loop)
@@ -118,7 +160,7 @@ async function pollImapAccount(account: any) {
             .where(and(eq(emailReplies.sendingAccountId, account.id), eq(emailReplies.imapUid, msg.uid)));
           if (byImap.length > 0) continue;
 
-          if (!msg.source) continue;
+          if (!msg.source) { skip(); continue; }
           const parsed = await simpleParser(msg.source);
           const fromAddr = parsed.from?.value?.[0];
           const toVal = parsed.to;
@@ -126,14 +168,14 @@ async function pollImapAccount(account: any) {
           // Warmup traffic between our own mailboxes must never become a
           // "reply": skip on the engine's marker header, and skip anything
           // sent FROM one of this workspace's own sending accounts.
-          if (parsed.headers?.get?.("x-velocity-warmup")) continue;
+          if (parsed.headers?.get?.("x-velocity-warmup")) { skip(); continue; }
           if (fromAddr?.address) {
             const own = await db3
               .select({ id: sendingAccounts.id })
               .from(sendingAccounts)
               .where(and(eq(sendingAccounts.workspaceId, account.workspaceId), eq(sendingAccounts.fromEmail, fromAddr.address.toLowerCase())))
               .limit(1);
-            if (own.length > 0) continue;
+            if (own.length > 0) { skip(); continue; }
           }
 
           // Cross-source dedup: same messageId already recorded for
@@ -148,7 +190,7 @@ async function pollImapAccount(account: any) {
                 ),
               )
               .limit(1);
-            if (byMsg.length > 0) continue;
+            if (byMsg.length > 0) { skip(); continue; }
           }
 
           await processInboundReply({

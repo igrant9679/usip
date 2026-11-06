@@ -117,8 +117,11 @@ export default function DataEnrichment() {
 
   const { data: m, isLoading, error: metricsError, refetch: refetchMetrics } = trpc.dataHealth.getMetrics.useQuery();
   // "What needs me" on the tab itself: discovery rows awaiting human review.
-  // perPage 1 — only the total is wanted.
-  const needsReviewQ = trpc.prospects.list.useQuery({ verificationStatus: "needs_review", perPage: 1, page: 1 } as never);
+  // Only the total is wanted, but at the page size the procedure accepts: it
+  // asked for 1, below prospects.list's minimum of 10, so every load was
+  // refused and the badge never showed (audit 2026-10-20, L3 / P141). The
+  // `as never` that hid the input from the type check is gone too.
+  const needsReviewQ = trpc.prospects.list.useQuery({ verificationStatus: "needs_review", perPage: 10, page: 1 });
   const needsReview = Number((needsReviewQ.data as { total?: number } | undefined)?.total ?? 0);
   const metrics = m as
     | { total: number; withEmail: number; withPhone: number; pctWithEmail: number; pctWithPhone: number; pctEnriched: number; pctVerified: number; enrichedLast90Days: number }

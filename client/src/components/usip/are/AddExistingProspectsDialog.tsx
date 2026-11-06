@@ -153,8 +153,9 @@ export function AddExistingProspectsDialog({
 
   const pageRows: PersonRow[] = useMemo(() => {
     if (source === "search") return ((list.data as any)?.data ?? []) as PersonRow[];
+    // recordLists.members returns a People list's people (P49); nothing else to filter.
     return ((listMembers.data?.rows ?? []) as any[])
-      .filter((m) => m.recordType === "prospect" && m.record)
+      .filter((m) => m.record)
       .map((m) => m.record as PersonRow);
   }, [source, list.data, listMembers.data]);
   const pageIds = useMemo(() => pageRows.map((r) => r.id as number), [pageRows]);
@@ -275,7 +276,11 @@ export function AddExistingProspectsDialog({
               searchInput={searchInput} setSearchInput={setSearchInput}
               emailFilter={emailFilter} setEmailFilter={setEmailFilter}
               hideSequenced={hideSequenced} setHideSequenced={setHideSequenced}
-              lists={(lists.data ?? []) as any[]} listsLoading={lists.isLoading} listId={listId} setListId={setListId}
+              // People lists only (audit 2026-10-20, A55): a Companies list holds
+              // companies, so picking one always showed an empty table.
+              lists={((lists.data ?? []) as any[]).filter((l) => (l.entityType ?? "people") === "people")}
+              hiddenCompanyLists={((lists.data ?? []) as any[]).filter((l) => l.entityType === "companies").length}
+              listsLoading={lists.isLoading} listId={listId} setListId={setListId}
               rows={pageRows} loading={rowsLoading} total={total} page={page} totalPages={totalPages} setPage={setPage}
               selected={selected} toggle={toggle} allOnPageSelected={allOnPageSelected} toggleAllOnPage={toggleAllOnPage}
               clearSelection={() => setSelected(new Map())} enrollmentMap={enrollmentMap}
@@ -424,7 +429,7 @@ function SelectStep(props: {
   searchInput: string; setSearchInput: (s: string) => void;
   emailFilter: "any" | "yes" | "no"; setEmailFilter: (v: "any" | "yes" | "no") => void;
   hideSequenced: boolean; setHideSequenced: (v: boolean) => void;
-  lists: any[]; listsLoading: boolean; listId: number | null; setListId: (id: number | null) => void;
+  lists: any[]; hiddenCompanyLists: number; listsLoading: boolean; listId: number | null; setListId: (id: number | null) => void;
   rows: PersonRow[]; loading: boolean; total: number; page: number; totalPages: number; setPage: (p: number) => void;
   selected: Map<number, PersonRow>; toggle: (r: PersonRow) => void; allOnPageSelected: boolean; toggleAllOnPage: () => void;
   clearSelection: () => void; enrollmentMap?: EnrollmentMap;
@@ -471,11 +476,16 @@ function SelectStep(props: {
             onChange={(e) => props.setListId(e.target.value ? Number(e.target.value) : null)}
             className="h-8 min-w-[240px] rounded-md border border-border bg-background px-2 text-[12.5px]"
           >
-            <option value="">{props.listsLoading ? "Loading lists…" : props.lists.length ? "Choose a list…" : "No lists yet"}</option>
+            <option value="">{props.listsLoading ? "Loading lists…" : props.lists.length ? "Choose a list…" : "No People lists yet"}</option>
             {props.lists.map((l) => (
               <option key={l.id} value={l.id}>{l.name}{l.memberCount != null ? ` (${l.memberCount})` : ""}</option>
             ))}
           </select>
+        )}
+        {source === "list" && props.hiddenCompanyLists > 0 && (
+          <span className="text-[11.5px] text-muted-foreground">
+            {props.hiddenCompanyLists} Companies list{props.hiddenCompanyLists === 1 ? " is" : "s are"} not shown: they hold companies, not people.
+          </span>
         )}
       </div>
 

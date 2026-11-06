@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lte, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { DEFAULT_STAGE_ORDER } from "@shared/stageSemantics";
 import {
@@ -83,6 +83,42 @@ export { evalConditions };
 
 /* ----- Standalone async helpers (exported for nightly batch) ----- */
 
+/**
+ * The deals this deal_stuck rule has already fired for since they entered their
+ * current stage. Both checks re-ran every action for every stuck deal on every
+ * pass, so a "create a task" rule added another task per stuck deal each night
+ * (G61). A deal now fires once per stay in a stage; moved on and stuck again,
+ * it fires again. Without stageEnteredAt, the stay is read off daysInStage.
+ */
+export async function dealsAlreadyFiredThisStage(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  ruleId: number,
+  deals: { id: number; daysInStage: number | null; stageEnteredAt: Date | string | null }[],
+  now = Date.now(),
+): Promise<Set<number>> {
+  const out = new Set<number>();
+  if (deals.length === 0) return out;
+  const runs = await db.select({ relatedId: workflowRuns.relatedId, runAt: workflowRuns.runAt }).from(workflowRuns)
+    .where(and(
+      eq(workflowRuns.ruleId, ruleId),
+      eq(workflowRuns.relatedType, "opportunity"),
+      inArray(workflowRuns.relatedId, deals.map((d) => d.id)),
+    ));
+  const lastRun = new Map<number, number>();
+  for (const r of runs) {
+    if (r.relatedId == null) continue;
+    const t = new Date(r.runAt).getTime();
+    if (t > (lastRun.get(r.relatedId) ?? -Infinity)) lastRun.set(r.relatedId, t);
+  }
+  for (const d of deals) {
+    const last = lastRun.get(d.id);
+    if (last === undefined) continue;
+    const entered = d.stageEnteredAt ? new Date(d.stageEnteredAt).getTime() : now - (d.daysInStage ?? 0) * 86_400_000;
+    if (last >= entered) out.add(d.id);
+  }
+  return out;
+}
+
 export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMatched: number; actionsTriggered: number }> {
   const db = await getDb();
   if (!db) return { rulesChecked: 0, dealsMatched: 0, actionsTriggered: 0 };
@@ -125,6 +161,7 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
       // evalConditions in below would evaluate every such rule FALSE forever.
       value: opportunities.value,
       winProb: opportunities.winProb,
+      stageEnteredAt: opportunities.stageEnteredAt,
     }).from(opportunities)
       .where(and(
         eq(opportunities.workspaceId, rule.workspaceId),
@@ -133,8 +170,10 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
         ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
       ));
 
+    const alreadyFired = await dealsAlreadyFiredThisStage(db, rule.id, stuckDeals);
     let firedForRule = 0;
     for (const deal of stuckDeals) {
+      if (alreadyFired.has(deal.id)) continue;
       /**
        * Runs through the SHARED dispatcher rather than a local copy. The local
        * one handled four action types — post_slack, notify_teams, and two names
@@ -184,6 +223,9 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
       actionsTriggered += Array.isArray(rule.actions) ? (rule.actions as unknown[]).length : 0;
       await db.insert(workflowRuns).values({
         workspaceId: rule.workspaceId, ruleId: rule.id, triggeredBy: "deal_stuck_nightly",
+        // Read back by dealsAlreadyFiredThisStage against stageEnteredAt, which
+        // the app writes; the same clock on both sides.
+        runAt: new Date(),
         // workflowRuns.status enum is success|failed|skipped — "error" fails the
         // INSERT, so the one run that had something to report was the one that
         // could not be logged. Same fix already applied to testFire below.
@@ -246,7 +288,9 @@ export const workflowsRouter = router({
     .input(z.object({
       name: z.string().min(1),
       description: z.string().optional(),
-      enabled: z.boolean().default(true),
+      // Off unless the caller says otherwise (G61): a rule fires as soon as it is
+      // enabled, so a new one waits until someone has finished it.
+      enabled: z.boolean().default(false),
       // Only triggers that actually fire at runtime (shared/workflowTriggers).
       // The inline list used to include nps_submitted / field_equals /
       // schedule — nothing dispatches those, so the API accepted rules that
@@ -382,6 +426,7 @@ export const workflowsRouter = router({
           // Same reason as the cron twin above: the conditions gate needs them.
           value: opportunities.value,
           winProb: opportunities.winProb,
+          stageEnteredAt: opportunities.stageEnteredAt,
         }).from(opportunities)
           .where(and(
             eq(opportunities.workspaceId, ctx.workspace.id),
@@ -390,8 +435,11 @@ export const workflowsRouter = router({
             ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
           ));
 
+        // Once per stay in a stage, as the nightly check (G61).
+        const alreadyFired = await dealsAlreadyFiredThisStage(db, rule.id, stuckDeals);
         let firedForRule = 0;
         for (const deal of stuckDeals) {
+          if (alreadyFired.has(deal.id)) continue;
           // Shared dispatcher — see checkDealAging above for why the local copy
           // that used to live here was wrong (six of the eight builder actions
           // did nothing, and the run was still logged "success").
@@ -419,6 +467,7 @@ export const workflowsRouter = router({
           // Log the workflow run
           await db.insert(workflowRuns).values({
             workspaceId: ctx.workspace.id, ruleId: rule.id, triggeredBy: "deal_stuck_check",
+            runAt: new Date(),
             // enum is success|failed|skipped — see checkDealAging above.
             status: errors.length === 0 ? "success" : "failed",
             actionsRun: rule.actions,
@@ -1588,10 +1637,184 @@ async function resolveWidgetData(
 
 /* ───── Quotes (CPQ) ──────────────────────────────────────────────── */
 
+type QuoteForPdf = {
+  quoteNumber: string;
+  createdAt: Date | null;
+  expiresAt: Date | null;
+  subtotal: string | number;
+  discountTotal: string | number;
+  taxTotal: string | number;
+  total: string | number;
+  notes: string | null;
+  terms: string | null;
+};
+type QuoteLineForPdf = {
+  name: string;
+  description: string | null;
+  quantity: number;
+  unitPrice: string | number;
+  discountPct: string | number;
+  lineTotal: string | number;
+};
+
+/**
+ * A quote as the customer receives it (audit 2026-10-20, R71, R94).
+ *
+ * The header was the literal "USIP" on every workspace's quotes, beside a
+ * "Status: DRAFT" stamp — and since a PDF is only ever generated for a draft
+ * (Mark sent needs one first), every quote a customer saw said DRAFT. It now
+ * carries the workspace's name, the quote's date and the day it is valid
+ * until, and no status.
+ *
+ * Line items were drawn at a running y with no page break, so a long quote
+ * ran off the bottom of the page. A row that won't fit starts a new page,
+ * which repeats the column header, and the totals move over with it.
+ *
+ * `compress` exists for tests, which read the page content.
+ */
+export async function renderQuotePdf(
+  q: QuoteForPdf,
+  lis: QuoteLineForPdf[],
+  opts: { workspaceName: string; timeZone: string; compress?: boolean },
+): Promise<Buffer> {
+  // Lazy-import to keep cold start light; pdfkit is CJS so we destructure .default.
+  const { default: PDFDocument } = await import("pdfkit");
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: "LETTER", margin: 48, compress: opts.compress ?? true });
+    const chunks: Buffer[] = [];
+    doc.on("data", (c: Buffer) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    const day = (d: Date | null) => (d
+      ? new Date(d).toLocaleDateString("en-US", { timeZone: opts.timeZone, year: "numeric", month: "short", day: "numeric" })
+      : "—");
+    const bottom = () => doc.page.height - doc.page.margins.bottom;
+
+    // Header: who the quote is from, which quote, and its dates.
+    doc.fillColor("#0F1F1B").fontSize(24).font("Helvetica-Bold").text(opts.workspaceName.trim() || "Quote", 48, 48, { width: 330 });
+    doc.fontSize(11).font("Helvetica").fillColor("#666").text(`Quote ${q.quoteNumber}`, 48, doc.y, { width: 330 });
+    const leftBottom = doc.y;
+    doc.fontSize(10).fillColor("#666")
+      .text(`Date: ${day(q.createdAt)}`, 380, 52, { width: 184, align: "right" })
+      .text(`Valid until: ${day(q.expiresAt)}`, 380, doc.y, { width: 184, align: "right" });
+    doc.y = Math.max(leftBottom, doc.y) + 6;
+    doc.strokeColor("#14B89A").lineWidth(2).moveTo(48, doc.y).lineTo(564, doc.y).stroke();
+    doc.moveDown(1);
+
+    // Money columns are wide enough for six figures: at 54pt a line or a
+    // total of $10,000.00 or more wrapped onto a second line.
+    const colX = { item: 48, qty: 282, unit: 328, disc: 414, total: 466 };
+    const colW = { item: 226, qty: 40, unit: 80, disc: 46, total: 98 };
+    const tableHeader = (top: number) => {
+      doc.fillColor("#fff").rect(48, top, 516, 22).fill("#0F1F1B");
+      doc.fillColor("#fff").fontSize(9).font("Helvetica-Bold");
+      doc.text("ITEM", colX.item + 6, top + 7);
+      doc.text("QTY", colX.qty, top + 7, { width: colW.qty, align: "right" });
+      doc.text("UNIT", colX.unit, top + 7, { width: colW.unit, align: "right" });
+      doc.text("DISC.", colX.disc, top + 7, { width: colW.disc, align: "right" });
+      doc.text("TOTAL", colX.total, top + 7, { width: colW.total, align: "right" });
+      return top + 28;
+    };
+    let y = tableHeader(doc.y);
+
+    for (const li of lis) {
+      // Measure the row first, so one that won't fit starts the next page.
+      doc.font("Helvetica").fontSize(10);
+      const nameH = doc.heightOfString(li.name, { width: colW.item });
+      const descH = li.description ? doc.fontSize(8).heightOfString(li.description, { width: colW.item }) : 0;
+      doc.fontSize(10);
+      const rowH = Math.max(20, nameH + descH);
+      if (y + rowH + 4 > bottom()) {
+        doc.addPage();
+        y = tableHeader(doc.page.margins.top);
+        doc.font("Helvetica").fontSize(10);
+      }
+      doc.fillColor("#0F1F1B").text(li.name, colX.item + 6, y, { width: colW.item });
+      if (li.description) {
+        doc.fillColor("#666").fontSize(8).text(li.description, colX.item + 6, doc.y, { width: colW.item });
+        doc.fontSize(10).fillColor("#0F1F1B");
+      }
+      doc.text(String(li.quantity), colX.qty, y, { width: colW.qty, align: "right" });
+      // formatMoney, not toLocaleString(): its default maximumFractionDigits
+      // is 3 and minimumFractionDigits 0, so a line of 1234.5 printed as
+      // "$1,234.5" and 1234 as "$1,234" on a document a customer signs.
+      doc.text(formatMoney(li.unitPrice), colX.unit, y, { width: colW.unit, align: "right" });
+      doc.text(`${Number(li.discountPct).toFixed(1)}%`, colX.disc, y, { width: colW.disc, align: "right" });
+      doc.font("Helvetica-Bold").text(formatMoney(li.lineTotal), colX.total, y, { width: colW.total, align: "right" });
+      doc.font("Helvetica");
+      y += rowH + 4;
+      doc.strokeColor("#eee").lineWidth(0.5).moveTo(48, y - 2).lineTo(564, y - 2).stroke();
+    }
+
+    // Totals: five rows and a rule, kept together on one page.
+    if (y + 16 + 110 > bottom()) {
+      doc.addPage();
+      y = doc.page.margins.top - 16;
+    }
+    doc.y = y + 16;
+    const labelX = 330, valX = 424, valW = 140;
+    const totalsRow = (label: string, value: string, bold = false) => {
+      if (bold) doc.font("Helvetica-Bold").fontSize(13).fillColor("#0F1F1B");
+      else doc.font("Helvetica").fontSize(10).fillColor("#0F1F1B");
+      const ty = doc.y;
+      doc.text(label, labelX, ty, { width: 90 });
+      doc.text(value, valX, ty, { width: valW, align: "right" });
+      doc.moveDown(0.3);
+    };
+    totalsRow("Subtotal", formatMoney(q.subtotal));
+    totalsRow("Discount", `−${formatMoney(q.discountTotal)}`);
+    // Always $0.00: quotes.create has no tax input, so this row is decoration.
+    // Left in place rather than removed — a quote with no tax line reads as
+    // "tax not considered", and adding a real tax field is a product decision.
+    totalsRow("Tax", formatMoney(q.taxTotal));
+    doc.strokeColor("#0F1F1B").lineWidth(1.5).moveTo(labelX, doc.y).lineTo(564, doc.y).stroke();
+    doc.moveDown(0.3);
+    totalsRow("Total", formatMoney(q.total), true);
+
+    // Notes & Terms (pdfkit flows long text onto new pages itself).
+    if (q.notes) {
+      doc.moveDown(1.5).font("Helvetica-Bold").fontSize(10).fillColor("#0F1F1B").text("Notes", 48);
+      doc.font("Helvetica").fontSize(10).fillColor("#444").text(q.notes, 48, doc.y, { width: 516 });
+    }
+    if (q.terms) {
+      doc.moveDown(0.8).font("Helvetica-Bold").fontSize(10).fillColor("#0F1F1B").text("Terms", 48);
+      doc.font("Helvetica").fontSize(10).fillColor("#444").text(q.terms, 48, doc.y, { width: 516 });
+    }
+
+    doc.end();
+  });
+}
+
+/**
+ * A quote past its date that was never accepted or rejected (R71). Quotes
+ * stored an expiry and nothing ever acted on it: one from last year could be
+ * marked sent and accepted.
+ */
+export function quoteHasLapsed(q: { status: string; expiresAt: Date | null }, now: number = Date.now()): boolean {
+  if (q.status === "expired") return true;
+  return (q.status === "draft" || q.status === "sent") && q.expiresAt != null && new Date(q.expiresAt).getTime() <= now;
+}
+
+function lapsedQuote(q: { expiresAt: Date | null }) {
+  const when = q.expiresAt ? ` on ${new Date(q.expiresAt).toISOString().slice(0, 10)}` : "";
+  return new TRPCError({ code: "BAD_REQUEST", message: `This quote expired${when}. Create a new quote for new terms.` });
+}
+
 export const quotesRouter = router({
   list: workspaceProcedure.input(z.object({ opportunityId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
+    // A quote past its date that nobody accepted or rejected is expired, and
+    // says so (R71). Written here, where quotes are read, rather than by a new
+    // timer: the statement only matches quotes that have lapsed.
+    await db.update(quotes)
+      .set({ status: "expired" })
+      .where(and(
+        eq(quotes.workspaceId, ctx.workspace.id),
+        inArray(quotes.status, ["draft", "sent"]),
+        lte(quotes.expiresAt, new Date()),
+      ));
     let rows = await db.select().from(quotes).where(eq(quotes.workspaceId, ctx.workspace.id)).orderBy(desc(quotes.createdAt));
     if (input?.opportunityId) rows = rows.filter((r) => r.opportunityId === input.opportunityId);
     return rows;
@@ -1684,90 +1907,10 @@ export const quotesRouter = router({
     if (!q) throw new TRPCError({ code: "NOT_FOUND" });
     const lis = await db.select().from(quoteLineItems).where(eq(quoteLineItems.quoteId, q.id));
 
-    // Lazy-import to keep cold start light; pdfkit is CJS so we destructure .default.
-    const { default: PDFDocument } = await import("pdfkit");
-    const buf: Buffer = await new Promise((resolve, reject) => {
-      const doc = new PDFDocument({ size: "LETTER", margin: 48 });
-      const chunks: Buffer[] = [];
-      doc.on("data", (c: Buffer) => chunks.push(c));
-      doc.on("end", () => resolve(Buffer.concat(chunks)));
-      doc.on("error", reject);
-
-      // Header
-      doc.fillColor("#0F1F1B").fontSize(24).font("Helvetica-Bold").text("USIP", { continued: false });
-      doc.fontSize(11).font("Helvetica").fillColor("#666").text(`Quote ${q.quoteNumber}`);
-      doc.moveUp(2);
-      const status = q.status.toUpperCase();
-      const exp = q.expiresAt ? new Date(q.expiresAt).toLocaleDateString() : "—";
-      doc.fontSize(10).fillColor("#666").text(`Status: ${status}`, { align: "right" }).text(`Expires: ${exp}`, { align: "right" });
-      doc.moveDown(0.5);
-      doc.strokeColor("#14B89A").lineWidth(2).moveTo(48, doc.y).lineTo(564, doc.y).stroke();
-      doc.moveDown(1);
-
-      // Line items header
-      const tableTop = doc.y;
-      const colX = { item: 48, qty: 320, unit: 380, disc: 450, total: 510 };
-      doc.fillColor("#fff").rect(48, tableTop, 516, 22).fill("#0F1F1B");
-      doc.fillColor("#fff").fontSize(9).font("Helvetica-Bold");
-      doc.text("ITEM", colX.item + 6, tableTop + 7);
-      doc.text("QTY", colX.qty, tableTop + 7, { width: 50, align: "right" });
-      doc.text("UNIT", colX.unit, tableTop + 7, { width: 60, align: "right" });
-      doc.text("DISC.", colX.disc, tableTop + 7, { width: 50, align: "right" });
-      doc.text("TOTAL", colX.total, tableTop + 7, { width: 54, align: "right" });
-      let y = tableTop + 28;
-
-      doc.font("Helvetica").fontSize(10).fillColor("#0F1F1B");
-      for (const li of lis) {
-        doc.fillColor("#0F1F1B").text(li.name, colX.item + 6, y, { width: 260 });
-        if (li.description) {
-          doc.fillColor("#666").fontSize(8).text(li.description, colX.item + 6, doc.y, { width: 260 });
-          doc.fontSize(10).fillColor("#0F1F1B");
-        }
-        const rowH = Math.max(20, doc.y - y);
-        doc.text(String(li.quantity), colX.qty, y, { width: 50, align: "right" });
-        // formatMoney, not toLocaleString(): its default maximumFractionDigits
-        // is 3 and minimumFractionDigits 0, so a line of 1234.5 printed as
-        // "$1,234.5" and 1234 as "$1,234" on a document a customer signs.
-        doc.text(formatMoney(li.unitPrice), colX.unit, y, { width: 60, align: "right" });
-        doc.text(`${Number(li.discountPct).toFixed(1)}%`, colX.disc, y, { width: 50, align: "right" });
-        doc.font("Helvetica-Bold").text(formatMoney(li.lineTotal), colX.total, y, { width: 54, align: "right" });
-        doc.font("Helvetica");
-        y += rowH + 4;
-        doc.strokeColor("#eee").lineWidth(0.5).moveTo(48, y - 2).lineTo(564, y - 2).stroke();
-      }
-
-      // Totals
-      doc.y = y + 16;
-      const labelX = 380, valX = 510, valW = 54;
-      const totalsRow = (label: string, value: string, bold = false) => {
-        if (bold) doc.font("Helvetica-Bold").fontSize(13).fillColor("#0F1F1B");
-        else doc.font("Helvetica").fontSize(10).fillColor("#0F1F1B");
-        const ty = doc.y;
-        doc.text(label, labelX, ty, { width: 120 });
-        doc.text(value, valX, ty, { width: valW, align: "right" });
-        doc.moveDown(0.3);
-      };
-      totalsRow("Subtotal", formatMoney(q.subtotal));
-      totalsRow("Discount", `−${formatMoney(q.discountTotal)}`);
-      // Always $0.00: quotes.create has no tax input, so this row is decoration.
-      // Left in place rather than removed — a quote with no tax line reads as
-      // "tax not considered", and adding a real tax field is a product decision.
-      totalsRow("Tax", formatMoney(q.taxTotal));
-      doc.strokeColor("#0F1F1B").lineWidth(1.5).moveTo(labelX, doc.y).lineTo(564, doc.y).stroke();
-      doc.moveDown(0.3);
-      totalsRow("Total", formatMoney(q.total), true);
-
-      // Notes & Terms
-      if (q.notes) {
-        doc.moveDown(1.5).font("Helvetica-Bold").fontSize(10).fillColor("#0F1F1B").text("Notes", 48);
-        doc.font("Helvetica").fontSize(10).fillColor("#444").text(q.notes, 48, doc.y, { width: 516 });
-      }
-      if (q.terms) {
-        doc.moveDown(0.8).font("Helvetica-Bold").fontSize(10).fillColor("#0F1F1B").text("Terms", 48);
-        doc.font("Helvetica").fontSize(10).fillColor("#444").text(q.terms, 48, doc.y, { width: 516 });
-      }
-
-      doc.end();
+    // The workspace's own name on the page, and its days for the dates (R71).
+    const buf = await renderQuotePdf(q, lis, {
+      workspaceName: ctx.workspace.name,
+      timeZone: await getWorkspaceTimezone(ctx.workspace.id),
     });
 
     const key = `ws-${ctx.workspace.id}/quotes/${q.quoteNumber}.pdf`;
@@ -1799,9 +1942,10 @@ export const quotesRouter = router({
     // Read first, so the audit entry below cannot claim a state change that
     // never happened: the UPDATE is workspace-scoped, so a foreign or missing
     // id matched nothing and this still answered ok:true.
-    const [q] = await db.select({ id: quotes.id, quoteNumber: quotes.quoteNumber, status: quotes.status })
+    const [q] = await db.select({ id: quotes.id, quoteNumber: quotes.quoteNumber, status: quotes.status, expiresAt: quotes.expiresAt })
       .from(quotes).where(and(eq(quotes.id, input.id), eq(quotes.workspaceId, ctx.workspace.id)));
     if (!q) throw new TRPCError({ code: "NOT_FOUND", message: "Quote not found" });
+    if (quoteHasLapsed(q)) throw lapsedQuote(q);
 
     const sentAt = new Date();
     await db.update(quotes).set({ status: "sent", sentAt }).where(and(eq(quotes.id, q.id), eq(quotes.workspaceId, ctx.workspace.id)));
@@ -1820,6 +1964,13 @@ export const quotesRouter = router({
   setStatus: workspaceProcedure.input(z.object({ id: z.number(), status: z.enum(["draft", "sent", "accepted", "rejected", "expired"]) })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // A lapsed quote can be recorded as rejected, never revived or accepted
+    // on terms that have run out (R71).
+    if (input.status !== "rejected" && input.status !== "expired") {
+      const [q] = await db.select({ status: quotes.status, expiresAt: quotes.expiresAt }).from(quotes)
+        .where(and(eq(quotes.id, input.id), eq(quotes.workspaceId, ctx.workspace.id)));
+      if (q && quoteHasLapsed(q)) throw lapsedQuote(q);
+    }
     await db.update(quotes).set({ status: input.status }).where(and(eq(quotes.id, input.id), eq(quotes.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),

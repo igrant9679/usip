@@ -18,6 +18,7 @@
  */
 import { ReactNode, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { insertMention, mentionCandidates, mentionQueryAt, mentionsAsText } from "@/lib/mentions";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -150,11 +151,43 @@ function NotesTab({ entityType, entityId }: { entityType: CrmEntityType; entityI
   const update = trpc.crmNotes.update.useMutation({ onSuccess: invalidate, onError: (e) => toast.error(e.message) });
   const del = trpc.crmNotes.delete.useMutation({ onSuccess: invalidate, onError: (e) => toast.error(e.message) });
 
+  // @mention by picking a teammate (audit 2026-10-20, R105): the drawer said
+  // to type the raw `@[Name](user:1)` token. "@" and a few letters now offer
+  // the workspace's active members, and picking one writes the token.
+  const { data: team } = trpc.team.list.useQuery();
+  const members = (team ?? [])
+    .filter((m: { deactivatedAt?: unknown }) => !m.deactivatedAt)
+    .map((m: { userId: number; name: string | null }) => ({ userId: m.userId, name: m.name }));
+  const [caret, setCaret] = useState(0);
+  const mention = mentionQueryAt(draft, caret);
+  const candidates = mention ? mentionCandidates(members, mention.query) : [];
+  const pick = (m: { userId: number; name: string | null }) => {
+    if (!mention) return;
+    const next = insertMention(draft, mention.start, caret, { userId: m.userId, name: m.name ?? "" });
+    setDraft(next.text);
+    setCaret(next.caret);
+  };
+  const track = (e: { currentTarget: HTMLTextAreaElement }) => setCaret(e.currentTarget.selectionStart ?? e.currentTarget.value.length);
+
   return (
     <div className="space-y-3">
       <Card>
         <CardContent className="pt-4 space-y-2">
-          <Textarea aria-label="New note" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add a note…" rows={3} />
+          <Textarea aria-label="New note" value={draft}
+            onChange={(e) => { setDraft(e.target.value); track(e); }}
+            onKeyUp={track} onClick={track}
+            placeholder="Add a note… type @ to mention a teammate" rows={3} />
+          {candidates.length > 0 && (
+            <ul role="listbox" aria-label="Mention a teammate" className="rounded-md border bg-popover text-sm shadow-sm">
+              {candidates.map((m) => (
+                <li key={m.userId} role="option" aria-selected={false}>
+                  <button type="button" className="w-full text-left px-3 py-1.5 hover:bg-muted" onMouseDown={(e) => e.preventDefault()} onClick={() => pick(m)}>
+                    @{m.name}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="flex justify-end">
             <Button size="sm" disabled={!draft.trim() || create.isPending}
               onClick={() => create.mutate({ entityType, entityId, body: draft.trim() })}>
@@ -169,7 +202,7 @@ function NotesTab({ entityType, entityId }: { entityType: CrmEntityType; entityI
           {data.map((n) => (
             <li key={n.id} className={`rounded-lg border bg-card p-3 ${n.pinned ? "border-amber-300/60" : ""}`}>
               <div className="flex justify-between items-start gap-2">
-                <div className="text-sm whitespace-pre-wrap flex-1">{n.body}</div>
+                <div className="text-sm whitespace-pre-wrap flex-1">{mentionsAsText(n.body)}</div>
                 <div className="flex gap-1 shrink-0">
                   <Button aria-label={n.pinned ? "Unpin note" : "Pin note"} variant="ghost" size="icon" className="size-7"
                     onClick={() => update.mutate({ id: n.id, pinned: !n.pinned })}>

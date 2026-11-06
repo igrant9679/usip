@@ -67,6 +67,10 @@ export default function ChatPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [bookedAt, setBookedAt] = useState<string | null>(null);
+  // Whether a calendar invite actually went out (chatAgents.book says so). The
+  // page promised one on every booking, including the ones with no calendar
+  // connected, where nothing was sent (G70).
+  const [inviteSent, setInviteSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -142,6 +146,7 @@ export default function ChatPage() {
       {
         onSuccess: (r: any) => {
           setBookedAt(r.scheduledAt);
+          setInviteSent(!!r?.calendarBooked);
           setSlots([]);
           setPicked(null);
         },
@@ -254,7 +259,7 @@ export default function ChatPage() {
               <div className="text-[13px] font-semibold">You're booked</div>
               <p className="text-[12px] text-muted-foreground mt-0.5">
                 {new Date(bookedAt).toLocaleString(undefined, { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })}
-                {" — a calendar invite is on its way."}
+                {inviteSent ? " — a calendar invite is on its way." : " — the team will confirm with you shortly."}
               </p>
             </div>
           </div>

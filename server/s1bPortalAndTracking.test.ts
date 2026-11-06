@@ -324,9 +324,15 @@ describe("P5: the visitor beacon files a task only for an id we signed", () => {
 
 describe("G45: analytics never sees a token", () => {
   const html = () => readFileSync(new URL("../client/index.html", import.meta.url), "utf8");
+  /** The inline script that loads analytics (the page has others, e.g. the font loader). */
+  const loader = () => {
+    const hits = Array.from(html().matchAll(/<script>\s*([\s\S]*?)<\/script>/g)).map((m) => m[1]).filter((b) => b.includes("VITE_ANALYTICS_ENDPOINT"));
+    expect(hits, "exactly one analytics loader").toHaveLength(1);
+    return hits[0];
+  };
   /** Run the page's analytics loader as Vite would serve it, with the endpoint configured. */
   function load(pathname: string) {
-    const src = /<script>\s*([\s\S]*?)<\/script>/.exec(html())![1]
+    const src = loader()
       // Every occurrence, as Vite does: the comment above the code names one too.
       .split("%VITE_ANALYTICS_ENDPOINT%").join("https://umami.example")
       .split("%VITE_ANALYTICS_WEBSITE_ID%").join("site-1");
@@ -357,7 +363,7 @@ describe("G45: analytics never sees a token", () => {
   });
 
   it("control: unconfigured, nothing loads (the 2026-09-20 rule)", () => {
-    const src = /<script>\s*([\s\S]*?)<\/script>/.exec(html())![1];
+    const src = loader();
     const appended: any[] = [];
     new Function("window", "document", "location", "URL", src)({}, { createElement: () => ({}), body: { appendChild: (n: any) => appended.push(n) } }, { pathname: "/v2/home", origin: "x" }, URL);
     expect(appended).toHaveLength(0);

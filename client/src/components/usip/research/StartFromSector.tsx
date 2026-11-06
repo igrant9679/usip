@@ -15,6 +15,19 @@ import { Telescope } from "lucide-react";
 
 export type SectorSearchFields = { jobTitle: string; industry: string; location: string; keywords: string[] };
 
+/**
+ * A picked title onto a search form (audit 2026-10-20, P151): the title is
+ * the pick, so it replaces; the sector's industry and place fill in where it
+ * has one; its keywords join the ones already typed instead of replacing them.
+ */
+export function applySectorFields<F extends SectorSearchFields>(form: F, f: SectorSearchFields): F {
+  const keywords = form.keywords.slice();
+  for (const k of f.keywords) {
+    if (!keywords.some((x) => x.trim().toLowerCase() === k.trim().toLowerCase())) keywords.push(k);
+  }
+  return { ...form, jobTitle: f.jobTitle, industry: f.industry || form.industry, location: f.location || form.location, keywords };
+}
+
 const NONE = "none";
 
 export function StartFromSector({ onApply }: { onApply: (f: SectorSearchFields) => void }) {

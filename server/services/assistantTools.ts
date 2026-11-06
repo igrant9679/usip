@@ -424,7 +424,7 @@ export function describeAction(name: AssistantToolName, args: Record<string, unk
     case "send_approved_drafts":
       return Array.isArray(args.draftIds)
         ? `⚠ Sends email now — send ${n(args.draftIds)} approved draft${n(args.draftIds) === 1 ? "" : "s"} to ${n(args.draftIds) === 1 ? "its recipient" : "their recipients"}`
-        : "⚠ Sends email now — send EVERY approved draft in the workspace to its recipient (max 200, one per second)";
+        : "⚠ Sends email now — send approved drafts in the workspace to their recipients, oldest first, one per second, at most 25 a run";
     case "approve_and_send_meetings":
       return `⚠ Sends email now — approve ${n(args.meetingIds)} proposed meeting${n(args.meetingIds) === 1 ? "" : "s"} and email the calendar invite${n(args.meetingIds) === 1 ? "" : "s"}${args.chosenTime ? ` for ${args.chosenTime}` : " (earliest future slot each)"}`;
     case "save_report": {

@@ -46,6 +46,7 @@ import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { invokeLLM, contentText } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
+import { CHURN_ESTIMATE_PREFIX } from "@shared/customerHealth";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -118,7 +119,8 @@ churnRiskScore: 0=no risk, 100=certain churn. Be calibrated — a healthy custom
       } catch {
         // Use heuristic fallback
         score = cust.healthScore < 35 ? 75 : cust.healthScore < 55 ? 45 : 15;
-        rationale = `Heuristic: health score ${cust.healthScore}/100 (${cust.healthTier}).`;
+        // The prefix is how the board knows to call this an estimate (R74).
+        rationale = `${CHURN_ESTIMATE_PREFIX} health score ${cust.healthScore}/100 (${cust.healthTier}).`;
       }
 
       const label = churnLabelFromScore(score);
@@ -562,12 +564,9 @@ Make the 3 suggestions distinct from existing rules and target real meeting-book
 });
 
 /**
- * One suggestion → one workflow rule, switched OFF, suggestion marked applied.
- *
- * Off (audit 2026-10-20, G19): a suggestion is the model's guess, and its
- * actions can name a webhook URL nobody chose, carrying lead data out. It
- * used to go live the moment someone pressed Add. Now a person reads the rule
- * and turns it on.
+ * One suggestion → one workflow rule, switched OFF (G61, and G19: a
+ * suggestion's actions can name a webhook URL nobody chose), suggestion
+ * marked applied.
  * Shared by applySuggestion and applyAllSuggestions so the two can never
  * drift (the live-trigger fallback below is the kind of rule that drifts).
  */
@@ -600,6 +599,8 @@ async function applySuggestionRow(
     triggerConfig: triggerConfig as object,
     conditions: sug.conditions as object,
     actions: sug.actions as object,
+    // Off until someone reviews it (G61): "Apply all" used to put every
+    // generated rule live at once, actions and all.
     enabled: false,
   }).$returningId();
 

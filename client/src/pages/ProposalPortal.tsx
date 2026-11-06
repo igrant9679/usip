@@ -51,13 +51,17 @@ function SectionBody({ content }: { content: string }) {
   return <div className="prose prose-sm max-w-none text-gray-700"><Streamdown>{content}</Streamdown></div>;
 }
 
+/**
+ * The badge the CLIENT sees. It used the team's own labels, so a client opening
+ * a link shared before sending saw "Draft", and every client saw "Sent to
+ * Client" (G70). A draft shows no badge; the rest speak to the reader.
+ */
 const STATUS_CONFIG = {
-  draft: { label: "Draft", color: "bg-slate-100 text-slate-600 border-slate-200" },
-  sent: { label: "Sent to Client", color: "bg-blue-50 text-blue-700 border-blue-200" },
-  under_review: { label: "Under Review", color: "bg-amber-50 text-amber-700 border-amber-200" },
+  sent: { label: "Awaiting your review", color: "bg-blue-50 text-blue-700 border-blue-200" },
+  under_review: { label: "Awaiting your review", color: "bg-amber-50 text-amber-700 border-amber-200" },
   accepted: { label: "Accepted", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  not_accepted: { label: "Not Accepted", color: "bg-red-50 text-red-700 border-red-200" },
-  revision_requested: { label: "Revision Requested", color: "bg-orange-50 text-orange-700 border-orange-200" },
+  not_accepted: { label: "Not accepted", color: "bg-red-50 text-red-700 border-red-200" },
+  revision_requested: { label: "Revision requested", color: "bg-orange-50 text-orange-700 border-orange-200" },
 } as const;
 
 const SECTION_LABELS: Record<string, string> = {
@@ -157,7 +161,7 @@ export default function ProposalPortal() {
   }
 
   const { proposal, sections, milestones } = data;
-  const statusCfg = STATUS_CONFIG[proposal.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.draft;
+  const statusCfg: { label: string; color: string } | undefined = STATUS_CONFIG[proposal.status as keyof typeof STATUS_CONFIG];
   const sectionMap: Record<string, string> = {};
   for (const s of sections) sectionMap[s.sectionKey] = s.content;
   const populatedSections = Object.entries(sectionMap).filter(([, v]) => v?.trim());
@@ -171,9 +175,11 @@ export default function ProposalPortal() {
             <ClipboardList className="size-5 text-teal-600" />
             <span className="font-semibold text-gray-800">Proposal</span>
           </div>
-          <span className={cn("text-xs px-2.5 py-1 rounded-full border font-medium", statusCfg.color)}>
-            {statusCfg.label}
-          </span>
+          {statusCfg && (
+            <span className={cn("text-xs px-2.5 py-1 rounded-full border font-medium", statusCfg.color)}>
+              {statusCfg.label}
+            </span>
+          )}
         </div>
       </header>
 

@@ -812,30 +812,43 @@ describe("the SMTP draft paths claim each draft and always carry an unsubscribe"
   });
 
   it('"Send approved" claims per draft, re-checks pause, and every message has headers and a footer', async () => {
+    // 2026-11-06 (audit O47): "Send approved" sends each draft through
+    // deliverEmailDraft, the row Send's path — the sending account through the
+    // adapter (h.emails), not the workspace SMTP config (h.smtp). The claim is
+    // deliverEmailDraft's own, taken from 'approved' only.
     smtpConfig();
-    rows("workspace_settings").push({ id: 1, workspaceId: LSI, emailUnsubscribeHeader: false, emailSequenceOptOutEnabled: false, emailOpenTracking: true, emailClickTracking: true });
     draft(120, { toEmail: ANN, status: "approved" });
     draft(121, { toEmail: "bo@beta.example", status: "sending", sendClaimedAt: new Date() }); // another sender has it
     const res = await caller(ADMIN).smtpConfig.sendBulkApproved({});
     expect(res.sent).toBe(1);
-    expect(h.smtp).toHaveLength(1);
-    expect(h.smtp[0].headers["List-Unsubscribe"]).toContain("/api/track/unsubscribe/");
-    expect(h.smtp[0].html).toContain("Unsubscribe</a>");
+    expect(h.smtp).toHaveLength(0);
+    expect(h.emails).toHaveLength(1);
+    expect(h.emails[0]).toMatchObject({ to: ANN, fromEmail: "rep@lsi.example" });
+    expect(h.emails[0].headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
+    expect(h.emails[0].bodyHtml).toContain("Unsubscribe</a>");
+    expect(row("email_drafts", 120).status).toBe("sent");
     expect(row("email_drafts", 121).status).toBe("sending");
 
-    // Two admins pressing it at once send each draft once.
+    // Two admins pressing it at once send each draft once. 2026-11-06 (audit
+    // O16): the second press is now refused while the first runs, rather than
+    // racing it draft by draft; what this pinned, one send per draft, holds.
     draft(123, { toEmail: "bo@beta.example", status: "approved" });
-    const runs = await Promise.all([caller(ADMIN).smtpConfig.sendBulkApproved({}), caller(ADMIN).smtpConfig.sendBulkApproved({})]);
-    expect(runs[0].sent + runs[1].sent).toBe(1);
-    expect(h.smtp).toHaveLength(2);
+    const runs = await Promise.allSettled([caller(ADMIN).smtpConfig.sendBulkApproved({}), caller(ADMIN).smtpConfig.sendBulkApproved({})]);
+    const done = runs.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    expect(done.reduce((n, r) => n + r.sent, 0)).toBe(1);
+    expect(runs.filter((r) => r.status === "rejected").map((r: any) => r.reason.code)).toEqual(["CONFLICT"]);
+    expect(h.emails).toHaveLength(2);
+    expect(h.smtp).toHaveLength(0);
 
-    // Pause, the daily cap and the claim are asked per draft, before its send.
+    // Pause and the daily cap are asked per draft, before its send.
     const src = readFileSync(join(__dirname, "routers", "smtpConfig.ts"), "utf8");
     const loop = src.slice(src.indexOf("for (const draft of drafts)"), src.indexOf("await sleep(1000)"));
-    for (const call of ["isOutboundPaused(", "assertSendAllowed(", "claimDraftForSend("]) {
-      expect(loop.indexOf(call), call).toBeGreaterThan(-1);
-      expect(loop.indexOf(call), call).toBeLessThan(loop.indexOf("transporter.sendMail("));
+    const send = loop.indexOf("deliverEmailDraft(");
+    expect(send).toBeGreaterThan(-1);
+    for (const call of ["isOutboundPaused(", "assertSendAllowed("]) {
+      expect(loop.slice(0, send), call).toContain(call);
     }
+    expect(loop.slice(send)).toContain('claimFrom: ["approved"]');
   }, 20_000);
 });
 

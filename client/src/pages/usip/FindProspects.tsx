@@ -15,9 +15,9 @@
 import { useEffect, useId, useState } from "react";
 import { confirmAction } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { foldRedirectUrl } from "./dataEnrichmentTabs";
-import { StartFromSector } from "@/components/usip/research/StartFromSector";
+import { StartFromSector, applySectorFields } from "@/components/usip/research/StartFromSector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -183,9 +183,10 @@ function ConfidenceChip({ score, tier }: { score: number | null; tier: string | 
             tier === "medium" ? "bg-amber-500/15 text-amber-700 dark:text-amber-400" :
             "bg-red-500/15 text-red-700 dark:text-red-400";
   const Icon = tier === "high" ? CheckCircle2 : tier === "medium" ? AlertTriangle : AlertCircle;
+  // The tier is said in words, not only by colour and icon (P152).
   return (
     <Badge className={`text-[10px] gap-1 ${c}`}>
-      <Icon className="size-3" /> {score}/100
+      <Icon className="size-3" aria-hidden="true" /> {score}/100 <span className="sr-only">confidence, {tier}</span>
     </Badge>
   );
 }
@@ -193,21 +194,15 @@ function ConfidenceChip({ score, tier }: { score: number | null; tier: string | 
 /* ─── Result row ────────────────────────────────────────────────────── */
 function ProspectRow({ p }: { p: any }) {
   const urls = (p.sourceUrls as string[] | null) ?? [];
-  const [, setLocation] = useLocation();
-  const open = () => setLocation(`/prospects/${p.id}`);
+  // A card with a link in it, not a button with links in it (P152): the name
+  // opens the person, and its overlay makes the whole card clickable, while
+  // the source and LinkedIn links sit above that overlay as links of their own.
   return (
-    <div
-      onClick={open}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
-      role="button"
-      tabIndex={0}
-      aria-label={`Open ${p.firstName} ${p.lastName}`}
-      className="border rounded-lg p-3 bg-card hover:border-primary/30 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary transition-colors"
-    >
+    <div className="relative border rounded-lg p-3 bg-card hover:border-primary/30 focus-within:ring-2 focus-within:ring-primary transition-colors">
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium text-sm hover:underline">{p.firstName} {p.lastName}</span>
+            <Link href={`/prospects/${p.id}`} className="font-medium text-sm hover:underline focus:outline-none after:absolute after:inset-0 after:content-['']">{p.firstName} {p.lastName}</Link>
             <ConfidenceChip score={p.confidenceScore} tier={p.confidenceTier} />
             {p.verificationStatus === "needs_review" && (
               <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-700">Needs Review</Badge>
@@ -231,11 +226,11 @@ function ProspectRow({ p }: { p: any }) {
             </div>
           )}
           {urls.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
+            <div className="relative z-10 flex flex-wrap gap-1.5 mt-2">
               {urls.slice(0, 5).map((u, i) => (
-                <a key={u + i} href={u} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
+                <a key={u + i} href={u} target="_blank" rel="noopener noreferrer"
                    className="text-[10px] inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border bg-muted/40 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors">
-                  <ExternalLink className="size-2.5" /> source {i + 1}
+                  <ExternalLink className="size-2.5" aria-hidden="true" /> source {i + 1}
                 </a>
               ))}
               {urls.length > 5 && <span className="text-[10px] text-muted-foreground self-center">+{urls.length - 5} more</span>}
@@ -243,12 +238,12 @@ function ProspectRow({ p }: { p: any }) {
           )}
         </div>
         {p.linkedinUrl && (
-          <a href={p.linkedinUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
-             className="size-7 rounded flex items-center justify-center hover:bg-muted text-muted-foreground hover:text-foreground transition-colors shrink-0">
-            <Linkedin className="size-3.5" />
+          <a href={p.linkedinUrl} target="_blank" rel="noopener noreferrer" aria-label={`${p.firstName} ${p.lastName} on LinkedIn`}
+             className="relative z-10 size-7 rounded flex items-center justify-center hover:bg-muted text-muted-foreground hover:text-foreground transition-colors shrink-0">
+            <Linkedin className="size-3.5" aria-hidden="true" />
           </a>
         )}
-        <ChevronRight className="size-4 text-muted-foreground shrink-0 self-center" />
+        <ChevronRight className="size-4 text-muted-foreground shrink-0 self-center" aria-hidden="true" />
       </div>
     </div>
   );
@@ -256,7 +251,7 @@ function ProspectRow({ p }: { p: any }) {
 
 /* ─── LinkedIn / Sales Navigator search ─────────────────────────────────
  * Compliant search via the rep's OWN connected LinkedIn account (Unipile).
- * Hits import as leads — the entry point to the autonomous funnel: leads →
+ * Hits save to People — the entry point to the autonomous funnel: People →
  * sequences send invites → accepts fire the Social Autopilot opener → meeting.
  */
 type SearchHit = {
@@ -302,8 +297,14 @@ function LinkedInSearchCard() {
     // pointed at a Settings page that does not exist.
     onError: (e) => toast.error(e.message),
   });
-  const importLeads = trpc.unipile.importSearchHitsAsLeads.useMutation({
-    onSuccess: (r) => { toast.success(`Imported ${r.created} lead${r.created === 1 ? "" : "s"}${r.skipped ? ` · ${r.skipped} skipped` : ""}`); utils.prospects?.list?.invalidate?.(); },
+  // Saved to People like the rest of this tab (audit 2026-10-20, P76), as a
+  // run of its own, so both the queues and Recent runs refresh (P142).
+  const importPeople = trpc.unipile.importSearchHitsToPeople.useMutation({
+    onSuccess: (r) => {
+      toast.success(`Saved to People: ${r.created} new · ${r.updated} updated${r.skipped ? ` · ${r.skipped} not saved` : ""}`);
+      utils.prospects.list.invalidate();
+      utils.discovery.listRuns.invalidate();
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -323,12 +324,17 @@ function LinkedInSearchCard() {
   };
 
   const runSearch = () => {
-    if (!keywords.trim() && api === "classic") { toast.error("Enter keywords"); return; }
     const filters: Record<string, unknown> = {};
     if (api === "sales_navigator") {
       if (locations.length) filters.location = locations.map((c) => Number(c.id));
       if (industries.length) filters.industry = industries.map((c) => Number(c.id));
       if (tenureMin) filters.tenure = [{ min: Number(tenureMin) }];
+    }
+    // Nothing filled in is not a search, on either API (P149): Sales Navigator
+    // sent one, and it used a search from the account's daily cap.
+    if (!keywords.trim() && Object.keys(filters).length === 0) {
+      toast.error(api === "classic" ? "Enter keywords" : "Enter keywords, or add a location, industry or tenure");
+      return;
     }
     search.mutate({ api, category: "people", keywords: keywords.trim() || undefined, filters, limit: 10 });
   };
@@ -341,7 +347,7 @@ function LinkedInSearchCard() {
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2"><Linkedin className="size-4 text-[#0A66C2]" /> LinkedIn search</CardTitle>
         <CardDescription className="text-xs">
-          Search LinkedIn via your connected account and import matches as leads. Sales Navigator adds structured location, industry, and tenure filters. Imported leads feed sequences → invites → the Social Autopilot opener on accept.
+          Search LinkedIn via your connected account and save matches to People, where the rest of this tab saves. Sales Navigator adds structured location, industry, and tenure filters. Enrol saved people in a sequence to send them invites.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -397,8 +403,9 @@ function LinkedInSearchCard() {
               <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => setSelected(allOn ? {} : Object.fromEntries(hits.map((_, i) => [i, true])))}>
                 {allOn ? "Deselect all" : "Select all"} · {selectedHits.length}/{hits.length}
               </button>
-              <Button size="sm" disabled={!selectedHits.length || importLeads.isPending} onClick={() => importLeads.mutate({ hits: selectedHits as any })} className="gap-1.5">
-                {importLeads.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />} Import {selectedHits.length} as leads
+              {/* The rows go as LinkedIn sent them; the server checks each one (P75). */}
+              <Button size="sm" disabled={!selectedHits.length || importPeople.isPending} onClick={() => importPeople.mutate({ hits: selectedHits })} className="gap-1.5">
+                {importPeople.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />} Save {selectedHits.length} to People
               </Button>
             </div>
             <div className="rounded-lg border divide-y">
@@ -488,14 +495,33 @@ export function FindProspectsPanel() {
   const search = trpc.discovery.search.useMutation({
     onSuccess: (r) => {
       setActiveRunId(r.runId);
-      toast.success(
-        `Discovery complete — ${r.rawFindCount} raw / ${r.prospectsCreated} new + ${r.prospectsUpdated} updated / ` +
-        `${r.highConfidenceCount} high · ${r.mediumConfidenceCount} medium · ${r.lowConfidenceCount} low`,
-        { duration: 6000 },
-      );
+      // What was SAVED (P61): the tiers count saved people only, and what was
+      // left out and the companies saved are said too.
+      const saved = `${r.prospectsCreated} new + ${r.prospectsUpdated} updated`
+        + (r.prospectsSkipped ? ` · ${r.prospectsSkipped} not saved` : "")
+        + (r.accountsCreated ? ` · ${r.accountsCreated} compan${r.accountsCreated === 1 ? "y" : "ies"} saved` : "");
+      const lead = r.joinedRunning ? `That search was already running (run #${r.runId}), so it was not started again — ` : "";
+      if (r.status === "failed") {
+        toast.error(`${lead}Run #${r.runId}: ${r.errorMessage ?? "the finds could not be saved"}`, { duration: 8000 });
+      } else {
+        toast.success(
+          `${lead}Discovery complete — ${r.rawFindCount} raw / ${saved} / ` +
+          `${r.highConfidenceCount} high · ${r.mediumConfidenceCount} medium · ${r.lowConfidenceCount} low`,
+          { duration: 6000 },
+        );
+      }
+      // The run, its trace and the history change too, not only the queues (P142).
       utils.prospects.list.invalidate();
+      utils.discovery.listRuns.invalidate();
+      utils.discovery.getRun.invalidate({ id: r.runId });
+      utils.discovery.getLogs.invalidate({ runId: r.runId });
+      utils.discovery.getRawFinds.invalidate({ runId: r.runId });
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => {
+      toast.error(e.message);
+      // A lost response can leave the run going: it shows in Recent runs (P72).
+      utils.discovery.listRuns.invalidate();
+    },
   });
 
   const runSearch = () => {
@@ -539,7 +565,7 @@ export function FindProspectsPanel() {
                 <TabsTrigger value="account" className="gap-1.5"><Building2 className="size-3.5" /> Account</TabsTrigger>
               </TabsList>
               <TabsContent value="person" className="mt-4 space-y-3">
-                <StartFromSector onApply={(f) => setPersonForm({ ...personForm, ...f })} />
+                <StartFromSector onApply={(f) => setPersonForm((prev) => applySectorFields(prev, f))} />
                 <PersonForm value={personForm} onChange={setPersonForm} />
               </TabsContent>
               <TabsContent value="account" className="mt-4">
@@ -555,14 +581,17 @@ export function FindProspectsPanel() {
                 <div className="flex flex-wrap gap-x-4 gap-y-1.5">
                   {modeSources.map((id) => {
                     const enabled = sourceEnabled(id);
+                    // The reason is on the page, not only in a tooltip (P152).
                     return (
                       <label
                         key={id}
-                        title={enabled ? undefined : "Disabled in Settings → Revenue Engine"}
-                        className={enabled ? "flex items-center gap-1.5 cursor-pointer" : "flex items-center gap-1.5 opacity-50 cursor-not-allowed"}
+                        className={enabled ? "flex items-center gap-1.5 cursor-pointer" : "flex items-center gap-1.5 cursor-not-allowed"}
                       >
                         <Checkbox className="size-3.5" disabled={!enabled} checked={enabled && runSources.includes(id)} onCheckedChange={() => toggleSource(id)} />
-                        <span className="text-[11.5px]">{SOURCE_LABEL[id] ?? id}</span>
+                        <span className={enabled ? "text-[11.5px]" : "text-[11.5px] text-muted-foreground"}>
+                          {SOURCE_LABEL[id] ?? id}
+                          {!enabled && <span className="ml-1 text-[10.5px]">(off in Settings → Revenue Engine)</span>}
+                        </span>
                       </label>
                     );
                   })}
@@ -624,10 +653,31 @@ export default function FindProspectsRedirect() {
 
 /* ─── Per-run detail card (raw finds + logs) ─────────────────────────── */
 function RunDetail({ runId }: { runId: number }) {
-  const { data: run } = trpc.discovery.getRun.useQuery({ id: runId });
-  const { data: logs = [] } = trpc.discovery.getLogs.useQuery({ runId });
-  const reprocess = trpc.discovery.reprocess.useMutation({ onSuccess: () => toast.success("Reprocessed"), onError: (e) => toast.error(e.message) });
+  const utils = trpc.useUtils();
+  const runQ = trpc.discovery.getRun.useQuery({ id: runId }, {
+    // A run that is still going is followed until it ends.
+    refetchInterval: (q) => ((q.state.data as { status?: string } | undefined)?.status === "running" ? 3000 : false),
+  });
+  const run = runQ.data;
+  const logsQ = trpc.discovery.getLogs.useQuery({ runId }, { refetchInterval: run?.status === "running" ? 3000 : false });
+  // What the sources returned, before consolidation (P147: promised, never shown).
+  const findsQ = trpc.discovery.getRawFinds.useQuery({ runId });
+  const logs = logsQ.data ?? [];
+  const finds = findsQ.data ?? [];
+  const reprocess = trpc.discovery.reprocess.useMutation({
+    onSuccess: (r) => {
+      toast.success(`Re-scored — ${r.prospectsCreated} new + ${r.prospectsUpdated} updated`);
+      // The re-score rewrites the run's counts and the people (P142).
+      utils.discovery.getRun.invalidate({ id: runId });
+      utils.discovery.getLogs.invalidate({ runId });
+      utils.discovery.listRuns.invalidate();
+      utils.prospects.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  if (runQ.error && !run) return <QueryError what={`run #${runId}`} message={runQ.error.message} onRetry={() => runQ.refetch()} />;
   if (!run) return null;
+  const r = run as typeof run & { prospectsUpdated?: number; prospectsSkipped?: number; accountsCreated?: number };
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -645,12 +695,19 @@ function RunDetail({ runId }: { runId: number }) {
           </Button>
         </CardTitle>
         <CardDescription className="text-[11px]">
-          {run.rawFindCount} raw · {run.prospectsCreated} new prospects · {run.highConfidenceCount} high · {run.mediumConfidenceCount} med · {run.lowConfidenceCount} low · {run.durationMs}ms
+          {run.rawFindCount} raw · {run.prospectsCreated} new · {r.prospectsUpdated ?? 0} updated
+          {r.prospectsSkipped ? ` · ${r.prospectsSkipped} not saved` : ""}
+          {r.accountsCreated ? ` · ${r.accountsCreated} companies` : ""}
+          {" "}· {run.highConfidenceCount} high · {run.mediumConfidenceCount} med · {run.lowConfidenceCount} low · {run.durationMs}ms
         </CardDescription>
+        {run.errorMessage && <div className="text-[11px] text-red-600 dark:text-red-400">{run.errorMessage}</div>}
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
         <div className="text-[11px] space-y-0.5 font-mono max-h-48 overflow-y-auto border rounded p-2 bg-muted/30">
-          {logs.length === 0 ? <div className="text-muted-foreground italic">Loading logs…</div> :
+          {/* A failed load is said, not shown as "Loading" for ever (P148). */}
+          {logsQ.error && !logsQ.data ? <QueryError what="this run's logs" message={logsQ.error.message} onRetry={() => logsQ.refetch()} /> :
+            logsQ.isLoading ? <div className="text-muted-foreground italic">Loading logs…</div> :
+            logs.length === 0 ? <div className="text-muted-foreground italic">No log lines for this run.</div> :
             logs.map((l: any) => (
               <div key={l.id} className="flex gap-2">
                 <span className="text-muted-foreground shrink-0">{new Date(l.createdAt).toLocaleTimeString()}</span>
@@ -659,6 +716,28 @@ function RunDetail({ runId }: { runId: number }) {
               </div>
             ))
           }
+        </div>
+        <div className="space-y-1">
+          <div className="text-[11px] font-medium">Raw finds</div>
+          {findsQ.error && !findsQ.data ? <QueryError what="this run's raw finds" message={findsQ.error.message} onRetry={() => findsQ.refetch()} /> :
+            findsQ.isLoading ? <div className="text-[11px] text-muted-foreground italic">Loading raw finds…</div> :
+            finds.length === 0 ? <div className="text-[11px] text-muted-foreground italic">The sources returned nothing for this run.</div> : (
+              <div className="rounded border divide-y max-h-56 overflow-y-auto text-[11px]">
+                {finds.map((f: any) => (
+                  <div key={f.id} className="flex items-center gap-2 px-2 py-1">
+                    <Badge variant="outline" className="text-[10px] shrink-0">{f.source}</Badge>
+                    <span className="truncate">
+                      {[[f.firstName, f.lastName].filter(Boolean).join(" ") || "(no name)", f.title, f.companyName, f.location].filter(Boolean).join(" · ")}
+                    </span>
+                    {f.sourceUrl && /^https?:\/\//i.test(f.sourceUrl) && (
+                      <a href={f.sourceUrl} target="_blank" rel="noopener noreferrer" className="ml-auto shrink-0 text-muted-foreground hover:text-foreground" aria-label={`Source for ${[f.firstName, f.lastName].filter(Boolean).join(" ") || f.companyName || "this find"}`}>
+                        <ExternalLink className="size-3" aria-hidden="true" />
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
         </div>
       </CardContent>
     </Card>
@@ -673,7 +752,12 @@ function RunDetail({ runId }: { runId: number }) {
  * constantly; hunting for a link is the slow path this card removes.
  */
 function RecentRuns({ activeRunId, onOpen }: { activeRunId: number | null; onOpen: (id: number) => void }) {
-  const { data: runs = [], isLoading } = trpc.discovery.listRuns.useQuery({ limit: 12 });
+  const { data: runs = [], isLoading, error, refetch } = trpc.discovery.listRuns.useQuery({ limit: 12 }, {
+    // A run still going (one whose response was lost, say) is followed until it ends.
+    refetchInterval: (q) => (((q.state.data as Array<{ status?: string }> | undefined) ?? []).some((r) => r.status === "running") ? 5000 : false),
+  });
+  // A failed load is not "no runs yet" (P148).
+  if (error && runs.length === 0) return <QueryError what="your recent discovery runs" message={error.message} onRetry={() => refetch()} />;
   if (isLoading || runs.length === 0) return null;
   const when = (d: unknown) => {
     const dt = new Date(d as string);
@@ -698,7 +782,7 @@ function RecentRuns({ activeRunId, onOpen }: { activeRunId: number | null; onOpe
               <span className="font-medium tabular-nums shrink-0">#{r.id}</span>
               <span className="shrink-0 capitalize text-muted-foreground">{r.mode}</span>
               <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                {r.rawFindCount ?? 0} raw · {r.prospectsCreated ?? 0} new · {r.highConfidenceCount ?? 0}H {r.mediumConfidenceCount ?? 0}M {r.lowConfidenceCount ?? 0}L
+                {r.rawFindCount ?? 0} raw · {r.prospectsCreated ?? 0} new · {r.prospectsUpdated ?? 0} updated · {r.highConfidenceCount ?? 0}H {r.mediumConfidenceCount ?? 0}M {r.lowConfidenceCount ?? 0}L
               </span>
               <span className={`shrink-0 ${r.status === "failed" ? "text-red-500" : r.status === "running" ? "text-amber-600" : "text-muted-foreground"}`}>{r.status}</span>
               <span className="shrink-0 text-muted-foreground">{when(r.startedAt)}</span>

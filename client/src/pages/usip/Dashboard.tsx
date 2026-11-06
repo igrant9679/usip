@@ -326,6 +326,7 @@ export default function Dashboard() {
     utils.opportunities.topReps.invalidate();
     utils.opportunities.winLoss.invalidate();
     utils.emailDrafts.list.invalidate();
+    utils.emailDrafts.count.invalidate();
     utils.opportunities.board.invalidate();
     utils.unipile.metrics.invalidate();
     setLastRefreshed(new Date());
@@ -337,7 +338,11 @@ export default function Dashboard() {
   const { data: funnel } = trpc.opportunities.stageFunnel.useQuery();
   const { data: topReps } = trpc.opportunities.topReps.useQuery();
   const { data: winLoss } = trpc.opportunities.winLoss.useQuery();
-  const { data: drafts } = trpc.emailDrafts.list.useQuery({ status: "pending_review" });
+  // The five the card shows, and the count for its badge (audit 2026-10-20,
+  // O41): this read every draft in the workspace, bodies included.
+  const { data: drafts } = trpc.emailDrafts.list.useQuery({ status: "pending_review", limit: 5 });
+  const { data: draftCount } = trpc.emailDrafts.count.useQuery({ status: "pending_review" });
+  const awaitingDrafts = draftCount?.count ?? (drafts ?? []).length;
   const { data: opps } = trpc.opportunities.board.useQuery();
   const { data: unipileMetrics } = trpc.unipile.metrics.useQuery();
   // Funnel-strip top-of-funnel count (Prospects). perPage minimal — we only read .total.
@@ -812,9 +817,9 @@ export default function Dashboard() {
               <div className="flex items-center gap-2">
                 <Zap className="size-3.5 text-violet-500" />
                 <div className="text-sm font-semibold">Drafts Awaiting Review</div>
-                {(drafts ?? []).length > 0 && (
+                {awaitingDrafts > 0 && (
                   <span className="ml-1 rounded-full bg-violet-500/20 text-violet-600 text-xs font-bold px-2 py-0.5">
-                    {(drafts ?? []).length}
+                    {awaitingDrafts}
                   </span>
                 )}
               </div>

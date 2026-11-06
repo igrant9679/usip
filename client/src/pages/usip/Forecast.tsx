@@ -1,8 +1,10 @@
 /**
  * /forecast — per-rep forecast rollup.
  *
- * Columns: owner | open count | total pipeline | weighted | commit
- * (>=90%) | best-case (>=50%) | won this quarter.
+ * Columns: owner | open count | total pipeline | weighted | commit |
+ * best case | won this calendar quarter. Commit and Best case follow each
+ * deal's forecast category, or its win % when it has none (R41). A rep sees
+ * their own row; managers see the team.
  *
  * Server side does the math (opportunities.forecastByRep). This page
  * just renders + joins owner names from team.list.
@@ -20,6 +22,10 @@ function fmt$(n: number): string {
   if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
   return `$${n.toFixed(0)}`;
 }
+
+/** What the numbers are (R41): the categories, and whose rows a rep sees. */
+export const FORECAST_DESCRIPTION =
+  "Pipeline by rep. Commit and Best case follow the forecast category set on each deal; a deal with none counts in Commit at 90% or more and in Best case at 50% or more. Weighted = value × win %. Quarters are calendar quarters. Reps see their own row; managers see the team.";
 
 export default function Forecast() {
   const { data: byRep, isLoading } = trpc.opportunities.forecastByRep.useQuery();
@@ -45,14 +51,14 @@ export default function Forecast() {
 
   return (
     <Shell title="Forecast">
-      <PageHeader title="Forecast" description="Per-rep pipeline rollup. Commit = ≥90% win prob. Best-case = ≥50%. Weighted = value × win prob." icon={<TrendingUp className="size-5" />} />
+      <PageHeader title="Forecast" description={FORECAST_DESCRIPTION} icon={<TrendingUp className="size-5" />} />
       <div className="p-4 md:p-5 space-y-4">
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <StatCard label="Total open" value={fmt$(totals.open)} />
           <StatCard label="Weighted" value={fmt$(totals.weighted)} hint="value × win prob" />
-          <StatCard label="Commit (≥90%)" value={fmt$(totals.commit)} tone="success" />
-          <StatCard label="Best case (≥50%)" value={fmt$(totals.bestCase)} tone="warning" />
-          <StatCard label="Won this quarter" value={fmt$(totals.won)} tone="success" />
+          <StatCard label="Commit" value={fmt$(totals.commit)} hint="marked Commit, or 90%+" tone="success" />
+          <StatCard label="Best case" value={fmt$(totals.bestCase)} hint="Commit + Best case, or 50%+" tone="warning" />
+          <StatCard label="Won this quarter" value={fmt$(totals.won)} hint="calendar quarter" tone="success" />
         </div>
 
         <Card><CardContent className="pt-4">
