@@ -1,11 +1,12 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { genuineReplyScope } from "../services/replyScope";
 import { z } from "zod";
 import {
   accounts,
   activities,
   bulkJobs,
+  crmTerritoryRules,
   emailDrafts,
   emailReplies,
   emailSuppressions,
@@ -14,7 +15,7 @@ import {
   leadScoreConfig,
   leadScoreHistory,
   leads,
-  notifications,
+  workspaces,
 } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
@@ -22,22 +23,29 @@ import {
   type AiFitOutput,
   composeScore,
   DEFAULT_SCORE_CONFIG,
+  type LeadFirmoInput,
   pickRoutingMatch,
   type RoutingPayload,
   type RoutingRule,
+  type ScoreBreakdown,
   type ScoreConfig,
   scoreAiFit,
   scoreBehavioral,
   scoreFirmographic,
   tierFor,
+  titleHeuristicFit,
 } from "../leadScoring";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeMemberIds } from "../_core/activeMembers";
+import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { notifyIfEnabled } from "../services/policyNotify";
+import { isOutboundPaused } from "../services/outboundPause";
 import { gradeForTier } from "@shared/leadTier";
-import { evalConditions } from "./operations";
+import { componentMaxes, tierThresholdProblem } from "@shared/leadScoreModel";
+import { normalizeRoutingConditions, routingConditionsMatch, routingConditionsProblem } from "@shared/leadRouting";
+import { takeEngagedLeads, noteLeadEngagement } from "../services/leadRescoreQueue";
 import { activeJob, cancelJob, enqueueJob, getJob as getBulkJob, registerJobKind } from "../services/jobs/runner";
 
 /* ───────── helpers ───────── */
@@ -118,27 +126,44 @@ async function aggregateBehavior(workspaceId: number, leadId: number) {
     ));
   const replies = replyRows.length;
 
-  // Activity-row signals (calls/meetings count as engagement, replies as a stronger signal).
+  /**
+   * Activity rows no longer count as replies (audit 2026-10-20, P37). Any
+   * email activity whose subject contained "re:" did, so "Feature: …" was a
+   * reply, and so was every "Re: …" follow-up WE sent: sends log an email
+   * activity, and nothing records a direction. The one inbound email activity
+   * is the reply poller's "Email reply received: …", and that same message is
+   * the emailReplies row counted above, inside the genuine-reply scope.
+   *
+   * What does count from activities is a meeting or a call that reached the
+   * person: that is the prospect engaging, for the decay clock below.
+   */
   const acts = await db
-    .select()
+    .select({ type: activities.type, occurredAt: activities.occurredAt, callDisposition: activities.callDisposition })
     .from(activities)
-    .where(and(eq(activities.workspaceId, workspaceId), eq(activities.relatedType, "lead"), eq(activities.relatedId, leadId)))
-    .orderBy(desc(activities.occurredAt));
-  const replyActs = acts.filter((a) => a.type === "email" && (a.subject ?? "").toLowerCase().includes("re:")).length;
-  // Recency now considers the prospect's OWN actions (opening, clicking,
-  // replying), not just rep-logged activity and send timestamps — previously
-  // someone could be actively reading every email and still look stale.
-  const engagementTimes = [
-    acts[0]?.occurredAt ?? null,
-    sentDrafts[sentDrafts.length - 1]?.sentAt ?? null,
-    ...sentDrafts.map((d) => d.lastOpenedAt ?? null),
-    ...sentDrafts.map((d) => d.lastClickedAt ?? null),
-    ...replyRows.map((r) => r.receivedAt ?? null),
-  ]
-    .filter((t): t is Date => !!t)
-    .map((t) => new Date(t).getTime());
-  const lastTs = engagementTimes.length > 0 ? Math.max(...engagementTimes) : null;
-  const daysSinceLastEngagement = lastTs ? Math.max(0, Math.floor((Date.now() - lastTs) / 86400000)) : 999;
+    .where(and(
+      eq(activities.workspaceId, workspaceId),
+      eq(activities.relatedType, "lead"),
+      eq(activities.relatedId, leadId),
+      inArray(activities.type, ["meeting", "call"]),
+    ));
+  const twoWay = acts.filter((a) => a.type === "meeting" || a.callDisposition === "connected" || a.callDisposition === "callback_requested");
+  /**
+   * Decay runs from the prospect's last action: an open, a click, a reply, a
+   * meeting or a call that connected (P117). Our own sends were in this list,
+   * so each step we sent reset the clock for someone who never responded.
+   * Someone who has never acted decays from our first send to them, when they
+   * could first have.
+   */
+  const ts = (t: Date | string | null | undefined) => (t ? new Date(t).getTime() : null);
+  const prospectTimes = [
+    ...twoWay.map((a) => ts(a.occurredAt)),
+    ...sentDrafts.map((d) => ts(d.lastOpenedAt)),
+    ...sentDrafts.map((d) => ts(d.lastClickedAt)),
+    ...replyRows.map((r) => ts(r.receivedAt)),
+  ].filter((t): t is number => t != null);
+  const sendTimes = sentDrafts.map((d) => ts(d.sentAt)).filter((t): t is number => t != null);
+  const since = prospectTimes.length > 0 ? Math.max(...prospectTimes) : sendTimes.length > 0 ? Math.min(...sendTimes) : null;
+  const daysSinceLastEngagement = since != null ? Math.max(0, Math.floor((Date.now() - since) / 86400000)) : 999;
 
   // Unsubscribes were hardcoded to 0, so opting out never dented a lead's
   // score — they could keep climbing toward "sales ready" (and now toward
@@ -170,9 +195,7 @@ async function aggregateBehavior(workspaceId: number, leadId: number) {
   return {
     opens,
     clicks,
-    // replyActs catches replies logged as activities (e.g. a rep noting one
-    // manually) that never came through the inbound poller.
-    replies: replies + replyActs,
+    replies,
     completedSteps,
     bounces,
     unsubscribes,
@@ -191,7 +214,9 @@ async function fetchAiFit(lead: typeof leads.$inferSelect): Promise<AiFitOutput 
         { role: "system", content: "You assess B2B lead/product fit. Output JSON only." },
         {
           role: "user",
-          content: `Assess fit on a 0..1 scale.\n\nLead: ${lead.firstName} ${lead.lastName}\nTitle: ${lead.title ?? ""}\nCompany: ${lead.company ?? ""}\nSource: ${lead.source ?? ""}`,
+          // No name (audit 2026-10-20, P128): fit is judged on the role and
+          // the organization, and the person's name told the model nothing.
+          content: `Assess fit on a 0..1 scale.\n\nTitle: ${lead.title ?? ""}\nCompany: ${lead.company ?? ""}\nSource: ${lead.source ?? ""}`,
         },
       ],
       response_format: {
@@ -218,17 +243,49 @@ async function fetchAiFit(lead: typeof leads.$inferSelect): Promise<AiFitOutput 
     return parsed as AiFitOutput;
   } catch (e) {
     console.warn("[leadScoring] AI fit failed", e);
-    // Heuristic fallback so behavior is deterministic without LLM.
-    const t = (lead.title ?? "").toLowerCase();
-    const fit = /chief|cxo|cmo|cro|cfo|ceo|founder/.test(t) ? 0.85
-      : /vp|vice president|head of/.test(t) ? 0.7
-      : /director/.test(t) ? 0.55
-      : /manager/.test(t) ? 0.4 : 0.25;
-    return { fit_score: fit, pain_points: [], recommended_products: [], objection_risks: [] };
+    // A guess from the title keeps the score deterministic without the model,
+    // and says it is a guess (P38): it was stored and shown as "AI fit".
+    return titleHeuristicFit(lead.title);
   }
 }
 
-async function recomputeOne(workspaceId: number, leadId: number) {
+/** The lead's latest stored score, with the AI fit assessment it used. */
+async function latestScore(workspaceId: number, leadId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(leadScoreHistory)
+    .where(and(eq(leadScoreHistory.workspaceId, workspaceId), eq(leadScoreHistory.leadId, leadId)))
+    .orderBy(desc(leadScoreHistory.id))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Score one lead and save it.
+ *
+ * `ai: true` (Recompute, Recompute all) asks the model for the fit, one call
+ * on the workspace's AI budget. `ai: false` is everything that runs on its own
+ * (audit 2026-10-20, P12: a new lead, engagement, the daily sweep): the
+ * profile and engagement are scored again and the fit is the last assessment,
+ * so no schedule ever calls a model. A lead never assessed has no fit points
+ * until someone presses Recompute.
+ *
+ * `trigger` says who asked, which decides what a score may set off:
+ *  - "person" (Recompute, Recompute all): the Sales-Ready alert on a crossing
+ *    and score-threshold enrolment at or above a threshold, as always.
+ *  - "create" (a lead just made by leads.create, a form, a landing page or
+ *    chat): the same, except no enrolment while the workspace's outbound is
+ *    paused.
+ *  - "schedule" (the hourly re-score): a lead's first score is the backfill
+ *    and sets off nothing; after that only an upward crossing alerts or
+ *    enrols (previous stored score below the threshold, new at or above),
+ *    and never an enrolment while outbound is paused. Without this, the first
+ *    sweeps after deploy would enrol every lead already above a trigger and
+ *    alert on every lead past Sales Ready (review of P12, 2026-11-06).
+ */
+type ScoreTrigger = "person" | "create" | "schedule";
+
+async function recomputeOne(workspaceId: number, leadId: number, opts: { ai: boolean; trigger: ScoreTrigger } = { ai: true, trigger: "person" }) {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
   const [lead] = await db.select().from(leads).where(and(eq(leads.id, leadId), eq(leads.workspaceId, workspaceId)));
@@ -238,7 +295,8 @@ async function recomputeOne(workspaceId: number, leadId: number) {
   const firmo = scoreFirmographic(lead, cfg);
   const behaviorInput = await aggregateBehavior(workspaceId, leadId);
   const behav = scoreBehavioral(behaviorInput, cfg);
-  const aiFitJson = await fetchAiFit(lead);
+  const last = await latestScore(workspaceId, leadId);
+  const aiFitJson = opts.ai ? await fetchAiFit(lead) : ((last?.aiFitPayload as AiFitOutput | null) ?? null);
   const ai = scoreAiFit(aiFitJson, cfg);
   const breakdown = composeScore({ firmo, behav, aiFit: ai, cfg });
 
@@ -246,17 +304,25 @@ async function recomputeOne(workspaceId: number, leadId: number) {
   const grade = gradeForTier(breakdown.tier);
 
   const previousTotal = lead.score ?? 0;
-  await db.update(leads).set({ score: breakdown.total, grade, scoreReasons: breakdown.reasons }).where(eq(leads.id, leadId));
-  await db.insert(leadScoreHistory).values({
-    workspaceId,
-    leadId,
-    firmographic: breakdown.firmographic,
-    behavioral: breakdown.behavioral,
-    aiFit: breakdown.aiFit,
-    total: breakdown.total,
-    tier: breakdown.tier,
-    aiFitPayload: aiFitJson as any,
-  });
+  // The schedule's first score of a lead is the backfill: stored, nothing fired.
+  const backfill = opts.trigger === "schedule" && lead.scoredAt == null;
+  await db.update(leads).set({ score: breakdown.total, grade, scoreReasons: breakdown.reasons, scoredAt: new Date() }).where(eq(leads.id, leadId));
+  // A scheduled re-score that changed nothing adds no history row, so the
+  // 90-day history shows changes, not the schedule.
+  const changed = !last || last.total !== breakdown.total || last.firmographic !== breakdown.firmographic
+    || last.behavioral !== breakdown.behavioral || last.aiFit !== breakdown.aiFit;
+  if (opts.ai || changed) {
+    await db.insert(leadScoreHistory).values({
+      workspaceId,
+      leadId,
+      firmographic: breakdown.firmographic,
+      behavioral: breakdown.behavioral,
+      aiFit: breakdown.aiFit,
+      total: breakdown.total,
+      tier: breakdown.tier,
+      aiFitPayload: aiFitJson as any,
+    });
+  }
 
   /**
    * Threshold-cross notification → assigned owner only.
@@ -275,7 +341,7 @@ async function recomputeOne(workspaceId: number, leadId: number) {
    */
   const [cfgRow] = await db.select().from(leadScoreConfig).where(eq(leadScoreConfig.workspaceId, workspaceId));
   const crossed = previousTotal < cfg.tierSalesReadyMin && breakdown.total >= cfg.tierSalesReadyMin;
-  if (crossed) {
+  if (crossed && !backfill) {
     await notifyIfEnabled({
       workspaceId,
       userId: lead.ownerUserId,
@@ -297,19 +363,152 @@ async function recomputeOne(workspaceId: number, leadId: number) {
   // were computed, stored, displayed and sorted on, and never actually started
   // any outreach. This is the score → sequence handoff that was missing.
   //
-  // Fire-and-forget: scoring must not fail because enrolment did. The function
-  // is idempotent (it checks for an existing enrolment first), so re-scoring
-  // the same lead never double-enrols.
-  void import("../sequenceEngine")
-    .then((m) => m.autoEnrollByTriggers({
-      kind: "score_threshold",
-      workspaceId,
-      leadId,
-      score: breakdown.total,
-    }))
-    .catch((e) => console.error(`[LeadScoring] auto-enroll failed for lead ${leadId}:`, e));
+  // Scoring must not fail because enrolment did. The function is idempotent
+  // (it checks for an existing enrolment first), so re-scoring the same lead
+  // never double-enrols. Awaited since scores re-run on a schedule (P12), so
+  // a sweep's enrolments run one lead at a time rather than piling up.
+  //
+  // The schedule asks only when the score rose, since only a rise can cross a
+  // threshold upward, and passes the previous score so a sequence matches only
+  // on that crossing. Neither the schedule nor a new lead enrols anyone while
+  // the workspace's outbound is paused: nothing is queued, and the skip is
+  // logged (by the tick, once per workspace, for the schedule).
+  let enrolment: "checked" | "skipped_paused" | "not_asked" = "not_asked";
+  const askEnrol = opts.trigger !== "schedule" || (!backfill && breakdown.total > previousTotal);
+  if (askEnrol) {
+    if (opts.trigger !== "person" && (await isOutboundPaused(workspaceId))) {
+      enrolment = "skipped_paused";
+      if (opts.trigger === "create") {
+        console.log(`[LeadScoring] lead ${leadId}: outbound is paused in workspace ${workspaceId}, so no score-threshold enrolment`);
+      }
+    } else {
+      enrolment = "checked";
+      try {
+        const m = await import("../sequenceEngine");
+        await m.autoEnrollByTriggers({
+          kind: "score_threshold",
+          workspaceId,
+          leadId,
+          score: breakdown.total,
+          ...(opts.trigger === "schedule" ? { previousScore: previousTotal } : {}),
+        });
+      } catch (e) {
+        console.error(`[LeadScoring] auto-enroll failed for lead ${leadId}:`, e);
+      }
+    }
+  }
 
-  return { ...breakdown, grade, aiFit: aiFitJson };
+  return { ...breakdown, grade, aiFit: aiFitJson, enrolment };
+}
+
+/**
+ * Score a lead just created, without a model call (P12): leads.create, forms,
+ * landing pages and chat. Never throws; a score is not worth failing the
+ * thing that asked for it. No enrolment while outbound is paused.
+ */
+export async function rescoreLead(workspaceId: number, leadId: number): Promise<void> {
+  try {
+    await recomputeOne(workspaceId, leadId, { ai: false, trigger: "create" });
+  } catch (e) {
+    console.error(`[LeadScoring] re-score failed for lead ${leadId}:`, (e as Error)?.message ?? e);
+  }
+}
+
+/** A lead with no engagement yet: what a new lead's behaviour scores. */
+const NO_ENGAGEMENT = { opens: 0, clicks: 0, replies: 0, completedSteps: 0, bounces: 0, unsubscribes: 0, daysSinceLastEngagement: 0 };
+
+/**
+ * What a lead scores the moment it is created, before the insert, so routing
+ * rules on Score see a real number (audit 2026-10-20, P13: every entry point
+ * passed 0). It is the profile's points: a new lead has no engagement, and the
+ * AI fit waits for Recompute. `rescoreLead` after the insert saves the same
+ * number.
+ */
+export async function createTimeScore(workspaceId: number, lead: LeadFirmoInput): Promise<ScoreBreakdown> {
+  const cfg = await loadConfig(workspaceId);
+  return composeScore({ firmo: scoreFirmographic(lead, cfg), behav: scoreBehavioral(NO_ENGAGEMENT, cfg), aiFit: scoreAiFit(null, cfg), cfg });
+}
+
+/* ───────── Scores that keep themselves current (audit P12) ───────── */
+
+/** Engaged leads re-scored per hourly tick, across every workspace. */
+export const RESCORE_ENGAGED_PER_TICK = 500;
+/** Stale leads re-scored per workspace per hourly tick. */
+export const RESCORE_STALE_PER_WORKSPACE = 200;
+/** A lead not scored for this long is due again, so decay is applied daily. */
+export const RESCORE_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+/** A tick stops starting new leads after this long. */
+export const RESCORE_TICK_BUDGET_MS = 10 * 60 * 1000;
+
+/**
+ * The hourly lead re-score (P12). Scores only changed when a rep pressed
+ * Recompute, so decay never applied, a lead never crossed into Sales Ready on
+ * its own, and sequences that start on a score never started. Each tick:
+ *
+ *  1. leads with new engagement (an open, a click, a reply) noted by the
+ *     tracking and reply paths, up to RESCORE_ENGAGED_PER_TICK;
+ *  2. leads never scored or not scored for a day, oldest first, up to
+ *     RESCORE_STALE_PER_WORKSPACE in each workspace.
+ *
+ * No model calls (`ai: false`), archived workspaces skipped, and a time budget,
+ * so one tick is bounded however many leads there are. What a score sets off
+ * is `trigger: "schedule"` (see recomputeOne): a lead's first score is the
+ * backfill and sets off nothing; after that only an upward crossing alerts or
+ * enrols, and nothing enrols while the workspace's outbound is paused.
+ */
+export async function runLeadRescoreTick(): Promise<{ engaged: number; swept: number; failed: number; pausedSkips: number }> {
+  const out = { engaged: 0, swept: 0, failed: 0, pausedSkips: 0 };
+  const db = await getDb();
+  if (!db) return out;
+  const until = Date.now() + RESCORE_TICK_BUDGET_MS;
+  const archived = await archivedWorkspaceIds();
+  const pausedByWs = new Map<number, number>();
+  const one = async (workspaceId: number, leadId: number) => {
+    try {
+      const r = await recomputeOne(workspaceId, leadId, { ai: false, trigger: "schedule" });
+      if (r.enrolment === "skipped_paused") pausedByWs.set(workspaceId, (pausedByWs.get(workspaceId) ?? 0) + 1);
+      return true;
+    } catch (e) {
+      out.failed++;
+      console.error(`[LeadRescore] lead ${leadId} failed:`, (e as Error)?.message ?? e);
+      return false;
+    }
+  };
+  // The run log says when a paused workspace held back enrolments.
+  const done = () => {
+    pausedByWs.forEach((n, ws) => {
+      out.pausedSkips += n;
+      console.log(`[LeadRescore] workspace ${ws}: outbound is paused, so ${n} score-threshold enrolment check${n === 1 ? " was" : "s were"} skipped`);
+    });
+    return out;
+  };
+
+  const engaged = takeEngagedLeads(RESCORE_ENGAGED_PER_TICK);
+  for (let i = 0; i < engaged.length; i++) {
+    const { workspaceId, leadId } = engaged[i]!;
+    if (Date.now() >= until) {
+      // Out of time: the rest wait for the next tick.
+      for (const rest of engaged.slice(i)) noteLeadEngagement(rest.workspaceId, rest.leadId);
+      return done();
+    }
+    if (archived.has(workspaceId)) continue;
+    if (await one(workspaceId, leadId)) out.engaged++;
+  }
+
+  const cutoff = new Date(Date.now() - RESCORE_STALE_AFTER_MS);
+  const wsRows = await db.select({ id: workspaces.id }).from(workspaces);
+  for (const { id: workspaceId } of wsRows) {
+    if (archived.has(workspaceId)) continue;
+    const due = await db.select({ id: leads.id }).from(leads)
+      .where(and(eq(leads.workspaceId, workspaceId), or(isNull(leads.scoredAt), lt(leads.scoredAt, cutoff))))
+      .orderBy(asc(leads.scoredAt), asc(leads.id))
+      .limit(RESCORE_STALE_PER_WORKSPACE);
+    for (const { id } of due) {
+      if (Date.now() >= until) return done();
+      if (await one(workspaceId, id)) out.swept++;
+    }
+  }
+  return done();
 }
 
 /* ───────── "Recompute all" as a background job (audit P11) ───────── */
@@ -348,6 +547,26 @@ registerJobKind(RECOMPUTE_JOB, {
   },
 });
 
+/** The weights and thresholds a workspace can set: as saved, and as previewed unsaved (P118). */
+const SCORE_CONFIG_SHAPE = {
+  firmoOrgTypeWeight: z.number().int().min(0).max(40),
+  firmoTitleWeight: z.number().int().min(0).max(40),
+  firmoCompletenessWeight: z.number().int().min(0).max(40),
+  behavOpenPoints: z.number().int().min(0).max(50),
+  behavOpenMax: z.number().int().min(0).max(50),
+  behavClickPoints: z.number().int().min(0).max(50),
+  behavClickMax: z.number().int().min(0).max(50),
+  behavReplyPoints: z.number().int().min(0).max(50),
+  behavStepPoints: z.number().int().min(0).max(20),
+  behavBouncePenalty: z.number().int().min(-50).max(0),
+  behavUnsubPenalty: z.number().int().min(-50).max(0),
+  behavDecayPctPer30d: z.number().int().min(0).max(100),
+  aiFitMax: z.number().int().min(0).max(50),
+  tierWarmMin: z.number().int().min(0).max(100),
+  tierHotMin: z.number().int().min(0).max(100),
+  tierSalesReadyMin: z.number().int().min(0).max(100),
+};
+
 /* ───────── tRPC router ───────── */
 
 export const leadScoringRouter = router({
@@ -364,26 +583,12 @@ export const leadScoringRouter = router({
   }),
 
   saveConfig: adminWsProcedure
-    .input(z.object({
-      firmoOrgTypeWeight: z.number().int().min(0).max(40),
-      firmoTitleWeight: z.number().int().min(0).max(40),
-      firmoCompletenessWeight: z.number().int().min(0).max(40),
-      behavOpenPoints: z.number().int().min(0).max(50),
-      behavOpenMax: z.number().int().min(0).max(50),
-      behavClickPoints: z.number().int().min(0).max(50),
-      behavClickMax: z.number().int().min(0).max(50),
-      behavReplyPoints: z.number().int().min(0).max(50),
-      behavStepPoints: z.number().int().min(0).max(20),
-      behavBouncePenalty: z.number().int().min(-50).max(0),
-      behavUnsubPenalty: z.number().int().min(-50).max(0),
-      behavDecayPctPer30d: z.number().int().min(0).max(100),
-      aiFitMax: z.number().int().min(0).max(50),
-      tierWarmMin: z.number().int().min(0).max(100),
-      tierHotMin: z.number().int().min(0).max(100),
-      tierSalesReadyMin: z.number().int().min(0).max(100),
-      notifyOnSalesReady: z.boolean(),
-    }))
+    .input(z.object({ ...SCORE_CONFIG_SHAPE, notifyOnSalesReady: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
+      // Thresholds out of order put a lead in a tier its score is below
+      // (audit 2026-10-20, P116).
+      const tierProblem = tierThresholdProblem(input);
+      if (tierProblem) throw new TRPCError({ code: "BAD_REQUEST", message: tierProblem });
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [exists] = await db.select().from(leadScoreConfig).where(eq(leadScoreConfig.workspaceId, ctx.workspace.id));
@@ -445,17 +650,35 @@ export const leadScoringRouter = router({
     return { canceled: await cancelJob(ctx.workspace.id, input.jobId) };
   }),
 
-  /** Read-only breakdown for the lead detail panel: current components + 90-day history. */
-  breakdown: workspaceProcedure.input(z.object({ leadId: z.number() })).query(async ({ ctx, input }) => {
+  /**
+   * A lead's score component by component, for the lead panel and the Lead
+   * Scoring page's preview, plus its 90-day history.
+   *
+   * The components are worked out now (profile and engagement from today's
+   * data, the AI fit from its last assessment) and the total is their sum, so
+   * the bars and the total agree (audit 2026-10-20, P34: AI Fit was the stored
+   * total minus today's other two, and said whatever made the sum work). This
+   * is what the next re-score saves. With `cfg`, the page's unsaved weights
+   * are used instead of the saved ones (P118). `saved` is what the lead holds
+   * now; its tier is null for a lead never scored (P119: that read Cold).
+   */
+  breakdown: workspaceProcedure.input(z.object({ leadId: z.number(), cfg: z.object(SCORE_CONFIG_SHAPE).optional() })).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.leadId), eq(leads.workspaceId, ctx.workspace.id)));
     if (!lead) throw new TRPCError({ code: "NOT_FOUND" });
-    const cfg = await loadConfig(ctx.workspace.id);
+    const savedCfg = await loadConfig(ctx.workspace.id);
+    const cfg = input.cfg ?? savedCfg;
 
     const firmo = scoreFirmographic(lead, cfg);
     const behaviorInput = await aggregateBehavior(ctx.workspace.id, input.leadId);
     const behav = scoreBehavioral(behaviorInput, cfg);
+    const last = await latestScore(ctx.workspace.id, input.leadId);
+    const aiFitJson = (last?.aiFitPayload as AiFitOutput | null) ?? null;
+    const ai = scoreAiFit(aiFitJson, cfg);
+    const now = composeScore({ firmo, behav, aiFit: ai, cfg });
+    const max = componentMaxes(cfg);
+    const scored = lead.scoredAt != null || last != null;
 
     // 90-day history
     const cutoff = new Date(Date.now() - 90 * 86400000);
@@ -467,13 +690,22 @@ export const leadScoringRouter = router({
 
     return {
       cfg,
-      tier: tierFor(lead.score ?? 0, cfg),
-      total: lead.score ?? 0,
-      grade: lead.grade,
-      reasons: (lead.scoreReasons as string[] | null) ?? [],
-      firmographic: { value: firmo.value, max: cfg.firmoOrgTypeWeight + cfg.firmoTitleWeight + cfg.firmoCompletenessWeight, reasons: firmo.reasons },
-      behavioral: { value: behav.value, max: 30, reasons: behav.reasons, raw: behaviorInput },
-      aiFit: { value: lead.score ? Math.max(0, (lead.score ?? 0) - firmo.value - Math.max(0, behav.value)) : 0, max: cfg.aiFitMax },
+      tier: now.tier,
+      total: now.total,
+      grade: gradeForTier(now.tier),
+      reasons: now.reasons,
+      firmographic: { value: firmo.value, max: max.firmographic, reasons: firmo.reasons },
+      // The real maximum (P22): this said 30 while behaviour could reach 75.
+      behavioral: { value: behav.value, max: max.behavioral, reasons: behav.reasons, raw: behaviorInput },
+      aiFit: { value: ai.value, max: max.aiFit, reasons: ai.reasons, assessed: aiFitJson != null },
+      maxSum: max.sum,
+      saved: {
+        scored,
+        total: lead.score ?? 0,
+        tier: scored ? tierFor(lead.score ?? 0, savedCfg) : null,
+        grade: lead.grade,
+        scoredAt: lead.scoredAt ?? last?.computedAt ?? null,
+      },
       history: history.map((h) => ({ at: h.computedAt, total: h.total, firmographic: h.firmographic, behavioral: h.behavioral, aiFit: h.aiFit, tier: h.tier })),
     };
   }),
@@ -485,7 +717,8 @@ export const leadRoutingRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
-    return db.select().from(leadRoutingRules).where(eq(leadRoutingRules.workspaceId, ctx.workspace.id)).orderBy(leadRoutingRules.priority);
+    // The order the router runs them in (P124): priority, then oldest.
+    return db.select().from(leadRoutingRules).where(eq(leadRoutingRules.workspaceId, ctx.workspace.id)).orderBy(leadRoutingRules.priority, leadRoutingRules.id);
   }),
 
   save: adminWsProcedure
@@ -499,6 +732,11 @@ export const leadRoutingRouter = router({
       targetUserIds: z.array(z.number()).default([]),
     }))
     .mutation(async ({ ctx, input }) => {
+      // A blank value, an operator the field can't take, or a Score that isn't
+      // a number would save a condition that matches everything or nothing
+      // (audit 2026-10-20, P42).
+      const problem = routingConditionsProblem(normalizeRoutingConditions(input.conditions));
+      if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       if (input.id) {
@@ -526,9 +764,17 @@ export const leadRoutingRouter = router({
   reorder: adminWsProcedure.input(z.object({ orderedIds: z.array(z.number()) })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await Promise.all(input.orderedIds.map((id, idx) =>
-      db.update(leadRoutingRules).set({ priority: (idx + 1) * 10 }).where(and(eq(leadRoutingRules.id, id), eq(leadRoutingRules.workspaceId, ctx.workspace.id)))
-    ));
+    // One transaction (audit 2026-10-20, P124): the per-row writes went out
+    // together, so two quick reorders interleaved and left a mix of both
+    // orders. Rows are written in id order, so two reorders lock them in the
+    // same order and one waits for the other instead of deadlocking.
+    const positions = input.orderedIds.map((id, idx) => ({ id, priority: (idx + 1) * 10 })).sort((a, b) => a.id - b.id);
+    await db.transaction(async (tx) => {
+      for (const p of positions) {
+        await tx.update(leadRoutingRules).set({ priority: p.priority })
+          .where(and(eq(leadRoutingRules.id, p.id), eq(leadRoutingRules.workspaceId, ctx.workspace.id)));
+      }
+    });
     return { ok: true };
   }),
 
@@ -590,41 +836,84 @@ export async function routeLeadOwner(workspaceId: number, payload: RoutingPayloa
     }
   }
 
-  const rows = await db.select().from(leadRoutingRules).where(eq(leadRoutingRules.workspaceId, workspaceId));
+  /**
+   * Geography and Industry rules take the owner from the matching territory
+   * rule (audit 2026-10-20, P41). Both strategies passed no lookup, so they
+   * always gave the first target, exactly like Direct. A Geography rule uses
+   * territory rules that name a country or state; an Industry rule, those that
+   * name an industry. With no match, or an owner who has left, the rule still
+   * falls back to its first target.
+   */
+  const territory = await db.select().from(crmTerritoryRules)
+    .where(and(eq(crmTerritoryRules.workspaceId, workspaceId), eq(crmTerritoryRules.active, true)))
+    .orderBy(crmTerritoryRules.priority, crmTerritoryRules.id);
+  const same = (rule: string | null, lead: string | null | undefined) =>
+    rule == null || rule.trim() === "" || rule.trim().toLowerCase() === (lead ?? "").trim().toLowerCase();
+  const company = (payload.company ?? "").toLowerCase();
 
   /**
-   * 🔴 `targetUserIds` is a STORED LIST OF USER IDS and nothing revalidated it.
-   * A rep who leaves keeps their place in the round-robin: every Nth inbound
-   * lead is filed under someone who cannot sign in, indefinitely, and the rule
-   * still reports a rising `matchCount` so it looks like it is working.
-   *
-   * Filtered here, once, over every rule — `pickRoutingMatch` is pure and must
-   * stay that way. It already treats an empty target list as "no match" and
-   * falls through to the NEXT rule, so a rule whose whole team has gone
-   * degrades to the next-best rule and finally to an unowned lead, rather than
-   * to a ghost. The stored cursor is taken modulo the surviving length, so it
-   * stays in range; the rotation shifts, which is the correct outcome when the
-   * roster changes.
+   * The round-robin cursor is claimed, not overwritten (P43). Two leads routed
+   * at once both read the same cursor, both picked the same rep and both wrote
+   * the same next value. Now the cursor only moves by +1 from the value this
+   * pick read; if another route moved it first, the rules are read again.
+   * It only ever grows, and the pick takes it modulo the target list.
    */
-  const active = await activeMemberIds(
-    workspaceId,
-    rows.flatMap((r) => ((r.targetUserIds as number[] | null) ?? [])),
-  );
-  const rules: RoutingRule[] = rows.map((r) => ({
-    id: r.id,
-    enabled: r.enabled,
-    priority: r.priority,
-    conditions: (r.conditions as any) ?? {},
-    strategy: r.strategy,
-    targetUserIds: (((r.targetUserIds as number[] | null) ?? []).filter((u) => active.has(u))),
-    rrCursor: r.rrCursor,
-  }));
-  const m = pickRoutingMatch(rules, payload, evalConditions);
-  if (!m) return null;
-  if (m.newCursor !== undefined) {
-    await db.update(leadRoutingRules).set({ rrCursor: m.newCursor, matchCount: sql`${leadRoutingRules.matchCount} + 1`, lastMatchedAt: new Date() }).where(eq(leadRoutingRules.id, m.ruleId));
-  } else {
-    await db.update(leadRoutingRules).set({ matchCount: sql`${leadRoutingRules.matchCount} + 1`, lastMatchedAt: new Date() }).where(eq(leadRoutingRules.id, m.ruleId));
+  for (let attempt = 1; ; attempt++) {
+    const rows = await db.select().from(leadRoutingRules).where(eq(leadRoutingRules.workspaceId, workspaceId));
+
+    /**
+     * 🔴 `targetUserIds` is a STORED LIST OF USER IDS and nothing revalidated it.
+     * A rep who leaves keeps their place in the round-robin: every Nth inbound
+     * lead is filed under someone who cannot sign in, indefinitely, and the rule
+     * still reports a rising `matchCount` so it looks like it is working.
+     *
+     * Filtered here, once, over every rule — `pickRoutingMatch` is pure and must
+     * stay that way. It already treats an empty target list as "no match" and
+     * falls through to the NEXT rule, so a rule whose whole team has gone
+     * degrades to the next-best rule and finally to an unowned lead, rather than
+     * to a ghost. The stored cursor is taken modulo the surviving length, so it
+     * stays in range; the rotation shifts, which is the correct outcome when the
+     * roster changes. Territory owners are checked the same way.
+     */
+    const active = await activeMemberIds(
+      workspaceId,
+      [...rows.flatMap((r) => ((r.targetUserIds as number[] | null) ?? [])), ...territory.map((t) => t.ownerUserId)],
+    );
+    const rules: RoutingRule[] = rows.map((r) => ({
+      id: r.id,
+      enabled: r.enabled,
+      priority: r.priority,
+      conditions: (r.conditions as any) ?? {},
+      strategy: r.strategy,
+      targetUserIds: (((r.targetUserIds as number[] | null) ?? []).filter((u) => active.has(u))),
+      rrCursor: r.rrCursor,
+    }));
+    const territoryOwner = (rule: RoutingRule, p: RoutingPayload): number | null => {
+      for (const t of territory) {
+        if (rule.strategy === "geography" ? !(t.country || t.state) : !t.industry) continue;
+        if (!same(t.industry, p.industry) || !same(t.country, p.country) || !same(t.state, p.state)) continue;
+        if (t.companyContains && !company.includes(t.companyContains.toLowerCase())) continue;
+        if (t.ownerUserId != null && active.has(t.ownerUserId)) return t.ownerUserId;
+      }
+      return null;
+    };
+    // Typed conditions (P42): case-blind text, numeric Score.
+    const m = pickRoutingMatch(rules, payload, routingConditionsMatch, territoryOwner);
+    if (!m) return null;
+    const counted = { matchCount: sql`${leadRoutingRules.matchCount} + 1`, lastMatchedAt: new Date() };
+    if (m.newCursor === undefined) {
+      await db.update(leadRoutingRules).set(counted)
+        .where(and(eq(leadRoutingRules.id, m.ruleId), eq(leadRoutingRules.workspaceId, workspaceId)));
+      return m.ownerUserId;
+    }
+    // After a few lost races, take the pick rather than leave the lead unowned.
+    const seen = attempt < 5 ? rules.find((r) => r.id === m.ruleId)!.rrCursor : undefined;
+    const res = await db.update(leadRoutingRules).set({ rrCursor: sql`${leadRoutingRules.rrCursor} + 1`, ...counted })
+      .where(and(
+        eq(leadRoutingRules.id, m.ruleId),
+        eq(leadRoutingRules.workspaceId, workspaceId),
+        seen === undefined ? undefined : eq(leadRoutingRules.rrCursor, seen),
+      ));
+    if (Number((res as any)?.[0]?.affectedRows ?? (res as any)?.affectedRows ?? 0) > 0 || seen === undefined) return m.ownerUserId;
   }
-  return m.ownerUserId;
 }

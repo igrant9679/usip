@@ -27,6 +27,7 @@
 import type { Express, Request, Response } from "express";
 import { eq } from "drizzle-orm";
 import { getDb } from "./db";
+import { isWorkspaceLive } from "./_core/workspaceArchive";
 import { chatAgents } from "../drizzle/schema";
 
 const ICON_CHAT =
@@ -114,6 +115,7 @@ export function registerChatWidgetRoutes(app: Express): void {
       const [a] = await db
         .select({
           slug: chatAgents.slug,
+          workspaceId: chatAgents.workspaceId,
           status: chatAgents.status,
           mode: chatAgents.mode,
           displayName: chatAgents.displayName,
@@ -121,7 +123,7 @@ export function registerChatWidgetRoutes(app: Express): void {
         })
         .from(chatAgents)
         .where(eq(chatAgents.slug, slug));
-      if (!a || a.status !== "published" || a.mode === "off") {
+      if (!a || a.status !== "published" || a.mode === "off" || !(await isWorkspaceLive(a.workspaceId))) {
         res.status(200).json({ ok: false });
         return;
       }

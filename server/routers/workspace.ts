@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
-import { ensureUserHasWorkspace } from "../seed";
+import { workspaceAbsenceReason, workspaceProcedure } from "../_core/workspace";
+import { ensureUserHasWorkspace, mayBootstrapOwnWorkspace } from "../seed";
 import {
   getDb,
   getUserWorkspaces,
@@ -17,15 +17,29 @@ import { slugify } from "@shared/slugify";
 export const workspaceRouter = router({
   /**
    * Returns workspaces the current user is a member of.
-   * Auto-bootstraps a demo workspace + seed data if the user has none.
+   * Bootstraps a demo workspace + seed data for someone with none, only where
+   * the sign-up policy allows it (seed.ts mayBootstrapOwnWorkspace, G10).
    */
   list: protectedProcedure.query(async ({ ctx }) => {
     let mine = await getUserWorkspaces(ctx.user.id);
-    if (mine.length === 0) {
+    if (mine.length === 0 && (await mayBootstrapOwnWorkspace(ctx.user))) {
       await ensureUserHasWorkspace(ctx.user.id, ctx.user.name);
       mine = await getUserWorkspaces(ctx.user.id);
     }
     return mine;
+  }),
+
+  /**
+   * Why someone signed in has no workspace to work in, for the screen that
+   * says so instead of a shell that never finishes loading (audit 2026-10-20,
+   * G35). "member" when they have one.
+   */
+  access: protectedProcedure.query(async ({ ctx }) => {
+    const mine = await getUserWorkspaces(ctx.user.id);
+    if (mine.length > 0) return { state: "member" as const };
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
+    return { state: await workspaceAbsenceReason(db, ctx.user.id) };
   }),
 
   current: workspaceProcedure.query(({ ctx }) => ({

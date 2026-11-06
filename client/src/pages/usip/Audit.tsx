@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Section, StatusPill, fmtDate } from "@/components/usip/Common";
+import { Section, StatusPill, fmtDateTime } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { todayLocal } from "@/lib/localDay";
 import { trpc } from "@/lib/trpc";
@@ -55,7 +55,7 @@ export default function Audit() {
 
   return (
     <Shell title="Audit log">
-      <PageHeader title="Audit log" description="A complete audit trail of all record creates, updates, and deletes with before-and-after field values. Restricted to workspace admins for compliance and security review." pageKey="audit" icon={<ClipboardList className="size-5" />} />
+      <PageHeader title="Audit log" description="Changes to records, members and settings, with before-and-after values where they were recorded. Not every action writes an entry yet, so treat a gap as unrecorded, not as nothing happened. Workspace admins only." pageKey="audit" icon={<ClipboardList className="size-5" />} />
       <div className="p-4 md:p-5 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           {/* Entity type filter */}
@@ -152,7 +152,8 @@ export default function Audit() {
                           {activeMembers.find((m: any) => m.userId === a.actorUserId)?.name ?? `User ${a.actorUserId}`}
                         </button>
                       )}
-                      <span>{fmtDate(a.createdAt)}</span>
+                      {/* With the time (G49): a day's entries were indistinguishable. */}
+                      <span>{fmtDateTime(a.createdAt)}</span>
                     </div>
                   </div>
                   {(a.before != null || a.after != null) ? (

@@ -186,4 +186,25 @@ export const savedSearchesRouter = router({
         );
       return { ok: true };
     }),
+
+  /** Back to the Default view, and stay there (audit 2026-10-20, R59). The
+   *  system view has no row to stamp, so picking it left the last saved
+   *  search the newest, and the next visit restored that one instead. */
+  clearApplied: workspaceProcedure
+    .input(z.object({ surface }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
+      await db
+        .update(savedSearches)
+        .set({ lastAppliedAt: null })
+        .where(
+          and(
+            eq(savedSearches.surface, input.surface),
+            eq(savedSearches.workspaceId, ctx.workspace.id),
+            eq(savedSearches.ownerUserId, ctx.user.id),
+          ),
+        );
+      return { ok: true };
+    }),
 });

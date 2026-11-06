@@ -27,7 +27,7 @@ import { PersonaResultsBadge, SectorResults, usePersonaResultSummaries } from "@
 import { confirmAction } from "@/components/usip/Common";
 import {
   Crumbs, HistoryButton, LinesInput, RowsEditor, SaveBar, Section, StatusBadge, TagInput,
-  reportDropped, useResearchDraft, useResearchRoles,
+  deleteImpact, reportDropped, useResearchDraft, useResearchRoles,
 } from "@/components/usip/research/ResearchFields";
 import { EMPTY_PERSONA, PersonaFormFields, personaFormFrom, personaPayload, type PersonaForm } from "@/components/usip/research/PersonaFormFields";
 import {
@@ -52,21 +52,33 @@ export default function ResearchSector() {
   const q = trpc.research.sectors.get.useQuery({ id }, { enabled: Number.isFinite(id) && id > 0 });
   const personaResults = usePersonaResultSummaries();
   const sector = q.data?.sector;
-  const draft = useResearchDraft<SectorContent>(sector?.content, sector?.revision);
+  const draft = useResearchDraft<SectorContent>(sector?.content, sector?.revision, q.refetch);
   const c = draft.value;
+  const utils = trpc.useUtils();
 
   const save = trpc.research.sectors.update.useMutation({
-    onError: (e) => toast.error(e.message),
+    onError: (e) => {
+      toast.error(e.message);
+      // Re-read the saved sector, keeping the draft, so the page says a newer
+      // version exists instead of failing the same way again (audit 2026-10-20, P26).
+      if (e.data?.code === "CONFLICT") q.refetch();
+    },
     onSuccess: async (r) => {
       reportDropped(r.dropped);
       toast.success(r.changed.length ? `Saved as version ${r.revision}` : "Nothing changed");
       draft.discard();
-      await q.refetch();
+      // The market page, pickers and reports show the change (P27).
+      await utils.research.invalidate();
     },
   });
   const del = trpc.research.sectors.delete.useMutation({
     onError: (e) => toast.error(e.message),
-    onSuccess: (r) => { toast.success("Sector deleted"); navigate(`/research/markets/${r.marketId}`); },
+    onSuccess: async (r) => {
+      toast.success("Sector deleted");
+      navigate(`/research/markets/${r.marketId}`);
+      // It leaves the market page, pickers and persona badges (P27).
+      await Promise.all([utils.research.invalidate(), utils.personas.invalidate()]);
+    },
   });
 
   // ── Personas in this sector ────────────────────────────────────────────
@@ -77,14 +89,15 @@ export default function ResearchSector() {
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkId, setLinkId] = useState<string>("");
   const [runOpen, setRunOpen] = useState(false);
-  const afterPersona = async () => { await Promise.all([q.refetch(), allPersonas.refetch()]); };
+  const afterPersona = async () => { await Promise.all([q.refetch(), utils.personas.invalidate(), utils.research.markets.invalidate()]); };
+  // What the cleaner removed as personal data is said, not dropped silently (P125).
   const createPersona = trpc.personas.create.useMutation({
     onError: (e) => toast.error(e.message),
-    onSuccess: async () => { toast.success("Persona added"); setPOpen(false); await afterPersona(); },
+    onSuccess: async (r) => { reportDropped(r.dropped); toast.success("Persona added"); setPOpen(false); await afterPersona(); },
   });
   const updatePersona = trpc.personas.update.useMutation({
     onError: (e) => toast.error(e.message),
-    onSuccess: async () => { setPOpen(false); setLinkOpen(false); await afterPersona(); },
+    onSuccess: async (r) => { reportDropped(r.dropped); setPOpen(false); setLinkOpen(false); await afterPersona(); },
   });
 
   // A non-numeric id never queried and showed a skeleton forever (audit
@@ -141,14 +154,19 @@ export default function ResearchSector() {
     else createPersona.mutate(body);
   };
 
-  const remove = () => confirmAction(
-    {
-      title: `Delete "${sector.content.name}"?`,
-      description: "This deletes the sector and all its versions. Its personas are kept but unlinked. This cannot be undone.",
-      confirmLabel: "Delete sector",
-    },
-    () => del.mutate({ id }),
-  );
+  // The confirmation names the campaigns and accounts it touches, and an
+  // active campaign stops it (P29).
+  const remove = async () => {
+    let impact: { blocked: boolean; text: string };
+    try {
+      impact = deleteImpact("sector", await utils.research.sectors.dependents.fetch({ id }));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't check what uses this sector");
+      return;
+    }
+    if (impact.blocked) { toast.error(impact.text); return; }
+    confirmAction({ title: `Delete "${sector.content.name}"?`, description: impact.text, confirmLabel: "Delete sector" }, () => del.mutate({ id }));
+  };
 
   return (
     <Shell title={sector.content.name}>

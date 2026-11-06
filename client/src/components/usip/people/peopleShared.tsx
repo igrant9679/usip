@@ -84,6 +84,8 @@ export type Prospect = {
   verificationStatus?: string | null;
   linkedLeadId?: number | null;
   linkedContactId?: number | null;
+  /** The linked company's employee count (prospects.list). */
+  companyEmployees?: number | null;
   /** Resolved, policy-gated image from prospects.list (null url → initials). */
   profile_image?: ProfileImage | null;
 };
@@ -459,7 +461,9 @@ export const COLUMN_REGISTRY: Record<ColumnKey, ColumnDef> = {
     key: "employees",
     label: "Company · Number of employees",
     icon: Users,
-    cell: () => muted,
+    // The linked company's headcount, which prospects.list now sends (R60):
+    // this cell was a dash for everyone.
+    cell: (p) => (p.companyEmployees != null ? <span className="text-xs tabular-nums">{p.companyEmployees.toLocaleString()}</span> : muted),
   },
   industries: {
     key: "industries",
@@ -556,7 +560,9 @@ export const COMPANY_FIELD_GROUPS: FieldGroup[] = [
       { columnKey: null, label: "Headcount growth", icon: Users, count: 3, drill: true },
       { columnKey: "company", label: "Domain", icon: Globe },
       { columnKey: "industries", label: "Industries", icon: Factory },
-      { columnKey: "keywords", label: "Keywords", icon: Tag },
+      // No keyword data reaches a person's row, so the column was blank for
+      // everyone; not offered (R60).
+      { columnKey: null, label: "Keywords", icon: Tag },
       { columnKey: "employees", label: "Number of employees", icon: Users },
       { columnKey: "links", label: "Links", icon: Globe },
       { columnKey: null, label: "Parent company", icon: Building2 },

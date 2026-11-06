@@ -20,7 +20,14 @@ import {
 import { ArrowUpDown, ChevronDown, Info } from "lucide-react";
 import { SORT_FIELDS, type SortField, type SortDir } from "./peopleShared";
 
-export function SortMenu({ onApply }: { onApply: (field: SortField, dir: SortDir) => void }) {
+/** The trigger names the sort in effect (R96): it said "Sort" whatever it was. */
+export function sortLabel(current?: { field: SortField; dir: SortDir }): string {
+  if (!current) return "Sort";
+  const label = SORT_FIELDS.find((f) => f.value === current.field)?.label ?? current.field;
+  return `Sort: ${label} ${current.dir === "asc" ? "↑" : "↓"}`;
+}
+
+export function SortMenu({ onApply, current }: { onApply: (field: SortField, dir: SortDir) => void; current?: { field: SortField; dir: SortDir } }) {
   const [open, setOpen] = useState(false);
   const [field, setField] = useState<SortField | "">("");
   const [dir, setDir] = useState<SortDir>("desc");
@@ -36,7 +43,7 @@ export function SortMenu({ onApply }: { onApply: (field: SortField, dir: SortDir
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button variant="outline" size="sm" className="gap-1.5">
-          <ArrowUpDown className="size-4" /> Sort <ChevronDown className="size-3.5 opacity-60" />
+          <ArrowUpDown className="size-4" /> {sortLabel(current)} <ChevronDown className="size-3.5 opacity-60" />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-64 p-3 space-y-3">

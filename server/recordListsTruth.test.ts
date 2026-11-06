@@ -217,13 +217,14 @@ describe("Add all N to a campaign goes in batches (P48)", () => {
     expect(PUSH_BATCH).toBe(100);
   });
 
-  it("the menu pushes batch by batch, reports once, and asks first over one batch; best-fit isn't split", () => {
+  it("the menu's Confirm pushes batch by batch and reports once, the review says so; best-fit isn't split", () => {
     const menu = read("client/src/components/usip/AddToMenu.tsx");
     expect(menu).toContain("for (const batch of pushChunks({ prospectIds, contactIds, leadIds })) {");
     expect(menu).toContain("await pushExisting.mutateAsync({ campaignId: campaign.id, ...batch });");
-    expect(menu).toContain("onClick={() => chooseCampaign(c)}");
-    expect(menu).not.toContain("pushExisting.mutate({ campaignId: c.id, prospectIds, contactIds, leadIds })");
-    expect(menu).toContain("if (n <= PUSH_BATCH) { void pushToCampaign(c); return; }");
+    // The pick is a review (R48); Confirm runs the batches.
+    expect(menu).toContain('if (picked.kind === "campaign") void pushToCampaign(picked);');
+    expect(menu).not.toContain("pushExisting.mutate({ campaignId: picked.id, prospectIds, contactIds, leadIds })");
+    expect(menu).toContain('{picked.kind === "campaign" && n > PUSH_BATCH ? <span className="block text-[11.5px] text-muted-foreground mt-0.5">They go in {PUSH_BATCH} at a time.</span> : null}');
     expect(menu).toContain("disabled={bestFitTooMany}");
   });
 });

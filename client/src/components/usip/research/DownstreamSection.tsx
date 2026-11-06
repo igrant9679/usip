@@ -77,7 +77,7 @@ export function DownstreamSection() {
                   variant="ghost"
                   className="h-8"
                   onClick={() => confirmAction(
-                    { title: `Unlink ${l.name}?`, description: "What it imported stays as ordinary research (delete the market to remove it). Its next file has to be linked again before it can import.", confirmLabel: "Unlink" },
+                    { title: `Unlink ${l.name}?`, description: "What it imported stays as ordinary research (delete the market to remove it). Its next file has to be linked again before it can import; linking again finds the same market, sectors and personas instead of copying them.", confirmLabel: "Unlink" },
                     () => remove.mutate({ id: l.id }),
                   )}
                 >
@@ -100,7 +100,10 @@ function ImportDialog({ open, onOpenChange, onDone }: { open: boolean; onOpenCha
   const [assign, setAssign] = useState(false);
   const [useSeller, setUseSeller] = useState(false);
   const [segments, setSegments] = useState<Set<string>>(new Set());
-  const [orgs, setOrgs] = useState(true);
+  // Off for a first import, which can create up to 10,000 accounts; on when
+  // this link brought organizations in before, so their awards stay current
+  // (audit 2026-10-20, P109).
+  const [orgs, setOrgs] = useState(false);
   const [take, setTake] = useState<Set<string>>(new Set());
   const [reading, setReading] = useState(false);
   const run = trpc.research.downstream.preview.useMutation({
@@ -110,6 +113,7 @@ function ImportDialog({ open, onOpenChange, onDone }: { open: boolean; onOpenCha
       setAssign(false);
       setUseSeller(p.link.useSellerMessaging);
       setSegments(new Set(p.segments.filter((s: any) => s.ticked).map((s: any) => s.ref)));
+      setOrgs(p.organizationsImportedBefore);
       setTake(new Set());
     },
   });
@@ -140,8 +144,14 @@ function ImportDialog({ open, onOpenChange, onDone }: { open: boolean; onOpenCha
 
   const p = preview;
   const needsLink = p && p.link.state !== "assigned";
-  const blocked = needsLink && !assign;
-  const orgCount = p ? p.segments.filter((s: any) => segments.has(s.ref)).reduce((n: number, s: any) => n + s.organizations, 0) : 0;
+  // A market deleted here imports only if it is brought back (P14: the error
+  // asked for a tick the page did not show).
+  const marketGone = p?.market.state === "deleted" && !take.has(p.market.ref);
+  const blocked = (needsLink && !assign) || marketGone;
+  const tickedSegs = p ? p.segments.filter((s: any) => segments.has(s.ref)) : [];
+  const orgCount = tickedSegs.reduce((n: number, s: any) => n + s.organizations, 0);
+  const orgMatched = tickedSegs.reduce((n: number, s: any) => n + s.organizationsMatched, 0);
+  const orgNew = tickedSegs.reduce((n: number, s: any) => n + s.organizationsNew, 0);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -187,6 +197,24 @@ function ImportDialog({ open, onOpenChange, onDone }: { open: boolean; onOpenCha
               </label>
             )}
 
+            <div className="rounded-md border p-3 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-medium">The "{p.market.name}" market</span>
+                <StateBadge state={p.market.state} />
+              </div>
+              {(p.market.state === "conflict" || p.market.state === "deleted") && (
+                <label className="flex items-center gap-2 text-xs cursor-pointer">
+                  <Checkbox checked={take.has(p.market.ref)} onCheckedChange={(v) => toggle(take, setTake, p.market.ref, !!v)} />
+                  {p.market.state === "deleted"
+                    ? "This market was deleted here. Bring it back (its sectors come back only where you tick them below)."
+                    : p.market.relinked
+                      ? "This market was imported before the link was removed, and may have been edited since. Use Downstream's version (yours stays in its history)."
+                      : "Someone edited this market here since the last import. Use Downstream's version (yours stays in its history)."}
+                </label>
+              )}
+              {marketGone && <div className="text-xs text-amber-700 dark:text-amber-300">Nothing can be imported until the market is brought back.</div>}
+            </div>
+
             <div className="space-y-2">
               <div className="font-medium">Segments to import</div>
               <p className="text-xs text-muted-foreground">Each becomes a sector in the "{p.source.workspaceName}" market, with its personas. Segments you leave out stay listed on the market as suggestions.</p>
@@ -207,7 +235,11 @@ function ImportDialog({ open, onOpenChange, onDone }: { open: boolean; onOpenCha
                   {(s.state === "conflict" || s.state === "deleted") && segments.has(s.ref) && (
                     <label className="flex items-center gap-2 text-xs pl-6 cursor-pointer">
                       <Checkbox checked={take.has(s.ref)} onCheckedChange={(v) => toggle(take, setTake, s.ref, !!v)} />
-                      {s.state === "conflict" ? "Someone edited this sector here since the last import. Use Downstream's version (yours stays in its history)." : "This sector was deleted here. Bring it back."}
+                      {s.state === "deleted"
+                        ? "This sector was deleted here. Bring it back."
+                        : s.relinked
+                          ? "This sector was imported before the link was removed, and may have been edited since. Use Downstream's version (yours stays in its history)."
+                          : "Someone edited this sector here since the last import. Use Downstream's version (yours stays in its history)."}
                     </label>
                   )}
                   {segments.has(s.ref) && s.personas.length > 0 && (
@@ -235,8 +267,9 @@ function ImportDialog({ open, onOpenChange, onDone }: { open: boolean; onOpenCha
               <label className="flex items-start gap-2 rounded-md border p-3 cursor-pointer">
                 <Checkbox checked={orgs} onCheckedChange={(v) => setOrgs(!!v)} className="mt-0.5" />
                 <span>
-                  Import the {orgCount} organizations of these segments as accounts (matched to existing accounts by website, then name and state). Each keeps
-                  its award, which the Revenue Engine uses as a sourced hook when it researches someone there.
+                  Import the {orgCount} organizations of these segments as accounts: {orgMatched} match accounts you already have (by website, then name and
+                  state), and up to {orgNew} become new accounts. Each keeps its award, which the Revenue Engine uses as a sourced hook when it researches
+                  someone there.
                 </span>
               </label>
             )}

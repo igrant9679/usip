@@ -128,18 +128,24 @@ function stops(reason: string, channel: SuppressionChannel): boolean {
  * The first suppression that stops contacting this person on this channel, or
  * null. Throws if the database is unreachable: a sender that cannot ask must
  * not assume the answer is no.
+ *
+ * `domain: false` asks about the person only, not their company. A rep
+ * writing from their own mailbox (My Mailbox, O34) must not be refused an
+ * email to an existing customer because the customer's domain is on the
+ * Revenue Engine's do-not-prospect list; the address itself still counts.
  */
 export async function findSuppression(
   workspaceId: number,
   target: SuppressionTarget,
   channel: SuppressionChannel,
+  opts: { domain?: boolean } = {},
 ): Promise<SuppressionHit | null> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable — suppression could not be checked");
 
   const email = normalizeSuppressionEmail(target.email);
   const liKey = normalizeLinkedinUrl(target.linkedinUrl);
-  const domain = normalizeDomain(target.companyDomain) ?? emailDomain(email);
+  const domain = opts.domain === false ? null : normalizeDomain(target.companyDomain) ?? emailDomain(email);
 
   if (email) {
     const rows = await db

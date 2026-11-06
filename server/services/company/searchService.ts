@@ -14,6 +14,7 @@ import { getDb } from "../../db";
 import { accounts, contactAccountLinks, scoreResults } from "../../../drizzle/schema";
 import { RESEARCH_SOURCES } from "@shared/researchSource";
 import { resolveCompanyLogo, faviconUrlForDomain } from "./logoService";
+import { linkedPeopleCounts } from "./profileService";
 
 export interface CompanyFilters {
   q?: string;
@@ -24,10 +25,12 @@ export interface CompanyFilters {
   employeeMax?: number;
   revenueMin?: number;
   revenueMax?: number;
-  locations?: string[];        // matched against region / hq_country / hq_state
+  locations?: string[];        // equal to region / hq_country / hq_state / hq_city (R57)
   hasContacts?: boolean;
   minRating?: "fair" | "good" | "excellent";
   includeArchived?: boolean;
+  /** Only archived companies — where a restore starts (R64). */
+  archivedOnly?: boolean;
   research?: "sourced" | "in_sector";
   researchSectorIds?: number[];
 }
@@ -60,15 +63,26 @@ const PAGE_COLUMNS = {
 export function searchOrder(ws: number, sort?: CompanySort): SQL[] {
   const dir = sort?.direction === "asc" ? asc : desc;
   const field = sort?.field ?? "createdAt";
+  // The people the row shows (R65): each linked person once, and only one
+  // whose row still exists — the count linkedPeopleCounts gives the page.
   const col = field === "contactCount"
     ? sql<number>`(
-        SELECT COUNT(*) FROM \`contact_account_links\` cal
+        SELECT COUNT(DISTINCT cal.\`person_type\`, cal.\`person_id\`) FROM \`contact_account_links\` cal
         WHERE cal.\`workspaceId\` = ${ws} AND cal.\`account_id\` = \`accounts\`.\`id\`
+          AND ((cal.\`person_type\` = 'prospect' AND EXISTS (SELECT 1 FROM \`prospects\` p WHERE p.\`id\` = cal.\`person_id\` AND p.\`workspaceId\` = ${ws}))
+            OR (cal.\`person_type\` = 'contact' AND EXISTS (SELECT 1 FROM \`contacts\` c WHERE c.\`id\` = cal.\`person_id\` AND c.\`workspaceId\` = ${ws})))
       )`
-    : ({
-        name: accounts.name, employeeCount: accounts.employeeCount, revenue: accounts.revenue,
-        score: accounts.accountScore, lastEnriched: accounts.lastEnrichedAt, createdAt: accounts.createdAt,
-      }[field] ?? accounts.createdAt);
+    : field === "score"
+      // The score the row shows (R57): the company's score result, which the
+      // profile and the rating filter read. accounts.accountScore is unset.
+      ? sql<number>`(
+          SELECT MAX(sr.\`normalized_score\`) FROM \`score_results\` sr
+          WHERE sr.\`workspaceId\` = ${ws} AND sr.\`object_type\` = 'company' AND sr.\`object_id\` = \`accounts\`.\`id\`
+        )`
+      : ({
+          name: accounts.name, employeeCount: accounts.employeeCount, revenue: accounts.revenue,
+          lastEnriched: accounts.lastEnrichedAt, createdAt: accounts.createdAt,
+        }[field] ?? accounts.createdAt);
   return [dir(col), dir(accounts.id)];
 }
 
@@ -82,7 +96,8 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
   const perPage = Math.min(200, Math.max(10, opts.perPage ?? 50));
 
   const conds = [eq(accounts.workspaceId, ws)];
-  if (!f.includeArchived) conds.push(isNull(accounts.archivedAt));
+  if (f.archivedOnly) conds.push(isNotNull(accounts.archivedAt));
+  else if (!f.includeArchived) conds.push(isNull(accounts.archivedAt));
   if (f.q) {
     const s = `%${f.q}%`;
     conds.push(or(like(accounts.name, s), like(accounts.domain, s), like(accounts.normalizedDomain, s))!);
@@ -97,12 +112,14 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
   if (f.employeeMax != null) conds.push(lte(accounts.employeeCount, f.employeeMax));
   if (f.revenueMin != null) conds.push(sql`${accounts.revenue} >= ${f.revenueMin}`);
   if (f.revenueMax != null) conds.push(sql`${accounts.revenue} <= ${f.revenueMax}`);
+  // A location is a whole value, matched exactly (case-insensitively, as the
+  // collation compares): "CA" was a substring of Chicago and Canada (R57).
+  // The options come from companies.facets, which lists these same values.
   if (f.locations?.length) {
-    const locConds = f.locations.flatMap((loc) => {
-      const s = `%${loc}%`;
-      return [like(accounts.region, s), like(accounts.hqCountry, s), like(accounts.hqState, s), like(accounts.hqCity, s)];
-    });
-    conds.push(or(...locConds)!);
+    const locs = Array.from(new Set(f.locations.map((l) => l.trim()).filter(Boolean)));
+    if (locs.length) {
+      conds.push(or(inArray(accounts.region, locs), inArray(accounts.hqCountry, locs), inArray(accounts.hqState, locs), inArray(accounts.hqCity, locs))!);
+    }
   }
   if (f.hasContacts === true) {
     conds.push(exists(db.select({ x: sql`1` }).from(contactAccountLinks)
@@ -126,15 +143,21 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
   if (!ids.length) return { data: [], total: Number(total), page, perPage };
 
   // Those rows, and their contact counts.
-  const [rows, cc] = await Promise.all([
+  const [rows, counts, scores] = await Promise.all([
     db.select(PAGE_COLUMNS).from(accounts).where(and(eq(accounts.workspaceId, ws), inArray(accounts.id, ids))),
-    db.select({ accountId: contactAccountLinks.accountId, n: sql<number>`count(*)` })
-      .from(contactAccountLinks)
-      .where(and(eq(contactAccountLinks.workspaceId, ws), inArray(contactAccountLinks.accountId, ids)))
-      .groupBy(contactAccountLinks.accountId),
+    linkedPeopleCounts(ws, ids),
+    db.select({ objectId: scoreResults.objectId, normalizedScore: scoreResults.normalizedScore, rating: scoreResults.rating })
+      .from(scoreResults)
+      .where(and(eq(scoreResults.workspaceId, ws), eq(scoreResults.objectType, "company"), inArray(scoreResults.objectId, ids))),
   ]);
-  const counts = new Map<number, number>();
-  for (const r of cc) counts.set(r.accountId, Number(r.n));
+  // The company's score result, as the profile reads it (R57); the highest
+  // when more than one model scored it, as the score sort orders.
+  const scoreOf = new Map<number, { value: number; rating: string }>();
+  for (const s of scores) {
+    const value = Number(s.normalizedScore);
+    const had = scoreOf.get(s.objectId);
+    if (!had || value > had.value) scoreOf.set(s.objectId, { value, rating: s.rating });
+  }
   const byId = new Map(rows.map((r) => [r.id, r]));
 
   // In the order the sort chose; a row archived or moved in between drops out.
@@ -146,7 +169,8 @@ export async function searchWorkspaceAccounts(ws: number, opts: {
       revenue: a.revenue == null ? null : Number(a.revenue), revenueBand: a.revenueBand,
       region: a.region, hqCity: a.hqCity, hqState: a.hqState, hqCountry: a.hqCountry,
       ownerUserId: a.ownerUserId, accountStage: a.accountStage,
-      accountScore: a.accountScore == null ? null : Number(a.accountScore), accountRating: a.accountRating,
+      accountScore: scoreOf.get(a.id)?.value ?? (a.accountScore == null ? null : Number(a.accountScore)),
+      accountRating: scoreOf.get(a.id)?.rating ?? a.accountRating,
       lastEnrichedAt: a.lastEnrichedAt, dataStatus: a.dataStatus,
       sourceType: a.sourceType, researchSectorId: a.researchSectorId,
       logo: { url: logo.url, faviconUrl: faviconUrlForDomain(a.normalizedDomain || a.domain), status: logo.status },

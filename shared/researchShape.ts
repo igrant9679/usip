@@ -386,8 +386,30 @@ export const RUN_PART_LABEL: Record<string, string> = {
   glossary: "Glossary",
   competitors: "Competitors",
   openQuestions: "Open questions",
-  sources: "Sources (added to the ones you have)",
+  sources: `Sources (added to the ones you have, up to ${ROWS})`,
 };
+
+/** The most sources a market or sector keeps; past it, the cleaner cuts the newest. */
+export const RESEARCH_SOURCES_MAX = ROWS;
+
+/**
+ * How many of a draft's sources taking it would leave out, because the union
+ * with the ones there passes the cap (audit 2026-10-20, P102: they were cut
+ * silently, so "added to yours" stopped adding after a couple of refreshes).
+ */
+export function sourcesLeftOut(current: ResearchSourceLink[], draft: ResearchSourceLink[]): number {
+  return Math.max(0, unionSources(current, draft).length - ROWS);
+}
+
+/**
+ * An http(s) address, the only kind a research page renders as a link. Some
+ * "source" fields hold a citation instead ("NCES Digest Table 214.10", as
+ * Downstream exports them), so they are kept as text, never made an href
+ * (audit 2026-10-20, P103: any string, javascript: included, became a link).
+ */
+export function isWebLink(value: string | null | undefined): boolean {
+  return /^https?:\/\/\S+$/i.test((value ?? "").trim());
+}
 
 /** Sources from both, the current ones first, each link once. */
 function unionSources(a: ResearchSourceLink[], b: ResearchSourceLink[]): ResearchSourceLink[] {

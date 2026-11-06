@@ -26,6 +26,7 @@ import {
   territories,
   unipileAccounts,
   users,
+  notifications,
   workspaceMembers,
   workspaceSettings,
   proposals,
@@ -615,6 +616,11 @@ export const contactsRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(contacts).where(and(eq(contacts.id, input.id), eq(contacts.workspaceId, ctx.workspace.id)));
     await db.delete(contacts).where(and(eq(contacts.id, input.id), eq(contacts.workspaceId, ctx.workspace.id)));
+    // The People row's pointer goes with the contact, as bulkDelete does (R33).
+    if (before) {
+      await db.update(prospects).set({ linkedContactId: null })
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.linkedContactId, input.id)));
+    }
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "contact", entityId: input.id, before });
     return { ok: true };
   }),
@@ -1199,6 +1205,9 @@ Return a JSON object with ONLY the fields you can reasonably suggest from this i
 
 /* ──────────────────────────────────────────────────────────────────────── */
 
+/** The most leads one "Send Email" may address (R5). */
+export const LEAD_BULK_SEND_MAX = 50;
+
 export const leadsRouter = router({
   /**
    * Leads for a picker or an export: filtered in SQL, highest score first,
@@ -1233,7 +1242,17 @@ export const leadsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [row] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
-    return row ?? null;
+    if (!row) return null;
+    // A lead has no LinkedIn column. Its profile is the one a LinkedIn import
+    // left in customFields, else the one on the People row it came from, so
+    // the drawer's LinkedIn tab can start with it (R44).
+    let linkedinUrl = String((row.customFields as Record<string, unknown> | null)?.linkedinUrl ?? "").trim() || null;
+    if (!linkedinUrl) {
+      const [person] = await db.select({ linkedinUrl: prospects.linkedinUrl }).from(prospects)
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.linkedLeadId, row.id))).limit(1);
+      linkedinUrl = person?.linkedinUrl?.trim() || null;
+    }
+    return { ...row, linkedinUrl };
   }),
 
   create: repProcedure
@@ -1251,13 +1270,15 @@ export const leadsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      // Apply lead-routing rules first; fall back to creator as owner.
-      const { routeLeadOwner } = await import("./leadScoring");
+      // Apply lead-routing rules first; fall back to creator as owner. Rules on
+      // Score see the score the lead is created with, not 0 (audit P13).
+      const { routeLeadOwner, createTimeScore, rescoreLead } = await import("./leadScoring");
+      const initial = await createTimeScore(ctx.workspace.id, input);
       const routedOwner = await routeLeadOwner(ctx.workspace.id, {
         title: input.title ?? null,
         company: input.company ?? null,
         source: input.source ?? null,
-        score: 0,
+        score: initial.total,
         industry: null,
         country: null,
         state: null,
@@ -1282,6 +1303,8 @@ export const leadsRouter = router({
             email: input.email, status: "new",
           }, ownerUserId))
           .catch(() => { /* workflow firing is best-effort */ });
+        // Scored on creation (audit P12), without a model call.
+        await rescoreLead(ctx.workspace.id, id);
       }
       return { id, ownerUserId, routed: routedOwner != null };
     }),
@@ -1325,6 +1348,12 @@ export const leadsRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
     await db.delete(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
+    // A People row converted to this lead must not keep pointing at it (R33):
+    // promoteToLead and the "Saved" count read linkedLeadId as "has a lead".
+    if (before) {
+      await db.update(prospects).set({ linkedLeadId: null })
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.linkedLeadId, input.id)));
+    }
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "lead", entityId: input.id, before });
     return { ok: true };
   }),
@@ -1340,6 +1369,8 @@ export const leadsRouter = router({
         .where(and(eq(leads.workspaceId, ctx.workspace.id), inArray(leads.id, input.ids)));
       if (rows.length === 0) return { deleted: 0 };
       await db.delete(leads).where(and(eq(leads.workspaceId, ctx.workspace.id), inArray(leads.id, rows.map((r) => r.id))));
+      await db.update(prospects).set({ linkedLeadId: null })
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.linkedLeadId, rows.map((r) => r.id))));
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "lead_bulk", entityId: 0, after: { ids: rows.map((r) => r.id) } });
       return { deleted: rows.length };
     }),
@@ -1541,64 +1572,43 @@ export const leadsRouter = router({
       return { accountId, contactId, opportunityId, accountCreated: done.accountCreated, contactCreated: done.contactCreated };
     }),
 
-  /** AI lead scoring re-run for one lead. Server-side LLM. */
-  rescore: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
-    if (!lead) throw new TRPCError({ code: "NOT_FOUND" });
+  // leads.rescore is gone (audit 2026-10-20, P39, R84): an older scorer that
+  // ignored the workspace's tier thresholds, added Math.random() when the
+  // model failed, and was open to the assistant. leadScoring.recompute is the
+  // scorer; no screen called this one.
 
-    const { invokeLLM } = await import("../_core/llm");
-    let score = 50;
-    let grade = "C";
-    let reasons: string[] = ["Default heuristic score"];
-    try {
-      const out = await invokeLLM({
-        messages: [
-          { role: "system", content: "You score B2B sales leads. Output JSON only." },
-          {
-            role: "user",
-            content: `Score this lead 0-100. Title weighting: C-level/VP=high, manager=medium, individual=low. Engagement is unknown. Return JSON {score:int, grade:"A"|"B"|"C"|"D", reasons:[string]}.\n\nName: ${lead.firstName} ${lead.lastName}\nTitle: ${lead.title}\nCompany: ${lead.company}\nSource: ${lead.source}`,
-          },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "lead_score",
-            strict: true,
-            schema: {
-              type: "object",
-              properties: {
-                score: { type: "integer" },
-                grade: { type: "string", enum: ["A", "B", "C", "D"] },
-                reasons: { type: "array", items: { type: "string" } },
-              },
-              required: ["score", "grade", "reasons"],
-              additionalProperties: false,
-            },
-          },
-        },
-      });
-      const content = out.choices?.[0]?.message?.content;
-      const parsed = typeof content === "string" ? JSON.parse(content) : content;
-      score = Math.max(0, Math.min(100, Number(parsed.score)));
-      grade = String(parsed.grade);
-      reasons = Array.isArray(parsed.reasons) ? parsed.reasons.slice(0, 6) : reasons;
-    } catch (e) {
-      console.warn("[lead.rescore] LLM failed; using heuristic", e);
-      const titleLow = (lead.title ?? "").toLowerCase();
-      let s = 40;
-      if (/chief|cxo|cmo|cro|cfo|ceo/.test(titleLow)) s += 35;
-      else if (/vp|vice president|head/.test(titleLow)) s += 25;
-      else if (/director/.test(titleLow)) s += 15;
-      else if (/manager/.test(titleLow)) s += 8;
-      score = Math.min(100, s + Math.floor(Math.random() * 15));
-      grade = score >= 80 ? "A" : score >= 60 ? "B" : score >= 40 ? "C" : "D";
-      reasons = [`Title-based ${score}`, "Engagement unknown — assumed neutral"];
-    }
-    await db.update(leads).set({ score, grade, scoreReasons: reasons }).where(eq(leads.id, lead.id));
-    return { score, grade, reasons };
-  }),
+  /**
+   * Send one email to several leads (audit 2026-10-20, R5): each through
+   * sendAdHocEmail, so every lead gets the same checks and the same delivery,
+   * one result per lead. The Leads page looped the single send from the
+   * browser, so a select-all of hundreds sent hundreds one request at a time
+   * and reported only a count. Capped: a person's ad-hoc send is not a
+   * campaign, and the cap keeps one click inside one request.
+   */
+  sendAdHocEmailBulk: repProcedure
+    .input(z.object({
+      leadIds: z.array(z.number().int().positive()).min(1).max(LEAD_BULK_SEND_MAX, `Send to at most ${LEAD_BULK_SEND_MAX} leads at a time — add more to a sequence instead.`),
+      subject: z.string().min(1),
+      body: z.string().min(1),
+      aiGenerated: z.boolean().default(false),
+      fromAccountId: z.number().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Refused as a whole while paused, before any lead is tried.
+      await assertOutboundNotPaused(ctx.workspace.id);
+      const { appRouter } = await import("../routers");
+      const caller = appRouter.createCaller(ctx as never);
+      const results: Array<{ leadId: number; ok: boolean; error?: string }> = [];
+      for (const leadId of Array.from(new Set(input.leadIds))) {
+        try {
+          await caller.leads.sendAdHocEmail({ leadId, subject: input.subject, body: input.body, aiGenerated: input.aiGenerated, fromAccountId: input.fromAccountId });
+          results.push({ leadId, ok: true });
+        } catch (e) {
+          results.push({ leadId, ok: false, error: ((e as Error)?.message ?? String(e)).slice(0, 300) });
+        }
+      }
+      return { sent: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results };
+    }),
 
   /** Send an ad-hoc email to a lead and log it in the timeline */
   /**
@@ -2677,7 +2687,27 @@ export const crmNotesRouter = router({
         pinned: input.pinned ?? false,
         createdByUserId: ctx.user.id,
       });
-      return { id: Number((r as any)[0]?.insertId ?? 0) };
+      // @[Name](user:ID) notifies the teammate, as the drawer's old note did:
+      // the drawer writes here now, so notes have one store (R45). Members
+      // of this workspace only, and never yourself.
+      const mentioned = Array.from(new Set(Array.from(input.body.matchAll(/@\[[^\]]+\]\(user:(\d+)\)/g), (m) => Number(m[1]))))
+        .filter((uid) => Number.isFinite(uid) && uid !== ctx.user.id);
+      if (mentioned.length) {
+        const members = await db.select({ userId: workspaceMembers.userId }).from(workspaceMembers)
+          .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), inArray(workspaceMembers.userId, mentioned)));
+        for (const { userId } of members) {
+          await db.insert(notifications).values({
+            workspaceId: ctx.workspace.id,
+            userId,
+            kind: "mention",
+            title: `${ctx.user.name ?? "Someone"} mentioned you`,
+            body: input.body.slice(0, 240),
+            relatedType: input.entityType,
+            relatedId: input.entityId,
+          });
+        }
+      }
+      return { id: Number((r as any)[0]?.insertId ?? 0), mentioned };
     }),
 
   update: repProcedure
