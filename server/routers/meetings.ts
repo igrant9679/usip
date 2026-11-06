@@ -10,7 +10,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { activeTaskStatuses } from "@shared/taskStatus";
-import { and, desc, eq, gt, inArray, isNull, like, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNull, like, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { calendarAccounts, calendarEvents, meetings, prospects, tasks, users, workspaceMembers, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -94,16 +94,32 @@ export const meetingsRouter = router({
   list: workspaceProcedure
     .input(z.object({
       status: z.enum(MEETING_STATUSES).optional(),
+      /** Several at once: the Meetings page reads the live ones, and the closed ones it shows. */
+      statuses: z.array(z.enum(MEETING_STATUSES)).optional(),
       ownerOnly: z.boolean().optional(),
+      /** Only meetings scheduled in [from, to): the weeks the Calendar shows. */
+      scheduledFrom: z.date().optional(),
+      scheduledTo: z.date().optional(),
+      limit: z.number().int().min(1).max(1000).default(1000),
     }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
-      let rows = await db.select().from(meetings)
-        .where(eq(meetings.workspaceId, ctx.workspace.id))
-        .orderBy(desc(meetings.createdAt));
-      if (input?.status) rows = rows.filter((m) => m.status === input.status);
-      if (input?.ownerOnly) rows = rows.filter((m) => m.ownerUserId === ctx.user.id);
+      // Filtered and bounded in SQL (audit 2026-10-20, O41): this read every
+      // meeting the workspace ever had and filtered in JS, for a page that
+      // shows the live ones and fifteen past, and a calendar that shows weeks.
+      const statuses = input?.statuses ?? (input?.status ? [input.status] : null);
+      if (statuses && !statuses.length) return [];
+      const rows = await db.select().from(meetings)
+        .where(and(
+          eq(meetings.workspaceId, ctx.workspace.id),
+          statuses ? inArray(meetings.status, statuses) : undefined,
+          input?.ownerOnly ? eq(meetings.ownerUserId, ctx.user.id) : undefined,
+          input?.scheduledFrom ? gte(meetings.scheduledAt, input.scheduledFrom) : undefined,
+          input?.scheduledTo ? lt(meetings.scheduledAt, input.scheduledTo) : undefined,
+        ))
+        .orderBy(desc(meetings.createdAt))
+        .limit(input?.limit ?? 1000);
       // The reply that produced each meeting (emailReplies.meetingId is set
       // when a positive reply's action books one). A meeting with no way back
       // to the conversation was one of the audit's missing next-step links.

@@ -17,7 +17,7 @@ import { NoCalendarConnected } from "@/components/usip/NoCalendarConnected";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { loadPerUserPref, savePerUserPref } from "@/lib/perUserPref";
-import { REMINDABLE_MEETING_STATUSES } from "@shared/meetingStatus";
+import { REMINDABLE_MEETING_STATUSES, remindableMeetingStatuses } from "@shared/meetingStatus";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -494,7 +494,11 @@ export default function CalendarPage() {
   // for everyone who never completed the external-calendar connect flow —
   // while their actual meetings sat one page away on /v2/meetings, invisible
   // here. Read-only on the calendar: clicking one opens the Meetings page.
-  const { data: velocityMeetings } = trpc.meetings.list.useQuery({});
+  // Only the weeks on screen, filtered in SQL (audit 2026-10-20, O41): this
+  // read every meeting the workspace ever had.
+  const { data: velocityMeetings } = trpc.meetings.list.useQuery({
+    statuses: remindableMeetingStatuses(), scheduledFrom: dateRange.from, scheduledTo: dateRange.to,
+  });
 
   // Map DB events to FullCalendar format
   const fcEvents = useMemo(() => {

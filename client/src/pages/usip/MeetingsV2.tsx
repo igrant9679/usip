@@ -37,6 +37,10 @@ import {
   CalendarClock, CalendarCheck, CalendarX, Sparkles, Bot, Zap, Check, X, Clock, Video, Send,
   MoreHorizontal, Plus, AlertTriangle, Link2, Building2, MailWarning, Copy, ExternalLink, UserRound,
 } from "lucide-react";
+import { CLOSED_MEETING_STATUSES, liveMeetingStatuses } from "@shared/meetingStatus";
+
+/** How many past meetings the page lists. */
+const PAST_SHOWN = 15;
 
 /** A member who can own a proposal, and the calendar its invite would send from. */
 type ProposalOwner = { userId: number; name: string; calendar: "teams" | "no_teams" | "none" };
@@ -107,7 +111,11 @@ export default function MeetingsV2() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
 
-  const all = trpc.meetings.list.useQuery({});
+  // The live meetings in full and only the closed ones the page shows (audit
+  // 2026-10-20, O41): this read every meeting the workspace ever had.
+  const live = trpc.meetings.list.useQuery({ statuses: liveMeetingStatuses() });
+  const closed = trpc.meetings.list.useQuery({ statuses: [...CLOSED_MEETING_STATUSES], limit: PAST_SHOWN });
+  const all = { isLoading: live.isLoading || closed.isLoading, error: live.error ?? closed.error, refetch: () => { live.refetch(); closed.refetch(); } };
   const stats = trpc.meetings.stats.useQuery();
   const autopilot = trpc.meetings.getAutopilotSettings.useQuery();
   const bookingLink = trpc.bookingLinks.mine.useQuery(undefined as any, { retry: false });
@@ -292,7 +300,9 @@ export default function MeetingsV2() {
     },
     onError: (e) => toast.error(e.message),
   });
-  const meetings = (all.data ?? []) as Meeting[];
+  // Newest first across both reads, as the one read returned them.
+  const meetings = useMemo(() => ([...(live.data ?? []), ...(closed.data ?? [])] as Meeting[])
+    .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()), [live.data, closed.data]);
   const s = stats.data ?? { proposed: 0, upcoming: 0, completed: 0, noShow: 0, booked: 0 };
   const now = Date.now();
 
@@ -305,7 +315,7 @@ export default function MeetingsV2() {
   const past = useMemo(() =>
     meetings
       .filter((m) => m.status === "completed" || m.status === "no_show" || m.status === "cancelled" || ((m.status === "scheduled" || m.status === "rescheduled") && m.scheduledAt && new Date(m.scheduledAt).getTime() < now - 3600_000))
-      .slice(0, 15),
+      .slice(0, PAST_SHOWN),
     [meetings, now]);
 
   const StatCard = ({ label, value, tone }: { label: string; value: number; tone?: "danger" | "ai" | "good" }) => {
