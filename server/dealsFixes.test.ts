@@ -6,6 +6,17 @@
  *   R34 — a line item shows its product and its stored (discounted) total.
  *   R35 — line items and contact roles can be added and removed on the deal
  *         page; the procedures check every id against the workspace.
+ *   L7, R66 — a board reads one pipeline's deals, their accounts' names and
+ *         their latest AI snapshot, not the workspace's.
+ *   R30 — the owner filter is read from the query string and the optimistic
+ *         move writes the cache entry on screen.
+ *   R36 — a new deal needs an account, starts in the pipeline's first open
+ *         stage, and an empty Win % is the stage's default.
+ *   R39 — the forecast tab, the CSV and the Deals header count what their
+ *         board shows.
+ *   R82 — only a dragged card moves a deal.
+ *   R43 — the Deals autopilot copy and the Analyze result say what it does.
+ *   R103 — the Deals board adds deals; its alert chips open them; #alerts lands.
  *
  * Procedures run through the real router against the SQL-evaluating fake;
  * screens render with a stub trpc.
@@ -42,6 +53,9 @@ import { invalidateStageIndex } from "./_core/stageSemantics";
 import { _clearWorkspaceTimezoneCache } from "./services/workspaceTimezone";
 import { OPPORTUNITY_DELETE_SCOPE } from "@shared/dealDelete";
 import { DealContactRoles, DealLineItems } from "../client/src/pages/usip/OpportunityDetail";
+import { DEAL_DRAG_TYPE, droppedDealId } from "../client/src/pages/usip/Pipeline";
+import { firstOpenStage, newOpportunityInput } from "../client/src/components/usip/NewOpportunityDialog";
+import { analyzeToast } from "../client/src/pages/usip/DealsV2";
 
 const WS = 2, OTHER = 9, ME = 1, REP = 3, MANAGER = 4;
 const root = join(__dirname, "..");
@@ -208,5 +222,171 @@ describe("R35: the deal page adds and removes line items and contact roles", () 
     rows("deal_line_items").push({ id: 1, workspaceId: WS, opportunityId: 2, productId: 4, quantity: 1, unitPrice: "5", discountPct: "0", lineTotal: "5" });
     await caller().opportunities.removeLineItem({ id: 1, opportunityId: 1 });
     expect(rows("deal_line_items").map((r) => r.id)).toEqual([1]);
+  });
+});
+
+/* ── L7, R66, R39: a board is one pipeline ─────────────────────────────── */
+
+describe("L7, R66: a board reads one pipeline's deals", () => {
+  beforeEach(() => {
+    rows("crm_pipelines").push({ id: 2, workspaceId: WS, name: "Renewals", isDefault: false, sortOrder: 1 }, { id: 3, workspaceId: OTHER, name: "Theirs", isDefault: true, sortOrder: 0 });
+    rows("accounts").push({ id: 3, workspaceId: WS, name: "Unrelated" });
+    deal(1, { pipelineId: 1, value: "100" });
+    deal(2, { pipelineId: null, value: "200", ownerUserId: REP }); // legacy: the default board
+    deal(3, { pipelineId: 2, value: "400", accountId: 3 });
+    rows("opportunities").push({ id: 4, workspaceId: OTHER, accountId: 2, name: "Theirs", stage: "discovery", value: "800", pipelineId: 3 });
+  });
+
+  it("the default board holds its own and the pipeline-less deals; another pipeline only its own", async () => {
+    expect((await caller().opportunities.board({ pipelineId: 1 })).map((d) => d.id).sort()).toEqual([1, 2]);
+    expect((await caller().opportunities.board({ pipelineId: 2 })).map((d) => [d.id, d.accountName])).toEqual([[3, "Unrelated"]]);
+    expect(await caller().opportunities.board({ pipelineId: 3 })).toEqual([]);
+    expect((await caller().opportunities.board({ pipelineId: 1, ownerUserId: REP })).map((d) => d.id)).toEqual([2]);
+    // No scope: the workspace, as the Dashboard reads it.
+    expect((await caller().opportunities.board()).map((d) => d.id).sort()).toEqual([1, 2, 3]);
+  });
+
+  it("the board's AI snapshots: the latest per deal on it, only the columns a card shows", async () => {
+    const snap = (id: number, opp: number, at: string, prob: string) => rows("opportunity_intelligence").push({
+      id, workspaceId: WS, opportunityId: opp, winProbability: prob, winProbabilityRationale: "r", nextBestActions: [],
+      suggestedStage: null, winStory: "a long story", altSubjectLines: [{ subject: "s" }], generatedAt: new Date(at),
+    });
+    snap(1, 1, "2026-10-01T00:00:00Z", "10");
+    snap(2, 1, "2026-10-05T00:00:00Z", "40");
+    snap(3, 3, "2026-10-05T00:00:00Z", "90");
+    const intel = await caller().oppIntelligence.getIntelligenceForBoard({ pipelineId: 1 });
+    expect(intel.map((i: any) => [i.opportunityId, i.winProbability])).toEqual([[1, "40"]]);
+    expect(Object.keys(intel[0])).not.toContain("winStory");
+    expect(Object.keys(intel[0])).not.toContain("altSubjectLines");
+  });
+
+  it("R39: the forecast and the header count the board's deals", async () => {
+    expect((await caller().opportunities.forecast({ pipelineId: 1 })).grandTotal).toBe(300);
+    expect((await caller().opportunities.forecast({ pipelineId: 1, ownerUserId: REP })).grandTotal).toBe(200);
+    expect((await caller().opportunities.forecast({ pipelineId: 2 })).grandTotal).toBe(400);
+    expect((await caller().opportunities.forecast()).grandTotal).toBe(700);
+    expect((await caller().opportunities.summary({ pipelineId: 2 })).open).toMatchObject({ count: 1, value: 400 });
+    expect((await caller().opportunities.summary()).open).toMatchObject({ count: 3, value: 700 });
+  });
+
+  it("the Pipeline page asks for its pipeline, and exports and forecasts what it shows", () => {
+    const page = read("client/src/pages/usip/Pipeline.tsx");
+    expect(page).toContain("const boardInput = useMemo(() => ({ ownerUserId, pipelineId }), [ownerUserId, pipelineId]);");
+    expect(page).toContain("trpc.opportunities.board.useQuery(boardInput,");
+    expect(page).toContain("trpc.oppIntelligence.getIntelligenceForBoard.useQuery(boardInput,");
+    expect(page).not.toContain("trpc.accounts.list.useQuery()");
+    const csv = page.slice(page.indexOf('{can("export_data") && ('), page.indexOf("Export CSV"));
+    expect(csv).toContain("const rows = filteredOpps;");
+    expect(page).toContain("<ForecastView scope={boardInput} scopeLabel={scopeLabel} />");
+  });
+});
+
+/* ── R30, R82 ──────────────────────────────────────────────────────────── */
+
+describe("R30: the owner filter clears, and a move updates the board on screen", () => {
+  it("reads ?owner= from useSearch, and every cache call uses the board's own input", () => {
+    const page = read("client/src/pages/usip/Pipeline.tsx");
+    expect(page).toContain("const search = useSearch();");
+    expect(page).toContain("new URLSearchParams(search).get(\"owner\")");
+    expect(page).not.toContain("window.location.search");
+    const move = page.slice(page.indexOf("const setStage = trpc.opportunities.setStage.useMutation({"), page.indexOf("const [addOpen, setAddOpen]"));
+    expect(move).toContain("utils.opportunities.board.getData(boardInput)");
+    expect(move).toContain("utils.opportunities.board.setData(boardInput, (old)");
+    expect(move).toContain("utils.opportunities.board.setData(boardInput, ctx.prev)");
+    expect(move).not.toContain("setData(undefined");
+  });
+});
+
+describe("R82: only a dragged card moves a deal", () => {
+  const dt = (data: Record<string, string>) => ({ types: Object.keys(data), getData: (t: string) => data[t] ?? "" });
+  it("plain text that happens to be a number moves nothing", () => {
+    expect(droppedDealId(dt({ "text/plain": "7" }))).toBeNull();
+    expect(droppedDealId(dt({ [DEAL_DRAG_TYPE]: "7" }))).toBe(7);
+    expect(droppedDealId(dt({ [DEAL_DRAG_TYPE]: "x" }))).toBeNull();
+    const page = read("client/src/pages/usip/Pipeline.tsx");
+    expect(page).toContain("e.dataTransfer.setData(DEAL_DRAG_TYPE, String(opp.id))");
+    expect(page).not.toContain('getData("text/plain")');
+  });
+});
+
+/* ── R36 ───────────────────────────────────────────────────────────────── */
+
+describe("R36: a new deal", () => {
+  const form = (o: Record<string, string>) => ({ get: (k: string) => (k in o ? o[k] : null) });
+  const stages = [
+    { id: "lead", label: "Lead", isWon: false, isLost: false, defaultWinProb: 10 },
+    { id: "signed", label: "Signed", isWon: true, isLost: false },
+  ];
+
+  it("needs an account; an empty Win % is left to the stage", () => {
+    expect(newOpportunityInput(form({ name: "D", accountId: "", stage: "lead", value: "5" }), 1)).toEqual({ ok: false, message: "Choose the account this deal is with." });
+    expect(newOpportunityInput(form({ name: "D", accountId: "0", stage: "lead", value: "5" }), 1).ok).toBe(false);
+    const r = newOpportunityInput(form({ name: " D ", accountId: "4", stage: "lead", value: "5", winProb: "" }), 1);
+    expect(r).toEqual({ ok: true, input: { name: "D", accountId: 4, value: 5, stage: "lead", winProb: undefined, pipelineId: 1, closeDate: undefined } });
+    expect(newOpportunityInput(form({ name: "D", accountId: "4", stage: "lead", value: "5", winProb: "0" }), 1)).toMatchObject({ input: { winProb: 0 } });
+  });
+
+  it("starts in the pipeline's first open stage, not a key it may not have", () => {
+    expect(firstOpenStage([{ id: "won", label: "Won", isWon: true, isLost: false }, ...stages])?.id).toBe("lead");
+  });
+
+  it("the server gives an absent Win % the stage's default", async () => {
+    await caller().opportunities.create({ name: "N", accountId: 1, value: 10, stage: "negotiation", pipelineId: 1 });
+    expect(rows("opportunities").at(-1)).toMatchObject({ name: "N", winProb: 75 });
+    await caller().opportunities.create({ name: "Z", accountId: 1, value: 10, stage: "negotiation", pipelineId: 1, winProb: 0 });
+    expect(rows("opportunities").at(-1)).toMatchObject({ name: "Z", winProb: 0 });
+  });
+
+  it("the dialog searches accounts on the server, leaves archived ones out, and is the one both boards use", () => {
+    const dialog = read("client/src/components/usip/NewOpportunityDialog.tsx");
+    expect(dialog).toContain("trpc.accounts.list.useQuery({ search: q || undefined, limit: 50 }, { enabled: open })");
+    expect(dialog).toContain("filter((a: any) => !a.archivedAt)");
+    expect(dialog).toContain('<select id="accountId" name="accountId" required');
+    expect(read("client/src/pages/usip/Pipeline.tsx")).toContain("<NewOpportunityDialog open={addOpen}");
+  });
+});
+
+/* ── R43, R103: the Deals board ────────────────────────────────────────── */
+
+describe("R43: the Deals autopilot says what it does", () => {
+  it("Analyze reports drafts to review, and points at them", () => {
+    expect(analyzeToast({ analyzed: 0, tasksCreated: 0 })).toBe("No open deals needed analysis");
+    expect(analyzeToast({ analyzed: 3, tasksCreated: 2 })).toBe("AI analyzed 3 deals: 2 draft tasks to review in Tasks. Your deals are unchanged.");
+    const page = read("client/src/pages/usip/DealsV2.tsx");
+    expect(page).toContain('toast.success(analyzeToast(r), r.tasksCreated > 0 ? { action: { label: "Review", onClick: () => navigate("/v2/tasks") } } : undefined);');
+  });
+
+  it("Approve's copy no longer says the AI writes the deal", () => {
+    const page = read("client/src/pages/usip/DealsV2.tsx");
+    const meta = page.slice(page.indexOf("const MODE_META"), page.indexOf("export function analyzeToast"));
+    const approve = meta.slice(meta.indexOf("approval:"), meta.indexOf("auto:"));
+    expect(approve).toContain("as a task for you to review in Tasks");
+    expect(approve).toContain("Your deals are not changed until you act.");
+    expect(approve).not.toContain("on each open deal for you to act on");
+    // And the service still keeps Approve off the deal row.
+    expect(read("server/services/dealAutopilot.ts")).toContain('if (mode === "auto") {');
+  });
+});
+
+describe("R103: the Deals board adds deals and its alerts open them", () => {
+  it("a New deal button opens the shared dialog for this pipeline", () => {
+    const page = read("client/src/pages/usip/DealsV2.tsx");
+    expect(page).toContain("onClick={() => setAddOpen(true)}");
+    expect(page).toContain("<NewOpportunityDialog open={addOpen} onOpenChange={setAddOpen} stages={dialogStages} pipelineId={pipelineId} />");
+  });
+
+  it("each alert chip links to its deal; #alerts scrolls to the strip once it has loaded", () => {
+    const page = read("client/src/pages/usip/DealsV2.tsx");
+    const strip = page.slice(page.indexOf('<div id="alerts"'), page.indexOf("{/* Kanban board */}"));
+    expect(strip).toContain("<Link key={a.id ?? i} href={`/opportunities/${a.opportunityId}`}");
+    expect(strip).not.toContain("<span key={a.id ?? i}");
+    expect(strip).toContain('<Link href="/pipeline-alerts"');
+    expect(page).toContain('document.getElementById("alerts")?.scrollIntoView(');
+  });
+
+  it("the board and its header read this pipeline", () => {
+    const page = read("client/src/pages/usip/DealsV2.tsx");
+    expect(page).toContain("trpc.opportunities.board.useQuery({ pipelineId }, { enabled: pipelines.data !== undefined })");
+    expect(page).toContain("trpc.opportunities.summary.useQuery({ pipelineId }, { enabled: pipelines.data !== undefined })");
   });
 });

@@ -30,6 +30,7 @@ import { changeOpportunityStage } from "../services/stageChange";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
+import { boardScopeWhere } from "./crm";
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
 
@@ -400,14 +401,34 @@ export const opportunityIntelligenceRouter = router({
       return { ok: true };
     }),
 
-  /** Batch fetch latest intelligence snapshots for all board opportunities (one query) */
-  getIntelligenceForBoard: workspaceProcedure.query(async ({ ctx }) => {
+  /**
+   * The latest snapshot for each deal on a board — the board's scope, the
+   * columns a card shows. It read every snapshot the workspace ever made, with
+   * every subject line, signal and win story, for every deal in every pipeline
+   * (audit 2026-10-20, L7).
+   */
+  getIntelligenceForBoard: workspaceProcedure
+    .input(z.object({ ownerUserId: z.number().optional(), pipelineId: z.number().optional() }).optional())
+    .query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
+    const where = await boardScopeWhere(db, ctx.workspace.id, input);
+    if (!where) return [];
+    const ids = (await db.select({ id: opportunities.id }).from(opportunities).where(where)).map((o) => o.id);
+    if (ids.length === 0) return [];
     const allIntel = await db
-      .select()
+      .select({
+        id: opportunityIntelligence.id,
+        opportunityId: opportunityIntelligence.opportunityId,
+        winProbability: opportunityIntelligence.winProbability,
+        winProbabilityRationale: opportunityIntelligence.winProbabilityRationale,
+        nextBestActions: opportunityIntelligence.nextBestActions,
+        suggestedStage: opportunityIntelligence.suggestedStage,
+        suggestedStageRationale: opportunityIntelligence.suggestedStageRationale,
+        generatedAt: opportunityIntelligence.generatedAt,
+      })
       .from(opportunityIntelligence)
-      .where(eq(opportunityIntelligence.workspaceId, ctx.workspace.id))
+      .where(and(eq(opportunityIntelligence.workspaceId, ctx.workspace.id), inArray(opportunityIntelligence.opportunityId, ids)))
       .orderBy(desc(opportunityIntelligence.generatedAt));
     // Keep only the latest snapshot per opportunityId
     const seen = new Set<number>();

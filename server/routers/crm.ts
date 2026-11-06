@@ -1894,6 +1894,34 @@ export const leadsRouter = router({
 
 /* ──────────────────────────────────────────────────────────────────────── */
 
+/** What a board shows: one pipeline, optionally one owner. */
+const BOARD_SCOPE = z.object({ ownerUserId: z.number().optional(), pipelineId: z.number().optional() }).optional();
+type BoardScope = z.infer<typeof BOARD_SCOPE>;
+
+/**
+ * The deals on a board, as a WHERE: the pipeline's own (and, for the default
+ * pipeline, those with no pipeline), optionally one owner's. Null when the
+ * pipeline is not this workspace's.
+ */
+export async function boardScopeWhere(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, scope: BoardScope) {
+  const owner = scope?.ownerUserId ? eq(opportunities.ownerUserId, scope.ownerUserId) : undefined;
+  if (!scope?.pipelineId) return and(eq(opportunities.workspaceId, workspaceId), owner);
+  const [pipeline] = await db.select({ id: crmPipelines.id, isDefault: crmPipelines.isDefault }).from(crmPipelines)
+    .where(and(eq(crmPipelines.id, scope.pipelineId), eq(crmPipelines.workspaceId, workspaceId)));
+  if (!pipeline) return null;
+  return and(boardDealsWhere(workspaceId, pipeline), owner);
+}
+
+/** Deal metrics for what a board shows (R39): the same pipeline and owner rule as boardScopeWhere. */
+async function scopedMetricDeals(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, scope: BoardScope) {
+  const deals = await loadMetricDeals(db, workspaceId, { ownerUserId: scope?.ownerUserId ?? null });
+  if (!scope?.pipelineId) return deals;
+  const [pipeline] = await db.select({ id: crmPipelines.id, isDefault: crmPipelines.isDefault }).from(crmPipelines)
+    .where(and(eq(crmPipelines.id, scope.pipelineId), eq(crmPipelines.workspaceId, workspaceId)));
+  if (!pipeline) return [];
+  return deals.filter((d) => d.pipelineId === pipeline.id || (d.pipelineId == null && !!pipeline.isDefault));
+}
+
 export const opportunitiesRouter = router({
   list: workspaceProcedure
     .input(z.object({ stage: z.string().optional(), ownerOnly: z.boolean().optional() }).optional())
@@ -1906,17 +1934,25 @@ export const opportunitiesRouter = router({
       return rows;
     }),
 
-  /** Kanban board grouped by stage. */
-  board: workspaceProcedure.input(z.object({ ownerUserId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
+  /**
+   * Kanban board grouped by stage — one pipeline's deals when `pipelineId` is
+   * given (its own, plus those with no pipeline on the default board), the
+   * same rule the board columns use. Every deal in the workspace was read and
+   * the browser threw the other pipelines' away (audit 2026-10-20, L7, R66).
+   */
+  board: workspaceProcedure.input(BOARD_SCOPE).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
-    const where = input?.ownerUserId
-      ? and(eq(opportunities.workspaceId, ctx.workspace.id), eq(opportunities.ownerUserId, input.ownerUserId))
-      : eq(opportunities.workspaceId, ctx.workspace.id);
+    const where = await boardScopeWhere(db, ctx.workspace.id, input);
+    if (!where) return [];
     const rows = await db.select().from(opportunities).where(where);
     // Names only: every account's every column (inline logos included) made
     // this 2 s for a board with a handful of deals (audit 2026-10-20, L7).
-    const acctRows = await db.select({ id: accounts.id, name: accounts.name }).from(accounts).where(eq(accounts.workspaceId, ctx.workspace.id));
+    // And only the board's accounts, not the workspace's.
+    const accountIds = Array.from(new Set(rows.map((r) => r.accountId)));
+    const acctRows = accountIds.length > 0
+      ? await db.select({ id: accounts.id, name: accounts.name }).from(accounts).where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, accountIds)))
+      : [];
     const accMap = new Map(acctRows.map((a) => [a.id, a.name]));
     return rows.map((r) => ({ ...r, accountName: accMap.get(r.accountId) ?? "?" }));
   }),
@@ -1936,7 +1972,8 @@ export const opportunitiesRouter = router({
         value: z.number().min(0).default(0),
         stage: z.string().min(1).max(60).default("discovery"),
         pipelineId: z.number().optional(),
-        winProb: z.number().min(0).max(100).default(20),
+        // Absent: the stage's default win %, not 0 (R36).
+        winProb: z.number().min(0).max(100).optional(),
         closeDate: z.string().optional(),
       }),
     )
@@ -1954,19 +1991,20 @@ export const opportunitiesRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: `"${input.stage}" is not a stage in this pipeline. Pick one of its own stages.` });
       }
       const meta = stages.resolve(input.pipelineId ?? null, input.stage);
+      const winProb = input.winProb ?? meta.defaultWinProb ?? 20;
       const r = await db.insert(opportunities).values({
         workspaceId: ctx.workspace.id, accountId: input.accountId, name: input.name,
-        value: String(input.value), stage: input.stage, winProb: input.winProb,
+        value: String(input.value), stage: input.stage, winProb,
         pipelineId: input.pipelineId ?? null,
         // A calendar date, kept on the day picked (R16/R29).
         closeDate: normalizeCalendarDate(input.closeDate), ownerUserId: ctx.user.id,
         ...stageDatesForNewDeal(meta),
       } as never);
       const id = Number((r as any)[0]?.insertId ?? 0);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "opportunity", entityId: id, after: input });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "opportunity", entityId: id, after: { ...input, winProb } });
       void import("../services/workflowEngine")
         .then((m) => m.fireRecordCreated(ctx.workspace.id, "opportunity", id, {
-          name: input.name, stage: input.stage, value: input.value, winProb: input.winProb, accountId: input.accountId,
+          name: input.name, stage: input.stage, value: input.value, winProb, accountId: input.accountId,
         }, ctx.user.id))
         .catch(() => { /* workflow firing is best-effort */ });
       return { id };
@@ -2154,11 +2192,13 @@ export const opportunitiesRouter = router({
    * classification the Dashboard, Deals, Forecast and Quota read (R39).
    */
   forecast: workspaceProcedure
-    .input(z.object({ stages: z.array(z.string()).optional() }).optional())
+    .input(z.object({ stages: z.array(z.string()).optional(), pipelineId: z.number().optional(), ownerUserId: z.number().optional() }).optional())
     .query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const open = (await loadMetricDeals(db, ctx.workspace.id)).filter((d) => d.status === "open");
+    // The board's scope — its pipeline and owner filter — so the Forecast tab
+    // counts the deals the board beside it shows (R39).
+    const open = (await scopedMetricDeals(db, ctx.workspace.id, input)).filter((d) => d.status === "open");
     const keys = open.map((d) => d.stage);
     const availableStages = keys.filter((k, i) => keys.indexOf(k) === i).sort();
     const filterStages = input?.stages && input.stages.length > 0 ? input.stages : null;
@@ -2195,10 +2235,12 @@ export const opportunitiesRouter = router({
    * (the Deals header computed its own from the board rows, R39).
    */
   summary: workspaceProcedure
-    .query(async ({ ctx }) => {
+    .input(BOARD_SCOPE)
+    .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const deals = await loadMetricDeals(db, ctx.workspace.id);
+      // Scoped like the board it heads (R39); unscoped, the workspace.
+      const deals = await scopedMetricDeals(db, ctx.workspace.id, input);
       const tz = await getWorkspaceTimezone(ctx.workspace.id);
       const r = currentRanges(tz);
       return {
