@@ -140,12 +140,18 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
 
   // Record the acceptance against the original sent invite (best-effort) so the
   // social funnel can report accept rates — independent of autopilot mode.
+  //
+  // By either id (audit 2026-10-20, A6): the engine's LinkedIn step and the
+  // hourly invites store the invite under the profile SLUG, and this event's
+  // user_provider_id is the member URN, so matching the URN alone never found
+  // them. The step waiting on the accept then sat until its 21-day timeout.
+  const inviteKeys = publicId && publicId !== providerId ? [providerId, publicId] : [providerId];
   try {
     await db.update(unipileInvites)
       .set({ status: "accepted", acceptedAt: new Date() } as never)
       .where(and(
         eq(unipileInvites.workspaceId, workspaceId),
-        eq(unipileInvites.recipientProviderId, providerId),
+        inArray(unipileInvites.recipientProviderId, inviteKeys),
         ne(unipileInvites.status, "accepted"),
       ));
   } catch (err) {
