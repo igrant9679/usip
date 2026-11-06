@@ -13,7 +13,9 @@
  * GET /api/track/click/:token?url=...
  *   - Inserts a "click" event into email_tracking_events
  *   - Increments emailDrafts.clickCount, sets lastClickedAt
- *   - Redirects the browser to the original URL
+ *   - Redirects the browser to the original URL when the link carries our
+ *     signature (`sig`, services/trackedLinks.ts); otherwise shows where it
+ *     goes and lets the reader choose (G43)
  */
 
 import { csvCell } from "@shared/csvCell";
@@ -30,6 +32,7 @@ import { escapeHtml } from "@shared/escapeHtml";
 import { requireScheduledSecret } from "./scheduledTaskAuth";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "./_core/activeMembers";
 import { noteLeadEngagement } from "./services/leadRescoreQueue";
+import { isSignedClick } from "./services/trackedLinks";
 
 // 1×1 transparent GIF (43 bytes)
 const TRACKING_PIXEL = Buffer.from(
@@ -55,7 +58,15 @@ const TRACK_UNSUB_DONE = (email: string) => `<!DOCTYPE html><html><head><meta ch
 <p style="margin-top:40px;font-size:12px;color:#999">If this was a mistake, please contact the sender directly.</p>
 </body></html>`;
 
-const TRACK_UNSUB_INVALID = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invalid link</title>${TRACK_UNSUB_STYLE}</head>
+/** An unsigned tracked link: say where it goes, and let the reader decide (G43). */
+const TRACK_CLICK_CONFIRM = (url: string) => `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Leaving this email</title>${TRACK_UNSUB_STYLE}</head>
+<body><h1>This link goes to another site</h1>
+<p style="word-break:break-all"><strong>${escapeHtml(url)}</strong></p>
+<p><a href="${escapeHtml(url)}" rel="noopener noreferrer">Continue to that page</a></p>
+<p style="margin-top:24px;font-size:13px;color:#999">If you don't recognise the address, close this page.</p>
+</body></html>`;
+
+const TRACK_UNSUB_INVALID =`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invalid link</title>${TRACK_UNSUB_STYLE}</head>
 <body><h1>This unsubscribe link is not valid</h1><p>Reply to any message from the sender and ask to be removed.</p></body></html>`;
 
 export function registerEmailTrackingRoutes(app: Express) {
@@ -297,8 +308,17 @@ export function registerEmailTrackingRoutes(app: Express) {
       return;
     }
 
-    // Redirect immediately
-    res.redirect(302, safeUrl);
+    /**
+     * Only a link we signed is redirected (audit 2026-10-20, G43); anything
+     * else, an old email's link or a URL someone wrote by hand, gets a page
+     * that names the destination and lets the reader choose. Not a redirect,
+     * so our domain can't be used to bounce a stranger somewhere else.
+     */
+    if (!token || !isSignedClick(token, targetUrl, req.query.sig)) {
+      res.status(200).set("Content-Type", "text/html; charset=utf-8").set("Referrer-Policy", "no-referrer").send(TRACK_CLICK_CONFIRM(safeUrl));
+    } else {
+      res.redirect(302, safeUrl);
+    }
 
     // Record the event asynchronously
     if (!token) return;
@@ -531,10 +551,11 @@ export function registerEmailTrackingRoutes(app: Express) {
    */
   app.get("/api/track/proposal-click/:token", async (req: Request, res: Response) => {
     const { token } = req.params;
-    const { dest } = req.query as { dest?: string };
-    // Redirect immediately — tracking is best-effort
-    const fallback = dest || "/";
-    res.redirect(302, fallback);
+    // Redirect immediately — tracking is best-effort. Always to this proposal's
+    // own portal page (audit 2026-10-20, G43): it redirected to whatever
+    // `dest` said, an open redirect on our domain. Links already sent carry
+    // a `dest` that is this same page, so they land where they always did.
+    res.redirect(302, `/p/${encodeURIComponent(token ?? "")}`);
     if (!token) return;
     try {
       const db = await getDb();

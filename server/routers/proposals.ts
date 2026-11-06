@@ -45,6 +45,8 @@ import {
   workspaceProcedure,
 } from "../_core/workspace";
 import { assertOutboundNotPaused } from "../services/outboundPause";
+import { acceptanceRecord, PORTAL_UNAVAILABLE, portalMilestone, portalSection, portalView, proposalShareEmailHtml, servedOnPortal } from "../services/proposalPortal";
+import { clientIpOf } from "../_core/clientIp";
 
 // ── Section keys ─────────────────────────────────────────────────────────────
 export const SECTION_KEYS = [
@@ -609,8 +611,8 @@ export const proposalsRouter = router({
     .input(
       z.object({
         id: z.number(),
-        /** The frontend origin so the share URL resolves correctly. */
-        origin: z.string().url(),
+        /** Ignored since R92: every link is built from appUrl(). Kept so older clients still validate. */
+        origin: z.string().url().optional(),
         /** Optional personal message to include in the email body. */
         message: z.string().optional(),
         /** Optional sending account ID to use (overrides workspace default). */
@@ -638,46 +640,23 @@ export const proposalsRouter = router({
         await db.update(proposals).set({ shareToken: token }).where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
       }
 
-      const shareUrl = `${input.origin}/p/${token}`;
-      const clientName = proposal.clientName;
-      const orgAbbr = proposal.orgAbbr ? ` (${proposal.orgAbbr})` : "";
       const senderName = ctx.user.name ?? ctx.workspace.name;
-      const personalNote = input.message
-        ? `<p style="margin:16px 0;padding:12px 16px;background:#f9fafb;border-left:3px solid #14b8a6;border-radius:4px;font-style:italic;color:#374151">${input.message.replace(/\n/g, "<br>")}</p>`
-        : "";
+      // Links from appUrl(), not the browser's origin, and every value escaped (R92).
+      const { html: emailHtml, shareUrl } = proposalShareEmailHtml({
+        token,
+        workspaceName: ctx.workspace.name,
+        senderName,
+        clientName: proposal.clientName,
+        orgAbbr: proposal.orgAbbr,
+        title: proposal.title,
+        message: input.message,
+      });
 
       // ── Send email via team member's connected sending account (Unipile/SMTP) ──
       // Falls back to workspace SMTP config if no connected account is found.
       let emailOk = false;
       let senderEmail = "";
       const emailSubject = `${senderName} has shared a proposal with you: ${proposal.title}`;
-      const emailHtml = `
-<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111827">
-  <div style="margin-bottom:24px">
-    <span style="font-size:13px;font-weight:600;letter-spacing:0.05em;color:#14b8a6;text-transform:uppercase">${ctx.workspace.name}</span>
-  </div>
-  <h2 style="margin:0 0 8px;font-size:20px;font-weight:700">You have a new proposal to review</h2>
-  <p style="margin:0 0 16px;color:#6b7280">Hi ${clientName}${orgAbbr},</p>
-  <p style="margin:0 0 16px;color:#374151">
-    <strong>${senderName}</strong> from <strong>${ctx.workspace.name}</strong> has shared a proposal with you:
-    <strong>${proposal.title}</strong>.
-  </p>
-  ${personalNote}
-  <p style="margin:24px 0">
-    <a href="${input.origin}/api/track/proposal-click/${token}?dest=${encodeURIComponent(shareUrl)}" style="display:inline-block;background:#0f766e;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">
-      View Proposal →
-    </a>
-  </p>
-  <p style="color:#6b7280;font-size:13px">Or copy this link into your browser:</p>
-  <p style="color:#14b8a6;font-size:12px;word-break:break-all"><a href="${shareUrl}" style="color:#14b8a6">${shareUrl}</a></p>
-  <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
-  <p style="color:#9ca3af;font-size:12px">
-    You can view the proposal and leave feedback without creating an account.
-    If you did not expect this email, you can safely ignore it.
-  </p>
-  <!-- Tracking pixel: 1x1 transparent GIF, logs open event server-side -->
-  <img src="${input.origin}/api/track/proposal-open/${token}" width="1" height="1" style="display:block;width:1px;height:1px;border:0;margin:0;padding:0" alt="" />
-</div>`;
       try {
         // Use specified account if provided, else prefer the first enabled connected account
         const [sendingAcc] = input.sendingAccountId
@@ -938,7 +917,7 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
 
   /** Get proposal by share token — public, for client portal. */
   getByShareToken: publicProcedure
-    .input(z.object({ token: z.string() }))
+    .input(z.object({ token: z.string().min(1).max(128) }))
     .query(async ({ input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
@@ -947,34 +926,37 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         .from(proposals)
         .where(eq(proposals.shareToken, input.token))
         .limit(1);
-      if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+      // A draft is not served, and says what an unknown link says (G40).
+      if (!rows[0] || !servedOnPortal(rows[0].status)) throw new TRPCError({ code: "NOT_FOUND", message: PORTAL_UNAVAILABLE });
       const proposal = rows[0];
       const [sections, milestones] = await Promise.all([
         getSections(db, proposal.id),
         getMilestones(db, proposal.id),
       ]);
-      return { proposal, sections, milestones };
+      // The fields the portal shows, not the internal row (R67).
+      return { proposal: portalView(proposal), sections: sections.map(portalSection), milestones: milestones.map(portalMilestone) };
     }),
 
   /** Submit client feedback — public. */
   submitFeedback: publicProcedure
     .input(
+      // Capped (G40): a public write a stranger can repeat.
       z.object({
-        token: z.string(),
-        authorName: z.string().min(1),
-        authorEmail: z.string().email().optional().or(z.literal("")),
-        message: z.string().min(1),
+        token: z.string().min(1).max(128),
+        authorName: z.string().trim().min(1).max(200),
+        authorEmail: z.string().email().max(320).optional().or(z.literal("")),
+        message: z.string().trim().min(1).max(5000),
       }),
     )
     .mutation(async ({ input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
       const rows = await db
-        .select({ id: proposals.id })
+        .select({ id: proposals.id, status: proposals.status })
         .from(proposals)
         .where(eq(proposals.shareToken, input.token))
         .limit(1);
-      if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+      if (!rows[0] || !servedOnPortal(rows[0].status)) throw new TRPCError({ code: "NOT_FOUND", message: PORTAL_UNAVAILABLE });
       await db.insert(proposalFeedback).values({
         proposalId: rows[0].id,
         authorName: input.authorName,
@@ -999,8 +981,17 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
    * and sends an in-app notification to the workspace owner.
    */
   acceptByToken: publicProcedure
-    .input(z.object({ token: z.string(), clientName: z.string().optional() }))
-    .mutation(async ({ input }) => {
+    .input(z.object({
+      token: z.string().min(1).max(128),
+      /** Legacy name for signerName, from portals loaded before G18. */
+      clientName: z.string().max(200).optional(),
+      /** The name the person accepting typed (G18). */
+      signerName: z.string().trim().max(200).optional(),
+      signerEmail: z.string().email().max(320).optional().or(z.literal("")),
+      /** Their browser's IANA time zone, for the record. */
+      timeZone: z.string().max(64).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
       const rows = await db
@@ -1034,6 +1025,24 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         throw new TRPCError({ code: "BAD_REQUEST", message: "This proposal is not open for acceptance. Contact the team that sent it." });
       }
       /**
+       * Who accepted (audit 2026-10-20, G18). Written only by the click that
+       * won the claim above, so a double click records one acceptance.
+       */
+      const signer = (input.signerName || input.clientName || "").trim() || null;
+      await logProposalActivity(db, {
+        workspaceId: proposal.workspaceId,
+        proposalId: proposal.id,
+        subject: signer ? `Accepted by ${signer} on the client portal`.slice(0, 240) : "Accepted on the client portal",
+        body: acceptanceRecord({
+          signerName: signer,
+          signerEmail: input.signerEmail || null,
+          ip: ctx.req ? clientIpOf(ctx.req as never) : null,
+          userAgent: String((ctx.req as { headers?: Record<string, unknown> } | undefined)?.headers?.["user-agent"] ?? "") || null,
+          timeZone: input.timeZone ?? null,
+          at: new Date(),
+        }),
+      });
+      /**
        * PUBLIC PATH — the client accepts from a share link, with no session.
        * The resulting follow-up task is the only thing that tells the business
        * a deal just closed, and it was addressed to a raw `ownerUserId`. If
@@ -1044,8 +1053,8 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         // Create follow-up task for owner
         await db.insert(tasks).values({
           workspaceId: proposal.workspaceId,
-          title: `Follow up: ${proposal.title} — accepted by ${proposal.clientName}`,
-          description: `Client ${proposal.clientName} accepted the proposal via the client portal. Schedule a kickoff meeting and send the contract.`,
+          title: `Follow up: ${proposal.title} — accepted by ${signer ?? proposal.clientName}`.slice(0, 240),
+          description: `${signer ? `${signer} (${proposal.clientName})` : `Client ${proposal.clientName}`} accepted the proposal via the client portal. Schedule a kickoff meeting and send the contract.`,
           type: "follow_up",
           priority: "high",
           status: "open",
@@ -1399,9 +1408,9 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
   requestExtension: publicProcedure
     .input(
       z.object({
-        token: z.string(),
-        reason: z.string().min(1).max(2000),
-        clientName: z.string().optional(),
+        token: z.string().min(1).max(128),
+        reason: z.string().trim().min(1).max(2000),
+        clientName: z.string().max(200).optional(),
       }),
     )
     .mutation(async ({ input }) => {
@@ -1412,7 +1421,7 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         .from(proposals)
         .where(eq(proposals.shareToken, input.token))
         .limit(1);
-      if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+      if (!rows[0] || !servedOnPortal(rows[0].status)) throw new TRPCError({ code: "NOT_FOUND", message: PORTAL_UNAVAILABLE });
       const proposal = rows[0];
       // PUBLIC PATH — extension request from a share link, same reasoning.
       const ownerUserId = await workspaceNotifyUserId(proposal.workspaceId);
@@ -1681,16 +1690,16 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
    * Filters activities whose subject contains "extension" for the given shareToken.
    */
   getExtensionHistory: publicProcedure
-    .input(z.object({ token: z.string() }))
+    .input(z.object({ token: z.string().min(1).max(128) }))
     .query(async ({ input }) => {
       const db = await getDb();
       if (!db) return [];
       const rows = await db
-        .select({ id: proposals.id })
+        .select({ id: proposals.id, status: proposals.status })
         .from(proposals)
         .where(eq(proposals.shareToken, input.token))
         .limit(1);
-      if (!rows[0]) return [];
+      if (!rows[0] || !servedOnPortal(rows[0].status)) return [];
       const proposalId = rows[0].id;
       const events = await db
         .select({
@@ -1791,16 +1800,16 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
    * Returns { status: "none"|"pending"|"approved"|"denied", resolvedAt, newExpiresAt, reason }
    */
   getExtensionStatus: publicProcedure
-    .input(z.object({ token: z.string() }))
+    .input(z.object({ token: z.string().min(1).max(128) }))
     .query(async ({ input }) => {
       const db = await getDb();
       if (!db) return { status: "none" as const, resolvedAt: null, newExpiresAt: null, reason: null };
       const [proposal] = await db
-        .select({ id: proposals.id, expiresAt: proposals.expiresAt })
+        .select({ id: proposals.id, expiresAt: proposals.expiresAt, status: proposals.status })
         .from(proposals)
         .where(eq(proposals.shareToken, input.token))
         .limit(1);
-      if (!proposal) return { status: "none" as const, resolvedAt: null, newExpiresAt: null, reason: null };
+      if (!proposal || !servedOnPortal(proposal.status)) return { status: "none" as const, resolvedAt: null, newExpiresAt: null, reason: null };
       // Get all extension-related activities for this proposal, newest first
       const extActs = await db
         .select({ id: activities.id, subject: activities.subject, body: activities.body, occurredAt: activities.occurredAt })
