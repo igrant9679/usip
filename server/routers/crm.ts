@@ -1454,6 +1454,12 @@ export const leadsRouter = router({
 
       const convName = lead.company ?? `${lead.firstName} ${lead.lastName}`;
       const domain = businessDomainFromEmail(lead.email) || null;
+      // An account this creates is routed by the territory rules, as one
+      // created on its own is (R42): a lead carries only its company, so the
+      // rules that can match are "company contains" and those with no
+      // condition. A routed owner who has left is skipped for the converter.
+      const territory = await applyTerritoryRules(db, ws, { company: convName });
+      const territoryOwner = await activeOwnerOrNull(ws, territory?.ownerUserId);
       // The deal's stage: the default pipeline's first OPEN stage, by flags.
       let deal: { pipelineId: number | null; key: string; winProb: number; meta: { isWon: boolean; isLost: boolean } } | null = null;
       if (input.createOpportunity) {
@@ -1478,7 +1484,8 @@ export const leadsRouter = router({
         const accountCreated = accountId == null;
         if (accountCreated) {
           const accR = await tx.insert(accounts).values({
-            workspaceId: ws, name: convName, domain: domain ?? undefined, ...normalizedAccountFields(convName, domain), ownerUserId: ctx.user.id,
+            workspaceId: ws, name: convName, domain: domain ?? undefined, ...normalizedAccountFields(convName, domain),
+            ownerUserId: territoryOwner ?? ctx.user.id, territoryId: territory?.territoryId ?? undefined,
           });
           accountId = Number((accR as any)[0]?.insertId ?? 0);
         }
@@ -2598,10 +2605,20 @@ export const territoriesRouter = router({
     return { ok: true };
   }),
 
+  /**
+   * Rules and accounts that named it are detached, as the confirmation says
+   * (R42): a rule kept handing new accounts a territory that no longer existed.
+   */
   delete: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.delete(territories).where(and(eq(territories.id, input.id), eq(territories.workspaceId, ctx.workspace.id)));
+    await db.transaction(async (tx) => {
+      await tx.update(crmTerritoryRules).set({ territoryId: null })
+        .where(and(eq(crmTerritoryRules.workspaceId, ctx.workspace.id), eq(crmTerritoryRules.territoryId, input.id)));
+      await tx.update(accounts).set({ territoryId: null })
+        .where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.territoryId, input.id)));
+      await tx.delete(territories).where(and(eq(territories.id, input.id), eq(territories.workspaceId, ctx.workspace.id)));
+    });
     return { ok: true };
   }),
 });
@@ -2663,21 +2680,26 @@ export const productsRouter = router({
  * Apply territory rules to a candidate account/lead payload. Returns the
  * matched rule's territoryId + ownerUserId or nulls if no rule matched.
  * First-match-wins by priority (lower priority value = higher precedence).
+ *
+ * Matching ignores case and surrounding spaces (audit 2026-10-20, R42): it
+ * was `===`, so a rule for "Software" never matched an account in
+ * "software". The same rule Lead Routing applies to these rules.
  */
 export async function applyTerritoryRules(
-  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  db: Pick<NonNullable<Awaited<ReturnType<typeof getDb>>>, "select">,
   workspaceId: number,
   payload: { industry?: string | null; country?: string | null; state?: string | null; company?: string | null },
 ): Promise<{ territoryId: number | null; ownerUserId: number | null } | null> {
   const rules = await db.select().from(crmTerritoryRules)
     .where(and(eq(crmTerritoryRules.workspaceId, workspaceId), eq(crmTerritoryRules.active, true)))
     .orderBy(crmTerritoryRules.priority, crmTerritoryRules.id);
-  const company = (payload.company ?? "").toLowerCase();
+  const norm = (v: string | null | undefined) => (v ?? "").trim().toLowerCase();
+  const company = norm(payload.company);
   for (const r of rules) {
-    if (r.industry && r.industry !== payload.industry) continue;
-    if (r.country && r.country !== payload.country) continue;
-    if (r.state && r.state !== payload.state) continue;
-    if (r.companyContains && !company.includes(r.companyContains.toLowerCase())) continue;
+    if (norm(r.industry) && norm(r.industry) !== norm(payload.industry)) continue;
+    if (norm(r.country) && norm(r.country) !== norm(payload.country)) continue;
+    if (norm(r.state) && norm(r.state) !== norm(payload.state)) continue;
+    if (norm(r.companyContains) && !company.includes(norm(r.companyContains))) continue;
     return { territoryId: r.territoryId ?? null, ownerUserId: r.ownerUserId ?? null };
   }
   return null;

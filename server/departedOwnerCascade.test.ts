@@ -187,6 +187,13 @@ const SURFACES: Array<{
     gate: /const recipient = \(await activeOwnerOrNull\(ctx\.workspace\.id, proposal\.createdBy\)\)\s*\?\? \(await workspaceNotifyUserId\(ctx\.workspace\.id\)\);\s*if \(recipient\) \{/,
   },
   {
+    what: "an account a lead conversion creates is not routed to a departed rep",
+    file: "server/routers/crm.ts",
+    start: "const territory = await applyTerritoryRules(db, ws, { company: convName });",
+    end: "const done = await db.transaction(",
+    gate: /const territoryOwner = await activeOwnerOrNull\(ws, territory\?\.ownerUserId\);/,
+  },
+  {
     what: "the stuck-deal digest is mailed to a member who is still here",
     file: "server/routers/pipelineAlerts.ts",
     start: "sendDigest: workspaceProcedure",
@@ -423,7 +430,9 @@ describe("every session-less path that names a member gates on active membership
     // 2026-11-06: 39, with the stuck-deal digest and the proposal engagement
     // notice — both went to the platform owner, and now go to a member of the
     // workspace who is still here (audit R2).
-    expect(SURFACES.length).toBe(39);
+    // Same day: 40, with lead conversion — the account it creates is routed
+    // by the territory rules now (audit R42).
+    expect(SURFACES.length).toBe(40);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 

@@ -17,6 +17,9 @@
  *   R82 — only a dragged card moves a deal.
  *   R43 — the Deals autopilot copy and the Analyze result say what it does.
  *   R103 — the Deals board adds deals; its alert chips open them; #alerts lands.
+ *   R42 — territory rules match ignoring case, also route the account a lead
+ *         conversion creates, and are confirmed before deletion; the page says
+ *         what they do and shows no unread JSON.
  *
  * Procedures run through the real router against the SQL-evaluating fake;
  * screens render with a stub trpc.
@@ -388,5 +391,53 @@ describe("R103: the Deals board adds deals and its alerts open them", () => {
     const page = read("client/src/pages/usip/DealsV2.tsx");
     expect(page).toContain("trpc.opportunities.board.useQuery({ pipelineId }, { enabled: pipelines.data !== undefined })");
     expect(page).toContain("trpc.opportunities.summary.useQuery({ pipelineId }, { enabled: pipelines.data !== undefined })");
+  });
+});
+
+/* ── R42: territories ──────────────────────────────────────────────────── */
+
+describe("R42: territory rules do what the page says", () => {
+  beforeEach(() => {
+    rows("territories").push({ id: 5, workspaceId: WS, name: "Software East" }, { id: 6, workspaceId: OTHER, name: "Theirs" });
+  });
+  const rule = (o: Record<string, unknown>) => rows("crm_territory_rules").push({ id: rows("crm_territory_rules").length + 1, workspaceId: WS, name: "R", priority: 100, active: true, industry: null, country: null, state: null, companyContains: null, territoryId: 5, ownerUserId: REP, ...o });
+
+  it("matching ignores case and surrounding spaces", async () => {
+    rule({ industry: "Software", state: " CA " });
+    const { id } = await caller().accounts.create({ name: "Globex", industry: "software", region: "ca" });
+    expect(rows("accounts").find((a) => a.id === id)).toMatchObject({ territoryId: 5, ownerUserId: REP });
+  });
+
+  it("a lead conversion that creates an account routes it; a leaver's rule leaves it with the converter", async () => {
+    rule({ companyContains: "INITECH" });
+    rows("leads").push({ id: 1, workspaceId: WS, firstName: "Bo", lastName: "B", company: "Initech Ltd", email: "bo@initech.example", status: "new", ownerUserId: ME });
+    const r = await caller().leads.convert({ id: 1, accountId: null, contactId: null });
+    expect(rows("accounts").find((a) => a.id === r.accountId)).toMatchObject({ territoryId: 5, ownerUserId: REP });
+    // The rep has left: the account is the converter's, as before.
+    rows("workspace_members").find((m) => m.userId === REP).deactivatedAt = new Date();
+    rows("leads").push({ id: 2, workspaceId: WS, firstName: "Cy", lastName: "C", company: "Initech Two", email: "cy@initech2.example", status: "new", ownerUserId: ME });
+    const r2 = await caller().leads.convert({ id: 2, accountId: null, contactId: null });
+    expect(rows("accounts").find((a) => a.id === r2.accountId)).toMatchObject({ ownerUserId: ME });
+  });
+
+  it("deleting a territory detaches the rules and accounts that named it, in this workspace", async () => {
+    rule({ industry: "x" });
+    rows("crm_territory_rules").push({ id: 9, workspaceId: OTHER, name: "Theirs", priority: 1, active: true, territoryId: 5 });
+    rows("accounts").push({ id: 8, workspaceId: WS, name: "In it", territoryId: 5 }, { id: 9, workspaceId: OTHER, name: "Theirs", territoryId: 5 });
+    await caller().territories.delete({ id: 5 });
+    expect(rows("territories").map((t) => t.id)).toEqual([6]);
+    expect(rows("crm_territory_rules").map((r) => [r.id, r.territoryId])).toEqual([[1, null], [9, 5]]);
+    expect(rows("accounts").filter((a) => a.id >= 8).map((a) => [a.id, a.territoryId])).toEqual([[8, null], [9, 5]]);
+  });
+
+  it("the page shows no unread JSON, confirms both deletes, and says what the rules do", () => {
+    const page = read("client/src/pages/usip/Territories.tsx");
+    expect(page).not.toContain("JSON.stringify(t.rules");
+    expect(page).not.toContain('label="Rules (JSON)"');
+    expect(page).toContain("onConfirm={() => del.mutate({ id: t.id })}");
+    expect(page).toContain("onConfirm={() => delRule.mutate({ id: r.id })}");
+    expect(page).not.toMatch(/onClick=\{\(\) => (del|delRule)\.mutate/);
+    expect(page).toContain("description={TERRITORIES_DESCRIPTION}");
+    expect(page).not.toContain("automatically route new leads and accounts to the correct owner on creation");
   });
 });
