@@ -38,6 +38,9 @@ import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
 import { askLaunchOnUtc } from "@/components/usip/are/launchTimezone";
+import { useConfirmActivate } from "@/components/usip/are/activateConfirm";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { ROLE_RANK, rankOf } from "@shared/roleRank";
 import { APPROVE_THRESHOLD_START, approveThresholdSummary } from "@shared/areApproveThreshold";
 import { wizardDefaults } from "./areCampaignsModel";
 
@@ -299,17 +302,26 @@ export default function ARECampaigns() {
   retryCreate.current = create.mutate;
 
   const setStatus = trpc.are.campaigns.setStatus.useMutation({
-    onSuccess: () => utils.are.campaigns.list.invalidate(),
+    onSuccess: (_r, vars) => {
+      toast.success(vars.status === "active" ? "Campaign activated. The engine picks it up within 3 minutes." : vars.status === "paused" ? "Campaign paused. Nothing more is sent from it." : "Campaign updated");
+      utils.are.campaigns.list.invalidate();
+      utils.are.campaigns.get.invalidate({ id: vars.id });
+    },
     onError: (e, vars) => {
       if (askLaunchOnUtc(e.message, () => retrySetStatus.current?.({ ...vars, confirmTimezone: true }))) return;
       toast.error(e.message);
     },
   });
   retrySetStatus.current = setStatus.mutate;
+  // The same confirm as the campaign page (A52): Activate starts real sending.
+  const confirmActivate = useConfirmActivate();
+  // Delete is a manager's (A18); the server refuses anyone else.
+  const { current: currentWs } = useWorkspace();
+  const canDelete = rankOf(currentWs?.role ?? "rep") >= ROLE_RANK.manager;
 
   const deleteCampaign = trpc.are.campaigns.delete.useMutation({
-    onSuccess: () => {
-      toast.success("Campaign deleted");
+    onSuccess: (r) => {
+      toast.success(`Campaign deleted. ${r.stepsStopped} unsent step${r.stepsStopped === 1 ? "" : "s"} stopped; ${r.peopleReleased} ${r.peopleReleased === 1 ? "person is" : "people are"} free to join another campaign.`);
       utils.are.campaigns.list.invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -414,21 +426,29 @@ export default function ARECampaigns() {
                       size="sm"
                       variant="ghost"
                       className="text-emerald-600 hover:text-emerald-700 gap-1 text-xs"
-                      onClick={() => setStatus.mutate({ id: c.id, status: "active" })}
+                      disabled={setStatus.isPending}
+                      onClick={() => confirmActivate(c, () => setStatus.mutate({ id: c.id, status: "active" }))}
                     >
                       <Play className="size-3" /> Activate
                     </Button>
                   ) : null}
+                  {canDelete && (
                   <Button aria-label="Delete campaign"
                     size="sm"
                     variant="ghost"
                     className="text-destructive/60 hover:text-destructive gap-1 text-xs"
+                    disabled={deleteCampaign.isPending}
                     onClick={() => {
-                      confirmAction({ title: "Delete this campaign?", description: "The campaign and its prospect queue will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { deleteCampaign.mutate({ id: c.id }); });
+                      confirmAction({
+                        title: `Delete "${c.name}"?`,
+                        description: "The campaign is deleted and its unsent steps are stopped. The people still in it are taken out, so they can be added to another campaign; what was already sent to them stays in their history. This cannot be undone.",
+                        confirmLabel: "Delete",
+                      }, () => { deleteCampaign.mutate({ id: c.id }); });
                     }}
                   >
                     <Trash2 className="size-3" />
                   </Button>
+                  )}
                   <Link href={`/are/campaigns/${c.id}`}>
                     <Button size="sm" variant="ghost" className="gap-1 text-xs">
                       Open <ArrowRight className="size-3" />

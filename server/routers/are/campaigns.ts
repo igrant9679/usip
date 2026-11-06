@@ -1503,15 +1503,56 @@ export const campaignsRouter = router({
       };
     }),
 
-  delete: workspaceProcedure
+  /**
+   * Delete a campaign: managers only, audited, in one transaction (audit
+   * 2026-10-20, A18). It deleted the campaign row alone, for any member, with
+   * no record. Its people stayed claimed by a campaign that no longer existed,
+   * so they could never join another, and their scheduled steps stayed on the
+   * calendar. Now its unsent steps are stopped and the people still in it are
+   * taken out (canceled, with the reason), and the identity index counts only
+   * rows whose campaign exists, so they are free to join another. Sent steps,
+   * signals and replies are kept: they are those people's history.
+   */
+  delete: managerProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db
-        .delete(areCampaigns)
-        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
-      return { success: true };
+      const ws = ctx.workspace.id;
+      const reason = "Campaign deleted";
+      const affected = (res: unknown) => Number((res as Array<{ affectedRows?: number }> | undefined)?.[0]?.affectedRows ?? 0);
+      const done = await db.transaction(async (tx) => {
+        const [campaign] = await tx
+          .select({ id: areCampaigns.id, name: areCampaigns.name, status: areCampaigns.status })
+          .from(areCampaigns)
+          .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ws)))
+          .limit(1);
+        if (!campaign) throw new TRPCError({ code: "NOT_FOUND" });
+        const steps = await tx
+          .update(areExecutionQueue)
+          .set({ status: "skipped", failureReason: reason, executedAt: new Date() })
+          .where(and(
+            eq(areExecutionQueue.workspaceId, ws),
+            eq(areExecutionQueue.campaignId, input.id),
+            inArray(areExecutionQueue.status, ["scheduled", "paused"]),
+          ));
+        const people = await tx
+          .update(prospectQueue)
+          .set({ sequenceStatus: "canceled", rejectedAt: new Date(), rejectionReason: reason })
+          .where(and(
+            eq(prospectQueue.workspaceId, ws),
+            eq(prospectQueue.campaignId, input.id),
+            inArray(prospectQueue.sequenceStatus, ["pending", "approved", "enrolled", "paused", "sourcing"]),
+          ));
+        await tx.delete(areCampaigns).where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ws)));
+        return { campaign, stepsStopped: affected(steps), peopleReleased: affected(people) };
+      });
+      await recordAudit({
+        workspaceId: ws, actorUserId: ctx.user.id, action: "delete", entityType: "are_campaign", entityId: input.id,
+        before: { name: done.campaign.name, status: done.campaign.status },
+        after: { stepsStopped: done.stepsStopped, peopleReleased: done.peopleReleased },
+      });
+      return { success: true, stepsStopped: done.stepsStopped, peopleReleased: done.peopleReleased };
     }),
 
   /**

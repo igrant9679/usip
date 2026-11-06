@@ -68,6 +68,7 @@ import { IntelligenceDossier } from "@/components/usip/are/IntelligenceDossier";
 import { CampaignResearchCard } from "@/components/usip/are/CampaignResearchCard";
 import { CampaignStallPanel } from "@/components/usip/are/CampaignStallPanel";
 import { askLaunchOnUtc } from "@/components/usip/are/launchTimezone";
+import { useConfirmActivate } from "@/components/usip/are/activateConfirm";
 import { CampaignSourceHealth } from "@/components/usip/are/CampaignSourceHealth";
 import { PlaceVerdictBadge } from "@/components/usip/are/PlaceVerdictBadge";
 import { CampaignTargetingCard } from "@/components/usip/are/CampaignTargetingCard";
@@ -2410,13 +2411,19 @@ function ARECampaignDetailPage() {
   // A first launch on the UTC default asks first (A31); a yes sends it again with confirmTimezone.
   const retrySetStatus = useRef<((v: any) => void) | null>(null);
   const setStatus = trpc.are.campaigns.setStatus.useMutation({
-    onSuccess: () => utils.are.campaigns.get.invalidate({ id: campaignId }),
+    onSuccess: (_r, vars) => {
+      toast.success(vars.status === "active" ? "Campaign activated. The engine picks it up within 3 minutes." : vars.status === "paused" ? "Campaign paused. Nothing more is sent from it." : "Campaign updated");
+      utils.are.campaigns.get.invalidate({ id: campaignId });
+      utils.are.campaigns.list.invalidate();
+    },
     onError: (e, vars) => {
       if (askLaunchOnUtc(e.message, () => retrySetStatus.current?.({ ...vars, confirmTimezone: true }))) return;
       toast.error(e.message);
     },
   });
   retrySetStatus.current = setStatus.mutate;
+  // Activate starts real sending, so it asks first (A52), as the list does.
+  const confirmActivate = useConfirmActivate();
 
   const enrichBatch = trpc.are.prospects.enrichBatch.useMutation({
     onSuccess: (d) => {
@@ -2545,7 +2552,7 @@ function ARECampaignDetailPage() {
           </Button>
         ) : (
           <Button size="sm" className="gap-1.5 text-xs"
-            onClick={() => setStatus.mutate({ id: campaignId, status: "active" })}
+            onClick={() => confirmActivate(campaign, () => setStatus.mutate({ id: campaignId, status: "active" }))}
             disabled={setStatus.isPending}>
             {setStatus.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
             Activate
