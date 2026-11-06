@@ -633,12 +633,12 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     slug: "unified-inbox",
     categorySlug: "sequences-email",
     title: "The Unified Inbox",
-    summary: "Handle replies across channels in one inbox.",
+    summary: "Your social conversations (LinkedIn, WhatsApp and the like) in one list.",
     readingTimeMinutes: 3,
     tags: ["inbox", "replies", "sequences"],
     pageKey: "unified-inbox",
     tourName: "Handle Replies (Unified Inbox)",
-    bodyMarkdown: `The **Unified Inbox** consolidates inbound replies across every connected email account. Conversations list on the left; open one to read the thread and reply, forward, or log it to a CRM record without leaving the page. An inbound reply automatically **pauses** the prospect's sequence and mirrors to the record timeline, so you won't double-touch someone who already answered. Use the channel filter to focus. Header shortcuts: **Refresh**, **Manage Accounts**, and **Email Drafts**.`,
+    bodyMarkdown: `The **Unified Inbox** lists the conversations from the social accounts you connected (LinkedIn, WhatsApp and the like, through Settings › Social accounts). Chats list on the left; open one to read the thread and reply. A LinkedIn reply from someone you reached out to **pauses** their sequences, so you won't double-touch someone who already answered. Use the channel filter to focus. Header shortcuts: **Refresh**, **Manage Accounts**, and **Email Drafts**. Email replies are not here: they are in **Conversations** and **My Mailbox**.`,
   },
   {
     slug: "email-drafts-sending",
@@ -1858,9 +1858,9 @@ export const TOURS: TourSeed[] = [
     route: "/unified-inbox",
     roleTags: ["sdr"],
     steps: [
-      { title: "All replies, one place", bodyMarkdown: "Inbound across every connected account.", routeTo: "/unified-inbox", visualTreatment: "coach", advanceCondition: "route_changed" },
-      { title: "Reply & log", bodyMarkdown: "Respond, forward, or log to a CRM record without leaving.", visualTreatment: "coach", advanceCondition: "next_button" },
-      { title: "Auto-pause", bodyMarkdown: "A reply pauses that prospect's sequence automatically.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Social chats, one place", bodyMarkdown: "LinkedIn, WhatsApp and other connected accounts' conversations.", routeTo: "/unified-inbox", visualTreatment: "coach", advanceCondition: "route_changed" },
+      { title: "Reply", bodyMarkdown: "Open a chat and reply without leaving.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Auto-pause", bodyMarkdown: "A LinkedIn reply to your outreach pauses that person's sequences.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
   {

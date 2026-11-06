@@ -288,7 +288,7 @@ export const TOOLS: Tool[] = [
   { href: "/brand-voice", label: "Brand Voice", icon: Mic2, group: "Configuration",
     description: "Teach the AI how your company sounds.", keywords: ["ai"] },
   { href: "/prompt-templates", label: "Prompt Templates", icon: FileText, group: "Configuration",
-    description: "Versioned prompts behind the AI generators.", keywords: ["ai"] },
+    description: "A library of versioned prompts; no AI generator reads them yet.", keywords: ["ai"] },
   { href: "/workflows", label: "Workflow Rules", icon: GitFork, group: "Configuration",
     description: "If-this-then-that automations on CRM events." },
   { href: "/custom-fields", label: "Custom Fields", icon: Database, group: "Configuration",
