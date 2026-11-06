@@ -1,8 +1,10 @@
 import { fmt$, fmtDate, StatusPill } from "@/components/usip/Common";
 import { PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { invalidateCustomerReads } from "@/lib/crmCache";
 import { RENEWAL_STAGES, RENEWAL_STAGE_LABELS, type RenewalStage } from "@shared/renewalStage";
-import { RefreshCw, Sparkles, AlertTriangle } from "lucide-react";
+import { RefreshCw, RotateCw, Sparkles, AlertTriangle } from "lucide-react";
+import { HEALTH_TIER_TONE, isChurnEstimate, type HealthTier } from "@shared/customerHealth";
 import { useMemo } from "react";
 import { toast } from "sonner";
 
@@ -25,11 +27,14 @@ import { toast } from "sonner";
  * outcome recorded — not that the customer looks unhealthy, which is the
  * separate health pill on every card.
  */
+// Urgency rises with the ladder and never falls back (audit 2026-10-20, R93):
+// 90 days was amber while 60 and 30 were blue, so the nearest renewals looked
+// calmer than the far ones.
 const TONE: Record<RenewalStage, "success" | "info" | "warning" | "danger" | "muted"> = {
   early: "success",
-  ninety: "warning",
-  sixty: "info",
-  thirty: "info",
+  ninety: "info",
+  sixty: "warning",
+  thirty: "danger",
   at_risk: "danger",
   renewed: "muted",
   churned: "muted",
@@ -41,7 +46,7 @@ export default function Renewals() {
   const utils = trpc.useUtils();
   const { data, isLoading, error, refetch } = trpc.cs.renewalsBoard.useQuery();
   const scoreChurn = trpc.csAi.scoreChurnRisk.useMutation({
-    onSuccess: () => utils.cs.renewalsBoard.invalidate(),
+    onSuccess: () => invalidateCustomerReads(utils),
     onError: (e: any) => toast.error(e.message),
   });
   const grouped = useMemo(() => {
@@ -60,7 +65,7 @@ export default function Renewals() {
 
   return (
     <Shell title="Renewals">
-      <PageHeader title="Renewal pipeline" description="Manage the full renewal cycle from early-warning flags through negotiation to signed renewals. Automate renewal reminders, track contract status, and surface expansion opportunities at renewal time." pageKey="renewals"
+      <PageHeader title="Renewal pipeline" description="Every customer in a column by how soon their contract ends, from more than 90 days out to past due, with their health and an AI churn-risk score you can run. Record a renewal or a termination as a contract amendment on the Customers page." pageKey="renewals"
         icon={<RefreshCw className="size-5" />}
       />
       {error ? <QueryError message={error.message} onRetry={() => refetch()} /> : isLoading ? <TableSkeleton rows={6} className="p-4" /> : (
@@ -81,7 +86,7 @@ export default function Renewals() {
                       <div className="text-sm font-medium truncate">{c.account?.name ?? "—"}</div>
                       <div className="flex items-center justify-between mt-1.5">
                         <div className="font-mono text-sm tabular-nums whitespace-nowrap">{fmt$(Number(c.arr ?? 0))}</div>
-                        <StatusPill tone={c.healthTier === "thriving" || c.healthTier === "healthy" ? "success" : c.healthTier === "at_risk" ? "warning" : c.healthTier === "critical" ? "danger" : "muted"}>
+                        <StatusPill tone={HEALTH_TIER_TONE[c.healthTier as HealthTier] ?? "muted"}>
                           {c.healthScore}
                         </StatusPill>
                       </div>
@@ -98,12 +103,26 @@ export default function Renewals() {
                           "text-emerald-600"
                         }`}>
                           <AlertTriangle className="size-3" />
-                          AI churn risk: {(c as any).churnRiskScore}%
+                          {/* An estimate from the health score when the AI
+                              call failed is not labelled AI (R74). */}
+                          {isChurnEstimate((c as any).churnRiskRationale) ? "Churn risk (estimate)" : "AI churn risk"}: {(c as any).churnRiskScore}%
                           {(c as any).churnRiskRationale && (
                             <span className="text-muted-foreground font-normal truncate ml-1" title={(c as any).churnRiskRationale}>
                               · {(c as any).churnRiskRationale.slice(0, 40)}{(c as any).churnRiskRationale.length > 40 ? "…" : ""}
                             </span>
                           )}
+                          {/* Re-score stays reachable (R93): once a score
+                              existed the only button went away for good. */}
+                          <button
+                            type="button"
+                            aria-label="Re-score churn risk"
+                            title="Re-score churn risk"
+                            className="ml-auto shrink-0 text-muted-foreground hover:text-foreground"
+                            onClick={() => scoreChurn.mutate({ customerId: c.id })}
+                            disabled={scoreChurn.isPending}
+                          >
+                            <RotateCw className="size-3" />
+                          </button>
                         </div>
                       ) : (
                         <button

@@ -8,6 +8,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { formatAmount } from "@shared/money";
 import { ReactNode, createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 /* ─────────────────────── promise-based confirm ──────────────────────────
@@ -283,8 +284,9 @@ export function useToggle(initial = false): [boolean, () => void, (v: boolean) =
   return [v, () => set((p) => !p), set];
 }
 
+/** The shared money format (@shared/money, R98): this was "$" + toLocaleString(), so 1234.5 read "$1,234.5". */
 export function fmt$(n: number | null | undefined) {
-  return `$${(Number(n ?? 0)).toLocaleString()}`;
+  return formatAmount(n);
 }
 
 export function fmtDate(d: Date | string | number | null | undefined) {

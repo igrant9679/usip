@@ -4,10 +4,16 @@
  * Pulls `opportunities.getWithRelated` for account + contact roles, plus
  * a line-items list, plus an inline win/loss reason editor when the deal
  * is closed. Stage history is exposed as an extra tab.
+ *
+ * Line items and contact roles are edited here (audit 2026-10-20, R35): the
+ * server procedures existed and no screen called them, so neither could ever
+ * be added. A line shows its product and its stored total, which carries the
+ * discount (R34).
  */
 import { useParams, Link, useLocation } from "wouter";
 import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { invalidateDealReads } from "@/lib/crmCache";
 import { CustomFieldsPanel } from "@/components/usip/CustomFieldsPanel";
 import { Shell, EmptyState } from "@/components/usip/Shell";
 import { DetailHeader, DetailSection, DetailBody } from "@/components/usip/DetailShell";
@@ -16,15 +22,162 @@ import { RelatedTasks } from "@/pages/usip/Tasks";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { KanbanSquare, Building2, Users, DollarSign, Brain, Loader2, Trash2 } from "lucide-react";
+import { KanbanSquare, Building2, Users, DollarSign, Brain, Loader2, Trash2, Plus } from "lucide-react";
 import { ConfirmButton } from "@/components/usip/Common";
 import { toast } from "sonner";
 import { formatCalendarDate, storedToCalendarDate } from "@shared/calendarDate";
+import { OPPORTUNITY_DELETE_SCOPE } from "@shared/dealDelete";
+import { FORECAST_CATEGORIES, FORECAST_CATEGORY_LABEL, type ForecastCategory } from "@shared/forecastCategory";
 
 function fmt$(n: any) {
   // Full, comma-grouped amount to match the list pages (e.g. $1,250,000).
   // The old K-only format mis-rendered millions as "$5000.0K".
   return `$${Math.round(Number(n ?? 0)).toLocaleString()}`;
+}
+
+/** A line's money to the cent: a discounted line is rarely whole dollars. */
+function fmtCents(n: any) {
+  return `$${Number(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+const ROLE_OPTIONS = ["champion", "decision_maker", "influencer", "evaluator", "blocker", "user", "other"] as const;
+const roleLabel = (r: string) => r.replace(/_/g, " ");
+
+/** Line items: the product, quantity × price less any discount, and the stored line total. */
+export function DealLineItems({ opportunityId, items, onChanged }: { opportunityId: number; items: any[]; onChanged: () => void }) {
+  const utils = trpc.useUtils();
+  const { data: products } = trpc.products.list.useQuery();
+  const [productId, setProductId] = useState("");
+  const [quantity, setQuantity] = useState("1");
+  const [unitPrice, setUnitPrice] = useState("");
+  const [discountPct, setDiscountPct] = useState("0");
+  const add = trpc.opportunities.addLineItem.useMutation({
+    // A line changes the deal amount, so every read of the deal (R31).
+    onSuccess: () => { setProductId(""); setQuantity("1"); setUnitPrice(""); setDiscountPct("0"); onChanged(); invalidateDealReads(utils); toast.success("Line item added"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const remove = trpc.opportunities.removeLineItem.useMutation({
+    onSuccess: () => { onChanged(); invalidateDealReads(utils); toast.success("Line item removed"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const active = (products ?? []).filter((p: any) => p.active !== false);
+  const pick = (id: string) => {
+    setProductId(id);
+    const p = active.find((x: any) => String(x.id) === id);
+    if (p) setUnitPrice(String(Number(p.listPrice ?? 0)));
+  };
+  const valid = !!productId && Number(quantity) >= 1 && Number.isInteger(Number(quantity))
+    && unitPrice !== "" && Number(unitPrice) >= 0 && Number(discountPct) >= 0 && Number(discountPct) <= 100;
+  return (
+    <section>
+      <div className="font-medium flex items-center gap-2 mb-2"><DollarSign className="size-4" /> Line items <Badge variant="outline">{items.length}</Badge></div>
+      {items.length === 0 ? <EmptyState title="No line items" /> :
+        <ul className="rounded-lg border bg-card divide-y">
+          {items.map((li: any) => (
+            <li key={li.id} className="p-3 flex items-center gap-3 text-sm">
+              <div className="flex-1 min-w-0 truncate">{li.product?.name ?? `Product #${li.productId} (removed)`}</div>
+              <div className="text-muted-foreground tabular-nums">
+                {li.quantity ?? 1} × {fmtCents(li.unitPrice)}{Number(li.discountPct ?? 0) > 0 ? ` − ${Number(li.discountPct)}%` : ""}
+              </div>
+              <div className="font-medium w-24 text-right tabular-nums">{fmtCents(li.lineTotal)}</div>
+              <ConfirmButton variant="ghost" size="sm" ariaLabel={`Remove ${li.product?.name ?? "line item"}`}
+                title="Remove this line item?" description="The deal's amount is recalculated from the lines that remain." confirmLabel="Remove"
+                disabled={remove.isPending} onConfirm={() => remove.mutate({ id: li.id, opportunityId })}>
+                <Trash2 className="size-3.5" />
+              </ConfirmButton>
+            </li>
+          ))}
+        </ul>
+      }
+      <p className="text-xs text-muted-foreground mt-2">Adding or removing a line sets the deal's amount to the sum of its lines.</p>
+      {active.length === 0 ? (
+        <p className="text-xs text-muted-foreground mt-1">No products yet. <Link href="/products" className="underline">Add products</Link> to price this deal by line.</p>
+      ) : (
+        <form className="mt-2 grid grid-cols-2 md:grid-cols-[1fr_5rem_7rem_5rem_auto] gap-2 items-end"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!valid) return;
+            add.mutate({ opportunityId, productId: Number(productId), quantity: Number(quantity), unitPrice: Number(unitPrice), discountPct: Number(discountPct) });
+          }}>
+          <select aria-label="Product" value={productId} onChange={(e) => pick(e.target.value)} className="col-span-2 md:col-span-1 h-9 text-sm rounded-md border bg-background px-2">
+            <option value="">Choose a product…</option>
+            {active.map((p: any) => <option key={p.id} value={String(p.id)}>{p.name}{p.sku ? ` (${p.sku})` : ""}</option>)}
+          </select>
+          <Input aria-label="Quantity" type="number" min={1} step={1} value={quantity} onChange={(e) => setQuantity(e.target.value)} className="h-9" />
+          <Input aria-label="Unit price" type="number" min={0} step="0.01" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} className="h-9" placeholder="Unit price" />
+          <Input aria-label="Discount %" type="number" min={0} max={100} step="0.01" value={discountPct} onChange={(e) => setDiscountPct(e.target.value)} className="h-9" />
+          <Button type="submit" size="sm" disabled={!valid || add.isPending} className="gap-1"><Plus className="size-3.5" /> Add line</Button>
+        </form>
+      )}
+    </section>
+  );
+}
+
+/** Contact roles: who on the account plays which part in this deal. */
+export function DealContactRoles({ opportunityId, accountId, accountName, roles, onChanged }: {
+  opportunityId: number; accountId: number | null; accountName: string | null; roles: any[]; onChanged: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const { data: acct } = trpc.accounts.getWithContacts.useQuery({ id: accountId ?? 0 }, { enabled: !!accountId });
+  const [contactId, setContactId] = useState("");
+  const [role, setRole] = useState<(typeof ROLE_OPTIONS)[number]>("champion");
+  const [isPrimary, setIsPrimary] = useState(false);
+  const add = trpc.opportunities.addRole.useMutation({
+    onSuccess: () => { setContactId(""); setIsPrimary(false); onChanged(); invalidateDealReads(utils); toast.success("Contact role added"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const remove = trpc.opportunities.removeRole.useMutation({
+    onSuccess: () => { onChanged(); invalidateDealReads(utils); toast.success("Contact role removed"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const people = acct?.contacts ?? [];
+  return (
+    <section>
+      <div className="font-medium flex items-center gap-2 mb-2"><Users className="size-4" /> Contact roles <Badge variant="outline">{roles.length}</Badge></div>
+      {roles.length === 0 ? <EmptyState title="No contacts on this deal" /> :
+        <ul className="rounded-lg border bg-card divide-y">
+          {roles.map((r: any) => (
+            <li key={r.id} className="p-3 flex items-center gap-3 text-sm">
+              <div className="flex-1">
+                {r.contact ? (
+                  <Link href={`/contacts/${r.contact.id}`} className="font-medium hover:underline">
+                    {r.contact.firstName} {r.contact.lastName}
+                  </Link>
+                ) : <span className="text-muted-foreground">(deleted)</span>}
+                {r.role && <span className="text-xs text-muted-foreground"> · {roleLabel(r.role)}</span>}
+              </div>
+              {r.isPrimary && <Badge>Primary</Badge>}
+              <ConfirmButton variant="ghost" size="sm" ariaLabel="Remove this contact role"
+                title="Remove this contact role?" description="The contact stays; only their role on this deal is removed." confirmLabel="Remove"
+                disabled={remove.isPending} onConfirm={() => remove.mutate({ id: r.id })}>
+                <Trash2 className="size-3.5" />
+              </ConfirmButton>
+            </li>
+          ))}
+        </ul>
+      }
+      {!accountId ? null : people.length === 0 ? (
+        <p className="text-xs text-muted-foreground mt-2">{accountName ?? "This account"} has no contacts yet. Add one to the account to give it a role here.</p>
+      ) : (
+        <form className="mt-2 grid grid-cols-2 md:grid-cols-[1fr_10rem_auto_auto] gap-2 items-center"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!contactId) return;
+            add.mutate({ opportunityId, contactId: Number(contactId), role, isPrimary });
+          }}>
+          <select aria-label="Contact" value={contactId} onChange={(e) => setContactId(e.target.value)} className="col-span-2 md:col-span-1 h-9 text-sm rounded-md border bg-background px-2">
+            <option value="">Choose a contact at {accountName ?? "the account"}…</option>
+            {people.map((c: any) => <option key={c.id} value={String(c.id)}>{c.firstName} {c.lastName}{c.title ? ` — ${c.title}` : ""}</option>)}
+          </select>
+          <select aria-label="Role" value={role} onChange={(e) => setRole(e.target.value as (typeof ROLE_OPTIONS)[number])} className="h-9 text-sm rounded-md border bg-background px-2 capitalize">
+            {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+          </select>
+          <label className="text-xs flex items-center gap-1"><input type="checkbox" checked={isPrimary} onChange={(e) => setIsPrimary(e.target.checked)} /> Primary</label>
+          <Button type="submit" size="sm" disabled={!contactId || add.isPending} className="gap-1"><Plus className="size-3.5" /> Add role</Button>
+        </form>
+      )}
+    </section>
+  );
 }
 
 export default function OpportunityDetail() {
@@ -40,7 +193,7 @@ export default function OpportunityDetail() {
   const { data: members } = trpc.team.list.useQuery();
 
   const update = trpc.opportunities.update.useMutation({
-    onSuccess: () => { utils.opportunities.getWithRelated.invalidate({ id }); toast.success("Saved"); },
+    onSuccess: () => { invalidateDealReads(utils); toast.success("Saved"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -49,8 +202,7 @@ export default function OpportunityDetail() {
   const del = trpc.opportunities.delete.useMutation({
     onSuccess: () => {
       toast.success("Opportunity deleted");
-      utils.opportunities.board.invalidate();
-      utils.opportunities.list.invalidate();
+      invalidateDealReads(utils);
       setLocation("/pipeline");
     },
     onError: (e) => toast.error(`Failed to delete: ${e.message}`),
@@ -99,7 +251,20 @@ export default function OpportunityDetail() {
               if (next !== (storedToCalendarDate(o.closeDate) ?? null)) update.mutate({ id: o.id, patch: { closeDate: next } });
             }} />
         </label>
-        {o.nextStep && <div className="text-muted-foreground text-xs">Next: <span className="text-foreground">{o.nextStep}</span></div>}
+        {/* A rep's forecast call (audit 2026-10-20, R41): Commit was "90%
+            or more", which no stage defaults to, so it was nearly always $0. */}
+        {!isClosedWon && !isClosedLost && (
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            Forecast
+            <select aria-label="Forecast category" className="h-7 text-xs rounded-md border bg-background px-2" disabled={update.isPending}
+              value={o.forecastCategory ?? ""}
+              onChange={(e) => update.mutate({ id: o.id, patch: { forecastCategory: (e.target.value || null) as ForecastCategory | null } })}>
+              <option value="">By win % ({o.winProb >= 90 ? "Commit" : o.winProb >= 50 ? "Best case" : "Pipeline"})</option>
+              {FORECAST_CATEGORIES.map((c) => <option key={c} value={c}>{FORECAST_CATEGORY_LABEL[c]}</option>)}
+            </select>
+          </label>
+        )}
+        {o.nextStep &&<div className="text-muted-foreground text-xs">Next: <span className="text-foreground">{o.nextStep}</span></div>}
         {account && (
           <div className="flex items-center gap-2 pt-2"><Building2 className="size-4 text-muted-foreground" />
             <Link href={`/accounts/${account.id}`} className="hover:underline font-medium">{account.name}</Link>
@@ -142,42 +307,18 @@ export default function OpportunityDetail() {
     </div>
   );
 
+  // A line changes the deal's amount, so the header and the boards re-read too.
+  const lineItemsChanged = () => {
+    utils.opportunities.listLineItems.invalidate({ opportunityId: id });
+    utils.opportunities.getWithRelated.invalidate({ id });
+    utils.opportunities.board.invalidate();
+  };
+  const rolesChanged = () => utils.opportunities.getWithRelated.invalidate({ id });
+
   const related = (
-    <div className="space-y-4">
-      <section>
-        <div className="font-medium flex items-center gap-2 mb-2"><Users className="size-4" /> Contact roles <Badge variant="outline">{contactRoles.length}</Badge></div>
-        {contactRoles.length === 0 ? <EmptyState title="No contacts on this deal" /> :
-          <ul className="rounded-lg border bg-card divide-y">
-            {contactRoles.map((r: any) => (
-              <li key={r.id} className="p-3 flex items-center gap-3 text-sm">
-                <div className="flex-1">
-                  {r.contact ? (
-                    <Link href={`/contacts/${r.contact.id}`} className="font-medium hover:underline">
-                      {r.contact.firstName} {r.contact.lastName}
-                    </Link>
-                  ) : <span className="text-muted-foreground">(deleted)</span>}
-                  {r.role && <span className="text-xs text-muted-foreground"> · {r.role}</span>}
-                </div>
-                {r.isPrimary && <Badge>Primary</Badge>}
-              </li>
-            ))}
-          </ul>
-        }
-      </section>
-      <section>
-        <div className="font-medium flex items-center gap-2 mb-2"><DollarSign className="size-4" /> Line items <Badge variant="outline">{lineItems?.length ?? 0}</Badge></div>
-        {!lineItems || lineItems.length === 0 ? <EmptyState title="No line items" /> :
-          <ul className="rounded-lg border bg-card divide-y">
-            {lineItems.map((li: any) => (
-              <li key={li.id} className="p-3 flex items-center gap-3 text-sm">
-                <div className="flex-1">{li.productName ?? li.sku ?? `Item #${li.id}`}</div>
-                <div className="text-muted-foreground">{li.quantity ?? 1} × {fmt$(li.unitPrice)}</div>
-                <div className="font-medium w-20 text-right">{fmt$((li.quantity ?? 1) * Number(li.unitPrice ?? 0))}</div>
-              </li>
-            ))}
-          </ul>
-        }
-      </section>
+    <div className="space-y-6">
+      <DealContactRoles opportunityId={o.id} accountId={account?.id ?? null} accountName={account?.name ?? null} roles={contactRoles} onChanged={rolesChanged} />
+      <DealLineItems opportunityId={o.id} items={lineItems ?? []} onChanged={lineItemsChanged} />
     </div>
   );
 
@@ -242,7 +383,7 @@ export default function OpportunityDetail() {
           size="sm"
           ariaLabel="Delete this opportunity"
           title="Delete this opportunity?"
-          description={`"${o.name}" will be permanently deleted, along with its stage history and line items. This cannot be undone.`}
+          description={`"${o.name}" will be permanently deleted, ${OPPORTUNITY_DELETE_SCOPE}. This cannot be undone.`}
           confirmLabel="Delete"
           disabled={del.isPending}
           className="text-destructive hover:text-destructive hover:bg-destructive/10"

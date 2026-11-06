@@ -33,6 +33,7 @@ import {
 } from "../drizzle/schema";
 import { getDb } from "./db";
 import { OPERATOR_ARTICLES, OPERATOR_CATEGORY } from "./seedHelpOperatorManual";
+import { helpOverrideKeys } from "./services/helpSeedOverrides";
 
 type AnyDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -1931,12 +1932,24 @@ async function upsertCategory(db: AnyDb, workspaceId: number, c: CatSeed): Promi
   return (res as any).insertId as number;
 }
 
+/**
+ * Hands off what a person changed (G21): `changed` is the slugs or names an
+ * admin edited or deleted (help_seed_overrides), or null when that could not be
+ * read, in which case an existing row counts as changed and only a missing one
+ * is added. Returns whether the seed wrote the row.
+ */
+function seedMayWrite(changed: Set<string> | null, key: string, exists: boolean): boolean {
+  if (changed === null) return !exists;
+  return !changed.has(key);
+}
+
 async function upsertArticle(
   db: AnyDb,
   workspaceId: number,
   a: ArticleSeed,
   categoryId: number | null,
-): Promise<void> {
+  changed: Set<string> | null,
+): Promise<boolean> {
   const payload = {
     workspaceId,
     categoryId: categoryId ?? null,
@@ -1954,14 +1967,17 @@ async function upsertArticle(
     .from(helpArticles)
     .where(and(eq(helpArticles.workspaceId, workspaceId), eq(helpArticles.slug, a.slug)))
     .limit(1);
+  if (!seedMayWrite(changed, a.slug, !!existing)) return false;
   if (existing) {
     await db.update(helpArticles).set(payload).where(eq(helpArticles.id, existing.id));
   } else {
     await db.insert(helpArticles).values(payload);
   }
+  return true;
 }
 
-async function upsertTour(db: AnyDb, workspaceId: number, t: TourSeed): Promise<number> {
+/** The tour's id, or null when it is gone and a person deleted it. */
+async function upsertTour(db: AnyDb, workspaceId: number, t: TourSeed, changed: Set<string> | null): Promise<number | null> {
   const tourPayload = {
     workspaceId,
     name: t.name,
@@ -1977,6 +1993,7 @@ async function upsertTour(db: AnyDb, workspaceId: number, t: TourSeed): Promise<
     .from(tours)
     .where(and(eq(tours.workspaceId, workspaceId), eq(tours.name, t.name)))
     .limit(1);
+  if (!seedMayWrite(changed, t.name, !!existing)) return existing?.id ?? null;
 
   let tourId: number;
   if (existing) {
@@ -2033,22 +2050,27 @@ export async function seedHelpContent(db: AnyDb, workspaceId: number): Promise<v
     categoryIdBySlug.set(c.slug, id);
   }
 
-  // 2. Articles (by slug).
+  // 2. Articles (by slug), except those a person has edited or deleted (G21).
+  const changedArticles = await helpOverrideKeys(db, workspaceId, "article");
+  const written = new Set<string>();
   for (const a of ARTICLES) {
-    await upsertArticle(db, workspaceId, a, categoryIdBySlug.get(a.categorySlug) ?? null);
+    if (await upsertArticle(db, workspaceId, a, categoryIdBySlug.get(a.categorySlug) ?? null, changedArticles)) {
+      written.add(a.slug);
+    }
   }
 
   // 3. Retire superseded legacy tours, then seed the 10 SDR tours (by name).
   await retireLegacyTours(db, workspaceId);
+  const changedTours = await helpOverrideKeys(db, workspaceId, "tour");
   const tourIdByName = new Map<string, number>();
   for (const t of TOURS) {
-    const id = await upsertTour(db, workspaceId, t);
-    tourIdByName.set(t.name, id);
+    const id = await upsertTour(db, workspaceId, t, changedTours);
+    if (id) tourIdByName.set(t.name, id);
   }
 
   // 4. Link articles → their associated tour (so Ask AI / Help can offer "take the tour").
   for (const a of ARTICLES) {
-    if (!a.tourName) continue;
+    if (!a.tourName || !written.has(a.slug)) continue;
     const tourId = tourIdByName.get(a.tourName);
     if (!tourId) continue;
     await db

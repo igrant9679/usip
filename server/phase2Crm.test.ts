@@ -447,7 +447,9 @@ describe("the client fixes", () => {
     const common = read("client/src/components/usip/Common.tsx");
     expect(common).toContain('{ type: "number", step: step ?? "0.01", min: allowNegative ? min : min ?? 0, max, inputMode: "decimal" as const }');
     for (const [f, field] of [
-      ["client/src/pages/usip/Pipeline.tsx", '<Field name="value" label="Value ($)" type="money"'],
+      // 2026-11-06 (audit R36, R103): the new-deal form moved into one dialog
+      // the Pipeline and Deals boards share. Same field, same cents.
+      ["client/src/components/usip/NewOpportunityDialog.tsx", '<Field name="value" label="Value ($)" type="money"'],
       ["client/src/pages/usip/Products.tsx", '<Field name="listPrice" label="List price" type="money"'],
       ["client/src/pages/usip/Products.tsx", '<Field name="cost" label="Cost" type="money"'],
       ["client/src/pages/usip/Customers.tsx", '<Field name="arrDelta" label="Δ ARR" type="money" allowNegative'],

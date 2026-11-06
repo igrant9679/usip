@@ -363,6 +363,9 @@ export const opportunities = mysqlTable(
     nextStep: text("nextStep"),
     lostReason: varchar("lostReason", { length: 120 }),
     winReason: varchar("winReason", { length: 120 }),
+    // A rep's forecast call — @shared/forecastCategory (migration 0301, R41).
+    // NULL: counted by win %, as before.
+    forecastCategory: varchar("forecastCategory", { length: 16 }),
     lastActivityAt: timestamp("lastActivityAt"),
     pipelineId: int("pipelineId"),
     campaignId: int("campaignId"),
@@ -3145,6 +3148,8 @@ export const pipelineAlerts = mysqlTable(
       "closing_soon_regression",
       "amount_change",
       "no_champion",
+      // A close date that has passed (migration 0300, audit R38).
+      "past_close_date",
     ]).notNull(),
     details: json("details"), // {daysSinceActivity, closeDate, previousAmount, currentAmount, etc.}
     dismissedAt: timestamp("dismissedAt"),
@@ -4870,6 +4875,27 @@ export const helpArticles = mysqlTable(
   }),
 );
 export type HelpArticle = typeof helpArticles.$inferSelect;
+
+/**
+ * Help articles and tours a person has edited or deleted (migration 0270). The
+ * boot seed re-applies its content by slug or tour name on every deploy; it
+ * leaves anything named here alone, so an admin's edit is not reverted and a
+ * deleted article does not come back (audit 2026-10-20, G21). seedKey is the
+ * slug or name the row had when it was first changed, so a rename still counts.
+ */
+export const helpSeedOverrides = mysqlTable(
+  "help_seed_overrides",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    kind: varchar("kind", { length: 16 }).notNull(), // "article" | "tour"
+    seedKey: varchar("seedKey", { length: 200 }).notNull(),
+    action: varchar("action", { length: 16 }).notNull(), // "edited" | "deleted"
+    userId: int("userId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ uq: uniqueIndex("ux_hso_key").on(t.workspaceId, t.kind, t.seedKey) }),
+);
 
 export const helpSearchLog = mysqlTable(
   "help_search_log",

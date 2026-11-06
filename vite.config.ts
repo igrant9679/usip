@@ -173,18 +173,29 @@ function vitePluginManusDebugCollector(): Plugin {
  * move, read cookies and local storage, and obeyed SpacePreviewerChannel
  * messages from ANY origin — so a page that framed the app could drive it.
  * `command === "serve"` is the Vite dev server; `vite build` is "build".
+ *
+ * The JSX location plugin is dev tooling too: it stamped a data-loc source
+ * path on every element of the production build, publishing the repo's file
+ * layout and adding weight to every page (audit 2026-10-20, X2.3).
  */
-const basePlugins = [react(), tailwindcss(), jsxLocPlugin()];
-const devOnlyPlugins = () => [vitePluginManusRuntime(), vitePluginManusDebugCollector()];
+const basePlugins = [react(), tailwindcss()];
+const devOnlyPlugins = () => [jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
 
 export default defineConfig(({ command }) => ({
   plugins: command === "serve" ? [...basePlugins, ...devOnlyPlugins()] : basePlugins,
   resolve: {
-    alias: {
-      "@": path.resolve(PROJECT_ROOT, "client", "src"),
-      "@shared": path.resolve(PROJECT_ROOT, "shared"),
-      "@assets": path.resolve(PROJECT_ROOT, "attached_assets"),
-    },
+    alias: [
+      { find: "@", replacement: path.resolve(PROJECT_ROOT, "client", "src") },
+      { find: "@shared", replacement: path.resolve(PROJECT_ROOT, "shared") },
+      { find: "@assets", replacement: path.resolve(PROJECT_ROOT, "attached_assets") },
+      // Streamdown imports the full Shiki bundle, whose language map built a
+      // chunk for each of about 300 languages, some 780 KB, slowing every build
+      // for code blocks nobody writes (audit X2.5). Shiki's web bundle has the
+      // same exports over 56 common languages (JS/TS, JSON, HTML/CSS, Python,
+      // SQL, shell, Markdown, YAML, ...); anything else renders as plain text,
+      // which is Streamdown's own fallback for an unknown language.
+      { find: /^shiki$/, replacement: "shiki/bundle/web" },
+    ],
   },
   envDir: path.resolve(PROJECT_ROOT),
   root: path.resolve(PROJECT_ROOT, "client"),
