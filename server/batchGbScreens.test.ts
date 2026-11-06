@@ -11,6 +11,7 @@ import { submissionExtras } from "../client/src/lib/submissionFields";
 import { SubmissionExtras } from "../client/src/components/usip/SubmissionExtras";
 import { DashboardChartRenderer } from "../client/src/components/usip/DashboardChartRenderer";
 import { chartText } from "../client/src/lib/chartText";
+import { formEmbedCode } from "../client/src/pages/usip/FormsV2";
 
 const root = join(__dirname, "..");
 const read = (rel: string) => readFileSync(join(root, rel), "utf8").replace(/\r\n/g, "\n");
@@ -154,6 +155,17 @@ describe("dead client code is gone (G67)", () => {
   ];
   it.each(gone)("%s", (f) => {
     expect(existsSync(join(root, f))).toBe(false);
+  });
+});
+
+describe("a form can be embedded (G71)", () => {
+  it("the embed code frames the public form, title escaped", () => {
+    const code = formEmbedCode("abc123", 'Get "a" <demo>');
+    expect(code).toMatch(/^<iframe src="[^"]*\/f\/abc123" title="Get &quot;a&quot; &lt;demo&gt;"/);
+    expect(read("client/src/pages/usip/FormsV2.tsx")).toContain("onClick={() => copyEmbed(f)}");
+  });
+  it("public form pages are still served frameable", () => {
+    expect(read("server/_core/securityHeaders.ts")).toMatch(/const EMBEDDABLE = \[[^\]]*"\/f\/"/);
   });
 });
 

@@ -20,6 +20,11 @@ const h = vi.hoisted(() => {
 });
 vi.mock("./db", async (a) => ({ ...(await a<typeof import("./db")>()), getDb: async () => h.db, checkPermission: async () => {} }));
 vi.mock("@/lib/trpc", () => ({ trpc: {} }));
+vi.mock("./_core/llm", async (a) => ({
+  ...(await a<typeof import("./_core/llm")>()),
+  // No provider is called: the model's reply, citing one real id and one made up.
+  invokeLLM: async () => ({ choices: [{ message: { content: JSON.stringify({ answer: "See the article.", citedArticleIds: [1, 999], confidence: 90 }) } }] }),
+}));
 
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { appRouter } from "./routers";
@@ -71,6 +76,23 @@ describe("the Help admin list (G59)", () => {
     const s = read("client/src/pages/usip/HelpCenter.tsx");
     const admin = s.slice(s.indexOf("function AdminTab()"));
     expect(admin).toContain('trpc.helpCenter.listArticles.useQuery({ status: "all", limit: 500 })');
+  });
+});
+
+describe("Ask AI names the articles it cites (G71)", () => {
+  it("the answer carries each cited article's title and slug, and drops an id that names nothing", async () => {
+    rows("ai_help_conversations").push({ id: 4, workspaceId: WS, userId: REP });
+    const out = await caller(REP).helpCenter.askAI({ conversationId: 4, message: "how do I go live?" });
+    expect(out.citedArticles).toEqual([{ id: 1, slug: "live", title: "Live" }]);
+  });
+
+  it("both chat surfaces show titles, linked, instead of ids", () => {
+    for (const f of ["client/src/pages/usip/HelpCenter.tsx", "client/src/components/usip/HelpDrawer.tsx"]) {
+      const s = read(f);
+      expect(s, f).toContain("<CitedArticles articles={msg.citedArticles}");
+      expect(s, f).not.toContain("Sources: Article {msg.citedArticleIds");
+    }
+    expect(read("client/src/components/usip/CitedArticles.tsx")).toContain("href={`/help/articles/${a.slug}`}");
   });
 });
 

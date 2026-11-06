@@ -42,6 +42,7 @@ import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
 import { isAdminRole } from "@shared/roleRank";
 import { tablistProps, tabProps } from "@/lib/tabs";
+import { CitedArticles, type CitedArticle } from "@/components/usip/CitedArticles";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
@@ -191,7 +192,7 @@ function BrowseTab() {
 
 /* ─── Ask AI Tab (full page) ─────────────────────────────────────────────── */
 
-type Message = { role: "user" | "assistant"; body: string; citedArticleIds?: number[] };
+type Message = { role: "user" | "assistant"; body: string; citedArticles?: CitedArticle[] };
 
 function AskAITab() {
   const [conversationId, setConversationId] = useState<number | null>(null);
@@ -223,7 +224,7 @@ function AskAITab() {
       const res = await askAI.mutateAsync({ conversationId: convId, message: userMsg });
       setMessages((m) => [
         ...m,
-        { role: "assistant", body: res.answer, citedArticleIds: res.citedArticleIds },
+        { role: "assistant", body: res.answer, citedArticles: res.citedArticles },
       ]);
     } catch {
       setMessages((m) => [
@@ -275,11 +276,7 @@ function AskAITab() {
               }`}
             >
               <p className="whitespace-pre-wrap leading-relaxed">{msg.body}</p>
-              {msg.citedArticleIds && msg.citedArticleIds.length > 0 && (
-                <p className="text-xs mt-2 opacity-60">
-                  📖 Sources: Article {msg.citedArticleIds.join(", ")}
-                </p>
-              )}
+              <CitedArticles articles={msg.citedArticles} className="text-xs mt-2 opacity-70" />
             </div>
           </div>
         ))}

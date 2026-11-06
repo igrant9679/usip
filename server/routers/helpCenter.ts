@@ -324,7 +324,7 @@ export const helpCenterRouter = router({
       // a large body slice. Replaces the old top-20-by-viewCount/600-char
       // approach that hid new articles entirely.
       const articles = await db
-        .select({ id: helpArticles.id, title: helpArticles.title, summary: helpArticles.summary, bodyMarkdown: helpArticles.bodyMarkdown, tags: helpArticles.tags, pageKey: helpArticles.pageKey })
+        .select({ id: helpArticles.id, slug: helpArticles.slug, title: helpArticles.title, summary: helpArticles.summary, bodyMarkdown: helpArticles.bodyMarkdown, tags: helpArticles.tags, pageKey: helpArticles.pageKey })
         .from(helpArticles)
         .where(and(eq(helpArticles.workspaceId, ctx.workspace.id), eq(helpArticles.status, "published")))
         // 80 was the seeded count's headroom in 0130; the Operator's Manual
@@ -450,10 +450,20 @@ ${articleContext}`;
           eq(aiHelpConversations.workspaceId, ctx.workspace.id),
         ));
 
+      // Titles and slugs for the articles cited, so the answer can link them
+      // instead of printing ids (G71). An id the model made up names nothing
+      // in this workspace's catalogue and is left out.
+      const catalogue = new Map(articles.map((a) => [a.id, a]));
+      const citedArticles = citedArticleIds
+        .map((id) => catalogue.get(Number(id)))
+        .filter((a): a is NonNullable<typeof a> => !!a)
+        .map((a) => ({ id: a.id, slug: a.slug, title: a.title }));
+
       return {
         messageId: (msgRes as any).insertId as number,
         answer,
         citedArticleIds,
+        citedArticles,
         confidence,
       };
     }),
