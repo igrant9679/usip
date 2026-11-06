@@ -116,10 +116,16 @@ export async function remainingUnits(
   return { plan, credits, total: plan == null ? null : plan + credits };
 }
 
+/**
+ * `heldAt` is when the row's current unbroken hold began (migration 0247,
+ * audit A72): set by the first hold, kept by overlapping ones, cleared when
+ * the reservations drain to zero. MySQL applies a single-table UPDATE's SET
+ * left to right, so the clear sees the decremented `unitsReserved`.
+ */
 async function tryHold(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, rowId: number, n: number): Promise<boolean> {
   const [res] = await db.execute(
     sql`UPDATE \`prospect_source_budget_ledger\`
-        SET \`unitsReserved\` = \`unitsReserved\` + ${n}
+        SET \`unitsReserved\` = \`unitsReserved\` + ${n}, \`heldAt\` = COALESCE(\`heldAt\`, NOW())
         WHERE \`id\` = ${rowId} AND \`workspaceId\` = ${workspaceId}
           AND (\`unitsLimit\` IS NULL OR \`unitsConsumed\` + \`unitsReserved\` + ${n} <= \`unitsLimit\`)`,
   );
@@ -130,7 +136,8 @@ async function unhold(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, worksp
   for (let i = 0; i < rowIds.length; i++) {
     await db.execute(
       sql`UPDATE \`prospect_source_budget_ledger\`
-          SET \`unitsReserved\` = GREATEST(0, \`unitsReserved\` - ${n})
+          SET \`unitsReserved\` = GREATEST(0, \`unitsReserved\` - ${n}),
+              \`heldAt\` = IF(\`unitsReserved\` = 0, NULL, \`heldAt\`)
           WHERE \`id\` = ${rowIds[i]} AND \`workspaceId\` = ${workspaceId}`,
     );
   }
@@ -185,7 +192,8 @@ export async function commit(workspaceId: number, r: Reservation, actualUnits: n
     await db.execute(
       sql`UPDATE \`prospect_source_budget_ledger\`
           SET \`unitsConsumed\` = \`unitsConsumed\` + ${actual},
-              \`unitsReserved\` = GREATEST(0, \`unitsReserved\` - ${r.units})
+              \`unitsReserved\` = GREATEST(0, \`unitsReserved\` - ${r.units}),
+              \`heldAt\` = IF(\`unitsReserved\` = 0, NULL, \`heldAt\`)
           WHERE \`id\` = ${r.rowIds[i]} AND \`workspaceId\` = ${workspaceId}`,
     );
   }
@@ -263,13 +271,23 @@ export async function ledgerView(workspaceId: number, slug: ProspectSourceSlug, 
     }));
 }
 
-/** Nightly: a hold older than the run that made it is a leak from a crashed run. */
+/**
+ * Nightly: a hold older than the run that made it is a leak from a crashed run.
+ *
+ * Keyed on when the hold began (audit A72). `updatedAt` moves with every
+ * reserve and commit on the row, so a monthly or credits row that some run
+ * touches every couple of hours never looked stale, and its leaked units
+ * stayed reserved — shrinking the allowance — until the period ended or for
+ * ever. A row holding since before 0247 has no `heldAt` and keeps the old rule.
+ */
 export async function releaseStaleHolds(): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
   const [res] = await db.execute(
-    sql`UPDATE \`prospect_source_budget_ledger\` SET \`unitsReserved\` = 0
-        WHERE \`unitsReserved\` > 0 AND \`updatedAt\` < (NOW() - INTERVAL 2 HOUR)`,
+    sql`UPDATE \`prospect_source_budget_ledger\` SET \`unitsReserved\` = 0, \`heldAt\` = NULL
+        WHERE \`unitsReserved\` > 0
+          AND (\`heldAt\` < (NOW() - INTERVAL 2 HOUR)
+               OR (\`heldAt\` IS NULL AND \`updatedAt\` < (NOW() - INTERVAL 2 HOUR)))`,
   );
   return (res as { affectedRows?: number })?.affectedRows ?? 0;
 }
