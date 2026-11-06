@@ -12,14 +12,15 @@
  * personLink + the existing capped, compliant enrichment machinery. What
  * this pass writes to the queue is limited to: scrubbed link fields,
  * discovered linkedinUrl (an enrichment INPUT), enrichment re-queue stamps,
- * and the skipped flag.
+ * and the skipped flag with the reason the Rejections tab shows.
  *
  * NO FABRICATION. LinkedIn discovery accepts a profile only when the
  * normalized result name equals the row's normalized name AND the result
  * mentions the row's company; anything less is left missing.
  */
-import { and, eq, inArray } from "drizzle-orm";
-import { prospectQueue, prospects } from "../../../drizzle/schema";
+import { and, eq, gte, inArray } from "drizzle-orm";
+import { linkedinActivityLog, prospectQueue, prospects } from "../../../drizzle/schema";
+import { stopProspectSteps } from "./stepHold";
 import { getDb } from "../../db";
 import { isPlaceholderToken } from "@shared/fieldHygiene";
 import { canonicalText, canonicalTokens } from "@shared/canonicalText";
@@ -35,6 +36,7 @@ interface QueueRow {
   campaignId: number | null;
   personProspectId: number | null;
   sequenceStatus: string;
+  enrichmentStatus?: string | null;
   firstName: string | null;
   lastName: string | null;
   email: string | null;
@@ -66,6 +68,7 @@ async function loadRows(workspaceId: number): Promise<QueueRow[]> {
     campaignId: prospectQueue.campaignId,
     personProspectId: prospectQueue.personProspectId,
     sequenceStatus: prospectQueue.sequenceStatus,
+    enrichmentStatus: prospectQueue.enrichmentStatus,
     firstName: prospectQueue.firstName,
     lastName: prospectQueue.lastName,
     email: prospectQueue.email,
@@ -77,26 +80,73 @@ async function loadRows(workspaceId: number): Promise<QueueRow[]> {
   }).from(prospectQueue).where(eq(prospectQueue.workspaceId, workspaceId)).orderBy(prospectQueue.id);
 }
 
-/** Union of rows sharing any identity key → duplicate groups. */
-function duplicateGroups(rows: QueueRow[]): QueueRow[][] {
-  const byKey = new Map<string, number>(); // key → group id
-  const groupOf = new Map<number, number>(); // row id → group id
-  const groups = new Map<number, QueueRow[]>();
-  let next = 0;
-  for (const r of rows) {
-    const keys = queueIdentityKeys(r);
-    let gid: number | undefined;
-    for (const k of keys) {
-      const g = byKey.get(k);
-      if (g !== undefined) { gid = g; break; }
+/** What the LinkedIn discovery searches for a row — also what the activity log records. */
+const searchKeywords = (r: QueueRow) => {
+  const first = isPlaceholderToken(r.firstName) ? "" : (r.firstName ?? "");
+  const last = isPlaceholderToken(r.lastName) ? "" : (r.lastName ?? "");
+  return `${first} ${last} ${r.companyName ?? r.companyDomain ?? ""}`.trim();
+};
+
+/** How long a reconcile search that found no confident match is not repeated. */
+const SEARCH_REST_DAYS = 30;
+
+/**
+ * Searches this pass already spent in the last SEARCH_REST_DAYS (A43, "re-spends").
+ * Each run searched the same first rows again — the ones that had found no
+ * confident match last time — so the budget never reached anyone new.
+ */
+async function recentReconcileSearches(db: any, workspaceId: number): Promise<Set<string>> {
+  const since = new Date(Date.now() - SEARCH_REST_DAYS * 86_400_000);
+  const rows: Array<{ t: string | null }> = await db.select({ t: linkedinActivityLog.targetIdentifier })
+    .from(linkedinActivityLog)
+    .where(and(
+      eq(linkedinActivityLog.workspaceId, workspaceId),
+      eq(linkedinActivityLog.kind, "search"),
+      eq(linkedinActivityLog.source, "reconcile"),
+      gte(linkedinActivityLog.occurredAt, since),
+    ));
+  return new Set(rows.map((r) => String(r.t ?? "")).filter(Boolean));
+}
+
+/**
+ * Move a row to the Rejections tab with the reason a person reads there
+ * (A43: rows were flagged with no reason, so the tab said "No reason
+ * given"), and stop any steps it still had scheduled.
+ */
+async function flagToRejections(db: any, workspaceId: number, userId: number, row: QueueRow, reason: string): Promise<void> {
+  await db.update(prospectQueue).set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectedByUserId: userId, rejectionReason: reason } as never)
+    .where(and(eq(prospectQueue.id, row.id), eq(prospectQueue.workspaceId, workspaceId)));
+  await stopProspectSteps(db, workspaceId, row.id, reason);
+}
+
+/**
+ * Rows that share an identity key, directly or through a chain → duplicate
+ * groups (union-find; audit 2026-10-20, A43). This used to join a row to the
+ * group of the FIRST key it matched and then repoint its other keys there,
+ * so A (email e) + B (profile u) + C (e and u) put C with A and left B on
+ * its own: one person, two groups, and the duplicate missed.
+ */
+export function duplicateGroups<R extends QueueRow>(rows: R[]): R[][] {
+  const parent = rows.map((_, i) => i);
+  const find = (i: number): number => {
+    while (parent[i] !== i) { parent[i] = parent[parent[i]!]!; i = parent[i]!; }
+    return i;
+  };
+  const firstWithKey = new Map<string, number>();
+  rows.forEach((r, i) => {
+    for (const k of queueIdentityKeys(r)) {
+      const j = firstWithKey.get(k);
+      if (j === undefined) firstWithKey.set(k, i);
+      else parent[find(i)] = find(j);
     }
-    if (gid === undefined) gid = next++;
-    for (const k of keys) byKey.set(k, gid);
-    groupOf.set(r.id, gid);
-    const list = groups.get(gid) ?? [];
+  });
+  const groups = new Map<number, R[]>();
+  rows.forEach((r, i) => {
+    const root = find(i);
+    const list = groups.get(root) ?? [];
     list.push(r);
-    groups.set(gid, list);
-  }
+    groups.set(root, list);
+  });
   return Array.from(groups.values()).filter((g) => g.length > 1);
 }
 
@@ -160,17 +210,24 @@ export async function auditQueueProspects(workspaceId: number): Promise<QueueAud
 
 export interface ReconcileResult {
   scanned: number;
+  /** What the audit found before anything changed (A43: the run said what it
+   *  did, never what it had found, so "0 fixed" and "nothing wrong" read alike). */
+  found: Omit<QueueAudit, "flaggedRowIds">;
   linksScrubbed: number;
   personsLinked: number;
   personsCreated: number;
   requeuedForEnrichment: number;
   linkedinFound: number;
   linkedinSearched: number;
+  /** Rows not searched again because this pass searched them in the last SEARCH_REST_DAYS. */
+  linkedinSearchesSaved: number;
   /** Person-level LinkedIn retrieves queued — what actually fills names and
    *  profile photos on the campaign tab (capped by the existing daily cap). */
   profileRetrievesQueued: number;
   duplicatesSkipped: number;
   flaggedUnreconcilable: number;
+  /** One line per row moved to the Rejections tab, with why. */
+  changes: string[];
   /** Edge cases a human should read — the "document what couldn't be fixed" half. */
   notes: string[];
 }
@@ -183,13 +240,14 @@ export async function reconcileQueueProspects(opts: {
   linkedinSearchBudget?: number;
 }): Promise<ReconcileResult> {
   const db = await getDb();
+  const { flaggedRowIds: _ids, ...found } = await auditQueueProspects(opts.workspaceId);
   const result: ReconcileResult = {
-    scanned: 0, linksScrubbed: 0, personsLinked: 0, personsCreated: 0,
-    requeuedForEnrichment: 0, linkedinFound: 0, linkedinSearched: 0,
-    profileRetrievesQueued: 0, duplicatesSkipped: 0, flaggedUnreconcilable: 0, notes: [],
+    scanned: 0, found, linksScrubbed: 0, personsLinked: 0, personsCreated: 0,
+    requeuedForEnrichment: 0, linkedinFound: 0, linkedinSearched: 0, linkedinSearchesSaved: 0,
+    profileRetrievesQueued: 0, duplicatesSkipped: 0, flaggedUnreconcilable: 0, changes: [], notes: [],
   };
   if (!db) return result;
-  const { workspaceId } = opts;
+  const { workspaceId, userId } = opts;
 
   // ── 1. Scrub broken link fields (shape rules, same vocabulary as 0159) ──
   let rows = await loadRows(workspaceId);
@@ -199,17 +257,40 @@ export async function reconcileQueueProspects(opts: {
     if (badLinkedin(r.linkedinUrl)) patch.linkedinUrl = null;
     if (badSource(r.sourceUrl)) patch.sourceUrl = null;
     if (Object.keys(patch).length > 0) {
-      await db.update(prospectQueue).set(patch as never).where(eq(prospectQueue.id, r.id));
+      await db.update(prospectQueue).set(patch as never).where(and(eq(prospectQueue.id, r.id), eq(prospectQueue.workspaceId, workspaceId)));
       result.linksScrubbed++;
     }
   }
 
-  // ── 2. Every row gets its canonical person (the display + fix vehicle) ──
+  // ── 2. Campaign exclusivity over HISTORY: keeper = most engagement ──
+  // Before anything that spends (A43): linking, enrichment and LinkedIn
+  // searches were run for rows this step then moved to Rejections. It runs
+  // again at the end for groups that a newly found profile URL joins.
+  const dedupe = async () => {
+    rows = await loadRows(workspaceId);
+    for (const group of duplicateGroups(rows.filter((r) => r.sequenceStatus !== "skipped"))) {
+      const sorted = [...group].sort((a, b) =>
+        (STATUS_RANK[b.sequenceStatus] ?? 0) - (STATUS_RANK[a.sequenceStatus] ?? 0) || a.id - b.id);
+      const keeper = sorted[0]!;
+      for (const loser of sorted.slice(1)) {
+        const where = keeper.campaignId === loser.campaignId ? "in this campaign" : `in campaign ${keeper.campaignId}`;
+        await flagToRejections(db, workspaceId, userId, loser, `Audit & fix: the same person as row ${keeper.id} ${where}`);
+        result.duplicatesSkipped++;
+        result.changes.push(`row ${loser.id} (campaign ${loser.campaignId}, was ${loser.sequenceStatus}) moved to Rejections: the same person as row ${keeper.id} ${where}, which is kept.`);
+        if ((STATUS_RANK[loser.sequenceStatus] ?? 0) >= STATUS_RANK.contacted!) {
+          result.notes.push(`row ${loser.id} (campaign ${loser.campaignId}) was already ${loser.sequenceStatus} before being deduped against row ${keeper.id} (campaign ${keeper.campaignId}) — both campaigns have contacted this person historically.`);
+        }
+      }
+    }
+  };
+  await dedupe();
+
+  // ── 3. Every row gets its canonical person (the display + fix vehicle) ──
   const linked = await linkUnlinkedQueueRows({ workspaceId, limit: 2000 });
   result.personsLinked = linked.linked;
   result.personsCreated = linked.created;
 
-  // ── 3. Names + missing LinkedIn URLs, through the person/enrichment ──
+  // ── 4. Names + missing LinkedIn URLs, through the person/enrichment ──
   rows = await loadRows(workspaceId);
   const live = () => rows.filter((r) => r.sequenceStatus !== "skipped");
   const personIds = Array.from(new Set(live().map((r) => r.personProspectId).filter((x): x is number => !!x)));
@@ -221,6 +302,7 @@ export async function reconcileQueueProspects(opts: {
   }
 
   let searchBudget = Math.max(0, opts.linkedinSearchBudget ?? 10);
+  const searchedRecently = searchBudget > 0 ? await recentReconcileSearches(db, workspaceId) : new Set<string>();
   for (const r of live()) {
     const person = r.personProspectId ? personById.get(r.personProspectId) : undefined;
     const named = hasRealName(r) || person?.named === true;
@@ -228,14 +310,25 @@ export async function reconcileQueueProspects(opts: {
 
     if (!named && li) {
       // A profile URL exists — the capped LinkedIn retrieve fills the name on
-      // the person; re-open the row so the engine works it.
+      // the person; re-open the row so the engine works it. A row already
+      // waiting for enrichment is left as it is (A43): re-stamping it did
+      // nothing and was counted as a fix.
+      if (r.enrichmentStatus === "pending" || r.enrichmentStatus === "enriching") continue;
       await db.update(prospectQueue).set({ enrichmentStatus: "pending", enrichedAt: null } as never)
-        .where(eq(prospectQueue.id, r.id));
+        .where(and(eq(prospectQueue.id, r.id), eq(prospectQueue.workspaceId, workspaceId)));
       result.requeuedForEnrichment++;
       continue;
     }
 
     if (named && !li && searchBudget > 0 && (r.companyName || r.companyDomain)) {
+      const keywords = searchKeywords(r);
+      if (searchedRecently.has(keywords.slice(0, 200))) {
+        // Searched by this pass within SEARCH_REST_DAYS and nothing matched
+        // confidently (a match would have given the row its URL). Spend the
+        // budget on someone not yet tried.
+        result.linkedinSearchesSaved++;
+        continue;
+      }
       // Confidence-gated discovery: exact normalized-name match AND the hit
       // must mention the company. Anything less stays missing — no guesses.
       searchBudget--;
@@ -246,7 +339,7 @@ export async function reconcileQueueProspects(opts: {
       try {
         const res = await searchLinkedInProfiles({
           workspaceId, userId: opts.userId, isAdmin: opts.isAdmin,
-          keywords: `${first} ${last} ${company}`.trim(), limit: 3, source: "reconcile",
+          keywords, limit: 3, source: "reconcile",
         });
         if (!res.ok && res.blocked) {
           // The account policy refused (paused, capped, paced, outside hours).
@@ -275,7 +368,7 @@ export async function reconcileQueueProspects(opts: {
           if (hit?.linkedinUrl) {
             await db.update(prospectQueue)
               .set({ linkedinUrl: hit.linkedinUrl, enrichmentStatus: "pending", enrichedAt: null } as never)
-              .where(eq(prospectQueue.id, r.id));
+              .where(and(eq(prospectQueue.id, r.id), eq(prospectQueue.workspaceId, workspaceId)));
             result.linkedinFound++;
           }
         }
@@ -288,14 +381,13 @@ export async function reconcileQueueProspects(opts: {
     if (!named && !li && !String(r.email ?? "").trim()) {
       // Nothing to reconcile FROM: no name, no profile, no address. Flag to
       // the Rejections tab rather than deleting — visible and reversible.
-      await db.update(prospectQueue).set({ sequenceStatus: "skipped" } as never)
-        .where(eq(prospectQueue.id, r.id));
+      await flagToRejections(db, workspaceId, userId, r, "Audit & fix: no name, email or LinkedIn profile to identify this person");
       result.flaggedUnreconcilable++;
-      result.notes.push(`row ${r.id}: flagged — no name, no LinkedIn, no email (source: ${r.sourceUrl ?? "unknown"})`);
+      result.changes.push(`row ${r.id} (campaign ${r.campaignId}) moved to Rejections: no name, no LinkedIn, no email (source: ${r.sourceUrl ?? "unknown"}).`);
     }
   }
 
-  // ── 3b. The VISIBLE fix: queue person-level LinkedIn retrieves ──
+  // ── 4b. The VISIBLE fix: queue person-level LinkedIn retrieves ──
   // Names, profile photos and the LinkedIn chip on the campaign tab all
   // come from the linked person's enrichment. A row can carry a profile URL
   // for months while the person stays unnamed and photo-less because
@@ -341,22 +433,10 @@ export async function reconcileQueueProspects(opts: {
     }
   }
 
-  // ── 4. Campaign exclusivity over HISTORY: keeper = most engagement ──
-  rows = await loadRows(workspaceId);
-  for (const group of duplicateGroups(rows.filter((r) => r.sequenceStatus !== "skipped"))) {
-    const sorted = [...group].sort((a, b) =>
-      (STATUS_RANK[b.sequenceStatus] ?? 0) - (STATUS_RANK[a.sequenceStatus] ?? 0) || a.id - b.id);
-    const keeper = sorted[0]!;
-    for (const loser of sorted.slice(1)) {
-      await db.update(prospectQueue).set({ sequenceStatus: "skipped" } as never)
-        .where(eq(prospectQueue.id, loser.id));
-      result.duplicatesSkipped++;
-      if ((STATUS_RANK[loser.sequenceStatus] ?? 0) >= STATUS_RANK.contacted!) {
-        result.notes.push(`row ${loser.id} (campaign ${loser.campaignId}) was already ${loser.sequenceStatus} before being deduped against row ${keeper.id} (campaign ${keeper.campaignId}) — both campaigns have contacted this person historically.`);
-      }
-    }
-  }
+  // ── 5. Exclusivity again, for groups a profile found above has joined ──
+  await dedupe();
 
+  result.changes = result.changes.slice(0, 100);
   result.notes = result.notes.slice(0, 100);
   return result;
 }

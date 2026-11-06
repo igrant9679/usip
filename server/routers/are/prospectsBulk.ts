@@ -215,17 +215,9 @@ export async function runBulkAction(ctx: Ctx, input: BulkInput): Promise<BulkRes
     case "approve": await perRow((r) => caller.are.prospects.approve({ prospectId: r.id })); result.summary = `Approved ${plural(result.ok, "prospect")}`; break;
     case "reject": await perRow((r) => caller.are.prospects.reject({ prospectId: r.id, reason: input.reason })); result.summary = `Rejected ${plural(result.ok, "prospect")}`; break;
     case "skip": await perRow((r) => caller.are.prospects.skip({ prospectId: r.id })); result.summary = `Skipped ${plural(result.ok, "prospect")}`; break;
-    case "restore": {
-      // A rejected/skipped row back to pending so the engine screens it again.
-      await perRow(async (r) => {
-        if (r.sequenceStatus !== "skipped") throw new Error(`not rejected (status ${r.sequenceStatus})`);
-        await db.update(prospectQueue)
-          .set({ sequenceStatus: "pending", rejectedAt: null, rejectionReason: input.reason ? `Restored — ${input.reason}` : null } as never)
-          .where(and(eq(prospectQueue.id, r.id), eq(prospectQueue.workspaceId, ws)));
-      });
-      result.summary = `Restored ${plural(result.ok, "prospect")} to pending`;
-      break;
-    }
+    // A rejected/skipped row back to pending so the engine screens it again —
+    // the row's Undo runs the same procedure (A51).
+    case "restore": await perRow((r) => caller.are.prospects.restore({ prospectId: r.id, reason: input.reason })); result.summary = `Restored ${plural(result.ok, "prospect")} to pending`; break;
     case "reEvaluate": await perRow((r) => caller.are.prospects.reEvaluate({ prospectId: r.id })); result.summary = `Re-evaluated ${plural(result.ok, "prospect")}`; break;
     case "enrich": await perRow((r) => caller.are.prospects.enrich({ prospectId: r.id })); result.summary = `Enrichment started for ${plural(result.ok, "prospect")}`; break;
     case "generateSequence": await perRow((r) => caller.are.prospects.generateSequence({ prospectId: r.id, campaignId: input.campaignId, force: input.force ?? false })); result.summary = `Sequences generated for ${plural(result.ok, "prospect")}`; break;
