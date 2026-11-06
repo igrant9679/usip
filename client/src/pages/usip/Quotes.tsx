@@ -84,7 +84,7 @@ export default function Quotes() {
 
   return (
     <Shell title="Quotes (CPQ)">
-      <PageHeader title="Quotes & proposals" description="Generate and manage price quotes linked directly to open opportunities. Add line items from your product catalogue, apply discounts, and send quotes for e-signature in one step." pageKey="quotes"
+      <PageHeader title="Quotes & proposals" description="Build price quotes on your opportunities from your product catalogue, with discounts, and download each as a PDF to send to the customer. A quote is valid for 30 days; record the customer's answer here." pageKey="quotes"
         icon={<Receipt className="size-5" />}
       >
         <Button onClick={() => setOpenNew(true)}><Plus className="size-4" /> New quote</Button>
@@ -116,10 +116,19 @@ export default function Quotes() {
                             unsent" three lines above a comment calling Send the
                             reversible one of the two. */}
                         {q.status === "draft" && q.pdfUrl && <ConfirmButton size="sm" variant="ghost" destructive={false} ariaLabel="Mark quote as sent" title="Mark this quote as sent?" description="Marks the quote as sent and records who did it. It does not email the customer — send them the PDF yourself. There's no undo from here; once marked, you can record it as Accepted or Rejected." confirmLabel="Mark sent" onConfirm={() => send.mutate({ id: q.id })}><Send className="size-3.5" /></ConfirmButton>}
+                        {/* Each asks first (audit 2026-10-20, R71, R76): one
+                            click recorded the customer's answer, with nothing
+                            on screen to undo it. */}
                         {q.status === "sent" && (
                           <>
-                            <Button size="sm" variant="ghost" onClick={() => setStatus.mutate({ id: q.id, status: "accepted" })}>Accept</Button>
-                            <Button size="sm" variant="ghost" onClick={() => setStatus.mutate({ id: q.id, status: "rejected" })}>Reject</Button>
+                            <ConfirmButton size="sm" variant="ghost" destructive={false}
+                              title={`Record quote ${q.quoteNumber} as accepted?`}
+                              description={`Records that the customer accepted ${formatMoney(q.total)}${o?.name ? ` on "${o.name}"` : ""}. It doesn't change the deal's stage.`}
+                              confirmLabel="Accepted" onConfirm={() => setStatus.mutate({ id: q.id, status: "accepted" })}>Accept</ConfirmButton>
+                            <ConfirmButton size="sm" variant="ghost"
+                              title={`Record quote ${q.quoteNumber} as rejected?`}
+                              description="Records that the customer turned this quote down. The Accept button goes away; make a new quote for new terms."
+                              confirmLabel="Rejected" onConfirm={() => setStatus.mutate({ id: q.id, status: "rejected" })}>Reject</ConfirmButton>
                           </>
                         )}
                         {/* Confirmed: this deletes the quote AND every line item.
@@ -183,7 +192,8 @@ export default function Quotes() {
                     updLi(i, { productId: pid, name: p?.name ?? li.name, unitPrice: p ? Number(p.listPrice) : li.unitPrice });
                   }}>
                   <option value="">— Custom —</option>
-                  {(products.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {/* Archived products are off new quotes (R75). */}
+                  {(products.data ?? []).filter((p) => p.active || p.id === li.productId).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
                 <input aria-label={`Line ${i + 1} item name`} className="col-span-3 text-sm border rounded h-9 px-2" placeholder="Item name" value={li.name} onChange={(e) => updLi(i, { name: e.target.value })} />
                 <input aria-label={`Line ${i + 1} quantity`} type="number" className="col-span-1 text-sm border rounded h-9 px-2" value={li.quantity} onChange={(e) => updLi(i, { quantity: Number(e.target.value) })} />

@@ -8,6 +8,7 @@ import { PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { NewOpportunityDialog } from "@/components/usip/NewOpportunityDialog";
 import { trpc } from "@/lib/trpc";
+import { invalidateDealReads } from "@/lib/crmCache";
 import { usePermissions } from "@/hooks/usePermissions";
 import { ArrowRight, Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare, Sparkles, ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -535,7 +536,8 @@ export default function Pipeline() {
       return { prev };
     },
     onError: (_e, _v, ctx) => { if (ctx?.prev) utils.opportunities.board.setData(boardInput, ctx.prev); toast.error("Move failed"); },
-    onSuccess: (res) => { if (res?.customerCreated) { toast.success("Closed won 🎉 — customer created"); utils.cs?.list?.invalidate?.(); } },
+    // Every read a stage move changes, not just this board (R31).
+    onSuccess: (res) => { if (res?.customerCreated) toast.success("Closed won 🎉 — customer created"); invalidateDealReads(utils); },
     onSettled: () => utils.opportunities.board.invalidate(),
   });
 

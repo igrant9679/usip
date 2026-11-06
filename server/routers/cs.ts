@@ -9,13 +9,8 @@ import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { renewalStageFor, type RenewalStage } from "@shared/renewalStage";
-
-function calcHealth(c: { usageScore: number; engagementScore: number; supportScore: number; npsScore: number }) {
-  const npsNorm = (c.npsScore + 100) / 2; // 0..100
-  const score = Math.round(c.usageScore * 0.35 + c.engagementScore * 0.25 + c.supportScore * 0.2 + npsNorm * 0.2);
-  const tier: "healthy" | "watch" | "at_risk" | "critical" = score >= 75 ? "healthy" : score >= 55 ? "watch" : score >= 35 ? "at_risk" : "critical";
-  return { score, tier };
-}
+// The one score → tier reading (R58), shared with the pages that colour it.
+import { calcHealth } from "@shared/customerHealth";
 
 /**
  * 2026-09-20: renewalStage is DERIVED from contractEnd on the way out, because
@@ -58,7 +53,10 @@ export const csRouter = router({
   kpis: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return null;
-    const cs = await db.select().from(customers).where(eq(customers.workspaceId, ctx.workspace.id));
+    const all = await db.select().from(customers).where(eq(customers.workspaceId, ctx.workspace.id));
+    // A churned customer is not ARR, expansion or a risk any more (R58): their
+    // contract counted in every figure here after it ended.
+    const cs = all.filter((c) => withStage(c).renewalStage !== "churned");
     const arr = cs.reduce((s, c) => s + Number(c.arr ?? 0), 0);
     const expansion = cs.reduce((s, c) => s + Number(c.expansionPotential ?? 0), 0);
     const atRisk = cs.filter((c) => c.healthTier === "at_risk" || c.healthTier === "critical").length;
@@ -82,15 +80,31 @@ export const csRouter = router({
     return cs.map((c) => ({ ...withStage(c), account: accMap.get(c.accountId) ?? null }));
   }),
 
+  /**
+   * Set one or more health components. Each is optional (R58): the page sent
+   * all three from the detail it had loaded, so moving Usage wrote back an
+   * Engagement value another slider (or person) had just changed. What isn't
+   * sent keeps its stored value.
+   */
   updateHealthComponents: repProcedure
-    .input(z.object({ id: z.number(), usage: z.number().int().min(0).max(100), engagement: z.number().int().min(0).max(100), support: z.number().int().min(0).max(100) }))
+    .input(z.object({
+      id: z.number(),
+      usage: z.number().int().min(0).max(100).optional(),
+      engagement: z.number().int().min(0).max(100).optional(),
+      support: z.number().int().min(0).max(100).optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [c] = await db.select().from(customers).where(and(eq(customers.id, input.id), eq(customers.workspaceId, ctx.workspace.id)));
       if (!c) throw new TRPCError({ code: "NOT_FOUND" });
-      const { score, tier } = calcHealth({ usageScore: input.usage, engagementScore: input.engagement, supportScore: input.support, npsScore: c.npsScore });
-      await db.update(customers).set({ usageScore: input.usage, engagementScore: input.engagement, supportScore: input.support, healthScore: score, healthTier: tier }).where(and(eq(customers.id, input.id), eq(customers.workspaceId, ctx.workspace.id)));
+      const next = {
+        usageScore: input.usage ?? c.usageScore,
+        engagementScore: input.engagement ?? c.engagementScore,
+        supportScore: input.support ?? c.supportScore,
+      };
+      const { score, tier } = calcHealth({ ...next, npsScore: c.npsScore });
+      await db.update(customers).set({ ...next, healthScore: score, healthTier: tier }).where(and(eq(customers.id, input.id), eq(customers.workspaceId, ctx.workspace.id)));
       return { score, tier };
     }),
 
@@ -213,7 +227,11 @@ export const csRouter = router({
     const [c] = await db.select().from(customers).where(and(eq(customers.id, q.customerId), eq(customers.workspaceId, ctx.workspace.id)));
     if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
     const [a] = await db.select().from(accounts).where(and(eq(accounts.id, c.accountId), eq(accounts.workspaceId, ctx.workspace.id)));
-    let prep: any = { wins: ["Adoption climbing"], risks: ["Champion stability"], asks: ["Identify expansion team"], agenda: ["Review usage", "Roadmap", "Asks"] };
+    // No canned fallback (audit 2026-10-20, R74): when the model failed, this
+    // saved "Adoption climbing" / "Champion stability" as the customer's AI
+    // prep and the page announced "AI prep generated". Made-up wins about a
+    // real customer are worse than none, so a failure saves nothing and says so.
+    let prep: { wins: string[]; risks: string[]; asks: string[]; agenda: string[] } | null = null;
     try {
       const out = await invokeLLM({
         messages: [
@@ -241,9 +259,15 @@ export const csRouter = router({
       });
       const content = out.choices?.[0]?.message?.content;
       const parsed = typeof content === "string" ? JSON.parse(content) : content;
-      prep = parsed;
+      const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "") : []);
+      if (parsed && typeof parsed === "object") {
+        prep = { wins: list(parsed.wins), risks: list(parsed.risks), asks: list(parsed.asks), agenda: list(parsed.agenda) };
+      }
     } catch (e) {
-      console.warn("[generateQbrPrep] LLM failed; using fallback", e);
+      console.warn("[generateQbrPrep] LLM failed; nothing saved", e);
+    }
+    if (!prep) {
+      throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: "The AI couldn't write this prep right now, so nothing was saved. Try again in a minute." });
     }
     await db.update(qbrs).set({ aiPrep: prep }).where(and(eq(qbrs.id, q.id), eq(qbrs.workspaceId, ctx.workspace.id)));
     return { prep };

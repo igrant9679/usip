@@ -13,6 +13,7 @@ import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { invalidateDealReads } from "@/lib/crmCache";
 import { Field, FormDialog } from "@/components/usip/Common";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -70,8 +71,8 @@ export function NewOpportunityDialog({ open, onOpenChange, stages, pipelineId, o
 
   const create = trpc.opportunities.create.useMutation({
     onSuccess: (r) => {
-      utils.opportunities.board.invalidate();
-      utils.opportunities.summary.invalidate();
+      // Every read a new deal changes, not just the boards (R31).
+      invalidateDealReads(utils);
       onOpenChange(false);
       setSearch("");
       setStage(undefined);

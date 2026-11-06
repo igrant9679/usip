@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { trpc } from "@/lib/trpc";
+import { invalidateDealReads } from "@/lib/crmCache";
 import { ConfirmButton, fmtDate, StatusPill } from "./Common";
 import { Brain, ChevronDown, CheckCircle2, Clock, Loader2, Paperclip, Phone, Calendar, MessageSquare, RefreshCw, Sparkles, Trash2, Users, XCircle, ShieldCheck, Send, Wand2, Sparkle, Linkedin, UserPlus } from "lucide-react";
 import { EmailVerificationBadge } from "./EmailVerificationBadge";
@@ -633,13 +634,15 @@ function RecordDrawerForRecord({
     const opts = {
       onSuccess: () => {
         toast.success(`${relatedType.charAt(0).toUpperCase() + relatedType.slice(1)} deleted`);
-        if (relatedType === "contact") utils.contacts.list.invalidate();
+        // Every list the record was on, not just one (R31): a deleted company
+        // stayed on Companies and a deleted deal on Deals, Forecast and Quota.
+        if (relatedType === "contact") utils.contacts.invalidate();
         if (relatedType === "account") {
-          utils.accounts.list.invalidate();
-          utils.accounts.hierarchy.invalidate();
+          utils.accounts.invalidate();
+          utils.companies.invalidate();
         }
         if (relatedType === "lead") utils.leads.invalidate();
-        if (relatedType === "opportunity") utils.opportunities.board.invalidate();
+        if (relatedType === "opportunity") invalidateDealReads(utils);
         onOpenChange(false);
       },
       onError: (e: { message: string }) => toast.error(`Failed to delete: ${e.message}`),
@@ -817,7 +820,8 @@ function RecordDrawerForRecord({
               the drawer wrote activities rows the detail page never showed. */}
           {tab === "note" && relatedId && (
             <div className="space-y-2">
-              <div className="text-xs text-muted-foreground">Use <code className="bg-secondary px-1 rounded">@[Name](user:1)</code> to @-mention a teammate. They'll get an in-app notification.</div>
+              {/* R105: this told people to type the raw token. */}
+              <div className="text-xs text-muted-foreground">Type @ and a name to mention a teammate. They'll get an in-app notification.</div>
               <RecordNotes entityType={relatedType} entityId={relatedId} />
             </div>
           )}
