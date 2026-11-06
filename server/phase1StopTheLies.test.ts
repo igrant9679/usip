@@ -209,7 +209,10 @@ describe("numbers that used to omit the engine", () => {
   it("Dashboards' two stage ratios are named as stage ratios", () => {
     const dash = client("pages", "usip", "Dashboards.tsx");
     expect(dash).toContain('label: "Opportunities with activity %"');
-    expect(dash).toContain('label: "Opportunities past proposal stage %"');
+    // 2026-11-06 (audit G55): reply_rate has counted closed deals, won or lost,
+    // since 2026-09-20, so "past proposal stage" was itself a wrong name. Still
+    // a stage ratio, still not called a reply rate.
+    expect(dash).toContain('label: "Opportunities closed (won or lost) %"');
     expect(dash).not.toContain('label: "Reply rate %"');
   });
 });

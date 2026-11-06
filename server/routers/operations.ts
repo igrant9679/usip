@@ -57,6 +57,7 @@ import { LIVE_TRIGGER_IDS, type LiveTrigger } from "@shared/workflowTriggers";
 import { zonedDowHour } from "@shared/availability";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { dayRangeBounds } from "../services/calendarDeadline";
+import { addMonths, closedIn, instantMonthKey, loadMetricDeals, monthKey, monthLabel, monthToDateRanges, zonedYmd } from "../services/dealMetrics";
 import crypto from "crypto";
 import { hashScimToken } from "../scimHttp";
 
@@ -915,6 +916,10 @@ export const dashboardsRouter = router({
     const d = await dashboardForEdit(db, ctx, input.id);
     await db.delete(dashboardWidgets)
       .where(and(eq(dashboardWidgets.dashboardId, d.id), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
+    // Its schedules go with it: left behind, they stayed on the list naming a
+    // dashboard nobody could open (audit 2026-10-20, G55).
+    await db.delete(reportSchedules)
+      .where(and(eq(reportSchedules.dashboardId, d.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));
     await db.delete(dashboards).where(and(eq(dashboards.id, d.id), eq(dashboards.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -1240,11 +1245,24 @@ async function resolveWidgetData(
     return and(...conds);
   };
 
-  /* ── Helper: 6-month bucket array ── */
-  const sixMonths = () => Array.from({ length: 6 }, (_, i) => {
-    const d = new Date(); d.setMonth(d.getMonth() - (5 - i));
-    return { label: d.toLocaleString("default", { month: "short" }), key: `${d.getFullYear()}-${d.getMonth()}` };
-  });
+  /* ── Helper: the last six months, in the workspace's zone ── */
+  // Stepped from the 1st: setMonth() on the 29th–31st skipped a month and showed
+  // the next one twice, and the machine's zone (UTC) put a New York evening on
+  // the 31st into the next month (audit 2026-10-20, G25).
+  const sixMonths = () => {
+    const { y, m } = zonedYmd(tz, new Date());
+    return Array.from({ length: 6 }, (_, i) => {
+      const b = addMonths(y, m, i - 5);
+      return { label: monthLabel(b.m), key: monthKey(b.y, b.m) };
+    });
+  };
+  /** When a won deal was won; the same fallback loadMetricDeals uses for a deal from before migration 0211. */
+  const wonAtOf = (o: { wonAt: Date | null; stageEnteredAt: Date | null; updatedAt: Date | null }) => o.wonAt ?? o.stageEnteredAt ?? o.updatedAt;
+  /** Deals per stage, counted and summed in SQL (G58): these widgets read every column of every deal. */
+  const dealsByStage = async () => (await db.select({
+    stage: opportunities.stage, n: sql<number>`count(*)`, v: sql<string>`COALESCE(SUM(${opportunities.value}),0)`,
+  }).from(opportunities).where(oppBase()).groupBy(opportunities.stage))
+    .map((r: { stage: string; n: number; v: string }) => ({ stage: r.stage, count: Number(r.n), value: Number(r.v) }));
 
   /* ═══════════════════════════════════════════════════════════
      KPI metrics (type = kpi | single_value | gauge)
@@ -1267,18 +1285,24 @@ async function resolveWidgetData(
         return { type: w.type, title: w.title, value: Number(r?.s ?? 0), format: "currency" };
       }
       case "win_rate": {
-        const all = await db.select().from(opportunities).where(oppBase());
-        const closed = all.filter((o) => stages.isClosed(o.stage));
-        const wr = closed.length === 0 ? 0 : (closed.filter((o) => stages.isWon(o.stage)).length / closed.length) * 100;
+        let won = 0, closed = 0;
+        for (const r of await dealsByStage()) {
+          if (!stages.isClosed(r.stage)) continue;
+          closed += r.count;
+          if (stages.isWon(r.stage)) won += r.count;
+        }
+        const wr = closed === 0 ? 0 : (won / closed) * 100;
         return { type: w.type, title: w.title, value: Math.round(wr), format: "percent" };
       }
       case "avg_deal": {
-        const won = await db.select().from(opportunities).where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
-        const avg = won.length === 0 ? 0 : won.reduce((s, o) => s + Number(o.value), 0) / won.length;
+        const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)`, n: sql<number>`count(*)` })
+          .from(opportunities).where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
+        const n = Number(r?.n ?? 0);
+        const avg = n === 0 ? 0 : Number(r?.s ?? 0) / n;
         return { type: w.type, title: w.title, value: Math.round(avg), format: "currency" };
       }
       case "sales_cycle_length": {
-        const won = await db.select().from(opportunities)
+        const won = await db.select({ createdAt: opportunities.createdAt, closeDate: opportunities.closeDate }).from(opportunities)
           .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
         const withDates = won.filter((o) => o.closeDate);
         const avgDays = withDates.length === 0 ? 0 :
@@ -1286,13 +1310,12 @@ async function resolveWidgetData(
         return { type: w.type, title: w.title, value: Math.round(avgDays), format: "days" };
       }
       case "activity_counts": {
-        const actConds = actBase();
-        const acts = await db.select().from(activities).where(actConds);
-        const calls = acts.filter((a) => a.type === "call").length;
-        const emails = acts.filter((a) => a.type === "email").length;
-        const meetings = acts.filter((a) => a.type === "meeting").length;
-        return { type: w.type, title: w.title, value: acts.length, format: "number",
-          breakdown: { calls, emails, meetings } };
+        const byType = await db.select({ type: activities.type, n: sql<number>`count(*)` })
+          .from(activities).where(actBase()).groupBy(activities.type);
+        const of = (t: string) => Number(byType.find((r: { type: string }) => r.type === t)?.n ?? 0);
+        const total = byType.reduce((s: number, r: { n: number }) => s + Number(r.n), 0);
+        return { type: w.type, title: w.title, value: total, format: "number",
+          breakdown: { calls: of("call"), emails: of("email"), meetings: of("meeting") } };
       }
       case "meetings_booked": {
         const actConds = actBase(eq(activities.type, "meeting"));
@@ -1300,13 +1323,20 @@ async function resolveWidgetData(
         return { type: w.type, title: w.title, value: Number(r?.c ?? 0), format: "number" };
       }
       case "response_rate": {
-        // Ratio of opportunities with at least one activity to total opportunities
-        const all = await db.select().from(opportunities).where(oppBase());
-        const withActivity = await db.select({ oppId: activities.relatedId })
-          .from(activities)
-          .where(and(eq(activities.workspaceId, workspaceId), eq(activities.relatedType, "opportunity")))
-          .groupBy(activities.relatedId);
-        const rate = all.length === 0 ? 0 : (withActivity.length / all.length) * 100;
+        // Of the deals this widget counts, the share with an activity logged
+        // against them. The top was every deal id any activity named, in no
+        // filter and deleted deals included, so it ran past 100% (G55).
+        const [all] = await db.select({ n: sql<number>`count(*)` }).from(opportunities).where(oppBase());
+        const touched = await db.select({ id: opportunities.id }).from(opportunities)
+          .innerJoin(activities, and(
+            eq(activities.relatedId, opportunities.id),
+            eq(activities.relatedType, "opportunity"),
+            eq(activities.workspaceId, workspaceId),
+          ))
+          .where(oppBase())
+          .groupBy(opportunities.id);
+        const total = Number(all?.n ?? 0);
+        const rate = total === 0 ? 0 : (touched.length / total) * 100;
         return { type: w.type, title: w.title, value: Math.round(rate), format: "percent" };
       }
       case "reply_rate": {
@@ -1315,9 +1345,12 @@ async function resolveWidgetData(
         // 'proposal', a definition no stage flag can express and that a custom
         // pipeline never satisfies at all. "Closed" is the closest honest
         // reading of the engagement proxy this widget claims to be.
-        const all = await db.select().from(opportunities).where(oppBase());
-        const engaged = all.filter((o) => stages.isClosed(o.stage)).length;
-        const rate = all.length === 0 ? 0 : (engaged / all.length) * 100;
+        let total = 0, engaged = 0;
+        for (const r of await dealsByStage()) {
+          total += r.count;
+          if (stages.isClosed(r.stage)) engaged += r.count;
+        }
+        const rate = total === 0 ? 0 : (engaged / total) * 100;
         return { type: w.type, title: w.title, value: Math.round(rate), format: "percent" };
       }
       default: {
@@ -1333,17 +1366,16 @@ async function resolveWidgetData(
      Funnel / Pipeline Stage
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "funnel" || w.type === "pipeline_stage") {
-    const all = await db.select().from(opportunities).where(oppBase());
+    const byStage = await dealsByStage();
     // Lost is excluded — a funnel is the path to a win — but "excluded" now
     // means flagged Lost, not named "lost".
-    const stageKeys = await orderedStageKeys(db, workspaceId, all, (k) => !stages.isLost(k));
+    const stageKeys = await orderedStageKeys(db, workspaceId, byStage, (k) => !stages.isLost(k));
     return {
       type: w.type, title: w.title,
-      series: stageKeys.map((s) => ({
-        stage: s,
-        count: all.filter((o) => o.stage === s).length,
-        value: all.filter((o) => o.stage === s).reduce((sum, o) => sum + Number(o.value), 0),
-      })),
+      series: stageKeys.map((s) => {
+        const r = byStage.find((x) => x.stage === s);
+        return { stage: s, count: r?.count ?? 0, value: r?.value ?? 0 };
+      }),
     };
   }
 
@@ -1352,35 +1384,23 @@ async function resolveWidgetData(
   ═══════════════════════════════════════════════════════════ */
   if (["bar", "line", "area", "stacked_bar"].includes(w.type)) {
     const months = sixMonths();
-    if (cfg.metric === "closed_won" || cfg.metric === "revenue") {
-      const won = await db.select().from(opportunities)
-        .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
-      const out = months.map((m) => ({ label: m.label, value: 0 }));
-      for (const o of won) {
-        if (!o.closeDate) continue;
-        const k = `${o.closeDate.getFullYear()}-${o.closeDate.getMonth()}`;
-        const idx = months.findIndex((m) => m.key === k);
-        if (idx >= 0) out[idx]!.value += Number(o.value);
-      }
-      return { type: w.type, title: w.title, series: out };
-    }
+    const at = (k: string) => months.findIndex((m) => m.key === k);
     if (cfg.metric === "pipeline_created") {
-      const all = await db.select().from(opportunities).where(oppBase());
+      const all = await db.select({ value: opportunities.value, createdAt: opportunities.createdAt })
+        .from(opportunities).where(oppBase());
       const out = months.map((m) => ({ label: m.label, value: 0 }));
       for (const o of all) {
-        const k = `${o.createdAt.getFullYear()}-${o.createdAt.getMonth()}`;
-        const idx = months.findIndex((m) => m.key === k);
+        const idx = at(instantMonthKey(tz, o.createdAt));
         if (idx >= 0) out[idx]!.value += Number(o.value);
       }
       return { type: w.type, title: w.title, series: out };
     }
     if (cfg.metric === "activities") {
-      const actConds = actBase();
-      const acts = await db.select().from(activities).where(actConds);
+      const acts = await db.select({ type: activities.type, occurredAt: activities.occurredAt })
+        .from(activities).where(actBase());
       const out = months.map((m) => ({ label: m.label, calls: 0, emails: 0, meetings: 0 }));
       for (const a of acts) {
-        const k = `${a.occurredAt.getFullYear()}-${a.occurredAt.getMonth()}`;
-        const idx = months.findIndex((m) => m.key === k);
+        const idx = at(instantMonthKey(tz, a.occurredAt));
         if (idx < 0) continue;
         if (a.type === "call") out[idx]!.calls++;
         else if (a.type === "email") out[idx]!.emails++;
@@ -1388,14 +1408,18 @@ async function resolveWidgetData(
       }
       return { type: w.type, title: w.title, series: out, keys: ["calls", "emails", "meetings"] };
     }
-    // Default: closed-won by month
-    const won = await db.select().from(opportunities)
-      .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
+    // closed_won, revenue and the default: won value in the month it was WON,
+    // as the Dashboard's revenue chart counts it. The expected close date put a
+    // deal won in March into whatever month someone had guessed (R16).
+    const won = await db.select({
+      value: opportunities.value, wonAt: opportunities.wonAt,
+      stageEnteredAt: opportunities.stageEnteredAt, updatedAt: opportunities.updatedAt,
+    }).from(opportunities).where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
     const out = months.map((m) => ({ label: m.label, value: 0 }));
     for (const o of won) {
-      if (!o.closeDate) continue;
-      const k = `${o.closeDate.getFullYear()}-${o.closeDate.getMonth()}`;
-      const idx = months.findIndex((m) => m.key === k);
+      const when = wonAtOf(o);
+      if (!when) continue;
+      const idx = at(instantMonthKey(tz, when));
       if (idx >= 0) out[idx]!.value += Number(o.value);
     }
     return { type: w.type, title: w.title, series: out };
@@ -1405,19 +1429,22 @@ async function resolveWidgetData(
      Pie / Donut
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "pie" || w.type === "donut") {
+    const byStage = await dealsByStage();
     if (cfg.metric === "stage_distribution") {
-      const all = await db.select().from(opportunities).where(oppBase());
-      const stageKeys = await orderedStageKeys(db, workspaceId, all, () => true);
+      const stageKeys = await orderedStageKeys(db, workspaceId, byStage, () => true);
       return {
         type: w.type, title: w.title,
-        series: stageKeys.map((s) => ({ name: s, value: all.filter((o) => o.stage === s).length })).filter((s) => s.value > 0),
+        series: stageKeys.map((s) => ({ name: s, value: byStage.find((r) => r.stage === s)?.count ?? 0 })).filter((s) => s.value > 0),
       };
     }
     // Default: win/loss ratio
-    const all = await db.select().from(opportunities).where(oppBase());
-    const won = all.filter((o) => stages.isWon(o.stage)).length;
-    const lost = all.filter((o) => stages.isLost(o.stage)).length;
-    const open = all.length - won - lost;
+    let won = 0, lost = 0, all = 0;
+    for (const o of byStage) {
+      all += o.count;
+      if (stages.isWon(o.stage)) won += o.count;
+      else if (stages.isLost(o.stage)) lost += o.count;
+    }
+    const open = all - won - lost;
     return { type: w.type, title: w.title, series: [{ name: "Won", value: won }, { name: "Lost", value: lost }, { name: "Open", value: open }].filter((s) => s.value > 0) };
   }
 
@@ -1425,10 +1452,11 @@ async function resolveWidgetData(
      Scatter
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "scatter") {
-    const all = await db.select().from(opportunities).where(oppBase());
+    const some = await db.select({ name: opportunities.name, stage: opportunities.stage, value: opportunities.value, daysInStage: opportunities.daysInStage })
+      .from(opportunities).where(oppBase()).limit(50);
     return {
       type: w.type, title: w.title,
-      series: all.slice(0, 50).map((o) => ({
+      series: some.map((o) => ({
         x: o.daysInStage,
         y: Number(o.value),
         name: o.name,
@@ -1441,8 +1469,7 @@ async function resolveWidgetData(
      Heatmap (activity by day-of-week × hour)
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "heatmap") {
-    const actConds = actBase();
-    const acts = await db.select().from(activities).where(actConds);
+    const acts = await db.select({ occurredAt: activities.occurredAt }).from(activities).where(actBase());
     // Build 7×24 grid, bucketed in the WORKSPACE's timezone.
     //
     // This was `getDay()` / `getHours()` — the container's clock, which is UTC in
@@ -1464,13 +1491,13 @@ async function resolveWidgetData(
      Table (top accounts by pipeline)
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "table") {
-    const accs = await db.select().from(opportunities).where(oppBase());
-    const map = new Map<number, number>();
-    for (const o of accs) map.set(o.accountId, (map.get(o.accountId) ?? 0) + Number(o.value));
-    const top = Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, cfg.limit ?? 5);
-    // Fetch account names
-    const accRows = await db.select({ id: accounts.id, name: accounts.name })
-      .from(accounts).where(eq(accounts.workspaceId, workspaceId));
+    const byAccount = await db.select({ accountId: opportunities.accountId, v: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
+      .from(opportunities).where(oppBase()).groupBy(opportunities.accountId);
+    const top = byAccount.map((r: { accountId: number; v: string }) => [r.accountId, Number(r.v)] as const)
+      .sort((a, b) => b[1] - a[1]).slice(0, cfg.limit ?? 5);
+    // Names for the accounts shown, not every account here.
+    const accRows = top.length === 0 ? [] : await db.select({ id: accounts.id, name: accounts.name })
+      .from(accounts).where(and(eq(accounts.workspaceId, workspaceId), inArray(accounts.id, top.map(([id]) => id))));
     const nameMap = new Map(accRows.map((a) => [a.id, a.name]));
     return { type: "table", title: w.title, rows: top.map(([id, v]) => ({ id, name: nameMap.get(id) ?? `Account #${id}`, value: v })) };
   }
@@ -1479,13 +1506,14 @@ async function resolveWidgetData(
      Leaderboard (top reps by deals closed)
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "leaderboard") {
-    const won = await db.select().from(opportunities)
-      .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
+    const byOwner = await db.select({ ownerUserId: opportunities.ownerUserId, n: sql<number>`count(*)`, v: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
+      .from(opportunities)
+      .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())))
+      .groupBy(opportunities.ownerUserId);
     const repMap = new Map<number, { count: number; value: number }>();
-    for (const o of won) {
-      if (!o.ownerUserId) continue;
-      const cur = repMap.get(o.ownerUserId) ?? { count: 0, value: 0 };
-      repMap.set(o.ownerUserId, { count: cur.count + 1, value: cur.value + Number(o.value) });
+    for (const r of byOwner) {
+      if (!r.ownerUserId) continue;
+      repMap.set(r.ownerUserId, { count: Number(r.n), value: Number(r.v) });
     }
     const memberRows = await db.select({ userId: workspaceMembers.userId, name: users.name })
       .from(workspaceMembers)
@@ -1519,11 +1547,14 @@ async function resolveWidgetData(
      Goal Progress (pipeline value vs target)
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "goal_progress") {
-    const target = Number(cfg.target ?? 1000000);
+    // A target of 0, blank or not a number divided by nothing: a NaN% bar, or
+    // a full one (G55). Such a widget has no target and says so.
+    const raw = Number(cfg.target ?? 1000000);
+    const target = Number.isFinite(raw) && raw > 0 ? raw : null;
     const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
       .from(opportunities).where(and(oppBase(), notInArray(opportunities.stage, stages.lostKeys())));
     const current = Number(r?.s ?? 0);
-    return { type: "goal_progress", title: w.title, current, target, pct: Math.min(100, Math.round((current / target) * 100)) };
+    return { type: "goal_progress", title: w.title, current, target, pct: target === null ? null : Math.min(100, Math.round((current / target) * 100)) };
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -1531,28 +1562,18 @@ async function resolveWidgetData(
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "comparison") {
     const metric = cfg.metric ?? "revenue";
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
-
-    const getVal = async (from: Date, to: Date) => {
-      const conds: any[] = [
-        eq(opportunities.workspaceId, workspaceId),
-        inArray(opportunities.stage, stages.wonKeys()),
-        sql`${opportunities.closeDate} >= ${from}`,
-        sql`${opportunities.closeDate} <= ${to}`,
-      ];
-      if (filters.ownerUserId) conds.push(eq(opportunities.ownerUserId, filters.ownerUserId));
-      if (sourceDealIds) conds.push(inArray(opportunities.id, sourceDealIds));
-      const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
-        .from(opportunities).where(and(...conds));
-      return Number(r?.s ?? 0);
-    };
-
-    const current = await getVal(startOfMonth, now);
-    const previous = await getVal(startOfLastMonth, endOfLastMonth);
-    const changePct = previous === 0 ? 100 : Math.round(((current - previous) / previous) * 100);
+    // Won value by WHEN it was won, this month so far against the same days of
+    // last month, in the workspace's zone (G55). It summed expected close
+    // dates, a few days of this month against the whole of the last, cut on
+    // the server's clock. The Dashboard counts wins the same way (R16).
+    const { current: thisSpan, previous: lastSpan } = monthToDateRanges(tz);
+    const deals = (await loadMetricDeals(db, workspaceId, { ownerUserId: filters.ownerUserId }))
+      .filter((d) => !sourceDealIds || sourceDealIds.includes(d.id));
+    const current = closedIn(deals, "won", thisSpan).value;
+    const previous = closedIn(deals, "won", lastSpan).value;
+    // Nothing to nothing is no change, and growth from nothing is no percentage
+    // at all: both read +100% (G55).
+    const changePct = previous === 0 ? (current === 0 ? 0 : null) : Math.round(((current - previous) / previous) * 100);
     return { type: "comparison", title: w.title, current, previous, changePct, metric, format: "currency" };
   }
 
@@ -1560,22 +1581,30 @@ async function resolveWidgetData(
      Rep Performance (table of rep KPIs)
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "rep_performance") {
-    const allOpps = await db.select().from(opportunities).where(oppBase());
-    const allActs = await db.select().from(activities).where(actBase());
+    // Counted and summed per owner and stage, and activities per person, in SQL (G58).
+    const oppRows = await db.select({
+      ownerUserId: opportunities.ownerUserId, stage: opportunities.stage,
+      n: sql<number>`count(*)`, v: sql<string>`COALESCE(SUM(${opportunities.value}),0)`,
+    }).from(opportunities).where(oppBase()).groupBy(opportunities.ownerUserId, opportunities.stage);
+    const actRows = await db.select({ actorUserId: activities.actorUserId, n: sql<number>`count(*)` })
+      .from(activities).where(actBase()).groupBy(activities.actorUserId);
     const memberRows = await db.select({ userId: workspaceMembers.userId, name: users.name })
       .from(workspaceMembers)
       .innerJoin(users, eq(users.id, workspaceMembers.userId))
       .where(eq(workspaceMembers.workspaceId, workspaceId));
 
     const rows = memberRows.map((m) => {
-      const myOpps = allOpps.filter((o) => o.ownerUserId === m.userId);
-      const myWon = myOpps.filter((o) => stages.isWon(o.stage));
-      const myClosed = myOpps.filter((o) => stages.isClosed(o.stage));
-      const myActs = allActs.filter((a) => a.actorUserId === m.userId);
-      const winRate = myClosed.length === 0 ? 0 : Math.round((myWon.length / myClosed.length) * 100);
-      const revenue = myWon.reduce((s, o) => s + Number(o.value), 0);
-      const pipeline = myOpps.filter((o) => stages.isOpen(o.stage)).reduce((s, o) => s + Number(o.value), 0);
-      return { name: m.name ?? `Rep #${m.userId}`, deals: myWon.length, revenue, pipeline, winRate, activities: myActs.length };
+      let deals = 0, closed = 0, revenue = 0, pipeline = 0;
+      for (const r of oppRows) {
+        if (r.ownerUserId !== m.userId) continue;
+        const n = Number(r.n), v = Number(r.v);
+        if (stages.isWon(r.stage)) { deals += n; revenue += v; }
+        if (stages.isClosed(r.stage)) closed += n;
+        if (stages.isOpen(r.stage)) pipeline += v;
+      }
+      const winRate = closed === 0 ? 0 : Math.round((deals / closed) * 100);
+      const activities = Number(actRows.find((a: { actorUserId: number | null }) => a.actorUserId === m.userId)?.n ?? 0);
+      return { name: m.name ?? `Rep #${m.userId}`, deals, revenue, pipeline, winRate, activities };
     }).filter((r) => r.deals > 0 || r.pipeline > 0 || r.activities > 0)
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, cfg.limit ?? 10);
@@ -1586,13 +1615,16 @@ async function resolveWidgetData(
      Email Health widget
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "email_health") {
-    const allContacts = await db.select().from(contacts).where(eq(contacts.workspaceId, workspaceId));
-    const total = allContacts.length;
-    const valid = allContacts.filter((c) => c.emailVerificationStatus === "valid").length;
-    const acceptAll = allContacts.filter((c) => c.emailVerificationStatus === "accept_all").length;
-    const risky = allContacts.filter((c) => c.emailVerificationStatus === "risky").length;
-    const invalid = allContacts.filter((c) => c.emailVerificationStatus === "invalid").length;
-    const unknown = allContacts.filter((c) => !c.emailVerificationStatus).length;
+    // Counted per status in SQL: this read every contact's every column (G58).
+    const byStatus = await db.select({ status: contacts.emailVerificationStatus, n: sql<number>`count(*)` })
+      .from(contacts).where(eq(contacts.workspaceId, workspaceId)).groupBy(contacts.emailVerificationStatus);
+    const of = (st: string) => Number(byStatus.find((r: { status: string | null }) => r.status === st)?.n ?? 0);
+    const total = byStatus.reduce((s: number, r: { n: number }) => s + Number(r.n), 0);
+    const valid = of("valid");
+    const acceptAll = of("accept_all");
+    const risky = of("risky");
+    const invalid = of("invalid");
+    const unknown = byStatus.filter((r: { status: string | null }) => !r.status).reduce((s: number, r: { n: number }) => s + Number(r.n), 0);
     const verifiedPct = total === 0 ? 0 : Math.round(((total - unknown) / total) * 100);
     return { type: "email_health", title: w.title, total, valid, acceptAll, risky, invalid, unknown, verifiedPct };
   }

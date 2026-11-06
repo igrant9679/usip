@@ -592,7 +592,9 @@ describe("R66: the deal list filters in SQL", () => {
   it("the company page and the Home widget ask for what they show", () => {
     expect(read("client/src/pages/usip/CompanyProfile.tsx")).toContain("trpc.opportunities.list.useQuery({ accountId: id },");
     expect(read("client/src/pages/usip/CompanyProfile.tsx")).not.toContain("filter((o) => o.accountId === id)");
-    expect(read("client/src/pages/usip/Home.tsx")).toContain("trpc.opportunities.list.useQuery({ openOnly: true, limit: 5 })");
+    // 2026-11-06: Home now reads opportunities.recent (audit G56/G58), which is
+    // bounded the same way and reads open deals by each deal's own pipeline.
+    expect(read("client/src/pages/usip/Home.tsx")).toContain("trpc.opportunities.recent.useQuery({ openOnly: true, limit: 5 })");
     const list = read("server/routers/crm.ts");
     const proc = list.slice(list.indexOf("export const opportunitiesRouter = router({"), list.indexOf("  /**\n   * Kanban board grouped by stage"));
     expect(proc).not.toMatch(/rows = rows\.filter/);

@@ -87,10 +87,13 @@ describe("O41: the Dashboard's drafts card reads five and counts the rest", () =
   });
 
   it("the Dashboard asks for five and badges the count", () => {
+    // 2026-11-06: the Dashboard now reads the same count Home shows, from
+    // attention.summary (audit G56/G58), which counts in SQL and returns five
+    // subjects with no bodies. What this pins holds: no unbounded draft read.
     const dash = read("client/src/pages/usip/Dashboard.tsx");
-    expect(dash).toContain('trpc.emailDrafts.list.useQuery({ status: "pending_review", limit: 5 })');
-    expect(dash).toContain('trpc.emailDrafts.count.useQuery({ status: "pending_review" })');
-    expect(dash).toContain("{awaitingDrafts}");
+    expect(dash).toContain("trpc.attention.summary.useQuery()");
+    expect(dash).toContain("{awaiting?.count}");
+    expect(dash).not.toContain("trpc.emailDrafts.list.useQuery");
     expect(dash).not.toContain("{(drafts ?? []).length}\n");
   });
 });

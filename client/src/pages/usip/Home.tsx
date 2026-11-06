@@ -17,11 +17,10 @@ import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { AttentionPanel } from "@/components/usip/AttentionPanel";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
-import { buildStageIndex, type StageFlagRow } from "@shared/stageSemantics";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
-  Pencil, Plus, X, GripVertical, Trash2, ChevronDown, Sparkles, Users, Building2,
+  Pencil, Plus, X, GripVertical, Trash2, Sparkles, Users, Building2,
   ListChecks, Mail, MessageSquare, Lightbulb, DollarSign, Activity, BarChart3,
   Phone, ArrowRight, Inbox,
 } from "lucide-react";
@@ -44,7 +43,6 @@ type Ctx = {
   calls: any[];
   convStats: any;
   attention: any;
-  dealStages: StageFlagRow[];
 };
 
 type WidgetDef = {
@@ -85,21 +83,26 @@ function statRow(items: { l: string; v: string | number }[], accent: string) {
 const WIDGETS: Record<string, WidgetDef> = {
   recommendations: {
     title: "Recommendations", category: "Recommended", icon: Lightbulb,
-    render: (c) => (
-      <div>
-        {[
-          { t: "Authenticate domains to avoid spam issues", d: "Some domains aren't fully verified — emails may be filtered.", tag: "Deliverability", to: "/v2/deliverability" },
-          { t: "Enrich contacts missing an email", d: `${c.metrics?.total ? 100 - (c.metrics?.pctWithEmail ?? 0) : 0}% of contacts have no email on file.`, tag: "Data", to: "/v2/data-enrichment" },
-        ].map((r) => (
-          <MiniRow key={r.t} primary={r.t} secondary={r.d} right={<Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => c.nav(r.to)}>{r.tag} <ArrowRight className="size-3" /></Button>} />
-        ))}
-      </div>
-    ),
+    render: (c) => {
+      // Only what the data says. "Some domains aren't fully verified" was shown
+      // to everyone, and nothing in the app checks a domain (audit 2026-10-20, G57).
+      const noEmailPct = c.metrics?.total ? 100 - (c.metrics?.pctWithEmail ?? 0) : 0;
+      const recs = noEmailPct > 0
+        ? [{ t: "Enrich contacts missing an email", d: `${noEmailPct}% of contacts have no email on file.`, tag: "Data", to: "/v2/data-enrichment" }]
+        : [];
+      return recs.length === 0 ? <EmptyHint text="Nothing to recommend right now." /> : (
+        <div>
+          {recs.map((r) => (
+            <MiniRow key={r.t} primary={r.t} secondary={r.d} right={<Button variant="ghost" size="sm" className="h-7 gap-1" onClick={() => c.nav(r.to)}>{r.tag} <ArrowRight className="size-3" /></Button>} />
+          ))}
+        </div>
+      );
+    },
   },
   people: {
     title: "Suggested leads", category: "Execution", icon: Users,
     render: (c) => c.people.length === 0 ? <EmptyHint text="No prospects yet." /> : (
-      <div>{c.people.slice(0, 5).map((p) => <MiniRow key={p.id} primary={`${p.firstName} ${p.lastName}`} secondary={[p.title, p.company].filter(Boolean).join(" · ")} right={p.email ? <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1"><Mail className="size-3" /> email</span> : <span className="text-[11px] text-blue-600">Access email</span>} />)}</div>
+      <div>{c.people.slice(0, 5).map((p) => <MiniRow key={p.id} primary={`${p.firstName} ${p.lastName}`} secondary={[p.title, p.company].filter(Boolean).join(" · ")} right={p.email ? <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1"><Mail className="size-3" /> email</span> : <span className="text-[11px] text-muted-foreground">no email</span>} />)}</div>
     ),
   },
   companies: {
@@ -111,7 +114,8 @@ const WIDGETS: Record<string, WidgetDef> = {
   tasks: {
     title: "Your tasks", category: "Execution", icon: ListChecks,
     render: (c) => {
-      const open = c.tasks.filter((t) => t.status === "open");
+      // The viewer's own open tasks: the server reads ownerOnly and status (G57).
+      const open = c.tasks;
       return open.length === 0 ? <EmptyHint text="No open tasks. Nice." /> : (
         <div>{open.slice(0, 5).map((t) => <MiniRow key={t.id} primary={t.title} secondary={t.type && t.type !== "todo" ? t.type : t.relatedType ?? undefined} right={t.priority ? <span className="text-[10px] capitalize text-muted-foreground">{t.priority}</span> : undefined} />)}</div>
       );
@@ -157,12 +161,10 @@ const WIDGETS: Record<string, WidgetDef> = {
   "pending-deals": {
     title: "Pending deals", category: "Recommended", icon: DollarSign,
     render: (c) => {
-      // 2026-09-20: this was startsWith("closed"), which matches neither "won"
-      // nor "lost" — so every won and lost deal showed up as "pending".
-      // buildStageIndex falls back to the name defaults while the pipeline
-      // query is still in flight.
-      const stageIdx = buildStageIndex(c.dealStages);
-      const open = (c.deals ?? []).filter((d: any) => stageIdx.isOpen(String(d.stage ?? "")));
+      // Open deals, newest first, classified on the server by each deal's own
+      // pipeline: the same reading as the Dashboard's open count (G56). This
+      // read every deal and the default pipeline's stages only.
+      const open = c.deals ?? [];
       return open.length === 0
         ? <div className="flex items-center justify-between"><EmptyHint text="No open deals right now." /><Button variant="outline" size="sm" className="h-7" onClick={() => c.nav("/v2/deals")}>View pipeline</Button></div>
         : (
@@ -230,7 +232,8 @@ export default function Home() {
   const people = ((trpc.prospects.list.useQuery({ page: 1, perPage: 10 }).data as any)?.data ?? []) as any[];
   // The "Top companies" card shows five.
   const companies = (trpc.accounts.list.useQuery({ limit: 5 }).data ?? []) as any[];
-  const tasks = (trpc.tasks.list.useQuery({}).data ?? []) as any[];
+  // "Your tasks" listed everyone's (audit 2026-10-20, G57).
+  const tasks = (trpc.tasks.list.useQuery({ ownerOnly: true, status: "open" }).data ?? []) as any[];
   // The one definition of open/dueToday/overdue, in the workspace's timezone.
   const taskStats = trpc.tasks.stats.useQuery().data as any;
   const sequences = (trpc.sequences.list.useQuery().data ?? []) as any[];
@@ -240,12 +243,10 @@ export default function Home() {
   const notifs = (trpc.notifications.list.useQuery().data ?? []) as any[];
   // Feed the four widgets that used to render hardcoded emptiness/zeros.
   const replies = (trpc.conversations.list.useQuery({ filter: "unhandled" }).data ?? []) as any[];
-  // The widget shows five open deals; it read every deal (R66).
-  const deals = (trpc.opportunities.list.useQuery({ openOnly: true, limit: 5 }).data ?? []) as any[];
-  const dealStages = (((trpc.crmPipelines.get.useQuery({} as any, { staleTime: 60_000 }).data as any)?.stages ?? []) as StageFlagRow[]);
+  const deals = (trpc.opportunities.recent.useQuery({ openOnly: true, limit: 5 }).data ?? []) as any[];
   const calls = ((trpc.voiceAgents.listCalls.useQuery({ limit: 50 }).data ?? []) as any[]);
   const attention = trpc.attention.summary.useQuery().data as any;
-  const ctx: Ctx = { accent, nav: setLocation, people, companies, tasks, sequences, metrics, replies, deals, calls, convStats, attention, dealStages };
+  const ctx: Ctx = { accent, nav: setLocation, people, companies, tasks, sequences, metrics, replies, deals, calls, convStats, attention };
 
   const current = editing ? draft : layout;
 
@@ -280,7 +281,7 @@ export default function Home() {
           ) : (
             <>
               <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={startEdit}><Pencil className="size-3.5" /> Edit layout</Button>
-              <Button size="sm" className="h-8 gap-1.5" style={{ backgroundColor: `color-mix(in srgb, ${accent} 85%, black)` }} onClick={() => setLocation("/are")}><Sparkles className="size-3.5" /> Generate Pipeline <ChevronDown className="size-3 opacity-70" /></Button>
+              <Button size="sm" className="h-8 gap-1.5" style={{ backgroundColor: `color-mix(in srgb, ${accent} 85%, black)` }} onClick={() => setLocation("/are")}><Sparkles className="size-3.5" /> Generate Pipeline</Button>
             </>
           )}
         </div>
