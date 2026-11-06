@@ -133,8 +133,8 @@ beforeEach(() => {
     { id: 8, workspaceId: WS, name: "Targets", entityType: "companies", updatedAt: new Date() },
     { id: 9, workspaceId: OTHER, name: "Theirs", entityType: "people", updatedAt: new Date() },
   );
-  rows("prospects").push(person(1), person(2), person(3), person(40, OTHER));
-  rows("accounts").push(company(50), company(51, { archivedAt: new Date("2026-10-01T00:00:00Z") }), company(52));
+  rows("prospects").push(person(1), person(2), person(3), person(40, OTHER), person(41, OTHER));
+  rows("accounts").push(company(50), company(51, { archivedAt: new Date("2026-10-01T00:00:00Z") }), company(52), company(53, { archivedAt: new Date("2026-10-01T00:00:00Z") }));
 });
 
 /* ── P46, P50: counts and what a list holds ──────────────────────────────── */
@@ -167,10 +167,12 @@ describe("the Lists index counts what each list's page shows (P46, P50)", () => 
   });
 
   it("adding takes only what the list can show, and says what it left out", async () => {
-    expect(await caller().recordLists.addMembers({ listId: 7, recordType: "prospect", recordIds: [1, 3, 40, 99, 3] })).toEqual({ added: 1, alreadyOn: 1, skipped: 2 });
+    // 1 is on the list already; 41 is another workspace's person and 98 is no one, so neither goes on.
+    expect(await caller().recordLists.addMembers({ listId: 7, recordType: "prospect", recordIds: [1, 3, 41, 98, 3] })).toEqual({ added: 1, alreadyOn: 1, skipped: 2 });
     expect(rows("record_list_members").filter((m) => m.listId === 7 && m.recordType === "prospect" && m.workspaceId === WS).map((m) => m.recordId).sort()).toEqual([1, 2, 3, 40, 99]);
     // An archived company is not offered by the picker and not taken here (P50).
-    expect(await caller().recordLists.addMembers({ listId: 8, recordType: "account", recordIds: [51, 52] })).toEqual({ added: 1, alreadyOn: 0, skipped: 1 });
+    expect(await caller().recordLists.addMembers({ listId: 8, recordType: "account", recordIds: [53, 52] })).toEqual({ added: 1, alreadyOn: 0, skipped: 1 });
+    expect(rows("record_list_members").filter((m) => m.listId === 8).map((m) => m.recordId).sort()).toEqual([1, 50, 51, 52]);
     // The wrong kind, and another workspace's list.
     expect((await refusal(caller().recordLists.addMembers({ listId: 7, recordType: "contact", recordIds: [3] }))).code).toBe("BAD_REQUEST");
     expect((await refusal(caller().recordLists.addMembers({ listId: 8, recordType: "prospect", recordIds: [1] }))).code).toBe("BAD_REQUEST");
