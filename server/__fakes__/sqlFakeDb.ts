@@ -6,7 +6,7 @@
  * condition object that merely looks right. It understands only what the
  * routers under test write: ANDs (and one level of OR) of =, <>, <, >, <=, >=,
  * IS NULL, IN and NOT IN, exists()/notExists() around one of its own selects, LIKE and NOT LIKE ('%' wildcards, case-insensitive), column-to-column equality in (inner and left) joins, ORDER BY a column,
- * LIMIT, GROUP BY with count(*) or SUM(col), a counted `sum(case when col = 'x' then 1 else 0 end)` (also <> and IN), `col + n`, `col + ?` or `COALESCE(col, NOW() | ?)` in an UPDATE or an
+ * LIMIT, GROUP BY with count(*), SUM(col) or AVG(col), a counted `sum(case when col = 'x' then 1 else 0 end)` (also <> and IN), `col + n`, `col + ?` or `COALESCE(col, NOW() | ?)` in an UPDATE or an
  * insert's onDuplicateKeyUpdate against the table's unique indexes, `lower(col) = ?` and `<> ?`, `DATE(col) = ?`, and
  * db.transaction(fn) — which rolls every table back if fn throws. Anything else
  * throws, naming the clause, so a test never passes on SQL it did not read.
@@ -253,6 +253,12 @@ export function makeSqlFakeDb(opts: {
             const hit = lits.includes(String(val));
             return c[2] === "<>" ? !hit : hit;
           }).length;
+        }
+        // AVG(col): the mean of the non-null values, as SQL takes it.
+        const av = text.match(/avg\((`\w+`\.`\w+`)\)/i);
+        if (av) {
+          const vals = qs.map((q) => lookup(q, av[1])).filter((v) => v != null).map(Number);
+          return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
         }
         const s = text.match(/sum\((`\w+`\.`\w+`)\)/i);
         return s ? qs.reduce((a, q) => a + Number(lookup(q, s[1]) ?? 0), 0) : qs.length;

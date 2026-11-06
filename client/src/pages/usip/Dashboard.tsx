@@ -39,8 +39,10 @@ import {
   AlertTriangle,
   Timer, LayoutDashboard
 } from "lucide-react";
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Link, useLocation } from "wouter";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { readGoals, writeGoals } from "@/lib/dashboardGoals";
 import {
   Area,
   AreaChart,
@@ -58,8 +60,6 @@ import {
 } from "recharts";
 
 /* ─── constants ───────────────────────────────────────────────────────────── */
-const GOALS_KEY = "velocity_dashboard_goals";
-
 const DEFAULT_GOALS: Record<string, number> = {
   pipelineValue: 5_000_000,
   closedWon:     20,
@@ -90,6 +90,21 @@ const fmtRelative = (d: Date) => {
   return `${Math.floor(mins / 60)}h ago`;
 };
 
+/**
+ * "Updated 5m ago", from when the numbers arrived, and kept current. It was the
+ * page's mount time, re-read only when something else re-rendered, so it sat
+ * on "just now" (audit 2026-10-20, G69). Its own component, so the tick
+ * redraws a line of text and not the charts.
+ */
+function UpdatedAgo({ at }: { at: number }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 15_000);
+    return () => clearInterval(t);
+  }, []);
+  return <span>{at > 0 ? `Updated ${fmtRelative(new Date(at))}` : "Loading…"}</span>;
+}
+
 const PERIOD_OPTIONS = [
   { value: "1",  label: "Past 30 days",   months: 1 },
   { value: "3",  label: "Past 3 months",  months: 3 },
@@ -113,19 +128,25 @@ function GoalBar({
   goals,
   onGoalChange,
   isMoney,
+  lowerIsBetter,
 }: {
   goalKey: string;
   current: number;
   goals: Record<string, number>;
   onGoalChange: (key: string, val: number) => void;
   isMoney?: boolean;
+  /** A limit to stay under, not a goal to reach (G53): more stale proposals read as progress. */
+  lowerIsBetter?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const goal = goals[goalKey] ?? DEFAULT_GOALS[goalKey] ?? 100;
   const pct = Math.min(Math.round((current / goal) * 100), 100);
-  const over = current >= goal;
+  const met = lowerIsBetter ? current <= goal : current >= goal;
+  const barColor = lowerIsBetter
+    ? (current > goal ? "#F87171" : pct >= 70 ? "#FCD34D" : "#34D399")
+    : (met ? "#34D399" : pct >= 70 ? "#FCD34D" : "#60A5FA");
 
   const startEdit = () => {
     setDraft(String(goal));
@@ -142,9 +163,15 @@ function GoalBar({
   return (
     <div className="mt-2 space-y-1">
       <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-        <span className={over ? "text-emerald-500 font-semibold" : ""}>
-          {pct}% of goal
-        </span>
+        {lowerIsBetter ? (
+          <span className={met ? "" : "text-red-500 font-semibold"}>
+            {met ? `${goal - current} under the limit` : `${current - goal} over the limit`}
+          </span>
+        ) : (
+          <span className={met ? "text-emerald-500 font-semibold" : ""}>
+            {pct}% of goal
+          </span>
+        )}
         {editing ? (
           <div className="flex items-center gap-1">
             <input aria-label="Name"
@@ -167,7 +194,7 @@ function GoalBar({
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); startEdit(); }}
             className="flex items-center gap-0.5 hover:text-foreground transition-colors"
           >
-            Goal: {isMoney ? fmt$(goal) : goal.toLocaleString()}
+            {lowerIsBetter ? "Limit" : "Goal"}: {isMoney ? fmt$(goal) : goal.toLocaleString()}
             <Pencil className="size-2.5 ml-0.5" />
           </button>
         )}
@@ -175,10 +202,7 @@ function GoalBar({
       <div className="h-1.5 rounded-full bg-secondary overflow-hidden">
         <div
           className="h-full rounded-full transition-all duration-700"
-          style={{
-            width: `${pct}%`,
-            background: over ? "#34D399" : pct >= 70 ? "#FCD34D" : "#60A5FA",
-          }}
+          style={{ width: `${pct}%`, background: barColor }}
         />
       </div>
     </div>
@@ -191,7 +215,11 @@ interface StatProps {
   value: string | number;
   rawValue: number;
   hint?: string;
-  delta?: number;
+  /** Percent change; null when the comparison had nothing to compare with. */
+  delta?: number | null;
+  /** What the delta compares with, e.g. "vs start of month". */
+  deltaLabel?: string;
+  lowerIsBetter?: boolean;
   icon: React.ElementType;
   iconColor: string;
   loading?: boolean;
@@ -202,10 +230,11 @@ interface StatProps {
 }
 
 function MBStatCard({
-  label, value, rawValue, hint, delta, icon: Icon, iconColor, loading,
-  goalKey, goals, onGoalChange, isMoney,
+  label, value, rawValue, hint, delta, deltaLabel = "vs last month", icon: Icon, iconColor, loading,
+  goalKey, goals, onGoalChange, isMoney, lowerIsBetter,
 }: StatProps) {
-  const trend = delta === undefined ? "flat" : delta > 0 ? "up" : delta < 0 ? "down" : "flat";
+  // null: something now where there was nothing to compare with, which is up.
+  const trend = delta === null ? "up" : delta === undefined ? "flat" : delta > 0 ? "up" : delta < 0 ? "down" : "flat";
   return (
     <div
       className="rounded-xl border bg-card p-5 flex flex-col gap-2 hover:shadow-md transition-shadow"
@@ -234,7 +263,7 @@ function MBStatCard({
             trend === "down" ? "text-red-500 font-semibold" :
             "text-muted-foreground"
           }>
-            {delta > 0 ? "+" : ""}{delta}% vs last month
+            {delta === null ? `up from none ${deltaLabel}` : `${delta > 0 ? "+" : ""}${delta}% ${deltaLabel}`}
           </span>
         )}
         {hint && <span className="text-muted-foreground ml-1">· {hint}</span>}
@@ -246,6 +275,7 @@ function MBStatCard({
           goals={goals}
           onGoalChange={onGoalChange}
           isMoney={isMoney}
+          lowerIsBetter={lowerIsBetter}
         />
       )}
     </div>
@@ -297,26 +327,21 @@ export default function Dashboard() {
   const [period, setPeriod] = useState<string>("6");
   const months = PERIOD_OPTIONS.find((o) => o.value === period)?.months ?? 6;
 
-  // Goals stored in localStorage
-  const [goals, setGoals] = useState<Record<string, number>>(() => {
-    try {
-      return { ...DEFAULT_GOALS, ...JSON.parse(localStorage.getItem(GOALS_KEY) ?? "{}") };
-    } catch {
-      return { ...DEFAULT_GOALS };
-    }
-  });
+  // Goals are this browser's, and this workspace's alone (G69).
+  const { current: workspace } = useWorkspace();
+  const wsId = workspace?.id ?? null;
+  const [goals, setGoals] = useState<Record<string, number>>({ ...DEFAULT_GOALS });
+  useEffect(() => {
+    if (wsId != null) setGoals(readGoals(localStorage, wsId, DEFAULT_GOALS));
+  }, [wsId]);
 
   const handleGoalChange = useCallback((key: string, val: number) => {
     setGoals((prev) => {
       const next = { ...prev, [key]: val };
-      localStorage.setItem(GOALS_KEY, JSON.stringify(next));
+      if (wsId != null) writeGoals(localStorage, wsId, next);
       return next;
     });
-  }, []);
-
-  // Last refreshed timestamp
-  const [lastRefreshed, setLastRefreshed] = useState(() => new Date());
-  const [refreshTick, setRefreshTick] = useState(0);
+  }, [wsId]);
 
   const utils = trpc.useUtils();
   const handleRefresh = useCallback(() => {
@@ -325,31 +350,27 @@ export default function Dashboard() {
     utils.opportunities.stageFunnel.invalidate();
     utils.opportunities.topReps.invalidate();
     utils.opportunities.winLoss.invalidate();
-    utils.emailDrafts.list.invalidate();
-    utils.emailDrafts.count.invalidate();
-    utils.opportunities.board.invalidate();
+    utils.attention.summary.invalidate();
+    utils.opportunities.recent.invalidate();
     utils.unipile.metrics.invalidate();
-    setLastRefreshed(new Date());
-    setRefreshTick((t) => t + 1);
   }, [utils]);
 
-  const { data: stats, isLoading: statsLoading } = trpc.opportunities.dashboardStats.useQuery();
+  const { data: stats, isLoading: statsLoading, dataUpdatedAt } = trpc.opportunities.dashboardStats.useQuery();
   const { data: chartData, isLoading: chartLoading } = trpc.opportunities.revenueChart.useQuery({ months });
   const { data: funnel } = trpc.opportunities.stageFunnel.useQuery();
   const { data: topReps } = trpc.opportunities.topReps.useQuery();
   const { data: winLoss } = trpc.opportunities.winLoss.useQuery();
-  // The five the card shows, and the count for its badge (audit 2026-10-20,
-  // O41): this read every draft in the workspace, bodies included.
-  const { data: drafts } = trpc.emailDrafts.list.useQuery({ status: "pending_review", limit: 5 });
-  const { data: draftCount } = trpc.emailDrafts.count.useQuery({ status: "pending_review" });
-  const awaitingDrafts = draftCount?.count ?? (drafts ?? []).length;
-  const { data: opps } = trpc.opportunities.board.useQuery();
+  // The same count Home's attention panel shows, from the same query (G56):
+  // counted in SQL, five subjects and no bodies (G58).
+  const { data: attention } = trpc.attention.summary.useQuery();
+  const awaiting = attention?.awaitingDrafts;
+  // Newest first, six of them, not the whole board in no order (G53, G58).
+  const { data: recentOpps = [] } = trpc.opportunities.recent.useQuery({ limit: 6 });
   const { data: unipileMetrics } = trpc.unipile.metrics.useQuery();
   // Funnel-strip top-of-funnel count (Prospects). perPage minimal — we only read .total.
   const { data: prospectsData } = trpc.prospects.list.useQuery({ page: 1, perPage: 10 });
   const prospectsTotal = prospectsData?.total ?? 0;
 
-  const recentOpps = (opps ?? []).slice(0, 6);
   const accent = useAccentColor();
 
   const winLossData = winLoss
@@ -368,7 +389,7 @@ export default function Dashboard() {
       >
         {/* Last refreshed + Refresh button */}
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>Updated {fmtRelative(lastRefreshed)}</span>
+          <UpdatedAgo at={dataUpdatedAt} />
           <button
             onClick={handleRefresh}
             className="flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs hover:bg-secondary transition-colors"
@@ -387,8 +408,8 @@ export default function Dashboard() {
           <div className="flex flex-wrap items-center gap-2">
             {[
               { label: "Prospects", href: "/v2/people", count: prospectsTotal },
-              { label: "Leads", href: "/leads", count: stats?.activeLeads ?? 0 },
-              { label: "Opportunities", href: "/pipeline", count: stats?.openOppsCount ?? 0 },
+              { label: "Active leads", href: "/leads", count: stats?.activeLeads ?? 0 },
+              { label: "Open opportunities", href: "/pipeline", count: stats?.openOppsCount ?? 0 },
               { label: "Customers", href: "/customers", count: stats?.customerCount ?? 0 },
             ].map((s, i, arr) => (
               <div key={s.label} className="flex items-center gap-2 flex-1 min-w-[130px]">
@@ -415,6 +436,7 @@ export default function Dashboard() {
               rawValue={stats?.pipelineValue ?? 0}
               hint={`${stats?.openOppsCount ?? 0} open opps`}
               delta={stats?.pipelineDelta}
+              deltaLabel="vs start of month"
               icon={BarChart2}
               iconColor="#60A5FA"
               loading={statsLoading}
@@ -426,11 +448,12 @@ export default function Dashboard() {
           </Link>
           <Link href="/pipeline">
             <MBStatCard
-              label="Closed-Won"
+              label="Won this month"
               value={`${stats?.closedWonCount ?? 0} deals`}
               rawValue={stats?.closedWonCount ?? 0}
-              hint={fmt$(stats?.totalWonValue ?? 0)}
+              hint={fmt$(stats?.closedWonValue ?? 0)}
               delta={stats?.closedWonDelta}
+              deltaLabel="vs same days last month"
               icon={Briefcase}
               iconColor="#34D399"
               loading={statsLoading}
@@ -444,7 +467,9 @@ export default function Dashboard() {
               label="Active Leads"
               value={(stats?.activeLeads ?? 0).toLocaleString()}
               rawValue={stats?.activeLeads ?? 0}
+              hint={`${stats?.leadsThisMonth ?? 0} new this month`}
               delta={stats?.leadsDelta}
+              deltaLabel="new, vs same days last month"
               icon={Users}
               iconColor="#C084FC"
               loading={statsLoading}
@@ -459,6 +484,7 @@ export default function Dashboard() {
               value={stats?.customerCount ?? 0}
               rawValue={stats?.customerCount ?? 0}
               delta={stats?.customerDelta}
+              deltaLabel="vs start of month"
               icon={UserCheck}
               iconColor="#F87171"
               loading={statsLoading}
@@ -483,6 +509,7 @@ export default function Dashboard() {
               goalKey="staleProposals"
               goals={goals}
               onGoalChange={handleGoalChange}
+              lowerIsBetter
             />
           </Link>
         </div>
@@ -528,7 +555,7 @@ export default function Dashboard() {
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="month" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                     <YAxis tickFormatter={fmtAxis} tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} width={56} />
                     <Tooltip content={<RevenueTooltip />} />
                     <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
@@ -631,11 +658,11 @@ export default function Dashboard() {
             <div className="px-5 py-4 border-b flex items-center gap-2">
               <Trophy className="size-4 text-amber-500" />
               <span className="text-base font-semibold">Top Reps</span>
-              <span className="ml-auto text-xs text-muted-foreground">Closed-Won value · click to drill down</span>
+              <span className="ml-auto text-xs text-muted-foreground">Won this month · click to drill down</span>
             </div>
             <div className="p-4 space-y-3">
               {(topReps ?? []).length === 0 ? (
-                <div className="text-sm text-muted-foreground py-4">No rep data yet.</div>
+                <div className="text-sm text-muted-foreground py-4">No deals won this month yet.</div>
               ) : (
                 (topReps ?? []).map((rep, i) => {
                   const pct = Math.round((rep.value / maxRepValue) * 100);
@@ -680,7 +707,6 @@ export default function Dashboard() {
           <div className="px-5 py-4 border-b flex items-center gap-2">
             <Link2 className="size-4" style={{ color: "#0A66C2" }} />
             <span className="text-base font-semibold">Multichannel Outreach</span>
-            <span className="ml-auto text-xs text-muted-foreground">Last 30 days</span>
             <Link href="/connected-accounts" className="ml-2 text-xs flex items-center gap-1" style={{ color: accent }}>
               Manage <ArrowRight className="size-3" />
             </Link>
@@ -696,7 +722,7 @@ export default function Dashboard() {
               >
                 <div className="flex items-center justify-center gap-1 mb-1">
                   <MessageSquare className="size-3.5" style={{ color: "#0A66C2" }} />
-                  <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Messages Sent</span>
+                  <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Messages · 30 days</span>
                 </div>
                 <div className="text-2xl font-bold font-mono tabular-nums" style={{ color: "#0A66C2" }}>
                   {unipileMetrics?.messagesSent ?? 0}
@@ -710,7 +736,7 @@ export default function Dashboard() {
               >
                 <div className="flex items-center justify-center gap-1 mb-1">
                   <UserPlus className="size-3.5 text-emerald-500" />
-                  <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Connections</span>
+                  <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Connections · all time</span>
                 </div>
                 <div className="text-2xl font-bold font-mono tabular-nums text-emerald-500">
                   {unipileMetrics?.connectionsAccepted ?? 0}
@@ -724,7 +750,7 @@ export default function Dashboard() {
               >
                 <div className="flex items-center justify-center gap-1 mb-1">
                   <Target className="size-3.5 text-amber-500" />
-                  <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Acceptance</span>
+                  <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Acceptance · all time</span>
                 </div>
                 <div className="text-2xl font-bold font-mono tabular-nums text-amber-600">
                   {unipileMetrics?.acceptanceRate ?? 0}%
@@ -776,6 +802,7 @@ export default function Dashboard() {
           <div className="rounded-xl border bg-card" data-tour-id="dashboard-recent-opps">
             <div className="px-5 py-3.5 border-b flex items-center">
               <div className="text-sm font-semibold">Recent Opportunities</div>
+              <span className="ml-2 text-xs text-muted-foreground">newest first</span>
               <Link href="/pipeline" className="ml-auto text-xs flex items-center gap-1" style={{ color: accent }}>
                 View pipeline <ArrowRight className="size-3" />
               </Link>
@@ -789,7 +816,7 @@ export default function Dashboard() {
                 return (
                   <Link
                     key={o.id}
-                    href="/pipeline"
+                    href={`/opportunities/${o.id}`}
                     className="flex items-center gap-3 px-5 py-3 hover:bg-secondary/50 transition-colors"
                   >
                     <div
@@ -817,35 +844,36 @@ export default function Dashboard() {
               <div className="flex items-center gap-2">
                 <Zap className="size-3.5 text-violet-500" />
                 <div className="text-sm font-semibold">Drafts Awaiting Review</div>
-                {awaitingDrafts > 0 && (
+                {(awaiting?.count ?? 0) > 0 && (
                   <span className="ml-1 rounded-full bg-violet-500/20 text-violet-600 text-xs font-bold px-2 py-0.5">
-                    {awaitingDrafts}
+                    {awaiting?.count}
                   </span>
                 )}
               </div>
-              {/* No source filter: this card counts EVERY awaiting draft in
-                  email_drafts (CRM, AI and sequence alike), so the link must
-                  land on the same set or the numbers disagree on arrival. */}
+              {/* No source filter: this card counts EVERY draft awaiting review
+                  (CRM, AI and sequence alike), so the link lands on all of them.
+                  That page's "awaiting" also lists approved drafts not yet sent. */}
               <Link href="/v2/emails?status=awaiting" className="ml-auto text-xs flex items-center gap-1" style={{ color: accent }}>
                 Review queue <ArrowRight className="size-3" />
               </Link>
             </div>
             <div className="p-4">
-              {(drafts ?? []).length === 0 ? (
+              {(awaiting?.count ?? 0) === 0 ? (
                 <div className="text-sm text-muted-foreground py-2 flex items-center gap-2">
                   <span className="text-emerald-500">✓</span> No drafts in the queue — you're all caught up!
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {(drafts ?? []).slice(0, 5).map((d) => (
-                    <div
+                  {(awaiting?.items ?? []).map((d) => (
+                    <Link
                       key={d.id}
-                      className="rounded-lg border bg-secondary/30 px-3 py-2.5 hover:bg-secondary/60 transition-colors cursor-pointer"
+                      href="/v2/emails?status=awaiting"
+                      className="block rounded-lg border bg-secondary/30 px-3 py-2.5 hover:bg-secondary/60 transition-colors"
                       style={{ borderLeftWidth: 3, borderLeftColor: "#C084FC" }}
                     >
-                      <div className="text-sm font-medium truncate">{d.subject}</div>
-                      <div className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{d.body}</div>
-                    </div>
+                      <div className="text-sm font-medium truncate">{d.subject || "(no subject)"}</div>
+                      {d.toEmail && <div className="text-xs text-muted-foreground truncate mt-0.5">to {d.toEmail}</div>}
+                    </Link>
                   ))}
                 </div>
               )}
