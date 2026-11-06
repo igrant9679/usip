@@ -340,7 +340,8 @@ export function makeSqlFakeDb(opts: {
         return chain;
       },
       $returningId() { return Promise.resolve(inserted.map((r) => ({ id: r.id }))); },
-      then(res: (v: unknown) => void) { res([{ affectedRows: inserted.length, insertId: inserted[0]?.id }]); },
+      // mysql2's own shape, [ResultSetHeader, FieldPacket[]] (audit N6).
+      then(res: (v: unknown) => void) { res([{ affectedRows: inserted.length, insertId: inserted[0]?.id }, []]); },
     };
     return chain;
   };
