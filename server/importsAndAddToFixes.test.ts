@@ -161,10 +161,15 @@ describe("R48 · Add to… reviews before it enrols, and List adds to a list", (
     expect(s).toContain('onClick={() => setPicked({ kind: "campaign", id: c.id, name: c.name, status: c.status })}');
     expect(s).toContain('onClick={() => setPicked({ kind: "sequence", id: s.id, name: s.name, status: s.status })}');
     // Each engine is called from one place: the Confirm handler.
-    expect(s.split("pushExisting.mutate(").length - 1).toBe(1);
+    // 2026-11-06 (audit P48, batch Pa): a campaign takes 100 people a call, so
+    // Confirm pushes through pushToCampaign, which sends them in batches with
+    // mutateAsync. It is still reached from Confirm alone.
+    expect(s.split("pushExisting.mutate(").length - 1).toBe(0);
+    expect(s.split("pushExisting.mutateAsync(").length - 1).toBe(1);
+    expect(s.split("pushToCampaign(").length - 1).toBe(1);
     expect(s.split("bulkEnroll.mutate(").length - 1).toBe(1);
     const confirm = s.slice(s.indexOf("const confirm = () => {"), s.indexOf("// The review: what Confirm will do"));
-    expect(confirm).toContain('if (picked.kind === "campaign") pushExisting.mutate({ campaignId: picked.id, prospectIds, contactIds, leadIds });');
+    expect(confirm).toContain('if (picked.kind === "campaign") void pushToCampaign(picked);');
     expect(confirm).toContain("else bulkEnroll.mutate({ sequenceId: picked.id, prospectIds, contactIds, leadIds });");
     // Both panes show the review.
     expect(s.split("{review}").length - 1).toBe(2);

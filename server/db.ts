@@ -141,6 +141,9 @@ export async function getWorkspaceMembers(workspaceId: number) {
       title: workspaceMembers.title,
       quota: workspaceMembers.quota,
       memberId: workspaceMembers.id,
+      // Pickers that assign work leave out people who have left (audit
+      // 2026-10-20, P115: lead routing offered them as targets).
+      deactivatedAt: workspaceMembers.deactivatedAt,
     })
     .from(workspaceMembers)
     .innerJoin(users, eq(workspaceMembers.userId, users.id))

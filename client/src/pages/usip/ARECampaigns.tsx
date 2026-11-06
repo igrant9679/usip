@@ -31,12 +31,13 @@ import {
   Megaphone,
   Sparkles,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ARE_SOURCES, ARE_SOURCE_IDS, ARE_DEFAULT_SOURCES, DISCOVERY_OFF_NOTE, toggledSources } from "@shared/areSources";
 import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenceSteps";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
+import { askLaunchOnUtc } from "@/components/usip/are/launchTimezone";
 
 const STATUS_COLOR: Record<string, string> = {
   draft: "#94A3B8",
@@ -268,6 +269,9 @@ export default function ARECampaigns() {
     }
   }, [showCreate]);
 
+  // A first launch on the UTC default asks first (A31); a yes sends it again with confirmTimezone.
+  const retryCreate = useRef<((v: any) => void) | null>(null);
+  const retrySetStatus = useRef<((v: any) => void) | null>(null);
   const create = trpc.are.campaigns.create.useMutation({
     onSuccess: (data) => {
       toast.success(
@@ -279,13 +283,21 @@ export default function ARECampaigns() {
       setShowCreate(false);
       navigate(`/are/campaigns/${data.id}`);
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e, vars) => {
+      if (askLaunchOnUtc(e.message, () => retryCreate.current?.({ ...vars, confirmTimezone: true }))) return;
+      toast.error(e.message);
+    },
   });
+  retryCreate.current = create.mutate;
 
   const setStatus = trpc.are.campaigns.setStatus.useMutation({
     onSuccess: () => utils.are.campaigns.list.invalidate(),
-    onError: (e) => toast.error(e.message),
+    onError: (e, vars) => {
+      if (askLaunchOnUtc(e.message, () => retrySetStatus.current?.({ ...vars, confirmTimezone: true }))) return;
+      toast.error(e.message);
+    },
   });
+  retrySetStatus.current = setStatus.mutate;
 
   const deleteCampaign = trpc.are.campaigns.delete.useMutation({
     onSuccess: () => {

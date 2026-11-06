@@ -15,7 +15,8 @@
  * `interrupted` at boot (a deploy kills fire-and-forget work — recorded
  * lesson 2026-09-09) so the page never spins on a run nothing is executing.
  */
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import {
   discoveryRuns,
   prospectSearchResults,
@@ -188,13 +189,55 @@ export async function estimatePromotion(workspaceId: number, runId: number, resu
 export async function promoteResults(workspaceId: number, userId: number | null, runId: number, resultIds: number[]) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
-  const rows = await db.select().from(prospectSearchResults)
-    .where(and(eq(prospectSearchResults.workspaceId, workspaceId), eq(prospectSearchResults.runId, runId), inArray(prospectSearchResults.id, resultIds.length ? resultIds : [-1])));
+  const wanted = resultIds.length ? resultIds : [-1];
+  /**
+   * CLAIM the rows before anything is bought (audit 2026-10-20, A59). Two
+   * promotions of the same rows — a double click — both read them unpromoted
+   * and both paid the vendor. Each takes only the rows nobody else holds, with
+   * a conditional UPDATE, and lets go in `finally`; a claim older than
+   * PROMOTE_CLAIM_STALE_MS belongs to a promotion that died, and may be taken.
+   */
+  const claim = randomUUID();
+  await db.update(prospectSearchResults)
+    .set({ promoteClaim: claim, promoteClaimedAt: new Date() } as never)
+    .where(and(
+      eq(prospectSearchResults.workspaceId, workspaceId),
+      eq(prospectSearchResults.runId, runId),
+      inArray(prospectSearchResults.id, wanted),
+      isNull(prospectSearchResults.promotedProspectId),
+      or(isNull(prospectSearchResults.promoteClaim), lt(prospectSearchResults.promoteClaimedAt, new Date(Date.now() - PROMOTE_CLAIM_STALE_MS))),
+    ));
+  try {
+    return await promoteClaimedResults(db, workspaceId, userId, runId, wanted, claim);
+  } finally {
+    await db.update(prospectSearchResults)
+      .set({ promoteClaim: null, promoteClaimedAt: null } as never)
+      .where(and(eq(prospectSearchResults.workspaceId, workspaceId), eq(prospectSearchResults.promoteClaim, claim)));
+  }
+}
+
+/** A promotion that dies holding rows lets go of them after this long. */
+export const PROMOTE_CLAIM_STALE_MS = 30 * 60_000;
+
+async function promoteClaimedResults(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  userId: number | null,
+  runId: number,
+  wanted: number[],
+  claim: string,
+) {
+  const all = await db.select().from(prospectSearchResults)
+    .where(and(eq(prospectSearchResults.workspaceId, workspaceId), eq(prospectSearchResults.runId, runId), inArray(prospectSearchResults.id, wanted)));
+  const rows = all.filter((r) => r.promoteClaim === claim);
+  const heldElsewhere = all.filter((r) => r.promoteClaim !== claim && !r.promotedProspectId).length;
   // A row already looked up and billed with nothing to take is not bought twice.
   const todo = rows.filter((r) => !r.promotedProspectId && !(r.normalized as ProspectRecord | null)?.rawSourcePayload?.noAddressFound);
-  if (todo.length === 0) return { promoted: 0, acquired: 0, unitsSpent: 0, failed: 0, discoveryRunId: null as number | null, errors: [] as string[] };
+  const errors: string[] = heldElsewhere > 0
+    ? [`${heldElsewhere} of the selected row${heldElsewhere === 1 ? " is" : "s are"} already being promoted — nothing was bought for ${heldElsewhere === 1 ? "it" : "them"} again`]
+    : [];
+  if (todo.length === 0) return { promoted: 0, acquired: 0, unitsSpent: 0, failed: 0, discoveryRunId: null as number | null, errors };
 
-  const errors: string[] = [];
   let acquired = 0, unitsSpent = 0, failed = 0;
   const finalRecords = new Map<number, ProspectRecord>();
   const bySource = new Map<string, typeof todo>();

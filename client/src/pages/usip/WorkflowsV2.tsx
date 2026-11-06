@@ -17,6 +17,8 @@ import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { ConfirmButton } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
+import { useConfirmAutoEnrol } from "@/hooks/useConfirmAutoEnrol";
+import { ruleState, runSummary } from "@/lib/segmentAutoEnrol";
 import { isDeadTrigger } from "@shared/workflowTriggers";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -247,7 +249,9 @@ export default function WorkflowsV2() {
   // ── Segment auto-enroll rules ──
   const segRules = trpc.segmentRules.list.useQuery(undefined as any, { retry: false });
   const saveSegRule = trpc.segmentRules.save.useMutation({ onSuccess: () => utils.segmentRules.list.invalidate(), onError: (e) => toast.error(e.message) });
-  const runSegRules = trpc.segmentRules.runEnrollment.useMutation({ onSuccess: (r: any) => { utils.segmentRules.list.invalidate(); toast.success(`Enrolled ${r?.enrolled ?? 0} contact(s)`); }, onError: (e) => toast.error(e.message) });
+  const runSegRules = trpc.segmentRules.runEnrollment.useMutation({ onSuccess: (r) => { utils.segmentRules.list.invalidate(); toast.success(runSummary(r)); }, onError: (e) => toast.error(e.message) });
+  // Turning a rule on shows how many it would enrol and asks first (audit 2026-10-20, P57).
+  const confirmTurnOn = useConfirmAutoEnrol();
 
   const campaignList = (campaigns.data as any[]) ?? [];
   const ruleList = (rules.data as any[]) ?? [];
@@ -521,10 +525,14 @@ export default function WorkflowsV2() {
               ) : (
                 segList.map((r: any) => (
                   <div key={r.id} className="flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0">
-                    <Switch aria-label={`${r.name} enabled`} checked={!!r.enabled} onCheckedChange={(v) => saveSegRule.mutate({ id: r.id, segmentId: r.segmentId, sequenceId: r.sequenceId, enabled: v })} />
+                    <Switch aria-label={`${r.segmentName ?? `Segment #${r.segmentId}`} → ${r.sequenceName ?? `Sequence #${r.sequenceId}`} enabled`} checked={!!r.enabled}
+                      onCheckedChange={(v) => v
+                        ? confirmTurnOn(r, (confirmedWouldEnrol) => saveSegRule.mutate({ id: r.id, segmentId: r.segmentId, sequenceId: r.sequenceId, enabled: true, confirmedWouldEnrol }))
+                        : saveSegRule.mutate({ id: r.id, segmentId: r.segmentId, sequenceId: r.sequenceId, enabled: false })} />
                     <div className="min-w-0 flex-1">
+                      {/* The list carries the names now; every card read "Segment #id" (P137). */}
                       <div className="text-sm font-medium truncate">{r.segmentName ?? `Segment #${r.segmentId}`} → {r.sequenceName ?? `Sequence #${r.sequenceId}`}</div>
-                      <div className="text-[11px] text-muted-foreground">{r.enrolledCount ?? 0} enrolled · last run {fmtWhen(r.lastRunAt)}</div>
+                      <div className="text-[11px] text-muted-foreground">{r.enrolledCount ?? 0} enrolled · last run {fmtWhen(r.lastRunAt)}{ruleState(r).why ? ` · ${ruleState(r).why}` : ""}</div>
                     </div>
                   </div>
                 ))

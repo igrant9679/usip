@@ -197,7 +197,7 @@ export default function Leads() {
 
   return (
     <Shell title="Leads">
-      <PageHeader title="Leads" description="Capture and qualify inbound leads before they enter the CRM pipeline. A new lead goes to a rep by your lead routing rules; its A–D score is worked out when you click AI score, or when an admin re-scores every lead." pageKey="leads"
+      <PageHeader title="Leads" description="Capture and qualify inbound leads before they enter the CRM pipeline. A new lead goes to a rep by your lead routing rules. A–D scores are worked out by the hourly re-score as leads engage or go stale, and at once when you click AI score. Leads are not enriched automatically." pageKey="leads"
         icon={<UserPlus className="size-5" />}
       >
         <Input aria-label="Search leads" placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-56" />

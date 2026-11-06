@@ -271,3 +271,36 @@ export function describeDuplicateMappings(
     .map((d) => `${d.label} ← ${d.headers.map((h) => `"${h}"`).join(", ")}`)
     .join("; ");
 }
+
+/* ─── Reading the file ───────────────────────────────────────────────────── */
+
+/**
+ * The file's bytes as text (audit 2026-10-20, R53: no encoding detection).
+ *
+ * The page read every file with `FileReader.readAsText`, which assumes UTF-8.
+ * Excel's "Unicode text" export is UTF-16 with a byte-order mark, and its
+ * plain "CSV" in Western locales is Windows-1252: the first arrived as
+ * garbage with a NUL between every letter, so no header could be mapped, and
+ * the second turned every "José" or "Müller" into a replacement character.
+ *
+ * A UTF-16 BOM decides UTF-16. Otherwise the bytes are UTF-8 if they decode
+ * as UTF-8 without error (a UTF-8 BOM is dropped by the decoder), else
+ * Windows-1252, which maps every byte to something.
+ */
+export function decodeCsvBytes(bytes: Uint8Array): string {
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder("utf-16le").decode(bytes);
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder("utf-16be").decode(bytes);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder("windows-1252").decode(bytes);
+  }
+}
+
+/**
+ * The file types the importer reads: .csv in any case ("CONTACTS.CSV" was
+ * refused), plus the .tsv / .txt names tab-separated exports are saved under.
+ */
+export function isImportableFileName(name: string): boolean {
+  return /\.(csv|tsv|txt)$/i.test(name);
+}

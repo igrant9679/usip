@@ -57,8 +57,9 @@ export function MfaRequiredGate() {
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            Lost the phone your codes were on? An admin can reset your 2FA from the Team page —
-            there are no backup codes.
+            {/* True since G15 (audit 2026-10-20): the button now exists. */}
+            Lost the phone your codes were on? An admin can press Reset 2FA on your row of the Team
+            page — there are no backup codes.
           </p>
           <div className="flex justify-end gap-2 pt-1">
             <Button variant="outline" size="sm" onClick={() => logout()}>Sign out</Button>

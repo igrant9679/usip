@@ -31,7 +31,9 @@ import { Link } from "wouter";
 import {
   CONTACT_IMPORT_FIELDS,
   autoMapHeaders,
+  decodeCsvBytes,
   findDuplicateFieldMappings,
+  isImportableFileName,
   isFieldRequiredFor,
   missingRequiredMappings,
   requiredFieldsFor,
@@ -127,9 +129,14 @@ export function ImportContactsPanel() {
   const [previewRows, setPreviewRows] = useState<Array<Record<string, string>>>([]);
   const [columnStats, setColumnStats] = useState<Array<{ header: string; filled: number; samples: string[] }>>([]);
 
-  // Step 3: validation results
-  const [validCount, setValidCount] = useState(0);
+  // Step 3: validation results. newCount + duplicateCount + errorCount is the
+  // file; importCount is what the button creates (new, plus duplicates when
+  // they are not skipped) — the server's number, not a client sum (R52).
+  const [newCount, setNewCount] = useState(0);
+  const [importCount, setImportCount] = useState(0);
   const [duplicateCount, setDuplicateCount] = useState(0);
+  const [errorCount, setErrorCount] = useState(0);
+  /** Every error row, for the report — the list on screen shows the first 20. */
   const [errorRows, setErrorRows] = useState<Array<{ rowIndex: number; reason: string }>>([]);
   const [totalRowCount, setTotalRowCount] = useState(0);
   const [skipDuplicates, setSkipDuplicates] = useState(true);
@@ -177,8 +184,8 @@ export function ImportContactsPanel() {
 
   /* ── Step 1: File upload ── */
   function handleFile(f: File) {
-    if (!f.name.endsWith(".csv")) {
-      toast.error("Please upload a .csv file.");
+    if (!isImportableFileName(f.name)) {
+      toast.error("Please upload a .csv file (a tab-separated .tsv or .txt works too).");
       return;
     }
     if (f.size > 10 * 1024 * 1024) {
@@ -187,9 +194,11 @@ export function ImportContactsPanel() {
     }
     setFile(f);
     setFilename(f.name);
+    // Bytes, then decoded here: readAsText assumed UTF-8, which garbled
+    // Excel's UTF-16 and Windows-1252 exports (R53). See decodeCsvBytes.
     const reader = new FileReader();
-    reader.onload = (e) => setCsvText(e.target?.result as string ?? "");
-    reader.readAsText(f);
+    reader.onload = (e) => setCsvText(decodeCsvBytes(new Uint8Array((e.target?.result as ArrayBuffer) ?? new ArrayBuffer(0))));
+    reader.readAsArrayBuffer(f);
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -232,8 +241,10 @@ export function ImportContactsPanel() {
         // different import than the one the button performs.
         skipDuplicates: override?.skipDuplicates ?? skipDuplicates,
       } as any);
-      setValidCount(result.validCount);
+      setNewCount(result.newCount);
+      setImportCount(result.importCount);
       setDuplicateCount(result.duplicateCount);
+      setErrorCount(result.errorCount);
       setErrorRows(result.errorRows);
       setTotalRowCount(result.totalRows);
       setNoEmailCount((result as any).noEmailCount ?? 0);
@@ -284,7 +295,7 @@ export function ImportContactsPanel() {
     URL.revokeObjectURL(url);
   }
 
-  const totalRows = totalRowCount || validCount + duplicateCount + errorRows.length;
+  const totalRows = totalRowCount || newCount + duplicateCount + errorCount;
 
   /**
    * Two columns claiming one field. The import keeps whichever comes last and
@@ -327,8 +338,10 @@ export function ImportContactsPanel() {
             <CardHeader>
               <CardTitle>Upload CSV File</CardTitle>
               <CardDescription>
-                Supported: .csv files up to 50,000 rows and 10 MB. Required columns: First Name,
-                Last Name. You will map columns in the next step.
+                Supported: .csv files (comma, semicolon or tab separated) up to 50,000 rows and 10 MB.
+                Required columns: {requiredFieldsFor("contacts").map((f) => f.label).join(", ")} for CRM
+                Contacts, or {requiredFieldsFor("prospects").map((f) => f.label).join(", ")} for Prospects.
+                You map columns and choose where they go in the next step.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -348,7 +361,7 @@ export function ImportContactsPanel() {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".csv"
+                  accept=".csv,.tsv,.txt"
                   className="hidden"
                   onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
                 />
@@ -373,7 +386,9 @@ export function ImportContactsPanel() {
                 <Info className="h-4 w-4 text-blue-600 dark:text-blue-300" />
                 <AlertDescription className="text-blue-800 dark:text-blue-200 text-sm">
                   <strong>Tip:</strong> Export your contacts from Google Contacts, HubSpot, Salesforce,
-                  or LinkedIn Sales Navigator as CSV. Include at minimum: First Name, Last Name, and Email.
+                  or LinkedIn Sales Navigator as CSV. Include at minimum:{" "}
+                  {requiredFieldsFor("contacts").map((f) => f.label).join(", ")} — or, with no email
+                  column, import into Prospects and let the sweeper find one.
                 </AlertDescription>
               </Alert>
 
@@ -658,27 +673,27 @@ export function ImportContactsPanel() {
                 {totalRows > 0 && (
                   <div className="space-y-1">
                     <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted" aria-hidden>
-                      <span className="bg-emerald-500" style={{ width: `${(validCount / totalRows) * 100}%` }} />
+                      <span className="bg-emerald-500" style={{ width: `${(newCount / totalRows) * 100}%` }} />
                       <span className="bg-amber-400" style={{ width: `${(duplicateCount / totalRows) * 100}%` }} />
-                      <span className="bg-red-500" style={{ width: `${(errorRows.length / totalRows) * 100}%` }} />
+                      <span className="bg-red-500" style={{ width: `${(errorCount / totalRows) * 100}%` }} />
                     </div>
                     <p className="text-[11px] text-muted-foreground tabular-nums">
-                      {totalRows.toLocaleString()} rows — {Math.round((validCount / totalRows) * 100)}% ready ·{" "}
-                      {Math.round((duplicateCount / totalRows) * 100)}% duplicates · {Math.round((errorRows.length / totalRows) * 100)}% errors
+                      {totalRows.toLocaleString()} rows — {Math.round((newCount / totalRows) * 100)}% new ·{" "}
+                      {Math.round((duplicateCount / totalRows) * 100)}% duplicates · {Math.round((errorCount / totalRows) * 100)}% errors
                     </p>
                   </div>
                 )}
                 <div className="grid grid-cols-3 gap-3">
                   <div className="rounded-lg border bg-green-50 dark:bg-green-950/40 p-3 text-center">
-                    <p className="text-2xl font-bold text-green-700 dark:text-green-300">{validCount}</p>
-                    <p className="text-xs text-green-600 dark:text-green-300 mt-0.5">Ready to import</p>
+                    <p className="text-2xl font-bold text-green-700 dark:text-green-300">{newCount}</p>
+                    <p className="text-xs text-green-600 dark:text-green-300 mt-0.5">New, ready to import</p>
                   </div>
                   <div className="rounded-lg border bg-yellow-50 dark:bg-yellow-950/40 p-3 text-center">
                     <p className="text-2xl font-bold text-yellow-700 dark:text-yellow-300">{duplicateCount}</p>
                     <p className="text-xs text-yellow-600 dark:text-yellow-300 mt-0.5">Duplicates found</p>
                   </div>
                   <div className="rounded-lg border bg-red-50 dark:bg-red-950/40 p-3 text-center">
-                    <p className="text-2xl font-bold text-red-700 dark:text-red-300">{errorRows.length}</p>
+                    <p className="text-2xl font-bold text-red-700 dark:text-red-300">{errorCount}</p>
                     <p className="text-xs text-red-600 dark:text-red-300 mt-0.5">Errors (will skip)</p>
                   </div>
                 </div>
@@ -760,12 +775,12 @@ export function ImportContactsPanel() {
                   </div>
                 )}
 
-                {errorRows.length > 0 && (
+                {errorCount > 0 && (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <p className="text-sm font-medium text-destructive flex items-center gap-1.5">
                         <AlertCircle className="h-4 w-4" />
-                        {errorRows.length} rows with errors (will be skipped)
+                        {errorCount} rows with errors (will be skipped)
                       </p>
                       <Button variant="outline" size="sm" onClick={downloadErrorReport} className="gap-1.5 h-7 text-xs">
                         <Download className="h-3 w-3" /> Download error report
@@ -791,9 +806,9 @@ export function ImportContactsPanel() {
                           <span className="text-destructive">{r.reason}</span>
                         </div>
                       ))}
-                      {errorRows.length > 20 && (
+                      {errorCount > 20 && (
                         <p className="px-3 py-1.5 text-xs text-muted-foreground">
-                          … and {errorRows.length - 20} more. Download the full report above.
+                          … and {errorCount - 20} more. Download the full report above.
                         </p>
                       )}
                     </div>
@@ -832,7 +847,7 @@ export function ImportContactsPanel() {
               </Button>
               <Button
                 onClick={() => setStep(4)}
-                disabled={validCount === 0 && (skipDuplicates || duplicateCount === 0)}
+                disabled={importCount === 0}
                 className="gap-2"
               >
                 Continue to Import <ArrowRight className="h-4 w-4" />
@@ -879,7 +894,7 @@ export function ImportContactsPanel() {
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Contacts to import</span>
                   <span className="font-medium text-green-700 dark:text-green-300">
-                    {validCount + (skipDuplicates ? 0 : duplicateCount)}
+                    {importCount}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
@@ -890,7 +905,7 @@ export function ImportContactsPanel() {
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Rows with errors</span>
-                  <span className="font-medium text-red-700 dark:text-red-300">{errorRows.length} (skipped)</span>
+                  <span className="font-medium text-red-700 dark:text-red-300">{errorCount} (skipped)</span>
                 </div>
                 {tag && (
                   <div className="flex justify-between text-sm">
@@ -917,7 +932,7 @@ export function ImportContactsPanel() {
                   ) : (
                     <>
                       <Upload className="h-4 w-4" />
-                      Import {validCount + (skipDuplicates ? 0 : duplicateCount)} Contacts
+                      Import {importCount} Contacts
                     </>
                   )}
                 </Button>
@@ -980,8 +995,10 @@ export function ImportContactsPanel() {
                     setFilename("");
                     setHeaders([]);
                     setFieldMapping({});
-                    setValidCount(0);
+                    setNewCount(0);
+                    setImportCount(0);
                     setDuplicateCount(0);
+                    setErrorCount(0);
                     setErrorRows([]);
                     setTotalRowCount(0);
                     setImportResult(null);

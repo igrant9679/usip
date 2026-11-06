@@ -9,10 +9,43 @@
  *
  * A People list shows its prospects, a Companies list its accounts; members
  * of another kind (a contact added by an old client) were never shown.
+ *
+ * Who counts as a member is one rule, `memberConds`, read by the page, the
+ * people ids and the Lists index alike (audit 2026-10-20, P46, P50): the
+ * index counted every membership row, so a deleted, foreign or mistyped
+ * member was in the number and not on the page, and an archived company was
+ * on the page. A membership whose record is deleted stays in the table and
+ * is never shown or counted, so a person restored from the audit trail comes
+ * back onto their lists.
  */
-import { and, asc, desc, eq, inArray, like, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, like, ne, or, sql, type SQL } from "drizzle-orm";
 import { accounts, prospects, recordListMembers, recordLists } from "../../drizzle/schema";
 import { getDb } from "../db";
+
+type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+/** A member a list of this kind shows: its own kind, a live record of this workspace, and no archived company. */
+export function memberConds(ws: number, companies: boolean): SQL[] {
+  return companies
+    ? [eq(recordListMembers.workspaceId, ws), eq(recordListMembers.recordType, "account"), eq(accounts.workspaceId, ws), isNull(accounts.archivedAt)]
+    : [eq(recordListMembers.workspaceId, ws), eq(recordListMembers.recordType, "prospect"), eq(prospects.workspaceId, ws)];
+}
+
+/** Each list's member count, by the same rule its page uses. */
+export async function listMemberCounts(db: Db, ws: number): Promise<Map<number, number>> {
+  const count = (companies: boolean) => {
+    const rec = companies ? accounts : prospects;
+    return db.select({ listId: recordListMembers.listId, c: sql<number>`count(*)` })
+      .from(recordListMembers)
+      .innerJoin(recordLists, eq(recordLists.id, recordListMembers.listId))
+      .innerJoin(rec, eq(rec.id, recordListMembers.recordId))
+      // Anything not "companies" is a People list, as listMemberPage reads it.
+      .where(and(eq(recordLists.workspaceId, ws), companies ? eq(recordLists.entityType, "companies") : ne(recordLists.entityType, "companies"), ...memberConds(ws, companies)))
+      .groupBy(recordListMembers.listId);
+  };
+  const [people, companies] = await Promise.all([count(false), count(true)]);
+  return new Map([...people, ...companies].map((r) => [r.listId, Number(r.c)]));
+}
 
 export const PERSON_COLUMNS = {
   id: prospects.id, firstName: prospects.firstName, lastName: prospects.lastName, title: prospects.title,
@@ -40,13 +73,9 @@ export async function listMemberPage(ws: number, input: MemberPageInput) {
     .where(and(eq(recordLists.id, input.id), eq(recordLists.workspaceId, ws))).limit(1);
   if (!list) return empty;
   const companies = list.entityType === "companies";
-  const recordType = companies ? "account" : "prospect";
   const rec = companies ? accounts : prospects;
 
-  const conds: SQL[] = [
-    eq(recordListMembers.listId, input.id), eq(recordListMembers.workspaceId, ws),
-    eq(recordListMembers.recordType, recordType), eq(rec.workspaceId, ws),
-  ];
+  const conds: SQL[] = [eq(recordListMembers.listId, input.id), ...memberConds(ws, companies)];
   const words = (input.search ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
   for (const w of words) {
     const s = `%${escapeLike(w)}%`;
@@ -68,7 +97,7 @@ export async function listMemberPage(ws: number, input: MemberPageInput) {
       // This workspace's people only, the same check the page makes.
       db.select({ id: recordListMembers.recordId }).from(recordListMembers)
         .innerJoin(prospects, eq(prospects.id, recordListMembers.recordId))
-        .where(and(eq(recordListMembers.listId, input.id), eq(recordListMembers.workspaceId, ws), eq(recordListMembers.recordType, "prospect"), eq(prospects.workspaceId, ws)))
+        .where(and(eq(recordListMembers.listId, input.id), ...memberConds(ws, false)))
         .orderBy(desc(recordListMembers.addedAt), desc(recordListMembers.id)).limit(MAX_LIST_PROSPECT_IDS),
   ]);
   const ids = pageIds.map((r) => r.id);
@@ -79,7 +108,7 @@ export async function listMemberPage(ws: number, input: MemberPageInput) {
     memberId: recordListMembers.id, recordType: recordListMembers.recordType, recordId: recordListMembers.recordId,
     addedAt: recordListMembers.addedAt, ...(companies ? COMPANY_COLUMNS : PERSON_COLUMNS),
   }).from(recordListMembers).innerJoin(rec, eq(rec.id, recordListMembers.recordId))
-    .where(and(eq(recordListMembers.workspaceId, ws), eq(rec.workspaceId, ws), inArray(recordListMembers.id, ids)));
+    .where(and(...memberConds(ws, companies), inArray(recordListMembers.id, ids)));
   const byId = new Map(rows.map((r: any) => [r.memberId, r]));
   return {
     rows: ids.flatMap((id) => {

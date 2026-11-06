@@ -1271,13 +1271,15 @@ export const leadsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      // Apply lead-routing rules first; fall back to creator as owner.
-      const { routeLeadOwner } = await import("./leadScoring");
+      // Apply lead-routing rules first; fall back to creator as owner. Rules on
+      // Score see the score the lead is created with, not 0 (audit P13).
+      const { routeLeadOwner, createTimeScore, rescoreLead } = await import("./leadScoring");
+      const initial = await createTimeScore(ctx.workspace.id, input);
       const routedOwner = await routeLeadOwner(ctx.workspace.id, {
         title: input.title ?? null,
         company: input.company ?? null,
         source: input.source ?? null,
-        score: 0,
+        score: initial.total,
         industry: null,
         country: null,
         state: null,
@@ -1302,6 +1304,8 @@ export const leadsRouter = router({
             email: input.email, status: "new",
           }, ownerUserId))
           .catch(() => { /* workflow firing is best-effort */ });
+        // Scored on creation (audit P12), without a model call.
+        await rescoreLead(ctx.workspace.id, id);
       }
       return { id, ownerUserId, routed: routedOwner != null };
     }),
@@ -1569,64 +1573,10 @@ export const leadsRouter = router({
       return { accountId, contactId, opportunityId, accountCreated: done.accountCreated, contactCreated: done.contactCreated };
     }),
 
-  /** AI lead scoring re-run for one lead. Server-side LLM. */
-  rescore: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
-    if (!lead) throw new TRPCError({ code: "NOT_FOUND" });
-
-    const { invokeLLM } = await import("../_core/llm");
-    let score = 50;
-    let grade = "C";
-    let reasons: string[] = ["Default heuristic score"];
-    try {
-      const out = await invokeLLM({
-        messages: [
-          { role: "system", content: "You score B2B sales leads. Output JSON only." },
-          {
-            role: "user",
-            content: `Score this lead 0-100. Title weighting: C-level/VP=high, manager=medium, individual=low. Engagement is unknown. Return JSON {score:int, grade:"A"|"B"|"C"|"D", reasons:[string]}.\n\nName: ${lead.firstName} ${lead.lastName}\nTitle: ${lead.title}\nCompany: ${lead.company}\nSource: ${lead.source}`,
-          },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "lead_score",
-            strict: true,
-            schema: {
-              type: "object",
-              properties: {
-                score: { type: "integer" },
-                grade: { type: "string", enum: ["A", "B", "C", "D"] },
-                reasons: { type: "array", items: { type: "string" } },
-              },
-              required: ["score", "grade", "reasons"],
-              additionalProperties: false,
-            },
-          },
-        },
-      });
-      const content = out.choices?.[0]?.message?.content;
-      const parsed = typeof content === "string" ? JSON.parse(content) : content;
-      score = Math.max(0, Math.min(100, Number(parsed.score)));
-      grade = String(parsed.grade);
-      reasons = Array.isArray(parsed.reasons) ? parsed.reasons.slice(0, 6) : reasons;
-    } catch (e) {
-      console.warn("[lead.rescore] LLM failed; using heuristic", e);
-      const titleLow = (lead.title ?? "").toLowerCase();
-      let s = 40;
-      if (/chief|cxo|cmo|cro|cfo|ceo/.test(titleLow)) s += 35;
-      else if (/vp|vice president|head/.test(titleLow)) s += 25;
-      else if (/director/.test(titleLow)) s += 15;
-      else if (/manager/.test(titleLow)) s += 8;
-      score = Math.min(100, s + Math.floor(Math.random() * 15));
-      grade = score >= 80 ? "A" : score >= 60 ? "B" : score >= 40 ? "C" : "D";
-      reasons = [`Title-based ${score}`, "Engagement unknown — assumed neutral"];
-    }
-    await db.update(leads).set({ score, grade, scoreReasons: reasons }).where(eq(leads.id, lead.id));
-    return { score, grade, reasons };
-  }),
+  // leads.rescore is gone (audit 2026-10-20, P39, R84): an older scorer that
+  // ignored the workspace's tier thresholds, added Math.random() when the
+  // model failed, and was open to the assistant. leadScoring.recompute is the
+  // scorer; no screen called this one.
 
   /**
    * Send one email to several leads (audit 2026-10-20, R5): each through

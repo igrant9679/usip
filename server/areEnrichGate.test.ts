@@ -65,8 +65,11 @@ describe("the gate is defined once and read the same way twice", () => {
     // discovery rows engine-wide. The promised retry was unreachable.
     expect(selector).toContain("CASE WHEN ${prospectQueue.sequenceStatus} = 'approved' THEN 2 WHEN ${prospectQueue.icpMatchScore} = 0 THEN 1 ELSE 0 END");
     expect(selector).not.toContain(".orderBy(desc(prospectQueue.icpMatchScore))");
-    // Still bounded per tick, still serial.
-    expect(selector).toContain(".limit(ENRICH_PER_TICK)");
+    // Still bounded per tick, still serial. 2026-11-06 (audit A7): the read is a
+    // page of candidates and the five are shared out between workspaces from it,
+    // in the same order; ENRICH_PER_TICK still bounds what is enriched.
+    expect(selector).toContain(".limit(ENRICH_CANDIDATES)");
+    expect(selector).toContain("const pending = roundRobinByWorkspace(candidates, ENRICH_PER_TICK);");
   });
 
   it("the screen pass derives its gate from the same constant", () => {
@@ -88,7 +91,9 @@ describe("the gate is defined once and read the same way twice", () => {
     expect(screen).toContain("`enrichmentStatus` IN ('pending', 'enriching')");
     // 'complete' rows below the gate already have a path: AUTO_REJECT_FLOOR.
     // 'failed' rows are a SEPARATE population (36 on prod) and a separate
-    // decision — deliberately out of scope here. Since 2026-09-16 ONE other
+    // decision — deliberately out of scope here (since 2026-11-06, audit A27,
+    // that decision is rejectExhaustedEnrichment, after the last retry, and
+    // the give-up below waits for it too). Since 2026-09-16 ONE other
     // statement in this phase acts on finished rows: the no-email door's
     // GIVE-UP, and only for staged ('sourcing') candidates — pin that it
     // stays the single exception and stays sourcing-scoped.

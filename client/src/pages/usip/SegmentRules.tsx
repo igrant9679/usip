@@ -5,8 +5,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PageHeader, Shell } from "@/components/usip/Shell";
+import { confirmAction } from "@/components/usip/Common";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useConfirmAutoEnrol } from "@/hooks/useConfirmAutoEnrol";
 import { trpc } from "@/lib/trpc";
+import { ruleState, runSummary, wouldEnrolLine } from "@/lib/segmentAutoEnrol";
 import { CheckCircle2, Loader2, Play, Plus, Trash2, Users, Zap, SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -38,13 +41,25 @@ export default function SegmentRules() {
   const rules = trpc.segmentRules.list.useQuery();
   const segments = trpc.segments.list.useQuery();
   const sequences = trpc.sequences.list.useQuery();
+  const confirmTurnOn = useConfirmAutoEnrol();
 
-  const save = trpc.segmentRules.save.useMutation({
+  // Adding a rule and pausing one are separate mutations: one shared save said
+  // "rule saved" on Pause and cleared whatever was typed in the Add form (audit
+  // 2026-10-20, P130).
+  const add = trpc.segmentRules.save.useMutation({
     onSuccess: () => {
       utils.segmentRules.list.invalidate();
-      toast.success("Auto-enroll rule saved");
+      toast.success("Auto-enroll rule added");
       setNewSegmentId("");
       setNewSequenceId("");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const toggle = trpc.segmentRules.save.useMutation({
+    onSuccess: (_r, vars) => {
+      utils.segmentRules.list.invalidate();
+      toast.success(vars.enabled ? "Rule turned on" : "Rule paused");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -54,20 +69,29 @@ export default function SegmentRules() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Each rule's row shows its last run, so Run now refreshes them (P129).
   const runNow = trpc.segmentRules.runEnrollment.useMutation({
-    onSuccess: (data) => toast.success(`Enrollment complete — ${data.enrolled} enrolled, ${data.skipped} skipped`),
+    onSuccess: (data) => { utils.segmentRules.list.invalidate(); toast.success(runSummary(data)); },
     onError: (e) => toast.error(e.message),
   });
 
   const [newSegmentId, setNewSegmentId] = useState("");
   const [newSequenceId, setNewSequenceId] = useState("");
 
-  const segmentMap = new Map((segments.data ?? []).map((s) => [s.id, s]));
-  const sequenceMap = new Map((sequences.data ?? []).map((s) => [s.id, s]));
+  // How many the new rule would enrol, shown before anyone presses Add (P57).
+  const preview = trpc.segmentRules.preview.useQuery(
+    { segmentId: Number(newSegmentId), sequenceId: Number(newSequenceId) },
+    { enabled: isAdmin && !!newSegmentId && !!newSequenceId, retry: false },
+  );
+
+  const addRule = () => {
+    const rule = { segmentId: parseInt(newSegmentId), sequenceId: parseInt(newSequenceId) };
+    confirmTurnOn(rule, (confirmedWouldEnrol) => add.mutate({ ...rule, enabled: true, confirmedWouldEnrol }));
+  };
 
   return (
-    <Shell>
-      <PageHeader title="Segment Auto-Enroll" description="Define auto-enrolment rules that keep your audience segments fresh as CRM data changes. Rules evaluate on every record update so segments always reflect your latest criteria." pageKey="segment-rules"
+    <Shell title="Segment Auto-Enroll">
+      <PageHeader title="Segment Auto-Enroll" description="Every hour, each enabled rule enrols the contacts its segment matches into its sequence, skipping anyone already enrolled, invalid, suppressed or in a campaign. Segments read CRM contacts, not People." pageKey="segment-rules"
         icon={<SlidersHorizontal className="size-5" />}
       >
         {isAdmin && (
@@ -79,6 +103,11 @@ export default function SegmentRules() {
       </PageHeader>
 
       <div className="p-4 md:p-5 space-y-6">
+        {/* Said here as well as in the header, whose text an admin can replace (P21). */}
+        <p className="text-xs text-muted-foreground">
+          Rules enrol CRM contacts. Someone who is only in People is never in a segment, so a rule never enrols them.
+        </p>
+
         {isAdmin && (
           <div className="border border-border rounded-lg p-4 bg-card">
             <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
@@ -110,13 +139,18 @@ export default function SegmentRules() {
               </div>
               <Button
                 size="sm"
-                onClick={() => save.mutate({ segmentId: parseInt(newSegmentId), sequenceId: parseInt(newSequenceId), enabled: true })}
-                disabled={!newSegmentId || !newSequenceId || save.isPending}
+                onClick={addRule}
+                disabled={!newSegmentId || !newSequenceId || add.isPending}
               >
-                {save.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Zap className="size-4 mr-1" />}
+                {add.isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Zap className="size-4 mr-1" />}
                 Add rule
               </Button>
             </div>
+            {newSegmentId && newSequenceId && (
+              <p className="text-xs text-muted-foreground mt-2" aria-live="polite">
+                {preview.isLoading ? "Counting who this would enrol…" : preview.error ? preview.error.message : preview.data ? wouldEnrolLine(preview.data) : null}
+              </p>
+            )}
           </div>
         )}
 
@@ -133,15 +167,16 @@ export default function SegmentRules() {
         ) : (
           <div className="space-y-3">
             {(rules.data ?? []).map((rule) => {
-              const seg = segmentMap.get(rule.segmentId);
-              const seq = sequenceMap.get(rule.sequenceId);
+              const state = ruleState(rule);
+              const segName = rule.segmentName ?? `Segment #${rule.segmentId}`;
+              const seqName = rule.sequenceName ?? `Sequence #${rule.sequenceId}`;
               return (
                 <div key={rule.id} className={`flex flex-wrap items-center gap-x-4 gap-y-2 border border-border rounded-lg p-4 bg-card transition-opacity ${rule.enabled ? "" : "opacity-50"}`}>
                   {/* Segment → sequence keep a line of their own on a phone; the counts and buttons wrap under them. */}
                   <div className="flex items-center gap-2 flex-1 min-w-[8rem]">
                     <Users className="size-4 text-muted-foreground shrink-0" />
                     <div className="min-w-0">
-                      <div className="text-sm font-medium truncate">{seg?.name ?? `Segment #${rule.segmentId}`}</div>
+                      <div className="text-sm font-medium truncate">{segName}</div>
                       <div className="text-xs text-muted-foreground">audience segment</div>
                     </div>
                   </div>
@@ -149,8 +184,8 @@ export default function SegmentRules() {
                   <div className="flex items-center gap-2 flex-1 min-w-[8rem]">
                     <Zap className="size-4 text-muted-foreground shrink-0" />
                     <div className="min-w-0">
-                      <div className="text-sm font-medium truncate">{seq?.name ?? `Sequence #${rule.sequenceId}`}</div>
-                      <div className="text-xs text-muted-foreground">{seq?.status ?? "sequence"}</div>
+                      <div className="text-sm font-medium truncate">{seqName}</div>
+                      <div className="text-xs text-muted-foreground">{rule.sequenceStatus ?? "sequence"}</div>
                     </div>
                   </div>
                   <div className="text-right shrink-0">
@@ -164,15 +199,22 @@ export default function SegmentRules() {
                     {/* What the last run did and why it left people out (audit 2026-10-20, P2). */}
                     {rule.lastRunSummary ? <div className="text-[11px] text-muted-foreground max-w-[260px]">{describeRun(rule.lastRunSummary as RunSummary)}</div> : null}
                   </div>
-                  <Badge variant={rule.enabled ? "default" : "secondary"} className="shrink-0">
-                    {rule.enabled ? <><CheckCircle2 className="size-3 mr-1" />Active</> : "Paused"}
+                  {/* Active only while the run would enrol: a paused sequence or a missing segment says so (P138). */}
+                  <Badge variant={state.enrolling ? "default" : "secondary"} className="shrink-0" title={state.why}>
+                    {state.enrolling ? <><CheckCircle2 className="size-3 mr-1" />Active</> : state.label}
                   </Badge>
+                  {state.why && <span className="text-[11px] text-muted-foreground shrink-0">{state.why}</span>}
                   {isAdmin && (
                     <div className="flex items-center gap-1 shrink-0">
-                      <Button size="sm" variant="ghost" onClick={() => save.mutate({ id: rule.id, segmentId: rule.segmentId, sequenceId: rule.sequenceId, enabled: !rule.enabled })} className="text-xs">
+                      <Button size="sm" variant="ghost" disabled={toggle.isPending} className="text-xs"
+                        onClick={() => rule.enabled
+                          ? toggle.mutate({ id: rule.id, segmentId: rule.segmentId, sequenceId: rule.sequenceId, enabled: false })
+                          : confirmTurnOn(rule, (confirmedWouldEnrol) => toggle.mutate({ id: rule.id, segmentId: rule.segmentId, sequenceId: rule.sequenceId, enabled: true, confirmedWouldEnrol }))}>
                         {rule.enabled ? "Pause" : "Enable"}
                       </Button>
-                      <Button aria-label="Delete rule" size="sm" variant="ghost" onClick={() => del.mutate({ id: rule.id })} className="text-destructive hover:text-destructive">
+                      {/* One click deleted a rule (P60). */}
+                      <Button aria-label="Delete rule" size="sm" variant="ghost" className="text-destructive hover:text-destructive"
+                        onClick={() => confirmAction({ title: `Delete the rule "${segName} → ${seqName}"?`, description: "Nothing is enrolled from it again. People it already enrolled stay in the sequence.", confirmLabel: "Delete" }, () => del.mutate({ id: rule.id }))}>
                         <Trash2 className="size-3.5" />
                       </Button>
                     </div>

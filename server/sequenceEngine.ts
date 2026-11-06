@@ -231,7 +231,13 @@ type EnrollmentTrigger = {
 type AutoEnrollEvent =
   | { kind: "status_change"; workspaceId: number; contactId?: number; leadId?: number; newStatus: string }
   | { kind: "tag_applied"; workspaceId: number; contactId?: number; leadId?: number; tag: string }
-  | { kind: "score_threshold"; workspaceId: number; contactId?: number; leadId?: number; score: number };
+  /**
+   * With `previousScore`, a sequence matches only when the score crosses its
+   * threshold upward (previous below, new at or above): the hourly re-score
+   * passes it so a lead already above a threshold is not enrolled again and
+   * again by the schedule (audit 2026-10-20, P12). Without it, at or above.
+   */
+  | { kind: "score_threshold"; workspaceId: number; contactId?: number; leadId?: number; score: number; previousScore?: number };
 
 // ─── Sequence-timezone clock ──────────────────────────────────────────────────
 
@@ -955,7 +961,8 @@ export async function autoEnrollByTriggers(event: AutoEnrollEvent): Promise<void
         if (trigger.value === event.tag) matches = true;
       } else if (event.kind === "score_threshold" && trigger.type === "score_threshold") {
         const threshold = parseInt(trigger.value, 10);
-        if (!isNaN(threshold) && event.score >= threshold) matches = true;
+        const crossed = event.previousScore == null || event.previousScore < threshold;
+        if (!isNaN(threshold) && event.score >= threshold && crossed) matches = true;
       }
     }
 

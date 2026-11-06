@@ -42,7 +42,10 @@ describe("rewriting one prospect", () => {
   const one = fnBody(svc, "export async function rewriteOneNotStarted(");
 
   it("regenerates the stored sequence first, with force", () => {
-    expect(one).toContain("runSequenceAgent(target.prospectQueueId, workspaceId, target.campaignId, { force: true })");
+    // 2026-11-06 (audit A13): and only clean copy is saved — copy breaking a
+    // research avoid rule leaves the prospect's sequence and sends as they
+    // were (run in areE1Sequence.test.ts).
+    expect(one).toContain("runSequenceAgent(target.prospectQueueId, workspaceId, target.campaignId, { force: true, onlyIfClean: true })");
   });
 
   it("re-checks the queue after writing and before touching it", () => {

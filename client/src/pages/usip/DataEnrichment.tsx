@@ -47,6 +47,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { QueryError } from "@/components/usip/Shell";
+import { JobChangeAction, JobChangeEmptyState } from "@/components/usip/JobChangeAlerts";
 import { tablistProps, tabProps } from "@/lib/tabs";
 
 /* ── inline donut chart ── */
@@ -139,8 +140,9 @@ export default function DataEnrichment() {
   });
   const jcMode = (jcSettings.data as any)?.mode ?? "off";
   const jobChanges = (jobChangesQ.data as any[]) ?? [];
-  // Un-actioned company moves — the count worth surfacing on the tab.
-  const pendingMoves = jobChanges.filter((j) => j.changeType === "company_changed" && !j.hasReengagementTask).length;
+  // Un-actioned company moves — the count worth surfacing on the tab. A first
+  // sighting is not a move, and Re-engage refuses it, so it is not counted.
+  const pendingMoves = jobChanges.filter((j) => j.changeType === "company_changed" && !j.hasReengagementTask && !j.reengageBlocked).length;
   const MODE_OPTS: Array<{ v: "off" | "approval" | "auto"; label: string }> = [
     { v: "off", label: "Off" }, { v: "approval", label: "Approve" }, { v: "auto", label: "Auto" },
   ];
@@ -382,17 +384,7 @@ export default function DataEnrichment() {
               ) : jobChangesQ.error && !jobChangesQ.data ? (
                 <QueryError what="job changes" message={jobChangesQ.error.message} onRetry={() => jobChangesQ.refetch()} />
               ) : jobChanges.length === 0 ? (
-                <div className="max-w-md mx-auto text-center py-16">
-                  <div className="mx-auto size-12 rounded-full bg-secondary flex items-center justify-center mb-3">
-                    <Briefcase className="size-5 text-muted-foreground" />
-                  </div>
-                  <h2 className="text-sm font-semibold">No job changes detected yet</h2>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Velocity monitors your enriched prospects' LinkedIn profiles daily. When a saved prospect changes
-                    company or title, it appears here so you can re-engage at the perfect moment.
-                  </p>
-                  <Button size="sm" className="mt-4" style={{ backgroundColor: accent }} onClick={() => setLocation("/find-prospects")}>Enrich prospects</Button>
-                </div>
+                <JobChangeEmptyState accent={accent} onEnrich={() => setLocation("/v2/data-enrichment/linkedin")} />
               ) : (
                 <div className="rounded-xl border bg-card shadow-sm divide-y divide-border/60">
                   {jobChanges.map((jc) => {
@@ -422,21 +414,8 @@ export default function DataEnrichment() {
                             <ExternalLink className="size-3.5" />
                           </a>
                         )}
-                        {isCompany && (
-                          jc.hasReengagementTask ? (
-                            <span className="shrink-0 inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="size-3.5" /> Queued</span>
-                          ) : (
-                            <Button
-                              size="sm"
-                              className="h-7 shrink-0"
-                              style={{ backgroundColor: accent }}
-                              disabled={reengage.isPending}
-                              onClick={() => reengage.mutate({ prospectId: jc.prospectId } as any)}
-                            >
-                              Re-engage
-                            </Button>
-                          )
-                        )}
+                        <JobChangeAction jc={jc} accent={accent} pending={reengage.isPending}
+                          onReengage={(prospectId) => reengage.mutate({ prospectId } as any)} />
                       </div>
                     );
                   })}

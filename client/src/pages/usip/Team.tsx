@@ -25,6 +25,8 @@ import {
   Pencil,
   RefreshCw,
   Shield,
+  ShieldCheck,
+  ShieldOff,
   Trash2,
   UserMinus,
   UserPlus,
@@ -413,6 +415,17 @@ export default function Team() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Reset 2FA (audit 2026-10-20, G15). The procedure existed and the 2FA
+  // lock-out screen told people an admin could do this from here, but there
+  // was no button: a member who lost their phone could not get back in.
+  const resetMfa = trpc.team.resetMemberMfa.useMutation({
+    onSuccess: () => {
+      utils.team.list.invalidate();
+      toast.success("2FA reset — they sign in with their password and set up an authenticator app again");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   // What happened, not what was asked for (audit 2026-10-20, G47).
   const resendInvitation = trpc.team.resendInvitation.useMutation({
     onSuccess: (res) => res.emailSent
@@ -657,6 +670,11 @@ export default function Team() {
                                       <KeyRound className="size-2.5" /> No password
                                     </span>
                                   )}
+                                  {Number(m.mfaEnabled) === 1 && (
+                                    <span title="Signs in with an authenticator app" className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                                      <ShieldCheck className="size-2.5" /> 2FA
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="text-xs text-muted-foreground truncate">{m.email}</div>
                               </div>
@@ -814,6 +832,22 @@ export default function Team() {
                                       >
                                         <Mail className="size-3.5" />
                                         <span className="hidden sm:inline ml-1">Send Password Setup</span>
+                                      </Button>
+                                    )}
+                                    {editable && Number(m.mfaEnabled) === 1 && (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        title="Reset two-factor sign-in"
+                                        disabled={resetMfa.isPending}
+                                        onClick={() => confirmAction({
+                                          title: `Reset 2FA for ${m.name ?? m.email}?`,
+                                          description: "Their authenticator app stops working for Velocity and they are signed out everywhere. They sign in with their password, and set up an app again if this workspace requires one.",
+                                          confirmLabel: "Reset 2FA",
+                                        }, () => resetMfa.mutate({ memberId: m.memberId }))}
+                                      >
+                                        <ShieldOff className="size-3.5" />
+                                        <span className="hidden sm:inline ml-1">Reset 2FA</span>
                                       </Button>
                                     )}
                                     <Button
