@@ -7,7 +7,7 @@
  * (shared/researchShape.ts) trims, deduplicates and drops personal data, so
  * these stay simple and typing is never fought by a cleaner mid-keystroke.
  */
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Link } from "wouter";
 import { SubNav } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -328,15 +328,49 @@ function HistoryDialog({ entityType, entityId, currentRevision, dirty, onRestore
   );
 }
 
+/* ── Deleting ───────────────────────────────────────────────────────────── */
+
+type Dependents = { sectors?: number; personas: number; accounts: number; campaigns: { name: string; status: string }[] };
+
+const plural = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+
+/**
+ * What deleting a market or sector does to what uses it, for its confirmation
+ * (audit 2026-10-20, P29: the confirm named only personas, and campaigns lost
+ * their never-target words without a word). An active campaign blocks it, as
+ * the server does.
+ */
+export function deleteImpact(what: "market" | "sector", d: Dependents): { blocked: boolean; text: string } {
+  const live = d.campaigns.filter((c) => c.status === "active");
+  const names = (cs: { name: string }[]) => cs.slice(0, 3).map((c) => `"${c.name}"`).join(", ") + (cs.length > 3 ? ` and ${cs.length - 3} more` : "");
+  if (live.length) {
+    return {
+      blocked: true,
+      text: `${live.length === 1 ? "An active campaign uses" : `${live.length} active campaigns use`} this ${what === "market" ? "market's sectors" : "sector"}: ${names(live)}. Pause ${live.length === 1 ? "it" : "them"}, or give ${live.length === 1 ? "it" : "them"} another sector, before deleting.`,
+    };
+  }
+  const lines = [what === "market" ? `This deletes the market, its ${plural(d.sectors ?? 0, "sector")} and all their versions.` : "This deletes the sector and all its versions."];
+  if (d.personas) lines.push(`${plural(d.personas, "persona")} linked to ${what === "market" ? "those sectors" : "it"} ${d.personas === 1 ? "is" : "are"} kept but unlinked.`);
+  if (d.campaigns.length) lines.push(`${plural(d.campaigns.length, "campaign")} (${names(d.campaigns)}) ${d.campaigns.length === 1 ? "loses" : "lose"} this research, its never-target words included.`);
+  if (d.accounts) lines.push(`${plural(d.accounts, "account")} ${d.accounts === 1 ? "loses its" : "lose their"} sector.`);
+  lines.push("This cannot be undone.");
+  return { blocked: false, text: lines.join(" ") };
+}
+
 /* ── Editing a saved record ─────────────────────────────────────────────── */
+
+/** While there are unsaved changes, how often the page re-reads the saved revision (P26). */
+export const DRAFT_POLL_MS = 20_000;
 
 /**
  * The page edits a draft of the saved content. The draft remembers the
  * revision it started from, and that is the revision a save names, so a
  * newer save by someone else makes ours fail with CONFLICT instead of
- * silently replacing theirs. `stale` says so before the person presses Save.
+ * silently replacing theirs. `stale` says so before the person presses Save:
+ * while the draft has changes, `refetch` re-reads the saved record every
+ * DRAFT_POLL_MS (audit 2026-10-20, P26: nothing polled, so it never did).
  */
-export function useResearchDraft<T>(saved: T | undefined, revision: number | undefined) {
+export function useResearchDraft<T>(saved: T | undefined, revision: number | undefined, refetch?: () => unknown) {
   const [draft, setDraft] = useState<{ value: T; base: number } | null>(null);
   const value = draft?.value ?? saved;
   const dirty = !!draft && JSON.stringify(draft.value) !== JSON.stringify(saved);
@@ -346,6 +380,13 @@ export function useResearchDraft<T>(saved: T | undefined, revision: number | und
     const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  const reread = useRef(refetch);
+  reread.current = refetch;
+  useEffect(() => {
+    if (!dirty) return;
+    const t = setInterval(() => { reread.current?.(); }, DRAFT_POLL_MS);
+    return () => clearInterval(t);
   }, [dirty]);
   return {
     value,

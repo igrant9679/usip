@@ -72,6 +72,15 @@ export function __clearResearchContextCache(): void {
   cache.clear();
 }
 
+/**
+ * Drops one workspace's snapshot, so a save reaches the writers on their next
+ * call instead of up to a minute later (audit 2026-10-20, P106: new avoid
+ * rules applied late). Called by every research and persona write.
+ */
+export function forgetResearchContext(workspaceId: number): void {
+  cache.delete(workspaceId);
+}
+
 const USABLE = ["researched", "verified"] as const;
 
 async function snapshot(workspaceId: number): Promise<Snapshot | null> {

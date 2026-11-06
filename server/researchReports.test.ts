@@ -167,7 +167,11 @@ describe("a market's reports", () => {
     expect(r.market.content.name).toBe("State and local government");
     expect(r.sectors.map((s) => s.content.name)).toEqual(["City governments", "County governments"]);
     expect(r.personas).toEqual([{ id: 36, name: "County Administrator", sectorId: 1, cares: "Budget", pains: ["Staff"], objections: [], angle: "Fixed scope" }]);
-    expect(r.runs.map((x) => [x.id, x.brief, x.byName, !!x.removedAt])).toEqual([[11, "County brief", "Idris", true], [10, "Created the market", "Idris", false]]);
+    // 2026-11-06 (audit P107): the report says which runs have a brief; each
+    // brief is read on its own, still only from this workspace.
+    expect(r.runs.map((x) => [x.id, x.hasBrief, x.byName, !!x.removedAt])).toEqual([[11, true, "Idris", true], [10, true, "Idris", false]]);
+    expect(await caller(2).research.runs.brief({ id: 11 })).toEqual({ id: 11, brief: "County brief" });
+    await expect(caller(2).research.runs.brief({ id: 13 })).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
   it("is the workspace's own: another workspace's market is not found", async () => {
