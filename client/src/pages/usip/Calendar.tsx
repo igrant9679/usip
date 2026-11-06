@@ -35,6 +35,7 @@ import { Streamdown } from "@/components/usip/LazyStreamdown";
 import { confirmAction } from "@/components/usip/Common";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { pressable } from "@/lib/pressable";
+import { storedAttendees } from "@shared/calendarAttendees";
 
 // ─── Connect Calendar Dialog ───────────────────────────────────────────────────
 
@@ -215,8 +216,10 @@ function EventDialog({
     toLocalInput(new Date(event?.endAt ?? initialEnd ?? new Date(Date.now() + 3600_000)))
   );
   const [allDay, setAllDay] = useState(event?.allDay ?? false);
+  // Already an array from the JSON column; JSON.parse on it crashed the
+  // dialog for every synced event with attendees (audit 2026-10-20, O20).
   const [attendees, setAttendees] = useState<string>(
-    event?.attendees ? JSON.parse(event.attendees).map((a: any) => a.email).join(", ") : ""
+    storedAttendees(event?.attendees).map((a) => a.email).filter(Boolean).join(", ")
   );
 
   const [aiSummary, setAiSummary] = useState<string | null>(event?.aiSummary ?? null);
