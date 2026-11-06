@@ -2,8 +2,8 @@
  * SelectionToolbar — the action shelf shown when one or more people rows are
  * selected, matching Apollo's selected-state toolbar:
  *
- *   Clear N selected · Save · Email · Sequence▾ · Workflow▾ · Add to list▾ ·
- *   Export · Enrich▾ · Research with AI▾ · Push to CRM/ATS · ⋯
+ *   Clear N selected · Add to…▾ · Tasks▾ · AI call▾ · Workflow▾ · Add to list▾ ·
+ *   Export · Enrich▾ · Research with AI▾ · ⋯
  *
  * Wired to real backends where Velocity already has them:
  *   - Sequence  → sequences.bulkEnroll(prospectIds)
@@ -11,9 +11,11 @@
  *   - Enrich    → linkedinEnrichment.run (LinkedIn refresh / job changes) and
  *                 prospects.findContactInfoBatch in chunks of 10 (the full
  *                 comprehensive pass — the drawer's "Enrich fully", in bulk)
- * The rest (Save, Email, Push to CRM) are clean placeholders that toast — no
- * backend exists for them yet. Horizontally scrollable so it never wraps at
- * desktop widths.
+ * Only controls that do something are shown (audit 2026-10-20, R60). Save,
+ * Email, Push to CRM/ATS and five More items looked like actions and only
+ * toasted "coming soon"; they are gone until something backs them. Add to
+ * list is the save, and Add to… is the email. Horizontally scrollable so it
+ * never wraps at desktop widths.
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
@@ -33,9 +35,9 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  X, Save, Mail, Send, Workflow as WorkflowIcon, ListPlus, Download, Sparkles, Upload,
-  MoreHorizontal, Search, ChevronDown, Plus, Loader2, Activity, Building2, Copy, ListChecks,
-  CheckSquare, Tag, UserX, Trash2, ListX, PhoneCall,
+  X, Mail, Send, Workflow as WorkflowIcon, ListPlus, Download, Sparkles,
+  MoreHorizontal, Search, ChevronDown, Plus, Loader2, Activity, ListChecks,
+  CheckSquare, UserX, Trash2, PhoneCall,
 } from "lucide-react";
 import { ResearchAiMenu } from "./ResearchAiMenu";
 import { WorkflowSelectionMenu } from "./CreateWorkflowMenu";
@@ -71,7 +73,6 @@ export function SelectionToolbar({
   const { can } = usePermissions();
   const utils = trpc.useUtils();
   const [exporting, setExporting] = useState(false);
-  const soon = (what: string) => toast.info(`${what} — coming soon for ${n} selected ${n === 1 ? "person" : "people"}`);
 
   const exportCsv = async () => {
     setExporting(true);
@@ -98,13 +99,6 @@ export function SelectionToolbar({
         <X className="size-3.5" /> Clear {n} selected
       </Button>
       <span className="mx-1 h-5 w-px bg-border shrink-0" />
-
-      <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={() => soon("Save")}>
-        <Save className="size-4" /> Save
-      </Button>
-      <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => soon("Email")}>
-        <Mail className="size-4" /> Email
-      </Button>
 
       {/* The one outreach action: Campaign · Sequence · List (seams audit, phase 2). */}
       <AddToMenu prospectIds={selectedIds} label="Add to…" trigger={
@@ -135,11 +129,7 @@ export function SelectionToolbar({
 
       <ResearchAiMenu compact />
 
-      <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => soon("Push to CRM/ATS")}>
-        <Upload className="size-4" /> Push to CRM/ATS
-      </Button>
-
-      <MoreMenu selectedIds={selectedIds} onClear={onClear} onPick={soon} />
+      <MoreMenu selectedIds={selectedIds} onClear={onClear} />
     </div>
   );
 }
@@ -559,7 +549,7 @@ function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
   );
 }
 
-function MoreMenu({ selectedIds, onClear, onPick }: { selectedIds: number[]; onClear: () => void; onPick: (what: string) => void }) {
+function MoreMenu({ selectedIds, onClear }: { selectedIds: number[]; onClear: () => void }) {
   const n = selectedIds.length;
   const utils = trpc.useUtils();
   // Real backend: prospects.bulkDelete hard-removes the selected people.
@@ -577,13 +567,6 @@ function MoreMenu({ selectedIds, onClear, onPick }: { selectedIds: number[]; onC
     onSuccess: (r: any) => toast.success(`Opted out ${r?.suppressed ?? 0} email${r?.suppressed === 1 ? "" : "s"} — they won't be contacted`),
     onError: (e: any) => toast.error(e?.message ?? "Opt-out failed"),
   });
-  const items = [
-    { label: "View Companies", icon: Building2 },
-    { label: "Merge duplicates", icon: Copy },
-    { label: "Change Stage", icon: ListChecks },
-    { label: "Remove from lists", icon: ListX },
-    { label: "Set Custom Field", icon: Tag },
-  ];
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -592,11 +575,6 @@ function MoreMenu({ selectedIds, onClear, onPick }: { selectedIds: number[]; onC
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
-        {items.map((it) => (
-          <DropdownMenuItem key={it.label} onClick={() => onPick(it.label)}>
-            <it.icon className="size-4 mr-2" /> {it.label}
-          </DropdownMenuItem>
-        ))}
         <DropdownMenuItem disabled={optOut.isPending} onClick={() => { confirmAction({ title: `Opt out ${n} selected ${n === 1 ? "person" : "people"}?`, description: "They'll be suppressed from all outreach.", confirmLabel: "Opt out", destructive: false }, () => { optOut.mutate({ prospectIds: selectedIds } as any); }); }}>
           <UserX className="size-4 mr-2" /> Opt Out
         </DropdownMenuItem>

@@ -615,6 +615,11 @@ export const contactsRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(contacts).where(and(eq(contacts.id, input.id), eq(contacts.workspaceId, ctx.workspace.id)));
     await db.delete(contacts).where(and(eq(contacts.id, input.id), eq(contacts.workspaceId, ctx.workspace.id)));
+    // The People row's pointer goes with the contact, as bulkDelete does (R33).
+    if (before) {
+      await db.update(prospects).set({ linkedContactId: null })
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.linkedContactId, input.id)));
+    }
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "contact", entityId: input.id, before });
     return { ok: true };
   }),
@@ -1325,6 +1330,12 @@ export const leadsRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
     await db.delete(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
+    // A People row converted to this lead must not keep pointing at it (R33):
+    // promoteToLead and the "Saved" count read linkedLeadId as "has a lead".
+    if (before) {
+      await db.update(prospects).set({ linkedLeadId: null })
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.linkedLeadId, input.id)));
+    }
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "lead", entityId: input.id, before });
     return { ok: true };
   }),
@@ -1340,6 +1351,8 @@ export const leadsRouter = router({
         .where(and(eq(leads.workspaceId, ctx.workspace.id), inArray(leads.id, input.ids)));
       if (rows.length === 0) return { deleted: 0 };
       await db.delete(leads).where(and(eq(leads.workspaceId, ctx.workspace.id), inArray(leads.id, rows.map((r) => r.id))));
+      await db.update(prospects).set({ linkedLeadId: null })
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.linkedLeadId, rows.map((r) => r.id))));
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "lead_bulk", entityId: 0, after: { ids: rows.map((r) => r.id) } });
       return { deleted: rows.length };
     }),

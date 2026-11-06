@@ -390,7 +390,11 @@ describe("trigger coverage (the inventory)", () => {
     const slice = src.slice(start);
     const guard = slice.indexOf("if (!leadId) {");
     const fire = slice.indexOf("fireRecordCreated(");
-    const ret = slice.indexOf("created: true");
+    // 2026-11-06 (audit R56): the return reports createdLead, the insert
+    // branch's own flag, instead of a literal true. Found before comparing,
+    // so a missing anchor cannot pass as -1.
+    const ret = slice.indexOf("return { leadId: leadId!, created: createdLead };");
+    expect(ret, "the return moved").toBeGreaterThan(-1);
     expect(guard, "the insert guard moved").toBeGreaterThan(-1);
     expect(
       fire,
