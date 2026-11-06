@@ -1877,14 +1877,73 @@ export const prospectsRouter = router({
 
   /** List sequence rows for the campaign Sequences tab. Returns both
    *  prospects with a generated sequence (for view + edit) AND approved
-   *  prospects without one yet (so the user can trigger Generate). */
+   *  prospects without one yet (so the user can trigger Generate).
+   *
+   *  A page at a time, with the counts (audit 2026-10-20, A44): this returned
+   *  up to 500 rows, every one carrying its full generated sequence, and the
+   *  tab counted and filtered whatever had arrived. The status filter and
+   *  the search are applied here, the counts come from the same WHERE, and
+   *  every row is reachable by paging. */
   listSequences: workspaceProcedure
-    // 100 was below the size of a real campaign's queue (101 rows live), which
-    // is how a page boundary became a missing feature.
-    .input(z.object({ campaignId: z.number(), limit: z.number().default(500) }))
+    .input(z.object({
+      campaignId: z.number(),
+      /** One of the tab's filters; "all" is every row the tab lists. */
+      status: z.enum(["all", "pending", "approved", "enrolled", "paused", "canceled", "completed", "replied", "skipped"]).default("all"),
+      search: z.string().max(200).optional(),
+      limit: z.number().int().min(1).max(200).default(100),
+      offset: z.number().int().min(0).default(0),
+    }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Scoped on BOTH sides, as list's join is.
+      const intelJoin = and(
+        eq(prospectIntelligence.prospectQueueId, prospectQueue.id),
+        eq(prospectIntelligence.workspaceId, prospectQueue.workspaceId),
+      );
+      const base: SQL[] = [
+        eq(prospectQueue.campaignId, input.campaignId),
+        eq(prospectQueue.workspaceId, ctx.workspace.id),
+        // Show a prospect unless they were deliberately dismissed.
+        //
+        // This used to require a sequence OR an approved/enrolled status, which
+        // made the tab unusable exactly when it was needed: a "pending" prospect
+        // has no sequence, so it was filtered out, so it never appeared, so the
+        // Generate button next to it could never be clicked. Chicken and egg.
+        // Live: campaign 21 held 88 prospects — 87 pending, 1 enrolled — and this
+        // list returned ONE row. Only `skipped` is hidden, and only when there
+        // is nothing to show: a skipped prospect that already has a sequence
+        // still appears, because hiding real work is worse than showing a
+        // dismissed row.
+        //
+        // Filter in SQL, not after. The LIMIT below used to be applied to
+        // the UNfiltered set and then trimmed in JS, so skipped rows ate
+        // slots and pushed real ones off the end of the page; and with
+        // paging the counts must be of the same rows the pages hold.
+        or(
+          ne(prospectQueue.sequenceStatus, "skipped"),
+          isNotNull(prospectIntelligence.generatedSequence),
+        )!,
+        // Every word in a name, company, title or email — the tab's search.
+        ...searchWords(input.search).map((w) => {
+          const s = `%${escapeLike(w)}%`;
+          return or(
+            like(prospectQueue.firstName, s), like(prospectQueue.lastName, s), like(prospectQueue.companyName, s),
+            like(prospectQueue.title, s), like(prospectQueue.email, s),
+          )!;
+        }),
+      ];
+      const cells = await db
+        .select({ seq: prospectQueue.sequenceStatus, n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .leftJoin(prospectIntelligence, intelJoin)
+        .where(and(...base))
+        .groupBy(prospectQueue.sequenceStatus);
+      const countsByStatus: Record<string, number> = {};
+      for (const c of cells) countsByStatus[String(c.seq)] = Number(c.n);
+      const total = input.status === "all"
+        ? Object.values(countsByStatus).reduce((s, n) => s + n, 0)
+        : (countsByStatus[input.status] ?? 0);
       const rows = await db
         .select({
           prospectId: prospectQueue.id,
@@ -1905,23 +1964,11 @@ export const prospectsRouter = router({
           sequenceQualityBreakdown: prospectIntelligence.sequenceQualityBreakdown,
         })
         .from(prospectQueue)
-        .leftJoin(
-          prospectIntelligence,
-          eq(prospectIntelligence.prospectQueueId, prospectQueue.id),
-        )
-        .where(
-          and(
-            eq(prospectQueue.campaignId, input.campaignId),
-            eq(prospectQueue.workspaceId, ctx.workspace.id),
-            // Filter in SQL, not after. The LIMIT below used to be applied to
-            // the UNfiltered set and then trimmed in JS, so skipped rows ate
-            // slots and pushed real ones off the end of the page.
-            or(
-              ne(prospectQueue.sequenceStatus, "skipped"),
-              isNotNull(prospectIntelligence.generatedSequence),
-            ),
-          ),
-        )
+        .leftJoin(prospectIntelligence, intelJoin)
+        .where(and(
+          ...base,
+          input.status === "all" ? undefined : eq(prospectQueue.sequenceStatus, input.status),
+        ))
         // Active sequences FIRST, then a stable id order.
         //
         // There was no ORDER BY at all, so MySQL returned an arbitrary page.
@@ -1936,26 +1983,9 @@ export const prospectsRouter = router({
                    ELSE 2 END`,
           prospectQueue.id,
         )
-        .limit(input.limit);
-      // Show a prospect unless they were deliberately dismissed.
-      //
-      // This used to require a sequence OR an approved/enrolled status, which
-      // made the tab unusable exactly when it was needed: a "pending" prospect
-      // has no sequence, so it was filtered out, so it never appeared, so the
-      // Generate button next to it could never be clicked. Chicken and egg.
-      // Live: campaign 21 held 88 prospects — 87 pending, 1 enrolled — and this
-      // list returned ONE row.
-      //
-      // The row UI has always handled the empty case ("no sequence" + a
-      // Generate action), and the tab's own filter bar offers "pending", so the
-      // client was built for these rows all along. Only `skipped` is hidden,
-      // and only when there is nothing to show: a skipped prospect that already
-      // has a sequence still appears, because hiding real work is worse than
-      // showing a dismissed row.
-      return rows.filter((r) => {
-        const hasSeq = Array.isArray(r.generatedSequence) && (r.generatedSequence as unknown[]).length > 0;
-        return hasSeq || String(r.sequenceStatus) !== "skipped";
-      });
+        .limit(input.limit)
+        .offset(input.offset);
+      return { rows, total, countsByStatus };
     }),
 
   /**

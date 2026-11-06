@@ -259,6 +259,8 @@ const SIGNAL_COLORS: Record<string, string> = {
 const REJECTION_PAGE = 100;
 /** Prospects per page on the Prospects tab (A45). */
 const PROSPECT_PAGE = 100;
+/** Sequences per page on the Sequences tab (A44): each row carries its whole sequence. */
+const SEQUENCE_PAGE = 50;
 
 const REJECT_TEMPLATES = [
   "Wrong industry",
@@ -1062,9 +1064,21 @@ function StatusBadgeMini({ status }: { status: string }) {
 }
 
 function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: any }) {
-  // Explicit limit: the default was 100 and a live campaign's queue held 101
-  // rows, which silently truncated the page.
-  const { data: rows = [], refetch, isLoading } = trpc.are.prospects.listSequences.useQuery({ campaignId, limit: 500 });
+  const [filter, setFilter] = useState<FilterKey>("enrolled");
+  const [search, setSearch] = useState("");
+  const searchQ = useDebouncedValue(search.trim());
+  const [seqPage, setSeqPage] = useState(1);
+  useClearOnChange({ filter, searchQ }, () => setSeqPage(1));
+  // A page of the filter, and the counts for every filter, from the server
+  // (A44). This asked for 500 rows with every full sequence, then counted
+  // and filtered whatever had arrived; an explicit page size still stands
+  // in for the default, which once truncated a 101-row campaign.
+  const { data: seqData, refetch, isLoading } = trpc.are.prospects.listSequences.useQuery(
+    { campaignId, status: filter, ...(searchQ ? { search: searchQ } : {}), limit: SEQUENCE_PAGE, offset: (seqPage - 1) * SEQUENCE_PAGE },
+    { placeholderData: (prev) => prev },
+  );
+  const rows = seqData?.rows ?? [];
+  const seqPages = Math.max(1, Math.ceil((seqData?.total ?? 0) / SEQUENCE_PAGE));
   // ONE representative execution row per (prospect, step), for the whole
   // campaign — server-reduced (are.execution.getStepStates), never truncated.
   // This used to read raw getQueue with limit 200 ("an active campaign has a
@@ -1119,8 +1133,6 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
     onError: (e) => toast.error(e.message),
   });
 
-  const [filter, setFilter] = useState<FilterKey>("enrolled");
-  const [search, setSearch] = useState("");
   const [drawerProspectId, setDrawerProspectId] = useState<number | null>(null);
   const [confirmCancel, setConfirmCancel] = useState<{ prospectId: number; name: string } | null>(null);
   const [generatingId, setGeneratingId] = useState<number | null>(null);
@@ -1136,20 +1148,12 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [generatingId]);
 
-  // Derive counts per status for the summary strip.
-  const countsByStatus = rows.reduce((acc: Record<string, number>, r: any) => {
-    acc[r.sequenceStatus] = (acc[r.sequenceStatus] ?? 0) + 1;
-    return acc;
-  }, {});
-  const filteredRows = rows.filter((r: any) => {
-    if (filter !== "all" && r.sequenceStatus !== filter) return false;
-    if (search) {
-      const q = search.toLowerCase();
-      const hay = `${r.firstName ?? ""} ${r.lastName ?? ""} ${r.companyName ?? ""} ${r.title ?? ""}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
+  // Counts per status for the summary strip — the server's, for every row
+  // that matches the search, not the ones on this page (A44).
+  const countsByStatus: Record<string, number> = seqData?.countsByStatus ?? {};
+  const allCount = Object.values(countsByStatus).reduce((s, n) => s + n, 0);
+  // The server already applied the filter and the search.
+  const filteredRows = rows;
   const seqSel = useRowSelection(filteredRows.map((r: any) => r.prospectId as number));
 
   // What the mass timeline editor needs to know about the selection: how many
@@ -1227,7 +1231,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
         />
         <div className="flex flex-wrap gap-1">
           {FILTERS.map((f) => {
-            const n = f === "all" ? rows.length : (countsByStatus[f] ?? 0);
+            const n = f === "all" ? allCount : (countsByStatus[f] ?? 0);
             const label = f === "all" ? "All" : (STATUS_STYLE[f]?.label ?? f);
             return (
               <Button
@@ -1252,11 +1256,19 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
         />
       ) : (
         <>
-        <div className="mb-2 flex items-center gap-2">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer select-none">
             <Checkbox checked={seqSel.allSelected} onCheckedChange={seqSel.toggleAll} aria-label="Select all shown" />
-            Select all {filteredRows.length}
+            Select all {filteredRows.length}{seqPages > 1 ? " on this page" : ""}
           </label>
+          {seqPages > 1 && (
+            <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
+              <span className="mr-1">{(seqPage - 1) * SEQUENCE_PAGE + 1}–{(seqPage - 1) * SEQUENCE_PAGE + rows.length} of {(seqData?.total ?? 0).toLocaleString()}</span>
+              <Button size="sm" variant="outline" className="h-7" disabled={seqPage <= 1} onClick={() => setSeqPage((p) => p - 1)}>Previous</Button>
+              <span className="px-2">Page {seqPage} of {seqPages}</span>
+              <Button size="sm" variant="outline" className="h-7" disabled={seqPage >= seqPages} onClick={() => setSeqPage((p) => p + 1)}>Next</Button>
+            </div>
+          )}
         </div>
         <div className="mb-2"><AreBulkActionBar campaignId={campaignId} selection={seqSel} actions={sequenceTabActions(filter)} timeline={timelineInfo} onDone={() => refetch()} /></div>
         <div className="border rounded-lg bg-card divide-y overflow-hidden">
