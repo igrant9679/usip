@@ -124,9 +124,12 @@ describe("inSendWindow", () => {
 
   it("a failed read falls back to the DEFAULT window, never to always-open", async () => {
     readFails = true;
+    // 2026-11-06 (audit O50): a failed read is also PAUSED now, so the window
+    // stays shut at 10:00 too; the default hours it falls back to are what
+    // the read hands the display, and are still checked here.
     expect(await inSendWindow(4, Date.UTC(2026, 8, 30, 3, 0))).toBe(false); // 3 AM UTC
-    invalidateSendWindowCache(4);
-    expect(await inSendWindow(4, Date.UTC(2026, 8, 30, 10, 0))).toBe(true);
+    expect(await inSendWindow(4, Date.UTC(2026, 8, 30, 10, 0))).toBe(false);
+    expect(await getWorkspaceSendWindow(4)).toEqual({ timezone: "UTC", window: DEFAULT_SEND_WINDOW, paused: true });
   });
 
   it("Pause all outbound keeps the window shut, even mid-window; off reopens it", async () => {
