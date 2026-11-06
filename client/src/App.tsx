@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { WorkspaceBrandingSync } from "@/components/usip/WorkspaceBrandingSync";
+import { MfaRequiredGate } from "@/components/usip/MfaRequiredGate";
 import { ConfirmProvider } from "@/components/usip/Common";
 import { safeReturnPath } from "@shared/returnPath";
 import { returnPathFor } from "@/lib/authRedirect";
@@ -432,7 +433,9 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   if (!user) return <Landing />;
   // WorkspaceBrandingSync sits here, not in Shell — the settings hub renders
   // without Shell, so brand colours would otherwise never reach it.
-  return <WorkspaceProvider><InviteReturnRedirect /><WorkspaceBrandingSync />{children}</WorkspaceProvider>;
+  // The enforce2fa gate lives here so it covers every authed page; in Shell it
+  // missed the settings hub, which renders without Shell (G66).
+  return <WorkspaceProvider><InviteReturnRedirect /><WorkspaceBrandingSync /><MfaRequiredGate />{children}</WorkspaceProvider>;
 }
 
 function PageLoading() {

@@ -65,6 +65,42 @@ describe("a dashboard chart has words (G64)", () => {
   });
 });
 
+describe("a broken page keeps the sidebar (G37)", () => {
+  it("Shell wraps the page content in its own boundary, keyed by the path", () => {
+    const s = read("client/src/components/usip/Shell.tsx");
+    const main = s.slice(s.indexOf('<main className="flex-1 overflow-auto bg-background">'), s.indexOf("</main>"));
+    expect(main).toMatch(/<ErrorBoundary resetKey=\{location\} inline>\s*<PageTransition>\{children\}<\/PageTransition>\s*<\/ErrorBoundary>/);
+  });
+});
+
+describe("the app shell's loose ends (G66)", () => {
+  const shell = read("client/src/components/usip/Shell.tsx");
+
+  it("the top-bar search opens the palette; there is no inert search box", () => {
+    expect(shell).not.toMatch(/<input aria-label="Search"[^>]*placeholder="Search…"/);
+    const top = shell.slice(shell.indexOf("<ElsieToggle />"), shell.indexOf("{actions}"));
+    expect(top).toContain("onClick={openCommandPalette}");
+  });
+
+  it("both search entries show one shortcut label, the platform's", () => {
+    expect(shell).toContain('const PALETTE_SHORTCUT = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K";');
+    expect((shell.match(/\{PALETTE_SHORTCUT\}<\/kbd>/g) ?? []).length).toBe(2);
+    expect(shell).not.toMatch(/>(Ctrl K|⌘K)<\/kbd>/);
+  });
+
+  it("the drawer's close button is called that, and only shows on a phone", () => {
+    expect(shell).not.toContain('aria-label="Collapse sidebar"');
+    const btn = shell.slice(shell.indexOf("onClick={() => setMobileOpen(false)}"), shell.indexOf('aria-label="Close menu"'));
+    expect(btn).toContain("md:hidden");
+  });
+
+  it("only an admin gets the Admin Settings panel; anyone else gets Settings", () => {
+    const bottom = shell.slice(shell.indexOf("{BOTTOM_LINKS.map((l) =>"), shell.indexOf("renderNavLink(l)\n"));
+    expect(bottom).toMatch(/isAdminRole\(current\?\.role\) \? \(\s*<AdminSettingsMenu/);
+    expect(bottom).toContain('renderNavLink({ ...l, href: "/v2/settings/profile", label: "Settings", trailingChevron: false })');
+  });
+});
+
 describe("Settings > Billing ships no placeholder (L11)", () => {
   it("the Invoices card that only said Placeholder is gone", () => {
     const s = read("client/src/pages/usip/Settings.tsx");
