@@ -379,3 +379,92 @@ describe("R91: accepted is never Expired, and History shows the text", () => {
     expect(rev).not.toContain("<pre className");
   });
 });
+
+/* ── R71 · R94: quotes ──────────────────────────────────────────────────── */
+
+/** Each page's text, from an uncompressed pdfkit file. */
+function pdfPages(buf: Buffer): string[] {
+  const s = buf.toString("latin1");
+  const streams = Array.from(s.matchAll(/stream\n([\s\S]*?)\nendstream/g), (m) => m[1]).filter((c) => c.includes(" Tf"));
+  return streams.map((c) => Array.from(c.matchAll(/\[([^\]]*)\] TJ/g), (tj) =>
+    Array.from(tj[1].matchAll(/<([0-9a-f]*)>/g), (x) => Buffer.from(x[1], "hex").toString("latin1")).join("")).join("|"));
+}
+
+describe("R71 · R94: a quote says who it is from, expires, and fits its pages", () => {
+  const quote = (over: Record<string, unknown> = {}) => ({
+    quoteNumber: "Q-1700000000000", createdAt: new Date(T0), expiresAt: new Date(T0 + 30 * DAY),
+    subtotal: "100.00", discountTotal: "0.00", taxTotal: "0.00", total: "100.00", notes: null, terms: null, ...over,
+  });
+  const line = (i: number) => ({ name: `Line item ${String(i).padStart(2, "0")}`, description: i % 3 === 0 ? "Includes onboarding and a quarterly review" : null, quantity: 1, unitPrice: `${1000 + i}.00`, discountPct: "0", lineTotal: `${1000 + i}.00` });
+
+  it("the PDF carries the workspace's name and dates, and no USIP or status stamp", async () => {
+    const { renderQuotePdf } = await import("./routers/operations");
+    const [page] = pdfPages(await renderQuotePdf(quote(), [line(1)], { workspaceName: "LSI Media", timeZone: "America/New_York", compress: false }));
+    expect(page).toContain("LSI Media");
+    expect(page).toContain("Valid until: Dec 18, 2026");
+    expect(page).not.toContain("USIP");
+    expect(page).not.toMatch(/Status:|DRAFT/);
+  });
+
+  it("six- and seven-figure amounts print on one line", async () => {
+    const { renderQuotePdf } = await import("./routers/operations");
+    const big = { ...line(1), unitPrice: "123456.78", lineTotal: "123456.78" };
+    const [page] = pdfPages(await renderQuotePdf(quote({ subtotal: "9876543.21", total: "9876543.21" }), [big], { workspaceName: "LSI Media", timeZone: "UTC", compress: false }));
+    expect(page).toContain("|$123,456.78|");
+    expect(page).toContain("|$9,876,543.21");
+  });
+
+  it("sixty lines break onto pages that each hold whole rows", async () => {
+    const { renderQuotePdf } = await import("./routers/operations");
+    const lines = Array.from({ length: 60 }, (_, i) => line(i + 1));
+    const pages = pdfPages(await renderQuotePdf(quote({ total: "61830.00" }), lines, { workspaceName: "LSI Media", timeZone: "UTC", compress: false }));
+    expect(pages.length).toBeGreaterThanOrEqual(2);
+    expect(pages.length).toBeLessThanOrEqual(4);
+    for (const l of lines) {
+      // A row's name and its own total are on one page.
+      const at = pages.filter((p) => p.includes(l.name));
+      expect(at).toHaveLength(1);
+      expect(at[0]).toContain(`$${(1000 + Number(l.name.slice(-2))).toLocaleString("en-US")}.00`);
+    }
+    // Every page after the first repeats the column header.
+    for (const p of pages.slice(1)) if (lines.some((l) => p.includes(l.name))) expect(p).toContain("ITEM");
+    // The totals come after the last row.
+    expect(pages[pages.length - 1]).toContain("$61,830.00");
+  });
+
+  function seedQuote(id: number, over: Record<string, unknown>) {
+    rows("quotes").push({ id, workspaceId: LSI, opportunityId: 1, quoteNumber: `Q-${id}`, status: "sent", expiresAt: new Date(T0 + DAY), total: "100.00", createdAt: new Date(T0 - DAY), ...over });
+  }
+
+  it("a quote past its date reads expired, and can't be sent or accepted", async () => {
+    seedQuote(1, { status: "sent", expiresAt: new Date(T0 - 1000) });
+    seedQuote(2, { status: "draft", expiresAt: new Date(T0 - DAY) });
+    seedQuote(3, { status: "sent", expiresAt: new Date(T0 + DAY) });
+    seedQuote(4, { status: "accepted", expiresAt: new Date(T0 - DAY) });
+    rows("quotes").push({ id: 5, workspaceId: CF, opportunityId: 9, quoteNumber: "Q-5", status: "sent", expiresAt: new Date(T0 - DAY), total: "1", createdAt: new Date() });
+    const rep = caller(REP);
+    const list = await rep.quotes.list();
+    const st = (id: number) => list.find((q: any) => q.id === id)?.status;
+    expect([st(1), st(2), st(3), st(4)]).toEqual(["expired", "expired", "sent", "accepted"]);
+    // Another workspace's quote is not touched.
+    expect(rows("quotes").find((q) => q.id === 5).status).toBe("sent");
+    expect((await refusal(rep.quotes.setStatus({ id: 1, status: "accepted" }))).message).toMatch(/expired/);
+    expect((await refusal(rep.quotes.send({ id: 2 }))).message).toMatch(/expired/);
+    await rep.quotes.setStatus({ id: 1, status: "rejected" });
+    expect(rows("quotes").find((q) => q.id === 1).status).toBe("rejected");
+  });
+
+  it("an unread lapsed quote is refused too, before any list has flipped it", async () => {
+    seedQuote(6, { status: "sent", expiresAt: new Date(T0 - 1000) });
+    expect((await refusal(caller(REP).quotes.setStatus({ id: 6, status: "accepted" }))).code).toBe("BAD_REQUEST");
+    expect(rows("quotes").find((q) => q.id === 6).status).toBe("sent");
+  });
+
+  it("Accept and Reject ask first, and no e-signature is promised", () => {
+    const src = read("client/src/pages/usip/Quotes.tsx");
+    const sent = block(src, `{q.status === "sent" && (`, "\n                        )}");
+    expect(sent).not.toContain("<Button");
+    expect(sent.match(/<ConfirmButton/g)).toHaveLength(2);
+    expect(src).not.toMatch(/e-signature/i);
+  });
+});
