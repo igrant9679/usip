@@ -17,7 +17,7 @@
  */
 import { Button } from "@/components/ui/button";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
-import { Section, StatusPill, fmtDate } from "@/components/usip/Common";
+import { ConfirmButton, Section, StatusPill, confirmAction, fmtDate } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
 import { ExternalLink, Send, Share2 } from "lucide-react";
 import { useState } from "react";
@@ -50,6 +50,18 @@ export default function Social() {
     onSuccess: () => { setCommentFor(null); setCommentText(""); toast.success("Comment posted"); },
     onError: (e) => toast.error(e.message),
   });
+  // Publish, comment and withdraw act on LinkedIn at once, in your name, so
+  // each asks first (audit 2026-10-20, O49); Enter in the comment box posted.
+  const postComment = (socialId: string) => {
+    const text = commentText.trim();
+    if (!text) return;
+    confirmAction({
+      title: "Post this comment on LinkedIn?",
+      description: `It appears under their post, in your name, straight away: “${text.length > 200 ? `${text.slice(0, 200)}…` : text}”`,
+      confirmLabel: "Post comment",
+      destructive: false,
+    }, () => commentPost.mutate({ socialId, text }));
+  };
   const lookupPosts = async () => {
     if (!engageId.trim()) return;
     setEngaging(true);
@@ -94,7 +106,16 @@ export default function Social() {
                     <div className="ml-auto flex items-center gap-1">
                       {inv.date && <span className="text-xs text-muted-foreground">{fmtDate(inv.date)}</span>}
                       {url && <a href={url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground"><ExternalLink className="size-3.5" /></a>}
-                      <Button size="sm" variant="ghost" disabled={withdraw.isPending} onClick={() => withdraw.mutate({ invitationId: String(inv.id) })}>Withdraw</Button>
+                      <ConfirmButton size="sm" variant="ghost" disabled={withdraw.isPending}
+                        title={`Withdraw your invitation to ${name}?`}
+                        description="The connection request is cancelled on LinkedIn and marked withdrawn here."
+                        confirmLabel="Withdraw"
+                        onConfirm={() => withdraw.mutate({
+                          invitationId: String(inv.id),
+                          recipient: [inv.invited_user_public_identifier, inv.invited_user].filter((v: unknown): v is string => typeof v === "string" && !!v),
+                        })}>
+                        Withdraw
+                      </ConfirmButton>
                     </div>
                   </li>
                 );
@@ -139,9 +160,14 @@ export default function Social() {
             />
             <div className="flex items-center justify-between">
               <span className="text-[11px] text-muted-foreground">{postBody.length}/3000 · posts to your own account</span>
-              <Button size="sm" disabled={!postBody.trim() || createLinkedInPost.isPending} onClick={() => createLinkedInPost.mutate({ text: postBody.trim() })}>
+              <ConfirmButton size="default" variant="default" destructive={false} className="h-8 px-3"
+                disabled={!postBody.trim() || createLinkedInPost.isPending}
+                title="Publish this post to LinkedIn?"
+                description="It goes on your own LinkedIn feed, visible to your network, straight away."
+                confirmLabel="Publish"
+                onConfirm={() => createLinkedInPost.mutate({ text: postBody.trim() })}>
                 <Send className="size-3.5 mr-1.5" /> {createLinkedInPost.isPending ? "Posting…" : "Publish"}
-              </Button>
+              </ConfirmButton>
             </div>
           </div>
         </Section>
@@ -175,8 +201,8 @@ export default function Social() {
                       </div>
                       {commentFor === String(sid) && (
                         <div className="flex gap-1.5 pt-1">
-                          <input aria-label="Comment" value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Write a comment…" className="flex-1 rounded-md border bg-background px-2 h-8 text-sm" onKeyDown={(e) => { if (e.key === "Enter" && commentText.trim()) commentPost.mutate({ socialId: String(sid), text: commentText.trim() }); }} />
-                          <Button size="sm" className="h-8" disabled={!commentText.trim() || commentPost.isPending} onClick={() => commentPost.mutate({ socialId: String(sid), text: commentText.trim() })}>Post</Button>
+                          <input aria-label="Comment" value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Write a comment…" className="flex-1 rounded-md border bg-background px-2 h-8 text-sm" onKeyDown={(e) => { if (e.key === "Enter" && commentText.trim()) { e.preventDefault(); postComment(String(sid)); } }} />
+                          <Button size="sm" className="h-8" disabled={!commentText.trim() || commentPost.isPending} onClick={() => postComment(String(sid))}>Post</Button>
                         </div>
                       )}
                     </li>
