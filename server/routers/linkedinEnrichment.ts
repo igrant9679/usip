@@ -18,7 +18,7 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure, adminWsProcedure, isAdminRole, requireMinRole } from "../_core/workspace";
 import { getDb } from "../db";
 import { activities, tasks, workspaceSettings } from "../../drizzle/schema";
-import { reengageProspectManually } from "../services/linkedinEnrichment/jobChangeReengagement";
+import { reengageBlocker, reengageProspectManually, type JobChangeReengageResult } from "../services/linkedinEnrichment/jobChangeReengagement";
 import { recordAudit } from "../audit";
 import { checkLinkedInEnrichmentHealth } from "../services/linkedinEnrichment/health";
 import {
@@ -122,6 +122,25 @@ const rowInput = z.object({
   email: z.string().max(320).optional(),
   prospectId: z.number().int().positive().optional(),
 });
+
+type RefusalReason = Exclude<JobChangeReengageResult["reason"], "created">;
+
+/** What a manual Re-engage says when it can't make the task. "error" stays a 500. */
+const REENGAGE_REFUSALS: Partial<Record<RefusalReason, { code: "BAD_REQUEST" | "CONFLICT" | "TOO_MANY_REQUESTS" | "NOT_FOUND"; message: string }>> = {
+  already_active: { code: "CONFLICT", message: "A re-engagement task is already open for this prospect." },
+  no_company_change: { code: "BAD_REQUEST", message: "No detected company change for this prospect." },
+  cap_reached: { code: "TOO_MANY_REQUESTS", message: "Daily re-engagement cap reached." },
+  incomplete_company_change: {
+    code: "BAD_REQUEST",
+    message: "LinkedIn shows no previous employer for this person, so this is the first company Velocity has seen for them, not a move. There is nothing to re-engage about yet.",
+  },
+  new_company_not_an_employer: {
+    code: "BAD_REQUEST",
+    message: "Their new LinkedIn \"company\" reads as a life change (retired, between roles, studying), not an employer, so no re-engagement task was made.",
+  },
+  prospect_rejected: { code: "BAD_REQUEST", message: "This person is marked rejected, so no re-engagement task was made." },
+  no_prospect: { code: "NOT_FOUND", message: "That person is no longer in this workspace." },
+};
 
 export const linkedinEnrichmentRouter = router({
   /** Integration health — is Unipile + a LinkedIn account ready to enrich? */
@@ -695,6 +714,14 @@ export const linkedinEnrichmentRouter = router({
         detectedAt: r.detectedAt,
         acknowledged: !!r.acknowledgedAt,
         hasReengagementTask: reengaged.has(r.prospectId),
+        /**
+         * Why Re-engage would be refused for this row, or null (tracker
+         * 2026-11-06, items 8 and 14). A first sighting — no previous employer
+         * on file — is recorded as company_changed too, and the feed offered
+         * Re-engage on it; the writer refused, and the click came back as
+         * "Could not create the re-engagement task."
+         */
+        reengageBlocked: r.changeType === "company_changed" ? reengageBlocker(r.oldValue, r.newValue) : null,
       }));
     }),
 
@@ -744,15 +771,12 @@ export const linkedinEnrichmentRouter = router({
     .mutation(async ({ ctx, input }) => {
       const res = await reengageProspectManually(ctx.workspace.id, input.prospectId);
       if (!res.created) {
-        if (res.reason === "already_active") {
-          throw new TRPCError({ code: "CONFLICT", message: "A re-engagement task is already open for this prospect." });
-        }
-        if (res.reason === "no_company_change") {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "No detected company change for this prospect." });
-        }
-        if (res.reason === "cap_reached") {
-          throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Daily re-engagement cap reached." });
-        }
+        // Every refusal says what it is (tracker 2026-11-06, items 8 and 14).
+        // All but three fell through to a 500 reading "Could not create the
+        // re-engagement task", which is what the tester got for a first
+        // sighting: a reason they could act on, reported as a server fault.
+        const refusal = REENGAGE_REFUSALS[res.reason as RefusalReason];
+        if (refusal) throw new TRPCError(refusal);
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the re-engagement task." });
       }
       // The re-engagement service emits the timeline activity itself (one source
