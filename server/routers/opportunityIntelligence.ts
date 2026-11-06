@@ -27,6 +27,7 @@ import {
 } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { changeOpportunityStage } from "../services/stageChange";
+import { stageResolver } from "../_core/stageSemantics";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
@@ -92,6 +93,19 @@ export const opportunityIntelligenceRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
       const { opp, account, contacts: oppContacts, recentActivities } = await getOppContext(db, ctx.workspace.id, input.opportunityId);
+      /**
+       * The stages the AI may suggest: this deal's pipeline's open stages
+       * (audit 2026-10-20, R40). The enum was the six legacy keys, so a
+       * pipeline with its own stages got suggestions for columns it does not
+       * have. Closing a deal stays a person's move.
+       */
+      const stages = await stageResolver(db, ctx.workspace.id);
+      const openKeys = stages.allowedKeys(opp.pipelineId ?? null).filter((k) => {
+        const m = stages.resolve(opp.pipelineId ?? null, k);
+        return !m.isWon && !m.isLost;
+      });
+      const closed = stages.resolve(opp.pipelineId ?? null, opp.stage);
+      const isClosed = closed.isWon || closed.isLost;
 
       const contextSummary = [
         `Opportunity: ${opp.name}`,
@@ -104,9 +118,10 @@ export const opportunityIntelligenceRouter = router({
         `Recent activities: ${recentActivities.map((a: any) => `${a.type}: ${a.subject ?? a.body?.slice(0, 60) ?? ""}`).join("; ") || "none"}`,
         opp.nextStep ? `Next step: ${opp.nextStep}` : "",
         opp.aiNote ? `AI note: ${opp.aiNote}` : "",
+        `Open stages in this pipeline, in order: ${openKeys.join(", ") || "none"}`,
       ].filter(Boolean).join("\n");
 
-      let result: any = {};
+      let result: any;
       try {
         const out = await invokeLLM({
           research: { surface: "research", industry: account?.industry ?? null, prospectTitle: (oppContacts[0] as { title?: string | null } | undefined)?.title ?? null },
@@ -184,7 +199,7 @@ export const opportunityIntelligenceRouter = router({
                   winStory: { type: "string", description: "Short narrative of how this deal could be won" },
                   suggestedStage: {
                     type: "string",
-                    enum: ["discovery", "qualified", "proposal", "negotiation", "won", "none"],
+                    enum: [...openKeys, "none"],
                     description: "The stage this deal should move to based on activity evidence. Return 'none' if the current stage is appropriate.",
                   },
                   suggestedStageRationale: { type: "string", description: "One or two sentences explaining why this stage change is recommended, or why no change is needed." },
@@ -197,25 +212,23 @@ export const opportunityIntelligenceRouter = router({
         });
         const content = out.choices?.[0]?.message?.content;
         result = typeof content === "string" ? JSON.parse(content) : content;
-      } catch {
-        result = {
-          winProbability: opp.winProb,
-          winProbabilityRationale: "AI analysis unavailable — using existing win probability",
-          nextBestActions: [],
-          conversationSignals: [],
-          actionItems: [],
-          emailEffectivenessScore: 50,
-          altSubjectLines: [],
-          winStory: "",
-          suggestedStage: "none",
-          suggestedStageRationale: "",
-        };
+        if (!result || typeof result !== "object") throw new Error("empty response");
+      } catch (e) {
+        // A failure is a failure (R40): it was stored as a placeholder
+        // snapshot, "AI analysis unavailable", and returned as a success, so
+        // the board toasted "AI analysis complete" and showed the placeholder
+        // as the AI's view. Nothing is stored and the caller hears why.
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `AI analysis failed: ${(e as Error).message}. Nothing was saved; try again.` });
       }
+      // A stage outside the list is no suggestion.
+      if (!openKeys.includes(result.suggestedStage)) result.suggestedStage = "none";
+      const aiWinProb = Number(result.winProbability);
+      const winProbability = Number.isFinite(aiWinProb) ? Math.max(0, Math.min(100, Math.round(aiWinProb))) : opp.winProb;
 
       const [inserted] = await db.insert(opportunityIntelligence).values({
         workspaceId: ctx.workspace.id,
         opportunityId: input.opportunityId,
-        winProbability: String(Math.round(result.winProbability ?? opp.winProb)),
+        winProbability: String(winProbability),
         winProbabilityRationale: result.winProbabilityRationale ?? "",
         nextBestActions: result.nextBestActions ?? [],
         conversationSignals: result.conversationSignals ?? [],
@@ -228,13 +241,16 @@ export const opportunityIntelligenceRouter = router({
         suggestedStageRationale: result.suggestedStageRationale ?? null,
       });
 
-      // Update opportunity winProb
-      await db
-        .update(opportunities)
-        .set({ winProb: Math.round(result.winProbability ?? opp.winProb) })
-        .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+      // The deal's own win % follows the AI's — on an open deal. A won deal is
+      // 100% and a lost one 0% by its stage, and the AI overwrote both (R40).
+      if (!isClosed) {
+        await db
+          .update(opportunities)
+          .set({ winProb: winProbability })
+          .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+      }
 
-      return result;
+      return { ...result, winProbability };
     }),
 
   /** Get stage history for an opportunity */

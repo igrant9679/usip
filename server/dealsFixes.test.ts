@@ -20,6 +20,8 @@
  *   R42 — territory rules match ignoring case, also route the account a lead
  *         conversion creates, and are confirmed before deletion; the page says
  *         what they do and shows no unread JSON.
+ *   R40 — AI suggestions are this pipeline's open stages; a failure throws and
+ *         saves nothing; a closed deal's win % is left alone.
  *
  * Procedures run through the real router against the SQL-evaluating fake;
  * screens render with a stub trpc.
@@ -34,9 +36,22 @@ import type { TrpcContext } from "./_core/context";
 
 const h = vi.hoisted(() => {
   if (!process.env.ENCRYPTION_KEY && !process.env.JWT_SECRET) process.env.ENCRYPTION_KEY = "b".repeat(64);
-  return { db: null as any, data: {} as Record<string, unknown> };
+  return {
+    db: null as any,
+    data: {} as Record<string, unknown>,
+    // The model: what it was asked, and what it answers (or throws).
+    llmCalls: [] as any[],
+    llm: (() => ({})) as (args: any) => unknown,
+  };
 });
 vi.mock("./db", async (a) => ({ ...(await a<typeof import("./db")>()), getDb: async () => h.db, checkPermission: async () => {} }));
+vi.mock("./_core/llm", async (a) => ({
+  ...(await a<typeof import("./_core/llm")>()),
+  invokeLLM: async (args: any) => {
+    h.llmCalls.push(args);
+    return { choices: [{ message: { content: JSON.stringify(h.llm(args)) } }] };
+  },
+}));
 vi.mock("@/lib/trpc", () => {
   const noop: any = new Proxy(() => undefined, { get: () => noop, apply: () => undefined });
   const node = (path: string[]): any => new Proxy({}, {
@@ -439,5 +454,52 @@ describe("R42: territory rules do what the page says", () => {
     expect(page).not.toMatch(/onClick=\{\(\) => (del|delRule)\.mutate/);
     expect(page).toContain("description={TERRITORIES_DESCRIPTION}");
     expect(page).not.toContain("automatically route new leads and accounts to the correct owner on creation");
+  });
+});
+
+/* ── R40: AI deal intelligence ─────────────────────────────────────────── */
+
+describe("R40: AI deal intelligence", () => {
+  const answer = (o: Record<string, unknown> = {}) => ({
+    winProbability: 64, winProbabilityRationale: "r", nextBestActions: [], conversationSignals: [], actionItems: [],
+    emailEffectivenessScore: 50, altSubjectLines: [], winStory: "", suggestedStage: "negotiation", suggestedStageRationale: "s", ...o,
+  });
+  beforeEach(() => { h.llmCalls = []; h.llm = () => answer(); });
+  const enumOf = (args: any) => args.response_format.json_schema.schema.properties.suggestedStage.enum;
+
+  it("suggests only this pipeline's open stages", async () => {
+    rows("crm_pipelines").push({ id: 2, workspaceId: WS, name: "Renewals", isDefault: false, sortOrder: 1 });
+    rows("crm_pipeline_stages").push(
+      { id: 21, workspaceId: WS, pipelineId: 2, key: "renewal_due", label: "Due", sortOrder: 1, defaultWinProb: 50, isWon: false, isLost: false },
+      { id: 22, workspaceId: WS, pipelineId: 2, key: "renewed", label: "Renewed", sortOrder: 2, defaultWinProb: 100, isWon: true, isLost: false },
+    );
+    deal(1, { pipelineId: 2, stage: "renewal_due" });
+    h.llm = () => answer({ suggestedStage: "renewed" });
+    await caller().oppIntelligence.generateIntelligence({ opportunityId: 1 });
+    expect(enumOf(h.llmCalls[0])).toEqual(["renewal_due", "none"]);
+    // Anything else it says is no suggestion.
+    expect(rows("opportunity_intelligence")[0].suggestedStage).toBeNull();
+    deal(2, { pipelineId: 1 });
+    h.llm = () => answer({ suggestedStage: "negotiation" });
+    await caller().oppIntelligence.generateIntelligence({ opportunityId: 2 });
+    expect(enumOf(h.llmCalls[1])).toEqual(["discovery", "negotiation", "none"]);
+    expect(rows("opportunity_intelligence")[1].suggestedStage).toBe("negotiation");
+  });
+
+  it("a failure says so and saves nothing", async () => {
+    deal(1);
+    h.llm = () => { throw new Error("provider down"); };
+    await expect(caller().oppIntelligence.generateIntelligence({ opportunityId: 1 })).rejects.toThrow(/AI analysis failed: provider down/);
+    expect(rows("opportunity_intelligence")).toEqual([]);
+    expect(rows("opportunities")[0].winProb).toBe(20);
+  });
+
+  it("moves an open deal's win %, never a closed one's", async () => {
+    deal(1);
+    deal(2, { stage: "signed", winProb: 100 });
+    await caller().oppIntelligence.generateIntelligence({ opportunityId: 1 });
+    await caller().oppIntelligence.generateIntelligence({ opportunityId: 2 });
+    expect(rows("opportunities").map((o) => [o.id, o.winProb])).toEqual([[1, 64], [2, 100]]);
+    expect(rows("opportunity_intelligence").map((i) => i.winProbability)).toEqual(["64", "64"]);
   });
 });
