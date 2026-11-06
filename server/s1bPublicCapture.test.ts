@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
   db: null as any,
   turn: null as any,
   invites: [] as Array<{ meetingId: number }>,
+  turnInputs: [] as any[],
+  mails: [] as any[],
 }));
 vi.mock("./db", async (a) => ({ ...(await a<typeof import("./db")>()), getDb: async () => h.db, checkPermission: async () => {} }));
 vi.mock("./services/workflowEngine", () => ({ fireRecordCreated: async () => {} }));
@@ -32,7 +34,11 @@ vi.mock("./services/bookingConfirmationEmail", async (orig) => ({
 }));
 vi.mock("./services/chatAgent", async (orig) => ({
   ...(await orig<typeof import("./services/chatAgent")>()),
-  runChatTurn: async () => h.turn,
+  runChatTurn: async (input: any) => { h.turnInputs.push(input); return h.turn; },
+}));
+vi.mock("./emailDelivery", async (orig) => ({
+  ...(await orig<typeof import("./emailDelivery")>()),
+  sendWorkspaceEmail: async (_ws: number, m: any) => { h.mails.push(m); return { ok: true }; },
 }));
 
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
@@ -75,6 +81,8 @@ beforeEach(() => {
   h.db = makeSqlFakeDb({ realMembers: true });
   h.turn = turn();
   h.invites = [];
+  h.turnInputs = [];
+  h.mails = [];
   invalidateArchivedWorkspaceCache();
   rows("workspaces").push(
     { id: WS, name: "LSI Media", slug: "lsi", ownerUserId: 20, archivedAt: null },
@@ -419,5 +427,81 @@ describe("L12: a landing page counts a visitor once a day, from the page, not fr
     expect(isPublicWritePath("/landingPages.recordView")).toBe(true);
     const page = read("client/src/pages/LandingPage.tsx");
     expect(page).toContain("recordView.mutate({ slug, visitor: visitor || undefined });");
+  });
+});
+
+/* ─── G44 ──────────────────────────────────────────────────────────────── */
+
+describe("G44: the chat says the same about every email, and a reload is the same chat", () => {
+  beforeEach(() => {
+    rows("chat_agents").push({
+      id: 83, workspaceId: WS, slug: "help", status: "published", mode: "approval", displayName: "Elsie", greeting: "Hi there",
+      name: "Help", qualifyThreshold: 90, autoCreateLead: true, autoRoute: false, autoEnrollSequenceId: null,
+      bookingUserId: 20, createdByUserId: 20, qualifyingQuestions: [],
+    });
+    rows("prospects").push({ id: 300, workspaceId: WS, email: "known@customer.example", company: "Customer Co", title: "CFO" });
+  });
+  const chat = async (email: string, sendCode = false, token?: string) => {
+    h.turn = turn({ score: 10, wantsMeeting: false, sendCode, extracted: { name: null, email, company: null, phone: null } });
+    return anon().chatAgents.send({ slug: "help", message: `I'm ${email}, can you look up my account?`, token });
+  };
+  const session = (token: string) => rows("chat_sessions").find((s) => s.token === token);
+
+  it("a known address and an unknown one hand the agent the same view, without company or role", async () => {
+    const { identityGuidance } = await import("./services/chatAgent");
+    await chat("known@customer.example");
+    await chat("stranger@nowhere.example");
+    const [a, b] = h.turnInputs.map((i) => i.identity);
+    expect(a.status).toBe("unproven");
+    expect(identityGuidance(a, null)).toBe(identityGuidance(b, null));
+    expect(JSON.stringify(h.turnInputs[0])).not.toMatch(/Customer Co|CFO/);
+  });
+
+  it("asking for a code: a known address is emailed one, an unknown one gets a decoy, and both replies are the same", async () => {
+    const known = await chat("known@customer.example", true);
+    const unknown = await chat("stranger@nowhere.example", true);
+    expect(h.mails.map((m) => m.to)).toEqual(["known@customer.example"]);
+    expect(known.reply).toBe(unknown.reply);
+    for (const t of [known.token, unknown.token]) {
+      expect(session(t).verifyCodeHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(session(t).verifyCodesSent).toBe(1);
+    }
+    // The next turn looks the same too: a code "on its way" either way.
+    await chat("known@customer.example", false, known.token);
+    await chat("stranger@nowhere.example", false, unknown.token);
+    const [k2, u2] = h.turnInputs.slice(-2).map((i) => i.identity);
+    expect({ ...k2, matched: null }).toEqual({ ...u2, matched: null });
+    expect(k2.codePending).toBe(true);
+  });
+
+  it("the widget's kept token reopens the conversation", async () => {
+    const first = await chat("pat@visitor.example");
+    const back = await anon().chatAgents.resume({ slug: "help", token: first.token });
+    expect(back?.messages.map((m) => m.role)).toEqual(["agent", "visitor", "agent"]);
+    expect(back?.messages[0].text).toBe("Hi there");
+    rows("chat_agents").push({ id: 84, workspaceId: WS, slug: "other", status: "published", mode: "approval", displayName: "O", greeting: "Hey", name: "O" });
+    expect(await anon().chatAgents.resume({ slug: "other", token: first.token }), "not another agent's").toBeNull();
+    session(first.token).updatedAt = new Date(Date.now() - 8 * 86_400_000);
+    expect(await anon().chatAgents.resume({ slug: "help", token: first.token }), "not after a week idle").toBeNull();
+  });
+
+  it("a returning visitor in a new chat is the same lead", async () => {
+    await chat("pat@visitor.example");
+    await chat("Pat@Visitor.example");
+    expect(rows("chat_sessions")).toHaveLength(2);
+    expect(rows("leads")).toHaveLength(1);
+    expect(rows("chat_sessions").map((s) => s.leadId)).toEqual([rows("leads")[0].id, rows("leads")[0].id]);
+  });
+
+  it("control: a different address is a different lead", async () => {
+    await chat("pat@visitor.example");
+    await chat("sam@visitor.example");
+    expect(rows("leads")).toHaveLength(2);
+  });
+
+  it("the page keeps the token and reopens with it", () => {
+    const page = read("client/src/pages/ChatPage.tsx");
+    expect(page).toContain("if (r.token) keepToken(slug, r.token);");
+    expect(page).toContain("trpc.chatAgents.resume.useQuery({ slug, token: kept ?? \"\" }");
   });
 });

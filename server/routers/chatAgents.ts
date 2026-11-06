@@ -20,7 +20,7 @@
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gte, like, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../_core/trpc";
 import { adminWsProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, isActiveMember } from "../_core/activeMembers";
@@ -35,20 +35,24 @@ import {
   type ChatMessage, type HandoffReason, type VisitorFacts,
 } from "../services/chatAgent";
 import { formatKnowledge, selectKnowledge } from "../services/chatKnowledge";
-import { checkCode, resolveChatIdentity, sendCode } from "../services/chatIdentity";
+import { checkCode, issueDecoyCode, resolveChatIdentity, sendCode } from "../services/chatIdentity";
 import { appUrl } from "../appUrl";
 import { describePageContext } from "../services/chatPageContext";
 import { getChatFunnelStats } from "../services/performanceMetrics";
 import { slugify } from "@shared/slugify";
 import { assertOwnerInWorkspace, assertRowInWorkspace, sequenceInWorkspace } from "../services/foreignIds";
 
-/** When a verification code cannot go out (limits, or no mailbox): never leave them waiting for it. */
+/** When no more codes may go out (the per-chat or per-address limits): never leave them waiting for one. */
 export const CODE_NOT_SENT = "I wasn't able to send a verification code just now, so I can't look up your details here. Someone from the team will follow up with you by email.";
 
 /** How many slots the widget offers. A short list converts; a wall of times doesn't. */
 const SLOTS_SHOWN = 6;
 /** Hard cap on turns per session — a public LLM endpoint needs a ceiling. */
 const MAX_MESSAGES = 60;
+/** How long the widget may reopen an idle chat from its kept token (G44). */
+export const RESUME_DAYS = 7;
+/** A returning visitor's chat lead is reused for this long rather than duplicated (G44). */
+export const CHAT_LEAD_REUSE_DAYS = 30;
 
 // slugify comes from @shared/slugify — one rule for every public URL.
 
@@ -425,6 +429,33 @@ export const chatAgentsRouter = router({
   }),
 
   /**
+   * PUBLIC: the conversation behind a token the widget kept (audit
+   * 2026-10-20, G44). The token lived only in page state, so every reload
+   * started a new session, and with the visitor's email a new lead: one
+   * person on a pricing page who refreshed twice was three leads. The widget
+   * now keeps the token and reopens the chat with this. The token is the
+   * credential, as it is for `send`; a token for another agent, or a chat idle
+   * for RESUME_DAYS, gives nothing and the widget starts over.
+   */
+  resume: publicProcedure
+    .input(z.object({ slug: z.string().min(1).max(80), token: z.string().min(1).max(64) }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return null;
+      const [agent] = await db.select({ id: chatAgents.id, status: chatAgents.status, mode: chatAgents.mode, workspaceId: chatAgents.workspaceId })
+        .from(chatAgents).where(eq(chatAgents.slug, input.slug));
+      if (!agent || agent.status !== "published" || agent.mode === "off" || !(await isWorkspaceLive(agent.workspaceId))) return null;
+      const [s] = await db.select({ agentId: chatSessions.agentId, messages: chatSessions.messages, status: chatSessions.status, updatedAt: chatSessions.updatedAt })
+        .from(chatSessions).where(eq(chatSessions.token, input.token));
+      if (!s || s.agentId !== agent.id) return null;
+      if (s.updatedAt && Date.now() - new Date(s.updatedAt).getTime() > RESUME_DAYS * 86_400_000) return null;
+      return {
+        messages: messagesOf(s).map((m) => ({ role: m.role, text: m.text })),
+        booked: s.status === "booked",
+      };
+    }),
+
+  /**
    * PUBLIC: one visitor turn.
    *
    * Returns the agent's reply plus, when the visitor has earned it and the
@@ -648,21 +679,24 @@ export const chatAgentsRouter = router({
       }
 
       /**
-       * The visitor agreed to be verified: email the code, from the
-       * workspace's own mailbox, only to a matched and unverified address,
-       * within the per-chat and per-address limits. The model's word is
-       * advice; if no code can go out, the reply says so rather than leaving
-       * them waiting for an email that is not coming.
+       * The visitor agreed to be verified. A code is emailed, from the
+       * workspace's own mailbox, only to an address the CRM knows, within the
+       * per-chat and per-address limits; an unknown address gets a decoy, the
+       * same record with no email and no code anyone holds (audit G44). The
+       * visitor sees the same either way, so this can't be used to ask
+       * whether someone is a customer. Past the limits, every address is told
+       * the same thing. The model's word is advice.
        */
-      if (turn.sendCode && identity.status === "matched" && visitor.email) {
-        let sent = false;
-        if (identity.canSendCode) {
+      if (turn.sendCode && identity.status === "unproven" && visitor.email) {
+        if (!identity.canSendCode) {
+          reply = `${reply}\n\n${CODE_NOT_SENT}`;
+        } else if (identity.matched) {
           const [ws] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, agent.workspaceId)).limit(1);
           const res = await sendCode(agent.workspaceId, session, visitor.email, { companyName: ws?.name ?? "", agentName: agent.displayName });
-          sent = res.ok;
           if (!res.ok) console.error("[chatAgents] verification code not sent:", res.reason);
+        } else {
+          await issueDecoyCode(session);
         }
-        if (!sent) reply = `${reply}\n\n${CODE_NOT_SENT}`;
       }
 
       const qualified = turn.score >= agent.qualifyThreshold;
@@ -771,6 +805,28 @@ async function createLeadForSession(
 ): Promise<number | null> {
   const db = await getDb();
   if (!db || !visitor.email) return null;
+
+  /**
+   * Someone who chatted before, on another device or with a cleared browser,
+   * is the same lead, not a new one (audit 2026-10-20, G44). Only a chat lead
+   * with the same address and recent: a lead from a form or an import is
+   * left alone, as the other inbound paths leave it.
+   */
+  try {
+    const [prior] = await db.select({ id: leads.id }).from(leads)
+      .where(and(
+        eq(leads.workspaceId, agent.workspaceId),
+        sql`lower(${leads.email}) = ${visitor.email.trim().toLowerCase()}`,
+        like(leads.source, "chat:%"),
+        gte(leads.createdAt, new Date(Date.now() - CHAT_LEAD_REUSE_DAYS * 86_400_000)),
+      ))
+      .orderBy(desc(leads.id))
+      .limit(1);
+    if (prior) return prior.id;
+  } catch (e) {
+    console.error("[chatAgents] prior-lead lookup failed:", (e as Error).message);
+  }
+
   const parts = (visitor.name ?? "").trim().split(/\s+/).filter(Boolean);
 
   // Unowned beats owned-by-a-leaver: the workspace can still see and claim it.
