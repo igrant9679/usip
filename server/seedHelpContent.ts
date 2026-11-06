@@ -377,8 +377,8 @@ All three land in the same place: a meeting on **Meetings** and on your real cal
 
 Each one is an independent engine. You do not need all five, and most people should start with one.
 
-1. **The website chat agent** talks to visitors on your site and books them straight into a rep's calendar. It sends no email at all, so there is nothing to warm up and no deliverability risk. **This is the cheapest one to switch on.**
-2. **Booking links** (/b/your-name) let someone pick a slot themselves. Also inbound, also no sending.
+1. **The website chat agent** talks to visitors on your site and books them straight into a rep's calendar. It sends no outreach, so there is nothing to warm up and no deliverability risk; the only email is a booking confirmation to someone who booked, when no calendar invite could go. **This is the cheapest one to switch on.**
+2. **Booking links** (/b/your-name) let someone pick a slot themselves. Also inbound: the calendar invite confirms the booking, or, when none can go, one confirmation email from your mailbox.
 3. **Sequences** are multi-step email follow-ups to people you already have.
 4. **Campaigns (the Autonomous Revenue Engine)** find new prospects, write to them, and work replies. This is the one that spends real sending reputation — leave it until the rest works.
 5. **Meeting Autopilot** proposes meetings with times and a drafted invite for prospects who look ready. In Approve you edit and approve each one before it sends; in Autonomous each new invite sends on its own.

@@ -24,6 +24,7 @@ import { isActiveMember } from "../_core/activeMembers";
 import { getDb } from "../db";
 import { activities, bookingLinks, calendarEvents, leads, meetings, notifications, users, type BookingLink } from "../../drizzle/schema";
 import { sendMeetingInvite } from "../services/meetingScheduler";
+import { describeConfirmationFailure, sendBookingConfirmationEmail, type BookingConfirmationResult } from "../services/bookingConfirmationEmail";
 import { hostedPageChatSlug } from "../services/hostedChat";
 import {
   DEFAULT_HORIZON_DAYS, DEFAULT_WORK_DAYS, formatInZone, generateSlots, isValidTimezone,
@@ -249,6 +250,33 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
       .where(and(eq(meetings.workspaceId, link.workspaceId), eq(meetings.id, meetingId), eq(meetings.status, "proposed")));
   }
 
+  // No calendar invite went: the booker is emailed a confirmation instead
+  // (tracker item 10, 2026-11-06). Before this they got nothing — the only
+  // message a booker ever received was the provider's invite. Not held by
+  // the outbound pause: booking is the prospect's own action (see
+  // services/bookingConfirmationEmail).
+  const whenLabel = formatInZone(start, link.timezone ?? "UTC");
+  let confirmation: BookingConfirmationResult | null = null;
+  if (!result.sent) {
+    // A failed name lookup must not sink a booking that has already happened.
+    const [host] = await db.select({ name: users.name }).from(users).where(eq(users.id, link.userId)).catch(() => []);
+    confirmation = await sendBookingConfirmationEmail({
+      workspaceId: link.workspaceId,
+      meetingId,
+      title: link.title,
+      startAt: start,
+      durationMin: link.durationMin,
+      timezone: link.timezone ?? "UTC",
+      hostName: host?.name || "your host",
+      ownerUserId: link.userId,
+      contactEmail: opts.email,
+      contactName: opts.name,
+      relatedType: leadId ? "lead" : null,
+      relatedId: leadId,
+    });
+  }
+  const confirmationSent = confirmation?.ok === true;
+
   // Atomic in SQL. `link.bookingCount + 1` computed in JS is a lost update: the
   // count comes from a row read before the booking, and two prospects booking
   // the same rep concurrently both read N and both write N+1, recording two
@@ -263,14 +291,18 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
   // `start.toISOString()` + " UTC" — honest, but it made a rep in New York read
   // 13:00 for a 9am meeting they had just been booked into, on the notification
   // whose whole job is telling them when to show up.
-  const whenLabel = formatInZone(start, link.timezone ?? "UTC");
+  //
+  // It names the REAL reason no invite went. Every failure used to read "No
+  // calendar connected", which sent a rep whose calendar refused the event, or
+  // whose booker already had a meeting, looking for a setting that was fine.
+  const outcome = bookingOutcomeLine(result, opts.email, confirmation);
   try {
     await db.insert(notifications).values({
       workspaceId: link.workspaceId,
       userId: link.userId,
       kind: "system",
       title: `New meeting booked: ${opts.name}`,
-      body: `${opts.name} booked "${link.title}" for ${whenLabel}.${result.sent ? "" : " No calendar connected — add it to their calendar."}${opts.notificationSuffix ? ` ${opts.notificationSuffix}` : ""}`,
+      body: `${opts.name} booked "${link.title}" for ${whenLabel}. ${outcome}${opts.notificationSuffix ? ` ${opts.notificationSuffix}` : ""}`,
     } as never);
   } catch (e) {
     console.error("[bookingLinks] rep notification failed:", (e as Error).message);
@@ -283,7 +315,7 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
         relatedType: "lead",
         relatedId: leadId,
         subject: `Meeting booked via link: ${opts.name}`.slice(0, 240),
-        body: `${opts.name} <${opts.email}> booked "${link.title}" for ${whenLabel}. ${result.sent ? "Calendar invite sent." : "No calendar connected — confirm manually."}`,
+        body: `${opts.name} <${opts.email}> booked "${link.title}" for ${whenLabel}. ${outcome}`,
         actorUserId: null,
       } as never);
     } catch (e) {
@@ -291,7 +323,33 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
     }
   }
 
-  return { meetingId, leadId, calendarBooked: result.sent, scheduledAt: start.toISOString() };
+  return { meetingId, leadId, calendarBooked: result.sent, confirmationSent, scheduledAt: start.toISOString() };
+}
+
+/**
+ * What the rep is told about delivery: the invite, or why there was none and
+ * whether the booker was emailed instead. Exported for the tests.
+ */
+export function bookingOutcomeLine(
+  result: { sent: boolean; reason?: string },
+  email: string,
+  confirmation: BookingConfirmationResult | null,
+): string {
+  if (result.sent) return "Calendar invite sent.";
+  const why =
+    result.reason === "no_calendar_connected" ? "No calendar invite went: no calendar is connected — add it to your calendar."
+    : result.reason === "provider_error" ? "No calendar invite went: your calendar refused the event — add it by hand."
+    // A second invite to the same address is held back on purpose
+    // (sendMeetingInvite, 2026-09-24); the booking stands because the booker
+    // chose this time, so the rep is told to look for the duplicate.
+    : result.reason === "already_invited" ? "No calendar invite went: they already have an upcoming meeting with you — check whether this one is a duplicate."
+    : `No calendar invite went (${result.reason ?? "unknown"}).`;
+  const told = !confirmation
+    ? ""
+    : confirmation.ok
+      ? ` A confirmation email went to ${email}.`
+      : ` No confirmation email went either (${describeConfirmationFailure(confirmation)}) — contact them.`;
+  return `${why}${told}`;
 }
 
 export const bookingLinksRouter = router({
@@ -434,6 +492,8 @@ export const bookingLinksRouter = router({
         ok: true as const,
         scheduledAt: booked.scheduledAt,
         calendarBooked: booked.calendarBooked,
+        /** No invite went, and the booker was emailed a confirmation instead. */
+        confirmationSent: booked.confirmationSent,
         ownerName: undefined as string | undefined,
       };
     }),
