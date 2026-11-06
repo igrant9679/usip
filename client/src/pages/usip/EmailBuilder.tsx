@@ -1187,6 +1187,33 @@ function Builder({ templateId }: { templateId: number }) {
     return () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); };
   }, [saveState, blocks, subject]);
 
+  /**
+   * Edits made in the 30 s before leaving were lost: the autosave's cleanup
+   * only cleared its timer (audit 2026-10-20, O46). Leaving the builder inside
+   * the app now saves what is unsaved, and closing or reloading the tab while
+   * something is unsaved asks first. The latest values live in a ref because
+   * the cleanup runs after the last render.
+   */
+  const latestDraft = useRef({ saveState, templateName, subject, blocks });
+  latestDraft.current = { saveState, templateName, subject, blocks };
+  useEffect(() => () => {
+    const d = latestDraft.current;
+    if (d.saveState !== "unsaved") return;
+    // The vanilla client: the component is gone, so no hook may run this.
+    utils.client.emailTemplates.save
+      .mutate({ id: templateId, name: d.templateName, subject: d.subject, designData: d.blocks })
+      .catch(() => toast.error("Your last edits to the template could not be saved"));
+  }, [templateId]);
+  useEffect(() => {
+    const warn = (e: BeforeUnloadEvent) => {
+      if (latestDraft.current.saveState !== "unsaved") return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, []);
+
   // Clean up the transient "Saved" flash timer on unmount.
   useEffect(() => () => {
     if (justSavedTimer.current) clearTimeout(justSavedTimer.current);
@@ -1553,9 +1580,14 @@ function Builder({ templateId }: { templateId: number }) {
           )}
           {!isReadOnly && (
             <>
-              <Button size="sm" variant="outline" className="h-7 px-2 text-xs text-destructive hover:text-destructive" onClick={() => archiveMutation.mutate({ id: templateId })}>
+              {/* Asked first (O46): one click archived it. */}
+              <ConfirmButton size="sm" variant="outline" className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                title={`Archive "${templateName}"?`}
+                description="An archived template is read-only and is no longer offered in the sequence editor's template picker. It stays under the archived filter."
+                confirmLabel="Archive" disabled={archiveMutation.isPending}
+                onConfirm={() => archiveMutation.mutate({ id: templateId })}>
                 Archive
-              </Button>
+              </ConfirmButton>
               <Button
                 size="sm"
                 className="h-7 px-3 text-xs min-w-[72px]"
