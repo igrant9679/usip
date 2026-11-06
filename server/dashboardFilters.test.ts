@@ -140,11 +140,14 @@ describe("a deal widget", () => {
     expect((await resolve(pipeline(), { source: "webform", ownerUserId: BEN })).value).toBe(0);
   });
   it("a comparison honours Source and Owner", async () => {
+    // 2026-11-06 (audit G55): the comparison counts a win by when it was won,
+    // as the Dashboard does, not by its expected close date, so the fixture
+    // sets wonAt. What this pins, Source and Owner, is unchanged.
     const now = new Date();
     rows("opportunities").find((d) => d.id === 1).stage = "won";
-    rows("opportunities").find((d) => d.id === 1).closeDate = now;
+    rows("opportunities").find((d) => d.id === 1).wonAt = now;
     rows("opportunities").find((d) => d.id === 2).stage = "won";
-    rows("opportunities").find((d) => d.id === 2).closeDate = now;
+    rows("opportunities").find((d) => d.id === 2).wonAt = now;
     const id = widget(12, "comparison");
     expect((await resolve(id)).current).toBe(11);
     expect((await resolve(id, { source: "event" })).current).toBe(10);

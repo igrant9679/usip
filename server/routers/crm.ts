@@ -60,7 +60,7 @@ import {
 import { normalizeCalendarDate } from "@shared/calendarDate";
 import {
   addMonths, closedIn, closeMonthKey, currentRanges, dollars, inRange, instantMonthKey, loadMetricDeals,
-  monthKey, openTotals, zonedYmd, type Range,
+  monthKey, monthToDateRanges, openTotals, zonedYmd, type Range,
 } from "../services/dealMetrics";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { describeWriteError, isDuplicateKeyError } from "../services/dbWriteError";
@@ -2371,7 +2371,9 @@ export const opportunitiesRouter = router({
       const { y, m } = zonedYmd(tz, new Date());
       for (let i = input.months - 1; i >= 0; i--) {
         const b = addMonths(y, m, -i);
-        const label = new Date(Date.UTC(b.y, b.m - 1, 15)).toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+        const month = new Date(Date.UTC(b.y, b.m - 1, 15)).toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+        // Past twelve months a name comes round twice, so the year tells them apart (G25).
+        const label = input.months > 12 ? `${month} '${String(b.y).slice(2)}` : month;
         buckets[monthKey(b.y, b.m)] = { label, revenue: 0, forecast: 0 };
       }
 
@@ -2391,16 +2393,24 @@ export const opportunitiesRouter = router({
       return Object.values(buckets).map((b) => ({ ...b, revenue: dollars(b.revenue), forecast: dollars(b.forecast) }));
     }),
 
-  /** Live stat-card deltas: current vs previous month for pipeline, closed-won, leads, customers. */
+  /**
+   * Live stat-card deltas. A stock (pipeline, customers) is compared with where
+   * it stood when this month began; a flow (wins, new leads) with the same days
+   * of last month, not the whole of it (audit 2026-10-20, G53). Growth from
+   * nothing is null, not +100%. Leads, customers and proposals are counted in
+   * SQL rather than read row by row (G58).
+   */
   dashboardStats: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const wid = ctx.workspace.id;
     const tz = await getWorkspaceTimezone(wid);
     const r = currentRanges(tz);
+    const span = monthToDateRanges(tz);
     const deals = await loadMetricDeals(db, wid);
-    const allLeads = await db.select({ id: leads.id, createdAt: leads.createdAt }).from(leads).where(eq(leads.workspaceId, wid));
-    const allCustomers = await db.select({ id: customers.id, createdAt: customers.createdAt }).from(customers).where(eq(customers.workspaceId, wid));
+    const countOf = async (table: typeof leads | typeof customers | typeof proposals, where: ReturnType<typeof and>) =>
+      Number((await db.select({ n: sql<number>`count(*)` }).from(table).where(where))[0]?.n ?? 0);
+    const createdIn = (range: Range) => and(sql`${leads.createdAt} >= ${range.start}`, lt(leads.createdAt, range.end));
     const open = openTotals(deals);
     // The pipeline as it stood when this month began: deals that existed then
     // and were still open — open now, or closed since. The old figure summed
@@ -2414,50 +2424,43 @@ export const opportunitiesRouter = router({
     const pipelinePrev = dollars(pipelinePrevCents);
     // Won by WHEN it was won (R16/R17): updatedAt moved any edited old win
     // into this month.
-    const closedWonNow = closedIn(deals, "won", r.month).count;
-    const closedWonPrev = closedIn(deals, "won", r.prevMonth).count;
-    const leadsNow = allLeads.filter((l) => inRange(l.createdAt, r.month)).length;
-    const leadsPrev = allLeads.filter((l) => inRange(l.createdAt, r.prevMonth)).length;
-    const custNow = allCustomers.length;
-    const custPrev = allCustomers.filter((c) => c.createdAt != null && c.createdAt < r.month.start).length;
-    const delta = (a: number, b: number) => b === 0 ? (a > 0 ? 100 : 0) : Math.round(((a - b) / b) * 100);
+    const closedWonNow = closedIn(deals, "won", span.current).count;
+    const closedWonPrev = closedIn(deals, "won", span.previous).count;
+    // Active means still being worked: "Active Leads" counted every lead ever
+    // made, the unqualified and the converted too (G53).
+    const activeLeads = await countOf(leads, and(eq(leads.workspaceId, wid), ne(leads.status, "unqualified"), ne(leads.status, "converted")));
+    const leadsNow = await countOf(leads, and(eq(leads.workspaceId, wid), createdIn(span.current)));
+    const leadsPrev = await countOf(leads, and(eq(leads.workspaceId, wid), createdIn(span.previous)));
+    const custNow = await countOf(customers, eq(customers.workspaceId, wid));
+    const custPrev = await countOf(customers, and(eq(customers.workspaceId, wid), isNotNull(customers.createdAt), lt(customers.createdAt, r.month.start)));
+    const delta = (a: number, b: number) => b === 0 ? (a > 0 ? null : 0) : Math.round(((a - b) / b) * 100);
     // Proposal health counts
     const STALE_MS = 48 * 60 * 60 * 1000;
     const EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000;
     const nowTs = Date.now();
-    const allProposals = await db
-      .select({
-        id: proposals.id,
-        status: proposals.status,
-        sentAt: proposals.sentAt,
-        emailOpenedAt: proposals.emailOpenedAt,
-        expiresAt: proposals.expiresAt,
-      })
-      .from(proposals)
-      .where(eq(proposals.workspaceId, wid));
-    const staleProposals = allProposals.filter(
-      (p) =>
-        p.status === "sent" &&
-        p.emailOpenedAt === null &&
-        p.sentAt !== null &&
-        nowTs - new Date(p.sentAt).getTime() > STALE_MS,
-    ).length;
-    const expiringProposals = allProposals.filter(
-      (p) =>
-        p.expiresAt !== null &&
-        new Date(p.expiresAt).getTime() >= nowTs &&
-        new Date(p.expiresAt).getTime() - nowTs <= EXPIRING_SOON_MS &&
-        p.status !== "accepted" &&
-        p.status !== "not_accepted",
-    ).length;
+    const staleProposals = await countOf(proposals, and(
+      eq(proposals.workspaceId, wid),
+      eq(proposals.status, "sent"),
+      isNull(proposals.emailOpenedAt),
+      isNotNull(proposals.sentAt),
+      lt(proposals.sentAt, new Date(nowTs - STALE_MS)),
+    ));
+    const expiringProposals = await countOf(proposals, and(
+      eq(proposals.workspaceId, wid),
+      sql`${proposals.expiresAt} >= ${new Date(nowTs)}`,
+      lte(proposals.expiresAt, new Date(nowTs + EXPIRING_SOON_MS)),
+      ne(proposals.status, "accepted"),
+      ne(proposals.status, "not_accepted"),
+    ));
     return {
       pipelineValue: open.value,
       pipelineDelta: delta(open.value, pipelinePrev),
       weightedPipeline: open.weighted,
-      closedWonCount: closedWonNow,
+      closedWonCount: closedIn(deals, "won", r.month).count,
       closedWonValue: closedIn(deals, "won", r.month).value,
       closedWonDelta: delta(closedWonNow, closedWonPrev),
-      activeLeads: allLeads.length,
+      activeLeads,
+      leadsThisMonth: leadsNow,
       leadsDelta: delta(leadsNow, leadsPrev),
       customerCount: custNow,
       customerDelta: delta(custNow, custPrev),
@@ -2575,7 +2578,11 @@ export const opportunitiesRouter = router({
       .map((s) => ({ stage: labelByKey.get(s) ?? s, count: map[s].count, value: dollars(map[s].value) }));
   }),
 
-  /** Top 5 reps by closed-won value (won this month, fallback to all-time). */
+  /**
+   * Top 5 reps by value won this month. With no win yet this month it fell back
+   * to all time under the same heading, so a quiet month showed old wins as
+   * this month's leaders (audit 2026-10-20, G69).
+   */
   topReps: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
@@ -2587,7 +2594,7 @@ export const opportunitiesRouter = router({
       for (const o of src) { const uid = o.ownerUserId ?? 0; if (!m[uid]) m[uid] = { value: 0, count: 0 }; m[uid].value += o.valueCents; m[uid].count++; }
       return m;
     };
-    const source = Object.keys(buildMap(thisMonth)).length > 0 ? buildMap(thisMonth) : buildMap(won);
+    const source = buildMap(thisMonth);
     const memberRows = await db.select({ userId: workspaceMembers.userId, name: users.name }).from(workspaceMembers).leftJoin(users, eq(users.id, workspaceMembers.userId)).where(eq(workspaceMembers.workspaceId, ctx.workspace.id));
     const nameMap = Object.fromEntries(memberRows.map((m) => [m.userId, m.name ?? "Rep"]));
     return Object.entries(source).map(([uid, v]) => ({ userId: Number(uid), name: nameMap[Number(uid)] ?? "Rep", value: dollars(v.value), count: v.count })).sort((a, b) => b.value - a.value).slice(0, 5);
@@ -2603,6 +2610,45 @@ export const opportunitiesRouter = router({
     const lost = closedIn(deals, "lost", last90);
     return { won: won.count, lost: lost.count, wonValue: won.value, lostValue: lost.value };
   }),
+
+  /**
+   * The newest deals, for the two home pages (audit 2026-10-20, G53/G56/G58).
+   * The Dashboard took six from the whole board in no order, and Home read
+   * every column of every deal and called one open by the default pipeline's
+   * stages. Open means what it means in every deal number: the deal's own
+   * pipeline's flags, as loadMetricDeals reads them.
+   */
+  recent: workspaceProcedure
+    .input(z.object({ openOnly: z.boolean().optional(), limit: z.number().int().min(1).max(20).optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const ws = ctx.workspace.id;
+      const limit = input?.limit ?? 6;
+      const cols = {
+        id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value,
+        accountId: opportunities.accountId, createdAt: opportunities.createdAt,
+      };
+      let rows: Array<{ id: number; name: string; stage: string; value: string | null; accountId: number; createdAt: Date }>;
+      if (input?.openOnly) {
+        const ids = (await loadMetricDeals(db, ws))
+          .filter((d) => d.status === "open")
+          .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0) || b.id - a.id)
+          .slice(0, limit)
+          .map((d) => d.id);
+        rows = ids.length === 0 ? [] : (await db.select(cols).from(opportunities)
+          .where(and(eq(opportunities.workspaceId, ws), inArray(opportunities.id, ids))))
+          .sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+      } else {
+        rows = await db.select(cols).from(opportunities).where(eq(opportunities.workspaceId, ws))
+          .orderBy(desc(opportunities.createdAt), desc(opportunities.id)).limit(limit);
+      }
+      const accountIds = Array.from(new Set(rows.map((r) => r.accountId)));
+      const names = accountIds.length === 0 ? [] : await db.select({ id: accounts.id, name: accounts.name }).from(accounts)
+        .where(and(eq(accounts.workspaceId, ws), inArray(accounts.id, accountIds)));
+      const nameOf = new Map(names.map((a) => [a.id, a.name]));
+      return rows.map((r) => ({ ...r, value: Number(r.value ?? 0), accountName: nameOf.get(r.accountId) ?? "?" }));
+    }),
 });
 
 /* ──────────────────────────────────────────────────────────────────────── */

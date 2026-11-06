@@ -53,6 +53,8 @@ const EMPTY = {
   routingSuggestions: { count: 0, byCampaign: [] as { campaignId: number; name: string; count: number }[] },
   /** Proposed NEW campaigns awaiting create/dismiss (2026-09-04). */
   campaignProposals: { count: 0 },
+  /** Every draft awaiting review, whatever made it: the three draft cards together, and the newest five. */
+  awaitingDrafts: { count: 0, items: [] as { id: number; subject: string | null; toEmail: string | null }[] },
   digest24h: { emailsSent: 0, prospectsDiscovered: 0, repliesReceived: 0, meetingsBooked: 0 },
 };
 
@@ -209,6 +211,13 @@ export const attentionRouter = router({
         isNull(emailDrafts.sequenceId),
       ));
     const crmDrafts = { count: Number(crmDraftAgg?.n ?? 0) };
+    // The Dashboard's "Drafts awaiting review" reads this, so the two home pages
+    // give one number (audit 2026-10-20, G56). It read every pending draft, body
+    // and all, to count them (G58), and left ai_pending_review out.
+    const awaitingItems = await db.select({ id: emailDrafts.id, subject: emailDrafts.subject, toEmail: emailDrafts.toEmail })
+      .from(emailDrafts)
+      .where(and(eq(emailDrafts.workspaceId, ws), inArray(emailDrafts.status, ["pending_review", "ai_pending_review"])))
+      .orderBy(desc(emailDrafts.id)).limit(5);
 
     const aiDrafts = { count: Number(draftAgg?.n ?? 0), items: draftItems };
     const proposedMeetings = { count: Number(meetAgg?.n ?? 0), items: meetItems };
@@ -253,6 +262,7 @@ export const attentionRouter = router({
       chatFollowUps,
       routingSuggestions,
       campaignProposals,
+      awaitingDrafts: { count: aiDrafts.count + crmDrafts.count + sequenceDrafts.count, items: awaitingItems },
       digest24h: {
         emailsSent: Number(digestSent?.n ?? 0),
         prospectsDiscovered: Number(digestDiscovered?.n ?? 0),

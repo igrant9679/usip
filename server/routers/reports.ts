@@ -227,7 +227,22 @@ function filterToSql(def: ObjectDef, f: z.infer<typeof filterSchema>, idx: Stage
   }
 }
 
-export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ columns: { key: string; label: string; kind: ColKind }[]; rows: Record<string, unknown>[]; grouped: boolean }> {
+/**
+ * The number field a Sum or Average reads. The builder showed the first one as
+ * picked and sent none, and with none this counted rows under a "Sum of" label
+ * (audit 2026-10-20, G54). So none means that first one, as the builder showed,
+ * and a field that isn't a number, or an object with no number field, is refused.
+ */
+function aggregateColumn(def: ObjectDef, spec: ReportSpec): ColDef | null {
+  if (spec.aggregate !== "sum_value" && spec.aggregate !== "avg_value") return null;
+  const key = spec.aggregateField ?? Object.keys(def.columns).find((k) => def.columns[k].kind === "number");
+  if (!key) throw new TRPCError({ code: "BAD_REQUEST", message: `${spec.object} has no number field to ${spec.aggregate === "sum_value" ? "sum" : "average"}. Count rows instead.` });
+  const c = colOrThrow(def, key);
+  if (c.kind !== "number") throw new TRPCError({ code: "BAD_REQUEST", message: `"${c.label}" isn't a number, so it can't be summed or averaged.` });
+  return c;
+}
+
+export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ columns: { key: string; label: string; kind: ColKind }[]; rows: Record<string, unknown>[]; grouped: boolean; truncated: boolean }> {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
   const def = OBJECTS[spec.object];
@@ -241,26 +256,32 @@ export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ 
   /* grouped mode: one row per group value + aggregate */
   if (spec.groupBy) {
     const g = colOrThrow(def, spec.groupBy);
-    const aggField = spec.aggregateField ? colOrThrow(def, spec.aggregateField) : null;
+    // A date is an instant, so each row was its own group (G54).
+    if (g.kind === "date") throw new TRPCError({ code: "BAD_REQUEST", message: `"${g.label}" is a date, and grouping on it makes a group per row. Filter on it instead.` });
+    const aggField = aggregateColumn(def, spec);
     const aggExpr =
       spec.aggregate === "sum_value" && aggField ? sum(aggField.col)
       : spec.aggregate === "avg_value" && aggField ? avg(aggField.col)
       : count();
-    const rows = await db
+    // One past the cap, so a cut list can say it was cut (G54).
+    const fetched = await db
       .select({ group: g.col, agg: aggExpr, n: count() })
       .from(def.table)
       .where(where)
       .groupBy(g.col)
       .orderBy(desc(count()))
-      .limit(spec.limit);
+      .limit(spec.limit + 1);
+    const truncated = fetched.length > spec.limit;
+    const rows = fetched.slice(0, spec.limit);
     const aggLabel =
-      spec.aggregate === "sum_value" && spec.aggregateField ? `Sum of ${colOrThrow(def, spec.aggregateField).label}`
-      : spec.aggregate === "avg_value" && spec.aggregateField ? `Avg ${colOrThrow(def, spec.aggregateField).label}`
+      spec.aggregate === "sum_value" && aggField ? `Sum of ${aggField.label}`
+      : spec.aggregate === "avg_value" && aggField ? `Avg ${aggField.label}`
       : "Count";
-    let out = rows.map((r) => ({ group: r.group ?? "(empty)", agg: spec.aggregate && spec.aggregate !== "count" ? Number(r.agg ?? 0) : Number(r.n), n: Number(r.n) }));
+    let out = rows.map((r) => ({ group: r.group ?? "(empty)", agg: aggField ? Number(r.agg ?? 0) : Number(r.n), n: Number(r.n) }));
     if (g.kind === "user") out = await resolveUserNames(out, "group");
     return {
       grouped: true,
+      truncated,
       columns: [
         { key: "group", label: g.label, kind: g.kind === "user" ? "text" : g.kind },
         { key: "agg", label: aggLabel, kind: "number" },
@@ -274,8 +295,10 @@ export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ 
   const sel: Record<string, MySqlColumn> = {};
   for (const key of spec.columns) sel[key] = colOrThrow(def, key).col;
   const sortCol = spec.sort ? colOrThrow(def, spec.sort.field).col : null;
-  const base = db.select(sel).from(def.table).where(where).limit(spec.limit);
-  const rows = (sortCol ? await base.orderBy(spec.sort!.dir === "asc" ? asc(sortCol) : desc(sortCol)) : await base) as Record<string, unknown>[];
+  const base = db.select(sel).from(def.table).where(where).limit(spec.limit + 1);
+  const fetched = (sortCol ? await base.orderBy(spec.sort!.dir === "asc" ? asc(sortCol) : desc(sortCol)) : await base) as Record<string, unknown>[];
+  const truncated = fetched.length > spec.limit;
+  const rows = fetched.slice(0, spec.limit);
 
   // resolve user-id columns to names
   let out = rows;
@@ -284,6 +307,7 @@ export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ 
   }
   return {
     grouped: false,
+    truncated,
     columns: spec.columns.map((key) => ({ key, label: def.columns[key].label, kind: def.columns[key].kind === "user" ? "text" : def.columns[key].kind })),
     rows: out,
   };

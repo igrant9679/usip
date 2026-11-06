@@ -224,7 +224,26 @@ export function currentRanges(tz: string, now: Date = new Date()) {
   };
 }
 
+/**
+ * This month so far, and the same stretch of last month. A flow (wins, new
+ * leads) compared a few days of this month with the whole of the last, so every
+ * month began with a collapse (audit 2026-10-20, G53/G55). The stretch is the
+ * same time since each month began, cut at last month's end when that month is
+ * shorter. Measured in elapsed time, so across a DST change it is an hour out.
+ */
+export function monthToDateRanges(tz: string, now: Date = new Date()): { current: Range; previous: Range } {
+  const r = currentRanges(tz, now);
+  const elapsed = now.getTime() - r.month.start.getTime();
+  return {
+    current: { start: r.month.start, end: new Date(now.getTime() + 1) },
+    previous: { start: r.prevMonth.start, end: new Date(Math.min(r.prevMonth.start.getTime() + elapsed + 1, r.prevMonth.end.getTime())) },
+  };
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "Jan"…"Dec" for a month 1–12, in no machine's locale. */
+export const monthLabel = (m: number) => MONTHS[m - 1];
 
 /**
  * The range a quota target measures (R17). The period names a month
