@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { TASK_STATUSES } from "@shared/taskStatus";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lte } from "drizzle-orm";
+import { seesAllTasks, taskDueState } from "@shared/taskRules";
 import { z } from "zod";
 import { activities, attachments, notifications, tasks, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
@@ -31,6 +32,24 @@ const TASK_PATCH = z.object({
 
 /* ─── Tasks ──────────────────────────────────────────────────────────── */
 
+/**
+ * A snoozed task comes back when its snooze ends (audit 2026-10-20, R72).
+ * Snooze set status "snoozed" and nothing ever set it back, so a task snoozed
+ * "until tomorrow" stayed out of every Today and Overdue list for good. Run
+ * where tasks are read, rather than by a new timer: it only matches tasks
+ * whose snooze has run out.
+ */
+async function wakeSnoozedTasks(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number) {
+  await db.update(tasks)
+    .set({ status: "open", snoozedUntil: null } as never)
+    .where(and(eq(tasks.workspaceId, workspaceId), eq(tasks.status, "snoozed"), lte(tasks.snoozedUntil, new Date())));
+}
+
+/** `mine`: the task pages' scope (R72) — a rep's own tasks, a manager's everyone's. */
+function taskScopeOwner(ctx: { user: { id: number }; member: { role: string } }, mine: boolean | undefined): number | null {
+  return mine && !seesAllTasks(ctx.member.role) ? ctx.user.id : null;
+}
+
 export const tasksRouter = router({
   list: workspaceProcedure
     .input(z.object({
@@ -44,12 +63,17 @@ export const tasksRouter = router({
       // don't leak into other surfaces (e.g. the Calls queue). The Tasks page
       // opts in with includeDrafts:true and reviews them separately.
       includeDrafts: z.boolean().optional(),
+      /** The task pages' scope (R72): a rep's own tasks, a manager's everyone's. */
+      mine: z.boolean().optional(),
     }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
+      await wakeSnoozedTasks(db, ctx.workspace.id);
       let rows = await db.select().from(tasks).where(eq(tasks.workspaceId, ctx.workspace.id)).orderBy(tasks.dueAt);
       if (input?.ownerOnly) rows = rows.filter((t) => t.ownerUserId === ctx.user.id);
+      const scopeOwner = taskScopeOwner(ctx, input?.mine);
+      if (scopeOwner !== null) rows = rows.filter((t) => t.ownerUserId === scopeOwner);
       if (input?.status) rows = rows.filter((t) => t.status === input.status);
       else if (!input?.includeDrafts) rows = rows.filter((t) => t.status !== "draft");
       if (input?.type) rows = rows.filter((t) => t.type === input.type);
@@ -309,17 +333,22 @@ export const tasksRouter = router({
     }),
 
   /** Queue stats for the Tasks page header. */
-  stats: workspaceProcedure.query(async ({ ctx }) => {
+  stats: workspaceProcedure.input(z.object({ mine: z.boolean().optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return { open: 0, dueToday: 0, overdue: 0, completed: 0, draftsPending: 0, snoozed: 0, aiOpen: 0 };
-    const rows = await db.select({ status: tasks.status, dueAt: tasks.dueAt, source: tasks.source }).from(tasks).where(eq(tasks.workspaceId, ctx.workspace.id));
+    await wakeSnoozedTasks(db, ctx.workspace.id);
+    let rows = await db.select({ status: tasks.status, dueAt: tasks.dueAt, source: tasks.source, ownerUserId: tasks.ownerUserId }).from(tasks).where(eq(tasks.workspaceId, ctx.workspace.id));
+    // The same scope as the list under these cards (R72), so they count it.
+    const scopeOwner = taskScopeOwner(ctx, input?.mine);
+    if (scopeOwner !== null) rows = rows.filter((r) => r.ownerUserId === scopeOwner);
     const now = Date.now();
     // "Today" as the WORKSPACE reads it. This was `setHours(23,59,59,999)` on a
     // bare Date — the container's day, i.e. UTC — so a task due at 8pm Eastern
     // fell into tomorrow and the Tasks header undercounted "due today" every
     // evening. workspace_settings.timezone is the setting Settings promises
-    // governs "activity timestamps"; see services/workspaceTimezone.ts.
-    const endOfToday = new Date(endOfZonedDay(await getWorkspaceTimezone(ctx.workspace.id), now));
+    // governs "activity timestamps"; see services/workspaceTimezone.ts. The
+    // rule itself is @shared/taskRules, which both task pages read too (R72).
+    const tz = await getWorkspaceTimezone(ctx.workspace.id);
     const s = { open: 0, dueToday: 0, overdue: 0, completed: 0, draftsPending: 0, snoozed: 0, aiOpen: 0 };
     for (const r of rows) {
       if (r.status === "done") s.completed++;
@@ -328,11 +357,9 @@ export const tasksRouter = router({
       else if (r.status === "open" || r.status === "in_progress") {
         s.open++;
         if (r.source === "ai") s.aiOpen++;
-        const t = r.dueAt ? new Date(r.dueAt).getTime() : null;
-        if (t !== null) {
-          if (t < now) s.overdue++;
-          else if (t <= endOfToday.getTime()) s.dueToday++;
-        }
+        const due = taskDueState(r.dueAt, now, tz);
+        if (due === "overdue") s.overdue++;
+        else if (due === "today") s.dueToday++;
       }
     }
     return s;
