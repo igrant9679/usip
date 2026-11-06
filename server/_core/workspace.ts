@@ -4,13 +4,13 @@
  * `ctx.workspace` and `ctx.member.role` are guaranteed.
  */
 import { TRPCError } from "@trpc/server";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, count, eq, isNull } from "drizzle-orm";
 import { workspaceMembers, workspaces, type WorkspaceMember, type Workspace } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { protectedProcedure } from "./trpc";
 import { mergeRequestContext } from "./requestContext";
 import { mfaGateExemptPath, securityPolicyFor } from "./securityPolicy";
-import { MFA_REQUIRED_ERR_MSG } from "@shared/const";
+import { MFA_REQUIRED_ERR_MSG, WORKSPACE_UNAVAILABLE_ERR_MSG } from "@shared/const";
 import { isAdminRole, rankOf, ROLE_RANK } from "@shared/roleRank";
 
 export type WorkspaceCtxExtension = {
@@ -71,8 +71,16 @@ async function resolveWorkspace(userId: number, headerVal?: string) {
         ))
         .limit(1);
       if (rows[0]) return { workspace: rows[0].ws, member: rows[0].mb };
-      // Deliberately FALLS THROUGH rather than throwing: someone deactivated in
-      // this workspace may still be active in another, and should land there.
+      /**
+       * REFUSED, not answered from another workspace (audit 2026-10-20, G11).
+       * This used to fall through to the person's first workspace, so that
+       * someone deactivated here but active elsewhere would land there. But
+       * the tab that sent the header still SHOWS this workspace, and its next
+       * save, send or delete went to a different one. The client reloads its
+       * workspace list on this message and moves the tab somewhere the person
+       * still belongs, so they still land there, knowingly.
+       */
+      throw new TRPCError({ code: "FORBIDDEN", message: WORKSPACE_UNAVAILABLE_ERR_MSG });
     }
   }
 
@@ -94,18 +102,14 @@ async function resolveWorkspace(userId: number, headerVal?: string) {
      * two need different words, and a leaver hitting a bare NO_WORKSPACE would
      * read it as a bug and ask someone to fix it.
      */
-    const [everMember] = await db
-      .select({ id: workspaceMembers.id, inviteToken: workspaceMembers.inviteToken, deactivatedAt: workspaceMembers.deactivatedAt })
-      .from(workspaceMembers)
-      .where(eq(workspaceMembers.userId, userId))
-      .limit(1);
-    if (everMember && everMember.inviteToken && !everMember.deactivatedAt) {
+    const absence = await workspaceAbsenceReason(db, userId);
+    if (absence === "invite_pending") {
       throw new TRPCError({
         code: "FORBIDDEN",
         message: "Your invitation hasn't been accepted yet. Open the invitation link in your email to join the workspace.",
       });
     }
-    if (everMember) {
+    if (absence === "deactivated") {
       throw new TRPCError({
         code: "FORBIDDEN",
         message: "Your access to this workspace has been deactivated. Contact an administrator.",
@@ -117,6 +121,29 @@ async function resolveWorkspace(userId: number, headerVal?: string) {
     });
   }
   return { workspace: rows[0].ws, member: rows[0].mb };
+}
+
+export type WorkspaceAbsence = "invite_pending" | "deactivated" | "none";
+
+/**
+ * Why someone with no workspace to work in has none: an invitation they have
+ * not accepted, a membership that was deactivated, or nothing at all. One
+ * answer for the refusal above and for the client's access screen
+ * (workspace.access, audit 2026-10-20, G35), which used to be a shell that
+ * never finished loading.
+ */
+export async function workspaceAbsenceReason(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  userId: number,
+): Promise<WorkspaceAbsence> {
+  const [everMember] = await db
+    .select({ id: workspaceMembers.id, inviteToken: workspaceMembers.inviteToken, deactivatedAt: workspaceMembers.deactivatedAt })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.userId, userId))
+    .limit(1);
+  if (everMember && everMember.inviteToken && !everMember.deactivatedAt) return "invite_pending";
+  if (everMember) return "deactivated";
+  return "none";
 }
 
 /**
@@ -331,6 +358,63 @@ export function assertOwnerOrManager(
   if (ownerUserId != null && ownerUserId === ctx.user.id) return;
   if (rankOf(ctx.member.role) >= ROLE_RANK.manager) return;
   throw new TRPCError({ code: "FORBIDDEN", message });
+}
+
+/**
+ * The one rank rule for acting on another member (audit 2026-10-20, G46): a
+ * super_admin may act on anyone; everyone else only on someone below their own
+ * rank. Quota, title, permissions and reactivation had no check at all, so an
+ * admin could change a fellow admin's, or a super admin's. `allowSelf` is for
+ * a change a person may make to their own row.
+ */
+export function assertOutranks(
+  ctx: { user: { id: number }; member: { role: string } },
+  target: { userId: number; role: string },
+  message: string,
+  opts: { allowSelf?: boolean } = {},
+): void {
+  if (ctx.member.role === "super_admin") return;
+  if (opts.allowSelf && target.userId === ctx.user.id) return;
+  if (rankOf(target.role) >= rankOf(ctx.member.role)) {
+    throw new TRPCError({ code: "FORBIDDEN", message });
+  }
+}
+
+/**
+ * A super admin who can act: not deactivated, invitation accepted. Only these
+ * count toward "this workspace still has a super admin" (audit 2026-10-20,
+ * G13). The single changeRole, deactivate and delete counted deactivated rows,
+ * so the last super admin who could sign in could be removed while a
+ * deactivated one "remained".
+ */
+export function isActiveSuperAdmin(m: { role: string; deactivatedAt?: unknown; inviteToken?: unknown }): boolean {
+  return m.role === "super_admin" && !m.deactivatedAt && !m.inviteToken;
+}
+
+/**
+ * Whether taking these members out of the super_admin seat (by demotion,
+ * deactivation or deletion) would leave the workspace with no active super
+ * admin. A workspace with none can never be archived, restored, transferred or
+ * exported again, and nothing can put one back. Members who don't hold an
+ * active seat don't count either way.
+ */
+export async function leavesNoActiveSuperAdmin(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  leaving: Array<{ role: string; deactivatedAt?: unknown; inviteToken?: unknown }>,
+): Promise<boolean> {
+  const vacated = leaving.filter(isActiveSuperAdmin).length;
+  if (vacated === 0) return false;
+  const [{ superAdminCount }] = await db
+    .select({ superAdminCount: count() })
+    .from(workspaceMembers)
+    .where(and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      eq(workspaceMembers.role, "super_admin"),
+      isNull(workspaceMembers.deactivatedAt),
+      isNull(workspaceMembers.inviteToken),
+    ));
+  return Number(superAdminCount ?? 0) - vacated < 1;
 }
 
 export const repProcedure = roleAtLeast("rep");

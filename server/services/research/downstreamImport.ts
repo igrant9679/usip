@@ -20,10 +20,10 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { accounts, downstreamLinks, personaCategories, personas, researchExternalRefs, researchMarkets, researchSectors } from "../../../drizzle/schema";
-import { normalizedAccountFields, normalizeDomain } from "../company/normalize";
-import { matchAccount } from "./downstreamAccounts";
+import { normalizeCompanyName, normalizedAccountFields, normalizeDomain } from "../company/normalize";
+import { existingAccountMatches, matchAccount } from "./downstreamAccounts";
 import {
   insertMarket,
   insertSector,
@@ -72,12 +72,35 @@ export function normalizeSourceUrl(url: string): string {
 
 /* ── Drafts (preview tokens) ────────────────────────────────────────────── */
 
+// Held in this process's memory, so bounded (audit 2026-10-20, P108): one
+// preview per person per workspace (a new one replaces theirs), and at most
+// DRAFT_BYTES_MAX of files in all, the oldest going first. A preview lost to
+// a restart, or taken by another instance, says to choose the file again.
 const TTL_MS = 15 * 60 * 1000;
-type Draft = { workspaceId: number; userId: number; createdAt: number; file: DownstreamFile; fileHash: string; dropped: string[] };
+export const DRAFT_BYTES_MAX = 48 * 1024 * 1024;
+type Draft = { workspaceId: number; userId: number; createdAt: number; bytes: number; file: DownstreamFile; fileHash: string; dropped: string[] };
 const drafts = new Map<string, Draft>();
 
 function sweep(now = Date.now()) {
   for (const [k, d] of Array.from(drafts.entries())) if (now - d.createdAt > TTL_MS) drafts.delete(k);
+}
+
+function keepDraft(token: string, d: Draft) {
+  sweep();
+  for (const [k, o] of Array.from(drafts.entries())) if (o.workspaceId === d.workspaceId && o.userId === d.userId) drafts.delete(k);
+  // Map order is insertion order: the first entries are the oldest.
+  let total = Array.from(drafts.values()).reduce((n, o) => n + o.bytes, 0);
+  for (const [k, o] of Array.from(drafts.entries())) {
+    if (total + d.bytes <= DRAFT_BYTES_MAX) break;
+    drafts.delete(k);
+    total -= o.bytes;
+  }
+  drafts.set(token, d);
+}
+
+/** For tests: the previews held now. */
+export function __downstreamDraftCount(): number {
+  return drafts.size;
 }
 
 export function __clearDownstreamDrafts() {
@@ -149,6 +172,56 @@ async function stateOf(db: Db, workspaceId: number, kind: "market" | "sector" | 
   return personaHash(personaShape(row)) === ref.contentHash ? "updated" : "conflict";
 }
 
+/**
+ * An item's state and the Velocity record it is. With no ref, the record an
+ * earlier link imported is found by its Downstream ref (audit 2026-10-20,
+ * P24): Unlink deletes the refs, and linking again used to copy the market,
+ * sectors and personas a second time. A record found that way may have been
+ * edited since, and nothing says otherwise, so a market or sector is a
+ * conflict (kept unless the person takes Downstream's version); a persona is
+ * unchanged only when it is exactly what the import would write.
+ */
+type Resolved = { state: ItemState; id: number | null; relinked: boolean };
+
+async function resolveItem(
+  db: Db,
+  workspaceId: number,
+  kind: "market" | "sector" | "persona",
+  ref: Ref | undefined,
+  newHash: string,
+  sourceRef: string,
+  marketId: number | null,
+): Promise<Resolved> {
+  if (ref) return { state: await stateOf(db, workspaceId, kind, ref, newHash), id: ref.velocityId, relinked: false };
+  if (kind === "market") {
+    const [m] = await db
+      .select({ id: researchMarkets.id })
+      .from(researchMarkets)
+      .where(and(eq(researchMarkets.workspaceId, workspaceId), eq(researchMarkets.source, "downstream"), eq(researchMarkets.sourceRef, sourceRef)))
+      .orderBy(asc(researchMarkets.id))
+      .limit(1);
+    return m ? { state: "conflict", id: m.id, relinked: true } : { state: "new", id: null, relinked: false };
+  }
+  if (kind === "sector") {
+    if (marketId == null) return { state: "new", id: null, relinked: false };
+    const [s] = await db
+      .select({ id: researchSectors.id })
+      .from(researchSectors)
+      .where(and(eq(researchSectors.workspaceId, workspaceId), eq(researchSectors.marketId, marketId), eq(researchSectors.source, "downstream"), eq(researchSectors.sourceRef, sourceRef)))
+      .orderBy(asc(researchSectors.id))
+      .limit(1);
+    return s ? { state: "conflict", id: s.id, relinked: true } : { state: "new", id: null, relinked: false };
+  }
+  const [p] = await db
+    .select()
+    .from(personas)
+    .where(and(eq(personas.workspaceId, workspaceId), eq(personas.source, "downstream"), eq(personas.sourceRef, sourceRef)))
+    .orderBy(asc(personas.id))
+    .limit(1);
+  if (!p) return { state: "new", id: null, relinked: false };
+  return { state: personaHash(personaShape(p)) === newHash ? "unchanged" : "conflict", id: p.id, relinked: true };
+}
+
 /* ── Preview ────────────────────────────────────────────────────────────── */
 
 export type DownstreamPreview = {
@@ -159,7 +232,8 @@ export type DownstreamPreview = {
   intendedFor: string | null;
   intendedForMismatch: boolean;
   link: { state: "assigned" | "unassigned" | "moved"; id: number | null; status: string | null; useSellerMessaging: boolean; settings: DownstreamLinkSettings };
-  market: { state: ItemState };
+  /** The ref a "use Downstream's version" / "bring back" choice names for the market. */
+  market: { ref: string; name: string; state: ItemState; relinked: boolean };
   segments: {
     ref: string;
     name: string;
@@ -167,15 +241,22 @@ export type DownstreamPreview = {
     status: string;
     revision: number;
     state: ItemState;
+    relinked: boolean;
     ticked: boolean;
     titles: string[];
     exclude: string[];
-    personas: { ref: string; name: string; state: ItemState; suggested: boolean }[];
+    personas: { ref: string; name: string; state: ItemState; relinked: boolean; suggested: boolean }[];
     organizations: number;
+    /** Of those, rows matching an account this workspace has (P109). */
+    organizationsMatched: number;
+    /** At most this many accounts would be created (rows of one organization make one). */
+    organizationsNew: number;
   }[];
   knowledge: { glossary: number; competitors: number; funders: number };
   hasStats: boolean;
   organizationsTotal: number;
+  /** An earlier import from this link brought organizations in: the import offers them again by default. */
+  organizationsImportedBefore: boolean;
   droppedPersonal: number;
 };
 
@@ -183,9 +264,8 @@ export async function previewDownstream(db: Db, workspaceId: number, userId: num
   const parsed = parseDownstreamFile(text);
   if (!parsed.ok) throw new TRPCError({ code: "BAD_REQUEST", message: parsed.error });
   const file = parsed.file;
-  sweep();
   const token = randomUUID();
-  drafts.set(token, { workspaceId, userId, createdAt: Date.now(), file, fileHash: hash(text), dropped: parsed.dropped });
+  keepDraft(token, { workspaceId, userId, createdAt: Date.now(), bytes: text.length, file, fileHash: hash(text), dropped: parsed.dropped });
 
   const { link, moved } = await findLink(db, workspaceId, file);
   const settings = cleanLinkSettings(link?.settings);
@@ -196,6 +276,14 @@ export async function previewDownstream(db: Db, workspaceId: number, userId: num
 
   const unticked = file.segments.filter((s) => !ticked.has(s.ref));
   const marketHash = hash(knowledgeToMarket(file, unticked));
+  const market = await resolveItem(db, workspaceId, "market", refs.get(`market:${file.source.workspace.id}`), marketHash, file.source.workspace.id, null);
+  // A deleted market's sectors went with it; a found one holds them.
+  const marketId = market.state === "deleted" ? null : market.id;
+
+  // Which organizations are already accounts here, by the import's own matching rules.
+  const known = new Map(Array.from(refs.values()).filter((r) => r.kind === "account").map((r) => [r.ref, r.velocityId]));
+  const matched = await existingAccountMatches(db, workspaceId, file.organizations.map((o) => ({ ref: o.ref, website: o.website, name: o.name, state: o.state })), known);
+
   const segments: DownstreamPreview["segments"] = [];
   for (const seg of file.segments) {
     const content = segmentToSector(seg, settings, seller);
@@ -203,20 +291,27 @@ export async function previewDownstream(db: Db, workspaceId: number, userId: num
     const personasOut: DownstreamPreview["segments"][number]["personas"] = [];
     for (const p of segPersonas) {
       const mapped = personaFromDownstream(p, content.targeting, settings);
-      personasOut.push({ ref: p.ref, name: p.name, suggested: mapped.suggested, state: await stateOf(db, workspaceId, "persona", refs.get(`persona:${p.ref}`), personaHash(mapped)) });
+      const r = await resolveItem(db, workspaceId, "persona", refs.get(`persona:${p.ref}`), personaHash(mapped), p.ref, null);
+      personasOut.push({ ref: p.ref, name: p.name, suggested: mapped.suggested, state: r.state, relinked: r.relinked });
     }
+    const orgs = file.organizations.filter((o) => o.segmentRef === seg.ref);
+    const fresh = new Set(orgs.filter((o) => !matched.has(o.ref)).map((o) => normalizeDomain(o.website ?? "") || `${normalizeCompanyName(o.name)}|${(o.state ?? "").trim().toLowerCase()}`));
+    const sector = await resolveItem(db, workspaceId, "sector", refs.get(`sector:${seg.ref}`), hash(content), seg.ref, marketId);
     segments.push({
       ref: seg.ref,
       name: seg.name,
       shortName: seg.shortName,
       status: seg.research.status,
       revision: seg.revision,
-      state: await stateOf(db, workspaceId, "sector", refs.get(`sector:${seg.ref}`), hash(content)),
+      state: sector.state,
+      relinked: sector.relinked,
       ticked: ticked.has(seg.ref),
       titles: content.targeting.titles,
       exclude: content.targeting.exclude,
       personas: personasOut,
-      organizations: file.organizations.filter((o) => o.segmentRef === seg.ref).length,
+      organizations: orgs.length,
+      organizationsMatched: orgs.filter((o) => matched.has(o.ref)).length,
+      organizationsNew: fresh.size,
     });
   }
   const intendedFor = file.intendedFor?.trim() || null;
@@ -241,11 +336,12 @@ export async function previewDownstream(db: Db, workspaceId: number, userId: num
       useSellerMessaging: useSeller,
       settings,
     },
-    market: { state: await stateOf(db, workspaceId, "market", refs.get(`market:${file.source.workspace.id}`), marketHash) },
+    market: { ref: file.source.workspace.id, name: file.source.workspace.name, state: market.state, relinked: market.relinked },
     segments,
     knowledge: { glossary: file.knowledge?.glossary?.length ?? 0, competitors: file.knowledge?.competitors?.length ?? 0, funders: file.knowledge?.funders?.length ?? 0 },
     hasStats: !!file.marketStats,
     organizationsTotal: file.organizations.length,
+    organizationsImportedBefore: known.size > 0,
     droppedPersonal: parsed.dropped.length,
   };
 }
@@ -305,7 +401,7 @@ export async function commitDownstream(db: Db, workspaceId: number, userId: numb
   const draft = drafts.get(choices.token);
   // A token from another workspace or person is the same as no token.
   if (!draft || draft.workspaceId !== workspaceId || draft.userId !== userId) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "This preview has expired. Choose the file again." });
+    throw new TRPCError({ code: "NOT_FOUND", message: "This preview has expired or was replaced by a newer one. Choose the file again." });
   }
   const file = draft.file;
   const ws = file.source.workspace;
@@ -352,7 +448,8 @@ export async function commitDownstream(db: Db, workspaceId: number, userId: numb
   const extras = marketExtras(file, seller);
   const marketHash = hash(marketContent);
   const marketRef = refs.get(`market:${ws.id}`);
-  const marketState = await stateOf(db, workspaceId, "market", marketRef, marketHash);
+  const marketFound = await resolveItem(db, workspaceId, "market", marketRef, marketHash, ws.id, null);
+  const marketState = marketFound.state;
   let marketId: number;
   if (marketState === "new" || (marketState === "deleted" && take.has(ws.id))) {
     const taken = await db.select({ name: researchMarkets.name }).from(researchMarkets).where(eq(researchMarkets.workspaceId, workspaceId));
@@ -360,9 +457,9 @@ export async function commitDownstream(db: Db, workspaceId: number, userId: numb
     marketId = (await insertMarket(db, { workspaceId, userId, content: { ...marketContent, name }, source: "downstream", sourceRef: ws.id, note: "Imported from Downstream" })).id;
     counts.created++;
   } else if (marketState === "deleted") {
-    throw new TRPCError({ code: "PRECONDITION_FAILED", message: `The "${ws.name}" market was deleted in Velocity. Tick "use Downstream's version" for it to bring it back.` });
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: `The "${ws.name}" market was deleted in Velocity. Tick "Bring it back" for the market to import.` });
   } else {
-    marketId = marketRef!.velocityId;
+    marketId = marketFound.id!;
     if (marketState === "updated" || (marketState === "conflict" && take.has(ws.id))) {
       const [cur] = await db.select().from(researchMarkets).where(and(eq(researchMarkets.id, marketId), eq(researchMarkets.workspaceId, workspaceId))).limit(1);
       await saveMarket(db, { workspaceId, userId, id: marketId, expectedRevision: cur.revision, content: { ...marketContent, name: marketContentOf(cur).name, status: marketContentOf(cur).status }, note: "Downstream import" });
@@ -389,7 +486,8 @@ export async function commitDownstream(db: Db, workspaceId: number, userId: numb
     const content = segmentToSector(seg, settings, seller);
     const h = hash(content);
     const ref = refs.get(`sector:${seg.ref}`);
-    const state = await stateOf(db, workspaceId, "sector", ref, h);
+    const found = await resolveItem(db, workspaceId, "sector", ref, h, seg.ref, marketId);
+    const state = found.state;
     let sectorId: number;
     if (state === "new" || (state === "deleted" && take.has(seg.ref))) {
       const siblings = await db.select({ name: researchSectors.name }).from(researchSectors).where(and(eq(researchSectors.workspaceId, workspaceId), eq(researchSectors.marketId, marketId)));
@@ -400,7 +498,7 @@ export async function commitDownstream(db: Db, workspaceId: number, userId: numb
       counts.keptYours++;
       continue;
     } else {
-      sectorId = ref!.velocityId;
+      sectorId = found.id!;
       if (state === "updated" || (state === "conflict" && take.has(seg.ref))) {
         const [cur] = await db.select().from(researchSectors).where(and(eq(researchSectors.id, sectorId), eq(researchSectors.workspaceId, workspaceId))).limit(1);
         await saveSector(db, { workspaceId, userId, id: sectorId, expectedRevision: cur.revision, content: { ...content, name: sectorContentOf(cur).name }, note: note(seg.revision) });
@@ -432,7 +530,8 @@ export async function commitDownstream(db: Db, workspaceId: number, userId: numb
     const mapped = personaFromDownstream(p, effectiveDownstreamTargeting(seg.targeting, settings), settings);
     const h = personaHash(mapped);
     const ref = refs.get(`persona:${p.ref}`);
-    const state = await stateOf(db, workspaceId, "persona", ref, h);
+    const found = await resolveItem(db, workspaceId, "persona", ref, h, p.ref, null);
+    const state = found.state;
     const values = {
       name: mapped.name,
       targetTitles: mapped.targetTitles,
@@ -455,7 +554,7 @@ export async function commitDownstream(db: Db, workspaceId: number, userId: numb
       counts.keptYours++;
       continue;
     } else {
-      personaId = ref!.velocityId;
+      personaId = found.id!;
       if (state === "unchanged") counts.unchanged++;
       else {
         await db.update(personas).set(values).where(and(eq(personas.id, personaId), eq(personas.workspaceId, workspaceId)));

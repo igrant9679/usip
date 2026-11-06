@@ -1,5 +1,6 @@
 /** Small pieces the research reports share. */
 import type { ReactNode } from "react";
+import { isWebLink } from "@shared/researchShape";
 
 /** A 1 to 5 score as five squares; an unset score reads "not scored". */
 export function ScoreDots({ value }: { value: number | null | undefined }) {
@@ -40,5 +41,10 @@ export function ReportTable({ head, children }: { head: string[]; children: Reac
 
 export const Td = ({ children, className = "" }: { children?: ReactNode; className?: string }) => <td className={`px-3 py-2 align-top ${className}`}>{children}</td>;
 
+/** A link only for an http(s) address; anything else is its text (audit 2026-10-20, P103). */
 export const ExtLink = ({ url, children }: { url?: string; children: ReactNode }) =>
-  url ? <a href={url} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">{children}</a> : <>{children}</>;
+  isWebLink(url) ? <a href={url!.trim()} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">{children}</a> : <>{children}</>;
+
+/** A "source" field: a link when it is one, otherwise the citation it holds. */
+export const SourceRef = ({ value, label = "source" }: { value?: string | null; label?: string }) =>
+  !value?.trim() ? null : isWebLink(value) ? <ExtLink url={value}>{label}</ExtLink> : <span>{label}: {value}</span>;

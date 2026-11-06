@@ -16,6 +16,7 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { notifyLeadRouted } from "../services/policyNotify";
 import { getDb } from "../db";
+import { isWorkspaceLive } from "../_core/workspaceArchive";
 import { landingPages, landingPageSubmissions, leads, enrollments } from "../../drizzle/schema";
 import { resolveBookingUrl } from "../mergeVars";
 import { hostedPageChatSlug } from "../services/hostedChat";
@@ -184,6 +185,7 @@ export const landingPagesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [p] = await db.select().from(landingPages).where(eq(landingPages.slug, input.slug));
     if (!p || p.status !== "published") throw new TRPCError({ code: "NOT_FOUND", message: "Page not available" });
+    if (!(await isWorkspaceLive(p.workspaceId))) throw new TRPCError({ code: "NOT_FOUND", message: "Page not available" });
     // Best-effort view count — never block rendering.
     db.update(landingPages).set({ viewCount: sql`${landingPages.viewCount} + 1` } as never)
       .where(eq(landingPages.id, p.id)).catch(() => {});
@@ -245,6 +247,7 @@ export const landingPagesRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [page] = await db.select().from(landingPages).where(eq(landingPages.slug, input.slug));
       if (!page || page.status !== "published") throw new TRPCError({ code: "NOT_FOUND", message: "Page not available" });
+      if (!(await isWorkspaceLive(page.workspaceId))) throw new TRPCError({ code: "NOT_FOUND", message: "Page not available" });
 
       const data = input.data ?? {};
       const email = str(data.email, 320);
@@ -267,9 +270,11 @@ export const landingPagesRouter = router({
         let ownerUserId: number | null = await activeOwnerOrNull(page.workspaceId, page.createdByUserId);
         if (page.autoRoute) {
           try {
-            const { routeLeadOwner } = await import("./leadScoring");
+            const { routeLeadOwner, createTimeScore } = await import("./leadScoring");
+            // Rules on Score see the score the lead is created with (audit P13).
+            const { total: score } = await createTimeScore(page.workspaceId, { company, email, phone, source: `landing:${page.slug}` });
             const routed = await routeLeadOwner(page.workspaceId, {
-              title: null, company, source: "landing_page", score: 0, industry: null, country: null, state: null, city: null,
+              title: null, company, source: "landing_page", score, industry: null, country: null, state: null, city: null,
             } as any);
             if (routed) ownerUserId = routed;
           } catch (e) { console.error("[landingPages.submit] routing failed:", e); }
@@ -287,6 +292,8 @@ export const landingPagesRouter = router({
           } as never);
           leadId = Number((r as any)[0]?.insertId ?? 0) || null;
         } catch (e) { console.error("[landingPages.submit] lead insert failed:", e); }
+        // Scored on creation (audit P12), without a model call; never throws.
+        if (leadId) await (await import("./leadScoring")).rescoreLead(page.workspaceId, leadId);
 
         // Same as forms.submit — a lead captured but unannounced is the bug,
         // so an unowned one falls back to the workspace's standing recipient.

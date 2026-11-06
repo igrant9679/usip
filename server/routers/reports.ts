@@ -10,6 +10,7 @@
  * Objects: deals (opportunities) · leads · prospects · contacts · activities.
  * Owner/actor user-id columns are resolved to names post-query.
  */
+import { csvCell } from "@shared/csvCell";
 import { TRPCError } from "@trpc/server";
 import { and, asc, avg, count, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notInArray, or, sum, type SQL } from "drizzle-orm";
 import type { MySqlColumn } from "drizzle-orm/mysql-core";
@@ -298,11 +299,8 @@ async function resolveUserNames<T extends Record<string, unknown>>(rows: T[], ke
 }
 
 function toCsv(columns: { key: string; label: string }[], rows: Record<string, unknown>[]): string {
-  const esc = (v: unknown) => {
-    if (v == null) return "";
-    const s = v instanceof Date ? v.toISOString() : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
+  // Formula cells neutralised too (audit 2026-10-20, G49): @shared/csvCell.
+  const esc = csvCell;
   return [columns.map((c) => esc(c.label)).join(","), ...rows.map((r) => columns.map((c) => esc(r[c.key])).join(","))].join("\n");
 }
 

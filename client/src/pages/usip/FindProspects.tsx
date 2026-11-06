@@ -43,6 +43,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { QueryError } from "@/components/usip/Shell";
+import { NoLinkedInConnected } from "@/components/usip/NoLinkedInConnected";
 
 /* ─── Chip-input shared between the two forms ───────────────────────── */
 function ChipInput({ value, onChange, placeholder }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
@@ -285,13 +286,20 @@ function LinkedInSearchCard() {
   const [selected, setSelected] = useState<Record<number, boolean>>({});
   const [resolving, setResolving] = useState<"" | "location" | "industry">("");
 
+  // Whether this person has a LinkedIn account to search through (item 7):
+  // known before the first search, so the card can say where to connect one.
+  const connected = trpc.unipile.listConnectedAccounts.useQuery(undefined, { retry: false });
+  const noLinkedIn = connected.isSuccess && !((connected.data ?? []) as Array<{ provider?: string | null }>).some((a) => a.provider === "LINKEDIN");
   const search = trpc.unipile.searchLinkedIn.useMutation({
     onSuccess: (r: any) => {
       setHits(r.items ?? []);
       setSelected(Object.fromEntries((r.items ?? []).map((_: any, i: number) => [i, true])));
       if (!r.items?.length) toast.info("No results — broaden your filters.");
     },
-    onError: (e) => toast.error(e.message.includes("PRECONDITION") ? "Connect a LinkedIn account first (Settings → Channels)." : e.message),
+    // The server's message says what is missing and where. The old fallback
+    // matched "PRECONDITION" in the message, which never contains it, and
+    // pointed at a Settings page that does not exist.
+    onError: (e) => toast.error(e.message),
   });
   const importLeads = trpc.unipile.importSearchHitsAsLeads.useMutation({
     onSuccess: (r) => { toast.success(`Imported ${r.created} lead${r.created === 1 ? "" : "s"}${r.skipped ? ` · ${r.skipped} skipped` : ""}`); utils.prospects?.list?.invalidate?.(); },
@@ -336,6 +344,7 @@ function LinkedInSearchCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {noLinkedIn && <NoLinkedInConnected />}
         <Tabs value={api} onValueChange={(v) => setApi(v as any)}>
           <TabsList className="grid grid-cols-2 max-w-sm">
             <TabsTrigger value="classic" className="gap-1.5"><Search className="size-3.5" /> Classic</TabsTrigger>
@@ -375,7 +384,7 @@ function LinkedInSearchCard() {
 
         <div className="flex items-center justify-between pt-2 border-t">
           <div className="text-[11px] text-muted-foreground">Uses your own LinkedIn account · max 10 results/search.</div>
-          <Button onClick={runSearch} disabled={search.isPending} className="gap-1.5">
+          <Button onClick={runSearch} disabled={search.isPending || noLinkedIn} className="gap-1.5">
             {search.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
             {search.isPending ? "Searching…" : "Search LinkedIn"}
           </Button>

@@ -8,7 +8,7 @@
  * a prospect works at (its award and, for the seller, its fit), by the
  * prospect's company domain or name.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { accountDomains, accounts, downstreamLinks } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { normalizeCompanyName, normalizeDomain } from "../company/normalize";
@@ -51,6 +51,58 @@ export async function matchAccount(
   return stateless?.id ?? null;
 }
 
+const CHUNK = 500;
+const chunks = <T,>(xs: T[]): T[][] => Array.from({ length: Math.ceil(xs.length / CHUNK) }, (_, i) => xs.slice(i * CHUNK, (i + 1) * CHUNK));
+
+/**
+ * Which organizations matchAccount would find an account for, by the same
+ * rules, in a few batched reads instead of one or three per row: the preview
+ * counts new against matched for up to 10,000 rows (audit 2026-10-20, P109).
+ * `known` maps an organization ref to the account an earlier import wrote it
+ * to; that account, if it is still there, is its match.
+ */
+export async function existingAccountMatches(
+  db: Db,
+  workspaceId: number,
+  orgs: { ref: string; website?: string | null; name: string; state?: string | null }[],
+  known: Map<string, number>,
+): Promise<Set<string>> {
+  const matched = new Set<string>();
+  const ids = Array.from(new Set(orgs.map((o) => known.get(o.ref)).filter((v): v is number => v != null)));
+  const alive = new Set<number>();
+  for (const part of chunks(ids)) {
+    const rows = await db.select({ id: accounts.id }).from(accounts).where(and(eq(accounts.workspaceId, workspaceId), inArray(accounts.id, part)));
+    for (const r of rows) alive.add(r.id);
+  }
+  for (const o of orgs) if (alive.has(known.get(o.ref) ?? -1)) matched.add(o.ref);
+
+  const domainOf = new Map(orgs.map((o) => [o.ref, normalizeDomain(o.website ?? "")]));
+  const domains = Array.from(new Set(orgs.filter((o) => !matched.has(o.ref)).map((o) => domainOf.get(o.ref)!).filter(Boolean)));
+  const hitDomains = new Set<string>();
+  for (const part of chunks(domains)) {
+    const a = await db.select({ d: accounts.normalizedDomain }).from(accounts).where(and(eq(accounts.workspaceId, workspaceId), inArray(accounts.normalizedDomain, part)));
+    const d = await db.select({ d: accountDomains.normalizedDomain }).from(accountDomains).where(and(eq(accountDomains.workspaceId, workspaceId), inArray(accountDomains.normalizedDomain, part)));
+    for (const r of [...a, ...d]) if (r.d) hitDomains.add(r.d);
+  }
+  for (const o of orgs) if (!matched.has(o.ref) && hitDomains.has(domainOf.get(o.ref)!)) matched.add(o.ref);
+
+  const nameOf = new Map(orgs.map((o) => [o.ref, normalizeCompanyName(o.name)]));
+  const names = Array.from(new Set(orgs.filter((o) => !matched.has(o.ref)).map((o) => nameOf.get(o.ref)!).filter(Boolean)));
+  const statesByName = new Map<string, string[]>();
+  for (const part of chunks(names)) {
+    const rows = await db.select({ n: accounts.normalizedName, s: accounts.hqState }).from(accounts).where(and(eq(accounts.workspaceId, workspaceId), inArray(accounts.normalizedName, part)));
+    for (const r of rows) if (r.n) statesByName.set(r.n, [...(statesByName.get(r.n) ?? []), (r.s ?? "").trim().toLowerCase()]);
+  }
+  for (const o of orgs) {
+    if (matched.has(o.ref)) continue;
+    const states = statesByName.get(nameOf.get(o.ref)!);
+    if (!states) continue;
+    const state = (o.state ?? "").trim().toLowerCase();
+    if (state ? states.includes(state) : states.includes("")) matched.add(o.ref);
+  }
+  return matched;
+}
+
 export type DownstreamAccountFacts = {
   accountId: number;
   award: DownstreamAward | null;
@@ -74,6 +126,8 @@ export async function downstreamAccountFor(
       .limit(1);
     const cf = (a?.customFields && typeof a.customFields === "object" ? a.customFields : {}) as Record<string, unknown>;
     if (!cf.downstreamRef) return null;
+    // A paused link's award and fit are kept but not used (audit 2026-10-20, P23).
+    if ((await pausedDownstreamFilter(workspaceId))({ source: "downstream", sourceRef: String(cf.downstreamRef) })) return null;
     return {
       accountId: id,
       // Picked from every award the company has, by the current rule; older imports hold only downstreamAward.
@@ -86,10 +140,11 @@ export async function downstreamAccountFor(
 }
 
 /**
- * Sectors imported through a PAUSED Downstream link are kept but not used:
+ * Research imported through a PAUSED Downstream link is kept but not used:
  * not by the writers, targeting, or the ICP (Downstream's rule: "paused links
  * are ignored by the context composer and targeting but keep their data").
- * Returns a test for a sector's (source, sourceRef).
+ * Returns a test for a sector's, persona's or account's (source, sourceRef):
+ * every Downstream ref starts with its workspace id.
  */
 export async function pausedDownstreamFilter(workspaceId: number): Promise<(s: { source?: string | null; sourceRef?: string | null }) => boolean> {
   const db = await getDb();

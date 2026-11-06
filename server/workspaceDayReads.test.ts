@@ -380,7 +380,9 @@ describe("the screens use the workspace's days", () => {
       expect(read(`client/src/${file}`), file).not.toContain("new Date().toISOString()");
     }
     expect(read("client/src/pages/usip/Audit.tsx")).toContain("a.download = `audit-log-${todayLocal()}.csv`;");
-    expect(read("client/src/pages/usip/Settings.tsx")).toContain("a.download = `workspace-export-${todayLocal()}.json`;");
+    // 2026-11-06 (audit G48): the file is named for what it is, a summary of
+    // counts. Still dated by the local day.
+    expect(read("client/src/pages/usip/Settings.tsx")).toContain("a.download = `workspace-summary-${todayLocal()}.json`;");
   });
 
   it("the viewer-zone read of a stored deadline is gone", () => {

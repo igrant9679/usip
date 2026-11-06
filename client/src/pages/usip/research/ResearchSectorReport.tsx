@@ -12,8 +12,8 @@ import { Pencil, Telescope } from "lucide-react";
 import { Crumbs, Section, StatusBadge } from "@/components/usip/research/ResearchFields";
 import { MoneyFlow } from "@/components/usip/research/MoneyFlow";
 import { RunsForRecord } from "@/components/usip/research/ResearchRuns";
-import { ScoreDots } from "@/components/usip/research/ReportBits";
-import { SECTOR_SCORE_KEYS, SECTOR_SCORE_LABEL } from "@shared/researchShape";
+import { ExtLink, ScoreDots } from "@/components/usip/research/ReportBits";
+import { SECTOR_SCORE_KEYS, SECTOR_SCORE_LABEL, isWebLink } from "@shared/researchShape";
 import { NotFoundState } from "@/components/usip/QueryState";
 
 const List = ({ items }: { items: string[] }) =>
@@ -22,8 +22,8 @@ const List = ({ items }: { items: string[] }) =>
 const Chips = ({ items }: { items: string[] }) =>
   items.length ? <div className="flex flex-wrap gap-1.5">{items.map((x) => <Badge key={x} variant="secondary" className="text-xs font-normal">{x}</Badge>)}</div> : <span className="text-sm text-muted-foreground">None</span>;
 
-const Ext = ({ url, children }: { url: string; children: React.ReactNode }) =>
-  url ? <a href={url} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">{children}</a> : <>{children}</>;
+// The shared link: only an http(s) address becomes an href (audit 2026-10-20, P103).
+const Ext = ExtLink;
 
 export default function ResearchSectorReport() {
   const id = Number(useParams<{ id: string }>().id);
@@ -57,7 +57,7 @@ export default function ResearchSectorReport() {
                 <div key={i} className="rounded-md border p-3">
                   {/* A short figure reads as a headline number; a long one (a breakdown) as text. */}
                   <div className={m.value.length > 24 ? "text-sm font-medium leading-snug" : "text-lg font-semibold"}>{m.value}</div>
-                  <div className="text-xs text-muted-foreground">{m.source ? <Ext url={m.source}>{m.label}</Ext> : m.label}</div>
+                  <div className="text-xs text-muted-foreground">{isWebLink(m.source) ? <Ext url={m.source}>{m.label}</Ext> : <>{m.label}{m.source ? ` (${m.source})` : ""}</>}</div>
                 </div>
               ))}
             </div>

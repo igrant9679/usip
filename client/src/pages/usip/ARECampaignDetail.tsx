@@ -55,6 +55,10 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { tablistProps, tabProps } from "@/lib/tabs";
+import { RejectProspectDialog, type RejectTarget } from "@/components/usip/are/RejectProspectDialog";
+import { ENRICHMENT_STATES, PROSPECT_VIEW_KEYS, PROSPECT_VIEW_LABEL, type EnrichmentState, type ProspectView } from "@shared/areProspectViews";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
 import { AddExistingProspectsDialog } from "@/components/usip/are/AddExistingProspectsDialog";
@@ -257,6 +261,8 @@ const SIGNAL_COLORS: Record<string, string> = {
 const REJECTION_PAGE = 100;
 /** Prospects per page on the Prospects tab (A45). */
 const PROSPECT_PAGE = 100;
+/** Sequences per page on the Sequences tab (A44): each row carries its whole sequence. */
+const SEQUENCE_PAGE = 50;
 
 const REJECT_TEMPLATES = [
   "Wrong industry",
@@ -409,9 +415,11 @@ function useCampaignSync(campaignId: number) {
 
 /* ─── Prospect row ─────────────────────────────────────────────────────────── */
 function ProspectRow({
-  p, campaignId, onSelect, selected,
+  p, campaignId, onSelect, selected, onReject,
 }: {
   p: any; campaignId: number; onSelect: (id: number) => void; selected: boolean;
+  /** Opens the tab's Reject dialog for this row (A51). */
+  onReject: (t: RejectTarget) => void;
 }) {
   const { invalidateAll } = useCampaignSync(campaignId);
   const [genStartedAt, setGenStartedAt] = useState<number | null>(null);
@@ -429,12 +437,9 @@ function ProspectRow({
     onSuccess: () => { toast.success("Enrichment started"); setTimeout(invalidateAll, 3000); },
     onError: (e) => toast.error(e.message),
   });
+  // Approved rows leave the review queue (tracker 12), so the toast says where they went.
   const approve = trpc.are.prospects.approve.useMutation({
-    onSuccess: () => { toast.success("Prospect approved for sequencing"); invalidateAll(); },
-    onError: (e) => toast.error(e.message),
-  });
-  const skip = trpc.are.prospects.skip.useMutation({
-    onSuccess: invalidateAll,
+    onSuccess: () => { toast.success("Approved for sequencing — now under Approved"); invalidateAll(); },
     onError: (e) => toast.error(e.message),
   });
   // Awaited generate — server now blocks until the LLM pipeline finishes
@@ -627,15 +632,22 @@ function ProspectRow({
           </Button>
         )}
         {p.enrichmentStatus === "complete" && (p.sequenceStatus === "pending" || p.sequenceStatus === "canceled") && (
-          <Button aria-label="Approve" size="sm" variant="ghost" className="h-7 px-2 text-xs text-emerald-600 hover:text-emerald-700"
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px] gap-1 text-emerald-600 hover:text-emerald-700"
+            title="Approve for sequencing"
             onClick={() => approve.mutate({ prospectId: p.id })} disabled={approve.isPending}>
-            {approve.isPending ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />}
+            {approve.isPending ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />} Approve
           </Button>
         )}
-        <Button aria-label="Skip" size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
-          onClick={() => skip.mutate({ prospectId: p.id })} disabled={skip.isPending}>
-          <X className="size-3" />
-        </Button>
+        {/* Reject… with a reason, a confirm and an Undo (A51). The unlabelled ✕
+            here ran `skip`: no reason, no confirm, and it overwrote a reply.
+            A replied or finished prospect is not rejectable. */}
+        {p.sequenceStatus !== "replied" && p.sequenceStatus !== "completed" && (
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px] gap-1 text-muted-foreground hover:text-destructive"
+            title="Reject this prospect"
+            onClick={() => onReject({ id: p.id, name: fullName, sequenceStatus: p.sequenceStatus })}>
+            <X className="size-3" /> Reject…
+          </Button>
+        )}
       </div>
 
       <ChevronRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0" />
@@ -1054,9 +1066,21 @@ function StatusBadgeMini({ status }: { status: string }) {
 }
 
 function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: any }) {
-  // Explicit limit: the default was 100 and a live campaign's queue held 101
-  // rows, which silently truncated the page.
-  const { data: rows = [], refetch, isLoading } = trpc.are.prospects.listSequences.useQuery({ campaignId, limit: 500 });
+  const [filter, setFilter] = useState<FilterKey>("enrolled");
+  const [search, setSearch] = useState("");
+  const searchQ = useDebouncedValue(search.trim());
+  const [seqPage, setSeqPage] = useState(1);
+  useClearOnChange({ filter, searchQ }, () => setSeqPage(1));
+  // A page of the filter, and the counts for every filter, from the server
+  // (A44). This asked for 500 rows with every full sequence, then counted
+  // and filtered whatever had arrived; an explicit page size still stands
+  // in for the default, which once truncated a 101-row campaign.
+  const { data: seqData, refetch, isLoading } = trpc.are.prospects.listSequences.useQuery(
+    { campaignId, status: filter, ...(searchQ ? { search: searchQ } : {}), limit: SEQUENCE_PAGE, offset: (seqPage - 1) * SEQUENCE_PAGE },
+    { placeholderData: (prev) => prev },
+  );
+  const rows = seqData?.rows ?? [];
+  const seqPages = Math.max(1, Math.ceil((seqData?.total ?? 0) / SEQUENCE_PAGE));
   // ONE representative execution row per (prospect, step), for the whole
   // campaign — server-reduced (are.execution.getStepStates), never truncated.
   // This used to read raw getQueue with limit 200 ("an active campaign has a
@@ -1111,8 +1135,6 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
     onError: (e) => toast.error(e.message),
   });
 
-  const [filter, setFilter] = useState<FilterKey>("enrolled");
-  const [search, setSearch] = useState("");
   const [drawerProspectId, setDrawerProspectId] = useState<number | null>(null);
   const [confirmCancel, setConfirmCancel] = useState<{ prospectId: number; name: string } | null>(null);
   const [generatingId, setGeneratingId] = useState<number | null>(null);
@@ -1128,20 +1150,12 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [generatingId]);
 
-  // Derive counts per status for the summary strip.
-  const countsByStatus = rows.reduce((acc: Record<string, number>, r: any) => {
-    acc[r.sequenceStatus] = (acc[r.sequenceStatus] ?? 0) + 1;
-    return acc;
-  }, {});
-  const filteredRows = rows.filter((r: any) => {
-    if (filter !== "all" && r.sequenceStatus !== filter) return false;
-    if (search) {
-      const q = search.toLowerCase();
-      const hay = `${r.firstName ?? ""} ${r.lastName ?? ""} ${r.companyName ?? ""} ${r.title ?? ""}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
+  // Counts per status for the summary strip — the server's, for every row
+  // that matches the search, not the ones on this page (A44).
+  const countsByStatus: Record<string, number> = seqData?.countsByStatus ?? {};
+  const allCount = Object.values(countsByStatus).reduce((s, n) => s + n, 0);
+  // The server already applied the filter and the search.
+  const filteredRows = rows;
   const seqSel = useRowSelection(filteredRows.map((r: any) => r.prospectId as number));
 
   // What the mass timeline editor needs to know about the selection: how many
@@ -1219,7 +1233,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
         />
         <div className="flex flex-wrap gap-1">
           {FILTERS.map((f) => {
-            const n = f === "all" ? rows.length : (countsByStatus[f] ?? 0);
+            const n = f === "all" ? allCount : (countsByStatus[f] ?? 0);
             const label = f === "all" ? "All" : (STATUS_STYLE[f]?.label ?? f);
             return (
               <Button
@@ -1244,11 +1258,19 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
         />
       ) : (
         <>
-        <div className="mb-2 flex items-center gap-2">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer select-none">
             <Checkbox checked={seqSel.allSelected} onCheckedChange={seqSel.toggleAll} aria-label="Select all shown" />
-            Select all {filteredRows.length}
+            Select all {filteredRows.length}{seqPages > 1 ? " on this page" : ""}
           </label>
+          {seqPages > 1 && (
+            <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
+              <span className="mr-1">{(seqPage - 1) * SEQUENCE_PAGE + 1}–{(seqPage - 1) * SEQUENCE_PAGE + rows.length} of {(seqData?.total ?? 0).toLocaleString()}</span>
+              <Button size="sm" variant="outline" className="h-7" disabled={seqPage <= 1} onClick={() => setSeqPage((p) => p - 1)}>Previous</Button>
+              <span className="px-2">Page {seqPage} of {seqPages}</span>
+              <Button size="sm" variant="outline" className="h-7" disabled={seqPage >= seqPages} onClick={() => setSeqPage((p) => p + 1)}>Next</Button>
+            </div>
+          )}
         </div>
         <div className="mb-2"><AreBulkActionBar campaignId={campaignId} selection={seqSel} actions={sequenceTabActions(filter)} timeline={timelineInfo} onDone={() => refetch()} /></div>
         <div className="border rounded-lg bg-card divide-y overflow-hidden">
@@ -2045,14 +2067,30 @@ export default function ARECampaignDetail() {
   const validId = Number.isInteger(campaignId) && campaignId > 0;
   const campaignQ = trpc.are.campaigns.get.useQuery({ id: campaignId }, { enabled: validId });
   const { data: campaign, isLoading: loadingCampaign } = campaignQ;
-  // A page of the review queue, and the counts for all of it (A45).
+  // A page of the review queue, and the counts for all of it (A45). The tab
+  // opens on the rows that still need a decision, so an approved prospect
+  // leaves the list instead of riding along with the next batch (tracker
+  // 12). View, enrichment state and search are the server's (tracker 13,
+  // A45): statusCounts counts what list returns for the same filter.
+  const [prospectView, setProspectView] = useState<ProspectView>("review");
+  const [enrichFilter, setEnrichFilter] = useState<EnrichmentState | null>(null);
+  const [prospectSearch, setProspectSearch] = useState("");
+  const prospectSearchQ = useDebouncedValue(prospectSearch.trim());
+  const prospectFilter = {
+    view: prospectView,
+    ...(enrichFilter ? { enrichmentStatus: enrichFilter } : {}),
+    ...(prospectSearchQ ? { search: prospectSearchQ } : {}),
+  };
   const [prospectPage, setProspectPage] = useState(1);
+  useClearOnChange(prospectFilter, () => setProspectPage(1));
   const { data: prospects, isLoading: loadingProspects } = trpc.are.prospects.list.useQuery(
-    { campaignId, limit: PROSPECT_PAGE, offset: (prospectPage - 1) * PROSPECT_PAGE },
+    { campaignId, ...prospectFilter, limit: PROSPECT_PAGE, offset: (prospectPage - 1) * PROSPECT_PAGE },
     { placeholderData: (prev) => prev },
   );
-  const { data: queueCounts } = trpc.are.prospects.statusCounts.useQuery({ campaignId });
-  const prospectPages = Math.max(1, Math.ceil((queueCounts?.inQueue ?? 0) / PROSPECT_PAGE));
+  const { data: queueCounts } = trpc.are.prospects.statusCounts.useQuery({ campaignId, ...prospectFilter });
+  const prospectPages = Math.max(1, Math.ceil((queueCounts?.matching ?? 0) / PROSPECT_PAGE));
+  const [rejectTarget, setRejectTarget] = useState<RejectTarget | null>(null);
+  const { invalidateAll: invalidateCampaign } = useCampaignSync(campaignId);
   // The no-email door (2026-09-16): staged candidates the email-finder is
   // still working. Hidden from the list above by the server; surfaced only
   // as a count so the funnel stays legible.
@@ -2243,8 +2281,10 @@ export default function ARECampaignDetail() {
   const [fullAck, setFullAck] = useState(false);
   const [gapDraft, setGapDraft] = useState<number | null>(null);
   const [respacePlan, setRespacePlan] = useState<{ gapDays: number; prospectsInFlight: number; prospectsTouched: number; rowsMoved: number; before: { earliest: string; latest: string } | null; after: { earliest: string; latest: string } | null; applied: boolean } | null>(null);
-  // Bulk selection
+  // Bulk selection — cleared when the filter changes, so a mass action only
+  // touches rows the user can see (R4).
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  useClearOnChange(prospectFilter, () => setSelectedIds(new Set()));
   const [reEvaluateAllConfirmOpen, setReEvaluateAllConfirmOpen] = useState(false);
   const [thresholdOverride, setThresholdOverride] = useState<number | null>(null);
   const [showIcpSuggestion, setShowIcpSuggestion] = useState(false);
@@ -2614,8 +2654,22 @@ export default function ARECampaignDetail() {
               </div>
             </div>
 
-            {/* Select-all + legend row */}
-            <div className="flex items-center gap-4 mb-3 text-[11px] text-muted-foreground">
+            {/* Which rows: a view, an enrichment state, a search — each
+                counted by the server (tracker 12, 13; A45). The enrichment
+                chips were a legend you could not click. */}
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              <div {...tablistProps("Show prospects")} className="flex flex-wrap gap-1">
+                {PROSPECT_VIEW_KEYS.map((v) => (
+                  <Button key={v} {...tabProps(prospectView === v)} size="sm" variant={prospectView === v ? "default" : "outline"} className="h-7 px-2 text-[11px]"
+                    onClick={() => setProspectView(v)}>
+                    {PROSPECT_VIEW_LABEL[v]} <span className="ml-1 opacity-70 tabular-nums">{(queueCounts?.byView?.[v] ?? 0).toLocaleString()}</span>
+                  </Button>
+                ))}
+              </div>
+              <Input aria-label="Search prospects" value={prospectSearch} onChange={(e) => setProspectSearch(e.target.value)}
+                placeholder="Search name, email, company, title…" className="h-8 text-xs flex-1 min-w-[180px] max-w-xs" />
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mb-3 text-[11px] text-muted-foreground">
               {prospects && prospects.length > 0 && (
                 <label className="flex items-center gap-1.5 cursor-pointer select-none">
                   <Checkbox
@@ -2623,18 +2677,28 @@ export default function ARECampaignDetail() {
                     onCheckedChange={toggleSelectAll}
                     className="size-3.5"
                   />
-                  <span>All</span>
+                  <span>All on this page</span>
                 </label>
               )}
-              <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#34D399]" /> complete</span>
-              <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#F59E0B]" /> enriching</span>
-              <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#94A3B8]" /> pending</span>
-              <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#F87171]" /> failed</span>
+              <div role="group" aria-label="Enrichment" className="flex flex-wrap items-center gap-1">
+                <span>Enrichment:</span>
+                {ENRICHMENT_STATES.map((e) => (
+                  <button key={e} type="button" aria-pressed={enrichFilter === e}
+                    onClick={() => setEnrichFilter(enrichFilter === e ? null : e)}
+                    className={`flex items-center gap-1 rounded-full border px-2 py-0.5 transition-colors ${enrichFilter === e ? "border-primary/50 bg-primary/10 text-foreground font-medium" : "border-border hover:border-primary/30"}`}>
+                    <span className="size-2 rounded-full" style={{ backgroundColor: ENRICH_COLOR[e] }} />
+                    {e} <span className="tabular-nums">{(queueCounts?.byEnrichment?.[e] ?? 0).toLocaleString()}</span>
+                  </button>
+                ))}
+                {enrichFilter && (
+                  <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => setEnrichFilter(null)}>any</button>
+                )}
+              </div>
               <span className="ml-auto flex items-center gap-1"><Eye className="size-3" /> Click row to view dossier</span>
             </div>
             {prospectPages > 1 && (
               <div className="flex flex-wrap items-center justify-between gap-2 mb-3 text-xs text-muted-foreground">
-                <span>{(prospectPage - 1) * PROSPECT_PAGE + 1}–{(prospectPage - 1) * PROSPECT_PAGE + (prospects?.length ?? 0)} of {(queueCounts?.inQueue ?? 0).toLocaleString()}</span>
+                <span>{(prospectPage - 1) * PROSPECT_PAGE + 1}–{(prospectPage - 1) * PROSPECT_PAGE + (prospects?.length ?? 0)} of {(queueCounts?.matching ?? 0).toLocaleString()}</span>
                 <div className="flex items-center gap-1">
                   <Button size="sm" variant="outline" className="h-7" disabled={prospectPage <= 1} onClick={() => { setSelectedIds(new Set()); setProspectPage((p) => p - 1); }}>Previous</Button>
                   <span className="px-2">Page {prospectPage} of {prospectPages}</span>
@@ -2656,12 +2720,24 @@ export default function ARECampaignDetail() {
                 <Loader2 className="size-4 animate-spin" /> Loading prospects…
               </div>
             ) : !prospects || prospects.length === 0 ? (
-              <EmptyState
-                icon={Radar}
-                title="No prospects yet"
-                description="Use the Scraper tab to discover prospects from Google Business, LinkedIn, news, or the web."
-                action={<Button size="sm" variant="outline" onClick={() => setTab("scraper")}>Go to Scraper</Button>}
-              />
+              (queueCounts?.inQueue ?? 0) === 0 ? (
+                <EmptyState
+                  icon={Radar}
+                  title="No prospects yet"
+                  description="Use the Scraper tab to discover prospects from Google Business, LinkedIn, news, or the web."
+                  action={<Button size="sm" variant="outline" onClick={() => setTab("scraper")}>Go to Scraper</Button>}
+                />
+              ) : (
+                // The campaign has prospects; this filter has none of them.
+                <EmptyState
+                  icon={Search}
+                  title={prospectSearchQ || enrichFilter ? "No prospects match" : prospectView === "review" ? "Nothing waiting for review" : `No prospects under ${PROSPECT_VIEW_LABEL[prospectView]}`}
+                  description={prospectSearchQ || enrichFilter
+                    ? "Try a different search, or clear the enrichment filter."
+                    : prospectView === "review" ? "Everyone here has been decided. Approved prospects are under Approved; rejected ones are on the Rejections tab." : "Pick another view above."}
+                  action={<Button size="sm" variant="outline" onClick={() => { setProspectView("all"); setEnrichFilter(null); setProspectSearch(""); }}>Show all</Button>}
+                />
+              )
             ) : (
               <div className="space-y-2">
                 {prospects.map((p) => (
@@ -2678,12 +2754,14 @@ export default function ARECampaignDetail() {
                         campaignId={campaignId}
                         onSelect={(id) => { setSelectedProspectId(id); setDossierOpen(true); setDossierTab("intel"); }}
                         selected={selectedProspectId === p.id}
+                        onReject={setRejectTarget}
                       />
                     </div>
                   </div>
                 ))}
               </div>
             )}
+            <RejectProspectDialog target={rejectTarget} presets={REJECT_TEMPLATES} onClose={() => setRejectTarget(null)} onChanged={invalidateCampaign} />
           </TabsContent>
 
           {/* ── Scraper tab ── */}

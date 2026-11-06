@@ -8,12 +8,15 @@
  *   4. Draft candidates   — 3 subject+body variants
  *   5. Final selection    — pick best variant, resolve personalization tokens
  *
- * Each stage is a separate tRPC mutation so the UI can stream progress.
- * The pipeline row is created on `start`, updated after each stage, and
- * an email_draft row is created on `finalize`.
+ * `start` checks the recipient, creates the pipeline row and returns; the
+ * stages run after the response, writing each stage's output to the row as
+ * they go, so the page's poll shows progress (audit 2026-10-20, P144: the
+ * request used to run every stage before returning). The email_draft row is
+ * created at stage 5. A stage whose AI call fails fails the run; no stock
+ * draft is saved in its place (P67).
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 import { z } from "zod";
 import {
   accounts,
@@ -32,11 +35,15 @@ import { repProcedure, workspaceProcedure } from "../_core/workspace";
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
 
+type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
 async function getRecipientContext(
-  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  db: Db,
   workspaceId: number,
   opts: { contactId?: number; leadId?: number; accountId?: number },
 ) {
+  let found = false;
+  let firstName = "";
   let personName = "";
   let personTitle = "";
   let personEmail: string | null = null;
@@ -44,6 +51,7 @@ async function getRecipientContext(
   let companyIndustry = "";
   let companySize = "";
   let companyRevenue = "";
+  let accountId = opts.accountId;
 
   if (opts.contactId) {
     const [c] = await db
@@ -51,9 +59,14 @@ async function getRecipientContext(
       .from(contacts)
       .where(and(eq(contacts.id, opts.contactId), eq(contacts.workspaceId, workspaceId)));
     if (c) {
+      found = true;
+      firstName = c.firstName ?? "";
       personName = `${c.firstName} ${c.lastName}`.trim();
       personTitle = c.title ?? "";
       personEmail = c.email ?? null;
+      companyName = c.companyName ?? "";
+      // The contact's own company, when the caller named none.
+      accountId ??= c.accountId ?? undefined;
     }
   }
   if (opts.leadId) {
@@ -62,17 +75,19 @@ async function getRecipientContext(
       .from(leads)
       .where(and(eq(leads.id, opts.leadId), eq(leads.workspaceId, workspaceId)));
     if (l) {
+      found = true;
+      firstName = l.firstName ?? "";
       personName = `${l.firstName} ${l.lastName}`.trim();
       personTitle = l.title ?? "";
       personEmail = l.email ?? null;
       companyName = l.company ?? "";
     }
   }
-  if (opts.accountId) {
+  if (accountId) {
     const [a] = await db
       .select()
       .from(accounts)
-      .where(and(eq(accounts.id, opts.accountId), eq(accounts.workspaceId, workspaceId)));
+      .where(and(eq(accounts.id, accountId), eq(accounts.workspaceId, workspaceId)));
     if (a) {
       companyName = a.name ?? companyName;
       companyIndustry = a.industry ?? companyIndustry;
@@ -81,12 +96,16 @@ async function getRecipientContext(
     }
   }
 
-  return { personName, personTitle, personEmail, companyName, companyIndustry, companySize, companyRevenue };
+  return { found, firstName, personName, personTitle, personEmail, companyName, companyIndustry, companySize, companyRevenue };
 }
 
-async function llmJson<T>(messages: any[], schema: any, fallback: T, opts?: { sendersBrand?: boolean }, research?: ResearchUse): Promise<T> {
+type Recipient = Awaited<ReturnType<typeof getRecipientContext>>;
+
+/** One stage's AI call. A failure throws and fails the run (P67: it used to return an empty fallback). */
+async function llmJson<T>(workspaceId: number, stage: string, messages: any[], schema: any, opts?: { sendersBrand?: boolean }, research?: ResearchUse): Promise<T> {
   try {
     const out = await invokeLLM({
+      workspaceId,
       messages,
       sendersBrand: opts?.sendersBrand,
       research,
@@ -97,8 +116,235 @@ async function llmJson<T>(messages: any[], schema: any, fallback: T, opts?: { se
     });
     const content = out.choices?.[0]?.message?.content;
     return (typeof content === "string" ? JSON.parse(content) : content) as T;
-  } catch {
-    return fallback;
+  } catch (e) {
+    throw new Error(`${stage}: the AI call failed (${e instanceof Error ? e.message : String(e)})`);
+  }
+}
+
+/**
+ * A pipeline still "running" this long after its last write was cut off by a
+ * restart: the stages run after the response, in the process that took it.
+ */
+export const PIPELINE_ORPHAN_MS = 10 * 60_000;
+
+async function failOrphanedPipelines(db: Db, workspaceId: number): Promise<void> {
+  await db
+    .update(researchPipelines)
+    .set({ status: "failed", errorMessage: "Stopped when the server restarted. Run it again." })
+    .where(and(
+      eq(researchPipelines.workspaceId, workspaceId),
+      eq(researchPipelines.status, "running"),
+      lt(researchPipelines.updatedAt, new Date(Date.now() - PIPELINE_ORPHAN_MS)),
+    ));
+}
+
+/** Runs started by this process and not yet finished, so tests can wait for them. */
+const inFlight = new Set<Promise<void>>();
+
+export async function __settleResearchPipelines(): Promise<void> {
+  while (inFlight.size) await Promise.all(Array.from(inFlight));
+}
+
+/**
+ * The five stages, after the response. Each writes its output as it finishes;
+ * a failure marks the run failed, naming the stage.
+ */
+async function runStages(
+  db: Db,
+  input: { workspaceId: number; userId: number; pipelineId: number; recipient: Recipient; contactId?: number; leadId?: number; goal: string; tone: string },
+): Promise<void> {
+  const { pipelineId, recipient } = input;
+  const ws = input.workspaceId;
+  // The prospect's market research, by their title and industry.
+  const marketFor = (surface: "research" | "outreach"): ResearchUse => ({ surface, prospectTitle: recipient.personTitle || null, industry: recipient.companyIndustry || null });
+
+  try {
+    /* ── Stage 1: Prospect research ── */
+    const stage1 = await llmJson<any>(
+      ws,
+      "Prospect research",
+      [
+        { role: "system", content: "You are a B2B sales research assistant. Output JSON only." },
+        {
+          role: "user",
+          content: `Research this prospect for an outreach email.\nPerson: ${recipient.personName}, ${recipient.personTitle}\nCompany: ${recipient.companyName} (${recipient.companyIndustry}, ${recipient.companySize} employees, ${recipient.companyRevenue} revenue)\nGoal: ${input.goal}`,
+        },
+      ],
+      {
+        type: "object",
+        properties: {
+          personSummary: { type: "string" },
+          companySummary: { type: "string" },
+          likelyPainPoints: { type: "array", items: { type: "string" } },
+          relevantContext: { type: "string" },
+        },
+        required: ["personSummary", "companySummary", "likelyPainPoints", "relevantContext"],
+        additionalProperties: false,
+      },
+      undefined,
+      marketFor("research"),
+    );
+    await db.update(researchPipelines).set({ stage1_prospect: stage1, currentStage: 2 }).where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
+
+    /* ── Stage 2: Signal detection ── */
+    const stage2 = await llmJson<any>(
+      ws,
+      "Signal detection",
+      [
+        { role: "system", content: "You are a B2B sales intelligence analyst. Output JSON only." },
+        {
+          role: "user",
+          content: `Identify buying signals and triggers for outreach.\nCompany: ${recipient.companyName} (${recipient.companyIndustry})\nContext: ${stage1?.relevantContext ?? ""}\nGoal: ${input.goal}`,
+        },
+      ],
+      {
+        type: "object",
+        properties: {
+          signals: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { signal: { type: "string" }, type: { type: "string" }, relevance: { type: "string" } },
+              required: ["signal", "type", "relevance"],
+              additionalProperties: false,
+            },
+          },
+          bestTimingRationale: { type: "string" },
+        },
+        required: ["signals", "bestTimingRationale"],
+        additionalProperties: false,
+      },
+      undefined,
+      marketFor("research"),
+    );
+    await db.update(researchPipelines).set({ stage2_signals: stage2, currentStage: 3 }).where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
+
+    /* ── Stage 3: Angle generation ── */
+    const stage3 = await llmJson<any>(
+      ws,
+      "Angle generation",
+      [
+        { role: "system", content: "You are a B2B messaging strategist. Output JSON only." },
+        {
+          role: "user",
+          content: `Generate 3 distinct value-prop angles for this outreach.\nRecipient: ${recipient.personName}, ${recipient.personTitle} at ${recipient.companyName}\nPain points: ${JSON.stringify(stage1?.likelyPainPoints)}\nSignals: ${JSON.stringify(stage2?.signals?.slice(0, 3))}\nGoal: ${input.goal}`,
+        },
+      ],
+      {
+        type: "object",
+        properties: {
+          angles: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { angle: { type: "string" }, hook: { type: "string" }, cta: { type: "string" }, rationale: { type: "string" } },
+              required: ["angle", "hook", "cta", "rationale"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["angles"],
+        additionalProperties: false,
+      },
+      undefined,
+      marketFor("research"),
+    );
+    await db.update(researchPipelines).set({ stage3_angles: stage3, currentStage: 4 }).where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
+
+    /* ── Stage 4: Draft candidates ── */
+    const angles = stage3?.angles ?? [];
+    const bestAngle = angles[0] ?? { angle: input.goal, hook: "", cta: "Let's connect", rationale: "" };
+    const stage4 = await llmJson<any>(
+      ws,
+      "Draft candidates",
+      [
+        {
+          role: "system",
+          content: `You write short B2B sales emails. Tone: ${input.tone}. Output JSON only. Body max 120 words, plain text, with personalization tokens {{firstName}}, {{company}}, {{senderName}}.`,
+        },
+        {
+          role: "user",
+          content: `Write 3 email variants for this outreach.\nRecipient: ${recipient.personName} at ${recipient.companyName}\nAngle: ${bestAngle.angle}\nHook: ${bestAngle.hook}\nCTA: ${bestAngle.cta}\nGoal: ${input.goal}`,
+        },
+      ],
+      {
+        type: "object",
+        properties: {
+          variants: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { subject: { type: "string" }, body: { type: "string" }, rationale: { type: "string" } },
+              required: ["subject", "body", "rationale"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["variants"],
+        additionalProperties: false,
+      },
+      // Stage 4 writes the emails a prospect receives; stages 1-3 are research.
+      { sendersBrand: true },
+      marketFor("outreach"),
+    );
+    await db.update(researchPipelines).set({ stage4_draft: stage4, currentStage: 5 }).where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
+
+    /* ── Stage 5: Final selection ── */
+    const variants: { subject?: string; body?: string; rationale?: string }[] = stage4?.variants ?? [];
+    const chosen = variants.find((v) => v?.subject?.trim() && v?.body?.trim());
+    // No stock "Quick question" email in place of one the AI did not write (P67).
+    if (!chosen) throw new Error("Draft candidates: the AI wrote no email to choose from");
+    const stage5 = {
+      subject: chosen.subject!,
+      body: chosen.body!,
+      rationale: chosen.rationale ?? "",
+      personalizationTokens: {
+        // An empty first name falls back too (P146: split(" ")[0] is "", never undefined).
+        firstName: recipient.firstName.trim() || recipient.personName.split(" ")[0] || "there",
+        company: recipient.companyName,
+        senderName: "{{senderName}}",
+      },
+      allVariants: variants,
+    };
+
+    // Create the email draft
+    const draftR = await db.insert(emailDrafts).values({
+      workspaceId: ws,
+      subject: stage5.subject,
+      body: stage5.body,
+      toContactId: input.contactId ?? null,
+      toLeadId: input.leadId ?? null,
+      toEmail: recipient.personEmail,
+      status: "pending_review",
+      aiGenerated: true,
+      aiPrompt: input.goal,
+      createdByUserId: input.userId,
+    });
+    const draftId = Number((draftR as any)[0]?.insertId ?? 0);
+
+    // Save prompt version history
+    await db.insert(promptVersions).values({
+      workspaceId: ws,
+      entityType: "email_draft",
+      entityId: draftId,
+      version: 1,
+      subject: stage5.subject,
+      body: stage5.body,
+      promptUsed: input.goal,
+      toneUsed: input.tone,
+      createdByUserId: input.userId,
+    });
+
+    // Mark pipeline complete
+    await db
+      .update(researchPipelines)
+      .set({ stage5_final: stage5, status: "complete", currentStage: 5, emailDraftId: draftId, completedAt: new Date() })
+      .where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
+  } catch (err: any) {
+    await db
+      .update(researchPipelines)
+      .set({ status: "failed", errorMessage: String(err?.message ?? err).slice(0, 2000) })
+      .where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
   }
 }
 
@@ -111,6 +357,7 @@ export const researchPipelineRouter = router({
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
+      await failOrphanedPipelines(db, ctx.workspace.id);
       return db
         .select()
         .from(researchPipelines)
@@ -125,6 +372,7 @@ export const researchPipelineRouter = router({
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return null;
+      await failOrphanedPipelines(db, ctx.workspace.id);
       const [row] = await db
         .select()
         .from(researchPipelines)
@@ -132,7 +380,12 @@ export const researchPipelineRouter = router({
       return row ?? null;
     }),
 
-  /** Create a new pipeline run and immediately execute all 5 stages */
+  /**
+   * Starts a pipeline for one person and returns at once; the stages run after
+   * the response (P144). A run needs someone to research and write to (P16:
+   * the page sent no recipient, so every stage researched nobody and the draft
+   * went to no one).
+   */
   start: repProcedure
     .input(
       z.object({
@@ -146,6 +399,21 @@ export const researchPipelineRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      if (!input.contactId && !input.leadId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Pick the person the email is for." });
+      }
+      const recipient = await getRecipientContext(db, ctx.workspace.id, {
+        contactId: input.contactId,
+        leadId: input.leadId,
+        accountId: input.accountId,
+      });
+      if (!recipient.found) throw new TRPCError({ code: "NOT_FOUND", message: "That person is not in this workspace." });
+      if (!recipient.personEmail) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `${recipient.personName || "This person"} has no email address, so a draft to them could not be sent. Add one first.`,
+        });
+      }
 
       // Create pipeline row
       const r = await db.insert(researchPipelines).values({
@@ -159,199 +427,11 @@ export const researchPipelineRouter = router({
       });
       const pipelineId = Number((r as any)[0]?.insertId ?? 0);
 
-      const ctx_ = { workspaceId: ctx.workspace.id };
-      const recipient = await getRecipientContext(db, ctx.workspace.id, {
-        contactId: input.contactId,
-        leadId: input.leadId,
-        accountId: input.accountId,
-      });
-      // The prospect's market research, by their title and industry.
-      const marketFor = (surface: "research" | "outreach"): ResearchUse => ({ surface, prospectTitle: recipient.personTitle || null, industry: recipient.companyIndustry || null });
-
-      try {
-        /* ── Stage 1: Prospect research ── */
-        const stage1 = await llmJson(
-          [
-            { role: "system", content: "You are a B2B sales research assistant. Output JSON only." },
-            {
-              role: "user",
-              content: `Research this prospect for an outreach email.\nPerson: ${recipient.personName}, ${recipient.personTitle}\nCompany: ${recipient.companyName} (${recipient.companyIndustry}, ${recipient.companySize} employees, ${recipient.companyRevenue} revenue)\nGoal: ${input.goal}`,
-            },
-          ],
-          {
-            type: "object",
-            properties: {
-              personSummary: { type: "string" },
-              companySummary: { type: "string" },
-              likelyPainPoints: { type: "array", items: { type: "string" } },
-              relevantContext: { type: "string" },
-            },
-            required: ["personSummary", "companySummary", "likelyPainPoints", "relevantContext"],
-            additionalProperties: false,
-          },
-          { personSummary: "", companySummary: "", likelyPainPoints: [], relevantContext: "" },
-          undefined,
-          marketFor("research"),
-        );
-        await db.update(researchPipelines).set({ stage1_prospect: stage1, currentStage: 2 }).where(eq(researchPipelines.id, pipelineId));
-
-        /* ── Stage 2: Signal detection ── */
-        const stage2 = await llmJson(
-          [
-            { role: "system", content: "You are a B2B sales intelligence analyst. Output JSON only." },
-            {
-              role: "user",
-              content: `Identify buying signals and triggers for outreach.\nCompany: ${recipient.companyName} (${recipient.companyIndustry})\nContext: ${(stage1 as any).relevantContext}\nGoal: ${input.goal}`,
-            },
-          ],
-          {
-            type: "object",
-            properties: {
-              signals: {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: { signal: { type: "string" }, type: { type: "string" }, relevance: { type: "string" } },
-                  required: ["signal", "type", "relevance"],
-                  additionalProperties: false,
-                },
-              },
-              bestTimingRationale: { type: "string" },
-            },
-            required: ["signals", "bestTimingRationale"],
-            additionalProperties: false,
-          },
-          { signals: [], bestTimingRationale: "" },
-          undefined,
-          marketFor("research"),
-        );
-        await db.update(researchPipelines).set({ stage2_signals: stage2, currentStage: 3 }).where(eq(researchPipelines.id, pipelineId));
-
-        /* ── Stage 3: Angle generation ── */
-        const stage3 = await llmJson(
-          [
-            { role: "system", content: "You are a B2B messaging strategist. Output JSON only." },
-            {
-              role: "user",
-              content: `Generate 3 distinct value-prop angles for this outreach.\nRecipient: ${recipient.personName}, ${recipient.personTitle} at ${recipient.companyName}\nPain points: ${JSON.stringify((stage1 as any).likelyPainPoints)}\nSignals: ${JSON.stringify((stage2 as any).signals?.slice(0, 3))}\nGoal: ${input.goal}`,
-            },
-          ],
-          {
-            type: "object",
-            properties: {
-              angles: {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: { angle: { type: "string" }, hook: { type: "string" }, cta: { type: "string" }, rationale: { type: "string" } },
-                  required: ["angle", "hook", "cta", "rationale"],
-                  additionalProperties: false,
-                },
-              },
-            },
-            required: ["angles"],
-            additionalProperties: false,
-          },
-          { angles: [] },
-          undefined,
-          marketFor("research"),
-        );
-        await db.update(researchPipelines).set({ stage3_angles: stage3, currentStage: 4 }).where(eq(researchPipelines.id, pipelineId));
-
-        /* ── Stage 4: Draft candidates ── */
-        const angles = (stage3 as any).angles ?? [];
-        const bestAngle = angles[0] ?? { angle: input.goal, hook: "", cta: "Let's connect", rationale: "" };
-        const stage4 = await llmJson(
-          [
-            {
-              role: "system",
-              content: `You write short B2B sales emails. Tone: ${input.tone}. Output JSON only. Body max 120 words, plain text, with personalization tokens {{firstName}}, {{company}}, {{senderName}}.`,
-            },
-            {
-              role: "user",
-              content: `Write 3 email variants for this outreach.\nRecipient: ${recipient.personName} at ${recipient.companyName}\nAngle: ${bestAngle.angle}\nHook: ${bestAngle.hook}\nCTA: ${bestAngle.cta}\nGoal: ${input.goal}`,
-            },
-          ],
-          {
-            type: "object",
-            properties: {
-              variants: {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: { subject: { type: "string" }, body: { type: "string" }, rationale: { type: "string" } },
-                  required: ["subject", "body", "rationale"],
-                  additionalProperties: false,
-                },
-              },
-            },
-            required: ["variants"],
-            additionalProperties: false,
-          },
-          { variants: [] },
-          // Stage 4 writes the emails a prospect receives; stages 1-3 are research.
-          { sendersBrand: true },
-          marketFor("outreach"),
-        );
-        await db.update(researchPipelines).set({ stage4_draft: stage4, currentStage: 5 }).where(eq(researchPipelines.id, pipelineId));
-
-        /* ── Stage 5: Final selection ── */
-        const variants = (stage4 as any).variants ?? [];
-        const chosen = variants[0] ?? { subject: "Quick question", body: `Hi {{firstName}},\n\n${input.goal}\n\nBest,\n{{senderName}}`, rationale: "" };
-        const stage5 = {
-          subject: chosen.subject,
-          body: chosen.body,
-          rationale: chosen.rationale,
-          personalizationTokens: {
-            firstName: recipient.personName.split(" ")[0] ?? "there",
-            company: recipient.companyName,
-            senderName: "{{senderName}}",
-          },
-          allVariants: variants,
-        };
-
-        // Create the email draft
-        const draftR = await db.insert(emailDrafts).values({
-          workspaceId: ctx.workspace.id,
-          subject: stage5.subject,
-          body: stage5.body,
-          toContactId: input.contactId ?? null,
-          toLeadId: input.leadId ?? null,
-          toEmail: recipient.personEmail,
-          status: "pending_review",
-          aiGenerated: true,
-          aiPrompt: input.goal,
-          createdByUserId: ctx.user.id,
-        });
-        const draftId = Number((draftR as any)[0]?.insertId ?? 0);
-
-        // Save prompt version history
-        await db.insert(promptVersions).values({
-          workspaceId: ctx.workspace.id,
-          entityType: "email_draft",
-          entityId: draftId,
-          version: 1,
-          subject: stage5.subject,
-          body: stage5.body,
-          promptUsed: input.goal,
-          toneUsed: input.tone,
-          createdByUserId: ctx.user.id,
-        });
-
-        // Mark pipeline complete
-        await db
-          .update(researchPipelines)
-          .set({ stage5_final: stage5, status: "complete", currentStage: 5, emailDraftId: draftId, completedAt: new Date() })
-          .where(eq(researchPipelines.id, pipelineId));
-
-        return { pipelineId, draftId, subject: stage5.subject, body: stage5.body };
-      } catch (err: any) {
-        await db
-          .update(researchPipelines)
-          .set({ status: "failed", errorMessage: String(err?.message ?? err) })
-          .where(eq(researchPipelines.id, pipelineId));
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Pipeline failed: " + (err?.message ?? "unknown") });
-      }
+      const run: Promise<void> = runStages(db, { ...input, workspaceId: ctx.workspace.id, userId: ctx.user.id, pipelineId, recipient })
+        .catch((e) => console.error(`[researchPipeline] ${pipelineId} crashed:`, e instanceof Error ? e.message : e))
+        .finally(() => { inFlight.delete(run); });
+      inFlight.add(run);
+      return { pipelineId };
     }),
 
   /** Get prompt version history for a draft */

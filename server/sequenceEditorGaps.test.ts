@@ -170,7 +170,19 @@ describe("the buttons on a row", () => {
     expect(src).toContain("const done = (message: string) => () => { refresh(); toast.success(message); };");
     expect(src).toContain("const failed = (e: { message: string }) => { refresh(); toast.error(e.message); };");
     expect(src.match(/onError: failed/g)).toHaveLength(3);
-    expect(src).toContain("utils.sequences.listEnrollments.invalidate({ sequenceId });");
+    /**
+     * 2026-11-06: this used to pin the hand-written
+     * `utils.sequences.listEnrollments.invalidate({ sequenceId })`. That line
+     * moved into `invalidateEnrollmentReads` (client/src/lib/enrollmentCache.ts)
+     * because invalidating only the queries one screen happens to read is
+     * exactly what left the v2 Contacts tab stale after an enrol from the
+     * People page — this component's own refresh was missing the two legacy
+     * reads, and the two bulk-enrol paths were missing this one. The
+     * guarantee here is unchanged: every outcome refreshes. The full set of
+     * reads, and the rule that every enrolment writer goes through one
+     * function, are pinned by server/enrollmentCacheInvalidation.test.ts.
+     */
+    expect(src).toContain("const refresh = () => invalidateEnrollmentReads(utils, sequenceId);");
     expect(src).not.toContain("pauseOnReply.");
   });
 });

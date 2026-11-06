@@ -20,7 +20,7 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { areCampaigns, downstreamLinks, personas, researchExternalRefs, researchJobs, researchMarkets, researchRevisions, researchSectors, users, workspaceSettings } from "../../drizzle/schema";
+import { accounts, areCampaigns, downstreamLinks, personas, researchExternalRefs, researchJobs, researchMarkets, researchRevisions, researchSectors, users, workspaceSettings } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
@@ -29,7 +29,7 @@ import { workspaceAnthropicKey } from "../_core/llm";
 import { cancelResearchJob, enqueueResearchJob, failOrphanedJobs, type ResearchDraft } from "../services/research/engine";
 import { ICP_FALLBACKS, workspaceIcpFallback } from "../services/research/targetingPrior";
 import { commitDownstream, previewDownstream } from "../services/research/downstreamImport";
-import { __clearResearchContextCache } from "../services/research/context";
+import { __clearResearchContextCache, forgetResearchContext } from "../services/research/context";
 import { personaResultSummaries, researchResults, sectorTallies } from "../services/research/results";
 import { cleanLinkSettings, type DownstreamMarketExtras } from "@shared/downstreamMap";
 import { isAdminRole } from "@shared/roleRank";
@@ -67,6 +67,7 @@ import {
   MARKET_RUN_PARTS,
   RESEARCH_STATUSES,
   SECTOR_RUN_PARTS,
+  sourcesLeftOut,
   type MarketContent,
   type SectorContent,
 } from "@shared/researchShape";
@@ -115,6 +116,78 @@ async function loadJob(db: Db, workspaceId: number, id: number) {
     .limit(1);
   if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Research run not found" });
   return row;
+}
+
+/**
+ * Stopping, discarding and drafting again spend or throw away someone's run:
+ * the person who started it, or an admin (audit 2026-10-20, P98, P100). The
+ * run page shows those buttons by the same rule.
+ */
+function assertRunOwnerOrAdmin(job: { userId: number }, userId: number, role: string, doing: string) {
+  if (job.userId !== userId && !isAdminRole(role)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: `Only the person who started a run, or an admin, can ${doing} it` });
+  }
+}
+
+/**
+ * Whether the market or sector a run was for has been deleted since it ran
+ * (audit 2026-10-20, P99): its draft can no longer be saved, and the page
+ * said it would create a new one.
+ */
+async function runTargetGone(db: Db, workspaceId: number, job: { kind: string; marketId: number | null; sectorId: number | null }): Promise<string | null> {
+  if (job.kind === "sector" && job.sectorId != null) {
+    const [s] = await db.select({ id: researchSectors.id }).from(researchSectors).where(and(eq(researchSectors.id, job.sectorId), eq(researchSectors.workspaceId, workspaceId))).limit(1);
+    if (!s) return "The sector this run refreshed was deleted, so its draft can't be saved. Its brief and sources are still here to read.";
+  }
+  if (job.marketId != null) {
+    const [m] = await db.select({ id: researchMarkets.id }).from(researchMarkets).where(and(eq(researchMarkets.id, job.marketId), eq(researchMarkets.workspaceId, workspaceId))).limit(1);
+    if (!m) return `The market this run ${job.kind === "market" ? "refreshed" : "was for"} was deleted, so its draft can't be saved. Its brief and sources are still here to read.`;
+  }
+  return null;
+}
+
+/**
+ * What deleting a market's or a sector's research would touch (audit
+ * 2026-10-20, P29): its personas and the campaigns and accounts that use its
+ * sectors. A campaign that is running blocks the delete.
+ */
+async function sectorDependents(db: Db, workspaceId: number, sectorIds: number[]) {
+  if (!sectorIds.length) return { personas: 0, accounts: 0, campaigns: [] as { id: number; name: string; status: string }[] };
+  const [p] = await db.select({ c: sql<number>`count(*)` }).from(personas).where(and(eq(personas.workspaceId, workspaceId), inArray(personas.sectorId, sectorIds)));
+  const [a] = await db.select({ c: sql<number>`count(*)` }).from(accounts).where(and(eq(accounts.workspaceId, workspaceId), inArray(accounts.researchSectorId, sectorIds)));
+  const campaigns = await db
+    .select({ id: areCampaigns.id, name: areCampaigns.name, status: areCampaigns.status })
+    .from(areCampaigns)
+    .where(and(eq(areCampaigns.workspaceId, workspaceId), inArray(areCampaigns.researchSectorId, sectorIds)))
+    .orderBy(asc(areCampaigns.name));
+  return { personas: Number(p?.c ?? 0), accounts: Number(a?.c ?? 0), campaigns };
+}
+
+function refuseIfLive(campaigns: { name: string; status: string }[], what: string) {
+  const live = campaigns.filter((c) => c.status === "active");
+  if (live.length) {
+    const names = live.slice(0, 3).map((c) => `"${c.name}"`).join(", ") + (live.length > 3 ? ` and ${live.length - 3} more` : "");
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `${live.length === 1 ? "An active campaign uses" : `${live.length} active campaigns use`} this ${what}: ${names}. Pause ${live.length === 1 ? "it" : "them"}, or give ${live.length === 1 ? "it" : "them"} another sector, first.`,
+    });
+  }
+}
+
+/** Unlinks the delete's campaigns and accounts from the sectors, so nothing keeps a dead id. */
+async function unlinkSectors(db: Db, workspaceId: number, sectorIds: number[]) {
+  await db
+    .update(personas)
+    .set({ sectorId: null })
+    .where(and(eq(personas.workspaceId, workspaceId), inArray(personas.sectorId, sectorIds)));
+  await db
+    .update(areCampaigns)
+    .set({ researchSectorId: null })
+    .where(and(eq(areCampaigns.workspaceId, workspaceId), inArray(areCampaigns.researchSectorId, sectorIds)));
+  await db
+    .update(accounts)
+    .set({ researchSectorId: null })
+    .where(and(eq(accounts.workspaceId, workspaceId), inArray(accounts.researchSectorId, sectorIds)));
 }
 
 /* ── Inputs ─────────────────────────────────────────────────────────────── */
@@ -219,7 +292,23 @@ export const researchRouter = router({
         return r;
       }),
 
-    /** Deletes the market, its sectors and every version; its personas stay, unlinked. */
+    /** What deleting the market would touch, for its confirmation (P29). */
+    dependents: workspaceProcedure.input(z.object({ id: Id })).query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const row = await loadMarket(db, ctx.workspace.id, input.id);
+      const sectorIds = (await db
+        .select({ id: researchSectors.id })
+        .from(researchSectors)
+        .where(and(eq(researchSectors.workspaceId, ctx.workspace.id), eq(researchSectors.marketId, row.id)))).map((s) => s.id);
+      return { sectors: sectorIds.length, ...(await sectorDependents(db, ctx.workspace.id, sectorIds)) };
+    }),
+
+    /**
+     * Deletes the market, its sectors and every version. Refused while an
+     * active campaign uses one of its sectors (P29: it silently dropped their
+     * never-target words); other campaigns, its personas and its accounts stay,
+     * unlinked.
+     */
     delete: adminWsProcedure.input(z.object({ id: Id })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       const row = await loadMarket(db, ctx.workspace.id, input.id);
@@ -227,15 +316,10 @@ export const researchRouter = router({
         .select({ id: researchSectors.id })
         .from(researchSectors)
         .where(and(eq(researchSectors.workspaceId, ctx.workspace.id), eq(researchSectors.marketId, row.id)))).map((s) => s.id);
+      const deps = await sectorDependents(db, ctx.workspace.id, sectorIds);
+      refuseIfLive(deps.campaigns, "market's sectors");
       if (sectorIds.length) {
-        await db
-          .update(personas)
-          .set({ sectorId: null })
-          .where(and(eq(personas.workspaceId, ctx.workspace.id), inArray(personas.sectorId, sectorIds)));
-        await db
-          .update(areCampaigns)
-          .set({ researchSectorId: null })
-          .where(and(eq(areCampaigns.workspaceId, ctx.workspace.id), inArray(areCampaigns.researchSectorId, sectorIds)));
+        await unlinkSectors(db, ctx.workspace.id, sectorIds);
         await db
           .delete(researchRevisions)
           .where(and(eq(researchRevisions.workspaceId, ctx.workspace.id), eq(researchRevisions.entityType, "sector"), inArray(researchRevisions.entityId, sectorIds)));
@@ -249,8 +333,9 @@ export const researchRouter = router({
       await db
         .delete(researchMarkets)
         .where(and(eq(researchMarkets.id, row.id), eq(researchMarkets.workspaceId, ctx.workspace.id)));
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "research_market", entityId: row.id, before: { name: row.name, sectors: sectorIds.length } });
-      return { success: true, sectorsDeleted: sectorIds.length };
+      forgetResearchContext(ctx.workspace.id);
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "research_market", entityId: row.id, before: { name: row.name, sectors: sectorIds.length, campaignsUnlinked: deps.campaigns.map((c) => c.id) } });
+      return { success: true, sectorsDeleted: sectorIds.length, campaignsUnlinked: deps.campaigns.length };
     }),
   }),
 
@@ -316,26 +401,33 @@ export const researchRouter = router({
         return r;
       }),
 
-    /** Deletes the sector and its versions; its personas stay, unlinked. */
+    /** What deleting the sector would touch, for its confirmation (P29). */
+    dependents: workspaceProcedure.input(z.object({ id: Id })).query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const row = await loadSector(db, ctx.workspace.id, input.id);
+      return sectorDependents(db, ctx.workspace.id, [row.id]);
+    }),
+
+    /**
+     * Deletes the sector and its versions. Refused while an active campaign
+     * uses it (P29); other campaigns, its personas and its accounts stay,
+     * unlinked.
+     */
     delete: adminWsProcedure.input(z.object({ id: Id })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       const row = await loadSector(db, ctx.workspace.id, input.id);
-      await db
-        .update(personas)
-        .set({ sectorId: null })
-        .where(and(eq(personas.workspaceId, ctx.workspace.id), eq(personas.sectorId, row.id)));
-      await db
-        .update(areCampaigns)
-        .set({ researchSectorId: null })
-        .where(and(eq(areCampaigns.workspaceId, ctx.workspace.id), eq(areCampaigns.researchSectorId, row.id)));
+      const deps = await sectorDependents(db, ctx.workspace.id, [row.id]);
+      refuseIfLive(deps.campaigns, "sector");
+      await unlinkSectors(db, ctx.workspace.id, [row.id]);
       await db
         .delete(researchRevisions)
         .where(and(eq(researchRevisions.workspaceId, ctx.workspace.id), eq(researchRevisions.entityType, "sector"), eq(researchRevisions.entityId, row.id)));
       await db
         .delete(researchSectors)
         .where(and(eq(researchSectors.id, row.id), eq(researchSectors.workspaceId, ctx.workspace.id)));
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "research_sector", entityId: row.id, before: { name: row.name, marketId: row.marketId } });
-      return { success: true, marketId: row.marketId };
+      forgetResearchContext(ctx.workspace.id);
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "research_sector", entityId: row.id, before: { name: row.name, marketId: row.marketId, campaignsUnlinked: deps.campaigns.map((c) => c.id) } });
+      return { success: true, marketId: row.marketId, campaignsUnlinked: deps.campaigns.length };
     }),
   }),
 
@@ -569,7 +661,8 @@ export const researchRouter = router({
       }),
 
     /** Recent runs in the workspace, and where the caller stands against the daily number. */
-    list: workspaceProcedure.input(z.object({ limit: z.number().int().min(1).max(50).default(15) }).optional()).query(async ({ ctx, input }) => {
+    // Up to 200, so the Research page can show older runs (audit 2026-10-20, P113).
+    list: workspaceProcedure.input(z.object({ limit: z.number().int().min(1).max(200).default(15) }).optional()).query(async ({ ctx, input }) => {
       const db = await requireDb();
       await failOrphanedJobs(db, ctx.workspace.id);
       const rows = await db
@@ -661,16 +754,23 @@ export const researchRouter = router({
         current,
         marketName,
         mine: job.userId === ctx.user.id,
+        /** Why the draft can't be saved, when what it was for was deleted (P99). */
+        targetGone: job.status === "done" && !job.outcome ? await runTargetGone(db, ctx.workspace.id, job) : null,
       };
+    }),
+
+    /** One run's brief, for the market report's briefs (P107: the report no longer carries every run's). */
+    brief: workspaceProcedure.input(z.object({ id: Id })).query(async ({ ctx, input }) => {
+      const db = await requireDb();
+      const job = await loadJob(db, ctx.workspace.id, input.id);
+      return { id: job.id, brief: job.brief ?? "" };
     }),
 
     /** Stops a queued or running run. Its owner or an admin. What it spent stays recorded. */
     cancel: managerProcedure.input(z.object({ id: Id })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       const job = await loadJob(db, ctx.workspace.id, input.id);
-      if (job.userId !== ctx.user.id && ctx.member.role !== "admin" && ctx.member.role !== "super_admin") {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Only the person who started a run, or an admin, can stop it" });
-      }
+      assertRunOwnerOrAdmin(job, ctx.user.id, ctx.member.role, "stop");
       if (job.status !== "queued" && job.status !== "running") return { success: true, status: job.status };
       cancelResearchJob(job.id);
       await db
@@ -708,66 +808,96 @@ export const researchRouter = router({
         const allowed: readonly string[] = draft.kind === "market" ? MARKET_RUN_PARTS : SECTOR_RUN_PARTS;
         const parts = input.parts.filter((x) => allowed.includes(x));
         if (parts.length === 0 && input.personas.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Tick at least one part to save" });
+        const gone = await runTargetGone(db, ws, job);
+        if (gone) throw new TRPCError({ code: "PRECONDITION_FAILED", message: gone });
 
-        if (draft.kind === "market") {
-          const proposed = cleanMarketContent(draft.content).content;
-          if (job.marketId != null) {
-            const cur = await loadMarket(db, ws, job.marketId);
-            if (input.expectedRevision == null) throw new TRPCError({ code: "BAD_REQUEST", message: "Reload the run and try again" });
-            const merged = mergeMarketParts(marketContentOf(cur), proposed, parts);
-            await saveMarket(db, { workspaceId: ws, userId: ctx.user.id, id: cur.id, expectedRevision: input.expectedRevision, content: merged, note });
-            resultId = cur.id;
+        // Claim the draft before writing anything (audit 2026-10-20, P112): two
+        // saves at once both read no outcome above, and both wrote. Only one
+        // claim matches the row; the other is refused here.
+        const claim = await db
+          .update(researchJobs)
+          .set({ outcome: "accepted", reviewedByUserId: ctx.user.id, reviewedAt: new Date() })
+          .where(and(eq(researchJobs.id, job.id), eq(researchJobs.workspaceId, ws), eq(researchJobs.status, "done"), isNull(researchJobs.outcome)));
+        if (affectedRowsOf(claim) !== 1) throw new TRPCError({ code: "CONFLICT", message: "This draft was already saved or discarded" });
+
+        let sourcesNotAdded = 0;
+        try {
+          if (draft.kind === "market") {
+            const proposed = cleanMarketContent(draft.content).content;
+            if (job.marketId != null) {
+              const cur = await loadMarket(db, ws, job.marketId);
+              if (input.expectedRevision == null) throw new TRPCError({ code: "BAD_REQUEST", message: "Reload the run and try again" });
+              const now = marketContentOf(cur);
+              if (parts.includes("sources")) sourcesNotAdded = sourcesLeftOut(now.sources, proposed.sources);
+              const merged = mergeMarketParts(now, proposed, parts);
+              await saveMarket(db, { workspaceId: ws, userId: ctx.user.id, id: cur.id, expectedRevision: input.expectedRevision, content: merged, note });
+              resultId = cur.id;
+            } else {
+              const merged = mergeMarketParts(emptyMarketContent(job.subject), proposed, parts);
+              resultId = (await insertMarket(db, { workspaceId: ws, userId: ctx.user.id, content: merged, source: "ai", sourceRef: ref, note: `Created from ${note}` })).id;
+            }
           } else {
-            const merged = mergeMarketParts(emptyMarketContent(job.subject), proposed, parts);
-            resultId = (await insertMarket(db, { workspaceId: ws, userId: ctx.user.id, content: merged, source: "ai", sourceRef: ref, note: `Created from ${note}` })).id;
+            const proposed = cleanSectorContent(draft.content).content;
+            let saved: SectorContent;
+            if (job.sectorId != null) {
+              const cur = await loadSector(db, ws, job.sectorId);
+              if (input.expectedRevision == null) throw new TRPCError({ code: "BAD_REQUEST", message: "Reload the run and try again" });
+              const now = sectorContentOf(cur);
+              if (parts.includes("sources")) sourcesNotAdded = sourcesLeftOut(now.sources, proposed.sources);
+              saved = mergeSectorParts(now, proposed, parts);
+              if (parts.length) await saveSector(db, { workspaceId: ws, userId: ctx.user.id, id: cur.id, expectedRevision: input.expectedRevision, content: saved, note });
+              resultId = cur.id;
+            } else {
+              if (job.marketId == null) throw new TRPCError({ code: "BAD_REQUEST", message: "This run has no market" });
+              saved = mergeSectorParts(emptySectorContent(job.subject), proposed, parts);
+              resultId = (await insertSector(db, { workspaceId: ws, userId: ctx.user.id, marketId: job.marketId, content: saved, source: "ai", sourceRef: ref, note: `Created from ${note}` })).id;
+            }
+            // The ticked personas, in this sector, starting from the targeting
+            // it now has: the draft's only if Targeting was ticked (audit
+            // 2026-10-20, P25: they took the draft's either way).
+            const targeting = cleanSectorContent(saved).content.targeting;
+            const existing = await db.select({ name: personas.name }).from(personas).where(and(eq(personas.workspaceId, ws), eq(personas.sectorId, resultId)));
+            const taken = new Set(existing.map((p) => p.name.trim().toLowerCase()));
+            for (const i of Array.from(new Set(input.personas))) {
+              const p = draft.personas[i];
+              if (!p || taken.has(p.name.trim().toLowerCase())) continue;
+              taken.add(p.name.trim().toLowerCase());
+              await db.insert(personas).values({
+                workspaceId: ws,
+                name: p.name.slice(0, 120),
+                targetTitles: p.titles,
+                targetIndustries: targeting.industries,
+                targetGeographies: targeting.geographies,
+                keywords: targeting.keywords,
+                employeeMin: targeting.employeeMin,
+                employeeMax: targeting.employeeMax,
+                sectorId: resultId,
+                cares: p.cares || null,
+                pains: p.pains,
+                objections: p.objections,
+                angle: p.angle || null,
+                source: "ai",
+                sourceRef: ref,
+                createdByUserId: ctx.user.id,
+              });
+            }
+            forgetResearchContext(ws);
           }
-        } else {
-          const proposed = cleanSectorContent(draft.content).content;
-          if (job.sectorId != null) {
-            const cur = await loadSector(db, ws, job.sectorId);
-            if (input.expectedRevision == null) throw new TRPCError({ code: "BAD_REQUEST", message: "Reload the run and try again" });
-            const merged = mergeSectorParts(sectorContentOf(cur), proposed, parts);
-            if (parts.length) await saveSector(db, { workspaceId: ws, userId: ctx.user.id, id: cur.id, expectedRevision: input.expectedRevision, content: merged, note });
-            resultId = cur.id;
-          } else {
-            if (job.marketId == null) throw new TRPCError({ code: "BAD_REQUEST", message: "This run has no market" });
-            const merged = mergeSectorParts(emptySectorContent(job.subject), proposed, parts);
-            resultId = (await insertSector(db, { workspaceId: ws, userId: ctx.user.id, marketId: job.marketId, content: merged, source: "ai", sourceRef: ref, note: `Created from ${note}` })).id;
-          }
-          // The ticked personas, in this sector, starting from its targeting.
-          const existing = await db.select({ name: personas.name }).from(personas).where(and(eq(personas.workspaceId, ws), eq(personas.sectorId, resultId)));
-          const taken = new Set(existing.map((p) => p.name.trim().toLowerCase()));
-          for (const i of Array.from(new Set(input.personas))) {
-            const p = draft.personas[i];
-            if (!p || taken.has(p.name.trim().toLowerCase())) continue;
-            taken.add(p.name.trim().toLowerCase());
-            await db.insert(personas).values({
-              workspaceId: ws,
-              name: p.name.slice(0, 120),
-              targetTitles: p.titles,
-              targetIndustries: proposed.targeting.industries,
-              targetGeographies: proposed.targeting.geographies,
-              keywords: proposed.targeting.keywords,
-              employeeMin: proposed.targeting.employeeMin,
-              employeeMax: proposed.targeting.employeeMax,
-              sectorId: resultId,
-              cares: p.cares || null,
-              pains: p.pains,
-              objections: p.objections,
-              angle: p.angle || null,
-              source: "ai",
-              sourceRef: ref,
-              createdByUserId: ctx.user.id,
-            });
-          }
+        } catch (e) {
+          // The save failed: give the draft back, so it can be saved again.
+          await db
+            .update(researchJobs)
+            .set({ outcome: null, reviewedByUserId: null, reviewedAt: null })
+            .where(and(eq(researchJobs.id, job.id), eq(researchJobs.workspaceId, ws), eq(researchJobs.outcome, "accepted"), isNull(researchJobs.resultId)));
+          throw e;
         }
 
         await db
           .update(researchJobs)
-          .set({ outcome: "accepted", reviewedByUserId: ctx.user.id, reviewedAt: new Date(), resultType, resultId })
+          .set({ resultType, resultId })
           .where(and(eq(researchJobs.id, job.id), eq(researchJobs.workspaceId, ws)));
-        await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "update", entityType: "research_run", entityId: job.id, after: { accepted: parts, personas: input.personas, resultType, resultId } });
-        return { resultType, resultId };
+        await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "update", entityType: "research_run", entityId: job.id, after: { accepted: parts, personas: input.personas, resultType, resultId, ...(sourcesNotAdded ? { sourcesNotAdded } : {}) } });
+        return { resultType, resultId, sourcesNotAdded };
       }),
 
     /**
@@ -776,13 +906,41 @@ export const researchRouter = router({
      */
     redraft: managerProcedure.input(z.object({ id: Id })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
-      const job = await loadJob(db, ctx.workspace.id, input.id);
+      const ws = ctx.workspace.id;
+      const job = await loadJob(db, ws, input.id);
       if (job.removedAt) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This run was removed from the Research page" });
       if (job.status !== "failed" || !(job.brief ?? "").trim()) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Only a run that failed after its research can draft again" });
       }
-      if (!(await workspaceAnthropicKey(ctx.workspace.id))) {
+      // Held to the rules a new run is (audit 2026-10-20, P100): its starter
+      // or an admin, one run at a time per person, within the day's number.
+      // The run is its starter's, so their limits apply.
+      assertRunOwnerOrAdmin(job, ctx.user.id, ctx.member.role, "draft again from");
+      if (!(await workspaceAnthropicKey(ws))) {
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Research runs on this workspace's own Anthropic key. An admin can add one in Settings → Integrations → AI provider keys." });
+      }
+      await failOrphanedJobs(db, ws);
+      const [busy] = await db
+        .select({ id: researchJobs.id })
+        .from(researchJobs)
+        .where(and(eq(researchJobs.workspaceId, ws), eq(researchJobs.userId, job.userId), inArray(researchJobs.status, ["queued", "running"])))
+        .limit(1);
+      if (busy) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `${job.userId === ctx.user.id ? "You already have" : "The person who started it already has"} a research run going. Wait for it to finish, or stop it, first.`,
+        });
+      }
+      const st = await researchSettingsOf(db, ws);
+      // This run already counts if it started in the last 24 hours; drafting
+      // it again must fit beside the others.
+      const others = (await runsCounted(db, ws, job.userId)).filter((r) => r.id !== job.id);
+      if (others.length >= st.dailyRuns) {
+        const free = new Date(new Date(others[0].createdAt).getTime() + RUN_WINDOW_MS);
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `The ${st.dailyRuns} research runs for the last 24 hours are used. The next one frees up at ${free.toISOString()}.`,
+        });
       }
       await db
         .update(researchJobs)
@@ -829,15 +987,22 @@ export const researchRouter = router({
       return { removed };
     }),
 
-    /** Sets a finished draft aside without saving any of it. */
+    /**
+     * Sets a finished draft aside without saving any of it. Its starter or an
+     * admin, like removing it, and on the audit log (audit 2026-10-20, P98).
+     */
     discard: managerProcedure.input(z.object({ id: Id })).mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       const job = await loadJob(db, ctx.workspace.id, input.id);
       if (job.outcome) return { success: true };
-      await db
+      assertRunOwnerOrAdmin(job, ctx.user.id, ctx.member.role, "discard");
+      const res = await db
         .update(researchJobs)
         .set({ outcome: "discarded", reviewedByUserId: ctx.user.id, reviewedAt: new Date() })
-        .where(and(eq(researchJobs.id, job.id), eq(researchJobs.workspaceId, ctx.workspace.id)));
+        .where(and(eq(researchJobs.id, job.id), eq(researchJobs.workspaceId, ctx.workspace.id), isNull(researchJobs.outcome)));
+      if (affectedRowsOf(res) === 1) {
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "research_run", entityId: job.id, after: { outcome: "discarded" } });
+      }
       return { success: true };
     }),
   }),
@@ -885,7 +1050,10 @@ export const researchRouter = router({
         market: { id: row.id, source: row.source, updatedAt: row.updatedAt, content: marketContentOf(row), extras: (row.extras ?? null) as DownstreamMarketExtras | null },
         sectors: sectorRows.map((s) => ({ id: s.id, source: s.source, updatedAt: s.updatedAt, content: sectorContentOf(s) })),
         personas: personaRows.map((p) => ({ id: p.id, name: p.name, sectorId: p.sectorId, ...cleanPersonaResearch(p).content })),
-        runs: runs.map(({ userId, ...r }) => ({ ...r, byName: nmap.get(userId) ?? "A former member" })),
+        // Whether each run has a brief, not the brief: every report section
+        // carried every run's in full (audit 2026-10-20, P107). The briefs
+        // section reads one at a time (runs.brief).
+        runs: runs.map(({ userId, brief, ...r }) => ({ ...r, hasBrief: !!(brief ?? "").trim(), byName: nmap.get(userId) ?? "A former member" })),
       };
     }),
     /** Written, contacted, replied and meetings per sector of the market (phase 6 results). */

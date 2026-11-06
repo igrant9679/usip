@@ -53,3 +53,15 @@ export function invalidateArchivedWorkspaceCache(): void {
 export async function isWorkspaceArchived(workspaceId: number): Promise<boolean> {
   return (await archivedWorkspaceIds()).has(workspaceId);
 }
+
+/**
+ * The live check for what the PUBLIC reaches: a form, a landing page, a
+ * booking link, a chat agent. Is its workspace still running? An archived
+ * workspace was frozen for members and engines while these kept serving and
+ * taking submissions, filing leads and booking meetings into it (audit
+ * 2026-10-20, G36). Each surface answers with its own "not available", so a
+ * visitor can't tell an archived workspace from a page that was taken down.
+ */
+export async function isWorkspaceLive(workspaceId: number): Promise<boolean> {
+  return !(await isWorkspaceArchived(workspaceId));
+}

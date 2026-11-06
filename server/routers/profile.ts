@@ -151,7 +151,7 @@ export const profileRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [u] = await db
-      .select({ enabledAt: users.mfaTotpEnabledAt, email: users.email })
+      .select({ enabledAt: users.mfaTotpEnabledAt, email: users.email, pending: users.mfaTotpSecret })
       .from(users)
       .where(eq(users.id, ctx.user.id))
       .limit(1);
@@ -159,9 +159,21 @@ export const profileRouter = router({
       throw new TRPCError({ code: "BAD_REQUEST", message: "Authenticator app is already connected — disconnect it first." });
     }
     const { generateTotpSecret, totpAuthUrl } = await import("../services/totp");
-    const secret = generateTotpSecret();
-    await db.update(users).set({ mfaTotpSecret: secret, mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
-    return { secret, otpauthUrl: totpAuthUrl(secret, u?.email ?? "account") };
+    /**
+     * An unconfirmed secret is handed back, not replaced (tracker 2026-11-06,
+     * item 16). The dialog starts enrolment every time it opens, and each
+     * start minted a new secret: someone who added Velocity to their app,
+     * closed the dialog (or was sent back to it by the 2FA requirement) and
+     * opened it again was now on a different key, while the app kept the old
+     * entry. Every code from that entry "didn't match", and the app ended up
+     * with several entries all called Velocity. Only this user has seen the
+     * pending key, and disconnecting or an admin reset clears it.
+     */
+    const secret = u?.pending?.trim() || generateTotpSecret();
+    if (secret !== u?.pending) {
+      await db.update(users).set({ mfaTotpSecret: secret, mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
+    }
+    return { secret, otpauthUrl: totpAuthUrl(secret, u?.email ?? "account"), reused: secret === u?.pending };
   }),
 
   /** Confirm enrollment with a live code from the authenticator app. */
@@ -177,10 +189,10 @@ export const profileRouter = router({
         .limit(1);
       if (!u?.secret) throw new TRPCError({ code: "BAD_REQUEST", message: "Start enrollment first." });
       if (u.enabledAt) return { ok: true, alreadyConnected: true };
-      const { matchTotpStep } = await import("../services/totp");
+      const { matchTotpStep, totpRefusal } = await import("../services/totp");
       const step = matchTotpStep(u.secret, input.code);
       if (step === null || !(await useTotpStep(db, ctx.user.id, step))) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "That code didn't match — check the app and try again." });
+        throw new TRPCError({ code: "FORBIDDEN", message: totpRefusal(step) });
       }
       await db.update(users).set({ mfaTotpEnabledAt: new Date() }).where(eq(users.id, ctx.user.id));
       // Turning on 2FA ends every other session (audit 2026-10-20): a session

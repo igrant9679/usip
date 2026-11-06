@@ -31,6 +31,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { csvCell } from "@shared/csvCell";
 
 const ROOT = join(__dirname, "..");
 const OPS = readFileSync(join(ROOT, "server/routers/operations.ts"), "utf8");
@@ -109,14 +110,11 @@ describe("audit filters reach SQL", () => {
 });
 
 describe("the escaper", () => {
-  // Re-declared rather than imported: it is module-local in operations.ts on
-  // purpose (reports.ts holds pinned tsc errors, so exporting its copy means
-  // editing those lines). These assert the BEHAVIOUR the source must have.
-  const esc = (v: unknown) => {
-    if (v == null) return "";
-    const s = v instanceof Date ? v.toISOString() : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
+  // 2026-11-06 (audit G49): the five copies of this escaper are one now,
+  // @shared/csvCell, which also neutralises cells that would run as formulas.
+  // So the behaviour is asserted on the real thing rather than a re-declared
+  // copy, and the source is pinned to use it.
+  const esc = csvCell;
 
   it("doubles quotes rather than backslash-escaping them", () => {
     expect(esc('a"b')).toBe('"a""b"');
@@ -133,7 +131,7 @@ describe("the escaper", () => {
   });
 
   it("and the source uses that form, not JSON.stringify", () => {
-    expect(block).toContain(`s.replace(/"/g, '""')`);
+    expect(block).toContain("const esc = csvCell;");
     expect(AUDIT_UI, "the browser-built escaper is back").not.toContain("JSON.stringify(r[h]");
   });
 });

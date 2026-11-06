@@ -34,6 +34,7 @@ import { decryptField } from "./emailAdapter";
 import { bumpCampaignCounter } from "./campaignCounters";
 import { processSignal } from "./routers/are/execution";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "./_core/activeMembers";
+import { noteLeadEngagement } from "./services/leadRescoreQueue";
 
 let pollerInterval: ReturnType<typeof setInterval> | null = null;
 let isPolling = false;
@@ -373,6 +374,9 @@ export async function processInboundReply(data: InboundReplyData) {
   const emailReplyId = Number(
     (insertedReply as unknown as { insertId?: number })?.insertId ?? 0,
   );
+  // The lead's score is re-read on the next hourly re-score (audit P12). The
+  // scorer counts only genuine replies, so a private message changes nothing.
+  noteLeadEngagement(data.workspaceId, matchedLeadId);
 
   // 4. Create notification for the account owner. The mailbox row's userId
   //    can name someone who left — then the workspace's standing recipient

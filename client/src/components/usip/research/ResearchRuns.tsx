@@ -134,10 +134,16 @@ export function StartRunDialog({ target, open, onOpenChange }: { target: RunTarg
 /** What removing runs means, said once in every confirmation. */
 const REMOVE_NOTE = "They leave this list but stay on record: what they cost still counts toward today's runs, and a link to one still opens it.";
 
+/** Runs the card shows at first, and how many more each "Show older runs" adds (P113). */
+export const RECENT_RUNS_STEP = 10;
+export const RECENT_RUNS_MAX = 200;
+
 export function RecentRuns() {
   const { canEdit, canDelete: isAdmin } = useResearchRoles();
   const utils = trpc.useUtils();
-  const q = trpc.research.runs.list.useQuery({ limit: 10 }, {
+  const [limit, setLimit] = useState(RECENT_RUNS_STEP);
+  const q = trpc.research.runs.list.useQuery({ limit }, {
+    placeholderData: (prev) => prev,
     refetchInterval: (query) => ((query.state.data as any)?.runs ?? []).some((r: any) => r.status === "queued" || r.status === "running") ? 4000 : false,
   });
   const remove = trpc.research.runs.remove.useMutation({
@@ -209,6 +215,15 @@ export function RecentRuns() {
           </div>
         ))}
       </div>
+      {/* Older runs were out of reach (audit 2026-10-20, P113). */}
+      {runs.length >= limit && limit < RECENT_RUNS_MAX && (
+        <Button size="sm" variant="ghost" disabled={q.isFetching} onClick={() => setLimit((l) => Math.min(RECENT_RUNS_MAX, l + RECENT_RUNS_STEP * 2))}>
+          Show older runs
+        </Button>
+      )}
+      {runs.length >= RECENT_RUNS_MAX && (
+        <p className="text-xs text-muted-foreground">The {RECENT_RUNS_MAX} most recent runs are shown. Each market and sector lists the runs behind it.</p>
+      )}
     </Section>
   );
 }

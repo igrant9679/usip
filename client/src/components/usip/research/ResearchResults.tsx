@@ -5,7 +5,7 @@
  * Rates appear only once enough prospects were contacted to compare
  * (MIN_SAMPLE); below that the counts are shown as they are.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { trpc, type RouterOutputs } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -141,12 +141,22 @@ function ResultsBody({ r, what, showPersonas }: { r: Results; what: string; show
   );
 }
 
+/** The Results section's anchor: the market and sector reports link to it. */
+export const RESULTS_ANCHOR = "results";
+
 /** The Results section of a sector page. */
 export function SectorResults({ sectorId }: { sectorId: number }) {
   const q = trpc.research.results.sector.useQuery({ id: sectorId });
+  // The reports link to /research/sectors/:id#results, and nothing scrolled
+  // there after a client-side visit (audit 2026-10-20, P105): once the
+  // results are in, so the page above is laid out, bring them into view.
+  const loaded = !!q.data;
+  useEffect(() => {
+    if (loaded && window.location.hash === `#${RESULTS_ANCHOR}`) document.getElementById(RESULTS_ANCHOR)?.scrollIntoView({ block: "start" });
+  }, [loaded, sectorId]);
   return (
     <Section
-      id="results"
+      id={RESULTS_ANCHOR}
       title="Results"
       description="What happened to the prospects whose Revenue Engine copy this sector shaped: replies and meetings by persona, pain, lead-with point and opener."
     >
