@@ -29,9 +29,10 @@
  * variant-assignment mechanism (see shared/variantKeys.ts) and is a product
  * decision, not something to infer.
  */
+import { csvCell } from "@shared/csvCell";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
-import { HELD_PAUSED, holdProspectSteps, releaseProspectSteps } from "../../services/are/stepHold";
+import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, like, ne, or, sql, type SQL } from "drizzle-orm";
+import { HELD_PAUSED, holdProspectSteps, releaseProspectSteps, stopProspectSteps } from "../../services/are/stepHold";
 import { z } from "zod";
 import {
   areAbVariants,
@@ -77,6 +78,7 @@ import { DEFAULT_STEP_GAP_DAYS, defaultDayForStep, stepIndexOf } from "@shared/a
 // verbatim, and the sendable-channel vocabulary is a different concern anyway.
 import { ARE_SENDABLE_CHANNELS, isSendableChannel } from "@shared/areSequenceSteps";
 import { cleanScrapedField } from "@shared/fieldHygiene";
+import { ENRICHMENT_STATES, PROSPECT_VIEWS, PROSPECT_VIEW_KEYS, bulkActionNeedsManager, searchWords, type ProspectView } from "@shared/areProspectViews";
 import { icpPromptList, icpWeighted } from "@shared/icpShape";
 import { MAX_TIMELINE_DAY_OFFSET, MAX_TIMELINE_STEPS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { sequenceMaxTokens, stepCountForTemplate } from "@shared/areSequenceTemplates";
@@ -1238,6 +1240,116 @@ export async function runSequenceAgent(
   }
 }
 
+/* ─── Prospects-tab filters ─────────────────────────────────────────────── */
+
+const escapeLike = (v: string) => v.replace(/[\\%_]/g, (m) => `\\${m}`);
+
+/**
+ * Search on the Prospects tab (A45): every word must appear in a name, email,
+ * company or title — on the queue row or on the person it links to, since the
+ * tab shows the person's values when there is one. Needs `prospects` joined.
+ */
+function queueSearchConditions(term: string | null | undefined): SQL[] {
+  return searchWords(term).map((w) => {
+    const s = `%${escapeLike(w)}%`;
+    return or(
+      like(prospectQueue.firstName, s), like(prospectQueue.lastName, s), like(prospectQueue.email, s),
+      like(prospectQueue.companyName, s), like(prospectQueue.title, s),
+      like(prospects.firstName, s), like(prospects.lastName, s), like(prospects.email, s), like(prospects.company, s),
+    )!;
+  });
+}
+
+// The queue row's person, scoped on BOTH sides (joining on the id alone is
+// the shape that once leaked across tenants, 24c720e).
+const personJoin = and(eq(prospects.id, prospectQueue.personProspectId), eq(prospects.workspaceId, prospectQueue.workspaceId));
+
+export interface QueueRowFilter {
+  campaignId: number;
+  view?: ProspectView;
+  sequenceStatus?: string;
+  enrichmentStatus?: string;
+  search?: string;
+}
+
+/**
+ * The rows `list` returns, as one WHERE (tracker 12, 13; A45). `statusCounts`
+ * counts with the same view statuses and the same search, so the number on a
+ * chip and the rows under it are one set. An explicit sequenceStatus wins
+ * over a view; with neither, rejected and staged rows stay out, as before.
+ */
+export function queueRowsWhere(workspaceId: number, f: QueueRowFilter): SQL {
+  const conditions: SQL[] = [
+    eq(prospectQueue.workspaceId, workspaceId),
+    eq(prospectQueue.campaignId, f.campaignId),
+  ];
+  if (f.enrichmentStatus) {
+    conditions.push(eq(prospectQueue.enrichmentStatus, f.enrichmentStatus as "pending" | "enriching" | "complete" | "failed"));
+  }
+  if (f.sequenceStatus) {
+    conditions.push(eq(prospectQueue.sequenceStatus, f.sequenceStatus as "pending" | "approved" | "enrolled" | "skipped" | "completed" | "replied" | "paused" | "canceled" | "sourcing"));
+  } else if (f.view) {
+    conditions.push(inArray(prospectQueue.sequenceStatus, [...PROSPECT_VIEWS[f.view]]));
+  } else {
+    // Rejected prospects (reject/bulkReject set sequenceStatus="skipped")
+    // belong in the Rejections tab only — getRejectionStats selects exactly
+    // these. Exclude them from the review queue so the two tabs are
+    // complementary (a prospect is in Prospects XOR Rejections). Callers
+    // that explicitly ask for sequenceStatus="skipped" still get them.
+    conditions.push(ne(prospectQueue.sequenceStatus, "skipped"));
+    // The no-email door (owner rule 2026-09-16): staged candidates the
+    // enrich phase is still finding addresses for are NOT in the queue —
+    // the Prospects tab shows them only via the explicit filter.
+    conditions.push(ne(prospectQueue.sequenceStatus, "sourcing"));
+  }
+  conditions.push(...queueSearchConditions(f.search));
+  return and(...conditions)!;
+}
+
+/**
+ * Reject or skip one prospect (audit 2026-10-20, A51). Both used to set
+ * `skipped` on any row whatever its state: a prospect who had replied lost
+ * that record, and one mid-sequence kept their scheduled steps. Now a replied
+ * or finished prospect is refused (that history is the record — Suppress is
+ * the way to stop contact), and anyone else's unsent steps stop with the row.
+ * Already skipped is a no-op.
+ */
+async function takeOutOfCampaign(
+  ctx: { workspace: { id: number }; user: { id: number } },
+  prospectId: number,
+  opts: { reject: boolean; reason?: string },
+): Promise<{ success: true; before: string; stepsStopped: number }> {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const ws = ctx.workspace.id;
+  const [cur] = await db.select({ sequenceStatus: prospectQueue.sequenceStatus }).from(prospectQueue)
+    .where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, ws))).limit(1);
+  if (!cur) throw new TRPCError({ code: "NOT_FOUND" });
+  const row = { status: cur.sequenceStatus };
+  if (row.status === "skipped") return { success: true, before: "skipped", stepsStopped: 0 };
+  if (row.status === "replied" || row.status === "completed") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `This prospect has ${row.status === "replied" ? "replied" : "finished their sequence"}, so it stays as it is. Use Suppress if they must not be contacted again.`,
+    });
+  }
+  const reason = opts.reason?.trim() || undefined;
+  const res = await db.update(prospectQueue).set(opts.reject
+    ? { sequenceStatus: "skipped", rejectedAt: new Date(), rejectedByUserId: ctx.user.id, rejectionReason: reason ?? null }
+    : { sequenceStatus: "skipped" },
+  ).where(and(
+    eq(prospectQueue.id, prospectId),
+    eq(prospectQueue.workspaceId, ws),
+    // Only from the state just read: a reply landing in between wins.
+    eq(prospectQueue.sequenceStatus, row.status),
+  ));
+  if (Number((res as any)?.[0]?.affectedRows ?? 0) !== 1) {
+    throw new TRPCError({ code: "CONFLICT", message: "This prospect changed while you were looking at it. Refresh and try again." });
+  }
+  const stepsStopped = await stopProspectSteps(db, ws, prospectId, `${opts.reject ? "Rejected" : "Skipped"}${reason ? ` — ${reason}` : ""}`);
+  return { success: true, before: row.status, stepsStopped };
+}
+
 /* ─── Router ─────────────────────────────────────────────────────────────── */
 
 export const prospectsRouter = router({
@@ -1247,14 +1359,26 @@ export const prospectsRouter = router({
    * and its "awaiting approval" stopped at 100.
    */
   statusCounts: workspaceProcedure
-    .input(z.object({ campaignId: z.number() }))
+    .input(z.object({
+      campaignId: z.number(),
+      // The tab's current filters (tracker 12, 13; A45): `byEnrichment` and
+      // `matching` count what `list` would return for them.
+      view: z.enum(PROSPECT_VIEW_KEYS as [ProspectView, ...ProspectView[]]).optional(),
+      enrichmentStatus: z.enum(ENRICHMENT_STATES).optional(),
+      search: z.string().max(200).optional(),
+    }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
-      if (!db) return { inQueue: 0, pendingEnrich: 0, awaitingApproval: 0, byStatus: {} as Record<string, number> };
-      const rows = await db.select({ seq: prospectQueue.sequenceStatus, enr: prospectQueue.enrichmentStatus, n: sql<number>`count(*)` })
-        .from(prospectQueue)
-        .where(and(eq(prospectQueue.workspaceId, ctx.workspace.id), eq(prospectQueue.campaignId, input.campaignId)))
-        .groupBy(prospectQueue.sequenceStatus, prospectQueue.enrichmentStatus);
+      if (!db) return { inQueue: 0, pendingEnrich: 0, awaitingApproval: 0, byStatus: {} as Record<string, number>, byView: {} as Record<ProspectView, number>, byEnrichment: {} as Record<string, number>, matching: 0 };
+      const base = [eq(prospectQueue.workspaceId, ctx.workspace.id), eq(prospectQueue.campaignId, input.campaignId)];
+      const cellsOf = (searchConds: SQL[]) => {
+        const q = db.select({ seq: prospectQueue.sequenceStatus, enr: prospectQueue.enrichmentStatus, n: sql<number>`count(*)` })
+          .from(prospectQueue);
+        return (searchConds.length ? q.leftJoin(prospects, personJoin) : q)
+          .where(and(...base, ...searchConds))
+          .groupBy(prospectQueue.sequenceStatus, prospectQueue.enrichmentStatus);
+      };
+      const rows = await cellsOf([]);
       const byStatus: Record<string, number> = {};
       let inQueue = 0, pendingEnrich = 0, awaitingApproval = 0;
       for (const r of rows) {
@@ -1266,7 +1390,21 @@ export const prospectsRouter = router({
         if (r.enr === "pending") pendingEnrich += n;
         if (r.seq === "pending" && r.enr === "complete") awaitingApproval += n;
       }
-      return { inQueue, pendingEnrich, awaitingApproval, byStatus };
+      const inView = (seq: unknown, view: ProspectView) => (PROSPECT_VIEWS[view] as readonly string[]).includes(String(seq));
+      const byView = Object.fromEntries(PROSPECT_VIEW_KEYS.map((v) => [v, 0])) as Record<ProspectView, number>;
+      for (const r of rows) for (const v of PROSPECT_VIEW_KEYS) if (inView(r.seq, v)) byView[v] += Number(r.n);
+      // Within the chosen view and search: one count per enrichment state,
+      // and how many rows the list has for the filters as set (its pages).
+      const searchConds = queueSearchConditions(input.search);
+      const searched = searchConds.length ? await cellsOf(searchConds) : rows;
+      const byEnrichment: Record<string, number> = Object.fromEntries(ENRICHMENT_STATES.map((e) => [e, 0]));
+      let matching = 0;
+      for (const r of searched) {
+        if (!inView(r.seq, input.view ?? "all")) continue;
+        byEnrichment[String(r.enr)] = (byEnrichment[String(r.enr)] ?? 0) + Number(r.n);
+        if (!input.enrichmentStatus || r.enr === input.enrichmentStatus) matching += Number(r.n);
+      }
+      return { inQueue, pendingEnrich, awaitingApproval, byStatus, byView, byEnrichment, matching };
     }),
 
   list: workspaceProcedure
@@ -1275,6 +1413,9 @@ export const prospectsRouter = router({
         campaignId: z.number(),
         enrichmentStatus: z.string().optional(),
         sequenceStatus: z.string().optional(),
+        /** A Prospects-tab view (shared/areProspectViews.ts); sequenceStatus wins over it. */
+        view: z.enum(PROSPECT_VIEW_KEYS as [ProspectView, ...ProspectView[]]).optional(),
+        search: z.string().max(200).optional(),
         minIcpScore: z.number().optional(),
         limit: z.number().default(50),
         offset: z.number().default(0),
@@ -1283,27 +1424,6 @@ export const prospectsRouter = router({
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const conditions = [
-        eq(prospectQueue.workspaceId, ctx.workspace.id),
-        eq(prospectQueue.campaignId, input.campaignId),
-      ];
-      if (input.enrichmentStatus) {
-        conditions.push(eq(prospectQueue.enrichmentStatus, input.enrichmentStatus as "pending" | "enriching" | "complete" | "failed"));
-      }
-      if (input.sequenceStatus) {
-        conditions.push(eq(prospectQueue.sequenceStatus, input.sequenceStatus as "pending" | "approved" | "enrolled" | "skipped" | "completed" | "replied" | "paused" | "canceled" | "sourcing"));
-      } else {
-        // Rejected prospects (reject/bulkReject set sequenceStatus="skipped")
-        // belong in the Rejections tab only — getRejectionStats selects exactly
-        // these. Exclude them from the review queue so the two tabs are
-        // complementary (a prospect is in Prospects XOR Rejections). Callers
-        // that explicitly ask for sequenceStatus="skipped" still get them.
-        conditions.push(ne(prospectQueue.sequenceStatus, "skipped"));
-        // The no-email door (owner rule 2026-09-16): staged candidates the
-        // enrich phase is still finding addresses for are NOT in the queue —
-        // the Prospects tab shows them only via the explicit filter.
-        conditions.push(ne(prospectQueue.sequenceStatus, "sourcing"));
-      }
       /**
        * How many verified intent signals the enrichment pass found.
        *
@@ -1376,14 +1496,8 @@ export const prospectsRouter = router({
             eq(prospectIntelligence.workspaceId, prospectQueue.workspaceId),
           ),
         )
-        .leftJoin(
-          prospects,
-          and(
-            eq(prospects.id, prospectQueue.personProspectId),
-            eq(prospects.workspaceId, prospectQueue.workspaceId),
-          ),
-        )
-        .where(and(...conditions))
+        .leftJoin(prospects, personJoin)
+        .where(queueRowsWhere(ctx.workspace.id, input))
         /**
          * ICP FIT STAYS THE PRIMARY KEY; intent only breaks ties.
          *
@@ -1630,13 +1744,7 @@ export const prospectsRouter = router({
 
   skip: workspaceProcedure
     .input(z.object({ prospectId: z.number() }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db.update(prospectQueue).set({ sequenceStatus: "skipped" })
-        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
-      return { success: true };
-    }),
+    .mutation(async ({ ctx, input }) => takeOutOfCampaign(ctx, input.prospectId, { reject: false })),
 
   /**
    * Cancel an enrolled (or paused) prospect's sequence. Hard-stops
@@ -1770,14 +1878,73 @@ export const prospectsRouter = router({
 
   /** List sequence rows for the campaign Sequences tab. Returns both
    *  prospects with a generated sequence (for view + edit) AND approved
-   *  prospects without one yet (so the user can trigger Generate). */
+   *  prospects without one yet (so the user can trigger Generate).
+   *
+   *  A page at a time, with the counts (audit 2026-10-20, A44): this returned
+   *  up to 500 rows, every one carrying its full generated sequence, and the
+   *  tab counted and filtered whatever had arrived. The status filter and
+   *  the search are applied here, the counts come from the same WHERE, and
+   *  every row is reachable by paging. */
   listSequences: workspaceProcedure
-    // 100 was below the size of a real campaign's queue (101 rows live), which
-    // is how a page boundary became a missing feature.
-    .input(z.object({ campaignId: z.number(), limit: z.number().default(500) }))
+    .input(z.object({
+      campaignId: z.number(),
+      /** One of the tab's filters; "all" is every row the tab lists. */
+      status: z.enum(["all", "pending", "approved", "enrolled", "paused", "canceled", "completed", "replied", "skipped"]).default("all"),
+      search: z.string().max(200).optional(),
+      limit: z.number().int().min(1).max(200).default(100),
+      offset: z.number().int().min(0).default(0),
+    }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Scoped on BOTH sides, as list's join is.
+      const intelJoin = and(
+        eq(prospectIntelligence.prospectQueueId, prospectQueue.id),
+        eq(prospectIntelligence.workspaceId, prospectQueue.workspaceId),
+      );
+      const base: SQL[] = [
+        eq(prospectQueue.campaignId, input.campaignId),
+        eq(prospectQueue.workspaceId, ctx.workspace.id),
+        // Show a prospect unless they were deliberately dismissed.
+        //
+        // This used to require a sequence OR an approved/enrolled status, which
+        // made the tab unusable exactly when it was needed: a "pending" prospect
+        // has no sequence, so it was filtered out, so it never appeared, so the
+        // Generate button next to it could never be clicked. Chicken and egg.
+        // Live: campaign 21 held 88 prospects — 87 pending, 1 enrolled — and this
+        // list returned ONE row. Only `skipped` is hidden, and only when there
+        // is nothing to show: a skipped prospect that already has a sequence
+        // still appears, because hiding real work is worse than showing a
+        // dismissed row.
+        //
+        // Filter in SQL, not after. The LIMIT below used to be applied to
+        // the UNfiltered set and then trimmed in JS, so skipped rows ate
+        // slots and pushed real ones off the end of the page; and with
+        // paging the counts must be of the same rows the pages hold.
+        or(
+          ne(prospectQueue.sequenceStatus, "skipped"),
+          isNotNull(prospectIntelligence.generatedSequence),
+        )!,
+        // Every word in a name, company, title or email — the tab's search.
+        ...searchWords(input.search).map((w) => {
+          const s = `%${escapeLike(w)}%`;
+          return or(
+            like(prospectQueue.firstName, s), like(prospectQueue.lastName, s), like(prospectQueue.companyName, s),
+            like(prospectQueue.title, s), like(prospectQueue.email, s),
+          )!;
+        }),
+      ];
+      const cells = await db
+        .select({ seq: prospectQueue.sequenceStatus, n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .leftJoin(prospectIntelligence, intelJoin)
+        .where(and(...base))
+        .groupBy(prospectQueue.sequenceStatus);
+      const countsByStatus: Record<string, number> = {};
+      for (const c of cells) countsByStatus[String(c.seq)] = Number(c.n);
+      const total = input.status === "all"
+        ? Object.values(countsByStatus).reduce((s, n) => s + n, 0)
+        : (countsByStatus[input.status] ?? 0);
       const rows = await db
         .select({
           prospectId: prospectQueue.id,
@@ -1798,23 +1965,11 @@ export const prospectsRouter = router({
           sequenceQualityBreakdown: prospectIntelligence.sequenceQualityBreakdown,
         })
         .from(prospectQueue)
-        .leftJoin(
-          prospectIntelligence,
-          eq(prospectIntelligence.prospectQueueId, prospectQueue.id),
-        )
-        .where(
-          and(
-            eq(prospectQueue.campaignId, input.campaignId),
-            eq(prospectQueue.workspaceId, ctx.workspace.id),
-            // Filter in SQL, not after. The LIMIT below used to be applied to
-            // the UNfiltered set and then trimmed in JS, so skipped rows ate
-            // slots and pushed real ones off the end of the page.
-            or(
-              ne(prospectQueue.sequenceStatus, "skipped"),
-              isNotNull(prospectIntelligence.generatedSequence),
-            ),
-          ),
-        )
+        .leftJoin(prospectIntelligence, intelJoin)
+        .where(and(
+          ...base,
+          input.status === "all" ? undefined : eq(prospectQueue.sequenceStatus, input.status),
+        ))
         // Active sequences FIRST, then a stable id order.
         //
         // There was no ORDER BY at all, so MySQL returned an arbitrary page.
@@ -1829,26 +1984,9 @@ export const prospectsRouter = router({
                    ELSE 2 END`,
           prospectQueue.id,
         )
-        .limit(input.limit);
-      // Show a prospect unless they were deliberately dismissed.
-      //
-      // This used to require a sequence OR an approved/enrolled status, which
-      // made the tab unusable exactly when it was needed: a "pending" prospect
-      // has no sequence, so it was filtered out, so it never appeared, so the
-      // Generate button next to it could never be clicked. Chicken and egg.
-      // Live: campaign 21 held 88 prospects — 87 pending, 1 enrolled — and this
-      // list returned ONE row.
-      //
-      // The row UI has always handled the empty case ("no sequence" + a
-      // Generate action), and the tab's own filter bar offers "pending", so the
-      // client was built for these rows all along. Only `skipped` is hidden,
-      // and only when there is nothing to show: a skipped prospect that already
-      // has a sequence still appears, because hiding real work is worse than
-      // showing a dismissed row.
-      return rows.filter((r) => {
-        const hasSeq = Array.isArray(r.generatedSequence) && (r.generatedSequence as unknown[]).length > 0;
-        return hasSeq || String(r.sequenceStatus) !== "skipped";
-      });
+        .limit(input.limit)
+        .offset(input.offset);
+      return { rows, total, countsByStatus };
     }),
 
   /**
@@ -2126,7 +2264,7 @@ export const prospectsRouter = router({
       await recordAudit({
         workspaceId: ctx.workspace.id, actorUserId: ctx.user.id,
         action: "update", entityType: "are_prospect_reconcile", entityId: 0,
-        after: { ...res, notes: res.notes.slice(0, 20) },
+        after: { ...res, notes: res.notes.slice(0, 20), changes: res.changes.slice(0, 20) },
       });
       return res;
     }),
@@ -2376,16 +2514,34 @@ export const prospectsRouter = router({
 
   /** Reject a prospect with an optional reason */
   reject: workspaceProcedure
-    .input(z.object({ prospectId: z.number(), reason: z.string().optional() }))
+    .input(z.object({ prospectId: z.number(), reason: z.string().max(500).optional() }))
+    .mutation(async ({ ctx, input }) => takeOutOfCampaign(ctx, input.prospectId, { reject: true, reason: input.reason })),
+
+  /**
+   * A rejected (or skipped) prospect back to the review queue — the row's
+   * Undo and the bulk bar's "Restore to pending" (A51). Only from `skipped`;
+   * steps a reject stopped stay stopped, so the prospect is approved again
+   * like any other before anything sends.
+   */
+  restore: workspaceProcedure
+    .input(z.object({ prospectId: z.number(), reason: z.string().trim().max(500).optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [cur] = await db.select({ sequenceStatus: prospectQueue.sequenceStatus }).from(prospectQueue)
+        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id))).limit(1);
+      if (!cur) throw new TRPCError({ code: "NOT_FOUND" });
+      if (cur.sequenceStatus !== "skipped") throw new TRPCError({ code: "BAD_REQUEST", message: `not rejected (status ${cur.sequenceStatus})` });
       await db.update(prospectQueue).set({
-        sequenceStatus: "skipped",
-        rejectedAt: new Date(),
-        rejectedByUserId: ctx.user.id,
-        rejectionReason: input.reason ?? null,
-      }).where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)));
+        sequenceStatus: "pending",
+        rejectedAt: null,
+        rejectedByUserId: null,
+        rejectionReason: input.reason ? `Restored — ${input.reason}` : null,
+      }).where(and(
+        eq(prospectQueue.id, input.prospectId),
+        eq(prospectQueue.workspaceId, ctx.workspace.id),
+        eq(prospectQueue.sequenceStatus, "skipped"),
+      ));
       return { success: true };
     }),
 
@@ -2492,7 +2648,11 @@ export const prospectsRouter = router({
   bulk: workspaceProcedure
     .input(BULK_INPUT)
     .mutation(async ({ ctx, input }) => {
-      requireMinRole(ctx.member.role, "manager", "Only managers and admins can run bulk actions.");
+      // A rep may approve, reject or skip a selection — the same decisions
+      // the row buttons and "Approve all" already let them make (tracker 9).
+      if (bulkActionNeedsManager(input.action)) {
+        requireMinRole(ctx.member.role, "manager", "Only managers and admins can run this bulk action.");
+      }
       return runBulkAction(ctx as never, input);
     }),
 
@@ -2525,18 +2685,14 @@ export const prospectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // The single reject's rule per row (A51): a replied or finished prospect
+      // is left as it is, and anyone still in a sequence has it stopped.
       let rejected = 0;
       for (const id of input.prospectIds) {
-        const result = await db.update(prospectQueue).set({
-          sequenceStatus: "skipped",
-          rejectedAt: new Date(),
-          rejectedByUserId: ctx.user.id,
-          rejectionReason: input.reason ?? null,
-        }).where(and(
-          eq(prospectQueue.id, id),
-          eq(prospectQueue.workspaceId, ctx.workspace.id),
-        ));
-        if ((result[0] as any).affectedRows > 0) rejected++;
+        try {
+          const r = await takeOutOfCampaign(ctx, id, { reject: true, reason: input.reason });
+          if (r.before !== "skipped") rejected++;
+        } catch { /* not found, or replied/completed — not rejected */ }
       }
       return { rejected };
     }),
@@ -2780,12 +2936,8 @@ export const prospectsRouter = router({
           eq(prospectQueue.sequenceStatus, "skipped"),
         ))
         .orderBy(desc(prospectQueue.rejectedAt));
-      const escape = (v: unknown) => {
-        if (v == null) return "";
-        const s = String(v);
-        return s.includes(",") || s.includes('"') || s.includes("\n")
-          ? `"${s.replace(/"/g, '""')}"` : s;
-      };
+      // Formula cells neutralised too (audit 2026-10-20, G49).
+      const escape = csvCell;
       const headers = [
         "ID","First Name","Last Name","Title","Company","Industry","Geography",
         "Company Size","Email","LinkedIn URL","ICP Match Score","Rejection Reason","Rejected At","Source",

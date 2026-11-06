@@ -293,3 +293,11 @@ export function fmtDate(d: Date | string | number | null | undefined) {
   if (Number.isNaN(dt.getTime())) return "—";
   return dt.toLocaleDateString();
 }
+
+/** A date with its time, for logs where the order within a day matters. */
+export function fmtDateTime(d: Date | string | number | null | undefined) {
+  if (!d) return "—";
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return "—";
+  return dt.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}

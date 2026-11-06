@@ -390,13 +390,22 @@ describe("the campaign tabs count in SQL and page (A44, A45)", () => {
     expect((await caller().are.prospects.getRejectionStats({ campaignId: 38, page: 2, perPage: 10 })).items.map((x: any) => x.id)).toEqual([2, 1]);
   });
 
+  // 2026-11-06 (tracker 12, 13; A45): statusCounts also counts each view and
+  // enrichment state, and `matching` is what the list returns for the tab's
+  // filter — the pages now come from it. Still one server count for the
+  // whole queue; server/areProspectReview.test.ts pins the new numbers.
   it("the Prospects tab's counts cover the whole queue, not the loaded page", async () => {
     expect(await caller().are.prospects.statusCounts({ campaignId: 38 })).toEqual({
       inQueue: 3, pendingEnrich: 1, awaitingApproval: 1, byStatus: { skipped: 12, pending: 2, enrolled: 1, sourcing: 1 },
+      byView: { review: 2, approved: 0, in_sequence: 1, finished: 0, all: 3 },
+      byEnrichment: { complete: 2, enriching: 0, pending: 1, failed: 0 },
+      matching: 3,
     });
     const ui = read("client/src/pages/usip/ARECampaignDetail.tsx");
     expect(ui).toContain("const pendingEnrich = queueCounts?.pendingEnrich ?? 0;");
-    expect(ui).toContain("{ campaignId, limit: PROSPECT_PAGE, offset: (prospectPage - 1) * PROSPECT_PAGE }");
+    expect(ui).toContain("{ campaignId, ...prospectFilter, limit: PROSPECT_PAGE, offset: (prospectPage - 1) * PROSPECT_PAGE }");
+    expect(ui).toContain("trpc.are.prospects.statusCounts.useQuery({ campaignId, ...prospectFilter })");
+    expect(ui).toContain("Math.ceil((queueCounts?.matching ?? 0) / PROSPECT_PAGE)");
     expect(ui).not.toMatch(/prospects\?\.filter\(\(p\) => p\.enrichmentStatus === "pending"\)/);
     expect(ui).toContain("{ campaignId, reason: reasonFilter, page: rejPage, perPage: REJECTION_PAGE }");
   });

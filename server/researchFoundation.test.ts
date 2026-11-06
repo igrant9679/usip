@@ -253,7 +253,8 @@ describe("research router", () => {
     const q = await caller(2).personas.create({ name: "Program officer", sectorId: keep.id });
 
     const r = await caller(2).research.markets.delete({ id: m.id });
-    expect(r).toEqual({ success: true, sectorsDeleted: 2 });
+    // 2026-11-06 (audit P29): the delete also says how many campaigns it unlinked.
+    expect(r).toEqual({ success: true, sectorsDeleted: 2, campaignsUnlinked: 0 });
     const db = h.db;
     expect(db.rowsOf("research_markets").map((x: any) => x.id)).toEqual([other.id]);
     expect(db.rowsOf("research_sectors").map((x: any) => x.id)).toEqual([keep.id]);

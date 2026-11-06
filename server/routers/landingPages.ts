@@ -16,6 +16,7 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { notifyLeadRouted } from "../services/policyNotify";
 import { getDb } from "../db";
+import { isWorkspaceLive } from "../_core/workspaceArchive";
 import { landingPages, landingPageSubmissions, leads, enrollments } from "../../drizzle/schema";
 import { resolveBookingUrl } from "../mergeVars";
 import { hostedPageChatSlug } from "../services/hostedChat";
@@ -184,6 +185,7 @@ export const landingPagesRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [p] = await db.select().from(landingPages).where(eq(landingPages.slug, input.slug));
     if (!p || p.status !== "published") throw new TRPCError({ code: "NOT_FOUND", message: "Page not available" });
+    if (!(await isWorkspaceLive(p.workspaceId))) throw new TRPCError({ code: "NOT_FOUND", message: "Page not available" });
     // Best-effort view count — never block rendering.
     db.update(landingPages).set({ viewCount: sql`${landingPages.viewCount} + 1` } as never)
       .where(eq(landingPages.id, p.id)).catch(() => {});
@@ -245,6 +247,7 @@ export const landingPagesRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [page] = await db.select().from(landingPages).where(eq(landingPages.slug, input.slug));
       if (!page || page.status !== "published") throw new TRPCError({ code: "NOT_FOUND", message: "Page not available" });
+      if (!(await isWorkspaceLive(page.workspaceId))) throw new TRPCError({ code: "NOT_FOUND", message: "Page not available" });
 
       const data = input.data ?? {};
       const email = str(data.email, 320);

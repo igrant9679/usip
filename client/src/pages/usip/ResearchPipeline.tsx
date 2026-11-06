@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "wouter";
 import { Shell, PageHeader } from "@/components/usip/Shell";
+import { EntityPicker } from "@/components/usip/EntityPicker";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -72,21 +74,28 @@ export function pipelinePollMs(status: string | null | undefined): number | fals
 export default function ResearchPipeline() {
   const [goal, setGoal] = useState("");
   const [tone, setTone] = useState<"concise" | "warm" | "formal" | "punchy">("concise");
+  // The person the email is for (audit 2026-10-20, P16: without one every
+  // stage researched nobody and the draft went to no one).
+  const [recipient, setRecipient] = useState<number[]>([]);
   const [activePipelineId, setActivePipelineId] = useState<number | null>(null);
 
   const { data: pipelines = [], refetch } = trpc.researchPipeline.list.useQuery(undefined);
-  const { data: activePipeline, refetch: refetchActive } = trpc.researchPipeline.get.useQuery(
+  const { data: activePipeline } = trpc.researchPipeline.get.useQuery(
     { id: activePipelineId! },
     // Every 2 s while it runs; a finished or failed pipeline is not polled
     // again (audit 2026-10-20, P144, X4.3: it polled forever).
     { enabled: !!activePipelineId, refetchInterval: (q) => pipelinePollMs(q.state.data?.status) },
   );
+  // The stages run after start returns, so the list learns the outcome here.
+  useEffect(() => {
+    if (activePipeline?.status === "complete" || activePipeline?.status === "failed") refetch();
+  }, [activePipeline?.id, activePipeline?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const start = trpc.researchPipeline.start.useMutation({
     onSuccess: (data) => {
       setActivePipelineId(data.pipelineId);
       refetch();
-      toast.success(`Draft created: "${data.subject}"`);
+      toast.success("Pipeline started. Each stage shows here as it finishes.");
     },
     onError: (err) => {
       toast.error(err.message);
@@ -94,8 +103,8 @@ export default function ResearchPipeline() {
   });
 
   const handleStart = () => {
-    if (!goal.trim()) return;
-    start.mutate({ goal: goal.trim(), tone });
+    if (!goal.trim() || recipient.length === 0) return;
+    start.mutate({ goal: goal.trim(), tone, contactId: recipient[0] });
   };
 
   const copyToClipboard = (text: string) => {
@@ -111,7 +120,7 @@ export default function ResearchPipeline() {
 
   return (
     <Shell title="Research Pipeline">
-      <PageHeader title="AI Research Pipeline" description="Run the 5-stage AI research pipeline: org signals → contact fit → angle generation → draft variants → final review. Each stage is fully auditable and can be paused for human approval." pageKey="research-pipeline" 
+      <PageHeader title="AI Research Pipeline" description="Run the 5-stage AI research pipeline for one contact: prospect research → signals → angles → draft variants → final pick. Every stage's output is kept, and the draft waits in the Email Drafts queue for your review before anything is sent." pageKey="research-pipeline"
         icon={<FlaskConical className="size-5" />}
       />
       <div className="p-4 md:p-5 max-w-5xl mx-auto space-y-6">
@@ -125,9 +134,13 @@ export default function ResearchPipeline() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-1.5">
+                <Label>Contact</Label>
+                <EntityPicker type="contacts" mode="single" value={recipient} onChange={setRecipient} placeholder="Who is the email for?" />
+              </div>
+              <div className="space-y-1.5">
                 <Label>Outreach Goal</Label>
                 <Textarea aria-label="Outreach Goal"
-                  placeholder="e.g. Book a discovery call to discuss how USIP can improve their sales pipeline visibility"
+                  placeholder="e.g. Book a discovery call to discuss how we can improve their sales pipeline visibility"
                   value={goal}
                   onChange={(e) => setGoal(e.target.value)}
                   rows={4}
@@ -151,12 +164,12 @@ export default function ResearchPipeline() {
               <Button
                 className="w-full"
                 onClick={handleStart}
-                disabled={start.isPending || !goal.trim()}
+                disabled={start.isPending || !goal.trim() || recipient.length === 0}
               >
                 {start.isPending ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Running pipeline…
+                    Starting…
                   </>
                 ) : (
                   <>
@@ -279,9 +292,10 @@ export default function ResearchPipeline() {
                     )}
                     {activePipeline?.emailDraftId && (
                       <div className="pt-2">
-                        <a href="/v2/emails?status=awaiting&source=sequence" className="inline-flex items-center gap-1.5 text-sm text-emerald-600 hover:underline">
+                        {/* AI drafts, by the router (P66: a plain <a> to the sequence filter reloaded the app and hid this draft). */}
+                        <Link href="/v2/emails?status=awaiting&source=ai_draft" className="inline-flex items-center gap-1.5 text-sm text-emerald-600 hover:underline">
                           View in Email Drafts queue <ArrowRight className="h-3.5 w-3.5" />
-                        </a>
+                        </Link>
                       </div>
                     )}
                   </CardContent>

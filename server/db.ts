@@ -97,6 +97,9 @@ export async function getUserWorkspaces(userId: number) {
       plan: workspaces.plan,
       logoUrl: workspaces.logoUrl,
       role: workspaceMembers.role,
+      // The switcher badges an archived workspace, and only a super admin may
+      // still open one (audit 2026-10-20, G36).
+      archivedAt: workspaces.archivedAt,
     })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))

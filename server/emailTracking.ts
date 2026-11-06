@@ -16,6 +16,7 @@
  *   - Redirects the browser to the original URL
  */
 
+import { csvCell } from "@shared/csvCell";
 import type { Express, Request, Response } from "express";
 import { openExtensionRequest } from "@shared/proposalExtension";
 import { eq, inArray, sql } from "drizzle-orm";
@@ -1125,12 +1126,8 @@ export function registerEmailTrackingRoutes(app: Express) {
           if (rejected.length === 0) continue;
 
           // Build CSV
-          const escape = (v: unknown) => {
-            if (v == null) return "";
-            const s = String(v);
-            return s.includes(",") || s.includes('"') || s.includes("\n")
-              ? `"${s.replace(/"/g, '""')}"` : s;
-          };
+          // Formula cells neutralised too (audit 2026-10-20, G49).
+          const escape = csvCell;
           const headers = ["ID", "First Name", "Last Name", "Title", "Company", "Industry", "ICP Score", "Rejection Reason", "Rejected At"];
           const rows = rejected.map((r) => [
             r.id, r.firstName, r.lastName, r.title, r.companyName, r.industry,
