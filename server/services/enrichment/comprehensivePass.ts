@@ -40,6 +40,7 @@ import {
 import { companyFromHeadline } from "./headlineCompany";
 import { businessDomainFromEmail } from "../company/normalize";
 import { isGenericInboxEmail } from "@shared/genericEmail";
+import { describeSuppression, suppressionBlockingNewEmail } from "../suppression";
 
 export interface ComprehensiveResult {
   ok: boolean;
@@ -88,6 +89,13 @@ export async function runComprehensiveEnrichment(opts: {
   if (p.verificationStatus === "rejected") {
     return { ok: false, skipped: "suppressed", phases, decisions: [], queuedLinkedInJob: null, email: p.email, emailStatus: p.emailStatus, credits };
   }
+  // A suppressed person gets no new address from any source (audit
+  // 2026-10-20, P86): replacing an unsubscribed address with a found one made
+  // them mailable again. Asked before anything is spent; the other fields
+  // still enrich.
+  const suppressed = await suppressionBlockingNewEmail(opts.workspaceId, {
+    email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain,
+  });
 
   const candidates: Candidate[] = [];
 
@@ -224,7 +232,9 @@ export async function runComprehensiveEnrichment(opts: {
   const domainNow = () => (candidates.find((c) => c.field === "companyDomain")?.value ?? p.companyDomain ?? "").trim() || null;
   let bestDomain = domainNow();
 
-  if (!emailIsProven) {
+  if (suppressed) {
+    phases.quickenrich = phases.pattern = `skipped — ${describeSuppression(suppressed)}, so no new address is looked for`;
+  } else if (!emailIsProven) {
     // 3a. QuickEnrich (LinkedIn-keyed database; bills only on a hit).
     const qeKey = await getQuickEnrichKey(opts.workspaceId).catch(() => "");
     if (qeKey && p.linkedinUrl) {
@@ -333,8 +343,9 @@ export async function runComprehensiveEnrichment(opts: {
   // Belt: a generic-inbox candidate never displaces a person-specific
   // primary, whatever its confidence. (No current source emits generic
   // candidates — this guards the seam for future ones.)
+  // And no email candidate at all for a suppressed person (P86, above).
   const guarded = candidates.filter(
-    (c) => !(c.field === "email" && isGenericInboxEmail(c.value) && p.email && !primaryIsGeneric),
+    (c) => !(c.field === "email" && (suppressed || (isGenericInboxEmail(c.value) && p.email && !primaryIsGeneric))),
   );
 
   const merged = mergeAll(

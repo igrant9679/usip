@@ -310,6 +310,32 @@ describe("quickenrichFindEmailByLinkedIn — envelope-agnostic on purpose", () =
     expect(r.reason).toBe("no_match");
     expect(r.companyDomain).toBe("acme.io");
   });
+
+  // audit 2026-10-20, P85
+  it("takes the work address over the generic one, which is often personal", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, { data: { email: "ada.li@gmail.com", work_email: "ada@acme.io" } }));
+    expect((await quickenrichFindEmailByLinkedIn("k", LI, M)).email).toBe("ada@acme.io");
+  });
+
+  it("an address on an employer's domain beats a free-mail one, whichever field holds it", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, { data: { work_email: "ada.li@gmail.com", email: "ada@acme.io" } }));
+    expect((await quickenrichFindEmailByLinkedIn("k", LI, M)).email).toBe("ada@acme.io");
+  });
+
+  it("a free-mail address alone is still returned: it is the only one they have", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, { data: { email: "ada.li@gmail.com" } }));
+    expect((await quickenrichFindEmailByLinkedIn("k", LI, M)).email).toBe("ada.li@gmail.com");
+  });
+
+  it("a free-mail email_domain is never the company's domain", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, { data: { first_name: "Ada", email_domain: "gmail.com" } }));
+    expect((await quickenrichFindEmailByLinkedIn("k", LI, M)).companyDomain).toBeNull();
+  });
+
+  it("and a real company domain further down the record still counts", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, { data: { first_name: "Ada", company_url: "https://gmail.com", email_domain: "acme.io" } }));
+    expect((await quickenrichFindEmailByLinkedIn("k", LI, M)).companyDomain).toBe("acme.io");
+  });
 });
 
 describe("buildQuickenrichFilters — targeting → their vocabulary, conservatively", () => {
@@ -638,6 +664,15 @@ describe("quickenrichContactFinder — free discovery, defensively parsed", () =
     const r = await quickenrichContactFinder("k", BODY, M);
     if (!r.ok) throw new Error("expected ok");
     expect(r.people[0].hasEmail).toBe(false);
+  });
+
+  it("a free-mail email_domain is not the discovered person's company domain (P85)", async () => {
+    mocks.fetch.mockResolvedValue(jsonResponse(200, {
+      data: [{ first_name: "A", last_name: "B", linkedin_url: "https://linkedin.com/in/a", email_domain: "gmail.com" }],
+    }));
+    const r = await quickenrichContactFinder("k", BODY, M);
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.people[0].companyDomain).toBeNull();
   });
 
   it("reports HTTP and envelope failures as errors, and never throws", async () => {

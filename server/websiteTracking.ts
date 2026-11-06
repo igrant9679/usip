@@ -5,10 +5,13 @@
  *   POST /api/track    — receives page views (public, CORS-open).
  *
  * The workspace slug is the public key (data-workspace="<slug>"). Visits that
- * carry a `vid` param — a lead/contact id embedded in tracked outbound links
- * (e.g. sequence email CTAs) — are attributed to a KNOWN prospect. A high-intent
- * known visit (pricing/demo/contact pages) autonomously spawns a follow-up task
- * for the record owner. This is the honest, provider-free half of the feature;
+ * carry a `vid` param — a lead/contact id in the link — are attributed to that
+ * record. Nothing in Velocity adds the id to outbound links, and the id is not
+ * signed, so anyone can claim any record in the workspace; the visitors page
+ * says so rather than promising "known prospect" matching (audit 2026-10-20,
+ * P88). Signing the id, then adding it to links, is the work left. A
+ * high-intent attributed visit (pricing/demo/contact pages) files a follow-up
+ * task for the record owner. This is the honest, provider-free half of the feature;
  * anonymous IP→company de-anonymization would need a paid IP-intelligence
  * vendor and is deliberately not stubbed.
  */
@@ -18,18 +21,61 @@ import { getDb } from "./db";
 import { activities, contacts, leads, tasks, websiteVisits, workspaces } from "../drizzle/schema";
 import { pageIntent } from "@shared/pageIntent";
 import { activeOwnerOrNull } from "./_core/activeMembers";
+import { findSuppression, type SuppressionTarget } from "./services/suppression";
+
+/**
+ * Privacy (audit 2026-10-20, P87). A visitor whose browser sends Do Not Track
+ * or Global Privacy Control is not tracked at all: no cookie, no beacon (and
+ * the route drops a beacon that arrives with either header anyway). Only the
+ * page's path is sent, never its query string or fragment, which carry search
+ * terms, email addresses and campaign tokens; the referrer goes the same way.
+ * The visitor cookie lasts VISITOR_COOKIE_DAYS, not a year.
+ */
+export const VISITOR_COOKIE_DAYS = 30;
+/** How long a visit is kept; purgeOldWebsiteVisits runs daily (P87). */
+export const WEBSITE_VISIT_RETENTION_DAYS = 180;
 
 const TRACKER_JS = `(function(){try{
+var n=navigator,w=window;
+if(n.globalPrivacyControl===true||n.doNotTrack==='1'||n.doNotTrack==='yes'||w.doNotTrack==='1'||n.msDoNotTrack==='1')return;
 var s=document.currentScript||(function(){var e=document.getElementsByTagName('script');return e[e.length-1];})();
 var ws=s&&s.getAttribute('data-workspace');if(!ws)return;
 var m=document.cookie.match(/(?:^|; )_vlvid=([^;]+)/);var vid=m?m[1]:(Date.now().toString(36)+Math.random().toString(36).slice(2,10));
-if(!m){document.cookie='_vlvid='+vid+';path=/;max-age=31536000;SameSite=Lax';}
+if(!m){document.cookie='_vlvid='+vid+';path=/;max-age=${VISITOR_COOKIE_DAYS * 86400};SameSite=Lax';}
 var q=new URLSearchParams(location.search);var known=q.get('vid')||q.get('vlid')||'';
 var base=s.src.replace(/\\/v\\/track\\.js.*$/,'');
 fetch(base+'/api/track',{method:'POST',headers:{'Content-Type':'application/json'},keepalive:true,body:JSON.stringify({
-slug:ws,visitorId:vid,path:location.pathname+location.search,referrer:document.referrer||'',vid:known,ua:navigator.userAgent||''
+slug:ws,visitorId:vid,path:location.pathname,referrer:(document.referrer||'').split(/[?#]/)[0],vid:known,ua:navigator.userAgent||''
 })}).catch(function(){});
 }catch(e){}})();`;
+
+/** A URL or path without its query string or fragment — what is stored (P87). */
+export function withoutQuery(value: unknown): string {
+  return String(value ?? "").split(/[?#]/)[0];
+}
+
+/** The browser asked not to be tracked (Do Not Track or Global Privacy Control). */
+export function optedOutOfTracking(header: (name: string) => string | undefined): boolean {
+  return header("dnt") === "1" || header("sec-gpc") === "1";
+}
+
+/**
+ * Delete visits older than WEBSITE_VISIT_RETENTION_DAYS, in batches so a first
+ * run does not hold a long lock. Daily, with the engine-log retention in
+ * _core/index.ts. Returns how many batches ran.
+ */
+export async function purgeOldWebsiteVisits(now: Date = new Date()): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const cutoff = new Date(now.getTime() - WEBSITE_VISIT_RETENTION_DAYS * 86400000);
+  let batches = 0;
+  for (let i = 0; i < 200; i++) {
+    const [res] = await db.execute(sql`DELETE FROM ${websiteVisits} WHERE ${websiteVisits.createdAt} < ${cutoff} LIMIT 5000`);
+    batches++;
+    if (Number((res as { affectedRows?: number })?.affectedRows ?? 0) < 5000) break;
+  }
+  return batches;
+}
 
 /*
  * `classifyIntent` lived here with its own patterns while chatPageContext.ts
@@ -112,10 +158,13 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.status(202).json({ ok: true }); // ack fast; process below
     try {
+      // An older cached copy of the script does not check DNT or GPC itself.
+      if (optedOutOfTracking((name) => { const v = req.headers?.[name]; return Array.isArray(v) ? v[0] : v; })) return;
       const b: any = req.body ?? {};
       const slug: string = String(b.slug ?? "").trim();
       const visitorId: string = String(b.visitorId ?? "").slice(0, 64);
-      const path: string = String(b.path ?? "/").slice(0, 1000);
+      // Stripped here too: an older cached script still sends the query string.
+      const path: string = (withoutQuery(b.path ?? "/") || "/").slice(0, 1000);
       if (!slug || !visitorId) return;
 
       const db = await getDb();
@@ -142,7 +191,7 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
         workspaceId: ws.id,
         visitorId,
         path,
-        referrer: String(b.referrer ?? "").slice(0, 1000) || null,
+        referrer: withoutQuery(b.referrer).slice(0, 1000) || null,
         contactId,
         leadId,
         intent,
@@ -168,17 +217,24 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
         if (Number(n) <= 1 && Number(filed) < MAX_INTENT_TASKS_PER_DAY) {
           let name = "A known prospect";
           let ownerUserId: number | null = null;
+          let target: SuppressionTarget = {};
           if (contactId) {
-            const [c] = await db.select({ f: contacts.firstName, l: contacts.lastName, o: contacts.ownerUserId }).from(contacts).where(eq(contacts.id, contactId)).limit(1);
-            if (c) { name = `${c.f ?? ""} ${c.l ?? ""}`.trim() || name; ownerUserId = c.o ?? null; }
+            const [c] = await db.select({ f: contacts.firstName, l: contacts.lastName, o: contacts.ownerUserId, email: contacts.email, linkedinUrl: contacts.linkedinUrl, companyDomain: contacts.companyDomain }).from(contacts).where(eq(contacts.id, contactId)).limit(1);
+            if (c) { name = `${c.f ?? ""} ${c.l ?? ""}`.trim() || name; ownerUserId = c.o ?? null; target = c; }
           } else if (leadId) {
-            const [l] = await db.select({ f: leads.firstName, l: leads.lastName, o: leads.ownerUserId }).from(leads).where(eq(leads.id, leadId)).limit(1);
-            if (l) { name = `${l.f ?? ""} ${l.l ?? ""}`.trim() || name; ownerUserId = l.o ?? null; }
+            const [l] = await db.select({ f: leads.firstName, l: leads.lastName, o: leads.ownerUserId, email: leads.email }).from(leads).where(eq(leads.id, leadId)).limit(1);
+            if (l) { name = `${l.f ?? ""} ${l.l ?? ""}`.trim() || name; ownerUserId = l.o ?? null; target = l; }
           }
+          // No "reach out" task for someone who asked not to be contacted
+          // (audit 2026-10-20, P87). A failed check files nothing either.
+          const suppressed = await findSuppression(ws.id, target, "any").catch(() => "unchecked" as const);
+          if (suppressed) return;
           await db.insert(tasks).values({
             workspaceId: ws.id,
             title: `High-intent website visit: ${name}`,
-            description: `Viewed ${path} — reach out while intent is hot.`,
+            // The id came from a link parameter anyone can set; it is not
+            // signed, so the task says so (P88).
+            description: `Viewed ${path} — reach out while intent is hot. The visit was matched by an id in the link, which is not verified.`,
             type: "follow_up",
             priority: "high",
             status: "open",

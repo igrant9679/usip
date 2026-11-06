@@ -3,7 +3,9 @@
  *
  * The batch-import workflow over the compliant Unipile enrichment backend:
  *   1. Integration-health banner gates the page (connect a LinkedIn account).
- *   2. Paste URLs or upload a CSV → parsed to rows (client-side).
+ *   2. Paste URLs or upload a CSV → read by lib/linkedinCsv, columns mapped by
+ *      the person, sliced into batches of MAX_BATCH_ROWS (client-side). The
+ *      batch on screen is kept in the URL, so a reload returns to it.
  *   3. Validate & import → createBatch (server validates/normalizes/dedupes).
  *   4. Review the validation preview → Run enrichment (Unipile retrieve + match).
  *   5. Results table with per-row match status + inline review for uncertain
@@ -28,78 +30,32 @@ import {
   Link2, Upload, FileUp, Loader2, CheckCircle2, AlertTriangle, ArrowRight,
   RefreshCw, Clock, Plug, ChevronLeft, Users,
 } from "lucide-react";
-
-type ParsedRow = {
-  linkedinUrl: string;
-  fullName?: string; firstName?: string; lastName?: string;
-  company?: string; title?: string; email?: string; prospectId?: number;
-};
+import {
+  LINKEDIN_IMPORT_FIELDS, MAX_BATCH_ROWS, columnNames, findHeaderRow, guessMapping, parseCsvRecords, rowsFromMapping,
+  type LinkedInImportField, type LinkedInImportRow as ParsedRow,
+} from "@/lib/linkedinCsv";
 
 /* ───────────────────────── CSV / paste parsing ────────────────────────── */
 
-function splitCsvLine(line: string): string[] {
-  const out: string[] = [];
-  let cur = "", inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (inQ) {
-      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
-      else if (c === '"') inQ = false;
-      else cur += c;
-    } else if (c === '"') inQ = true;
-    else if (c === ",") { out.push(cur); cur = ""; }
-    else cur += c;
-  }
-  out.push(cur);
-  return out.map((s) => s.trim());
-}
-
-const COL_ALIASES: Record<keyof ParsedRow, string[]> = {
-  linkedinUrl: ["linkedin_url", "linkedinurl", "linkedin", "url", "profile_url", "profile"],
-  fullName: ["full_name", "fullname", "name"],
-  firstName: ["first_name", "firstname", "first"],
-  lastName: ["last_name", "lastname", "last"],
-  company: ["company", "account_name", "organization"],
-  title: ["title", "job_title", "headline"],
-  email: ["email", "email_address"],
-  prospectId: ["prospect_id", "prospectid", "id"],
-};
-
-function parseCsv(text: string): ParsedRow[] {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim());
-  if (lines.length === 0) return [];
-  const header = splitCsvLine(lines[0]).map((h) => h.toLowerCase().replace(/\s+/g, "_"));
-  const idxOf = (key: keyof ParsedRow) => header.findIndex((h) => COL_ALIASES[key].includes(h));
-  const map: Partial<Record<keyof ParsedRow, number>> = {};
-  (Object.keys(COL_ALIASES) as (keyof ParsedRow)[]).forEach((k) => { const i = idxOf(k); if (i >= 0) map[k] = i; });
-  // No recognizable header → treat every line as a bare URL.
-  if (map.linkedinUrl === undefined) return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((u) => ({ linkedinUrl: splitCsvLine(u)[0] }));
-  const out: ParsedRow[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cells = splitCsvLine(lines[i]);
-    const get = (k: keyof ParsedRow) => (map[k] !== undefined ? cells[map[k]!] : undefined);
-    const url = get("linkedinUrl");
-    if (!url) continue;
-    const pid = get("prospectId");
-    out.push({
-      linkedinUrl: url,
-      fullName: get("fullName") || undefined,
-      firstName: get("firstName") || undefined,
-      lastName: get("lastName") || undefined,
-      company: get("company") || undefined,
-      title: get("title") || undefined,
-      email: get("email") || undefined,
-      prospectId: pid && /^\d+$/.test(pid) ? Number(pid) : undefined,
-    });
-  }
-  return out;
-}
-
+// One CSV reader and a mapping step (audit 2026-10-20, P91): see
+// lib/linkedinCsv. A pasted list is read by the same reader: URL, then name,
+// then company, as the placeholder shows.
 function parsePaste(text: string): ParsedRow[] {
-  return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((line) => {
-    const cells = splitCsvLine(line);
-    return { linkedinUrl: cells[0], fullName: cells[1] || undefined, company: cells[2] || undefined };
-  });
+  return rowsFromMapping(parseCsvRecords(text), null, { linkedinUrl: 0, fullName: 1, company: 2 });
+}
+
+type ParsedFile = { name: string; records: string[][]; headerRow: number | null; mapping: Partial<Record<LinkedInImportField, number>> };
+
+/** The batch on screen is in the URL (?batch=), so a reload comes back to it (P96). */
+function batchFromUrl(): number | null {
+  const v = Number(new URLSearchParams(window.location.search).get("batch"));
+  return Number.isInteger(v) && v > 0 ? v : null;
+}
+function writeBatchToUrl(id: number | null) {
+  const sp = new URLSearchParams(window.location.search);
+  if (id) sp.set("batch", String(id)); else sp.delete("batch");
+  const qs = sp.toString();
+  window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
 }
 
 /* ──────────────────────────── health banner ───────────────────────────── */
@@ -291,9 +247,20 @@ export default function LinkedInEnrichmentImport() {
   const utils = trpc.useUtils();
 
   const [paste, setPaste] = useState("");
-  const [rows, setRows] = useState<ParsedRow[]>([]);
-  const [batchId, setBatchId] = useState<number | null>(null);
+  const [pasted, setPasted] = useState<ParsedRow[]>([]);
+  const [file, setFile] = useState<ParsedFile | null>(null);
+  // A batch takes MAX_BATCH_ROWS; a longer file is imported a slice at a time.
+  const [chunk, setChunk] = useState(0);
+  const [batchId, setBatchIdState] = useState<number | null>(batchFromUrl);
+  const setBatchId = (id: number | null) => { setBatchIdState(id); writeBatchToUrl(id); };
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const allRows = useMemo(
+    () => (file ? rowsFromMapping(file.records, file.headerRow, file.mapping) : pasted),
+    [file, pasted],
+  );
+  const chunks = Math.max(1, Math.ceil(allRows.length / MAX_BATCH_ROWS));
+  const rows = allRows.slice(chunk * MAX_BATCH_ROWS, (chunk + 1) * MAX_BATCH_ROWS);
 
   const createMut = trpc.linkedinEnrichment.createBatch.useMutation({
     onSuccess: (s) => { setBatchId(s.batchId); toast.success(`Batch created — ${s.validRows}/${s.totalRows} valid`); },
@@ -331,12 +298,26 @@ export default function LinkedInEnrichmentImport() {
 
   const onFile = (f: File) => {
     const reader = new FileReader();
-    reader.onload = () => { setRows(parseCsv(String(reader.result ?? ""))); toast.success(`Parsed ${f.name}`); };
+    reader.onload = () => {
+      const records = parseCsvRecords(String(reader.result ?? ""));
+      const headerRow = findHeaderRow(records);
+      setFile({ name: f.name, records, headerRow, mapping: guessMapping(records, headerRow) });
+      setPasted([]);
+      setChunk(0);
+      toast.success(`Read ${f.name}: check the columns below`);
+    };
     reader.readAsText(f);
   };
-  const onParsePaste = () => setRows(parsePaste(paste));
+  const onParsePaste = () => { setFile(null); setChunk(0); setPasted(parsePaste(paste)); };
+  const setMapping = (field: LinkedInImportField, col: number | undefined) =>
+    setFile((cur) => (cur ? { ...cur, mapping: { ...cur.mapping, [field]: col } } : cur));
 
-  const reset = () => { setBatchId(null); setRows([]); setPaste(""); };
+  // A new batch keeps a long file's rows, so its next slice can follow.
+  const reset = () => {
+    setBatchId(null);
+    if (file && chunk + 1 < chunks) setChunk(chunk + 1);
+    else { setFile(null); setPasted([]); setPaste(""); setChunk(0); }
+  };
 
   const counts = useMemo(() => {
     const c = { enriched: 0, needs_review: 0, no_match: 0, failed: 0, skipped: 0, pending: 0 };
@@ -385,21 +366,75 @@ export default function LinkedInEnrichmentImport() {
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => fileRef.current?.click()}>
                 <FileUp className="size-3.5" /> Upload CSV
               </Button>
-              <span className="text-muted-foreground text-[11px]">columns: linkedin_url, full_name, company, title, email, prospect_id…</span>
+              <span className="text-muted-foreground text-[11px]">You choose which column holds what, next.</span>
             </div>
+
+            {/* The mapping step: the guess, which the person can change. */}
+            {file && (
+              <div className="border-t pt-3 space-y-2">
+                <div className="text-[13px] font-medium">
+                  Columns in {file.name}
+                  {file.headerRow === null
+                    ? <span className="font-normal text-muted-foreground"> · no header row found, so every row is read as data</span>
+                    : file.headerRow > 0
+                      ? <span className="font-normal text-muted-foreground"> · header on row {file.headerRow + 1}; the lines above it are skipped</span>
+                      : null}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {LINKEDIN_IMPORT_FIELDS.map((f) => (
+                    <label key={f.key} className="flex items-center gap-2 text-[12px]">
+                      <span className="w-40 shrink-0 text-muted-foreground">{f.label}{f.required ? " *" : ""}</span>
+                      <select
+                        className="flex-1 min-w-0 h-7 rounded border bg-background px-1.5 text-[12px]"
+                        value={file.mapping[f.key] ?? ""}
+                        onChange={(e) => setMapping(f.key, e.target.value === "" ? undefined : Number(e.target.value))}
+                      >
+                        <option value="">— not in this file —</option>
+                        {columnNames(file.records, file.headerRow).map((c, i) => <option key={i} value={i}>{c}</option>)}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+                {file.mapping.linkedinUrl === undefined && (
+                  <p className="text-[12px] text-amber-700">Choose the column that holds the LinkedIn profile URLs.</p>
+                )}
+              </div>
+            )}
 
             {rows.length > 0 && (
               <div className="border-t pt-3 space-y-2">
-                <div className="flex items-center justify-between text-[13px]">
-                  <span className="font-medium">{rows.length} row(s) parsed</span>
-                  <Button
-                    size="sm"
-                    className="gap-1.5"
-                    disabled={createMut.isPending}
-                    onClick={() => createMut.mutate({ sourceType: paste.trim() ? "pasted_urls" : "csv_upload", rows })}
-                  >
-                    {createMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />} Validate & import
-                  </Button>
+                {allRows.length > MAX_BATCH_ROWS && (
+                  <div className="flex flex-wrap items-center gap-2 text-[12px] text-amber-800 dark:text-amber-300">
+                    <AlertTriangle className="size-3.5 shrink-0" />
+                    <span>This file has {allRows.length.toLocaleString()} rows and a batch takes {MAX_BATCH_ROWS.toLocaleString()}. Import it a slice at a time:</span>
+                    <select
+                      aria-label="Rows to import in this batch"
+                      className="h-7 rounded border bg-background px-1.5 text-[12px]"
+                      value={chunk}
+                      onChange={(e) => setChunk(Number(e.target.value))}
+                    >
+                      {Array.from({ length: chunks }, (_, i) => (
+                        <option key={i} value={i}>
+                          Rows {(i * MAX_BATCH_ROWS + 1).toLocaleString()}–{Math.min((i + 1) * MAX_BATCH_ROWS, allRows.length).toLocaleString()}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div className="flex items-center justify-between gap-2 text-[13px]">
+                  <span className="font-medium">{rows.length} row(s) to import</span>
+                  <div className="flex items-center gap-2">
+                    {/* createBatch is a manager's; say so rather than fail on click (P96). */}
+                    {!isManager && <span className="text-[11px] text-muted-foreground">A manager imports and runs these batches.</span>}
+                    <Button
+                      size="sm"
+                      className="gap-1.5"
+                      disabled={createMut.isPending || !isManager}
+                      onClick={() => createMut.mutate({ sourceType: file ? "csv_upload" : "pasted_urls", rows })}
+                    >
+                      {createMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />} Validate & import
+                    </Button>
+                  </div>
                 </div>
                 <div className="max-h-44 overflow-y-auto rounded border divide-y text-[12px]">
                   {rows.slice(0, 100).map((r, i) => (
@@ -427,8 +462,11 @@ export default function LinkedInEnrichmentImport() {
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-2">
-                <Button variant="ghost" size="sm" className="h-7" onClick={reset}>New batch</Button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {!isManager && <span className="text-[11px] text-muted-foreground">A manager runs enrichment.</span>}
+                <Button variant="ghost" size="sm" className="h-7" onClick={reset}>
+                  {file && chunk + 1 < chunks ? "Next slice of the file" : "New batch"}
+                </Button>
                 {isManager && batchQ.data?.status === "completed" && counts.failed > 0 && (
                   <Button variant="outline" size="sm" className="h-7" disabled={retryMut.isPending} onClick={() => retryMut.mutate({ batchId })}>
                     Retry {counts.failed} failed
@@ -470,7 +508,12 @@ export default function LinkedInEnrichmentImport() {
               {batchRows.map((r) => (
                 <BatchRow key={r.id} row={r} onReview={(action, prospectId) => reviewMut.mutate({ batchId, decisions: [{ rowId: r.id, action, prospectId }] })} reviewing={reviewMut.isPending} />
               ))}
-              {batchRows.length === 0 && <div className="p-4 text-center text-[13px] text-muted-foreground">Loading rows…</div>}
+              {batchRows.length === 0 && (
+                // A batch reopened from the URL may be gone or another workspace's.
+                batchQ.error || rowsQ.error
+                  ? <div className="p-4 text-center text-[13px] text-muted-foreground">Batch #{batchId} could not be loaded: {(batchQ.error ?? rowsQ.error)?.message}</div>
+                  : <div className="p-4 text-center text-[13px] text-muted-foreground">Loading rows…</div>
+              )}
             </div>
           </div>
         )}

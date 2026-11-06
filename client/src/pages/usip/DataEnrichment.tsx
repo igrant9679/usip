@@ -12,7 +12,7 @@ import { forbiddenMessage } from "@/lib/forbidden";
 import { useLocation, useSearch } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
-import { EnrichmentJobDrawer } from "@/components/usip/enrichment/EnrichmentJobDrawer";
+import { isAdminRole } from "@shared/roleRank";
 import { FindProspectsPanel } from "@/pages/usip/FindProspects";
 import { SourceSearchPanel } from "@/pages/usip/SourceSearch";
 import { ImportContactsPanel } from "@/pages/usip/ImportContacts";
@@ -38,7 +38,6 @@ import {
   RefreshCw,
   Upload,
   Users,
-  Clock,
   Sparkles,
   CheckCircle2,
   Building2,
@@ -49,6 +48,9 @@ import {
 import { QueryError } from "@/components/usip/Shell";
 import { JobChangeAction, JobChangeEmptyState } from "@/components/usip/JobChangeAlerts";
 import { tablistProps, tabProps } from "@/lib/tabs";
+
+/** Where the scheduled enrichment Velocity has — the sweep — is set up. */
+const SWEEP_SETTINGS = "/v2/settings/enrichment-sweep";
 
 /* ── inline donut chart ── */
 function Donut({ pct, color, sub }: { pct: number; color: string; sub?: string }) {
@@ -112,7 +114,6 @@ export default function DataEnrichment() {
     if (slug) setTabState(tabFromSlug(slug));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchStr]);
-  const [jobDrawerOpen, setJobDrawerOpen] = useState(false);
 
   const { data: m, isLoading, error: metricsError, refetch: refetchMetrics } = trpc.dataHealth.getMetrics.useQuery();
   // "What needs me" on the tab itself: discovery rows awaiting human review.
@@ -142,6 +143,8 @@ export default function DataEnrichment() {
     onError: (e: any) => toast.error(e?.message ?? "Could not create task"),
   });
   const jcMode = (jcSettings.data as any)?.mode ?? "off";
+  const me = trpc.profile.getMe.useQuery();
+  const canSetJc = isAdminRole(me.data?.role);
   const jobChanges = (jobChangesQ.data as any[]) ?? [];
   // Un-actioned company moves — the count worth surfacing on the tab. A first
   // sighting is not a move, and Re-engage refuses it, so it is not counted.
@@ -176,15 +179,19 @@ export default function DataEnrichment() {
             <Database className="size-4" style={{ color: accent }} />
             <h1 className="text-[15px] font-semibold tracking-tight">Data enrichment</h1>
             <div className="flex-1" />
-            <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/data-health")}>View scheduled jobs <span className="text-muted-foreground">0</span></Button>
+            {/* The scheduled enrichment Velocity has is the sweep. "View
+                scheduled jobs" showed a hard-coded 0 and opened Data Health,
+                and "Schedule enrichment job" opened a builder that saves
+                nothing (audit 2026-10-20, P89). Both now go to the sweep. */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size="sm" className="h-7 gap-1.5" style={{ backgroundColor: accent }}><Zap className="size-3.5" /> Automate Enrichment <ChevronDown className="size-3 opacity-70" /></Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => setLocation("/are")}><Sparkles className="size-4 mr-2" /> Auto-enrich with ARE</DropdownMenuItem>
-                {/* Opens the job-builder drawer (was a bare redirect to /data-health). */}
-                <DropdownMenuItem onClick={() => setJobDrawerOpen(true)}><Activity className="size-4 mr-2" /> Schedule enrichment job</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setLocation(SWEEP_SETTINGS)}><Activity className="size-4 mr-2" /> Schedule the enrichment sweep</DropdownMenuItem>
+                {/* Was reachable only from a People menu (audit 2026-10-20, P96). */}
+                <DropdownMenuItem onClick={() => setLocation("/v2/data-enrichment/linkedin")}><Upload className="size-4 mr-2" /> Import LinkedIn URLs</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -199,7 +206,7 @@ export default function DataEnrichment() {
               className={cn("relative px-3 py-2 text-[13px] whitespace-nowrap transition-colors", tab === t ? "font-semibold" : "text-muted-foreground hover:text-foreground")}
               style={tab === t ? { color: accent } : undefined}
             >
-              <span className="inline-flex items-center gap-1.5">{t}{t === "CRM" && <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">New</span>}{t === "Job change alerts" && pendingMoves > 0 && <span className="text-[9px] font-semibold px-1 py-0.5 rounded-full text-white tabular-nums" style={{ backgroundColor: accent }}>{pendingMoves}</span>}{t === "Find prospects" && needsReview > 0 && <span className="text-[9px] font-semibold px-1 py-0.5 rounded-full text-white tabular-nums" style={{ backgroundColor: accent }} title={`${needsReview} discovered prospect${needsReview === 1 ? "" : "s"} awaiting review`}>{needsReview}</span>}</span>
+              <span className="inline-flex items-center gap-1.5">{t}{t === "Job change alerts" && pendingMoves > 0 && <span className="text-[9px] font-semibold px-1 py-0.5 rounded-full text-white tabular-nums" style={{ backgroundColor: accent }}>{pendingMoves}</span>}{t === "Find prospects" && needsReview > 0 && <span className="text-[9px] font-semibold px-1 py-0.5 rounded-full text-white tabular-nums" style={{ backgroundColor: accent }} title={`${needsReview} discovered prospect${needsReview === 1 ? "" : "s"} awaiting review`}>{needsReview}</span>}</span>
               {tab === t && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full" style={{ backgroundColor: accent }} />}
             </button>
           ))}
@@ -255,12 +262,12 @@ export default function DataEnrichment() {
                   </div>
                 </Card>
 
-                <Card title="Enrichment freshness" tag="Last 90 days" footer={<Button variant="outline" size="sm" className="h-7" onClick={() => setLocation("/data-health")}>Schedule</Button>}>
+                <Card title="Enrichment freshness" tag="Last 90 days" footer={<Button variant="outline" size="sm" className="h-7" onClick={() => setLocation(SWEEP_SETTINGS)}>Schedule</Button>}>
                   <div className="flex items-center gap-4">
                     <Donut pct={metrics?.pctEnriched ?? 0} color="#10b981" sub={`${metrics?.enrichedLast90Days ?? 0}`} />
                     <div className="space-y-1.5">
-                      <LegendDot color="#10b981" label={`${metrics?.pctEnriched ?? 0}% updated recently`} />
-                      <LegendDot color="#cbd5e1" label={`${100 - (metrics?.pctEnriched ?? 0)}% may be stale`} />
+                      <LegendDot color="#10b981" label={`${metrics?.pctEnriched ?? 0}% enriched in the last 90 days`} />
+                      <LegendDot color="#cbd5e1" label={`${100 - (metrics?.pctEnriched ?? 0)}% not enriched since`} />
                     </div>
                   </div>
                 </Card>
@@ -284,30 +291,18 @@ export default function DataEnrichment() {
                   </div>
                 </Card>
 
-                <Card title="Credit usage" tag="API & Apollo data">
+                {/* Says where the spend really is. It promised credit tracking
+                    under an Apollo label and its button opened Data Health; the
+                    "job activity" and "CRM status" cards beside it showed a
+                    fixed empty state and a sync that doesn't exist, and are
+                    gone (audit 2026-10-20, P89). */}
+                <Card title="Credit usage" tag="Verification & lookups">
                   <div className="text-center py-6">
                     <CreditCard className="size-7 mx-auto text-muted-foreground opacity-50 mb-2" />
-                    <div className="text-sm font-medium">Track your credit usage</div>
-                    <p className="text-xs text-muted-foreground mt-1">Stay on top of your credits for data enrichment.</p>
-                    <Button size="sm" className="mt-3" style={{ backgroundColor: accent }} onClick={() => setLocation("/data-health")}>Create scheduled enrichment</Button>
-                  </div>
-                </Card>
-
-                <Card title="Enrichment job activity" tag="ARE & enrichment">
-                  <div className="text-center py-6">
-                    <Activity className="size-7 mx-auto text-muted-foreground opacity-50 mb-2" />
-                    <div className="text-sm font-medium">No enrichment activities yet</div>
-                    <p className="text-xs text-muted-foreground mt-1">Schedule enrichment jobs to track changes and monitor progress.</p>
-                    <Button size="sm" className="mt-3" style={{ backgroundColor: accent }} onClick={() => setLocation("/are")}>Create scheduled enrichment</Button>
-                  </div>
-                </Card>
-
-                <Card title="CRM status" tag="CRM data">
-                  <div className="text-center py-6">
-                    <RefreshCw className="size-7 mx-auto text-muted-foreground opacity-50 mb-2" />
-                    <div className="text-sm font-medium">Check your CRM data status</div>
-                    <p className="text-xs text-muted-foreground mt-1">Sync your CRM to see if your data is up-to-date or needs enriching.</p>
-                    <Button variant="outline" size="sm" className="mt-3" onClick={() => setTab("CRM")}>Connect CRM</Button>
+                    <div className="text-sm font-medium">What enrichment has cost</div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Verification and lookup spend is in the cost report, under Settings → Billing and credits (admins).
+                    </p>
                   </div>
                 </Card>
               </div>
@@ -317,30 +312,16 @@ export default function DataEnrichment() {
           {tab === "CRM" && (
             <div className="max-w-3xl mx-auto text-center py-10">
               <div className="mx-auto size-12 rounded-xl text-white flex items-center justify-center mb-4 shadow-sm" style={{ backgroundColor: accent }}><RefreshCw className="size-6" /></div>
-              <h2 className="text-lg font-semibold">Enrich existing records across your CRM systems</h2>
-              <p className="text-sm text-muted-foreground mt-1 max-w-xl mx-auto">Boost your CRM effectiveness with dynamic enrichment, effortlessly updating contact and account details to keep your data consistently synchronized.</p>
+              {/* Salesforce and HubSpot sync don't exist; the connect buttons
+                  opened a settings page that has neither (audit 2026-10-20, P89). */}
+              <h2 className="text-lg font-semibold">Enrich the records Velocity holds</h2>
+              <p className="text-sm text-muted-foreground mt-1 max-w-xl mx-auto">
+                Syncing with an outside CRM such as Salesforce or HubSpot isn't available. Velocity enriches the People and
+                contacts it holds: import them, then let the enrichment sweep fill the gaps.
+              </p>
               <div className="mt-5 flex items-center justify-center gap-2">
-                <Button className="gap-1.5" style={{ backgroundColor: accent }} onClick={() => setLocation("/v2/settings/integrations")}>Connect Salesforce</Button>
-                <Button variant="outline" className="gap-1.5" onClick={() => setLocation("/v2/settings/integrations")}>Connect HubSpot</Button>
-              </div>
-              <div className="mt-10">
-                <div className="text-sm font-semibold mb-4">Key benefits</div>
-                <div className="grid sm:grid-cols-3 gap-5 text-left">
-                  {[
-                    { icon: Users, t: "Enhance customer connections", b: "Enrich CRM fields with accurate data, integrating leads cleanly into your sales strategy." },
-                    { icon: Clock, t: "Save time & streamline workflows", b: "Cut manual data entry so reps focus on selling, not cleanup." },
-                    { icon: CheckCircle2, t: "Ensure data consistency", b: "Keep records accurate and consistent across platforms, reducing errors." },
-                  ].map((k) => {
-                    const Icon = k.icon;
-                    return (
-                      <div key={k.t} className="rounded-xl border bg-card p-4 shadow-sm">
-                        <Icon className="size-5 mb-2" style={{ color: accent }} />
-                        <div className="text-[13px] font-semibold">{k.t}</div>
-                        <p className="text-[12px] text-muted-foreground mt-1">{k.b}</p>
-                      </div>
-                    );
-                  })}
-                </div>
+                <Button className="gap-1.5" style={{ backgroundColor: accent }} onClick={() => setTab("Import contacts")}>Import contacts</Button>
+                <Button variant="outline" className="gap-1.5" onClick={() => setLocation(SWEEP_SETTINGS)}>Enrichment sweep</Button>
               </div>
             </div>
           )}
@@ -364,21 +345,34 @@ export default function DataEnrichment() {
                     <b> Off</b> = alerts only · <b>Approve</b> = draft a re-engagement task · <b>Auto</b> = create it live.
                   </p>
                 </div>
-                <div className="flex gap-1 shrink-0">
-                  {MODE_OPTS.map((o) => (
-                    <Button
-                      key={o.v}
-                      size="sm"
-                      variant={jcMode === o.v ? "default" : "outline"}
-                      className="h-7"
-                      style={jcMode === o.v ? { backgroundColor: accent } : undefined}
-                      disabled={setJc.isPending}
-                      onClick={() => setJc.mutate({ mode: o.v } as any)}
-                    >
-                      {o.label}
-                    </Button>
-                  ))}
-                </div>
+                {/* An unread setting shows as unread, not as Off, and can't be
+                    overwritten blind (audit 2026-10-20, P154); only admins may
+                    change it, as the server already insists (P160). */}
+                {jcSettings.error && !jcSettings.data ? (
+                  <div className="shrink-0 sm:max-w-xs">
+                    <QueryError compact what="this setting" message={jcSettings.error.message} onRetry={() => jcSettings.refetch()} />
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-start sm:items-end gap-1 shrink-0">
+                    <div className="flex gap-1">
+                      {MODE_OPTS.map((o) => (
+                        <Button
+                          key={o.v}
+                          size="sm"
+                          variant={jcMode === o.v ? "default" : "outline"}
+                          className="h-7"
+                          style={jcMode === o.v ? { backgroundColor: accent } : undefined}
+                          aria-pressed={jcMode === o.v}
+                          disabled={setJc.isPending || jcSettings.isLoading || !canSetJc}
+                          onClick={() => setJc.mutate({ mode: o.v } as any)}
+                        >
+                          {o.label}
+                        </Button>
+                      ))}
+                    </div>
+                    {!canSetJc && <span className="text-[11px] text-muted-foreground">Only admins can change this.</span>}
+                  </div>
+                )}
               </div>
 
               {/* feed */}
@@ -431,10 +425,6 @@ export default function DataEnrichment() {
         </div>
       </div>
 
-      {/* New-enrichment-job builder (header ▸ Automate Enrichment ▸ Schedule
-          enrichment job). Mounted outside the scroll container; open state is
-          the only coupling. */}
-      <EnrichmentJobDrawer open={jobDrawerOpen} onOpenChange={setJobDrawerOpen} />
     </Shell>
   );
 }
