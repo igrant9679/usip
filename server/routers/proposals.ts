@@ -31,7 +31,7 @@ import { getDb } from "../db";
 import { appUrl } from "../appUrl";
 import { invokeLLM } from "../_core/llm";
 import { researchUseForProposal } from "../services/research/recipient";
-import { workspaceNotifyUserId } from "../_core/activeMembers";
+import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { changeOpportunityStage, stageDatesForNewDeal } from "../services/stageChange";
 import { EXTENSION_SUBJECT, extensionEventOf, openExtensionRequest } from "@shared/proposalExtension";
 import { defaultPipelineId, stageResolver } from "../_core/stageSemantics";
@@ -1494,11 +1494,23 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
             subject: `Engagement score dropped from ${prevScore} to ${score}`,
             body: `The proposal "${proposal.title}" engagement score decreased by ${prevScore - score} points.`,
           });
-          const { notifyOwner } = await import("../_core/notification");
-          await notifyOwner({
-            title: `Proposal engagement dropped: ${proposal.title}`,
-            content: `Score fell from ${prevScore} to ${score}/100. Consider following up with ${proposal.clientName || "the client"}.`,
-          });
+          // To the proposal's author in this workspace, or its owner if they
+          // have left (audit 2026-10-20, R2). notifyOwner POSTs the platform
+          // operator's notification service, so every workspace's client
+          // engagement went to one person outside it.
+          const recipient = (await activeOwnerOrNull(ctx.workspace.id, proposal.createdBy))
+            ?? (await workspaceNotifyUserId(ctx.workspace.id));
+          if (recipient) {
+            await db.insert(notifications).values({
+              workspaceId: ctx.workspace.id,
+              userId: recipient,
+              kind: "system",
+              title: `Proposal engagement dropped: ${proposal.title}`,
+              body: `Score fell from ${prevScore} to ${score}/100. Consider following up with ${proposal.clientName || "the client"}.`,
+              relatedType: "proposal",
+              relatedId: proposal.id,
+            });
+          }
         } catch {
           // non-fatal
         }

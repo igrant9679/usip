@@ -24,6 +24,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { tablistProps, tabProps } from "@/lib/tabs";
 import { AccountBriefPanel } from "./company/AccountBriefPanel";
+import { OPPORTUNITY_DELETE_SCOPE } from "@shared/dealDelete";
 
 type RelatedType = "lead" | "contact" | "account" | "opportunity" | "customer";
 
@@ -669,7 +670,9 @@ function RecordDrawerForRecord({
                   ariaLabel={`Delete this ${relatedType}`}
                   className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 p-1.5 h-auto rounded-md ml-1 border-l border-border pl-2"
                   title={`Delete this ${relatedType}?`}
-                  description={`"${title || relatedType}" will be permanently deleted. This cannot be undone.`}
+                  description={relatedType === "opportunity"
+                    ? `"${title || relatedType}" will be permanently deleted, ${OPPORTUNITY_DELETE_SCOPE}. This cannot be undone.`
+                    : `"${title || relatedType}" will be permanently deleted. This cannot be undone.`}
                   confirmLabel="Delete"
                   disabled={delContact.isPending || delAccount.isPending || delLead.isPending || delOpp.isPending}
                   onConfirm={deleteRecord}
