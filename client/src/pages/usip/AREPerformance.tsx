@@ -140,10 +140,14 @@ export default function AREPerformance() {
   const appliedRows = (history.data as any[]) ?? [];
   const mode = (optSettings.data as any)?.mode ?? "approval";
 
+  // The Revenue Engine's own steps (audit 2026-10-20, A22). The CRM Sequence
+  // table below is a different product and is labelled as one.
+  const areSteps = trpc.are.metrics.areSteps.useQuery(undefined as any, { retry: false });
   const steps = trpc.are.metrics.sequenceSteps.useQuery(undefined as any, { retry: false });
   const sources = trpc.are.metrics.sourceYield.useQuery(undefined as any, { retry: false });
   const replies = trpc.are.metrics.replyMix.useQuery(undefined as any, { retry: false });
 
+  const areStepRows = areSteps.data ?? [];
   const stepRows = steps.data ?? [];
   const sourceRows = sources.data ?? [];
   // Scoped to replies answering something we sent. The unattributed remainder
@@ -153,26 +157,27 @@ export default function AREPerformance() {
   const attributedReplies = replies.data?.attributed ?? 0;
   const unattributedInbound = replies.data?.unattributedInbound ?? 0;
 
-  const totalSent = stepRows.reduce((n, r) => n + r.sent, 0);
-  const totalReplies = stepRows.reduce((n, r) => n + r.replies, 0);
-  const totalMeetings = stepRows.reduce((n, r) => n + r.meetings, 0);
+  // One population (A63): the engine's contacted people who replied, each once.
+  const totalSent = areStepRows.reduce((n, r) => n + r.sent, 0);
+  const totalReplies = areStepRows.reduce((n, r) => n + r.replies, 0);
+  const totalMeetings = areStepRows.reduce((n, r) => n + r.meetings, 0);
   const totalContacted = sourceRows.reduce((n, r) => n + r.contacted, 0);
   const sourceMeetings = sourceRows.reduce((n, r) => n + r.meetings, 0);
   const positive = replyRows.find((r) => r.replyClass === "willing_to_meet")?.count ?? 0;
 
   // The best-performing step by meetings, only once there's enough to mean it.
-  const bestStep = [...stepRows]
+  const bestStep = [...areStepRows]
     .filter((r) => r.sent >= MIN_ROW_SAMPLE)
     .sort((a, b) => b.meetingRate - a.meetingRate)[0];
 
-  const loading = steps.isLoading || sources.isLoading || replies.isLoading;
+  const loading = areSteps.isLoading || steps.isLoading || sources.isLoading || replies.isLoading;
   // "An empty page means nothing has happened yet" is only true when the
   // metrics loaded (audit 2026-10-20, A63).
-  const metricsError = steps.error ?? sources.error ?? replies.error;
+  const metricsError = areSteps.error ?? steps.error ?? sources.error ?? replies.error;
   // Recommendations count as content: with metrics empty but a proposal pending,
   // the full-page empty state would hide the only actionable thing here.
   const nothingYet =
-    !loading && !metricsError && stepRows.length === 0 && sourceRows.length === 0 && replyRows.length === 0
+    !loading && !metricsError && areStepRows.length === 0 && stepRows.length === 0 && sourceRows.length === 0 && replyRows.length === 0
     && recRows.length === 0 && appliedRows.length === 0;
 
   return (
@@ -180,7 +185,7 @@ export default function AREPerformance() {
       <PageHeader
         title="What's Working"
         pageKey="are-performance"
-        description="Measured outcomes across the outbound machine — which sequence steps, sources, and replies actually produce meetings. Reported as-is: no estimates, no projections."
+        description="Measured outcomes of the Revenue Engine — which campaign steps, sources and replies actually produce meetings. Reported as-is: no estimates, no projections. CRM Sequences are shown separately."
         icon={<TrendingUp className="size-5" />}
       />
       <SubNav items={[
@@ -197,7 +202,7 @@ export default function AREPerformance() {
             compact
             what="the engine's measurements"
             message={metricsError.message}
-            onRetry={() => { void steps.refetch(); void sources.refetch(); void replies.refetch(); }}
+            onRetry={() => { void areSteps.refetch(); void steps.refetch(); void sources.refetch(); void replies.refetch(); }}
           />
         )}
         {loading ? (
@@ -370,10 +375,10 @@ export default function AREPerformance() {
 
             {/* Headline counters — raw counts only, no derived claims. */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <StatCard label="Sequence emails sent" value={totalSent} hint="Drafts with status 'sent' that belong to a sequence step" />
-              <StatCard label="Replies" value={totalReplies} hint="Inbound replies attributed to a sequence step" />
-              <StatCard label="Willing to meet" value={positive} tone={positive > 0 ? "success" : undefined} hint="Replies to our outbound classified as wanting a meeting" />
-              <StatCard label="Meetings from steps" value={totalMeetings} tone={totalMeetings > 0 ? "success" : undefined} hint="Replies that produced a meeting record" />
+              <StatCard label="Revenue Engine steps sent" value={areSteps.error ? "—" : totalSent} hint="Steps the Revenue Engine sent, email and LinkedIn" />
+              <StatCard label="People who replied" value={areSteps.error ? "—" : totalReplies} hint="People the engine contacted who replied by email, each counted once, on their last step" />
+              <StatCard label="Willing to meet" value={replies.error ? "—" : positive} tone={positive > 0 ? "success" : undefined} hint="Of those people, the ones whose latest reply asks for a meeting" />
+              <StatCard label="Meetings" value={areSteps.error ? "—" : totalMeetings} tone={totalMeetings > 0 ? "success" : undefined} hint="People the engine contacted who booked a meeting, each counted once" />
             </div>
 
             {/* What is and isn't measured — stated up front, not buried. */}
@@ -392,21 +397,77 @@ export default function AREPerformance() {
               </CardContent>
             </Card>
 
-            {/* ── Sequence step performance ── */}
+            {/* ── Revenue Engine step performance (A22) ── */}
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm flex items-center gap-2">
-                  <BarChart3 className="size-4" style={{ color: accent }} /> Sequence steps
+                  <BarChart3 className="size-4" style={{ color: accent }} /> Revenue Engine steps
                   {bestStep && (
                     <span className="ml-auto text-[11px] font-normal text-muted-foreground">
-                      Best: sequence {bestStep.sequenceId} · step {bestStep.stepIndex + 1} ({bestStep.meetingRate.toFixed(1)}% → meeting)
+                      Best: {bestStep.campaignName ?? `campaign ${bestStep.campaignId}`} · step {bestStep.stepIndex + 1} ({bestStep.meetingRate.toFixed(1)}% → meeting)
                     </span>
                   )}
                 </CardTitle>
               </CardHeader>
               <CardContent className="px-0 pb-0">
-                {stepRows.length === 0 ? (
-                  <p className="px-4 pb-4 text-[13px] text-muted-foreground">No sequence email has been sent yet, so there is no per-step performance to report.</p>
+                {areSteps.error ? (
+                  <div className="px-4 pb-4"><QueryError compact what="the Revenue Engine's steps" message={areSteps.error.message} onRetry={() => areSteps.refetch()} /></div>
+                ) : areStepRows.length === 0 ? (
+                  <p className="px-4 pb-4 text-[13px] text-muted-foreground">The Revenue Engine has not sent a step yet, so there is no per-step performance to report.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[760px]">
+                      <thead>
+                        <tr>
+                          <th className={th}>Campaign</th>
+                          <th className={th}>Step</th>
+                          <th className={th}>Sent</th>
+                          <th className={th}>Opened</th>
+                          <th className={th}>Open rate</th>
+                          <th className={th}>Replied</th>
+                          <th className={th}>Reply rate</th>
+                          <th className={th}>Meetings</th>
+                          <th className={th}>Meeting rate</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {areStepRows.map((r) => (
+                          <tr key={`${r.campaignId}-${r.stepIndex}`} className="hover:bg-muted/50">
+                            <td className={`${td} font-medium`}>
+                              <Link href={`/are/campaigns/${r.campaignId}`} className="hover:underline">{r.campaignName ?? `Campaign ${r.campaignId}`}</Link>
+                            </td>
+                            <td className={td}>{r.stepIndex + 1}</td>
+                            <td className={td}>{r.sent}</td>
+                            <td className={td}>{r.opensTracked ? r.opens : <span className="text-muted-foreground">—</span>}</td>
+                            <td className={td}>{r.opensTracked ? <RateCell value={r.openRate} sample={r.trackable} /> : <span className="text-muted-foreground">not tracked</span>}</td>
+                            <td className={td}>{r.replies}</td>
+                            <td className={td}><RateCell value={r.replyRate} sample={r.sent} /></td>
+                            <td className={td}>{r.meetings}</td>
+                            <td className={td}><RateCell value={r.meetingRate} sample={r.sent} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* ── CRM Sequences: a different product, counted on its own ── */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <BarChart3 className="size-4 text-muted-foreground" /> CRM Sequences (not the Revenue Engine)
+                  <span className="ml-auto text-[11px] font-normal text-muted-foreground">
+                    Emails sent from the Sequences page; not included in the numbers above
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-0 pb-0">
+                {steps.error ? (
+                  <div className="px-4 pb-4"><QueryError compact what="the CRM Sequence steps" message={steps.error.message} onRetry={() => steps.refetch()} /></div>
+                ) : stepRows.length === 0 ? (
+                  <p className="px-4 pb-4 text-[13px] text-muted-foreground">No CRM Sequence email has been sent yet.</p>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[760px]">
@@ -457,7 +518,9 @@ export default function AREPerformance() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="px-0 pb-0">
-                {sourceRows.length === 0 ? (
+                {sources.error ? (
+                  <div className="px-4 pb-4"><QueryError compact what="the prospect sources" message={sources.error.message} onRetry={() => sources.refetch()} /></div>
+                ) : sourceRows.length === 0 ? (
                   <p className="px-4 pb-4 text-[13px] text-muted-foreground">No prospects have been sourced yet.</p>
                 ) : (
                   <div className="overflow-x-auto">
@@ -500,13 +563,15 @@ export default function AREPerformance() {
                 <CardTitle className="text-sm flex items-center gap-2">
                   <MailOpen className="size-4" style={{ color: accent }} /> Reply mix
                   <span className="ml-auto text-[11px] font-normal text-muted-foreground">
-                    {attributedReplies} repl{attributedReplies === 1 ? "y" : "ies"} to our outbound
+                    {attributedReplies} {attributedReplies === 1 ? "person" : "people"} the engine contacted replied, by their latest reply
                   </span>
                 </CardTitle>
               </CardHeader>
               <CardContent className="px-0 pb-0">
-                {replyRows.length === 0 ? (
-                  <p className="px-4 pb-4 text-[13px] text-muted-foreground">No replies to our outbound yet. A raw reply count would hide whether replies progress deals — this breaks them out by intent once they arrive.</p>
+                {replies.error ? (
+                  <div className="px-4 pb-4"><QueryError compact what="the reply mix" message={replies.error.message} onRetry={() => replies.refetch()} /></div>
+                ) : replyRows.length === 0 ? (
+                  <p className="px-4 pb-4 text-[13px] text-muted-foreground">No replies to the Revenue Engine yet. A raw reply count would hide whether replies progress deals — this breaks them out by intent once they arrive.</p>
                 ) : (
                   <ul className="divide-y divide-border/60">
                     {replyRows.map((r) => {
