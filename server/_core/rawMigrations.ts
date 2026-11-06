@@ -4933,6 +4933,16 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // A rep's forecast category on a deal (audit 2026-10-20, R41): Commit was
+  // "90% or more" and no stage defaults that high. Nullable with no default,
+  // so every existing deal keeps being counted by its win %.
+  {
+    name: "0301_opportunity_forecast_category.sql",
+    statements: [
+      "ALTER TABLE `opportunities` ADD COLUMN `forecastCategory` varchar(16) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

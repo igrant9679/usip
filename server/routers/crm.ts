@@ -45,7 +45,8 @@ import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { linkEmailLogToDraft } from "../services/email/logSend";
 import { router } from "../_core/trpc";
-import { repProcedure, workspaceProcedure } from "../_core/workspace";
+import { rankOf, repProcedure, ROLE_RANK, workspaceProcedure } from "../_core/workspace";
+import { FORECAST_CATEGORIES } from "@shared/forecastCategory";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { assertOwnerInWorkspace, assertRowInWorkspace } from "../services/foreignIds";
 import { defaultPipelineId, invalidateStageIndex, resolvedStageFor, stageIndexFor, stageResolver } from "../_core/stageSemantics";
@@ -335,6 +336,8 @@ export const OPPORTUNITY_PATCH = z.object({
   pipelineId: optId,
   accountId: z.number().int().positive().optional(),
   ownerUserId: z.number().int().positive().optional(),
+  // A rep's forecast call (R41); null returns the deal to "by win %".
+  forecastCategory: z.enum(FORECAST_CATEGORIES).nullable().optional(),
 }).strict();
 
 export const TERRITORY_PATCH = z.object({
@@ -2465,14 +2468,18 @@ export const opportunitiesRouter = router({
     }),
 
   /**
-   * Per-rep forecast rollup: total open, weighted (value × winProb),
-   * commit (≥90% prob), best-case (≥50% prob), won this quarter.
+   * Per-rep forecast rollup: total open, weighted (value × winProb), commit,
+   * best case (@shared/forecastCategory), won this calendar quarter.
    * Powers the /forecast page.
+   *
+   * A rep sees their own row; managers and above see every rep's (audit
+   * 2026-10-20, R41) — the rule Quota already keeps for the same numbers.
    */
   forecastByRep: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
-    const deals = await loadMetricDeals(db, ctx.workspace.id);
+    const seesTeam = rankOf(ctx.member.role) >= ROLE_RANK.manager;
+    const deals = await loadMetricDeals(db, ctx.workspace.id, seesTeam ? {} : { ownerUserId: ctx.user.id });
     const quarter = currentRanges(await getWorkspaceTimezone(ctx.workspace.id)).quarter;
     // Grouped first, then totalled by the same functions every page uses — so
     // the per-rep rows add up to the Pipeline and Deals totals exactly.

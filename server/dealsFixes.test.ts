@@ -22,6 +22,8 @@
  *         what they do and shows no unread JSON.
  *   R40 — AI suggestions are this pipeline's open stages; a failure throws and
  *         saves nothing; a closed deal's win % is left alone.
+ *   R41 — a rep's forecast is their own; a deal's forecast category decides
+ *         Commit and Best case, and an unmarked deal keeps the win % rule.
  *
  * Procedures run through the real router against the SQL-evaluating fake;
  * screens render with a stub trpc.
@@ -501,5 +503,47 @@ describe("R40: AI deal intelligence", () => {
     await caller().oppIntelligence.generateIntelligence({ opportunityId: 2 });
     expect(rows("opportunities").map((o) => [o.id, o.winProb])).toEqual([[1, 64], [2, 100]]);
     expect(rows("opportunity_intelligence").map((i) => i.winProbability)).toEqual(["64", "64"]);
+  });
+});
+
+/* ── R41: the Forecast page ────────────────────────────────────────────── */
+
+describe("R41: the forecast", () => {
+  beforeEach(() => {
+    deal(1, { ownerUserId: REP, stage: "negotiation", winProb: 75, value: "100" });
+    deal(2, { ownerUserId: REP, stage: "negotiation", winProb: 95, value: "1000" });
+    deal(3, { ownerUserId: MANAGER, stage: "negotiation", winProb: 60, value: "10000" });
+  });
+  const row = (r: any[], owner: number) => r.find((x) => x.ownerUserId === owner);
+
+  it("a rep sees their own row; a manager and an admin see the team", async () => {
+    expect((await caller(REP).opportunities.forecastByRep()).map((r) => r.ownerUserId)).toEqual([REP]);
+    expect((await caller(MANAGER).opportunities.forecastByRep()).map((r) => r.ownerUserId).sort()).toEqual([REP, MANAGER]);
+    expect((await caller(ME).opportunities.forecastByRep()).map((r) => r.ownerUserId).sort()).toEqual([REP, MANAGER]);
+  });
+
+  it("a deal marked Commit counts in Commit at any win %; an unmarked one by its win %; Omitted in neither", async () => {
+    // Unmarked: the old rule.
+    expect(row(await caller().opportunities.forecastByRep(), REP)).toMatchObject({ commit: 1000, bestCase: 1100 });
+    await caller(REP).opportunities.update({ id: 1, patch: { forecastCategory: "commit" } });
+    await caller(REP).opportunities.update({ id: 2, patch: { forecastCategory: "omitted" } });
+    await caller(MANAGER).opportunities.update({ id: 3, patch: { forecastCategory: "pipeline" } });
+    const r = await caller().opportunities.forecastByRep();
+    expect(row(r, REP)).toMatchObject({ commit: 100, bestCase: 100, total: 1100 });
+    expect(row(r, MANAGER)).toMatchObject({ commit: 0, bestCase: 0, total: 10000 });
+    // Back to "by win %".
+    await caller(REP).opportunities.update({ id: 2, patch: { forecastCategory: null } });
+    expect(row(await caller().opportunities.forecastByRep(), REP)).toMatchObject({ commit: 1100 });
+    await expect(caller(REP).opportunities.update({ id: 2, patch: { forecastCategory: "maybe" as never } })).rejects.toThrow();
+  });
+
+  it("the page and the deal say what the numbers are", () => {
+    const page = read("client/src/pages/usip/Forecast.tsx");
+    expect(page).toContain("Quarters are calendar quarters. Reps see their own row; managers see the team.");
+    expect(page).not.toContain("Commit = ≥90% win prob");
+    const detail = read("client/src/pages/usip/OpportunityDetail.tsx");
+    expect(detail).toContain('aria-label="Forecast category"');
+    expect(detail).toContain("patch: { forecastCategory: (e.target.value || null)");
+    expect(read("server/_core/rawMigrations.ts")).toContain("ALTER TABLE `opportunities` ADD COLUMN `forecastCategory` varchar(16) NULL");
   });
 });

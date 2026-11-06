@@ -363,6 +363,9 @@ export const opportunities = mysqlTable(
     nextStep: text("nextStep"),
     lostReason: varchar("lostReason", { length: 120 }),
     winReason: varchar("winReason", { length: 120 }),
+    // A rep's forecast call — @shared/forecastCategory (migration 0301, R41).
+    // NULL: counted by win %, as before.
+    forecastCategory: varchar("forecastCategory", { length: 16 }),
     lastActivityAt: timestamp("lastActivityAt"),
     pipelineId: int("pipelineId"),
     campaignId: int("campaignId"),

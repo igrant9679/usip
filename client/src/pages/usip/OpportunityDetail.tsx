@@ -26,6 +26,7 @@ import { ConfirmButton } from "@/components/usip/Common";
 import { toast } from "sonner";
 import { formatCalendarDate, storedToCalendarDate } from "@shared/calendarDate";
 import { OPPORTUNITY_DELETE_SCOPE } from "@shared/dealDelete";
+import { FORECAST_CATEGORIES, FORECAST_CATEGORY_LABEL, type ForecastCategory } from "@shared/forecastCategory";
 
 function fmt$(n: any) {
   // Full, comma-grouped amount to match the list pages (e.g. $1,250,000).
@@ -247,7 +248,20 @@ export default function OpportunityDetail() {
               if (next !== (storedToCalendarDate(o.closeDate) ?? null)) update.mutate({ id: o.id, patch: { closeDate: next } });
             }} />
         </label>
-        {o.nextStep && <div className="text-muted-foreground text-xs">Next: <span className="text-foreground">{o.nextStep}</span></div>}
+        {/* A rep's forecast call (audit 2026-10-20, R41): Commit was "90%
+            or more", which no stage defaults to, so it was nearly always $0. */}
+        {!isClosedWon && !isClosedLost && (
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            Forecast
+            <select aria-label="Forecast category" className="h-7 text-xs rounded-md border bg-background px-2" disabled={update.isPending}
+              value={o.forecastCategory ?? ""}
+              onChange={(e) => update.mutate({ id: o.id, patch: { forecastCategory: (e.target.value || null) as ForecastCategory | null } })}>
+              <option value="">By win % ({o.winProb >= 90 ? "Commit" : o.winProb >= 50 ? "Best case" : "Pipeline"})</option>
+              {FORECAST_CATEGORIES.map((c) => <option key={c} value={c}>{FORECAST_CATEGORY_LABEL[c]}</option>)}
+            </select>
+          </label>
+        )}
+        {o.nextStep &&<div className="text-muted-foreground text-xs">Next: <span className="text-foreground">{o.nextStep}</span></div>}
         {account && (
           <div className="flex items-center gap-2 pt-2"><Building2 className="size-4 text-muted-foreground" />
             <Link href={`/accounts/${account.id}`} className="hover:underline font-medium">{account.name}</Link>
