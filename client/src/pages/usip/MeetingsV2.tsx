@@ -135,6 +135,43 @@ export default function MeetingsV2() {
     },
     onError: (e) => toast.error(e.message),
   });
+  /**
+   * In Autonomous, Find meetings SENDS what it finds: up to 8 invites on one
+   * click, with only a toast afterwards (audit 2026-10-20, O29). It now asks
+   * first, naming how many and to whom, and sends to no one else. Otherwise
+   * (Approve, Off, or paused) it only drafts proposals, as before.
+   */
+  const [finding, setFinding] = useState(false);
+  const findMeetings = async () => {
+    setFinding(true);
+    try {
+      const p = await utils.client.meetings.previewFindMeetings.query({ limit: 8 });
+      if (!p.send || p.candidates.length === 0) {
+        generate.mutate({ limit: 8, allowSend: false });
+        return;
+      }
+      const n = p.candidates.length;
+      confirmAction({
+        title: `Send ${n} meeting invite${n === 1 ? "" : "s"} now?`,
+        description: (
+          <span className="block space-y-2">
+            <span className="block">Autopilot is Autonomous, so each of these people is emailed a proposal with the owner's free times straight away. Nothing goes on the calendar until they pick one.</span>
+            <span className="block max-h-48 overflow-auto rounded border p-2 text-xs">
+              {p.candidates.map((c) => (
+                <span key={c.id} className="block truncate">{c.name}{c.company ? ` · ${c.company}` : ""} · {c.email}</span>
+              ))}
+            </span>
+          </span>
+        ),
+        confirmLabel: `Send ${n} invite${n === 1 ? "" : "s"}`,
+        destructive: false,
+      }, () => generate.mutate({ limit: 8, prospectIds: p.candidates.map((c) => c.id), allowSend: true }));
+    } catch (e) {
+      toast.error((e as Error).message || "Couldn't look for meetings");
+    } finally {
+      setFinding(false);
+    }
+  };
   const approveSend = trpc.meetings.approveAndSend.useMutation({
     onSuccess: (r) => {
       invalidateAll();
@@ -314,8 +351,8 @@ export default function MeetingsV2() {
               </SelectContent>
             </Select>
           </div>
-          <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={generate.isPending} onClick={() => generate.mutate({ limit: 8 })}>
-            <Sparkles className="size-3.5" /> {generate.isPending ? "Finding…" : "Find meetings with AI"}
+          <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={generate.isPending || finding} onClick={findMeetings}>
+            <Sparkles className="size-3.5" /> {generate.isPending || finding ? "Finding…" : "Find meetings with AI"}
           </Button>
           <Button size="sm" className="h-7 gap-1.5" onClick={() => setNewOpen(true)}><Plus className="size-3.5" /> New meeting</Button>
         </div>
@@ -495,7 +532,7 @@ export default function MeetingsV2() {
                   <div className="text-sm font-medium">No upcoming meetings</div>
                   <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">Let AI propose meetings with your best-fit prospects, or add one manually.</p>
                   <div className="flex items-center justify-center gap-2 mt-3">
-                    <Button size="sm" variant="outline" className="gap-1.5" disabled={generate.isPending} onClick={() => generate.mutate({ limit: 8 })}><Sparkles className="size-3.5" /> Find meetings with AI</Button>
+                    <Button size="sm" variant="outline" className="gap-1.5" disabled={generate.isPending || finding} onClick={findMeetings}><Sparkles className="size-3.5" /> Find meetings with AI</Button>
                     <Button size="sm" className="gap-1.5" onClick={() => setNewOpen(true)}><Plus className="size-3.5" /> New meeting</Button>
                   </div>
                 </div>
