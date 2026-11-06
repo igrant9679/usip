@@ -6,6 +6,7 @@
  * Feature 57: Bounced Badge — badge label resolution logic
  */
 import { describe, it, expect } from "vitest";
+import { segmentEnrollNotification } from "./routers/segmentRules";
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Feature 55 — getBounceStats aggregation logic
@@ -164,26 +165,16 @@ describe("bounce rate warning threshold", () => {
    Feature 56 — Segment Enrollment Cron Notification message formatting
    ═══════════════════════════════════════════════════════════════════════════ */
 
+// 2026-11-06 (audit 2026-10-20, P131, P132): this was a copy of the cron's
+// message, so it stayed green while it pinned a link to /segment-auto-enroll,
+// a page the app never had. It reads the real message now, which links to
+// /segment-rules and counts people skipped apart from rules refused.
 function buildSegmentEnrollNotification(
   workspaceCount: number,
   totalEnrolled: number,
   totalSkipped: number,
 ) {
-  const runDate = new Date().toLocaleDateString(undefined, {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-  const runTime = new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  const title = `Segment Auto-Enroll: ${totalEnrolled} contact${totalEnrolled !== 1 ? "s" : ""} enrolled`;
-  const content =
-    `Hourly segment → sequence auto-enroll completed on ${runDate} at ${runTime}.\n\n` +
-    `• Workspaces with active rules: ${workspaceCount}\n` +
-    `• Contacts enrolled in sequences: ${totalEnrolled}\n` +
-    `• Contacts skipped (already enrolled): ${totalSkipped}\n` +
-    `\nView and manage enrollment rules in Settings → Segment Auto-Enroll (/segment-auto-enroll).`;
-  return { title, content };
+  return segmentEnrollNotification(workspaceCount, totalEnrolled, totalSkipped, 0);
 }
 
 describe("segment enrollment notification — message formatting", () => {
@@ -214,12 +205,12 @@ describe("segment enrollment notification — message formatting", () => {
 
   it("includes skipped count in content", () => {
     const { content } = buildSegmentEnrollNotification(1, 8, 20);
-    expect(content).toContain("Contacts skipped (already enrolled): 20");
+    expect(content).toContain("Contacts skipped (already enrolled, invalid email, in a campaign or suppressed): 20");
   });
 
-  it("includes the segment auto-enroll link", () => {
+  it("includes the Segment Rules link, a route the app has", () => {
     const { content } = buildSegmentEnrollNotification(1, 5, 0);
-    expect(content).toContain("/segment-auto-enroll");
+    expect(content).toContain("(/segment-rules)");
   });
 
   it("content mentions the run date", () => {

@@ -330,7 +330,9 @@ describe("people searches pass the gate too", () => {
     expect(body).toContain('kind: "search"');
     expect(body).toContain("pickAccountForAction(");
     expect(body).not.toContain("?? accounts[0]");
-    expect(body).toContain("return [];");
+    // 2026-11-06 (audit A77): it returns its page state beside the rows now;
+    // a refused search still returns no rows and does not move the page.
+    expect(body).toContain("return { raw: [], next: undefined };");
     // Recorded AFTER the vendor call, never before.
     const search = body.indexOf("searchLinkedInPeople(");
     const record = body.indexOf("recordLinkedInAction(");

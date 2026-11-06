@@ -331,6 +331,13 @@ export function CampaignStallPanel({ campaignId, onJump }: {
                     ? `Below target, but discovery is resting until ${inZone(g.queue.discoveryRestingUntil, data.timezone)} — the last run found nobody new.`
                     : "Below target — discovery runs on every tick."}
               >
+                {g.queue.staged > 0 && (
+                  <div className="text-[11px] text-muted-foreground mt-0.5">
+                    {g.queue.staged} of them {g.queue.staged === 1 ? "is" : "are"} staged while an email address is found — counted
+                    here, but not on the Prospects list until an address turns up (or every source is exhausted and{" "}
+                    {g.queue.staged === 1 ? "it is" : "they are"} rejected).
+                  </div>
+                )}
                 {g.queue.rejected > 0 && (
                   <div className="text-[11px] text-muted-foreground mt-0.5">
                     {g.queue.rejected} rejected {plural(g.queue.rejected, "row", "rows")} excluded from that count — they
