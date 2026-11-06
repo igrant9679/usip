@@ -30,7 +30,8 @@
  * decision, not something to infer.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { retryAt } from "../../services/are/retryBackoff";
 import { HELD_PAUSED, holdProspectSteps, releaseProspectSteps } from "../../services/are/stepHold";
 import { z } from "zod";
 import {
@@ -83,6 +84,19 @@ import { sequenceMaxTokens, stepCountForTemplate } from "@shared/areSequenceTemp
 import { DEFAULT_VARIANT_KEY, normalizeVariantKey } from "@shared/variantKeys";
 
 /* ─── ICP Match Scorer ───────────────────────────────────────────────────── */
+
+/**
+ * The model answered without a usable ICP score (audit 2026-10-20, A67). It
+ * used to come back as a score of 0, which was stored, and Full Auto then
+ * rejected the prospect for a fit nobody measured. Thrown instead, and treated
+ * like a rate limit: the row waits and is enriched again.
+ */
+export class IcpScoreUnavailable extends Error {
+  constructor() {
+    super("The AI returned no ICP score");
+    this.name = "IcpScoreUnavailable";
+  }
+}
 
 async function scoreIcpMatch(
   prospect: typeof prospectQueue.$inferSelect,
@@ -144,10 +158,12 @@ Score each dimension 0-20 and provide a total score 0-100.
   });
 
   const content = result.choices[0]?.message?.content;
-  if (!content) return { score: 0, breakdown: {} };
+  if (!content) throw new IcpScoreUnavailable();
   const parsed = parseLlmJson(content, "scoreIcpMatch");
+  const total = Number(parsed?.total);
+  if (typeof parsed?.total !== "number" || !Number.isFinite(total)) throw new IcpScoreUnavailable();
   return {
-    score: Math.min(100, Math.max(0, Math.round(parsed.total))),
+    score: Math.min(100, Math.max(0, Math.round(total))),
     breakdown: {
       industry: parsed.industry,
       title: parsed.title,
@@ -172,23 +188,47 @@ export const REGENERATE_SCHEDULED_MESSAGE =
 
 /* ─── Enrich Agent ───────────────────────────────────────────────────────── */
 
+/**
+ * How long an 'enriching' row stays claimed by the run that marked it. Older
+ * than this, that run died (a deploy, a crash) and another may take the row.
+ */
+export const ENRICH_STALE_MS = 15 * 60_000;
+
+/**
+ * Enrich one prospect. Resolves false when another enrichment holds the row
+ * (or it is not this workspace's), so nothing was done; true when this run did
+ * the work. Throws what the work threw.
+ */
 export async function runEnrichAgent(
   prospectId: number,
   workspaceId: number,
-): Promise<void> {
+): Promise<boolean> {
   const db = await getDb();
-  if (!db) return;
+  if (!db) return false;
 
   const [prospect] = await db
     .select()
     .from(prospectQueue)
     .where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, workspaceId)))
     .limit(1);
-  if (!prospect) return;
+  if (!prospect) return false;
 
-  // Mark as enriching — also clear any prior enrichmentError so the UI
-  // doesn't keep showing a stale failure reason during a retry.
-  await db.update(prospectQueue).set({ enrichmentStatus: "enriching", enrichmentError: null }).where(eq(prospectQueue.id, prospectId));
+  /**
+   * CLAIM the row (audit 2026-10-20, A35): marked enriching ONLY if no other
+   * enrichment holds it. Unconditional, a double click — or a manual enrich
+   * overlapping the engine's pass — ran two at once: paid twice, wrote two
+   * dossiers, and the slower one could leave the row failed. A claim older
+   * than ENRICH_STALE_MS is a dead run's, and may be taken. Also clears any
+   * prior enrichmentError so the UI doesn't show a stale reason during a retry.
+   */
+  const claim = await db.update(prospectQueue)
+    .set({ enrichmentStatus: "enriching", enrichmentError: null, updatedAt: new Date() })
+    .where(and(
+      eq(prospectQueue.id, prospectId),
+      eq(prospectQueue.workspaceId, workspaceId),
+      or(ne(prospectQueue.enrichmentStatus, "enriching"), lt(prospectQueue.updatedAt, new Date(Date.now() - ENRICH_STALE_MS))),
+    ));
+  if (Number((claim as any)?.[0]?.affectedRows ?? (claim as any)?.affectedRows ?? 0) !== 1) return false;
 
   try {
     // Get active ICP
@@ -496,6 +536,9 @@ Produce:
       icpMatchBreakdown,
       enrichmentStatus: "complete",
       enrichedAt: new Date(),
+      // A success clears the failure count and the wait (A27).
+      enrichAttempts: 0,
+      enrichRetryAt: null,
       ...(resolvedEmail ? { email: resolvedEmail } : {}),
       ...(effCompanyName && !prospect.companyName ? { companyName: effCompanyName.slice(0, 200) } : {}),
       ...(qeFilledDomain && effCompanyDomain ? { companyDomain: effCompanyDomain.slice(0, 200) } : {}),
@@ -533,23 +576,40 @@ Produce:
     // cut that lands on whitespace, so what is stored is a reason and never
     // half a word.
     const reason = clipAtWordBoundary(enrichmentReasonFrom(err), 800);
-    if (isRetryableLLMError(err)) {
-      // Provider rate limit / overload — a fact about the moment, not about
-      // this prospect. Back to 'pending' so the engine's next tick retries
-      // it, instead of stranding a red 'failed' chip with raw 429 JSON the
-      // user has to retry by hand.
+    // Every failure counts, and the next try waits longer each time (audit
+    // A7/A27): a row that kept failing was retried at the head of the page on
+    // every tick. A 'failed' row is retried by the engine up to
+    // ENRICH_MAX_ATTEMPTS, then rejected with this reason.
+    const backoff = {
+      enrichAttempts: sql`${prospectQueue.enrichAttempts} + 1`,
+      enrichRetryAt: retryAt(Number(prospect.enrichAttempts ?? 0) + 1),
+    };
+    if (err instanceof IcpScoreUnavailable) {
       await db.update(prospectQueue).set({
         enrichmentStatus: "pending",
-        enrichmentError: `AI provider is rate-limited — enrichment will retry automatically on the next engine pass. (${clipAtWordBoundary(reason, 300)})`,
-      }).where(eq(prospectQueue.id, prospectId));
+        enrichmentError: "The AI returned no ICP score — enrichment will retry automatically.",
+        ...backoff,
+      }).where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, workspaceId)));
+    } else if (isRetryableLLMError(err)) {
+      // Provider rate limit / overload — a fact about the moment, not about
+      // this prospect. Back to 'pending' so the engine retries it, instead of
+      // stranding a red 'failed' chip with raw 429 JSON the user has to retry
+      // by hand.
+      await db.update(prospectQueue).set({
+        enrichmentStatus: "pending",
+        enrichmentError: `AI provider is rate-limited — enrichment will retry automatically. (${clipAtWordBoundary(reason, 300)})`,
+        ...backoff,
+      }).where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, workspaceId)));
     } else {
       await db.update(prospectQueue).set({
         enrichmentStatus: "failed",
         enrichmentError: reason || "Unknown error",
-      }).where(eq(prospectQueue.id, prospectId));
+        ...backoff,
+      }).where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, workspaceId)));
     }
     throw err;
   }
+  return true;
 }
 
 /* ─── Sequence Agent ─────────────────────────────────────────────────────

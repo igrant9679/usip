@@ -36,7 +36,7 @@
  * Per-campaign and per-phase try/catch so one failure never blocks the rest.
  */
 import { createHash } from "node:crypto";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, notExists, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notExists, notInArray, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   areCampaigns,
@@ -137,6 +137,8 @@ const SWEEP_CHUNK = 500;
  *  drains steadily over multiple ticks instead of stalling dispatch for other
  *  work. */
 const ENRICH_PER_TICK = 5;
+/** Rows the selector reads so the five can be shared between workspaces (A7). */
+const ENRICH_CANDIDATES = ENRICH_PER_TICK * 10;
 /**
  * ⚠️ These two are PER CAMPAIGN, not per tick — they are applied inside
  * tickCampaign(), which runs once for every ACTIVE campaign. Only
@@ -500,7 +502,13 @@ async function enrichPendingGlobally(result: AreEngineResult, onlyWorkspaceId?: 
   // approved/pending, invisible to this selector, while phase 2 waited on
   // dossiers that could never come. The approval decision outranks the score
   // — override supremacy, same as everywhere else the owner has spoken.
-  const pending = await db
+  // Archived workspaces are frozen (2026-08-12), and left out IN SQL (audit
+  // A7): they were skipped only after the page was chosen, so their rows could
+  // take every slot and enrich nobody.
+  const archivedWs = await archivedWorkspaceIds();
+  const archivedList = Array.from(archivedWs);
+  const now = new Date();
+  const candidates = await db
     .select({
       id: prospectQueue.id,
       workspaceId: prospectQueue.workspaceId,
@@ -512,7 +520,16 @@ async function enrichPendingGlobally(result: AreEngineResult, onlyWorkspaceId?: 
       and(
         eq(areCampaigns.status, "active"),
         onlyWorkspaceId != null ? eq(prospectQueue.workspaceId, onlyWorkspaceId) : undefined,
-        inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
+        archivedList.length > 0 ? notInArray(prospectQueue.workspaceId, archivedList) : undefined,
+        or(
+          inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
+          // A failed enrichment is tried again (A27), up to the limit; then
+          // the screen pass rejects the prospect with the reason.
+          and(eq(prospectQueue.enrichmentStatus, "failed"), lt(prospectQueue.enrichAttempts, ENRICH_MAX_ATTEMPTS)),
+        ),
+        // A row that keeps failing waits its turn (A7) instead of taking a
+        // slot at the head of the page on every tick.
+        or(isNull(prospectQueue.enrichRetryAt), lte(prospectQueue.enrichRetryAt, now)),
         // A row a human (or the screen) rejected or canceled is a decision,
         // not a backlog: enriching it spends LLM + verification credits on
         // someone who will never be contacted. Found 2026-09-16 — a rejected
@@ -532,22 +549,26 @@ async function enrichPendingGlobally(result: AreEngineResult, onlyWorkspaceId?: 
       desc(sql`CASE WHEN ${prospectQueue.sequenceStatus} = 'approved' THEN 2 WHEN ${prospectQueue.icpMatchScore} = 0 THEN 1 ELSE 0 END`),
       desc(prospectQueue.icpMatchScore),
     )
-    .limit(ENRICH_PER_TICK);
+    .limit(ENRICH_CANDIDATES);
+  // Shared between workspaces (A7): the top five across the whole engine all
+  // came from whichever workspace had the best scores, every tick.
+  const pending = roundRobinByWorkspace(candidates, ENRICH_PER_TICK);
 
   if (pending.length === 0) return;
 
   // One enrichment at a time. A single prospect failing must not abort the rest.
-  const archivedWs = await archivedWorkspaceIds();
   const perCampaign = new Map<number, { ws: number; ok: number; total: number }>();
   for (const p of pending) {
-    if (archivedWs.has(p.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
+    if (archivedWs.has(p.workspaceId)) continue; // belt to the SQL above
     const bucket = perCampaign.get(p.campaignId) ?? { ws: p.workspaceId, ok: 0, total: 0 };
-    bucket.total++;
     try {
-      await runEnrichAgent(p.id, p.workspaceId);
+      // False: another enrichment holds the row (A35) — not this pass's to count.
+      if (!(await runEnrichAgent(p.id, p.workspaceId))) continue;
+      bucket.total++;
       bucket.ok++;
       result.enriched++;
     } catch (e) {
+      bucket.total++;
       console.error(`[AreEngine] enrich prospect ${p.id} (campaign ${p.campaignId}) failed:`, e);
     }
     perCampaign.set(p.campaignId, bucket);
@@ -555,9 +576,70 @@ async function enrichPendingGlobally(result: AreEngineResult, onlyWorkspaceId?: 
 
   // One summary log per campaign so each campaign's Logs tab shows its activity.
   for (const [campId, b] of perCampaign) {
+    if (b.total === 0) continue;
     await emitLog(b.ws, campId, "enrich", "info",
       `Enriched ${b.ok}/${b.total} prospects (serial, global pass)`);
   }
+}
+
+/**
+ * Up to `n` rows, one workspace at a time in turn (audit A7). `rows` is the
+ * selector's page, best first; each workspace keeps that order among its own,
+ * and the workspace with the best row goes first.
+ */
+export function roundRobinByWorkspace<T extends { workspaceId: number }>(rows: T[], n: number): T[] {
+  const queues = new Map<number, T[]>();
+  for (const r of rows) {
+    const q = queues.get(r.workspaceId);
+    if (q) q.push(r); else queues.set(r.workspaceId, [r]);
+  }
+  const out: T[] = [];
+  while (out.length < n) {
+    let took = false;
+    for (const q of Array.from(queues.values())) {
+      const r = q.shift();
+      if (!r) continue;
+      out.push(r);
+      took = true;
+      if (out.length >= n) break;
+    }
+    if (!took) break;
+  }
+  return out;
+}
+
+/**
+ * Reject the campaign's still-pending prospects whose enrichment failed on
+ * its last allowed attempt, with the reason (audit A27). They held a queue
+ * slot for ever: never retried, never screened, counted as working. Approved
+ * rows are a person's decision and are left; staged ones leave through the
+ * no-email door's give-up. Returns how many.
+ */
+export async function rejectExhaustedEnrichment(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  wsId: number,
+  campId: number,
+): Promise<number> {
+  const exhausted = await db
+    .select({ id: prospectQueue.id, attempts: prospectQueue.enrichAttempts, error: prospectQueue.enrichmentError })
+    .from(prospectQueue)
+    .where(and(
+      eq(prospectQueue.campaignId, campId),
+      eq(prospectQueue.workspaceId, wsId),
+      eq(prospectQueue.sequenceStatus, "pending"),
+      eq(prospectQueue.enrichmentStatus, "failed"),
+      gte(prospectQueue.enrichAttempts, ENRICH_MAX_ATTEMPTS),
+    ))
+    .limit(SCREEN_BATCH);
+  let n = 0;
+  for (const r of exhausted) {
+    const why = String(r.error ?? "").trim().slice(0, 300) || "no reason recorded";
+    await db.update(prospectQueue)
+      .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionReason: `Enrichment failed ${r.attempts} times: ${why}` })
+      .where(and(eq(prospectQueue.id, r.id), eq(prospectQueue.workspaceId, wsId), eq(prospectQueue.sequenceStatus, "pending")));
+    n++;
+  }
+  return n;
 }
 
 /**
@@ -1190,12 +1272,21 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         AND \`workspaceId\` = ${wsId}
         AND \`sequenceStatus\` = 'sourcing'
         AND (\`email\` IS NULL OR \`email\` = '')
-        AND \`enrichmentStatus\` IN ('complete', 'failed')`);
+        AND \`enrichmentStatus\` IN ('complete', 'failed')
+        AND (\`enrichmentStatus\` = 'complete' OR \`enrichAttempts\` >= ${ENRICH_MAX_ATTEMPTS})`);
     const gaveUp = (giveUp as { affectedRows?: number })?.affectedRows ?? 0;
     if (gaveUp > 0) {
       result.rejected += gaveUp;
       await emitLog(wsId, campId, "screen", "info",
         `${gaveUp} candidate${gaveUp === 1 ? "" : "s"} rejected — no verifiable email address could be found, so they never entered the queue.`);
+    }
+
+    // A failed enrichment's last try used: rejected with its reason (A27).
+    const exhausted = await rejectExhaustedEnrichment(db, wsId, campId);
+    if (exhausted > 0) {
+      result.rejected += exhausted;
+      await emitLog(wsId, campId, "screen", "info",
+        `${exhausted} prospect${exhausted === 1 ? "" : "s"} rejected — enrichment failed ${ENRICH_MAX_ATTEMPTS} times; the reason is on the Rejections tab.`);
     }
 
     // A batch per tick, oldest first (audit 2026-10-20, A34): every enriched
