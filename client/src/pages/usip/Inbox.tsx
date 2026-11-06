@@ -52,7 +52,7 @@ function parseMentionBody(body: string | null | undefined): {
 export default function Inbox() {
   const utils = trpc.useUtils();
   const [filter, setFilter] = useState<FilterKind>("all");
-  const { data } = trpc.notifications.list.useQuery();
+  const { data, isLoading, isError, error } = trpc.notifications.list.useQuery();
   // Read-state only. The invalidate on success is what corrects the badge, so a
   // failure self-heals on the next load and is not worth a toast.
   const markAll = trpc.notifications.markAllRead.useMutation({ onSuccess: () => utils.notifications.invalidate(), meta: { silentError: true } });
@@ -93,7 +93,12 @@ export default function Inbox() {
             </button>
           ))}
         </div>
-        {filtered.length === 0 ? (
+        {/* Not read yet is not "Inbox zero" (audit 2026-10-20, O56). */}
+        {isLoading ? (
+          <div className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">Loading notifications…</div>
+        ) : isError ? (
+          <div className="rounded-lg border bg-card p-4 text-sm text-destructive">Notifications could not be loaded{error?.message ? `: ${error.message}` : "."}</div>
+        ) : filtered.length === 0 ? (
           <EmptyState icon={filter === "email_reply" ? MailOpen : filter === "mention" ? AtSign : InboxIcon}
             title={filter === "email_reply" ? "No email replies" : filter === "mention" ? "No mentions" : "Inbox zero"}
             description={

@@ -64,6 +64,21 @@ export function detachTemplate<S extends EmailStep>(step: S): S {
 }
 
 /**
+ * The window a sequence's email steps are drafted in, as the engine reads its
+ * settings (resolveSendSettings in server/sequenceEngine.ts): 08:00 to 18:00
+ * unless set, in the sequence's own zone or else the workspace's, weekends
+ * skipped unless switched off (audit 2026-10-20, O39).
+ */
+export function describeSendWindow(settings: unknown): string {
+  const s = (settings ?? {}) as { timezone?: string | null; sendWindowStart?: string | null; sendWindowEnd?: string | null; skipWeekends?: boolean | null };
+  const start = s.sendWindowStart || "08:00";
+  const end = s.sendWindowEnd || "18:00";
+  const zone = s.timezone || "the workspace's time zone";
+  const days = s.skipWeekends === false ? "every day" : "Monday to Friday";
+  return `Email steps are drafted between ${start} and ${end} (${zone}), ${days}.`;
+}
+
+/**
  * How many people sit at each step. Only active and paused people sit anywhere:
  * someone finished or exited has left, though their row still names a step.
  *
