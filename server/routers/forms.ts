@@ -179,8 +179,10 @@ export const formsRouter = router({
         let ownerUserId: number | null = await activeOwnerOrNull(form.workspaceId, form.createdByUserId);
         if (form.autoRoute) {
           try {
-            const { routeLeadOwner } = await import("./leadScoring");
-            routedToUserId = await routeLeadOwner(form.workspaceId, { title, company, source: "webform", score: 0, industry: null, country: null, state: null, city: null } as any);
+            const { routeLeadOwner, createTimeScore } = await import("./leadScoring");
+            // Rules on Score see the score the lead is created with (audit P13).
+            const { total: score } = await createTimeScore(form.workspaceId, { title, company, email, phone, source: "webform" });
+            routedToUserId = await routeLeadOwner(form.workspaceId, { title, company, source: "webform", score, industry: null, country: null, state: null, city: null } as any);
             if (routedToUserId) ownerUserId = routedToUserId;
           } catch (e) { console.error("[FormSubmit] routing failed:", e); }
         }
@@ -199,6 +201,8 @@ export const formsRouter = router({
           } as never);
           leadId = Number((r as any)[0]?.insertId ?? 0) || null;
         } catch (e) { console.error("[FormSubmit] lead insert failed:", e); }
+        // Scored on creation (audit P12), without a model call; never throws.
+        if (leadId) await (await import("./leadScoring")).rescoreLead(form.workspaceId, leadId);
 
         // Tell whoever it landed on. Awaited rather than fire-and-forget: it is
         // one insert, and a lead captured but unannounced is the whole bug —

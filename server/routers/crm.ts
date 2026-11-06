@@ -1251,13 +1251,15 @@ export const leadsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      // Apply lead-routing rules first; fall back to creator as owner.
-      const { routeLeadOwner } = await import("./leadScoring");
+      // Apply lead-routing rules first; fall back to creator as owner. Rules on
+      // Score see the score the lead is created with, not 0 (audit P13).
+      const { routeLeadOwner, createTimeScore, rescoreLead } = await import("./leadScoring");
+      const initial = await createTimeScore(ctx.workspace.id, input);
       const routedOwner = await routeLeadOwner(ctx.workspace.id, {
         title: input.title ?? null,
         company: input.company ?? null,
         source: input.source ?? null,
-        score: 0,
+        score: initial.total,
         industry: null,
         country: null,
         state: null,
@@ -1282,6 +1284,8 @@ export const leadsRouter = router({
             email: input.email, status: "new",
           }, ownerUserId))
           .catch(() => { /* workflow firing is best-effort */ });
+        // Scored on creation (audit P12), without a model call.
+        await rescoreLead(ctx.workspace.id, id);
       }
       return { id, ownerUserId, routed: routedOwner != null };
     }),

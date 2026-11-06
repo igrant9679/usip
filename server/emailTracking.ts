@@ -28,6 +28,7 @@ import { normalizeSuppressionEmail } from "./unsubscribe";
 import { escapeHtml } from "@shared/escapeHtml";
 import { requireScheduledSecret } from "./scheduledTaskAuth";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "./_core/activeMembers";
+import { noteLeadEngagement } from "./services/leadRescoreQueue";
 
 // 1×1 transparent GIF (43 bytes)
 const TRACKING_PIXEL = Buffer.from(
@@ -188,6 +189,7 @@ export function registerEmailTrackingRoutes(app: Express) {
           openCount: emailDrafts.openCount,
           sentAt: emailDrafts.sentAt,
           lastOpenedAt: emailDrafts.lastOpenedAt,
+          toLeadId: emailDrafts.toLeadId,
         })
         .from(emailDrafts)
         .where(eq(emailDrafts.trackingToken, token))
@@ -245,6 +247,9 @@ export function registerEmailTrackingRoutes(app: Express) {
           lastOpenedAt: new Date(),
         })
         .where(eq(emailDrafts.id, draft.id));
+      // A person's open moves the lead's score on the next hourly re-score
+      // (audit P12); a machine open returned above and does not.
+      noteLeadEngagement(draft.workspaceId, draft.toLeadId);
 
       /**
        * No A/B counter is bumped here. sequence_ab_variants' counters are dead
@@ -302,7 +307,7 @@ export function registerEmailTrackingRoutes(app: Express) {
       if (!db) return;
 
       const [draft] = await db
-        .select({ id: emailDrafts.id, workspaceId: emailDrafts.workspaceId })
+        .select({ id: emailDrafts.id, workspaceId: emailDrafts.workspaceId, toLeadId: emailDrafts.toLeadId })
         .from(emailDrafts)
         .where(eq(emailDrafts.trackingToken, token))
         .limit(1);
@@ -325,6 +330,7 @@ export function registerEmailTrackingRoutes(app: Express) {
           lastClickedAt: new Date(),
         })
         .where(eq(emailDrafts.id, draft.id));
+      noteLeadEngagement(draft.workspaceId, draft.toLeadId);
     } catch (e) {
       console.error("[EmailTracking] click event failed:", e);
     }

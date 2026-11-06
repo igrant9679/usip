@@ -760,9 +760,13 @@ async function createLeadForSession(
   );
   if (agent.autoRoute) {
     try {
-      const { routeLeadOwner } = await import("./leadScoring");
+      const { routeLeadOwner, createTimeScore } = await import("./leadScoring");
+      // Rules on Score see the score the lead is created with (audit P13).
+      const { total: score } = await createTimeScore(agent.workspaceId, {
+        company: visitor.company, email: visitor.email, phone: visitor.phone, source: `chat:${agent.slug}`,
+      });
       const routed = await routeLeadOwner(agent.workspaceId, {
-        title: null, company: visitor.company, source: "chat", score: 0,
+        title: null, company: visitor.company, source: "chat", score,
         industry: null, country: null, state: null, city: null,
       } as any);
       if (routed) ownerUserId = routed;
@@ -789,6 +793,8 @@ async function createLeadForSession(
     console.error("[chatAgents] lead insert failed:", (e as Error).message);
     return null;
   }
+  // Scored on creation (audit P12), without a model call; never throws.
+  if (leadId) await (await import("./leadScoring")).rescoreLead(agent.workspaceId, leadId);
 
   // One lead per chat session. Placed below the insert so the
   // departedOwnerCascade source window on `db.insert(leads)` is untouched.
