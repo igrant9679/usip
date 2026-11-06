@@ -2233,7 +2233,7 @@ export const prospectsRouter = router({
       await recordAudit({
         workspaceId: ctx.workspace.id, actorUserId: ctx.user.id,
         action: "update", entityType: "are_prospect_reconcile", entityId: 0,
-        after: { ...res, notes: res.notes.slice(0, 20) },
+        after: { ...res, notes: res.notes.slice(0, 20), changes: res.changes.slice(0, 20) },
       });
       return res;
     }),

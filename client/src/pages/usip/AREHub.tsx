@@ -47,6 +47,7 @@ import { Link } from "wouter";
 import { toast } from "sonner";
 import { useState } from "react";
 import { groupHubCampaigns, refreshHub } from "./areHubModel";
+import { ProspectQualityCard } from "@/components/usip/are/ProspectQualityCard";
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from "recharts";
 
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
@@ -223,68 +224,6 @@ function SignalRow({ s }: { s: any }) {
 }
 
 /* ─── Main page ────────────────────────────────────────────────────────────── */
-/**
- * Workspace-wide prospect data quality (owner ask, 2026-08-12): what the
- * audit sees across ALL campaigns, and the one-click fix. Fixes flow through
- * the canonical person + the capped enrichment machinery — nothing here
- * fabricates data; unreconcilable rows land in the Rejections tab, and
- * cross-campaign duplicates collapse to the most-engaged row (one campaign
- * per prospect).
- */
-function ProspectQualityCard() {
-  const audit = trpc.are.prospects.audit.useQuery(undefined, { refetchOnWindowFocus: false });
-  const reconcile = trpc.are.prospects.reconcile.useMutation({
-    onSuccess: (r) => {
-      toast.success(
-        `Reconciled ${r.scanned} prospects — ${r.linksScrubbed} links scrubbed, ${r.personsLinked} linked, ` +
-        `${r.linkedinFound} LinkedIn profiles found, ${r.profileRetrievesQueued} profile retrieves queued ` +
-        `(names + photos fill as they complete), ${r.duplicatesSkipped} duplicates collapsed, ` +
-        `${r.flaggedUnreconcilable} flagged to Rejections.`,
-        { duration: 12000 },
-      );
-      for (const n of r.notes.slice(0, 3)) toast.warning(n, { duration: 12000 });
-      if (r.notes.length > 0) console.log("[reconcile] edge-case notes:", r.notes);
-      audit.refetch();
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const a = audit.data;
-  if (!a || a.scanned === 0) return null;
-
-  const issues = a.missingName + a.badLinkedinUrl + a.badSourceUrl + a.unlinkedPerson + a.duplicateRows + a.unreconcilable;
-  const stat = (label: string, value: number, warn: boolean) => (
-    <div className="flex items-center gap-1.5 text-xs">
-      <span className={warn && value > 0 ? "font-semibold text-amber-600" : "font-semibold"}>{value}</span>
-      <span className="text-muted-foreground">{label}</span>
-    </div>
-  );
-
-  return (
-    <Card className="bg-card border">
-      <CardContent className="p-4 flex flex-wrap items-center gap-x-6 gap-y-2">
-        <div className="text-sm font-medium shrink-0">Prospect data quality</div>
-        {stat("prospects", a.scanned, false)}
-        {stat("missing names", a.missingName, true)}
-        {stat("broken links", a.badLinkedinUrl + a.badSourceUrl, true)}
-        {stat("no LinkedIn", a.missingLinkedinUrl, false)}
-        {stat("duplicates", a.duplicateRows, true)}
-        {stat("in multiple campaigns", a.crossCampaignGroups, true)}
-        {stat("unreconcilable", a.unreconcilable, true)}
-        <div className="ml-auto">
-          <Button
-            size="sm" variant={issues > 0 ? "default" : "outline"} className="gap-1.5 text-xs"
-            disabled={reconcile.isPending}
-            onClick={() => reconcile.mutate({ linkedinSearchBudget: 10 })}
-          >
-            {reconcile.isPending ? <RefreshCw className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-            {reconcile.isPending ? "Reconciling…" : issues > 0 ? "Audit & fix" : "Re-audit"}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 export default function AREHub() {
   const utils = trpc.useUtils();
   const { data: campaigns, isLoading: loadingCampaigns } = trpc.are.campaigns.list.useQuery({ limit: 100 });
