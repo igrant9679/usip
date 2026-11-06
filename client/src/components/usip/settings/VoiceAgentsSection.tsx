@@ -482,6 +482,8 @@ function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent;
   const [picked, setFrom] = useState<string>(numbers[0] ?? "");
   // The agent's numbers can change while this stays mounted: fall back to the main one.
   const from = numbers.includes(picked) ? picked : (numbers[0] ?? "");
+  // The AI-calls switch holds test calls too (O31).
+  const paused = !!trpc.voiceAgents.plivoStatus.useQuery(undefined, { enabled: open }).data?.aiCallsPausedAt;
   const call = trpc.aiCalls.testCall.useMutation({
     onSuccess: (r) => {
       try { localStorage.setItem(TEST_NUMBER_KEY, number.trim()); } catch { /* per-browser convenience only */ }
@@ -505,8 +507,9 @@ function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent;
           <Label>Your phone number</Label>
           <Input aria-label="Your phone number" value={number} onChange={(e) => setNumber(e.target.value)} placeholder="+1 571 555 0100" autoFocus />
           <p className="text-[11.5px] text-muted-foreground">
-            Only call your own phone. On Plivo's free trial, the number must be verified in Plivo first. Up to 10 test calls a day.
+            Only call your own phone: a number that belongs to someone in People, Leads or Contacts is refused. On Plivo's free trial, the number must be verified in Plivo first. Up to 10 test calls a day.
           </p>
+          {paused && <p role="alert" className="text-[11.5px] text-amber-700">AI calls are paused, so test calls are too. Turn them back on in the AI calls card to place one.</p>}
         </div>
         {numbers.length > 1 && (
           <div className="space-y-1.5">
@@ -546,7 +549,7 @@ function TestCallDialog({ open, agent, onClose }: { open: boolean; agent: Agent;
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" size="sm" onClick={onClose} disabled={call.isPending}>Cancel</Button>
-          <Button size="sm" className="gap-1.5" disabled={!number.trim() || call.isPending} onClick={() => call.mutate({ agentId: agent.id, toNumber: number.trim(), ...(from ? { fromNumber: from } : {}), ...(asPerson ? { asProspectId: asPerson.id } : {}) })}>
+          <Button size="sm" className="gap-1.5" disabled={!number.trim() || call.isPending || paused} onClick={() => call.mutate({ agentId: agent.id, toNumber: number.trim(), ...(from ? { fromNumber: from } : {}), ...(asPerson ? { asProspectId: asPerson.id } : {}) })}>
             {call.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <PhoneCall className="size-3.5" />} Call me now
           </Button>
         </div>

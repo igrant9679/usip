@@ -15,15 +15,19 @@
  * Nothing here dials. A draft is inert until a person approves it.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, like, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   callSuppressions,
+  contacts,
+  leads,
+  prospectQueue,
   prospects,
   users,
   voiceAgents,
   voiceCallRequests,
   voiceCalls,
+  workspaceSettings,
   workspaces,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
@@ -47,6 +51,30 @@ async function requireDb() {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
   return db;
+}
+
+/**
+ * Whose number this is in the workspace's records, if anyone's (audit
+ * 2026-10-20, O31). A test call is for the tester's own phone: dialled at a
+ * person in People, a lead, a contact or a campaign's queue, it reached them
+ * with no approval, outside their calling hours. There is no verified number
+ * per member to check against, so a record's number is what is refused.
+ * Phones are stored in any format: rows ending in the same four digits are
+ * read and compared as callable numbers.
+ */
+async function numberInRecords(db: Awaited<ReturnType<typeof requireDb>>, wsId: number, to: string): Promise<string | null> {
+  const tail = `%${to.slice(-4)}`;
+  const sources = [
+    { whose: "a person in People", table: prospects, phone: prospects.phone, ws: prospects.workspaceId },
+    { whose: "a lead", table: leads, phone: leads.phone, ws: leads.workspaceId },
+    { whose: "a contact", table: contacts, phone: contacts.phone, ws: contacts.workspaceId },
+    { whose: "a campaign prospect", table: prospectQueue, phone: prospectQueue.phone, ws: prospectQueue.workspaceId },
+  ] as const;
+  for (const s of sources) {
+    const found = await db.select({ phone: s.phone }).from(s.table).where(and(eq(s.ws, wsId), like(s.phone, tail))).limit(500);
+    if (found.some((r: { phone: string | null }) => callableNumber(r.phone) === to)) return s.whose;
+  }
+  return null;
 }
 
 /** A person with one of these is already on the way to being called. */
@@ -272,6 +300,13 @@ export const aiCallsRouter = router({
       if (!from) throw new TRPCError({ code: "BAD_REQUEST", message: `That number is not one of ${agent.name}'s.` });
       const to = callableNumber(input.toNumber);
       if (!to) throw new TRPCError({ code: "BAD_REQUEST", message: "Enter a North American phone number." });
+      // The AI-calls switch holds test calls too (audit 2026-10-20, O31): it is
+      // the one control that says no AI dials out of this workspace.
+      const [settings] = await db.select({ pausedAt: workspaceSettings.aiCallsPausedAt }).from(workspaceSettings)
+        .where(eq(workspaceSettings.workspaceId, wsId)).limit(1);
+      if (settings?.pausedAt) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "AI calls are paused for this workspace (Settings → Voice agents). Turn them on to place a test call." });
+      const whose = await numberInRecords(db, wsId, to);
+      if (whose) throw new TRPCError({ code: "BAD_REQUEST", message: `That number belongs to ${whose} in this workspace. A test call rings your own phone; calls to people go through the approval queue.` });
       const [dnc] = await db.select({ id: callSuppressions.id }).from(callSuppressions)
         .where(and(eq(callSuppressions.workspaceId, wsId), eq(callSuppressions.phone, to))).limit(1);
       if (dnc) throw new TRPCError({ code: "BAD_REQUEST", message: "That number is on the do-not-call list." });

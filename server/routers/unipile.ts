@@ -9,6 +9,7 @@ import { z } from "zod";
 import { getDb } from "../db";
 import {
   activities,
+  sendingAccounts,
   unipileAccounts,
   unipileInvites,
   unipileMessages,
@@ -203,7 +204,8 @@ export const unipileRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
-      // Verify ownership
+      // Verify ownership — the caller's, in this workspace, which is the only
+      // row the delete below can remove (audit 2026-10-20, O32).
       const [row] = await db
         .select()
         .from(unipileAccounts)
@@ -211,6 +213,7 @@ export const unipileRouter = router({
           and(
             eq(unipileAccounts.unipileAccountId, input.unipileAccountId),
             eq(unipileAccounts.userId, ctx.user.id),
+            eq(unipileAccounts.workspaceId, ctx.workspace.id),
           ),
         )
         .limit(1);
@@ -227,6 +230,17 @@ export const unipileRouter = router({
         .where(and(
           eq(unipileAccounts.unipileAccountId, input.unipileAccountId),
           eq(unipileAccounts.workspaceId, ctx.workspace.id),
+        ));
+      // Its bridged mailbox stops sending (audit 2026-10-20, O33): left enabled,
+      // a sequence or the send fallback could still pick a mailbox whose account
+      // is gone. Disabled, not deleted, so its history and settings stay; a
+      // reconnect makes a new bridge and leaves this one off.
+      await db
+        .update(sendingAccounts)
+        .set({ enabled: false })
+        .where(and(
+          eq(sendingAccounts.unipileAccountId, input.unipileAccountId),
+          eq(sendingAccounts.workspaceId, ctx.workspace.id),
         ));
 
       return { success: true };
@@ -296,11 +310,25 @@ export const unipileRouter = router({
         limit: z.number().min(1).max(100).default(30),
       }),
     )
-    .query(async ({ ctx: _ctx, input }) => {
+    .query(async ({ ctx, input }) => {
+      // Only a chat on one of the caller's own accounts here (audit 2026-10-20,
+      // O32): the vendor answers for any chat id under the platform's key, so
+      // any member could read any workspace's conversation by its id.
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
+      const own = await db
+        .select({ id: unipileAccounts.unipileAccountId })
+        .from(unipileAccounts)
+        .where(and(eq(unipileAccounts.workspaceId, ctx.workspace.id), eq(unipileAccounts.userId, ctx.user.id)));
+      if (own.length === 0) return { items: [] };
       const result = await getChatMessages(input.chatId, {
         cursor: input.cursor,
         limit: input.limit,
       });
+      const mine = new Set(own.map((a) => a.id));
+      if (result.items.some((m) => !mine.has(m.account_id))) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "That chat isn't on one of your connected accounts." });
+      }
       return result;
     }),
 
@@ -1155,10 +1183,17 @@ async function resolveOwnLinkedInAccount(
   explicitId?: string,
 ): Promise<string | null> {
   if (explicitId) {
+    // This workspace's row too (audit 2026-10-20, O32): by user alone, an
+    // account connected in another workspace — a paused one included — could
+    // react, comment, search and withdraw from here.
     const [row] = await db
       .select({ id: unipileAccounts.unipileAccountId })
       .from(unipileAccounts)
-      .where(and(eq(unipileAccounts.unipileAccountId, explicitId), eq(unipileAccounts.userId, userId)))
+      .where(and(
+        eq(unipileAccounts.unipileAccountId, explicitId),
+        eq(unipileAccounts.userId, userId),
+        eq(unipileAccounts.workspaceId, workspaceId),
+      ))
       .limit(1);
     return row?.id ?? null;
   }
