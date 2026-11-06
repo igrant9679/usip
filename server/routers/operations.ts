@@ -40,7 +40,8 @@ import { checkPermission, getDb } from "../db";
 import { closedStageKeys, stageIndexFor } from "../_core/stageSemantics";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
-import { adminWsProcedure, assertOwnerOrManager, managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, assertOwnerOrManager, managerProcedure, rankOf, repProcedure, ROLE_RANK, workspaceProcedure } from "../_core/workspace";
+import { activeMemberEmails, activeRecipients, revokedMemberEmails } from "../services/reportScheduler";
 import { escapeHtml } from "@shared/escapeHtml";
 import { csvCell } from "@shared/csvCell";
 import { filtersNotApplied } from "@shared/dashboardPresets";
@@ -974,6 +975,20 @@ export const dashboardsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await dashboardForEdit(db, ctx, input.dashboardId);
+    /**
+     * A report goes to this workspace's people (audit 2026-10-20, G26). Any
+     * member could mail the numbers to any address outside it. A manager may
+     * still add an outside address, as a client or an exec with no account is
+     * a real use, and that is kept in the audit log.
+     */
+    const members = await activeMemberEmails(db, ctx.workspace.id);
+    const outside = input.recipients.filter((r) => !members.has(r.trim().toLowerCase()));
+    if (outside.length > 0) {
+      if (rankOf(ctx.member.role) < ROLE_RANK.manager) {
+        throw new TRPCError({ code: "FORBIDDEN", message: `Only a manager can send a report outside this workspace (${outside.join(", ")}).` });
+      }
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "dashboard_schedule_outside_recipients", entityId: input.dashboardId, after: { recipients: outside, frequency: input.frequency } });
+    }
     await db.insert(reportSchedules).values({ ...input, workspaceId: ctx.workspace.id, enabled: true });
     return { ok: true };
   }),
@@ -1039,8 +1054,12 @@ export async function sendDashboardScheduleEmail(
     if (!db) return { ok: false, reason: "db_unavailable", message: "Database unavailable" };
     const [sched] = await db.select().from(reportSchedules).where(and(eq(reportSchedules.id, scheduleId), eq(reportSchedules.workspaceId, workspaceId)));
     if (!sched) return { ok: false, reason: "not_found", message: "Schedule not found." };
-    const recipients: string[] = Array.isArray(sched.recipients) ? (sched.recipients as string[]) : [];
-    if (recipients.length === 0) return { ok: false, reason: "no_recipients", message: "No recipients configured for this schedule. Edit the schedule to add recipients." };
+    const configured: string[] = Array.isArray(sched.recipients) ? (sched.recipients as string[]) : [];
+    if (configured.length === 0) return { ok: false, reason: "no_recipients", message: "No recipients configured for this schedule. Edit the schedule to add recipients." };
+    // A deactivated member stops receiving the workspace's numbers (audit
+    // 2026-10-20, G26), as on saved-report schedules.
+    const recipients = activeRecipients(configured, await revokedMemberEmails(db, workspaceId));
+    if (recipients.length === 0) return { ok: false, reason: "no_recipients", message: "Every recipient on this schedule is a deactivated member." };
     const [dash] = await db.select().from(dashboards).where(and(eq(dashboards.id, sched.dashboardId), eq(dashboards.workspaceId, workspaceId)));
     if (!dash) return { ok: false, reason: "not_found", message: "Dashboard not found." };
     const widgets = await db.select().from(dashboardWidgets)
@@ -1064,36 +1083,52 @@ export async function sendDashboardScheduleEmail(
     try { password = decrypt(cfg.encryptedPassword); }
     catch { return { ok: false, reason: "decrypt_failed", message: "Failed to decrypt SMTP password" }; }
     const transporter = buildTransporter({ host: cfg.host, port: cfg.port, secure: cfg.secure, username: cfg.username, password });
-    await transporter.sendMail({
-      from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
-      to: recipients.join(", "),
-      subject: `${dash.name} \u2014 Dashboard Report (${sentAt.toLocaleDateString()})`,
-      html,
-    });
     /**
+     * One message per recipient (audit 2026-10-20, G26): on one To: line every
+     * recipient, an outside one included, saw who else gets the numbers.
+     *
      * Transmission point 3 of 3. Builds its own transporter from the SMTP
      * config and never touches createEmailAdapter, so the meter in that
-     * factory cannot see this send. `recipients` may be several addresses in
-     * one message — counted as the ONE message that was transmitted, which is
-     * what the other two points count too.
+     * factory cannot see these sends: each message transmitted is counted,
+     * which is what the other two points count too.
      *
      * The email_log row (migration 0163) follows the same rule and for the
      * same reason: scheduled reports left the building with no record on the
      * Emails page.
+     *
+     * One address failing doesn't stop the rest, and the run counts as sent
+     * if any went: a retry would mail the others twice. All failing is thrown,
+     * as the single send was.
      */
-    await recordEmailsSent(workspaceId, 1);
-    await logEmailSend({
-      workspaceId,
-      meta: { source: "transactional", sourceLabel: `${dash.name} — Dashboard Report`, userId: actorUserId ?? undefined },
-      fromEmail: cfg.fromEmail,
-      fromName: cfg.fromName,
-      to: recipients,
-      cc: recipients.length > 1 ? recipients.slice(1).join(", ") : null,
-      subject: `${dash.name} — Dashboard Report (${sentAt.toLocaleDateString()})`,
-      bodyHtml: html,
-      status: "sent",
-      sentAt,
-    });
+    let delivered = 0;
+    let firstError: unknown = null;
+    for (const to of recipients) {
+      try {
+        await transporter.sendMail({
+          from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
+          to,
+          subject: `${dash.name} \u2014 Dashboard Report (${sentAt.toLocaleDateString()})`,
+          html,
+        });
+      } catch (e) {
+        firstError ??= e;
+        continue;
+      }
+      delivered++;
+      await recordEmailsSent(workspaceId, 1);
+      await logEmailSend({
+        workspaceId,
+        meta: { source: "transactional", sourceLabel: `${dash.name} — Dashboard Report`, userId: actorUserId ?? undefined },
+        fromEmail: cfg.fromEmail,
+        fromName: cfg.fromName,
+        to: [to],
+        subject: `${dash.name} — Dashboard Report (${sentAt.toLocaleDateString()})`,
+        bodyHtml: html,
+        status: "sent",
+        sentAt,
+      });
+    }
+    if (delivered === 0) throw firstError;
     await db.update(reportSchedules).set({ lastSentAt: sentAt }).where(eq(reportSchedules.id, sched.id));
     return { ok: true, sentAt };
   }

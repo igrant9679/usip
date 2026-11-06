@@ -11,7 +11,7 @@
  * notifications), never a rep's mailbox. Body is an inline HTML table capped
  * at 100 rows with a link to open the full report in /reports.
  */
-import { and, eq, isNotNull, ne } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, ne } from "drizzle-orm";
 import { savedReports, users, workspaceMembers } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { appUrl } from "../appUrl";
@@ -63,17 +63,43 @@ export function activeRecipients(recipients: string[], revokedEmails: readonly s
   return kept.filter((r) => !revoked.has(r.trim().toLowerCase()));
 }
 
-/** Emails of members of this workspace whose access has been revoked. */
-async function revokedMemberEmails(db: any, workspaceId: number): Promise<string[]> {
+/**
+ * Emails of members of this workspace whose access has been revoked: their
+ * sign-in address and their notification address, which a report can be sent
+ * to as well (audit 2026-10-20, G26). Dashboard schedules use it too.
+ */
+export async function revokedMemberEmails(db: any, workspaceId: number): Promise<string[]> {
   const rows = await db
-    .select({ email: users.email })
+    .select({ email: users.email, notifEmail: workspaceMembers.notifEmail })
     .from(workspaceMembers)
     .innerJoin(users, eq(users.id, workspaceMembers.userId))
     .where(and(
       eq(workspaceMembers.workspaceId, workspaceId),
       isNotNull(workspaceMembers.deactivatedAt),
     ));
-  return rows.map((r: { email: string | null }) => r.email ?? "").filter(Boolean);
+  return rows.flatMap((r: { email: string | null; notifEmail: string | null }) => [r.email ?? "", r.notifEmail ?? ""]).filter(Boolean);
+}
+
+/**
+ * Emails of this workspace's active members — signed in, not deactivated, the
+ * invitation accepted — lowercased: their sign-in and notification addresses.
+ * What a dashboard schedule may send to without a manager (audit G26).
+ */
+export async function activeMemberEmails(db: any, workspaceId: number): Promise<Set<string>> {
+  const rows = await db
+    .select({ email: users.email, notifEmail: workspaceMembers.notifEmail })
+    .from(workspaceMembers)
+    .innerJoin(users, eq(users.id, workspaceMembers.userId))
+    .where(and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      isNull(workspaceMembers.deactivatedAt),
+      isNull(workspaceMembers.inviteToken),
+    ));
+  return new Set(
+    rows.flatMap((r: { email: string | null; notifEmail: string | null }) => [r.email ?? "", r.notifEmail ?? ""])
+      .map((e: string) => e.trim().toLowerCase())
+      .filter(Boolean),
+  );
 }
 
 const CHART_PALETTE = ["#0EA5E9", "#8B5CF6", "#F59E0B", "#10B981", "#EC4899", "#06B6D4", "#F43F5E", "#84CC16", "#6366F1"];

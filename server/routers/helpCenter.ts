@@ -288,7 +288,7 @@ export const helpCenterRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
 
-      // Verify conversation belongs to this user
+      // Verify conversation belongs to this user, in this workspace (G39)
       const [conv] = await db
         .select()
         .from(aiHelpConversations)
@@ -296,6 +296,7 @@ export const helpCenterRouter = router({
           and(
             eq(aiHelpConversations.id, input.conversationId),
             eq(aiHelpConversations.userId, ctx.user.id),
+            eq(aiHelpConversations.workspaceId, ctx.workspace.id),
           ),
         )
         .limit(1);
@@ -444,11 +445,11 @@ ${articleContext}`;
     .input(z.object({ conversationId: z.number() }))
     .query(async ({ ctx, input }) => {
       const db = await requireDb();
-      // Verify ownership
+      // Verify ownership, in this workspace (G39)
       const [conv] = await db
         .select()
         .from(aiHelpConversations)
-        .where(and(eq(aiHelpConversations.id, input.conversationId), eq(aiHelpConversations.userId, ctx.user.id)))
+        .where(and(eq(aiHelpConversations.id, input.conversationId), eq(aiHelpConversations.userId, ctx.user.id), eq(aiHelpConversations.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!conv) throw new TRPCError({ code: "NOT_FOUND" });
       return db

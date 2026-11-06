@@ -618,6 +618,12 @@ export default function Dashboards() {
           options={[{ value: "daily", label: "Daily" }, { value: "weekly", label: "Weekly" }, { value: "monthly", label: "Monthly" }]}
           defaultValue="weekly" />
         <Field name="recipients" label="Recipients (comma-separated)" required />
+        {/* The server's rule (G26), said before it refuses. */}
+        <p className="text-xs text-muted-foreground">
+          {rankOf(current?.role) >= rankOf("manager")
+            ? "Members of this workspace, or any address: an address outside it is recorded in the audit log. Each recipient gets their own email."
+            : "Members of this workspace only; a manager can add an address outside it. Each recipient gets their own email."}
+        </p>
         <p className="text-xs text-muted-foreground">Send-now is wired; recurring delivery requires an external cron.</p>
       </FormDialog>
     </Shell>

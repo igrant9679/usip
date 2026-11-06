@@ -118,7 +118,7 @@ const compactPerson = (p: Record<string, unknown>) => ({
 async function runReadTool(
   name: AssistantToolName,
   args: Record<string, unknown>,
-  ctx: { workspace: { id: number } },
+  ctx: { workspace: { id: number }; user: { id: number }; member: { role: string } },
   caller: Awaited<ReturnType<typeof getCaller>>,
 ): Promise<{ result: unknown; summary: string }> {
   switch (name) {
@@ -220,7 +220,8 @@ async function runReadTool(
       return { result: { entities: buildEntityCatalog() }, summary: "Listed the queryable data entities" };
     case "query_data": {
       const spec = args as { entity?: unknown };
-      const r = await runExplorerQuery(ctx.workspace.id, args);
+      // As the person asking: the screens' role and owner gates apply (G38).
+      const r = await runExplorerQuery(ctx.workspace.id, args, { userId: ctx.user.id, role: ctx.member.role });
       return {
         result: r,
         summary: `Queried ${String(spec.entity)} — ${r.rows.length} row(s)${r.total !== undefined ? ` of ${r.total}` : ""}`,
@@ -368,8 +369,14 @@ export const assistantRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
+      // This workspace's conversation (audit 2026-10-20, G39): by id and person
+      // alone, one opened in another workspace carried its names and emails here.
       const [conv] = await db.select().from(aiHelpConversations)
-        .where(and(eq(aiHelpConversations.id, input.conversationId), eq(aiHelpConversations.userId, ctx.user.id)))
+        .where(and(
+          eq(aiHelpConversations.id, input.conversationId),
+          eq(aiHelpConversations.userId, ctx.user.id),
+          eq(aiHelpConversations.workspaceId, ctx.workspace.id),
+        ))
         .limit(1);
       if (!conv) throw new TRPCError({ code: "NOT_FOUND", message: "Conversation not found" });
 
