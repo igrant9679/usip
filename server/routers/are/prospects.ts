@@ -70,6 +70,7 @@ import { notifyIfEnabled } from "../../services/policyNotify";
 import { promoteApprovedProspects } from "../../services/are/approvePromotion";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../../services/humanCopy";
 import { resolveVerifiedEmail } from "../../services/scraper";
+import { suppressionBlockingNewEmail } from "../../services/suppression";
 import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "../../services/quickenrich";
 import { getReoonKey, reoonStatusToUsip, reoonVerifySingle } from "../../services/reoon";
 import { buildBrandContext } from "../../services/brandContext";
@@ -493,7 +494,14 @@ Produce:
     let resolvedEmail: string | null = null;
     let resolvedStatus: string | null = null;
     let qeFilledDomain = false;
-    if (!prospect.email) {
+    // A suppressed person gets no new address (audit 2026-10-20, P86). If the
+    // lists can't be read, none is looked for: a wrong "no" here is a send.
+    const emailBlocked = prospect.email
+      ? null
+      : await suppressionBlockingNewEmail(workspaceId, {
+          linkedinUrl: prospect.linkedinUrl, companyDomain: prospect.companyDomain, personProspectId: prospect.personProspectId,
+        }).catch(() => "unchecked");
+    if (!prospect.email && !emailBlocked) {
       try {
         // No Apollo in the waterfall (owner decision 2026-08-12, reaffirmed
         // 2026-08-24: CF runs without an Apollo key — QuickEnrich/LinkedIn

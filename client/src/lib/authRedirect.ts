@@ -19,6 +19,24 @@
  * Pure, so every case is testable without a browser or a router.
  */
 import { MFA_REQUIRED_ERR_MSG } from "@shared/const";
+import { safeReturnPath } from "@shared/returnPath";
+
+/**
+ * Where to send someone after they sign in, from the page the sign-in form is
+ * on (audit 2026-10-20, G33).
+ *
+ * A deep link opened while signed out renders the form in place (AuthGate) at
+ * that URL, and an expired session is sent to "/" by main.tsx; both used to
+ * land on "/" after sign-in, because only an explicit ?returnPath= was read and
+ * neither path set one. An explicit returnPath still wins; otherwise the
+ * current page is the way back. Always passed through safeReturnPath.
+ */
+export function returnPathFor(loc: { pathname: string; search: string; hash: string }): string {
+  const asked = new URLSearchParams(loc.search).get("returnPath");
+  if (asked != null) return safeReturnPath(asked);
+  if (!loc.pathname || loc.pathname === "/") return "/";
+  return safeReturnPath(loc.pathname + loc.search + loc.hash);
+}
 
 /**
  * The pathname part of a login URL, which may carry a `?returnPath=` query.

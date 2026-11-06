@@ -292,7 +292,7 @@ function EmailModePanel({
             </Select>
           </Field>
           <p className="text-[11px] text-muted-foreground">
-            Picking a template copies its subject and body into the Typed view so you can customise it per step. The source template stays untouched.
+            Picking a template copies its subject and body into the Typed view so you can customise it per step. The step keeps that copy: later changes to the template don't reach it, so pick the template again to refresh it.
           </p>
         </TabsContent>
 
@@ -355,6 +355,14 @@ function EmailModePanel({
 }
 
 /* ─── Wait node fields ──────────────────────────────────────────────────── */
+/**
+ * The longest wait a step keeps (audit 2026-10-20, O60): the server's step
+ * schema caps a wait at 60 days, and this field offered 365, so a longer wait
+ * was cut to 60 without a word. Kept in step with `stepSchema`.
+ */
+export const MAX_WAIT_DAYS = 60;
+const clampInt = (v: string, max: number) => Math.max(0, Math.min(max, Math.floor(Number(v) || 0)));
+
 function WaitFields({ data, readOnly, onChange }: { data: NodeData; readOnly: boolean; onChange: (p: Partial<NodeData>) => void }) {
   return (
     <Section title="Delay">
@@ -363,10 +371,11 @@ function WaitFields({ data, readOnly, onChange }: { data: NodeData; readOnly: bo
           <Input
             type="number"
             min={0}
-            max={365}
-            value={data.delayDays ?? 1}
+            max={MAX_WAIT_DAYS}
+            // A wait written by the list editors stores "days", which the server reads too.
+            value={Number(data.delayDays ?? data.days ?? 1)}
             disabled={readOnly}
-            onChange={(e) => onChange({ delayDays: Number(e.target.value) })}
+            onChange={(e) => onChange({ delayDays: clampInt(e.target.value, MAX_WAIT_DAYS) })}
           />
         </Field>
         <Field label="Hours">
@@ -376,14 +385,23 @@ function WaitFields({ data, readOnly, onChange }: { data: NodeData; readOnly: bo
             max={23}
             value={data.delayHours ?? 0}
             disabled={readOnly}
-            onChange={(e) => onChange({ delayHours: Number(e.target.value) })}
+            onChange={(e) => onChange({ delayHours: clampInt(e.target.value, 23) })}
           />
         </Field>
       </div>
       <p className="text-[11px] text-muted-foreground">
-        Wait this long after the previous step before proceeding.
+        Wait this long after the previous step before proceeding, up to {MAX_WAIT_DAYS} days. A wait of 0 moves straight on once the step before it is done.
       </p>
     </Section>
+  );
+}
+
+/** What a node the engine does not run yet says about itself (O21). */
+function NotAvailableNote({ children }: { children: React.ReactNode }) {
+  return (
+    <div role="note" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+      {children}
+    </div>
   );
 }
 
@@ -402,6 +420,9 @@ const BRANCH_CONDITIONS = [
 function ConditionFields({ data, readOnly, onChange }: { data: NodeData; readOnly: boolean; onChange: (p: Partial<NodeData>) => void }) {
   return (
     <Section title="Branch condition">
+      <NotAvailableNote>
+        Not available yet. The engine doesn't branch: everyone follows the TRUE path, and the steps on the FALSE path never run. Remove this node, or keep the steps you want on the TRUE path.
+      </NotAvailableNote>
       <Field label="Condition">
         <Select
           value={data.branchOn ?? "email_opened"}
@@ -452,33 +473,34 @@ const ACTION_TYPES = [
   { value: "update_field", label: "Update custom field" },
 ];
 
+/**
+ * An action node creates a task for the rep, and nothing else (O21): the
+ * engine turns every one into a task, whatever action it named. So this edits
+ * the task's text (`body`, which is what the engine reads), and an action
+ * saved before, naming a status, tag, owner or enrolment change, says it
+ * isn't available.
+ */
 function ActionFields({ data, readOnly, onChange }: { data: NodeData; readOnly: boolean; onChange: (p: Partial<NodeData>) => void }) {
+  const named = ACTION_TYPES.find((a) => a.value === data.actionType && a.value !== "create_task");
   return (
-    <Section title="Action">
-      <Field label="Action type">
-        <Select
-          value={data.actionType ?? "create_task"}
+    <Section title="Task">
+      {named && (
+        <NotAvailableNote>
+          This step was set to "{named.label}", which isn't available yet. It creates a task for the rep instead.
+        </NotAvailableNote>
+      )}
+      <Field label="Task for the rep">
+        <Textarea
+          value={typeof data.body === "string" ? data.body : ""}
           disabled={readOnly}
-          onValueChange={(v) => onChange({ actionType: v })}
-        >
-          <SelectTrigger className="text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {ACTION_TYPES.map((a) => (
-              <SelectItem key={a.value} value={a.value} className="text-xs">{a.label}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
-      <Field label="Value / parameter">
-        <Input
-          value={data.actionValue ?? ""}
-          disabled={readOnly}
-          placeholder="e.g. tag name, status value, sequence ID…"
-          onChange={(e) => onChange({ actionValue: e.target.value })}
+          rows={3}
+          placeholder="What should the rep do? (e.g. Call and reference their recent funding)"
+          onChange={(e) => onChange({ body: e.target.value })}
         />
       </Field>
+      <p className="text-[11px] text-muted-foreground">
+        Changing a status, tag, owner or enrolment from a sequence isn't available yet.
+      </p>
     </Section>
   );
 }
@@ -496,6 +518,9 @@ const GOAL_TYPES = [
 function GoalFields({ data, readOnly, onChange }: { data: NodeData; readOnly: boolean; onChange: (p: Partial<NodeData>) => void }) {
   return (
     <Section title="Goal / exit event">
+      <NotAvailableNote>
+        Not available yet. Nothing watches for this goal, so nobody leaves the sequence when it is met. A reply still pauses them while reply detection is on.
+      </NotAvailableNote>
       <Field label="Goal type">
         <Select
           value={data.goalType ?? "reply"}
@@ -670,7 +695,8 @@ const NODE_META: Record<string, { icon: React.FC<any>; color: string; label: str
 
 /* ─── Main panel ────────────────────────────────────────────────────────── */
 export function NodeEditPanel({ node, readOnly, onClose, onSave }: Props) {
-  const [draft, setDraft] = useState<NodeData>({});
+  // Seeded from the node, so the first paint shows its settings rather than blanks.
+  const [draft, setDraft] = useState<NodeData>(() => ({ ...(node?.data ?? {}) }));
 
   useEffect(() => {
     if (node) setDraft({ ...node.data });
@@ -736,14 +762,16 @@ export function NodeEditPanel({ node, readOnly, onClose, onSave }: Props) {
         {node.type === "wait" && (
           <WaitFields data={draft} readOnly={readOnly} onChange={patch} />
         )}
+        {/* Read-only whatever the sequence's state: a setting that changes
+            nothing is shown, not offered (O21). */}
         {node.type === "condition" && (
-          <ConditionFields data={draft} readOnly={readOnly} onChange={patch} />
+          <ConditionFields data={draft} readOnly onChange={patch} />
         )}
         {node.type === "action" && (
           <ActionFields data={draft} readOnly={readOnly} onChange={patch} />
         )}
         {node.type === "goal" && (
-          <GoalFields data={draft} readOnly={readOnly} onChange={patch} />
+          <GoalFields data={draft} readOnly onChange={patch} />
         )}
         {node.type === "linkedin_dm" && (
           <LinkedInDmFields data={draft} readOnly={readOnly} onChange={patch} />

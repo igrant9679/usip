@@ -47,7 +47,6 @@ import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../../_core/activeMembers";
-import { notifyOwner } from "../../_core/notification";
 import { areNotify, notifyPersonLabel } from "./notify";
 import { isSendableChannel, unsendableReason } from "@shared/areSequenceSteps";
 import { markAreProspectReplied } from "../../services/are/stepHold";
@@ -489,20 +488,11 @@ export async function processSignal(
 
     const who = `${prospect?.firstName ?? ""} ${prospect?.lastName ?? ""}`.trim() || "A prospect";
     const where = prospect?.companyName ?? "their company";
-    if (promoted) {
-      if (promoted.opportunityId) {
-        actionTaken = "opportunity_created";
-        await notifyOwner({
-          title: `ARE: Meeting booked → Opportunity created`,
-          content: `Campaign "${campaign?.name ?? ""}" — ${who} at ${where} booked a meeting. They're now in Contacts, and a new opportunity has been created in the pipeline.`,
-        }).catch(() => {/* non-fatal */});
-      } else {
-        await notifyOwner({
-          title: `ARE: Meeting booked`,
-          content: `Campaign "${campaign?.name ?? ""}" — ${who} at ${where} booked a meeting and has been added to your CRM. Turn on "Signal to opportunity" in the campaign's settings to also open a deal automatically.`,
-        }).catch(() => {/* non-fatal */});
-      }
-    }
+    // No notifyOwner here (audit 2026-10-20, R2): it POSTs the platform
+    // operator's notification service, so this workspace's prospect, company
+    // and campaign went to one person outside it. The in-app notice below is
+    // this workspace's own.
+    if (promoted?.opportunityId) actionTaken = "opportunity_created";
 
     // The in-app notice the "Meeting booked via signal" switch on ARE Settings
     // was always supposed to control: until 2026-09-20 the only thing this

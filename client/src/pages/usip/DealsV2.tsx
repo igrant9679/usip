@@ -7,14 +7,17 @@
  * pipeline / pipelineAlerts / forecastAi routers — this page only adds the
  * autonomy layer (deals.* ) on top. The classic editor stays at /pipeline.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { forbiddenMessage } from "@/lib/forbidden";
-import { Link } from "wouter";
+import { formatAmount } from "@shared/money";
+import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { ColorAvatar } from "@/components/usip/ColorAvatar";
 import { trpc } from "@/lib/trpc";
+import { invalidateDealReads } from "@/lib/crmCache";
 import { buildStageIndex } from "@shared/stageSemantics";
+import { NewOpportunityDialog } from "@/components/usip/NewOpportunityDialog";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,7 +27,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from "@/components/ui/select";
 import {
-  KanbanSquare, Bot, Zap, Sparkles, TrendingUp, AlertTriangle, MoreHorizontal, ExternalLink, Building2, ArrowRight,
+  KanbanSquare, Bot, Zap, Sparkles, TrendingUp, AlertTriangle, MoreHorizontal, ExternalLink, Building2, ArrowRight, Plus,
 } from "lucide-react";
 
 type Opp = {
@@ -84,28 +87,35 @@ function WonConfetti() {
   );
 }
 
+/**
+ * What each mode does, in the words of what it does (audit 2026-10-20, R43).
+ * Approve never writes the deal: each recommendation is a DRAFT task in Tasks
+ * → AI drafts to review, carrying the suggested next step and win %.
+ * Autonomous writes both onto the deal and opens the follow-up task.
+ */
 const MODE_META: Record<string, { label: string; blurb: string }> = {
   off: { label: "Autopilot off", blurb: "AI won't touch your deals." },
-  approval: { label: "Autopilot: Approve", blurb: "AI writes a recommended next step + win probability on each open deal for you to act on." },
-  auto: { label: "Autopilot: Autonomous", blurb: "AI also creates the follow-up task on each open deal so nothing stalls." },
+  approval: { label: "Autopilot: Approve", blurb: "AI drafts a next step and a win probability for each open deal as a task for you to review in Tasks. Your deals are not changed until you act." },
+  auto: { label: "Autopilot: Autonomous", blurb: "AI writes the next step and win probability onto each open deal and opens the follow-up task, so nothing stalls." },
 };
 
+/** What "Analyze with AI" did, and where its drafts went (R43). */
+export function analyzeToast(r: { analyzed: number; tasksCreated: number }): string {
+  if (r.analyzed === 0) return "No open deals needed analysis";
+  const drafts = `${r.tasksCreated} draft task${r.tasksCreated === 1 ? "" : "s"}`;
+  return `AI analyzed ${r.analyzed} deal${r.analyzed === 1 ? "" : "s"}: ${drafts} to review in Tasks. Your deals are unchanged.`;
+}
+
+// The shared compact format (R98): this had no millions, so $1.5M read "$1500k".
 function money(v: number | string | null | undefined): string {
-  const n = Number(v ?? 0);
-  if (!Number.isFinite(n)) return "$0";
-  if (n >= 1000) return "$" + (n / 1000).toFixed(n >= 100000 ? 0 : 1) + "k";
-  return "$" + n.toFixed(0);
+  return formatAmount(v, { compact: true });
 }
 
 export default function DealsV2() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
 
-  const board = trpc.opportunities.board.useQuery({});
-  // The header numbers come from the server's deal metrics — the same ones
-  // the Dashboard, Pipeline forecast, Forecast and Quota read (audit
-  // 2026-10-20, R39). This page summed the board rows itself.
-  const summary = trpc.opportunities.summary.useQuery();
+  const [, navigate] = useLocation();
   // Which pipeline's board to show (R20). Every deal sat under the DEFAULT
   // pipeline's columns, and "Move to stage" offered keys another pipeline's
   // deal cannot hold — the server now refuses those, so offer only its own.
@@ -113,6 +123,12 @@ export default function DealsV2() {
   const defaultPipelineId = pipelines.data?.find((p) => p.isDefault)?.id ?? pipelines.data?.[0]?.id;
   const [selectedPipelineId, setSelectedPipelineId] = useState<number | undefined>(undefined);
   const pipelineId = selectedPipelineId ?? defaultPipelineId;
+  // That pipeline's deals, read by the server (L7).
+  const board = trpc.opportunities.board.useQuery({ pipelineId }, { enabled: pipelines.data !== undefined });
+  // The header numbers come from the server's deal metrics — the same ones
+  // the Dashboard, Pipeline forecast, Forecast and Quota read (audit
+  // 2026-10-20, R39) — for the pipeline this board shows.
+  const summary = trpc.opportunities.summary.useQuery({ pipelineId }, { enabled: pipelines.data !== undefined });
   const pipe = trpc.crmPipelines.get.useQuery(pipelineId ? { pipelineId } : ({} as any));
   const autopilot = trpc.deals.getAutopilotSettings.useQuery();
   const alerts = trpc.pipelineAlerts.list.useQuery(undefined as any, { retry: false });
@@ -143,15 +159,20 @@ export default function DealsV2() {
     onSuccess: () => { utils.deals.getAutopilotSettings.invalidate(); toast.success("Autopilot updated"); },
     onError: (e) => toast.error(forbiddenMessage(e, "Only admins can change Autopilot")),
   });
+  // Analyze runs in Approve mode whatever the setting: drafts, not deal edits (R43).
   const analyze = trpc.deals.analyzeAll.useMutation({
-    onSuccess: (r) => { utils.opportunities.board.invalidate(); toast.success(r.analyzed === 0 ? "No open deals to analyze" : `AI analyzed ${r.analyzed} deal${r.analyzed === 1 ? "" : "s"}`); },
+    onSuccess: (r) => {
+      utils.opportunities.board.invalidate();
+      toast.success(analyzeToast(r), r.tasksCreated > 0 ? { action: { label: "Review", onClick: () => navigate("/v2/tasks") } } : undefined);
+    },
     onError: (e) => toast.error(e.message),
   });
+  const [addOpen, setAddOpen] = useState(false);
   const [celebrate, setCelebrate] = useState(0);
   const setStage = trpc.opportunities.setStage.useMutation({
     onSuccess: (_d, vars) => {
-      utils.opportunities.board.invalidate();
-      utils.opportunities.summary.invalidate();
+      // Every read a stage move changes, not just board and summary (R31).
+      invalidateDealReads(utils);
       if (stageIdx.isWon(vars.stage)) {
         setCelebrate(Date.now());
         toast.success("Deal won! 🎉");
@@ -162,8 +183,8 @@ export default function DealsV2() {
   });
 
   const mode = autopilot.data?.mode ?? "off";
-  // This pipeline's deals; a deal with no pipeline sits on the default board.
-  const opps = ((board.data ?? []) as Opp[]).filter((o: any) => !pipelineId || (o.pipelineId ?? defaultPipelineId) === pipelineId);
+  // This pipeline's deals; the server put the pipeline-less ones on the default board.
+  const opps = (board.data ?? []) as Opp[];
 
   // Stage columns: prefer the workspace pipeline's stages; fall back to legacy;
   // then append any stage present in the data that isn't already a column.
@@ -187,6 +208,17 @@ export default function DealsV2() {
   const weighted = summary.data?.open.weighted ?? 0;
   const wonCount = summary.data?.won.count ?? 0;
   const activeAlerts = (alerts.data as any[])?.filter?.((a) => !a.dismissedAt) ?? (alerts.data as any[]) ?? [];
+
+  // /v2/deals#alerts (the Library's "Pipeline Alerts") lands on the strip
+  // (R103): the hash was set, but the strip renders after the alerts load,
+  // so nothing scrolled to it.
+  useEffect(() => {
+    if (typeof window === "undefined" || window.location.hash !== "#alerts" || !alerts.isFetched) return;
+    document.getElementById("alerts")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [alerts.isFetched]);
+  const showAlerts = activeAlerts.length > 0 || (typeof window !== "undefined" && window.location.hash === "#alerts" && alerts.isFetched);
+  // The dialog's stages: this pipeline's, with their flags and default win %.
+  const dialogStages = stageRows.map((s: any) => ({ id: s.key, label: s.label, isWon: !!s.isWon, isLost: !!s.isLost, defaultWinProb: s.defaultWinProb ?? null }));
 
   const StatCard = ({ label, value, tone }: { label: string; value: string | number; tone?: "good" | "warn" }) => {
     const color = tone === "good" ? "#059669" : tone === "warn" ? "#d97706" : accent;
@@ -254,8 +286,13 @@ export default function DealsV2() {
               </SelectContent>
             </Select>
           </div>
-          <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={analyze.isPending} onClick={() => analyze.mutate({ limit: 15 })}>
+          <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={analyze.isPending} onClick={() => analyze.mutate({ limit: 15 })}
+            title="Drafts a next step and win probability for up to 15 open deals, as tasks for you to review. Deals are not changed.">
             <Sparkles className="size-3.5" /> {analyze.isPending ? "Analyzing…" : "Analyze with AI"}
+          </Button>
+          {/* There was no way to add a deal from this board (R103). */}
+          <Button size="sm" className="h-7 gap-1.5" onClick={() => setAddOpen(true)}>
+            <Plus className="size-3.5" /> New deal
           </Button>
         </div>
 
@@ -288,14 +325,20 @@ export default function DealsV2() {
           )}
 
           {/* At-risk alerts */}
-          {activeAlerts.length > 0 && (
-            <div id="alerts" className="rounded-lg border border-amber-300/60 bg-amber-50/50 dark:bg-amber-900/10 px-4 py-2.5 shadow-sm">
-              <div className="text-[12px] font-medium flex items-center gap-1.5 text-amber-700 dark:text-amber-300 mb-1"><AlertTriangle className="size-3.5" /> {activeAlerts.length} deal{activeAlerts.length === 1 ? "" : "s"} need attention</div>
+          {showAlerts && (
+            <div id="alerts" className="rounded-lg border border-amber-300/60 bg-amber-50/50 dark:bg-amber-900/10 px-4 py-2.5 shadow-sm scroll-mt-4">
+              <div className="text-[12px] font-medium flex items-center gap-1.5 text-amber-700 dark:text-amber-300 mb-1">
+                <AlertTriangle className="size-3.5" />
+                {activeAlerts.length === 0 ? "No deals need attention right now" : `${activeAlerts.length} deal${activeAlerts.length === 1 ? "" : "s"} need attention`}
+                <Link href="/pipeline-alerts" className="ml-auto font-normal underline">All alerts</Link>
+              </div>
               <div className="flex flex-wrap gap-1.5">
+                {/* Each chip opens its deal (R103): they were plain text. */}
                 {activeAlerts.slice(0, 6).map((a: any, i: number) => (
-                  <span key={a.id ?? i} className="text-[11px] rounded px-1.5 py-0.5 bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
-                    {a.details?.oppName ?? "Deal"} · {String(a.alertType ?? "").replace(/_/g, " ")}
-                  </span>
+                  <Link key={a.id ?? i} href={`/opportunities/${a.opportunityId}`}
+                    className="text-[11px] rounded px-1.5 py-0.5 bg-amber-100 text-amber-800 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-200 dark:hover:bg-amber-900/50">
+                    {a.opportunity?.name ?? a.details?.oppName ?? "Deal"} · {String(a.alertType ?? "").replace(/_/g, " ")}
+                  </Link>
                 ))}
               </div>
             </div>
@@ -344,6 +387,7 @@ export default function DealsV2() {
         </div>
       </div>
       {celebrate > 0 && <WonConfetti />}
+      <NewOpportunityDialog open={addOpen} onOpenChange={setAddOpen} stages={dialogStages} pipelineId={pipelineId} />
     </Shell>
   );
 }

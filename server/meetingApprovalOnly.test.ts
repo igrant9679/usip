@@ -88,7 +88,10 @@ describe("the dial is Off, Approve or Autonomous everywhere", () => {
 
   it("the Autonomy Center offers Autonomous for meetings, and All: Autonomous sets it", () => {
     expect(autonomy).toContain("const NO_AUTO = new Set<string>([]);");
-    expect(autonomy).toContain("setMeetAp.mutate({ mode: mode as any });");
+    // 2026-11-06 (audit G62): All: Autonomous runs every autopilot row through
+    // its awaitable setter, after a confirm that names each change.
+    expect(autonomy).toContain("setAsync: (m: string) => setMeetAp.mutateAsync({ mode: m as any })");
+    expect(autonomy).toContain("autopilots.map((a) => ({ label: a.label, run: () => a.setAsync(mode) }))");
   });
 
   it("the assistant and the Help Center describe all three modes", () => {

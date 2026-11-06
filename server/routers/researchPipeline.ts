@@ -52,6 +52,9 @@ async function getRecipientContext(
   let companySize = "";
   let companyRevenue = "";
   let accountId = opts.accountId;
+  // Which of the ids asked for were found in this workspace: only those are
+  // stored on the pipeline (audit 2026-10-20, P145).
+  const verified: { contactId?: number; leadId?: number; accountId?: number } = {};
 
   if (opts.contactId) {
     const [c] = await db
@@ -60,6 +63,7 @@ async function getRecipientContext(
       .where(and(eq(contacts.id, opts.contactId), eq(contacts.workspaceId, workspaceId)));
     if (c) {
       found = true;
+      verified.contactId = c.id;
       firstName = c.firstName ?? "";
       personName = `${c.firstName} ${c.lastName}`.trim();
       personTitle = c.title ?? "";
@@ -76,6 +80,7 @@ async function getRecipientContext(
       .where(and(eq(leads.id, opts.leadId), eq(leads.workspaceId, workspaceId)));
     if (l) {
       found = true;
+      verified.leadId = l.id;
       firstName = l.firstName ?? "";
       personName = `${l.firstName} ${l.lastName}`.trim();
       personTitle = l.title ?? "";
@@ -89,6 +94,8 @@ async function getRecipientContext(
       .from(accounts)
       .where(and(eq(accounts.id, accountId), eq(accounts.workspaceId, workspaceId)));
     if (a) {
+      // Only a company the caller named is stored; the contact's own is context.
+      if (opts.accountId === a.id) verified.accountId = a.id;
       companyName = a.name ?? companyName;
       companyIndustry = a.industry ?? companyIndustry;
       companySize = a.employeeBand ?? "";
@@ -96,7 +103,7 @@ async function getRecipientContext(
     }
   }
 
-  return { found, firstName, personName, personTitle, personEmail, companyName, companyIndustry, companySize, companyRevenue };
+  return { found, verified, firstName, personName, personTitle, personEmail, companyName, companyIndustry, companySize, companyRevenue };
 }
 
 type Recipient = Awaited<ReturnType<typeof getRecipientContext>>;
@@ -408,6 +415,15 @@ export const researchPipelineRouter = router({
         accountId: input.accountId,
       });
       if (!recipient.found) throw new TRPCError({ code: "NOT_FOUND", message: "That person is not in this workspace." });
+      // Every id given must be this workspace's, not only one of them (P145):
+      // the pipeline and its draft store them as given.
+      if ((input.contactId && recipient.verified.contactId !== input.contactId)
+        || (input.leadId && recipient.verified.leadId !== input.leadId)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "That person is not in this workspace." });
+      }
+      if (input.accountId && recipient.verified.accountId !== input.accountId) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "That company is not in this workspace." });
+      }
       if (!recipient.personEmail) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",

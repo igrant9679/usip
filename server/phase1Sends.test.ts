@@ -823,10 +823,14 @@ describe("the SMTP draft paths claim each draft and always carry an unsubscribe"
     expect(h.smtp[0].html).toContain("Unsubscribe</a>");
     expect(row("email_drafts", 121).status).toBe("sending");
 
-    // Two admins pressing it at once send each draft once.
+    // Two admins pressing it at once send each draft once. 2026-11-06 (audit
+    // O16): the second press is now refused while the first runs, rather than
+    // racing it draft by draft; what this pinned, one send per draft, holds.
     draft(123, { toEmail: "bo@beta.example", status: "approved" });
-    const runs = await Promise.all([caller(ADMIN).smtpConfig.sendBulkApproved({}), caller(ADMIN).smtpConfig.sendBulkApproved({})]);
-    expect(runs[0].sent + runs[1].sent).toBe(1);
+    const runs = await Promise.allSettled([caller(ADMIN).smtpConfig.sendBulkApproved({}), caller(ADMIN).smtpConfig.sendBulkApproved({})]);
+    const done = runs.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+    expect(done.reduce((n, r) => n + r.sent, 0)).toBe(1);
+    expect(runs.filter((r) => r.status === "rejected").map((r: any) => r.reason.code)).toEqual(["CONFLICT"]);
     expect(h.smtp).toHaveLength(2);
 
     // Pause, the daily cap and the claim are asked per draft, before its send.

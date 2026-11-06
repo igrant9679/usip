@@ -1,6 +1,7 @@
 import { Shell, PageHeader, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
-import { isAdminRole } from "@shared/roleRank";
+import { isAdminRole, rankOf, ROLE_RANK } from "@shared/roleRank";
+import { CONTACT_MERGE_FIELDS, hasValue, planContactMerge, type ContactMergeField } from "@/lib/contactMergePlan";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmButton } from "@/components/usip/Common";
@@ -107,6 +108,14 @@ function FieldCoverageBar({ label, pct }: { label: string; pct: number }) {
 /* ─── Merge Dialog ──────────────────────────────────────────────────────── */
 type DupeGroup = { type: "email" | "name"; key: string; ids: string[]; names: string[]; count: number };
 
+/**
+ * Merge a whole duplicate group (audit 2026-10-20, P95). It showed the first
+ * two records, kept the oldest, and could not choose the address. Now every
+ * record is a column, the person picks the one that survives and, per field,
+ * whose value it keeps (the address included), and the rest are merged into
+ * it one by one through the same server merge. planContactMerge computes the
+ * preview and the calls from the same choices, so they cannot disagree.
+ */
 function MergeDialog({
   group,
   open,
@@ -118,55 +127,53 @@ function MergeDialog({
   onClose: () => void;
   onMerged: () => void;
 }) {
-  const utils = trpc.useUtils();
-  // Load the first two contacts for side-by-side comparison
-  const primaryId = Number(group.ids[0]);
-  const secondaryId = Number(group.ids[1]);
-  const { data: primary, isLoading: pLoading } = trpc.contacts.get.useQuery(
-    { id: primaryId },
-    { enabled: open && !!primaryId },
-  );
-  const { data: secondary, isLoading: sLoading } = trpc.contacts.get.useQuery(
-    { id: secondaryId },
-    { enabled: open && !!secondaryId },
-  );
+  const ids = group.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 50);
+  const recordsQuery = trpc.dataHealth.duplicateGroupRecords.useQuery({ ids }, { enabled: open && ids.length > 1 });
+  const records = recordsQuery.data ?? [];
+  const isLoading = recordsQuery.isLoading;
 
-  const [overrideFields, setOverrideFields] = useState<string[]>([]);
+  // The oldest stays the default, as before; it is now a choice.
+  const [chosenId, setChosenId] = useState<number | null>(null);
+  const survivorId = chosenId ?? records[0]?.id ?? 0;
+  const [picks, setPicks] = useState<Partial<Record<ContactMergeField, number>>>({});
+  const plan = planContactMerge(records, survivorId, picks);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+
   const merge = trpc.dataHealth.mergeContacts.useMutation({
-    onSuccess: (res) => {
-      toast.success(`Merged successfully. ${res.mergedFields.length > 0 ? `Copied fields: ${res.mergedFields.join(", ")}` : "No field updates needed."}`);
-      utils.dataHealth.getDuplicateGroups.invalidate();
-      utils.dataHealth.getMetrics.invalidate();
-      onMerged();
-      onClose();
-    },
     onError: (e) => toast.error(e.message),
   });
 
-  const FIELDS: { key: string; label: string }[] = [
-    { key: "title", label: "Title" },
-    { key: "phone", label: "Phone" },
-    { key: "linkedinUrl", label: "LinkedIn URL" },
-    { key: "city", label: "City" },
-    { key: "seniority", label: "Seniority" },
-    { key: "accountId", label: "Account" },
-  ];
-
-  const toggleOverride = (field: string) => {
-    setOverrideFields((prev) =>
-      prev.includes(field) ? prev.filter((f) => f !== field) : [...prev, field],
-    );
+  const run = async () => {
+    const total = plan.steps.length;
+    let done = 0;
+    setProgress({ done, total });
+    try {
+      for (const step of plan.steps) {
+        await merge.mutateAsync({ primaryId: survivorId, ...step });
+        done++;
+        setProgress({ done, total });
+      }
+      toast.success(`Merged ${done} duplicate${done === 1 ? "" : "s"} into #${survivorId}.`);
+      onClose();
+    } catch {
+      // onError has said why; say how far it got.
+      if (done > 0) toast.message(`${done} of ${total} merged before it stopped. The rest are unchanged.`);
+    } finally {
+      setProgress(null);
+      onMerged();
+    }
   };
 
-  const isLoading = pLoading || sLoading;
+  const name = (r: (typeof records)[number]) => `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || "(no name)";
+  const busy = progress !== null;
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl">
+    <Dialog open={open} onOpenChange={(v) => !v && !busy && onClose()}>
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <GitMerge className="size-4 text-[#14B89A]" />
-            Merge Duplicate Contacts
+            Merge {records.length || group.count} duplicate contacts
           </DialogTitle>
         </DialogHeader>
 
@@ -174,81 +181,109 @@ function MergeDialog({
           <div className="space-y-3 py-4">
             {[1, 2, 3].map((i) => <Skeleton key={i} className="h-8 rounded" />)}
           </div>
+        ) : recordsQuery.error ? (
+          <p className="text-sm text-rose-700 py-4">Could not load these contacts: {recordsQuery.error.message}</p>
+        ) : records.length < 2 ? (
+          <p className="text-sm text-muted-foreground py-4">This group no longer has two contacts to merge.</p>
         ) : (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              The <strong>primary</strong> (left) contact will be kept. Everything that points at the secondary — activity, tasks, emails, replies, suppressions, deal roles, proposals, lists, enrolments and its People record — moves to the primary, then the secondary is deleted (the deleted record is kept in the audit log). Check a field to use the secondary's value instead.
+              Choose the contact that stays, and for each field whose value it keeps. Everything that points at
+              the others — activity, tasks, emails, replies, suppressions, deal roles, proposals, lists, enrolments
+              and their People records — moves to it, then they are deleted (each deleted record is kept in the
+              audit log). If the address it keeps is not the one someone unsubscribed from, the opt-out is carried
+              over to it.
             </p>
-
-            {/* Side-by-side header */}
-            <div className="grid grid-cols-3 gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              <span>Field</span>
-              <span className="text-center">Primary (kept)</span>
-              <span className="text-center">Secondary (deleted)</span>
-            </div>
-
-            {/* Name row (read-only) */}
-            <div className="grid grid-cols-3 gap-2 items-center text-sm border-b pb-2">
-              <span className="text-muted-foreground">Name</span>
-              <span className="text-center font-medium">{primary?.firstName} {primary?.lastName}</span>
-              <span className="text-center text-muted-foreground">{secondary?.firstName} {secondary?.lastName}</span>
-            </div>
-            <div className="grid grid-cols-3 gap-2 items-center text-sm border-b pb-2">
-              <span className="text-muted-foreground">Email</span>
-              <span className="text-center font-medium">{primary?.email ?? "—"}</span>
-              <span className="text-center text-muted-foreground">{secondary?.email ?? "—"}</span>
-            </div>
-
-            {/* Overrideable fields */}
-            {FIELDS.map(({ key, label }) => {
-              const pVal = (primary as any)?.[key];
-              const sVal = (secondary as any)?.[key];
-              const isOverriding = overrideFields.includes(key);
-              const hasSecondaryVal = sVal !== null && sVal !== undefined && sVal !== "";
-              return (
-                <div key={key} className="grid grid-cols-3 gap-2 items-center text-sm">
-                  <span className="text-muted-foreground">{label}</span>
-                  <span className={`text-center ${isOverriding ? "text-muted-foreground line-through" : "font-medium"}`}>
-                    {String(pVal ?? "—")}
-                  </span>
-                  <div className="flex items-center justify-center gap-2">
-                    <span className={`${isOverriding ? "font-medium text-[#14B89A]" : "text-muted-foreground"}`}>
-                      {String(sVal ?? "—")}
-                    </span>
-                    {hasSecondaryVal && (
-                      <button
-                        onClick={() => toggleOverride(key)}
-                        className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
-                          isOverriding
-                            ? "bg-[#14B89A] text-white border-[#14B89A]"
-                            : "border-muted-foreground text-muted-foreground hover:border-[#14B89A] hover:text-[#14B89A]"
-                        }`}
-                      >
-                        {isOverriding ? "✓ Use this" : "Use this"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-
-            {group.count > 2 && (
-              <p className="text-xs text-amber-600 flex items-center gap-1">
+            {records.length < ids.length ? (
+              <p className="text-xs text-amber-700 flex items-center gap-1">
                 <AlertTriangle className="size-3" />
-                This group has {group.count} duplicates. Only the first two are shown. Merge again to handle remaining duplicates.
+                {ids.length - records.length} of this group's records no longer exist and are left out.
               </p>
-            )}
+            ) : null}
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b">
+                    <th scope="col" className="text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground py-2 pr-3">Field</th>
+                    {records.map((r) => (
+                      <th key={r.id} scope="col" className="text-left py-2 px-2 align-top min-w-[10rem]">
+                        <label className="flex items-start gap-2 cursor-pointer font-normal">
+                          <input
+                            type="radio"
+                            name={`survivor-${group.key}`}
+                            className="mt-1"
+                            checked={r.id === survivorId}
+                            onChange={() => setChosenId(r.id)}
+                            disabled={busy}
+                          />
+                          <span>
+                            <span className="block font-medium">{name(r)}</span>
+                            <span className="block text-xs text-muted-foreground">
+                              #{r.id}{r.createdAt ? ` · added ${new Date(r.createdAt).toLocaleDateString()}` : ""}
+                            </span>
+                            <Badge
+                              variant="secondary"
+                              className={`mt-1 ${r.id === survivorId ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}
+                            >
+                              {r.id === survivorId ? "Kept" : "Deleted"}
+                            </Badge>
+                          </span>
+                        </label>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {CONTACT_MERGE_FIELDS.map(({ key, label }) => (
+                    <tr key={key} className="border-b border-border/50">
+                      <th scope="row" className="text-left text-muted-foreground font-normal py-2 pr-3 align-top">{label}</th>
+                      {records.map((r) => {
+                        const v = (r as Record<string, unknown>)[key];
+                        const kept = plan.result[key].fromId === r.id;
+                        return (
+                          <td key={r.id} className="py-2 px-2 align-top">
+                            {hasValue(v) ? (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                aria-pressed={kept}
+                                onClick={() => setPicks((p) => ({ ...p, [key]: r.id }))}
+                                className={`text-left break-all rounded px-1.5 py-0.5 border transition-colors ${
+                                  kept
+                                    ? "border-[#14B89A] bg-[#14B89A]/10 font-medium"
+                                    : "border-transparent text-muted-foreground hover:border-[#14B89A]"
+                                }`}
+                              >
+                                {String(v)}
+                              </button>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The highlighted value in each row is what the kept contact ends up with. Click another to keep that one instead.
+            </p>
           </div>
         )}
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
           <Button
-            onClick={() => merge.mutate({ primaryId, secondaryId, overrideFields })}
-            disabled={merge.isPending || isLoading}
+            onClick={() => void run()}
+            disabled={busy || isLoading || records.length < 2}
             className="bg-[#14B89A] hover:bg-[#12a589] text-white"
           >
-            {merge.isPending ? <><Loader2 className="size-3 animate-spin mr-1" /> Merging…</> : <><GitMerge className="size-3 mr-1" /> Merge Contacts</>}
+            {busy
+              ? <><Loader2 className="size-3 animate-spin mr-1" /> Merging {Math.min(progress!.done + 1, progress!.total)} of {progress!.total}…</>
+              : <><GitMerge className="size-3 mr-1" /> Merge {Math.max(records.length - 1, 0)} into #{survivorId || "—"}</>}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -266,10 +301,13 @@ function MergeDialog({
  * It is not a pure link either, and the copy says so: the contact's curated
  * values go through the merge onto the People record.
  */
-function SplitPeopleSection() {
+function SplitPeopleSection({ canLinkAll }: { canLinkAll: boolean }) {
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.dataHealth.personContactDuplicates.useQuery();
   const [, setLocation] = useLocation();
+  // "Link all unlinked" reads one page of contacts per click (audit
+  // 2026-10-20, P93); this is where the next click carries on from.
+  const [linkCursor, setLinkCursor] = useState(0);
 
   const invalidate = () => {
     utils.dataHealth.personContactDuplicates.invalidate();
@@ -295,7 +333,11 @@ function SplitPeopleSection() {
   });
   const linkAll = trpc.dataHealth.relinkAllUnlinked.useMutation({
     onSuccess: (r) => {
-      toast.success(`Scanned ${r.scanned} · linked ${r.linked} · created ${r.created} · failed ${r.failed}`);
+      const bits = [`Checked ${r.scanned} contact${r.scanned === 1 ? "" : "s"}`, `linked ${r.linked}`, `created ${r.created}`];
+      if (r.skippedNameOnly) bits.push(`${r.skippedNameOnly} left alone (no address or LinkedIn to match on)`);
+      if (r.failed) bits.push(`failed ${r.failed}`);
+      toast.success(bits.join(" · ") + (r.more ? ". More remain: click again to carry on." : "."));
+      setLinkCursor(r.more ? r.nextAfterId : 0);
       invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -325,18 +367,28 @@ function SplitPeopleSection() {
                   into that record — it never deletes a row and never merges two People rows.
                 </p>
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="shrink-0"
-                disabled={busy}
-                onClick={() => linkAll.mutate()}
-              >
-                {linkAll.isPending
-                  ? <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-                  : <Link2 className="size-3.5 mr-1.5" />}
-                Link all unlinked
-              </Button>
+              {canLinkAll ? (
+                <ConfirmButton
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  destructive={false}
+                  disabled={busy}
+                  title={linkCursor ? "Link the next contacts?" : "Link unlinked contacts?"}
+                  description="Checks the next 500 contacts with no People record. A contact is linked only where its address or LinkedIn profile matches a People record, and gets a new one where nothing does; its values are merged into that record. A contact that only a name matches is left alone, so one person's details never land on someone else's."
+                  confirmLabel="Link"
+                  onConfirm={() => linkAll.mutate({ afterId: linkCursor })}
+                >
+                  {linkAll.isPending
+                    ? <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                    : <Link2 className="size-3.5 mr-1.5" />}
+                  {linkCursor ? "Link the next 500" : "Link all unlinked"}
+                </ConfirmButton>
+              ) : (
+                <span className="text-xs text-muted-foreground shrink-0 max-w-[12rem]">
+                  A manager can link every unlinked contact at once.
+                </span>
+              )}
             </div>
           </CardHeader>
           <CardContent className="pt-0">
@@ -470,6 +522,11 @@ function PeopleMergeSection({ by = "email" }: { by?: "email" | "linkedin" }) {
   });
 
   const clusters = plan.data?.merge ?? [];
+  // The plan returns at most 50 groups; the heading counts every group it
+  // found that can be merged, and says when the list shows fewer (audit
+  // 2026-10-20, P158). A scan past its cap is a floor, hence "+".
+  const mergeableTotal = Math.max(clusters.length, (plan.data?.clustersFound ?? 0) - (plan.data?.skipped.length ?? 0));
+  const totalLabel = `${mergeableTotal}${plan.data?.capped ? "+" : ""}`;
   const open = clusters.filter((c) => c.key === preview)[0] ?? null;
   // "Merge all shown" (owner ask 2026-09-24): one confirmed click for every
   // cluster on screen instead of one dialog each. It sends exactly the
@@ -507,9 +564,14 @@ function PeopleMergeSection({ by = "email" }: { by?: "email" | "linkedin" }) {
                 <CardTitle className="text-sm font-medium">
                   {clusters.length
                     ? linkedinPass
-                      ? `${clusters.length} LinkedIn profile${clusters.length === 1 ? "" : "s"} held by more than one People row`
-                      : `${clusters.length} email${clusters.length === 1 ? "" : "s"} held by more than one People row`
+                      ? `${totalLabel} LinkedIn profile${mergeableTotal === 1 ? "" : "s"} held by more than one People row`
+                      : `${totalLabel} email${mergeableTotal === 1 ? "" : "s"} held by more than one People row`
                     : "No duplicate People to merge"}
+                  {clusters.length > 0 && clusters.length < mergeableTotal ? (
+                    <span className="block text-xs font-normal text-muted-foreground mt-0.5">
+                      Showing the first {clusters.length}. Merge these and the next ones appear.
+                    </span>
+                  ) : null}
                 </CardTitle>
                 {clusters.length > 1 && !plan.data?.proposalsCapped && (
                   <ConfirmButton
@@ -655,7 +717,8 @@ function PeopleMergeSection({ by = "email" }: { by?: "email" | "linkedin" }) {
       )}
 
       <Dialog open={open !== null} onOpenChange={(o) => { if (!o) setPreview(null); }}>
-        <DialogContent className="max-w-2xl">
+        {/* Fits a phone as the contact merge dialog does (audit 2026-10-20, P160). */}
+        <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Merge {open?.key}</DialogTitle>
           </DialogHeader>
@@ -665,7 +728,7 @@ function PeopleMergeSection({ by = "email" }: { by?: "email" | "linkedin" }) {
                 <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Rows</div>
                 <div className="divide-y rounded-md border">
                   {open.rows.map((r) => (
-                    <div key={r.id} className="px-3 py-2 flex items-center gap-2">
+                    <div key={r.id} className="px-3 py-2 flex flex-wrap items-center gap-2">
                       <Badge
                         variant="secondary"
                         className={r.id === open.survivorId ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}
@@ -829,8 +892,9 @@ function ProviderEffectivenessCard() {
 }
 
 export default function DataHealth() {
-  const { data: metrics, isLoading: metricsLoading, refetch } = trpc.dataHealth.getMetrics.useQuery();
-  const { data: dupes, isLoading: dupesLoading, refetch: refetchDupes } = trpc.dataHealth.getDuplicateGroups.useQuery();
+  const utils = trpc.useUtils();
+  const { data: metrics, isLoading: metricsLoading } = trpc.dataHealth.getMetrics.useQuery();
+  const { data: dupes, isLoading: dupesLoading } = trpc.dataHealth.getDuplicateGroups.useQuery();
   // One payload feeds both the KPI card and the section below, so the count
   // and the list it sits above can never disagree.
   const splits = trpc.dataHealth.personContactDuplicates.useQuery();
@@ -839,6 +903,8 @@ export default function DataHealth() {
   // Merging deletes a contact, so it is an admin action (audit 2026-10-20, P9).
   const me = trpc.profile.getMe.useQuery();
   const canMerge = isAdminRole(me.data?.role);
+  // The server gate for "Link all unlinked" (audit 2026-10-20, P93).
+  const canLinkAll = rankOf(me.data?.role) >= ROLE_RANK.manager;
 
   /**
    * On demand, not on load: the audit replays every past import and scans up
@@ -861,7 +927,10 @@ export default function DataHealth() {
         description="Monitor data quality across your entire CRM — surface duplicates, missing fields, and enrichment gaps. Run bulk fixes and enrichment jobs to keep your data clean and actionable."
         icon={<ShieldCheck className="size-5" />}
       >
-        <Button variant="outline" size="sm" onClick={() => { refetch(); refetchDupes(); }}>
+        {/* Every card on the page, not only the first two (audit 2026-10-20,
+            P158). The import audit stays on demand: invalidating a disabled
+            query does not run it. */}
+        <Button variant="outline" size="sm" onClick={() => { void utils.dataHealth.invalidate(); }}>
           <RefreshCw className="size-3.5 mr-1.5" />
           Refresh
         </Button>
@@ -898,9 +967,12 @@ export default function DataHealth() {
                 icon={Phone}
                 tone={(metrics?.pctWithPhone ?? 0) >= 60 ? "success" : (metrics?.pctWithPhone ?? 0) >= 30 ? "warning" : "danger"}
               />
+              {/* Valid only: invalid, risky and accept-all addresses were
+                  counted as verified, in green (audit 2026-10-20, P79). Each
+                  verdict is in the breakdown below. */}
               <MetricCard
-                label="Verified Emails"
-                value={(metrics?.verifiedValid ?? 0) + (metrics?.verifiedAcceptAll ?? 0) + (metrics?.verifiedRisky ?? 0) + (metrics?.verifiedInvalid ?? 0)}
+                label="Valid Emails"
+                value={metrics?.verifiedValid ?? 0}
                 pct={metrics?.pctVerified}
                 icon={CheckCircle2}
                 tone={(metrics?.pctVerified ?? 0) >= 80 ? "success" : (metrics?.pctVerified ?? 0) >= 40 ? "warning" : "danger"}
@@ -918,8 +990,11 @@ export default function DataHealth() {
               {/* "Duplicates" counted People and sat directly above a list of
                   duplicate CONTACTS, so merging from that list never moved the
                   number. Both now say which table they are about. */}
+              {/* Groups the email merge below can act on (audit 2026-10-20,
+                  P80); name + company groups, which nothing merges, are gone.
+                  The LinkedIn pass counts its own groups in its section. */}
               <MetricCard
-                label="Duplicate People"
+                label={metrics?.duplicatesCapped ? "Duplicate People (same email, first 2,000 groups)" : "Duplicate People (same email)"}
                 value={metrics?.estimatedDuplicates ?? 0}
                 icon={Copy}
                 tone={(metrics?.estimatedDuplicates ?? 0) === 0 ? "success" : "warning"}
@@ -1071,7 +1146,7 @@ export default function DataHealth() {
           )}
         </section>
 
-        <SplitPeopleSection />
+        <SplitPeopleSection canLinkAll={canLinkAll} />
 
         <PeopleMergeSection />
 
@@ -1203,7 +1278,7 @@ export default function DataHealth() {
           group={mergeGroup}
           open={!!mergeGroup}
           onClose={() => setMergeGroup(null)}
-          onMerged={() => { refetch(); refetchDupes(); }}
+          onMerged={() => { void utils.dataHealth.invalidate(); }}
         />
       )}
     </Shell>

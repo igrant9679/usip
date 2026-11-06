@@ -190,11 +190,36 @@ const SURFACES: Array<{
     gate: /const ownerUserId = await workspaceNotifyUserId\(proposal\.workspaceId\);/,
   },
   {
+    what: "a proposal's engagement drop tells its author only while they are here",
+    file: "server/routers/proposals.ts",
+    start: "snapshotScore: workspaceProcedure",
+    end: "db.insert(notifications)",
+    gate: /const recipient = \(await activeOwnerOrNull\(ctx\.workspace\.id, proposal\.createdBy\)\)\s*\?\? \(await workspaceNotifyUserId\(ctx\.workspace\.id\)\);\s*if \(recipient\) \{/,
+  },
+  {
+    what: "an account a lead conversion creates is not routed to a departed rep",
+    file: "server/routers/crm.ts",
+    start: "const territory = await applyTerritoryRules(db, ws, { company: convName });",
+    end: "const done = await db.transaction(",
+    gate: /const territoryOwner = await activeOwnerOrNull\(ws, territory\?\.ownerUserId\);/,
+  },
+  {
+    what: "the stuck-deal digest is mailed to a member who is still here",
+    file: "server/routers/pipelineAlerts.ts",
+    start: "sendDigest: workspaceProcedure",
+    end: "const html =",
+    gate: /const ownerId = await workspaceNotifyUserId\(wsId\);/,
+  },
+  {
+    // 2026-11-06 (audit O13): re-anchored. The worker no longer falls back to
+    // the workspace owner when a draft's author has left — that fallback is
+    // how every rep's sequence sent as the owner. A departed sender now HOLDS
+    // the draft, which keeps what this pins: no departed actor ever sends.
     what: "the unattended auto-send worker picks a present actor",
     file: "server/routers/sequences.ts",
-    start: "let actorUserId = ",
-    end: "no actor user for draft",
-    gate: /let actorUserId = await activeOwnerOrNull\(ws\.workspaceId, draft\.createdByUserId\);\s*if \(!actorUserId\) \{\s*actorUserId = await workspaceNotifyUserId\(ws\.workspaceId\);/,
+    start: "export async function sequenceDraftSender(",
+    end: "return { userId };",
+    gate: /if \(\(await activeOwnerOrNull\(workspaceId, userId\)\) == null\) \{\s*return \{ hold:/,
   },
   {
     what: "the company-backfill cron neither runs nor reports for a workspace with no active owner",
@@ -416,9 +441,14 @@ describe("every session-less path that names a member gates on active membership
     // Plivo number is filed under its member (plivoWebhook).
     // 2026-10-24: 37, with services/foreignIds.ts — the owner check behind the
     // explicit CRM patch schemas (audit C7).
-    // 2026-11-06: 38, with areNotifyRecipient — an ARE notice goes to the
+    // 2026-11-06: 39, with the stuck-deal digest and the proposal engagement
+    // notice — both went to the platform owner, and now go to a member of the
+    // workspace who is still here (audit R2).
+    // Same day: 40, with lead conversion — the account it creates is routed
+    // by the territory rules now (audit R42).
+    // Same day: 41, with areNotifyRecipient — an ARE notice goes to the
     // campaign's owner, while they are an active member (audit A57).
-    expect(SURFACES.length).toBe(38);
+    expect(SURFACES.length).toBe(41);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 

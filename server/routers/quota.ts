@@ -15,6 +15,7 @@ import { activities, quotaTargets, workspaceMembers } from "../../drizzle/schema
 import { getDb } from "../db";
 import { closedIn, loadMetricDeals, quotaPeriodRange } from "../services/dealMetrics";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { quotaPeriodLabel } from "@shared/quotaPeriod";
 import { router } from "../_core/trpc";
 import { managerProcedure, roleRank, workspaceProcedure } from "../_core/workspace";
 
@@ -106,6 +107,12 @@ export const quotaRouter = router({
         revenueTarget: z.number().min(0).default(0),
         dealsTarget: z.number().int().min(0).default(0),
         activitiesTarget: z.number().int().min(0).default(0),
+        /**
+         * Add, not edit (R102): refuse when this person already has a target
+         * for the period, instead of overwriting it without a word. Edit
+         * leaves it out and replaces the target as before.
+         */
+        onlyIfNew: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -119,6 +126,16 @@ export const quotaRouter = router({
       if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "User is not a member of this workspace" });
 
       const period = quotaPeriodKey(input.period, input.periodType);
+      if (input.onlyIfNew) {
+        const [existing] = await db.select({ id: quotaTargets.id }).from(quotaTargets).where(and(
+          eq(quotaTargets.workspaceId, ctx.workspace.id),
+          eq(quotaTargets.userId, input.userId),
+          eq(quotaTargets.period, period),
+        ));
+        if (existing) {
+          throw new TRPCError({ code: "CONFLICT", message: `This person already has a target for ${quotaPeriodLabel(period)}. Edit that target instead.` });
+        }
+      }
       await db
         .insert(quotaTargets)
         .values({

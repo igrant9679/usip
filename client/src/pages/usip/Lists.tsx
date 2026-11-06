@@ -7,7 +7,7 @@
  * (record_lists / record_list_members) — People lists hold prospects, Companies
  * lists hold accounts. Clicking a list opens its detail at /v2/lists/:id.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useLocation, useSearch } from "wouter";
 import { QueryError, Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
@@ -51,6 +51,7 @@ import {
   X,
 } from "lucide-react";
 import { pressable } from "@/lib/pressable";
+import { createSingleFlight } from "@/lib/singleFlight";
 
 type RecordList = {
   id: number;
@@ -90,7 +91,8 @@ function ListRow({ l, accent, onOpen, onRename, onDelete }: { l: RecordList; acc
       <div onClick={(e) => e.stopPropagation()}>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button aria-label="List actions" variant="ghost" size="icon-sm" className="opacity-0 group-hover/row:opacity-100"><MoreHorizontal className="size-4" /></Button>
+            {/* Shown on keyboard focus and while open too, not on hover alone (audit 2026-10-20, P58). */}
+            <Button aria-label={`Actions for ${l.name}`} variant="ghost" size="icon-sm" className="opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"><MoreHorizontal className="size-4" /></Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem onClick={onOpen}><ExternalLink className="size-4 mr-2" /> Open list</DropdownMenuItem>
@@ -192,9 +194,15 @@ export default function Lists() {
   const companyLists = useMemo(() => sortAndFilter("companies"), [lists, search, sort]);
 
   const openCreate = (object: "People" | "Companies") => { setNewObject(object); setNewName(""); setCreateOpen(true); };
+  // Enter twice made two lists: only the button was disabled while one was
+  // being made, and isPending lags the keypress (audit 2026-10-20, P135).
+  const createOnce = useRef(createSingleFlight()).current;
   const create = () => {
     if (!newName.trim()) return;
-    createMut.mutate({ name: newName.trim(), entityType: newObject === "People" ? "people" : "companies" });
+    createOnce((done) => createMut.mutate(
+      { name: newName.trim(), entityType: newObject === "People" ? "people" : "companies" },
+      { onSettled: done },
+    ));
   };
   const del = (l: RecordList) => { confirmAction({ title: `Delete list "${l.name}"?`, description: "This removes the list, not the records in it.", confirmLabel: "Delete" }, () => { deleteMut.mutate({ id: l.id }); }); };
 

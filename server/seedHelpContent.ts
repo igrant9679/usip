@@ -33,6 +33,7 @@ import {
 } from "../drizzle/schema";
 import { getDb } from "./db";
 import { OPERATOR_ARTICLES, OPERATOR_CATEGORY } from "./seedHelpOperatorManual";
+import { helpOverrideKeys } from "./services/helpSeedOverrides";
 
 type AnyDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -598,7 +599,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     tags: ["sequences", "outreach", "cadence"],
     pageKey: "sequences",
     tourName: "Build Your First Sequence",
-    bodyMarkdown: `**Sequences** (sidebar → Engage) are multi-step cadences. Click **New sequence**, then add steps: email steps (subject + body, with \`{{firstName}}\`, \`{{company}}\`, \`{{senderName}}\` merge fields), **wait** steps (delays), and **task** steps (manual to-dos). Apply an Email Builder template to a step, or write inline. Use the **Canvas** view for a visual builder or the list/Edit view — they stay in sync. Set day caps and auto-stop rules so replies pause the sequence. When ready, **Activate** it, then enroll prospects/contacts/leads (see "Enroll prospects into a sequence"). The engine creates and sends drafts on cadence.`,
+    bodyMarkdown: `**Sequences** (sidebar → Engage) are multi-step cadences. Click **New sequence**, then add steps: email steps (subject + body, with \`{{firstName}}\`, \`{{company}}\`, \`{{senderName}}\` merge fields), **wait** steps (delays), and **task** steps (manual to-dos). Apply an Email Builder template to a step, or write inline. Use the **Canvas** view for a visual builder or the list/Edit view — they stay in sync. Set a daily cap; a reply pauses the person while reply detection is on. When ready, **Activate** it, then enroll prospects/contacts/leads (see "Enroll prospects into a sequence"). Email steps write **drafts** on cadence: nothing is sent until someone reviews and sends them (Emails → Needs review), or auto-send does if it is switched on.`,
   },
   {
     slug: "sequences-vs-campaigns",
@@ -1628,19 +1629,19 @@ export const TOURS: TourSeed[] = [
   },
   {
     name: "Who Is On Your Site",
-    description: "See when people you already know come back to read you.",
+    description: "See how much of your site people read, and which pages show buying intent.",
     type: "feature",
     estimatedMinutes: 2,
     pageKey: "website-visitors",
     route: "/v2/website-visitors",
     roleTags: ["sdr", "admin"],
     steps: [
-      // Honest scope: identification works for KNOWN people (a contact or
-      // lead who arrived through a tracked link). Anonymous visitor→company
-      // resolution needs a paid data provider Velocity doesn't ship with —
-      // the automation article says so, and this tour must not promise more.
-      { title: "Known people, recognised", bodyMarkdown: "When a contact or lead you already have visits through a tracked link, their visit is tied to their record — so you see *who* came back and what they read. Fully anonymous traffic stays anonymous.", routeTo: "/v2/website-visitors", targetDataTourId: "visitors-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Use it as a signal", bodyMarkdown: "A known prospect on your pricing page spawns a high-priority task for their owner automatically — reach out while intent is hot. Pair it with the chat agent so they can book a call while they are still on the page.", visualTreatment: "coach", advanceCondition: "next_button" },
+      // Honest scope (audit 2026-10-20, P88): nothing adds a record id to
+      // outbound links and the id is not signed, so a visit is not matched to
+      // a known person. Anonymous visitor→company resolution needs a paid data
+      // provider Velocity doesn't ship with. This tour must not promise either.
+      { title: "Visits and intent", bodyMarkdown: "The snippet counts visits and unique visitors and flags the pages that show buying intent, such as pricing, demo and contact. Visitors whose browser asks not to be tracked are not tracked, and visits are kept for 180 days.", routeTo: "/v2/website-visitors", targetDataTourId: "visitors-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Not who, yet", bodyMarkdown: "Matching a visit to a prospect isn't available yet. A visit names a record only if its link carries a record id, which nothing adds for you and which isn't verified, so those rows are shown as claims. Pair the page with the chat agent so a visitor can book a call while they are still on your site.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
   {
@@ -1931,12 +1932,24 @@ async function upsertCategory(db: AnyDb, workspaceId: number, c: CatSeed): Promi
   return (res as any).insertId as number;
 }
 
+/**
+ * Hands off what a person changed (G21): `changed` is the slugs or names an
+ * admin edited or deleted (help_seed_overrides), or null when that could not be
+ * read, in which case an existing row counts as changed and only a missing one
+ * is added. Returns whether the seed wrote the row.
+ */
+function seedMayWrite(changed: Set<string> | null, key: string, exists: boolean): boolean {
+  if (changed === null) return !exists;
+  return !changed.has(key);
+}
+
 async function upsertArticle(
   db: AnyDb,
   workspaceId: number,
   a: ArticleSeed,
   categoryId: number | null,
-): Promise<void> {
+  changed: Set<string> | null,
+): Promise<boolean> {
   const payload = {
     workspaceId,
     categoryId: categoryId ?? null,
@@ -1954,14 +1967,17 @@ async function upsertArticle(
     .from(helpArticles)
     .where(and(eq(helpArticles.workspaceId, workspaceId), eq(helpArticles.slug, a.slug)))
     .limit(1);
+  if (!seedMayWrite(changed, a.slug, !!existing)) return false;
   if (existing) {
     await db.update(helpArticles).set(payload).where(eq(helpArticles.id, existing.id));
   } else {
     await db.insert(helpArticles).values(payload);
   }
+  return true;
 }
 
-async function upsertTour(db: AnyDb, workspaceId: number, t: TourSeed): Promise<number> {
+/** The tour's id, or null when it is gone and a person deleted it. */
+async function upsertTour(db: AnyDb, workspaceId: number, t: TourSeed, changed: Set<string> | null): Promise<number | null> {
   const tourPayload = {
     workspaceId,
     name: t.name,
@@ -1977,6 +1993,7 @@ async function upsertTour(db: AnyDb, workspaceId: number, t: TourSeed): Promise<
     .from(tours)
     .where(and(eq(tours.workspaceId, workspaceId), eq(tours.name, t.name)))
     .limit(1);
+  if (!seedMayWrite(changed, t.name, !!existing)) return existing?.id ?? null;
 
   let tourId: number;
   if (existing) {
@@ -2033,22 +2050,27 @@ export async function seedHelpContent(db: AnyDb, workspaceId: number): Promise<v
     categoryIdBySlug.set(c.slug, id);
   }
 
-  // 2. Articles (by slug).
+  // 2. Articles (by slug), except those a person has edited or deleted (G21).
+  const changedArticles = await helpOverrideKeys(db, workspaceId, "article");
+  const written = new Set<string>();
   for (const a of ARTICLES) {
-    await upsertArticle(db, workspaceId, a, categoryIdBySlug.get(a.categorySlug) ?? null);
+    if (await upsertArticle(db, workspaceId, a, categoryIdBySlug.get(a.categorySlug) ?? null, changedArticles)) {
+      written.add(a.slug);
+    }
   }
 
   // 3. Retire superseded legacy tours, then seed the 10 SDR tours (by name).
   await retireLegacyTours(db, workspaceId);
+  const changedTours = await helpOverrideKeys(db, workspaceId, "tour");
   const tourIdByName = new Map<string, number>();
   for (const t of TOURS) {
-    const id = await upsertTour(db, workspaceId, t);
-    tourIdByName.set(t.name, id);
+    const id = await upsertTour(db, workspaceId, t, changedTours);
+    if (id) tourIdByName.set(t.name, id);
   }
 
   // 4. Link articles → their associated tour (so Ask AI / Help can offer "take the tour").
   for (const a of ARTICLES) {
-    if (!a.tourName) continue;
+    if (!a.tourName || !written.has(a.slug)) continue;
     const tourId = tourIdByName.get(a.tourName);
     if (!tourId) continue;
     await db

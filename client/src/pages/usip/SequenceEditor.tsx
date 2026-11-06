@@ -1,12 +1,12 @@
 /**
  * SequenceEditor — the sequence builder (/v2/sequences/:id).
  *
- * Apollo's sequence editor: header (name + Share / Add contacts / Activate),
- * tabs (Editor / Contacts / Activity / Report / Settings). The Editor tab is
- * the step builder — an ordered list of steps with an "Add a step" picker
- * (Automatic email / Manual email / Phone call / Action item / LinkedIn /
- * Wait) and inline editors per step. Steps persist via sequences.updateSteps;
- * name/description/status via sequences.update.
+ * Apollo's sequence editor: header (name + Share / Add contacts / Activate
+ * or Pause), tabs (Editor / Contacts / Activity / Report / Settings). The
+ * Editor tab is the step builder — an ordered list of steps with an "Add a
+ * step" picker (Email / Phone call / Action item / LinkedIn / Wait) and inline
+ * editors per step. Steps persist via sequences.updateSteps; name and
+ * description via sequences.update; status via sequences.setStatus.
  */
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useLocation, Link } from "wouter";
@@ -22,7 +22,7 @@ import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import {
-  Send, Star, Share2, Zap, UserPlus, ChevronDown, Plus, Mail, MailOpen, Phone,
+  Send, Star, Share2, Zap, UserPlus, ChevronDown, Plus, Mail, Phone,
   CheckSquare, MessageSquare, Clock, Trash2, GripVertical, ArrowUp, ArrowDown,
   PauseCircle, PlayCircle,
   Loader2, Users, Activity as ActivityIcon, Settings2, X,
@@ -30,8 +30,11 @@ import {
 import { pressable } from "@/lib/pressable";
 import { tablistProps, tabProps } from "@/lib/tabs";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
-import { applyTemplate, detachTemplate, stepDistribution, type EmailStep, type TemplateChoice } from "@/lib/sequenceSteps";
+import { applyTemplate, describeSendWindow, detachTemplate, stepDistribution, type EmailStep, type TemplateChoice } from "@/lib/sequenceSteps";
 import { SequenceEnrollmentActions } from "@/components/usip/SequenceEnrollmentActions";
+import { SequenceDraftsNote } from "@/components/usip/SequenceDraftsNote";
+import { ConfirmButton } from "@/components/usip/Common";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { SequenceReport } from "@/components/usip/SequenceReport";
 import { StepTemplatePicker } from "@/components/usip/StepTemplatePicker";
 
@@ -48,9 +51,13 @@ type Step =
   | { type: "linkedin_dm"; body?: string; enabled?: boolean }
   | { type: "linkedin_invite"; note?: string; enabled?: boolean };
 
+/**
+ * One email step, not two (audit 2026-10-20, O39): "Automatic email" and
+ * "Manual email" made the same step, and every email step works the same way
+ * (a draft that waits for review or auto-send), so the choice meant nothing.
+ */
 const STEP_OPTIONS: { key: string; label: string; icon: any; make: () => Step }[] = [
-  { key: "email_auto", label: "Automatic email", icon: Mail, make: () => ({ type: "email", subject: "", body: "" }) },
-  { key: "email_manual", label: "Manual email", icon: MailOpen, make: () => ({ type: "email", subject: "", body: "" }) },
+  { key: "email_step", label: "Email", icon: Mail, make: () => ({ type: "email", subject: "", body: "" }) },
   { key: "call", label: "Phone call", icon: Phone, make: () => ({ type: "task", body: "Call: " }) },
   { key: "task", label: "Action item", icon: CheckSquare, make: () => ({ type: "task", body: "" }) },
   { key: "li_invite", label: "LinkedIn — connection request", icon: UserPlus, make: () => ({ type: "linkedin_invite", note: "" }) },
@@ -117,7 +124,29 @@ export default function SequenceEditor() {
   const seqQ = trpc.sequences.get.useQuery({ id }, { enabled: Number.isFinite(id) });
   const seq = seqQ.data as any;
 
-  const updateSteps = trpc.sequences.updateSteps.useMutation({ onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); }, onError: (e) => toast.error(e.message) });
+  /**
+   * A refused step edit puts the screen back to what is saved (audit
+   * 2026-10-20, O38). It only toasted, and the edit stayed on screen looking
+   * saved, so a sequence could appear to say something it does not send.
+   */
+  const updateSteps = trpc.sequences.updateSteps.useMutation({
+    onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); },
+    onError: (e) => {
+      toast.error(e.message);
+      void seqQ.refetch().then((r) => { if (r.data) setSteps(Array.isArray((r.data as any).steps) ? (r.data as any).steps : []); });
+    },
+  });
+  // Activate and Pause on this page (O38): Activate used to take you to the
+  // legacy list to find the real button.
+  const setStatus = trpc.sequences.setStatus.useMutation({
+    onSuccess: (_d, v) => {
+      utils.sequences.get.invalidate({ id });
+      utils.sequences.list.invalidate();
+      toast.success(v.status === "active" ? "Sequence activated" : "Sequence paused");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const { user } = useAuth();
   const updateMeta = trpc.sequences.update.useMutation({ onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); }, onError: (e) => toast.error(e.message) });
 
   const [tabForQuery, setTabForQuery] = useState(false);
@@ -207,16 +236,24 @@ export default function SequenceEditor() {
             <div className="flex-1" />
             <Button variant="ghost" size="sm" className="h-7 gap-1.5"><Share2 className="size-3.5" /> Share</Button>
             <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/v2/people")}><Users className="size-3.5" /> Add contacts</Button>
-            <Button
-              size="sm"
-              className="h-7 gap-1.5"
-              style={{ backgroundColor: seq.status === "active" ? "#6b7280" : accent }}
-              disabled={updateMeta.isPending || steps.length === 0}
-              title={steps.length === 0 ? "Add a step first" : undefined}
-              onClick={() => setLocation("/sequences")}
-            >
-              <Zap className="size-3.5" /> {seq.status === "active" ? "Manage" : "Activate"}
-            </Button>
+            {seq.status === "active" ? (
+              <Button size="sm" variant="outline" className="h-7 gap-1.5" disabled={setStatus.isPending} onClick={() => setStatus.mutate({ id, status: "paused" })}>
+                <PauseCircle className="size-3.5" /> Pause
+              </Button>
+            ) : seq.status !== "archived" ? (
+              <ConfirmButton
+                variant="default"
+                destructive={false}
+                className="h-7 gap-1.5"
+                disabled={setStatus.isPending || steps.length === 0}
+                title="Activate this sequence?"
+                description="Everyone enrolled starts moving through its steps. Email steps write drafts that wait for review unless auto-send sends them; LinkedIn steps go out within your account's limits. Nothing goes out while outbound sending is paused."
+                confirmLabel="Activate"
+                onConfirm={() => setStatus.mutate({ id, status: "active" })}
+              >
+                <Zap className="size-3.5" /> {steps.length === 0 ? "Add a step to activate" : "Activate"}
+              </ConfirmButton>
+            ) : null}
           </div>
           {/* tabs */}
           <div {...tablistProps("Sequence sections")} className="flex items-center gap-1">
@@ -232,6 +269,7 @@ export default function SequenceEditor() {
           {/* EDITOR */}
           {tab === "Editor" && (
             <div className="max-w-2xl mx-auto p-4 md:p-6">
+              <SequenceDraftsNote className="mb-3" />
               <div className="flex items-center gap-2 mb-4">
                 <span className="text-[12px] font-medium px-2 py-1 rounded-md border bg-card inline-flex items-center gap-1.5"><Send className="size-3.5" style={{ color: accent }} /> {steps.length} step{steps.length === 1 ? "" : "s"}</span>
                 {updateSteps.isPending && <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1"><Loader2 className="size-3 animate-spin" /> Saving…</span>}
@@ -334,7 +372,8 @@ export default function SequenceEditor() {
               <div className="rounded-xl border bg-card shadow-sm divide-y divide-border/60">
                 <div className="flex items-center gap-3 px-3 py-3">
                   <span className="size-7 rounded-full flex items-center justify-center" style={{ backgroundColor: `${accent}1f`, color: accent }}><Send className="size-3.5" /></span>
-                  <div className="text-[13px]">You created the sequence.</div>
+                  {/* "You" only for the person who did (O39). */}
+                  <div className="text-[13px]">{seq.ownerUserId != null && seq.ownerUserId === user?.id ? "You created the sequence." : "This sequence was created."}</div>
                   <div className="flex-1" />
                   <div className="text-[11px] text-muted-foreground">{seq.createdAt ? new Date(seq.createdAt).toLocaleString() : ""}</div>
                 </div>
@@ -367,7 +406,9 @@ export default function SequenceEditor() {
               </div>
               <div className="rounded-xl border bg-card shadow-sm p-4">
                 <h2 className="text-sm font-semibold mb-2">Scheduling</h2>
-                <p className="text-[12px] text-muted-foreground">Send window Mon–Fri, 8 AM–5 PM (workspace default). Per-sequence schedules coming soon.</p>
+                {/* The window the engine really uses (O39): this printed a fixed weekday 8-to-5 window whatever was set, and the default is 08:00–18:00. */}
+                <p className="text-[12px] text-muted-foreground">{describeSendWindow(seq.settings)}</p>
+                <p className="text-[12px] text-muted-foreground mt-1">Sending also waits for the workspace send window in Settings. Change this sequence's window from its canvas, under Sequence settings.</p>
               </div>
             </div>
           )}

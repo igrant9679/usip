@@ -38,7 +38,10 @@ export const ARE_SOURCES = [
   {
     id: "linkedin",
     label: "LinkedIn",
-    description: "Find decision-makers matching your title filters via your connected LinkedIn account.",
+    // Campaigns and Find prospects search through every LinkedIn account
+    // connected in the workspace, least-used first, not the viewer's own
+    // (audit 2026-10-20, P76: this said "your connected LinkedIn account").
+    description: "Find decision-makers matching your title filters through the LinkedIn accounts connected in this workspace.",
   },
   {
     id: "news",

@@ -21,12 +21,11 @@ import {
   discoveryRuns,
   prospectSearchResults,
   prospectSearchRuns,
-  prospects,
   rawFinds,
 } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import type { ProspectSourceSlug, SearchCriteria } from "@shared/prospectSources";
-import { activeFilters } from "@shared/prospectSources";
+import { narrowingFilters } from "@shared/prospectSources";
 import type { ProspectRecord } from "./types";
 import { eligibleFor, getSource } from "./registry";
 import { runWaterfall } from "./executor";
@@ -37,6 +36,29 @@ import { commit, ensurePeriodRows, releaseStaleHolds, remainingUnits, reserve } 
 
 export const MAX_BATCH_TARGET = 200;
 
+/**
+ * Searches queued or running in this process, by what they search for (audit
+ * 2026-10-20, P77). The page kept the run id only in memory, so after a
+ * reload pressing Run again started a second search — a billed preview, for
+ * LeadOcean — while the first was still going. The same search is now found
+ * again instead. Runs execute in the process that queued them, so a map here
+ * is the whole set.
+ */
+const activeSearches = new Map<string, number>();
+
+/** Equal for two starts that would run the same search. */
+export function searchFingerprint(workspaceId: number, criteria: SearchCriteria, target: number, only: ProspectSourceSlug[] | null | undefined): string {
+  const c = criteria as unknown as Record<string, unknown>;
+  const fields: Record<string, unknown> = {};
+  for (const k of Object.keys(c).sort()) {
+    const v = c[k];
+    if (Array.isArray(v)) { if (v.length) fields[k] = v.map((x) => String(x).trim().toLowerCase()).sort(); }
+    else if (v && typeof v === "object") { if (Object.values(v).some((x) => x != null)) fields[k] = v; }
+    else if (v !== undefined && v !== null) fields[k] = v;
+  }
+  return JSON.stringify([workspaceId, fields, target, only?.length ? Array.from(new Set(only)).sort() : null]);
+}
+
 export async function startRun(
   workspaceId: number,
   userId: number | null,
@@ -44,16 +66,23 @@ export async function startRun(
   batchTarget: number,
   /** Per-run source picker (owner ask 2026-09-22): null = every eligible source, as before. */
   only?: ProspectSourceSlug[] | null,
-): Promise<{ runId: number }> {
+): Promise<{ runId: number; alreadyRunning?: boolean }> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
-  if (activeFilters(criteria).length === 0) throw new Error("Set at least one filter — searching every vendor's whole database is not an audience.");
+  // "Has email" / "Has phone" alone do not make a search filtered (P68).
+  if (narrowingFilters(criteria).length === 0) throw new Error("Set at least one filter besides Has email / Has phone — searching every vendor's whole database is not an audience.");
   const target = Math.max(1, Math.min(MAX_BATCH_TARGET, Math.floor(batchTarget)));
+  const key = searchFingerprint(workspaceId, criteria, target, only);
+  const going = activeSearches.get(key);
+  if (going != null) return { runId: going, alreadyRunning: true };
   const [created] = await db.insert(prospectSearchRuns).values({
     workspaceId, userId, criteria: criteria as never, batchTarget: target, status: "queued",
   } as never).$returningId();
   const runId = created.id;
-  void executeRun(workspaceId, runId, { only: only ?? null }).catch((e) => console.error(`[prospectSources] run ${runId} crashed:`, e));
+  activeSearches.set(key, runId);
+  void executeRun(workspaceId, runId, { only: only ?? null })
+    .catch((e) => console.error(`[prospectSources] run ${runId} crashed:`, e))
+    .finally(() => { if (activeSearches.get(key) === runId) activeSearches.delete(key); });
   return { runId };
 }
 
@@ -268,11 +297,10 @@ async function promoteClaimedResults(
     unitsSpent += acq.unitsSpent;
     if (acq.note) errors.push(`${s.displayName}: ${acq.note}`);
     const paidMisses = new Set(acq.paidMissExternalIds ?? []);
-    const byId = new Map<string, ProspectRecord>();
-    for (let i = 0; i < acq.records.length; i++) byId.set(acq.records[i].externalId.replace(/#\d+$/, ""), acq.records[i]);
-    const { mergeAcquired } = await import("./executor");
+    const { acquiredFor, mergeAcquired } = await import("./executor");
     for (let i = 0; i < needs.length; i++) {
-      const full = byId.get(needs[i].externalId.replace(/#\d+$/, ""));
+      // Each of a business's people gets their own record (N2).
+      const full = acquiredFor(needs[i].normalized as ProspectRecord, acq.records);
       if (!full) {
         failed += 1;
         finalRecords.delete(needs[i].id);
@@ -301,40 +329,82 @@ async function promoteClaimedResults(
     input: { fromSearchRun: runId, resultIds: ids } as never, status: "running",
   } as never).$returningId();
   const discoveryRunId = dr.id;
-  const { toRawFindRow } = await import("../discovery/index");
+  const { toRawFindRow, associateDiscoveredPeople } = await import("../discovery/index");
   const { processRun } = await import("../discovery/consolidate");
   const rawRows: Array<ReturnType<typeof toRawFindRow>> = [];
   for (let i = 0; i < ids.length; i++) {
     const rec = finalRecords.get(ids[i])!;
     const r = todo.find((x) => x.id === ids[i])!;
-    rawRows.push(toRawFindRow(workspaceId, discoveryRunId, r.sourceSlug, recordToQueueRow(rec)));
+    // The staged row's id travels on the raw find, so the person it became is
+    // read back exactly rather than matched by name (P71).
+    rawRows.push(toRawFindRow(workspaceId, discoveryRunId, r.sourceSlug, { ...recordToQueueRow(rec), searchResultId: ids[i] }));
   }
+  // An unstorable row is counted and reported, not skipped silently (P71).
+  let unstorable = 0;
   for (let i = 0; i < rawRows.length; i += 50) {
     const chunk = rawRows.slice(i, i + 50);
     try { await db.insert(rawFinds).values(chunk); }
-    catch { for (let j = 0; j < chunk.length; j++) { try { await db.insert(rawFinds).values(chunk[j]); } catch { /* skip */ } } }
-  }
-  await db.update(discoveryRuns).set({ rawFindCount: rawRows.length } as never).where(eq(discoveryRuns.id, discoveryRunId));
-  const persisted = await processRun(workspaceId, discoveryRunId, "person");
-  await db.update(discoveryRuns).set({ status: "complete", completedAt: new Date() } as never).where(eq(discoveryRuns.id, discoveryRunId));
-
-  // Stamp each staged row with the People record it became.
-  const people = await db.select({ id: prospects.id, email: prospects.email, linkedinUrl: prospects.linkedinUrl, firstName: prospects.firstName, lastName: prospects.lastName })
-    .from(prospects).where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.lastDiscoveryRunId, discoveryRunId)));
-  let promoted = 0;
-  for (let i = 0; i < ids.length; i++) {
-    const rec = finalRecords.get(ids[i])!;
-    const hit = people.find((p) =>
-      (rec.email && p.email && p.email.toLowerCase() === rec.email.toLowerCase())
-      || (rec.linkedinUrl && p.linkedinUrl && p.linkedinUrl.toLowerCase() === rec.linkedinUrl.toLowerCase())
-      || (p.firstName === rec.firstName && p.lastName === rec.lastName));
-    if (hit) {
-      promoted += 1;
-      await db.update(prospectSearchResults).set({ promotedProspectId: hit.id } as never)
-        .where(and(eq(prospectSearchResults.id, ids[i]), eq(prospectSearchResults.workspaceId, workspaceId)));
+    catch {
+      for (let j = 0; j < chunk.length; j++) {
+        try { await db.insert(rawFinds).values(chunk[j]); }
+        catch (e) { unstorable += 1; console.error("[prospectSources] raw find unstorable, skipped:", (e as Error)?.message); }
+      }
     }
   }
-  return { promoted, acquired, unitsSpent, failed, discoveryRunId, errors, persisted };
+  if (unstorable > 0) errors.push(`${unstorable} could not be stored for saving and were left out`);
+  await db.update(discoveryRuns).set({ rawFindCount: rawRows.length - unstorable } as never)
+    .where(and(eq(discoveryRuns.id, discoveryRunId), eq(discoveryRuns.workspaceId, workspaceId)));
+  let persisted: Awaited<ReturnType<typeof processRun>>;
+  try {
+    persisted = await processRun(workspaceId, discoveryRunId, "person");
+  } catch (e) {
+    // The run says it failed rather than sitting at "running" (P71). What was
+    // acquired is on the staged rows already, so promoting again is free.
+    const message = String((e as Error)?.message ?? e).slice(0, 500);
+    await db.update(discoveryRuns).set({ status: "failed", errorMessage: `Saving to People failed: ${message}`, completedAt: new Date() } as never)
+      .where(and(eq(discoveryRuns.id, discoveryRunId), eq(discoveryRuns.workspaceId, workspaceId)));
+    errors.push(`Saving to People failed (${message}); nothing acquired is lost, promote again to retry`);
+    return { promoted: 0, acquired, unitsSpent, failed, discoveryRunId, errors };
+  }
+  await db.update(discoveryRuns).set({ status: "complete", completedAt: new Date() } as never)
+    .where(and(eq(discoveryRuns.id, discoveryRunId), eq(discoveryRuns.workspaceId, workspaceId)));
+  // Linked to companies, as a Find prospects run is (P71).
+  associateDiscoveredPeople(workspaceId, discoveryRunId);
+
+  // Stamp each staged row with the People record it became.
+  const finds = await db.select({ id: rawFinds.id, rawJson: rawFinds.rawJson }).from(rawFinds)
+    .where(and(eq(rawFinds.runId, discoveryRunId), eq(rawFinds.workspaceId, workspaceId)));
+  const resultOfFind = new Map<number, number>();
+  for (let i = 0; i < finds.length; i++) {
+    const rid = Number((finds[i].rawJson as Record<string, unknown> | null)?.searchResultId);
+    if (Number.isFinite(rid) && rid > 0) resultOfFind.set(finds[i].id, rid);
+  }
+  const became = new Map<number, number>();
+  const saved = persisted.saved ?? [];
+  for (let i = 0; i < saved.length; i++) {
+    for (let j = 0; j < saved[i].sourceRows.length; j++) {
+      const rid = resultOfFind.get(saved[i].sourceRows[j]);
+      if (rid != null) became.set(rid, saved[i].prospectId);
+    }
+  }
+  const stamped = Array.from(became.entries());
+  for (let i = 0; i < stamped.length; i++) {
+    await db.update(prospectSearchResults).set({ promotedProspectId: stamped[i][1] } as never)
+      .where(and(eq(prospectSearchResults.id, stamped[i][0]), eq(prospectSearchResults.workspaceId, workspaceId)));
+  }
+  const promoted = stamped.length;
+  const notSaved = ids.length - unstorable - promoted;
+  // The reasons are read off the result directly, so promote needs nothing
+  // from the consolidation but processRun (areE1Sources mocks it alone).
+  const why = [
+    persisted?.prospectsSkippedSuppressed ? `${persisted.prospectsSkippedSuppressed} on a suppression list` : "",
+    persisted?.prospectsSkippedNameOnly ? `${persisted.prospectsSkippedNameOnly} matching someone in People by name only` : "",
+    persisted?.prospectsSkippedNoName ? `${persisted.prospectsSkippedNoName} with no full name` : "",
+    persisted?.prospectsSkippedArchived ? `${persisted.prospectsSkippedArchived} archived` : "",
+  ].filter(Boolean).join(", ");
+  if (notSaved > 0) errors.push(`${notSaved} not saved to People${why ? `: ${why}` : ""}`);
+  const { saved: _saved, ...counts } = persisted;
+  return { promoted, acquired, unitsSpent, failed, discoveryRunId, errors, persisted: counts };
 }
 
 /** Boot: nothing executes a run that was in flight when the process died. */

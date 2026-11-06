@@ -359,8 +359,14 @@ describe("the blocked member is given somewhere to go", () => {
     expect(src).toContain("shouldRedirectToLogin");
   });
 
-  it("the gate is mounted inside the authed shell", () => {
-    expect(read("client/src/components/usip/Shell.tsx")).toContain("<MfaRequiredGate />");
+  // 2026-11-06 (audit G66): moved from Shell to AuthGate. Shell does not wrap
+  // every authed page (the settings hub renders without it), so the gate is
+  // mounted where every authed page passes, and only once.
+  it("the gate is mounted for every authed page", () => {
+    const app = read("client/src/App.tsx");
+    const gate = app.slice(app.indexOf("function AuthGate("), app.indexOf("function PageLoading("));
+    expect(gate).toContain("<MfaRequiredGate />");
+    expect(read("client/src/components/usip/Shell.tsx")).not.toContain("<MfaRequiredGate />");
   });
 
   it("the enrolment dialog is shared, not duplicated", () => {

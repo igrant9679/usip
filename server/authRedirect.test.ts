@@ -21,7 +21,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { loginPathnameOf, shouldRedirectToLogin } from "../client/src/lib/authRedirect";
+import { loginPathnameOf, returnPathFor, shouldRedirectToLogin } from "../client/src/lib/authRedirect";
 
 const ROOT = join(__dirname, "..");
 
@@ -60,6 +60,33 @@ describe("loginPathnameOf", () => {
   it("never returns empty", () => {
     expect(loginPathnameOf("")).toBe("/");
     expect(loginPathnameOf("?x=1")).toBe("/");
+  });
+});
+
+/** A deep link survives signing in (audit 2026-10-20, G33). */
+describe("returnPathFor", () => {
+  const at = (pathname: string, search = "", hash = "") => returnPathFor({ pathname, search, hash });
+
+  it("the page the sign-in form is showing on is the way back", () => {
+    expect(at("/v2/deals", "?stage=proposal", "#row-4")).toBe("/v2/deals?stage=proposal#row-4");
+    expect(at("/prospects/12")).toBe("/prospects/12");
+  });
+  it("an explicit returnPath wins, and is sanitised", () => {
+    expect(at("/", "?returnPath=%2Fv2%2Fpeople")).toBe("/v2/people");
+    expect(at("/", "?returnPath=%2F%2Fevil.example")).toBe("/");
+    expect(at("/x", "?returnPath=%2F%5Cevil.example")).toBe("/");
+  });
+  it("the root goes back to the root", () => {
+    expect(at("/")).toBe("/");
+  });
+  it("the sign-in form and the 401 redirect both use it", () => {
+    const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const main = strip(readFileSync(join(ROOT, "client/src/main.tsx"), "utf8"));
+    expect(main).toContain("const back = returnPathFor(window.location);");
+    expect(main).toContain('const loginUrl = getLoginUrl(back === "/" ? undefined : back);');
+    const app = strip(readFileSync(join(ROOT, "client/src/App.tsx"), "utf8"));
+    const landing = app.slice(app.indexOf("function Landing()"), app.indexOf("const [mode, setMode]"));
+    expect(landing).toContain("const returnPath = returnPathFor(window.location);");
   });
 });
 

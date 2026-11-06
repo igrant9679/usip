@@ -19,12 +19,18 @@ import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
 import { Check, ListChecks, Plus, X, CheckSquare, User, LinkIcon } from "lucide-react";
 import { toast } from "sonner";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
+import { RelatedRecordPicker, type RelatedRecord } from "@/components/usip/RelatedRecordPicker";
+import { recentlyClosed, seesAllTasks, taskDueState, WORKABLE_TASK_STATUSES } from "@shared/taskRules";
 
 type TaskRow = {
   id: number;
   title: string;
   description: string | null;
-  status: "open" | "done" | "cancelled";
+  status: "open" | "done" | "cancelled" | "in_progress" | "snoozed" | "draft";
+  completedAt?: string | Date | null;
+  updatedAt?: string | Date | null;
   priority: "low" | "normal" | "high" | "urgent";
   type: string;
   dueAt: string | Date | null;
@@ -37,19 +43,21 @@ const PRIORITY_TONE: Record<string, "default" | "success" | "warning" | "danger"
   urgent: "danger", high: "danger", normal: "warning", low: "muted",
 };
 
-function bucketize(rows: TaskRow[]) {
-  const now = new Date();
-  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const endToday = new Date(startToday); endToday.setDate(endToday.getDate() + 1);
+/**
+ * Today / Upcoming / Overdue by the rule /v2/tasks and the server's counts use
+ * (@shared/taskRules, audit 2026-10-20, R72): overdue from the moment a task
+ * is due, "today" up to midnight in the workspace's zone. This counted overdue
+ * only from the start of today on the viewer's clock.
+ */
+export function bucketize(rows: TaskRow[], timeZone: string, nowMs: number = Date.now()) {
   const today: TaskRow[] = [];
   const upcoming: TaskRow[] = [];
   const overdue: TaskRow[] = [];
   for (const t of rows) {
-    if (t.status !== "open") continue;
-    if (!t.dueAt) { upcoming.push(t); continue; }
-    const due = new Date(t.dueAt);
-    if (due < startToday) overdue.push(t);
-    else if (due < endToday) today.push(t);
+    if (!(WORKABLE_TASK_STATUSES as readonly string[]).includes(t.status)) continue;
+    const due = taskDueState(t.dueAt, nowMs, timeZone);
+    if (due === "overdue") overdue.push(t);
+    else if (due === "today") today.push(t);
     else upcoming.push(t);
   }
   return { today, upcoming, overdue };
@@ -154,8 +162,13 @@ export default function Tasks() {
   const [assigneeFilter, setAssigneeFilter] = useState<string>(""); // "" = any
   const [relTypeFilter, setRelTypeFilter] = useState<string>(""); // "" = any
   const [open, setOpen] = useState(false);
+  const [related, setRelated] = useState<RelatedRecord | null>(null);
+  const { current } = useWorkspace();
+  const { timezone } = useWorkspaceTimezone();
+  // One scope on both task pages (R72): a rep sees their own, a manager everyone's.
+  const seesAll = seesAllTasks(current?.role);
 
-  const { data: rawAll, isLoading: allLoading, error: allError, refetch: allRefetch } = trpc.tasks.list.useQuery({});
+  const { data: rawAll, isLoading: allLoading, error: allError, refetch: allRefetch } = trpc.tasks.list.useQuery({ mine: true });
   const { data: members } = trpc.team.list.useQuery();
   const memberOpts = useMemo(() => (members ?? []).map((m: any) => ({ userId: m.userId as number, name: m.name as string | null })), [members]);
 
@@ -168,12 +181,13 @@ export default function Tasks() {
     });
   }, [all, assigneeFilter, relTypeFilter]);
 
-  const buckets = useMemo(() => bucketize(filtered), [filtered]);
-  const done = filtered.filter((t) => t.status === "done");
+  const buckets = useMemo(() => bucketize(filtered, timezone), [filtered, timezone]);
+  // Done tasks, latest first (R72); this tab never held cancelled ones.
+  const done = useMemo(() => recentlyClosed(filtered.filter((t) => t.status === "done")), [filtered]);
 
   const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: () => utils.tasks.list.invalidate(), onError: (e) => toast.error(e.message) });
   const create = trpc.tasks.create.useMutation({
-    onSuccess: () => { utils.tasks.list.invalidate(); setOpen(false); toast.success("Task created"); },
+    onSuccess: () => { utils.tasks.list.invalidate(); setOpen(false); setRelated(null); toast.success("Task created"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -192,6 +206,8 @@ export default function Tasks() {
       </PageHeader>
       <div className="p-4 md:p-5 space-y-4">
         <div className="flex flex-wrap items-center gap-3">
+          {/* A rep's list is their own tasks, so there is no one else to pick. */}
+          {seesAll && (
           <div className="flex items-center gap-2 text-xs">
             <span className="text-muted-foreground">Assignee</span>
             <select aria-label="Assignee" className="bg-secondary rounded px-2 py-1" value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
@@ -199,6 +215,7 @@ export default function Tasks() {
               {memberOpts.map((m) => <option key={m.userId} value={String(m.userId)}>{m.name ?? `User ${m.userId}`}</option>)}
             </select>
           </div>
+          )}
           <div className="flex items-center gap-2 text-xs">
             <span className="text-muted-foreground">Related</span>
             <select aria-label="Related" className="bg-secondary rounded px-2 py-1" value={relTypeFilter} onChange={(e) => setRelTypeFilter(e.target.value)}>
@@ -230,10 +247,8 @@ export default function Tasks() {
         </Tabs>
       </div>
 
-      <FormDialog open={open} onOpenChange={setOpen} title="New task" isPending={create.isPending}
+      <FormDialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setRelated(null); }} title="New task" isPending={create.isPending}
         onSubmit={(f) => {
-          const relType = String(f.get("relatedType") ?? "");
-          const relId = Number(f.get("relatedId") ?? 0);
           create.mutate({
             title: String(f.get("title")),
             description: String(f.get("description") ?? "") || undefined,
@@ -243,8 +258,8 @@ export default function Tasks() {
             dueAt: String(f.get("dueAt") ?? "") || undefined,
             priority: f.get("priority") as any,
             ownerUserId: f.get("ownerUserId") ? Number(f.get("ownerUserId")) : undefined,
-            relatedType: relType || undefined,
-            relatedId: relType && relId ? relId : undefined,
+            relatedType: related?.type,
+            relatedId: related?.id,
           });
         }}>
         <Field name="title" label="Title" required />
@@ -255,11 +270,9 @@ export default function Tasks() {
         </div>
         <SelectField name="ownerUserId" label="Assignee"
           options={[{ value: "", label: "— Me —" }, ...memberOpts.map((m) => ({ value: String(m.userId), label: m.name ?? `User ${m.userId}` }))]} />
-        <div className="grid grid-cols-2 gap-3">
-          <SelectField name="relatedType" label="Related to (type)"
-            options={[{ value: "", label: "— None —" }, ...["account", "contact", "lead", "opportunity", "prospect"].map((t) => ({ value: t, label: t }))]} />
-          <Field name="relatedId" label="Related ID" type="number" placeholder="e.g. 42" />
-        </div>
+        {/* Found by name (R104): this asked for a raw "Related ID" that
+            appears nowhere in the app. */}
+        <RelatedRecordPicker value={related} onChange={setRelated} idPrefix="task-related" />
       </FormDialog>
     </Shell>
   );

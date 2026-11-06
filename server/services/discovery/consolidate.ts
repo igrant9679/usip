@@ -33,11 +33,14 @@
  *        now clustered as people in both modes, and in account mode the
  *        company-only finds become accounts.
  */
-import { and, eq, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { canonicalText } from "@shared/canonicalText";
 import { CONFIDENCE, mergeAll, type Candidate, type ProvenanceMap } from "../enrichment/fieldMerge";
 import { normalizePersonNamePair } from "../enrichment/personName";
-import { normalizeCompanyDisplayName, normalizeCompanyName, normalizeDomain, normalizedAccountFields } from "../company/normalize";
+import { isConsumerDomain, normalizeCompanyDisplayName, normalizeCompanyName, normalizeDomain, normalizedAccountFields } from "../company/normalize";
+import { COUNTRY_CODES, regionCountry } from "../prospectSources/bridge";
+import { extractLinkedInIdentifier } from "../linkedinLookup";
+import { describeSuppression, findSuppression } from "../suppression";
 import { getDb } from "../../db";
 import {
   accounts,
@@ -79,6 +82,13 @@ export interface IdentityCandidate {
   email: string | null;
   phone: string | null;
   location: string | null;
+  /** The place split into People's columns, and the industry a source gave
+   *  (P65: collected, then dropped on save). Optional: older callers build
+   *  candidates by hand. */
+  city?: string | null;
+  state?: string | null;
+  country?: string | null;
+  industry?: string | null;
   /** Every source URL across the cluster. */
   sourceUrls: string[];
   /** raw_finds row ids that contributed. */
@@ -154,6 +164,17 @@ function mergeCluster(cluster: RawFindRow[]): IdentityCandidate {
     trackConflict("email", r.email);
   }
 
+  // A source that gave the place in parts (source search's vendors) keeps
+  // them; a single string is split (P65).
+  const json = (r: RawFindRow) => (r.rawJson && typeof r.rawJson === "object" ? r.rawJson as Record<string, unknown> : {});
+  const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const cj = json(canonical);
+  const structured = text(cj.city) || text(cj.stateProvince) || text(cj.country);
+  const place = structured
+    ? { city: text(cj.city), state: text(cj.stateProvince), country: text(cj.country) }
+    : placeParts(canonical.location);
+  const industry = text(cj.industry) ?? cluster.map((r) => text(json(r).industry)).find(Boolean) ?? null;
+
   return {
     firstName: canonical.firstName,
     lastName: canonical.lastName,
@@ -164,11 +185,38 @@ function mergeCluster(cluster: RawFindRow[]): IdentityCandidate {
     email: canonical.email,
     phone: canonical.phone,
     location: canonical.location,
+    ...place,
+    industry,
     sourceUrls: [...sourceUrls],
     sourceRows,
     sources,
     conflicts,
   };
+}
+
+/**
+ * "Austin, Texas, United States" → People's city / state / country (P65).
+ * Only what can be placed: a known country or state name, or a two-letter
+ * state after a city ("Austin, TX"). One unknown part is kept as the city
+ * ("San Francisco Bay Area") rather than dropped.
+ */
+export function placeParts(location: string | null | undefined): { city: string | null; state: string | null; country: string | null } {
+  const parts = String(location ?? "").split(",").map((p) => p.trim()).filter(Boolean);
+  const isCountry = (s: string) => !!COUNTRY_CODES[s.toLowerCase()];
+  const isRegion = (s: string) => regionCountry(s) !== null;
+  if (parts.length === 0) return { city: null, state: null, country: null };
+  if (parts.length === 1) {
+    const p = parts[0];
+    if (isCountry(p)) return { city: null, state: null, country: p };
+    if (isRegion(p)) return { city: null, state: p, country: null };
+    return { city: p, state: null, country: null };
+  }
+  if (parts.length === 2) {
+    const [a, b] = parts;
+    if (isCountry(b)) return isRegion(a) ? { city: null, state: a, country: b } : { city: a, state: null, country: b };
+    return { city: a, state: b, country: null };
+  }
+  return { city: parts[0], state: parts[1], country: parts.slice(2).join(", ") };
 }
 
 /* ─── Score confidence (0-100 + tier) ─────────────────────────────── */
@@ -309,13 +357,79 @@ export interface PersistResult {
   prospectsUpdated: number;
   /** Matched people left alone because someone archived them (P3). */
   prospectsSkippedArchived?: number;
+  /** Not saved: no first and last name to tell who they are. */
+  prospectsSkippedNoName?: number;
+  /** Not saved: on the suppression or do-not-contact list (P74). */
+  prospectsSkippedSuppressed?: number;
+  /** Not saved: the same name and company as someone already in People, with
+   *  no address or LinkedIn profile to prove it is them (P64). */
+  prospectsSkippedNameOnly?: number;
   /** Account mode: companies found with no person, saved as accounts (P15). */
   accountsCreated?: number;
   accountsMatched?: number;
+  /** Tiers of the people SAVED, created or updated (P61: candidates that were
+   *  skipped used to be counted too). */
   highConfidenceCount: number;
   mediumConfidenceCount: number;
   lowConfidenceCount: number;
+  /** Which raw finds became which person: source-search promote stamps its
+   *  rows from this rather than matching names back (P71). */
+  saved?: Array<{ prospectId: number; sourceRows: number[] }>;
 }
+
+/** Every person not saved, for the run record. */
+export function skippedCount(r: PersistResult): number {
+  return (r.prospectsSkippedArchived ?? 0) + (r.prospectsSkippedNoName ?? 0)
+    + (r.prospectsSkippedSuppressed ?? 0) + (r.prospectsSkippedNameOnly ?? 0);
+}
+
+/**
+ * Identity keys for matching a find to someone already in People (P64): an
+ * address, or a LinkedIn profile by its canonical slug, so case and URL shape
+ * ("https://www.linkedin.com/in/Jane/", "linkedin.com/in/jane") agree. A name
+ * is not an identity: it can only hold a find back, never update a person.
+ */
+export function strongIdentityKeys(p: { email?: string | null; linkedinUrl?: string | null }): string[] {
+  const out: string[] = [];
+  const email = String(p.email ?? "").trim().toLowerCase();
+  if (email) out.push(`e:${email}`);
+  const slug = p.linkedinUrl ? extractLinkedInIdentifier(String(p.linkedinUrl).trim().toLowerCase()) : null;
+  if (slug) out.push(`li:${slug}`);
+  return out;
+}
+
+/** Canonical name at the company's domain and at its name. */
+export function nameOrgKeys(p: { firstName?: string | null; lastName?: string | null; company?: string | null; companyDomain?: string | null }): string[] {
+  const name = `${norm(p.firstName ?? "")} ${norm(p.lastName ?? "")}`.trim();
+  if (!name) return [];
+  const out: string[] = [];
+  const domain = normalizeDomain(p.companyDomain);
+  if (domain) out.push(`n:${name}@${domain}`);
+  const company = normalizeCompanyName(p.company);
+  if (company) out.push(`n:${name}@${company}`);
+  return out;
+}
+
+/** The workspace's People by identity key; the lowest id wins a collision. */
+async function peopleIndex(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number) {
+  const rows = await db.select({
+    id: prospects.id, email: prospects.email, linkedinUrl: prospects.linkedinUrl, firstName: prospects.firstName,
+    lastName: prospects.lastName, company: prospects.company, companyDomain: prospects.companyDomain,
+  }).from(prospects).where(eq(prospects.workspaceId, workspaceId)).orderBy(prospects.id);
+  const strong = new Map<string, number>();
+  const named = new Map<string, number>();
+  const add = (id: number, p: Parameters<typeof nameOrgKeys>[0] & { email?: string | null; linkedinUrl?: string | null }) => {
+    for (const k of strongIdentityKeys(p)) if (!strong.has(k)) strong.set(k, id);
+    for (const k of nameOrgKeys(p)) if (!named.has(k)) named.set(k, id);
+  };
+  for (const r of rows) add(r.id, r);
+  return { strong, named, add };
+}
+
+const emailDomainOf = (email: string | null | undefined) => {
+  const at = (email ?? "").lastIndexOf("@");
+  return at > 0 ? (email ?? "").slice(at + 1).trim().toLowerCase() : "";
+};
 
 export async function persistAsProspects(
   workspaceId: number,
@@ -327,41 +441,53 @@ export async function persistAsProspects(
 
   let created = 0;
   let updated = 0;
-  let skippedArchived = 0;
+  let skippedArchived = 0, skippedNoName = 0, skippedSuppressed = 0, skippedNameOnly = 0;
   let high = 0, medium = 0, low = 0;
-
-  for (const c of candidates) {
+  const saved: Array<{ prospectId: number; sourceRows: number[] }> = [];
+  const tally = (c: ScoredCandidate) => {
     if (c.tier === "high") high++;
     else if (c.tier === "medium") medium++;
     else low++;
+  };
+  const index = await peopleIndex(db, workspaceId);
 
+  for (const c of candidates) {
     // Skip rows with no first+last name — useless without identity.
-    if (!c.firstName || !c.lastName) continue;
+    if (!c.firstName || !c.lastName) { skippedNoName++; continue; }
 
-    // Dedup: linkedinUrl > email > (firstName+lastName+company).
+    // Nobody who said no is brought in (P74): an unsubscribe, a complaint or
+    // the do-not-contact list (address, LinkedIn profile or company domain)
+    // keeps the person out on every channel, and an existing person is not
+    // touched either. A bounce only says the address is dead, so the address
+    // stays out and the person comes in.
+    const target = { email: c.email, linkedinUrl: c.linkedinUrl, companyDomain: c.companyDomain };
+    if (await findSuppression(workspaceId, target, "any")) { skippedSuppressed++; continue; }
+    const extraNotes: string[] = [];
+    let email = c.email?.trim() || null;
+    let companyDomain = c.companyDomain?.trim() || null;
+    if (email) {
+      const bounced = await findSuppression(workspaceId, { email }, "email");
+      if (bounced) { extraNotes.push(`Address left out: ${describeSuppression(bounced)}`); email = null; }
+    }
+    // A free-mail address is a person's own, not a work address, and is not
+    // imported as one; gmail.com is never a company's domain.
+    if (email && isConsumerDomain(emailDomainOf(email))) { extraNotes.push(`Personal address (${emailDomainOf(email)}) left out`); email = null; }
+    if (companyDomain && isConsumerDomain(companyDomain)) companyDomain = null;
+
+    // Match on an address or a LinkedIn profile only (P64). The same name at
+    // the same company with neither is held back rather than written onto
+    // someone who may be a stranger, or created as a second copy.
     let existingId: number | null = null;
-    const conditions: any[] = [];
-    if (c.linkedinUrl) conditions.push(eq(prospects.linkedinUrl, c.linkedinUrl));
-    if (c.email) conditions.push(eq(prospects.email, c.email));
-    if (conditions.length > 0) {
-      const [hit] = await db.select({ id: prospects.id }).from(prospects)
-        .where(and(eq(prospects.workspaceId, workspaceId), or(...conditions)))
-        .limit(1);
-      if (hit) existingId = hit.id;
+    for (const k of strongIdentityKeys({ email, linkedinUrl: c.linkedinUrl })) {
+      const id = index.strong.get(k);
+      if (id != null) { existingId = id; break; }
     }
-    if (!existingId) {
-      // Last-ditch dedup by exact name + company (case-insensitive
-      // would require a function index — keep it strict for now).
-      const [hit] = await db.select({ id: prospects.id }).from(prospects).where(and(
-        eq(prospects.workspaceId, workspaceId),
-        eq(prospects.firstName, c.firstName),
-        eq(prospects.lastName, c.lastName),
-        c.companyName ? eq(prospects.company, c.companyName) : eq(prospects.firstName, c.firstName),
-      )).limit(1);
-      if (hit) existingId = hit.id;
+    if (existingId == null && nameOrgKeys({ ...c, company: c.companyName, companyDomain }).some((k) => index.named.has(k))) {
+      skippedNameOnly++;
+      continue;
     }
 
-    const verificationNotes = c.notes.join(" · ");
+    const verificationNotes = c.notes.concat(extraNotes).join(" · ");
     const sourceUrlsJson = c.sourceUrls.slice(0, 50) as any;
 
     // Person fields flow through the SAME merge every enrichment source
@@ -376,10 +502,16 @@ export async function persistAsProspects(
     };
     addCand("title", c.title);
     addCand("company", c.companyName);
-    addCand("companyDomain", c.companyDomain);
+    addCand("companyDomain", companyDomain);
     addCand("linkedinUrl", c.linkedinUrl);
-    addCand("email", c.email);
+    addCand("email", email);
     addCand("phone", c.phone);
+    // The place, through the same ledger (P65).
+    addCand("city", c.city);
+    addCand("state", c.state);
+    addCand("country", c.country);
+    // Industry has no ledger slot: it fills a blank and never replaces one.
+    const industry = c.industry?.trim().slice(0, 80) || null;
 
     if (existingId) {
       const [existing] = await db.select().from(prospects)
@@ -391,15 +523,17 @@ export async function persistAsProspects(
         {
           email: existing?.email, phone: existing?.phone, company: existing?.company,
           companyDomain: existing?.companyDomain, title: existing?.title, linkedinUrl: existing?.linkedinUrl,
+          city: existing?.city, state: existing?.state, country: existing?.country,
         },
         (existing?.fieldProvenance ?? {}) as ProvenanceMap,
         discoveryCandidates,
       );
-      const WIDTHS: Record<string, number> = { title: 120, email: 320 };
+      const WIDTHS: Record<string, number> = { title: 120, email: 320, city: 80, state: 80, country: 80 };
       const personPatch: Record<string, unknown> = {};
       for (const [field, value] of Object.entries(merged.fields)) {
         personPatch[field] = value.slice(0, WIDTHS[field] ?? 200);
       }
+      if (industry && !existing?.industry) personPatch.industry = industry;
       await db.update(prospects).set({
         ...personPatch,
         fieldProvenance: merged.ledger,
@@ -417,23 +551,29 @@ export async function persistAsProspects(
         void recordFieldHistory(workspaceId, existingId, merged.decisions, "discovery");
       }
       updated++;
+      tally(c);
+      saved.push({ prospectId: existingId, sourceRows: c.sourceRows });
     } else {
       // Fresh insert keeps its shape and now carries a ledger from birth.
       // People "Name" rule (owner 2026-08-25): first + last only,
       // capitalization normalized, at the birth seam.
       const namePair = normalizePersonNamePair(c.firstName, c.lastName);
       const merged = mergeAll({}, {}, discoveryCandidates);
-      await db.insert(prospects).values({
+      const [ins] = await db.insert(prospects).values({
         workspaceId,
         firstName: namePair.firstName ?? c.firstName,
         lastName: namePair.lastName ?? c.lastName,
         title: merged.fields.title?.slice(0, 120) ?? c.title,
         // Company display rule (owner 2026-08-25): capitalization normalized at birth.
         company: (normalizeCompanyDisplayName(merged.fields.company ?? c.companyName) ?? c.companyName)?.slice(0, 200),
-        companyDomain: merged.fields.companyDomain?.slice(0, 200) ?? c.companyDomain,
+        companyDomain: merged.fields.companyDomain?.slice(0, 200) ?? companyDomain,
         linkedinUrl: merged.fields.linkedinUrl ?? c.linkedinUrl,
-        email: merged.fields.email?.slice(0, 320) ?? c.email,
+        email: merged.fields.email?.slice(0, 320) ?? email,
         phone: merged.fields.phone?.slice(0, 40) ?? c.phone,
+        city: merged.fields.city?.slice(0, 80) ?? null,
+        state: merged.fields.state?.slice(0, 80) ?? null,
+        country: merged.fields.country?.slice(0, 80) ?? null,
+        industry,
         fieldProvenance: merged.ledger,
         confidenceScore: c.score,
         confidenceTier: c.tier,
@@ -445,8 +585,12 @@ export async function persistAsProspects(
         linkedinUrlVerified: c.linkedinUrlVerified,
         lastEnrichedAt: new Date(),
         lastDiscoveryRunId: runId,
-      } as never);
+      } as never).$returningId();
       created++;
+      tally(c);
+      // Two finds in one pass for the same person meet the row just made.
+      index.add(ins.id, { email, linkedinUrl: c.linkedinUrl, firstName: c.firstName, lastName: c.lastName, company: c.companyName, companyDomain });
+      saved.push({ prospectId: ins.id, sourceRows: c.sourceRows });
     }
   }
 
@@ -454,9 +598,13 @@ export async function persistAsProspects(
     prospectsCreated: created,
     prospectsUpdated: updated,
     prospectsSkippedArchived: skippedArchived,
+    prospectsSkippedNoName: skippedNoName,
+    prospectsSkippedSuppressed: skippedSuppressed,
+    prospectsSkippedNameOnly: skippedNameOnly,
     highConfidenceCount: high,
     mediumConfidenceCount: medium,
     lowConfidenceCount: low,
+    saved,
   };
 }
 
@@ -497,19 +645,31 @@ export async function processRun(
   const result: PersistResult = await persistAsProspects(workspaceId, runId, scored);
   if (mode === "account") Object.assign(result, await persistCompanies(workspaceId, rows));
 
+  // What was saved, and only that (P61): the run record and the toast count
+  // the same people the log does.
   await db.update(discoveryRuns).set({
     prospectsCreated: result.prospectsCreated,
+    prospectsUpdated: result.prospectsUpdated,
+    prospectsSkipped: skippedCount(result),
+    accountsCreated: result.accountsCreated ?? 0,
     highConfidenceCount: result.highConfidenceCount,
     mediumConfidenceCount: result.mediumConfidenceCount,
     lowConfidenceCount: result.lowConfidenceCount,
-  }).where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
+  } as never).where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
 
+  const left = [
+    result.prospectsSkippedArchived ? `${result.prospectsSkippedArchived} archived left alone` : "",
+    result.prospectsSkippedSuppressed ? `${result.prospectsSkippedSuppressed} on a suppression list` : "",
+    result.prospectsSkippedNameOnly ? `${result.prospectsSkippedNameOnly} matching someone in People by name only` : "",
+    result.prospectsSkippedNoName ? `${result.prospectsSkippedNoName} with no full name` : "",
+  ].filter(Boolean);
+  const { saved: _saved, ...details } = result;
   await db.insert(discoveryLogs).values({
     workspaceId, runId, phase: "persist.complete", level: "info",
     message: `Persisted ${result.prospectsCreated} new / ${result.prospectsUpdated} updated prospects`
-      + (result.prospectsSkippedArchived ? ` (${result.prospectsSkippedArchived} archived left alone)` : "")
+      + (left.length ? ` (not saved: ${left.join(", ")})` : "")
       + (mode === "account" ? `; ${result.accountsCreated ?? 0} new / ${result.accountsMatched ?? 0} existing companies` : ""),
-    details: result as any,
+    details: details as any,
   });
 
   return result;

@@ -21,7 +21,7 @@
  * The state comes from `unipile_invites`, which the accept webhook already
  * maintains.
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import {
   prospectQueue,
   unipileAccounts,
@@ -87,7 +87,9 @@ export function toInviteNote(body: string, max = INVITE_NOTE_MAX): string {
 
 /**
  * Which LinkedIn account should carry this step: the campaign owner's own,
- * else any connected one in the workspace.
+ * else any connected one in the workspace — or, with `ownerOnly`, the owner's
+ * or none. Oldest first either way, so the choice does not depend on the
+ * order the database happens to return rows in (audit 2026-10-20, O12).
  *
  * Owner-first matters for more than attribution — an invitation arrives from a
  * person, and a prospect researched by one rep receiving a request from
@@ -96,6 +98,7 @@ export function toInviteNote(body: string, max = INVITE_NOTE_MAX): string {
 export async function pickLinkedInAccount(
   workspaceId: number,
   ownerUserId: number | null,
+  opts: { ownerOnly?: boolean } = {},
 ): Promise<{ unipileAccountId: string; userId: number | null } | null> {
   const db = await getDb();
   if (!db) return null;
@@ -105,11 +108,21 @@ export async function pickLinkedInAccount(
     .where(and(
       eq(unipileAccounts.workspaceId, workspaceId),
       eq(unipileAccounts.provider, "LINKEDIN"),
-    ));
+    ))
+    .orderBy(asc(unipileAccounts.id));
   if (!accts.length) return null;
   const own = ownerUserId ? accts.find((a) => a.userId === ownerUserId) : undefined;
-  const chosen = own ?? accts[0];
-  return { unipileAccountId: chosen.id, userId: chosen.userId ?? null };
+  const chosen = opts.ownerOnly ? own : own ?? accts[0];
+  return chosen ? { unipileAccountId: chosen.id, userId: chosen.userId ?? null } : null;
+}
+
+/**
+ * Whether a stored LinkedIn network distance means a 1st-degree connection.
+ * Unipile spells it FIRST_DEGREE, DISTANCE_1 or 1 depending on the endpoint.
+ */
+export function isFirstDegree(degree: string | number | null | undefined): boolean {
+  const d = String(degree ?? "").trim().toUpperCase();
+  return d === "1" || d === "1ST" || d === "FIRST" || d === "FIRST_DEGREE" || d === "DISTANCE_1";
 }
 
 /**
