@@ -257,3 +257,32 @@ describe("the registry adapter", () => {
     expect(adapter).toContain("p.apolloId ? `apollo:${p.apolloId}`");
   });
 });
+
+describe("the Find-prospects Apollo source", () => {
+  // 2026-11-06: the campaigns filtered masked rows from 2d9fc33 on; this
+  // copy kept every row, so masked finds reached raw finds, counted against
+  // the daily record cap, and could be pushed to a campaign to be rejected.
+  const svc = read("server/services/discovery/index.ts");
+  const start = svc.indexOf("async function discoverViaApollo");
+  const fn = svc.slice(start, svc.indexOf("async function discoverViaQuickEnrich", start));
+
+  it("is found where this test looks for it", () => {
+    expect(start).toBeGreaterThan(-1);
+    expect(fn).toContain('apolloSearchPeople(workspaceId, {');
+  });
+
+  it("keeps only rows the email lookup can use, and only those use the cap", () => {
+    expect(fn).toContain("const ready = res.prospects.filter(apolloEmailReady);");
+    expect(fn).toContain("raw: ready.map((x) => ({ ...x })),");
+    expect(fn).toContain('recordPullLedger(workspaceId, "apollo", buildQuery(mode, input), ready.length);');
+    expect(fn).not.toContain("res.prospects.map(");
+  });
+
+  it("says in the run log how many it left out, and why", () => {
+    const at = fn.indexOf("...(left > 0 ? {");
+    expect(at).toBeGreaterThan(-1);
+    const noted = fn.slice(at, fn.indexOf("} : {})", at));
+    expect(noted).toContain("note: `${left} of ${res.prospects.length} left out: no LinkedIn URL, and no full name with a company domain, so no email lookup can find them`");
+    expect(fn).toContain("with the last name hidden: Apollo's free search masks it and sends no domain");
+  });
+});
