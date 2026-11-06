@@ -9,6 +9,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { submissionExtras } from "../client/src/lib/submissionFields";
 import { SubmissionExtras } from "../client/src/components/usip/SubmissionExtras";
+import { DashboardChartRenderer } from "../client/src/components/usip/DashboardChartRenderer";
+import { chartText } from "../client/src/lib/chartText";
 
 const root = join(__dirname, "..");
 const read = (rel: string) => readFileSync(join(root, rel), "utf8").replace(/\r\n/g, "\n");
@@ -36,6 +38,30 @@ describe("a submission's message and phone are shown (G63)", () => {
   it("both submissions lists show them", () => {
     expect(read("client/src/pages/usip/FormsV2.tsx")).toContain("<SubmissionExtras data={r.data} />");
     expect(read("client/src/pages/usip/LandingPages.tsx")).toContain("<SubmissionExtras data={s.data} />");
+  });
+});
+
+describe("a dashboard chart has words (G64)", () => {
+  const bar = { type: "bar", series: [{ label: "Mon", value: 3 }, { label: "Tue", value: 41 }] };
+
+  it("a drawn chart is named by its summary and followed by a hidden table of what it plots", () => {
+    const html = renderToStaticMarkup(createElement(DashboardChartRenderer, { data: bar }));
+    expect(html).toContain('<figure class="m-0" aria-label="Bar chart, 2 points, from 3 to 41">');
+    expect(html).toContain('<div aria-hidden="true">');
+    expect(html).toMatch(/<table class="sr-only">[\s\S]*<th scope="row">Tue<\/th><td>41<\/td>/);
+  });
+
+  it("every drawn type says something; the text types are left as they are", () => {
+    expect(chartText({ type: "pie", series: [{ name: "Won", value: 3 }, { name: "Lost", value: 1 }] })?.summary)
+      .toBe("Pie chart, 2 slices, total 4; largest Won (75%)");
+    expect(chartText({ type: "stacked_bar", keys: ["calls", "emails"], series: [{ label: "W1", calls: 2, emails: 5 }] })?.columns)
+      .toEqual(["Label", "calls", "emails"]);
+    expect(chartText({ type: "scatter", series: [{ name: "D", stage: "proposal", x: 9, y: 500 }] })?.rows).toEqual([["D", "proposal", 9, 500]]);
+    expect(chartText({ type: "heatmap", series: [{ day: "Mon", hour: 9, count: 4 }, { day: "Tue", hour: 1, count: 0 }] })?.rows).toEqual([["Mon", "9:00", 4]]);
+    expect(chartText({ type: "gauge", value: 62 })?.summary).toBe("Gauge: 62%");
+    expect(chartText({ type: "funnel", series: [{ stage: "a", count: 1, value: 1 }] })).toBeNull();
+    expect(chartText({ type: "single_value", value: 3 })).toBeNull();
+    expect(chartText({ type: "bar", series: [] })).toBeNull();
   });
 });
 
