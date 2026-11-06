@@ -12,6 +12,7 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { enrollments, forms, formSubmissions, leads } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { isWorkspaceLive } from "../_core/workspaceArchive";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
 import { publicProcedure } from "../_core/trpc";
@@ -48,6 +49,7 @@ export const formsRouter = router({
     if (!db) return null;
     const [row] = await db.select().from(forms).where(eq(forms.publicId, input.publicId));
     if (!row || row.status !== "active") return null;
+    if (!(await isWorkspaceLive(row.workspaceId))) return null;
     return { id: row.id, publicId: row.publicId, title: row.title, description: row.description, fields: row.fields, redirectUrl: safeRedirectUrl(row.redirectUrl) };
   }),
 
@@ -159,6 +161,7 @@ export const formsRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [form] = await db.select().from(forms).where(eq(forms.publicId, input.publicId));
       if (!form || form.status !== "active") throw new TRPCError({ code: "NOT_FOUND", message: "Form not available" });
+      if (!(await isWorkspaceLive(form.workspaceId))) throw new TRPCError({ code: "NOT_FOUND", message: "Form not available" });
 
       const data = input.data ?? {};
       const email = str(data.email, 320);
