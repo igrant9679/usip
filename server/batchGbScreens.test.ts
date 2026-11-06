@@ -119,6 +119,25 @@ describe("public pages say what is true (G70)", () => {
   });
 });
 
+describe("the settings hub says where you are (G51)", () => {
+  const hub = read("client/src/pages/usip/SettingsHub.tsx");
+
+  it("an unknown section says so instead of showing Profile", () => {
+    expect(hub).not.toContain('.some((i) => i.internal && i.id === params.section)');
+    expect(hub).toContain("const unknownSection = !!params.section && !askedItem ? params.section : null;");
+    expect(hub).toContain("There is no settings section called “{unknownSection}”");
+    expect(hub).toContain('const section = askedItem?.internal ? askedItem.id : "profile";');
+  });
+
+  it("a link-out row reached by its id goes where the rail sends it", () => {
+    expect(hub).toContain("if (askedItem && !askedItem.internal && askedItem.href) navigate(askedItem.href, { replace: true });");
+  });
+
+  it("the audit page's row carries its title", () => {
+    expect(hub).toContain('{ id: "system-activity", label: "Audit log", icon: Activity, href: "/audit" }');
+  });
+});
+
 describe("Settings > Billing ships no placeholder (L11)", () => {
   it("the Invoices card that only said Placeholder is gone", () => {
     const s = read("client/src/pages/usip/Settings.tsx");
