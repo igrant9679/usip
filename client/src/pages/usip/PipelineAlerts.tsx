@@ -77,7 +77,7 @@ const ALERT_CONFIG: Record<
     bg: "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800",
     description: (d) =>
       d?.previousAmount && d?.currentAmount
-        ? `Amount changed from ${Number(d.previousAmount).toLocaleString()} to ${Number(d.currentAmount).toLocaleString()}`
+        ? `Amount changed from $${Number(d.previousAmount).toLocaleString()} to $${Number(d.currentAmount).toLocaleString()}`
         : "Deal amount has changed significantly",
   },
   no_champion: {

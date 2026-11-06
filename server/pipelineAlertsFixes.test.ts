@@ -259,6 +259,7 @@ describe("R15 and R38: the alert sweep", () => {
     expect(page).toContain('{ type: "past_close_date", label: "Past Close"');
     expect(page).toContain('"closing_soon_regression", "past_close_date", "amount_change"');
     expect(page).toContain("Dismissed for 7 days.");
+    expect(page).toContain("`Amount changed from $${Number(d.previousAmount).toLocaleString()} to $${Number(d.currentAmount).toLocaleString()}`");
     expect(read("server/_core/rawMigrations.ts")).toContain("'no_champion','past_close_date') NOT NULL");
   });
 });
