@@ -272,7 +272,9 @@ describe("the market report does not carry every run's brief (P107)", () => {
   it("runs say whether they have one, and a brief is read on its own, in its workspace", async () => {
     const m = await caller().research.markets.create({ content: { name: "Ed" } });
     doneJob({ marketId: m.id, brief: "A long brief." });
-    doneJob({ id: 51, marketId: m.id, brief: "" });
+    // Older than run 50: the report lists newest first, and two runs stamped
+    // in the same millisecond have no order (CI, 2026-11-06).
+    doneJob({ id: 51, marketId: m.id, brief: "", createdAt: new Date(Date.now() - 60_000) });
     const r = await caller().research.reports.market({ id: m.id });
     expect(r.runs.map((x: any) => [x.id, x.hasBrief, "brief" in x])).toEqual([[50, true, false], [51, false, false]]);
     expect(await caller().research.runs.brief({ id: 50 })).toEqual({ id: 50, brief: "A long brief." });
