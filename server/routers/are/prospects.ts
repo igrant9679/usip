@@ -29,6 +29,7 @@
  * variant-assignment mechanism (see shared/variantKeys.ts) and is a product
  * decision, not something to infer.
  */
+import { csvCell } from "@shared/csvCell";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { HELD_PAUSED, holdProspectSteps, releaseProspectSteps } from "../../services/are/stepHold";
@@ -2780,12 +2781,8 @@ export const prospectsRouter = router({
           eq(prospectQueue.sequenceStatus, "skipped"),
         ))
         .orderBy(desc(prospectQueue.rejectedAt));
-      const escape = (v: unknown) => {
-        if (v == null) return "";
-        const s = String(v);
-        return s.includes(",") || s.includes('"') || s.includes("\n")
-          ? `"${s.replace(/"/g, '""')}"` : s;
-      };
+      // Formula cells neutralised too (audit 2026-10-20, G49).
+      const escape = csvCell;
       const headers = [
         "ID","First Name","Last Name","Title","Company","Industry","Geography",
         "Company Size","Email","LinkedIn URL","ICP Match Score","Rejection Reason","Rejected At","Source",
