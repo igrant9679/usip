@@ -101,6 +101,24 @@ describe("the app shell's loose ends (G66)", () => {
   });
 });
 
+describe("public pages say what is true (G70)", () => {
+  it("the proposal portal shows a client no Draft badge and none of the team's labels", () => {
+    const s = read("client/src/pages/ProposalPortal.tsx");
+    const cfg = s.slice(s.indexOf("const STATUS_CONFIG = {"), s.indexOf("} as const;", s.indexOf("const STATUS_CONFIG = {")));
+    expect(cfg).not.toContain("draft:");
+    expect(cfg).not.toContain("Sent to Client");
+    expect(s).not.toContain("?? STATUS_CONFIG.draft");
+    expect(s).toMatch(/\{statusCfg && \(\s*<span/);
+  });
+
+  it("the chat promises a calendar invite only when one was sent", () => {
+    const s = read("client/src/pages/ChatPage.tsx");
+    expect(s).toContain("setInviteSent(!!r?.calendarBooked);");
+    expect(s).toContain('{inviteSent ? " — a calendar invite is on its way." : " — the team will confirm with you shortly."}');
+    expect(s).not.toContain('{" — a calendar invite is on its way."}');
+  });
+});
+
 describe("Settings > Billing ships no placeholder (L11)", () => {
   it("the Invoices card that only said Placeholder is gone", () => {
     const s = read("client/src/pages/usip/Settings.tsx");
