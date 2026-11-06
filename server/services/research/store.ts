@@ -9,6 +9,7 @@ import { TRPCError } from "@trpc/server";
 import { and, eq, lt, sql } from "drizzle-orm";
 import { researchMarkets, researchRevisions, researchSectors } from "../../../drizzle/schema";
 import { getDb } from "../../db";
+import { forgetResearchContext } from "./context";
 import { changedParts, cleanMarketContent, cleanSectorContent, type MarketContent, type SectorContent } from "@shared/researchShape";
 
 export type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -187,6 +188,7 @@ export async function saveMarket(
   if (affectedRows(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: CONFLICT_MESSAGE });
   const revision = args.expectedRevision + 1;
   await writeRevision(db, { workspaceId: args.workspaceId, entityType: "market", entityId: args.id, revision, data: content, changed, note: args.note ?? "Edited", userId: args.userId });
+  forgetResearchContext(args.workspaceId);
   return { id: args.id, revision, changed, dropped };
 }
 
@@ -220,6 +222,7 @@ export async function saveSector(
   if (affectedRows(res) !== 1) throw new TRPCError({ code: "CONFLICT", message: CONFLICT_MESSAGE });
   const revision = args.expectedRevision + 1;
   await writeRevision(db, { workspaceId: args.workspaceId, entityType: "sector", entityId: args.id, revision, data: content, changed, note: args.note ?? "Edited", userId: args.userId });
+  forgetResearchContext(args.workspaceId);
   return { id: args.id, revision, changed, dropped };
 }
 
@@ -254,6 +257,7 @@ export async function insertMarket(
     })
     .$returningId();
   await writeRevision(db, { workspaceId: args.workspaceId, entityType: "market", entityId: row.id, revision: 1, data: content, changed: [], note: args.note ?? "Created", userId: args.userId });
+  forgetResearchContext(args.workspaceId);
   return { id: row.id, dropped };
 }
 
@@ -285,5 +289,6 @@ export async function insertSector(
     })
     .$returningId();
   await writeRevision(db, { workspaceId: args.workspaceId, entityType: "sector", entityId: row.id, revision: 1, data: content, changed: [], note: args.note ?? "Created", userId: args.userId });
+  forgetResearchContext(args.workspaceId);
   return { id: row.id, dropped };
 }
