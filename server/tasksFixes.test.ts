@@ -177,6 +177,8 @@ describe("R72: snoozed tasks wake, and Recently closed is the latest", () => {
     expect(recentlyClosed(rowsIn).map((t) => t.id)).toEqual([2, 3, 1]);
     expect(recentlyClosed(rowsIn, 2).map((t) => t.id)).toEqual([2, 3]);
     expect(read("client/src/pages/usip/TasksV2.tsx")).toContain("const done = useMemo(() => recentlyClosed(activeTasks, 10), [activeTasks]);");
+    // /tasks' Done tab: done only, as before, in the same order.
+    expect(read("client/src/pages/usip/Tasks.tsx")).toContain(`const done = useMemo(() => recentlyClosed(filtered.filter((t) => t.status === "done")), [filtered]);`);
   });
 });
 
