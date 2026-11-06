@@ -1078,7 +1078,6 @@ export function registerEmailTrackingRoutes(app: Express) {
         notifications: notificationsT,
       } = await import("../drizzle/schema");
       const { and: andR, eq: eqR, gte: gteR, desc: descR } = await import("drizzle-orm");
-      const { notifyOwner } = await import("./_core/notification");
 
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
       const activeCampaigns = await db
@@ -1164,15 +1163,9 @@ export function registerEmailTrackingRoutes(app: Express) {
             });
           }
 
-          // Also push a Manus platform notification to the owner
-          await notifyOwner({
-            title: `ARE Rejection Digest: ${campaign.name}`,
-            content: `${rejected.length} prospect${rejected.length !== 1 ? "s" : ""} rejected this week in campaign "${campaign.name}".\n` +
-              rejected.slice(0, 5).map((r) =>
-                `• ${[r.firstName, r.lastName].filter(Boolean).join(" ") || "Unknown"} (${r.companyName ?? "—"}) — ${r.rejectionReason ?? "No reason"}`
-              ).join("\n"),
-          }).catch(() => {/* non-fatal */});
-
+          // The in-app notice above is the digest. A second copy went through
+          // notifyOwner to the platform operator, outside this workspace, with
+          // the prospects' names (audit 2026-10-20, R2).
           digestsSent++;
         } catch (e) {
           errors.push(`campaign ${campaign.id}: ${String(e).slice(0, 120)}`);

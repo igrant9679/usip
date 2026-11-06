@@ -9,6 +9,8 @@ import { getDb } from "../db";
 import { changeOpportunityStage } from "../services/stageChange";
 import { refreshDaysInStage } from "../services/dealDates";
 import { closedStageKeys, stageIndexFor } from "../_core/stageSemantics";
+import { workspaceNotifyUserId } from "../_core/activeMembers";
+import { escapeHtml } from "@shared/escapeHtml";
 import { TRPCError } from "@trpc/server";
 import { eq, and, inArray, isNull, desc, lt, gte, notInArray, sql } from "drizzle-orm";
 import {
@@ -521,8 +523,8 @@ export const pipelineAlertsRouter = router({
     }),
 
   /**
-   * Send a digest email of stuck deals to the workspace owner (or configured notif email).
-   * Uses the workspace system sender account if configured.
+   * Send a digest email of stuck deals to the workspace's owner — a member of
+   * this workspace — through its system sender.
    */
   sendDigest: workspaceProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();
@@ -562,20 +564,24 @@ export const pipelineAlertsRouter = router({
       return { ok: true, sent: false, reason: "No stuck deals found" };
     }
 
-    // Find the workspace owner's email (user with ownerOpenId or the calling user)
-    const { ENV } = await import("../_core/env");
-    const [ownerUser] = await db
-      .select({ id: users.id, email: users.email, name: users.name })
-      .from(users)
-      .where(sql`${users.openId} = ${ENV.ownerOpenId}`);
-    const recipientEmail = ownerUser?.email ?? ctx.user.email;
+    /**
+     * The workspace's own owner, resolved to someone still in it, else the
+     * member asking (audit 2026-10-20, R2). This read the PLATFORM owner
+     * (ENV.ownerOpenId), the operator of the whole install, so every
+     * workspace's stuck deals were mailed to one person outside it.
+     */
+    const ownerId = await workspaceNotifyUserId(wsId);
+    const [ownerUser] = ownerId
+      ? await db.select({ email: users.email }).from(users).where(eq(users.id, ownerId)).limit(1)
+      : [];
+    const recipientEmail = ownerUser?.email || ctx.user.email;
     if (!recipientEmail) {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No recipient email found for workspace owner" });
     }
 
     // Build email HTML
     const rows = stuckDeals
-      .map((d) => `<tr><td style="padding:4px 8px;border-bottom:1px solid #eee">${d.name}</td><td style="padding:4px 8px;border-bottom:1px solid #eee">${d.stage}</td><td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">${d.daysInStage ?? 0} days</td><td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">$${Number(d.value ?? 0).toLocaleString()}</td></tr>`)
+      .map((d) => `<tr><td style="padding:4px 8px;border-bottom:1px solid #eee">${escapeHtml(d.name)}</td><td style="padding:4px 8px;border-bottom:1px solid #eee">${escapeHtml(d.stage)}</td><td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">${d.daysInStage ?? 0} days</td><td style="padding:4px 8px;border-bottom:1px solid #eee;text-align:right">$${Number(d.value ?? 0).toLocaleString()}</td></tr>`)
       .join("");
     const html = `<h2 style="font-family:sans-serif">Pipeline Alerts Digest</h2>
 <p style="font-family:sans-serif">${stuckDeals.length} deal${stuckDeals.length !== 1 ? "s" : ""} are stuck in their current stage as of ${new Date().toLocaleDateString()}.</p>
