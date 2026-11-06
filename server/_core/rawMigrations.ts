@@ -4968,6 +4968,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, P61: a discovery run recorded only the people it
+  // created, so a run that updated twenty and skipped five read "0 new" and
+  // nothing else, and the companies it saved were nowhere on it.
+  {
+    name: "0290_discovery_run_counts.sql",
+    statements: [
+      "ALTER TABLE `discovery_runs` ADD COLUMN `prospectsUpdated` int NOT NULL DEFAULT 0",
+      "ALTER TABLE `discovery_runs` ADD COLUMN `prospectsSkipped` int NOT NULL DEFAULT 0",
+      "ALTER TABLE `discovery_runs` ADD COLUMN `accountsCreated` int NOT NULL DEFAULT 0",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

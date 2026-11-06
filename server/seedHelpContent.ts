@@ -1629,19 +1629,19 @@ export const TOURS: TourSeed[] = [
   },
   {
     name: "Who Is On Your Site",
-    description: "See when people you already know come back to read you.",
+    description: "See how much of your site people read, and which pages show buying intent.",
     type: "feature",
     estimatedMinutes: 2,
     pageKey: "website-visitors",
     route: "/v2/website-visitors",
     roleTags: ["sdr", "admin"],
     steps: [
-      // Honest scope: identification works for KNOWN people (a contact or
-      // lead who arrived through a tracked link). Anonymous visitor→company
-      // resolution needs a paid data provider Velocity doesn't ship with —
-      // the automation article says so, and this tour must not promise more.
-      { title: "Known people, recognised", bodyMarkdown: "When a contact or lead you already have visits through a tracked link, their visit is tied to their record — so you see *who* came back and what they read. Fully anonymous traffic stays anonymous.", routeTo: "/v2/website-visitors", targetDataTourId: "visitors-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Use it as a signal", bodyMarkdown: "A known prospect on your pricing page spawns a high-priority task for their owner automatically — reach out while intent is hot. Pair it with the chat agent so they can book a call while they are still on the page.", visualTreatment: "coach", advanceCondition: "next_button" },
+      // Honest scope (audit 2026-10-20, P88): nothing adds a record id to
+      // outbound links and the id is not signed, so a visit is not matched to
+      // a known person. Anonymous visitor→company resolution needs a paid data
+      // provider Velocity doesn't ship with. This tour must not promise either.
+      { title: "Visits and intent", bodyMarkdown: "The snippet counts visits and unique visitors and flags the pages that show buying intent, such as pricing, demo and contact. Visitors whose browser asks not to be tracked are not tracked, and visits are kept for 180 days.", routeTo: "/v2/website-visitors", targetDataTourId: "visitors-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
+      { title: "Not who, yet", bodyMarkdown: "Matching a visit to a prospect isn't available yet. A visit names a record only if its link carries a record id, which nothing adds for you and which isn't verified, so those rows are shown as claims. Pair the page with the chat agent so a visitor can book a call while they are still on your site.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
   {

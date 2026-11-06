@@ -4706,6 +4706,10 @@ export const discoveryRuns = mysqlTable(
     status: mysqlEnum("status", ["running", "complete", "failed"]).default("running").notNull(),
     rawFindCount: int("rawFindCount").default(0).notNull(),
     prospectsCreated: int("prospectsCreated").default(0).notNull(),
+    /** What the save did besides creating (migration 0290, audit P61). */
+    prospectsUpdated: int("prospectsUpdated").default(0).notNull(),
+    prospectsSkipped: int("prospectsSkipped").default(0).notNull(),
+    accountsCreated: int("accountsCreated").default(0).notNull(),
     highConfidenceCount: int("highConfidenceCount").default(0).notNull(),
     mediumConfidenceCount: int("mediumConfidenceCount").default(0).notNull(),
     lowConfidenceCount: int("lowConfidenceCount").default(0).notNull(),

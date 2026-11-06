@@ -26,7 +26,10 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { confirmAction } from "@/components/usip/Common";
-import { FILTER_LABELS, activeFilters, emptyCriteria, filterUnion, type FilterType, type ProspectSourceSlug, type SearchCriteria } from "@shared/prospectSources";
+import { FILTER_LABELS, activeFilters, emptyCriteria, filterUnion, narrowingFilters, type FilterType, type ProspectSourceSlug, type SearchCriteria } from "@shared/prospectSources";
+
+/** The server's MAX_BATCH_TARGET (services/prospectSources/searchRuns.ts). */
+const MAX_TARGET = 200;
 import { Loader2, Search, ShieldCheck, AlertTriangle, EyeOff, Sparkles } from "lucide-react";
 import { QueryError } from "@/components/usip/Shell";
 
@@ -61,11 +64,31 @@ const LIST_FIELDS: Array<{ f: FilterType; key: keyof SearchCriteria; placeholder
   { f: "technology", key: "technologies", placeholder: "Salesforce…" },
 ];
 
+/**
+ * The open search lives in the address (?searchRun=), so a reload comes back
+ * to it instead of an empty page whose Run button starts the search — and,
+ * for a billed preview, the spend — again (audit 2026-10-20, P77).
+ */
+export const SEARCH_RUN_PARAM = "searchRun";
+function runIdFromUrl(): number | null {
+  if (typeof window === "undefined") return null;
+  const n = Number(new URLSearchParams(window.location.search).get(SEARCH_RUN_PARAM));
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+function writeRunIdToUrl(id: number | null): void {
+  if (typeof window === "undefined") return;
+  const sp = new URLSearchParams(window.location.search);
+  if (id == null) sp.delete(SEARCH_RUN_PARAM); else sp.set(SEARCH_RUN_PARAM, String(id));
+  const qs = sp.toString();
+  window.history.replaceState(window.history.state, "", `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`);
+}
+
 export function SourceSearchPanel() {
   const utils = trpc.useUtils();
   const [criteria, setCriteria] = useState<SearchCriteria>(() => ({ ...emptyCriteria(), hasEmail: true }));
   const [target, setTarget] = useState("25");
-  const [runId, setRunId] = useState<number | null>(null);
+  const [runId, setRunIdState] = useState<number | null>(runIdFromUrl);
+  const setRunId = (id: number | null) => { setRunIdState(id); writeRunIdToUrl(id); };
   const [selected, setSelected] = useState<Set<number>>(new Set());
   // Per-run source picker (owner ask 2026-09-22). null = every usable source
   // whose preview is free, which is what the page ran before it had a picker. A
@@ -78,6 +101,8 @@ export function SourceSearchPanel() {
   const connected = sources.filter((s) => s.credential.configured && s.implemented);
   const union = useMemo(() => filterUnion(sources.map((s) => s.capabilities)), [sources]);
   const active = activeFilters(criteria);
+  // "Has email" / "Has phone" alone are not a filtered search (P68).
+  const narrowing = narrowingFilters(criteria);
   const usableSlugs = useMemo(
     () => sources.filter((s) => s.implemented && s.credential.configured && s.enabled && !s.circuit.open && s.credential.status !== "invalid").map((s) => s.slug),
     [sources],
@@ -99,10 +124,16 @@ export function SourceSearchPanel() {
     for (const s of connected) { if (!s.enabled || !chosenSet.has(s.slug)) continue; if (s.leadsRemaining == null) uncapped = true; else sum += s.leadsRemaining; }
     return { sum, uncapped };
   }, [connected, chosenSet]);
-  const targetNum = Math.max(1, Math.min(200, Math.floor(Number(target) || 25)));
+  const typedTarget = Math.floor(Number(target) || 25);
+  const targetNum = Math.max(1, Math.min(MAX_TARGET, typedTarget));
 
   const start = trpc.prospectSources.startSearch.useMutation({
-    onSuccess: (r) => { setRunId(r.runId); setSelected(new Set()); toast.success(`Search #${r.runId} started`); },
+    onSuccess: (r) => {
+      setRunId(r.runId); setSelected(new Set());
+      if (r.alreadyRunning) toast.info(`Search #${r.runId} is already running with these filters — showing it instead of starting it again.`);
+      else toast.success(`Search #${r.runId} started`);
+      utils.prospectSources.listRuns.invalidate();
+    },
     onError: (e: any) => toast.error(e?.message ?? "Could not start the search"),
   });
   // A staged search outlives this page. Rows from a billed preview will not come
@@ -192,12 +223,12 @@ export function SourceSearchPanel() {
         {sources.filter((s) => s.implemented).map((s) => {
           const m = s.match;
           const usable = s.credential.configured && s.enabled && !s.circuit.open && s.credential.status !== "invalid";
-          const tone = !usable ? "border-border text-muted-foreground" : !m || active.length === 0 ? "border-border text-muted-foreground"
+          const tone = !usable ? "border-border text-muted-foreground" : !m || narrowing.length === 0 ? "border-border text-muted-foreground"
             : m.verdict === "full" ? "border-emerald-500/50 bg-emerald-500/5 text-emerald-800 dark:text-emerald-300"
             : m.verdict === "approximate" ? "border-amber-500/50 bg-amber-500/5 text-amber-800 dark:text-amber-300"
             : "border-rose-500/40 bg-rose-500/5 text-rose-800 dark:text-rose-300";
           const reason = !s.credential.configured ? "not connected" : !s.enabled ? "disabled in Settings" : s.circuit.open ? `paused after ${s.circuit.failures} failures` : s.credential.status === "invalid" ? `key rejected: ${s.credential.validationError ?? ""}`
-            : active.length === 0 ? "set a filter" : !m ? "" : m.verdict === "full" ? "every filter honoured natively"
+            : narrowing.length === 0 ? "set a filter" : !m ? "" : m.verdict === "full" ? "every filter honoured natively"
             : m.verdict === "approximate" ? `approximates ${m.approximated.map((f) => FILTER_LABELS[f]).join(", ")}` : `cannot filter on ${m.missing.map((f) => FILTER_LABELS[f]).join(", ")}`;
           return (
             <div key={s.slug} title={reason} className={cn("rounded-lg border px-2.5 py-1.5 text-[11.5px] flex items-center gap-1.5", tone)}>
@@ -205,7 +236,7 @@ export function SourceSearchPanel() {
                 <Checkbox className="size-3.5" aria-label={`Use ${s.displayName} in this run`} checked={chosenSet.has(s.slug)} onCheckedChange={() => toggleSource(s.slug)} />
               )}
               <span className="font-medium">{s.displayName}</span>
-              <span className="opacity-80">· {!usable ? reason : active.length === 0 ? "—" : m?.verdict === "full" ? "full match" : m?.verdict === "approximate" ? "approximate" : "cannot honour"}</span>
+              <span className="opacity-80">· {!usable ? reason : narrowing.length === 0 ? "—" : m?.verdict === "full" ? "full match" : m?.verdict === "approximate" ? "approximate" : "cannot honour"}</span>
               {usable && s.leadsRemaining != null && <span className="opacity-70 tabular-nums">· {s.leadsRemaining} left</span>}
             </div>
           );
@@ -216,18 +247,20 @@ export function SourceSearchPanel() {
       <div className="flex flex-wrap items-end gap-4 rounded-xl border border-border/70 bg-card p-4">
         <div className="space-y-1">
           <Label className="text-[11.5px]">Batch target</Label>
-          <Input aria-label="Batch target" type="number" min={1} max={200} value={target} onChange={(e) => setTarget(e.target.value)} className="h-8 w-28 text-[12.5px]" />
+          <Input aria-label="Batch target" type="number" min={1} max={MAX_TARGET} value={target} onChange={(e) => setTarget(e.target.value)} className="h-8 w-28 text-[12.5px]" />
+          {/* Said, not silently cut (P150). */}
+          {typedTarget > MAX_TARGET && <div className="text-[11px] text-amber-700 dark:text-amber-400">A search takes at most {MAX_TARGET}; this one will stop at {MAX_TARGET}.</div>}
         </div>
         <div className="text-[12px] text-muted-foreground pb-2">
           Combined remaining allowance: <span className="font-medium text-foreground tabular-nums">{combinedRemaining.sum.toLocaleString()}{combinedRemaining.uncapped ? "+" : ""}</span>
           {!combinedRemaining.uncapped && targetNum > combinedRemaining.sum && <span className="ml-2 inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"><AlertTriangle className="size-3.5" /> target exceeds what your sources can acquire today</span>}
         </div>
-        <Button size="sm" className="gap-1.5" disabled={start.isPending || active.length === 0 || runSources.length === 0 || status === "running" || status === "queued"}
+        <Button size="sm" className="gap-1.5" disabled={start.isPending || narrowing.length === 0 || runSources.length === 0 || status === "running" || status === "queued"}
           onClick={() => start.mutate({ criteria, batchTarget: targetNum, sources: runSources })}>
           {start.isPending || status === "running" || status === "queued" ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} {billedPreviews.length > 0 ? "Run search (billed preview)" : "Run search (free preview)"}
         </Button>
-        {active.length === 0 && <span className="text-[11.5px] text-muted-foreground pb-2">Set at least one filter.</span>}
-        {active.length > 0 && runSources.length === 0 && <span className="text-[11.5px] text-muted-foreground pb-2">Pick at least one source.</span>}
+        {narrowing.length === 0 && <span className="text-[11.5px] text-muted-foreground pb-2">{active.length > 0 ? "Set at least one filter besides Has email / Has phone." : "Set at least one filter."}</span>}
+        {narrowing.length > 0 && runSources.length === 0 && <span className="text-[11.5px] text-muted-foreground pb-2">Pick at least one source.</span>}
         {billedPreviews.length > 0 && <span className="text-[11.5px] text-amber-700 dark:text-amber-400 pb-2">LeadOcean counts one record per preview row, up to {Math.min(targetNum, 100)} this run, if the sources before it leave slots open.</span>}
         {(earlierRuns.data ?? []).length > 0 && (
           <div className="ml-auto space-y-1">
