@@ -190,10 +190,18 @@ describe("the surfaces that must agree with it", () => {
     ).not.toMatch(/acc\.discovered \+/);
   });
 
+  // 2026-11-06 (audit A50): the counter phase's queries moved into the one
+  // recount helper, which campaigns.get and the approve-all paths share. The
+  // guarantee is unchanged: the phase runs that helper with the workspace,
+  // and the helper's contacted recompute carries it.
   it("the engine's contacted recompute carries the workspace", () => {
     const phase = engine.slice(engine.indexOf("Phase 6: COUNTERS"), engine.indexOf("Phase 7: DISCOVERY"));
-    expect(phase.length, "the counter phase moved — re-anchor").toBeGreaterThan(400);
-    expect(phase).toContain("eq(areExecutionQueue.workspaceId, wsId)");
+    expect(phase.length, "the counter phase moved — re-anchor").toBeGreaterThan(200);
+    expect(phase).toContain("await recountCampaignCounters(db, wsId, campId);");
+    const helper = read("server", "services", "are", "campaignCounters.ts");
+    const contacted = helper.slice(helper.indexOf("count(distinct"), helper.indexOf("const sum ="));
+    expect(contacted.length, "the contacted recompute moved — re-anchor").toBeGreaterThan(100);
+    expect(contacted).toContain("eq(areExecutionQueue.workspaceId, workspaceId)");
   });
 
   it("the help tour and the funnel name the same stages", () => {

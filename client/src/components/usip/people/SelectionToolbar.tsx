@@ -18,6 +18,7 @@
 import { csvCell } from "@shared/csvCell";
 import { useMemo, useState, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
+import { invalidateEnrollmentReads } from "@/lib/enrollmentCache";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { AddToMenu } from "@/components/usip/AddToMenu";
@@ -168,7 +169,7 @@ export function SequenceMenu({ selectedIds, trigger }: { selectedIds: number[]; 
       else toast.info("No one enrolled");
       // A paused or draft sequence holds new enrolments (audit 2026-10-20, O1).
       if (r.enrolled > 0 && r.heldUntilActive) toast.info(`"${name}" is not active — nothing is sent until it is activated`);
-      utils.sequences.getEnrollmentStats.invalidate({ sequenceId: vars.sequenceId });
+      invalidateEnrollmentReads(utils, vars.sequenceId);
       setOpen(false);
     },
     onError: (e: any) => toast.error(e.message),
