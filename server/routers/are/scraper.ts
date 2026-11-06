@@ -206,11 +206,13 @@ export async function scrapeGoogleBusiness(
       messages: [
         {
           role: "system",
-          content: `You are a B2B prospect researcher. Extract business prospect information ONLY from the provided Google Business search results — never invent businesses that aren't present in the content. Focus on companies matching the ICP: ${icpContext}. For each business found, identify the most likely decision-maker title based on the business type.`,
+          content: `You are a B2B prospect researcher. Extract business prospect information ONLY from the provided Google Business search results — never invent businesses that aren't present in the content. Focus on companies matching the ICP: ${icpContext}. Never invent a person: a name goes in firstName/lastName only if that person's name appears in the content.`,
         },
         {
           role: "user",
-          content: `Search query: "${query}" (results page ${page + 1})\n\nRaw content:\n${rawContent}\n\nExtract up to 10 business prospects that actually appear in the content above. For companies where you cannot find a specific person, use the business owner/manager as the contact. Only output an email if it appears in the content; otherwise leave email blank.`,
+          // Audit 2026-10-20, P73: this asked for "the business owner/manager
+          // as the contact" where no person was found, which invites a name.
+          content: `Search query: "${query}" (results page ${page + 1})\n\nRaw content:\n${rawContent}\n\nExtract up to 10 business prospects that actually appear in the content above. Where the content names no person for a business, leave firstName, lastName and title blank and give the business only. Only output an email if it appears in the content; otherwise leave email blank.`,
         },
       ],
       response_format: PROSPECT_EXTRACTION_SCHEMA,
@@ -222,7 +224,7 @@ export async function scrapeGoogleBusiness(
     const content = result.choices[0]?.message?.content;
     if (!content) continue;
     const parsed = parseLlmJson(content, "scrapeGoogleBusiness");
-    for (const p of (parsed.prospects ?? []) as Array<Record<string, unknown>>) {
+    for (const p of dropUnsourcedPeople((parsed.prospects ?? []) as Array<Record<string, unknown>>, rawContent)) {
       const key = String(p.linkedinUrl || p.email || `${p.firstName}|${p.lastName}|${p.companyName}`).toLowerCase().trim();
       if (!key || seen.has(key)) continue;
       seen.add(key);
@@ -304,7 +306,9 @@ export async function scrapeNews(
       },
       {
         role: "user",
-        content: `News search: "${query}"\n\nContent:\n${rawContent}\n\nFor each company actually mentioned in the content, identify: (1) the trigger event, (2) the most relevant decision-maker to contact, (3) why this trigger event makes them a good prospect right now. Extract up to 10 prospects. Only output an email if it appears in the content.`,
+        // P73: this asked for "the most relevant decision-maker to contact",
+        // which the model answered with a name whether or not one was there.
+        content: `News search: "${query}"\n\nContent:\n${rawContent}\n\nFor each company actually mentioned in the content, identify: (1) the trigger event, (2) a person named in the content in connection with it, if there is one — otherwise leave firstName, lastName and title blank; never supply a name the content does not contain, (3) why this trigger event makes them a good prospect right now. Extract up to 10 prospects. Only output an email if it appears in the content.`,
       },
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
@@ -316,7 +320,38 @@ export async function scrapeNews(
   const content = result.choices[0]?.message?.content;
   if (!content) return [];
   const parsed = parseLlmJson(content, "scrapeNews");
-  return parsed.prospects ?? [];
+  return dropUnsourcedPeople(parsed.prospects ?? [], rawContent);
+}
+
+/**
+ * Research must not invent people (audit 2026-10-20, P73). A name — or an
+ * email — the model returns that is not in the text it was given is taken
+ * off the find, which stays as the company it is about. Compared without
+ * case, accents or punctuation, a name counting when its first and last
+ * words both appear.
+ */
+export function dropUnsourcedPeople(found: Array<Record<string, unknown>>, sourceText: string): Array<Record<string, unknown>> {
+  const fold = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const words = ` ${fold(sourceText).replace(/[^a-z0-9@.]+/g, " ")} `;
+  const hasWord = (w: string) => words.includes(` ${w} `) || words.includes(` ${w}. `);
+  const wordsOf = (s: unknown) => fold(s).replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+  const text = fold(sourceText);
+  return found.map((p) => {
+    const first = wordsOf(p.firstName);
+    const last = wordsOf(p.lastName);
+    const named = first.length > 0 || last.length > 0;
+    const sourced = named && first.every(hasWord) && last.every(hasWord);
+    const email = String(p.email ?? "").trim();
+    const out: Record<string, unknown> = { ...p };
+    if (named && !sourced) {
+      out.firstName = "";
+      out.lastName = "";
+      // A title guessed for the invented person goes with them.
+      out.title = "";
+    }
+    if (email && !text.includes(fold(email))) out.email = "";
+    return out;
+  });
 }
 
 /* ─── Industry events scraper ────────────────────────────────────────────── */

@@ -8,9 +8,25 @@
  * 670 silent failures.
  */
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { TrpcContext } from "./_core/context";
+
+const h = vi.hoisted(() => ({ db: null as any, gate: null as null | Promise<void>, calls: 0 }));
+vi.mock("./db", async (a) => ({ ...(await a<typeof import("./db")>()), getDb: async () => h.db, checkPermission: async () => {} }));
+vi.mock("./audit", async (a) => ({ ...(await a<typeof import("./audit")>()), recordAudit: async () => {} }));
+vi.mock("./_core/llm", async (a) => ({
+  ...(await a<typeof import("./_core/llm")>()),
+  invokeLLM: async () => {
+    h.calls++;
+    if (h.gate) await h.gate;
+    return { choices: [{ message: { content: JSON.stringify({ industry: "Nonprofit", country: "United States", confidence: 80, reasoning: "r" }) } }] };
+  },
+}));
+
 import { AI_INFERENCE_CONFIDENCE, AI_INFERENCE_VENDOR, INDUSTRIES } from "./services/firmographicInference";
 import { CONFIDENCE } from "./services/enrichment/fieldMerge";
+import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
+import { appRouter } from "./routers";
 
 const src = readFileSync(new URL("./services/firmographicInference.ts", import.meta.url), "utf8");
 const router = readFileSync(new URL("./routers/companies.ts", import.meta.url), "utf8");
@@ -56,8 +72,52 @@ describe("firmographic inference", () => {
   it("is admin-only, background, observable, and audited when done", () => {
     const proc = router.slice(router.indexOf("inferFirmographics:"), router.indexOf("firmographicStatus:"));
     expect(proc).toContain('requireMinRole(ctx.member.role, "admin"');
-    expect(proc).toContain("void runFirmographicInference(ws, { limit })");
+    // 2026-11-06 (audit P156): the pass now starts through
+    // startFirmographicInference, which refuses a second one for the same
+    // workspace; it is still fire-and-forget, and audited when done.
+    expect(proc).toContain("const pass = startFirmographicInference(ws, { limit });");
+    expect(proc).toContain("void pass.then(async (t) => {");
     expect(proc).toContain('entityType: "firmographic_inference"');
     expect(router).toContain("firmographicStatus: workspaceProcedure.query");
+  });
+});
+
+/* ── P156: one pass at a time, and a dry run calls no model ─────────────── */
+
+const WS = 2;
+const caller = () => appRouter.createCaller({
+  user: { id: 1, openId: "u", email: "o@example.com", name: "O", loginMethod: "password", role: "user", createdAt: new Date(), updatedAt: new Date(), lastSignedIn: new Date() },
+  req: { protocol: "https", headers: { "x-workspace-id": String(WS) } },
+  res: { clearCookie: () => {} },
+} as unknown as TrpcContext);
+
+describe("firmographic inference spends once (audit 2026-10-20, P156)", () => {
+  beforeEach(() => {
+    h.db = makeSqlFakeDb({ roles: { [WS]: "admin" }, wsId: () => WS });
+    h.calls = 0;
+    h.gate = null;
+    h.db.rowsOf("workspaces").push({ id: WS, name: "LSI", slug: "lsi", ownerUserId: 1, archivedAt: null, plan: "trial" });
+    h.db.rowsOf("accounts").push(
+      { id: 1, workspaceId: WS, name: "Acme Foundation", domain: "acme.example", industry: null, hqCountry: null },
+      { id: 2, workspaceId: WS, name: "Beta Trust", domain: "beta.example", industry: null, hqCountry: null },
+    );
+  });
+
+  it("a dry run counts what a pass would send to the model and calls it for none", async () => {
+    const r = await caller().companies.inferFirmographics({ dryRun: true });
+    expect(r).toMatchObject({ started: false, sample: { companiesTried: 2, companiesFilled: 0 } });
+    expect(h.calls).toBe(0);
+    expect(h.db.rowsOf("accounts").every((a: any) => a.industry === null)).toBe(true);
+  });
+
+  it("a second click while a pass runs starts nothing; once it ends, one can start again", async () => {
+    let release!: () => void;
+    h.gate = new Promise<void>((r) => { release = r; });
+    expect(await caller().companies.inferFirmographics({})).toMatchObject({ started: true });
+    expect(await caller().companies.inferFirmographics({})).toMatchObject({ started: false, alreadyRunning: true });
+    release();
+    await vi.waitFor(() => expect(h.db.rowsOf("accounts").every((a: any) => a.industry === "Nonprofit")).toBe(true), { timeout: 15000 });
+    expect(h.calls).toBe(2);
+    await vi.waitFor(async () => expect(await caller().companies.inferFirmographics({})).toMatchObject({ started: true }), { timeout: 15000 });
   });
 });

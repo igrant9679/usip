@@ -82,6 +82,22 @@ describe("a run is for one person (P16)", () => {
   });
 });
 
+describe("every id a run stores is this workspace's (P145)", () => {
+  it("refuses a foreign lead or company beside a real contact, and stores only what it checked", async () => {
+    rows("leads").push({ id: 40, workspaceId: OTHER, firstName: "Lee", lastName: "Other", title: null, email: "lee@example.org", company: null });
+    rows("accounts").push(
+      { id: 50, workspaceId: OTHER, name: "Their Co", industry: null, employeeBand: null, revenueBand: null },
+      { id: 51, workspaceId: WS, name: "County Schools", industry: "Education", employeeBand: null, revenueBand: null },
+    );
+    await expect(caller().researchPipeline.start({ goal: "Book a call", contactId: 10, leadId: 40 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(caller().researchPipeline.start({ goal: "Book a call", contactId: 10, accountId: 50 })).rejects.toMatchObject({ code: "NOT_FOUND", message: "That company is not in this workspace." });
+    expect(rows("research_pipelines")).toEqual([]);
+    await caller().researchPipeline.start({ goal: "Book a call", contactId: 10, accountId: 51 });
+    await __settleResearchPipelines();
+    expect(rows("research_pipelines")[0]).toMatchObject({ toContactId: 10, toLeadId: null, toAccountId: 51 });
+  });
+});
+
 describe("start returns before the stages run (P144)", () => {
   it("the poll sees each stage as it lands", async () => {
     const gates: (() => void)[] = [];
