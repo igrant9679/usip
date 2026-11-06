@@ -82,6 +82,7 @@ import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { isHtmlBody } from "@shared/emailBody";
 import { CampaignSourcesCard } from "@/components/usip/are/CampaignSourcesCard";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { rankOf } from "@shared/roleRank";
 import { dayOffsetForPosition, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenceSteps";
@@ -1413,6 +1414,8 @@ function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; 
     onError: (e) => toast.error(e.message),
     onSuccess: async () => { toast.success("Released — it enrolls on the next engine run"); await refetch(); },
   });
+  // Releasing overrides a research avoid rule: a manager's (A36).
+  const canRelease = useWorkspaceRole().isManager;
   const [editing, setEditing] = useState<{ arrayIndex: number; subject: string; body: string } | null>(null);
   const steps = (row.generatedSequence ?? []) as any[];
   // The timing that will actually be USED: the prospect's override (0170) or
@@ -1462,11 +1465,15 @@ function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; 
             <div className="font-medium">Held for review</div>
             <div className="break-words">{row.copyHoldReason}</div>
             <div className="text-muted-foreground">
-              This sequence will not be enrolled until someone releases it. Edit the step below and release it, or regenerate the sequence (the new copy is checked again).
+              {canRelease
+                ? "This sequence will not be enrolled until someone releases it. Edit the step below and release it, or regenerate the sequence (the new copy is checked again)."
+                : "This sequence will not be enrolled until a manager releases it. You can edit the step below or regenerate the sequence (the new copy is checked again)."}
             </div>
-            <Button size="sm" variant="outline" disabled={releaseHold.isPending} onClick={() => releaseHold.mutate({ prospectId: row.prospectId })}>
-              Release as it is now
-            </Button>
+            {canRelease && (
+              <Button size="sm" variant="outline" disabled={releaseHold.isPending} onClick={() => releaseHold.mutate({ prospectId: row.prospectId })}>
+                Release as it is now
+              </Button>
+            )}
           </div>
         )}
         {steps.length === 0 ? (
@@ -2252,6 +2259,8 @@ export default function ARECampaignDetail() {
   // unlike the Leads/Contacts/Pipeline exports it can be — and since
   // 2026-09-20 is — refused rather than merely hidden.
   const { can: canPerm } = usePermissions();
+  // Re-evaluate and scrape are a manager's on the server (A36); a rep isn't offered them.
+  const isManager = useWorkspaceRole().isManager;
   const handleExportCsv = async () => {
     const result = await fetchCsv();
     if (!result.data?.csv) { toast.error("No data to export"); return; }
@@ -2777,6 +2786,8 @@ export default function ARECampaignDetail() {
               {/* Multi-source Discovery (one-click using campaign targeting) */}
               <CampaignDiscoveryLauncher campaignId={campaignId} campaign={campaign} />
             </div>
+            {/* A scrape spends source credits and fills the review queue: a manager's (A36). */}
+            {isManager ? (
             <div className="max-w-2xl space-y-5 mt-6">
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Single-source scrape</div>
 
@@ -2860,6 +2871,9 @@ export default function ARECampaignDetail() {
                 </CardContent>
               </Card>
             </div>
+            ) : (
+              <p className="max-w-2xl mt-6 text-xs text-muted-foreground">A single-source scrape is run by a manager or admin.</p>
+            )}
 
             {/* Recent scrape jobs */}
             <div className="mt-6">
@@ -3655,6 +3669,7 @@ export default function ARECampaignDetail() {
                         </div>
                       </PopoverContent>
                     </Popover>
+                    {isManager && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -3672,6 +3687,7 @@ export default function ARECampaignDetail() {
                       )}
                       Re-evaluate All
                     </Button>
+                    )}
                     {canPerm("export_data") && (
                     <Button
                       size="sm"
@@ -3758,6 +3774,7 @@ export default function ARECampaignDetail() {
                           {new Date(item.rejectedAt).toLocaleDateString([], { month: "short", day: "numeric" })}
                         </div>
                       )}
+                      {isManager && (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -3772,6 +3789,7 @@ export default function ARECampaignDetail() {
                         )}
                         Re-evaluate
                       </Button>
+                      )}
                     </div>
                   </div>
                 ))}

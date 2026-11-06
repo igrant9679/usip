@@ -520,7 +520,10 @@ async function enrichPendingGlobally(result: AreEngineResult, onlyWorkspaceId?: 
       campaignId: prospectQueue.campaignId,
     })
     .from(prospectQueue)
-    .innerJoin(areCampaigns, eq(areCampaigns.id, prospectQueue.campaignId))
+    // The campaign is the row's own workspace's (audit 2026-10-20, A42): by id
+    // alone, a row planted under another tenant's campaign took that one's
+    // status and confidence gate.
+    .innerJoin(areCampaigns, and(eq(areCampaigns.id, prospectQueue.campaignId), eq(areCampaigns.workspaceId, prospectQueue.workspaceId)))
     .where(
       and(
         eq(areCampaigns.status, "active"),

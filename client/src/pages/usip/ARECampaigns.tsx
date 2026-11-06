@@ -38,6 +38,7 @@ import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
 import { askLaunchOnUtc } from "@/components/usip/are/launchTimezone";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 
 const STATUS_COLOR: Record<string, string> = {
   draft: "#94A3B8",
@@ -306,6 +307,8 @@ export default function ARECampaigns() {
     },
     onError: (e) => toast.error(e.message),
   });
+  // Deleting a campaign is a manager's on the server (A36).
+  const canDelete = useWorkspaceRole().isManager;
 
   const toggleSource = (id: string) => {
     setForm((f) => ({ ...f, prospectSources: toggledSources(f.prospectSources, id) }));
@@ -408,16 +411,18 @@ export default function ARECampaigns() {
                       <Play className="size-3" /> Activate
                     </Button>
                   ) : null}
-                  <Button aria-label="Delete campaign"
-                    size="sm"
-                    variant="ghost"
-                    className="text-destructive/60 hover:text-destructive gap-1 text-xs"
-                    onClick={() => {
-                      confirmAction({ title: "Delete this campaign?", description: "The campaign and its prospect queue will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { deleteCampaign.mutate({ id: c.id }); });
-                    }}
-                  >
-                    <Trash2 className="size-3" />
-                  </Button>
+                  {canDelete && (
+                    <Button aria-label="Delete campaign"
+                      size="sm"
+                      variant="ghost"
+                      className="text-destructive/60 hover:text-destructive gap-1 text-xs"
+                      onClick={() => {
+                        confirmAction({ title: "Delete this campaign?", description: "The campaign and its prospect queue will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { deleteCampaign.mutate({ id: c.id }); });
+                      }}
+                    >
+                      <Trash2 className="size-3" />
+                    </Button>
+                  )}
                   <Link href={`/are/campaigns/${c.id}`}>
                     <Button size="sm" variant="ghost" className="gap-1 text-xs">
                       Open <ArrowRight className="size-3" />

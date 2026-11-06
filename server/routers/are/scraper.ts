@@ -14,12 +14,12 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { areScrapeJobs, prospectQueue } from "../../../drizzle/schema";
+import { areCampaigns, areScrapeJobs, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { parseLlmJson } from "./llmJson";
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
-import { workspaceProcedure, isAdminRole } from "../../_core/workspace";
+import { managerProcedure, workspaceProcedure, isAdminRole } from "../../_core/workspace";
 import { cleanScrapedField, isPlaceholderToken, usableDomainOrNull, usableEmailOrNull, usablePhoneOrNull } from "@shared/fieldHygiene";
 import { searchLinkedInProfiles } from "../../services/linkedinLookup";
 import { safeFetch } from "../../services/scraper/ssrfGuard";
@@ -641,8 +641,27 @@ export async function saveScrapeJobAndQueue(
   }
 }
 
+/**
+ * A scrape's campaign must be this workspace's (audit 2026-10-20, A42): the id
+ * went into the job and every queued row as given, so a scrape could fill
+ * another tenant's campaign queue. Checked before any source is searched.
+ */
+async function assertCampaignHere(workspaceId: number, campaignId: number | null | undefined): Promise<void> {
+  if (campaignId == null) return;
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const [c] = await db.select({ id: areCampaigns.id }).from(areCampaigns)
+    .where(and(eq(areCampaigns.id, campaignId), eq(areCampaigns.workspaceId, workspaceId))).limit(1);
+  if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+}
+
 /* ─── Router ─────────────────────────────────────────────────────────────── */
 
+/**
+ * Running a scrape spends the workspace's source credits and fills a campaign's
+ * review queue, so it is a manager's (audit 2026-10-20, A36). The job list
+ * stays open to everyone.
+ */
 export const scraperRouter = router({
   /** List all scrape jobs for the workspace */
   /**
@@ -670,45 +689,50 @@ export const scraperRouter = router({
     }),
 
   /** Scrape Google Business listings */
-  scrapeGoogleBusiness: workspaceProcedure
+  scrapeGoogleBusiness: managerProcedure
     .input(z.object({ campaignId: z.number().optional(), query: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const prospects = await scrapeGoogleBusiness(ctx.workspace.id, input.campaignId ?? null, input.query, input.icpContext);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "google_business", input.query, prospects);
       return { count: prospects.length, prospects };
     }),
 
   /** LinkedIn search (company-oriented keywords) via real Unipile people search */
-  scrapeLinkedInCompany: workspaceProcedure
+  scrapeLinkedInCompany: managerProcedure
     .input(z.object({ campaignId: z.number().optional(), query: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const prospects = await realLinkedInSearch(ctx, input.query, 25);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "linkedin_company", input.query, prospects);
       return { count: prospects.length, prospects };
     }),
 
   /** LinkedIn people search via real Unipile classic search */
-  scrapeLinkedInPeople: workspaceProcedure
+  scrapeLinkedInPeople: managerProcedure
     .input(z.object({ campaignId: z.number().optional(), query: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const prospects = await realLinkedInSearch(ctx, input.query, 25);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "linkedin_people", input.query, prospects);
       return { count: prospects.length, prospects };
     }),
 
   /** Scrape a specific URL or run a general web search */
-  scrapeWeb: workspaceProcedure
+  scrapeWeb: managerProcedure
     .input(z.object({ campaignId: z.number().optional(), urlOrQuery: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const prospects = await scrapeWeb(ctx.workspace.id, input.campaignId ?? null, input.urlOrQuery, input.icpContext);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "web_scrape", input.urlOrQuery, prospects);
       return { count: prospects.length, prospects };
     }),
 
   /** Monitor news for trigger events and extract prospects */
-  scrapeNews: workspaceProcedure
+  scrapeNews: managerProcedure
     .input(z.object({ campaignId: z.number().optional(), query: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const prospects = await scrapeNews(ctx.workspace.id, input.campaignId ?? null, input.query, input.icpContext);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "news", input.query, prospects);
       return { count: prospects.length, prospects };
@@ -726,16 +750,17 @@ export const scraperRouter = router({
    * `disabled` is read from the map rather than hardcoded, so deleting the
    * entry when a real event-data source is wired in makes this null on its own.
    */
-  scrapeIndustryEvents: workspaceProcedure
+  scrapeIndustryEvents: managerProcedure
     .input(z.object({ campaignId: z.number().optional(), query: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const prospects = await scrapeIndustryEvents(ctx.workspace.id, input.campaignId ?? null, input.query, input.icpContext);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "industry_events", input.query, prospects);
       return { count: prospects.length, prospects, disabled: DISABLED_SCRAPE_SOURCES.industry_events ?? null };
     }),
 
   /** Run all scrapers for a campaign: they search in parallel and save in turn (A12). */
-  runFullScrape: workspaceProcedure
+  runFullScrape: managerProcedure
     .input(
       z.object({
         campaignId: z.number(),
@@ -751,6 +776,7 @@ export const scraperRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const results: Record<string, number> = {};
       // A source that cannot run must not arrive as a 0 beside sources that
       // searched and found nobody. Keyed by the same name as `breakdown`, so a
@@ -793,7 +819,7 @@ export const scraperRouter = router({
     }),
 
   /** Unified run — dispatches to the right scraper based on source */
-  run: workspaceProcedure
+  run: managerProcedure
     .input(
       z.object({
         campaignId: z.number(),
@@ -803,6 +829,7 @@ export const scraperRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       let prospects: any[] = [];
       const { campaignId, source, query } = input;
       if (source === "google_business") {

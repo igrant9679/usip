@@ -1456,7 +1456,8 @@ export const campaignsRouter = router({
       };
     }),
 
-  delete: workspaceProcedure
+  // Deleting a campaign is a manager's (audit 2026-10-20, A36); any member could.
+  delete: managerProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();

@@ -22,6 +22,7 @@ import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { icpLabels, icpWeighted, type IcpListKind } from "@shared/icpShape";
 import {
   AlertTriangle,
@@ -533,6 +534,8 @@ export default function AREIcpAgent() {
   const { data: icp, isLoading } = trpc.are.icp.getCurrent.useQuery();
   const { data: history, isLoading: loadingHistory } = trpc.are.icp.getHistory.useQuery();
   const [overrideOpen, setOverrideOpen] = useState(false);
+  // Regenerate, override and restore are a manager's on the server (A36).
+  const canChange = useWorkspaceRole().isManager;
 
   const regenerate = trpc.are.icp.regenerate.useMutation({
     onSuccess: () => {
@@ -579,28 +582,32 @@ export default function AREIcpAgent() {
         {icp?.confidenceScore != null && (
           <ConfidenceBadge score={icp.confidenceScore} />
         )}
-        <Button
-          variant="outline"
-          size="sm"
-          className="gap-1.5 text-xs"
-          onClick={() => setOverrideOpen(true)}
-          disabled={!icp}
-        >
-          <Pencil className="size-3.5" /> Override
-        </Button>
-        <Button
-          size="sm"
-          className="gap-1.5 text-xs"
-          onClick={() => regenerate.mutate()}
-          disabled={regenerate.isPending}
-        >
-          {regenerate.isPending ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="size-3.5" />
-          )}
-          {regenerate.isPending ? "Regenerating…" : "Regenerate ICP"}
-        </Button>
+        {canChange && (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-xs"
+              onClick={() => setOverrideOpen(true)}
+              disabled={!icp}
+            >
+              <Pencil className="size-3.5" /> Override
+            </Button>
+            <Button
+              size="sm"
+              className="gap-1.5 text-xs"
+              onClick={() => regenerate.mutate()}
+              disabled={regenerate.isPending}
+            >
+              {regenerate.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3.5" />
+              )}
+              {regenerate.isPending ? "Regenerating…" : "Regenerate ICP"}
+            </Button>
+          </>
+        )}
       </PageHeader>
       <ResearchSubNav />
 
@@ -614,8 +621,10 @@ export default function AREIcpAgent() {
           <EmptyState
             icon={Brain}
             title="No ICP profile yet"
-            description="The ICP Agent needs at least a few won and lost deals in your CRM to infer a profile. Click Regenerate to run the first inference."
-            action={
+            description={canChange
+              ? "The ICP Agent needs at least a few won and lost deals in your CRM to infer a profile. Click Regenerate to run the first inference."
+              : "The ICP Agent needs at least a few won and lost deals in your CRM to infer a profile. A manager runs the first inference."}
+            action={canChange &&
               <Button
                 onClick={() => regenerate.mutate()}
                 disabled={regenerate.isPending}
@@ -799,7 +808,7 @@ export default function AREIcpAgent() {
                     key={v.id}
                     v={v}
                     isActive={!!v.isActive}
-                    onRestore={() => { setRestoringId(v.id); restore.mutate({ id: v.id }); }}
+                    onRestore={canChange ? () => { setRestoringId(v.id); restore.mutate({ id: v.id }); } : undefined}
                     isRestoring={restoringId === v.id}
                   />
                 ))}

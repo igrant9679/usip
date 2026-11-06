@@ -29,7 +29,7 @@ import { closedStageKeys, lostStageKeys, wonStageKeys } from "../../_core/stageS
 import { invokeLLM } from "../../_core/llm";
 import { researchPriorForIcp } from "../../services/research/targetingPrior";
 import { router } from "../../_core/trpc";
-import { workspaceProcedure } from "../../_core/workspace";
+import { managerProcedure, workspaceProcedure } from "../../_core/workspace";
 import { icpStoredFromLabels } from "@shared/icpShape";
 
 /** An edited ICP list: plain labels, as the Override dialog sends them. */
@@ -567,8 +567,12 @@ export const icpRouter = router({
       .orderBy(desc(icpProfiles.version));
   }),
 
-  /** Trigger immediate AI re-inference */
-  regenerate: workspaceProcedure.mutation(async ({ ctx }) => {
+  /**
+   * Trigger immediate AI re-inference. Regenerate, override and restore change
+   * the profile every campaign scores against, so they are a manager's (audit
+   * 2026-10-20, A36). Reading it stays open.
+   */
+  regenerate: managerProcedure.mutation(async ({ ctx }) => {
     await runIcpInference(ctx.workspace.id);
     await areNotify({
       workspaceId: ctx.workspace.id,
@@ -587,7 +591,7 @@ export const icpRouter = router({
    * rows of mixed objects and junk). A label already in the profile keeps its
    * stored entry and weight; a new one gets no weight.
    */
-  override: workspaceProcedure
+  override: managerProcedure
     .input(
       z.object({
         targetIndustries: icpLabelList.optional(),
@@ -626,7 +630,7 @@ export const icpRouter = router({
       return { success: true };
     }),
   /** Restore a previous ICP version — sets it as active, deactivates all others */
-  restore: workspaceProcedure
+  restore: managerProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
