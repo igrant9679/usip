@@ -1950,9 +1950,9 @@ function BillingTab({ usage, canEdit }: { usage: any; canEdit: boolean }) {
           </p>
         </div>
       </Section>
-      <Section title="Invoices" description="Placeholder — invoice history appears here once billing is activated.">
-        <div className="p-4 text-sm text-muted-foreground">No invoices yet.</div>
-      </Section>
+      {/* No Invoices card: nothing in the app issues or stores an invoice, so the
+          card only ever shipped the words "Placeholder — invoice history appears
+          here" to customers (audit L11). Add it back with a real source. */}
     </>
   );
 }
