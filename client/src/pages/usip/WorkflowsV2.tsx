@@ -15,7 +15,8 @@ import { forbiddenMessage } from "@/lib/forbidden";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
-import { ConfirmButton } from "@/components/usip/Common";
+import { ConfirmButton, confirmAction } from "@/components/usip/Common";
+import { bulkAutopilotChanges, bulkNeedsConfirm, bulkOutcome, settleAll, MODE_NAME, type AutopilotMode } from "@/lib/autopilotBulk";
 import { trpc } from "@/lib/trpc";
 import { isDeadTrigger } from "@shared/workflowTriggers";
 import { cn } from "@/lib/utils";
@@ -36,7 +37,6 @@ function fmtWhen(d?: string | Date | null): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
-const MODE_LABEL: Record<string, string> = { off: "Off", approval: "Approve", auto: "Autonomous" };
 
 /**
  * Engines with no Autonomous mode: they only ever propose, and a person
@@ -143,76 +143,99 @@ export default function WorkflowsV2() {
   };
 
   const autopilots = [
-    { key: "tasks", label: "Task Autopilot", icon: ListTodo, blurb: "Next-best-action per prospect", href: "/v2/tasks", mode: taskAp.data?.mode ?? "off", lastRunAt: taskAp.data?.lastRunAt, set: (m: string) => setTaskAp.mutate({ mode: m as any }) },
-    { key: "meetings", label: "Meeting Autopilot", icon: CalendarClock, blurb: "Propose times + a drafted invite; Approve waits for you, Autonomous sends each new invite", href: "/v2/meetings", mode: meetAp.data?.mode ?? "off", lastRunAt: meetAp.data?.lastRunAt, set: (m: string) => setMeetAp.mutate({ mode: m as any }) },
-    { key: "conversations", label: "Conversation Autopilot", icon: MessageSquare, blurb: "Classify replies + act", href: "/v2/conversations", mode: convAp.data?.mode ?? "off", lastRunAt: convAp.data?.lastRunAt, set: (m: string) => setConvAp.mutate({ mode: m as any }) },
-    { key: "deals", label: "Deal Autopilot", icon: KanbanSquare, blurb: "Advance deals toward close", href: "/v2/deals", mode: dealAp.data?.mode ?? "off", lastRunAt: dealAp.data?.lastRunAt, set: (m: string) => setDealAp.mutate({ mode: m as any }) },
-    { key: "social", label: "Social Autopilot", icon: Share2, blurb: "Auto-invite leads → opener on accept", href: "/v2/conversations", mode: socialAp.data?.mode ?? "off", lastRunAt: socialAp.data?.lastRunAt, set: (m: string) => setSocialAp.mutate({ mode: m as any }) },
+    { key: "tasks", label: "Task Autopilot", icon: ListTodo, blurb: "Next-best-action per prospect", href: "/v2/tasks", mode: taskAp.data?.mode ?? "off", lastRunAt: taskAp.data?.lastRunAt, set: (m: string) => setTaskAp.mutate({ mode: m as any }), setAsync: (m: string) => setTaskAp.mutateAsync({ mode: m as any }) },
+    { key: "meetings", label: "Meeting Autopilot", icon: CalendarClock, blurb: "Propose times + a drafted invite; Approve waits for you, Autonomous sends each new invite", href: "/v2/meetings", mode: meetAp.data?.mode ?? "off", lastRunAt: meetAp.data?.lastRunAt, set: (m: string) => setMeetAp.mutate({ mode: m as any }), setAsync: (m: string) => setMeetAp.mutateAsync({ mode: m as any }) },
+    { key: "conversations", label: "Conversation Autopilot", icon: MessageSquare, blurb: "Classify replies + act", href: "/v2/conversations", mode: convAp.data?.mode ?? "off", lastRunAt: convAp.data?.lastRunAt, set: (m: string) => setConvAp.mutate({ mode: m as any }), setAsync: (m: string) => setConvAp.mutateAsync({ mode: m as any }) },
+    { key: "deals", label: "Deal Autopilot", icon: KanbanSquare, blurb: "Advance deals toward close", href: "/v2/deals", mode: dealAp.data?.mode ?? "off", lastRunAt: dealAp.data?.lastRunAt, set: (m: string) => setDealAp.mutate({ mode: m as any }), setAsync: (m: string) => setDealAp.mutateAsync({ mode: m as any }) },
+    { key: "social", label: "Social Autopilot", icon: Share2, blurb: "Auto-invite leads → opener on accept", href: "/v2/conversations", mode: socialAp.data?.mode ?? "off", lastRunAt: socialAp.data?.lastRunAt, set: (m: string) => setSocialAp.mutate({ mode: m as any }), setAsync: (m: string) => setSocialAp.mutateAsync({ mode: m as any }) },
     // No schedule of its own: it fires when a LinkedIn enrichment detects a
     // company change, so the Enrichment Sweep is what supplies its triggers.
-    { key: "jobChange", label: "Job Change Autopilot", icon: UserRoundCog, blurb: "Re-engage when an enrichment detects a job change (runs off the Enrichment Sweep — no schedule of its own)", href: "/v2/data-enrichment", mode: jobChangeAp.data?.mode ?? "off", lastRunAt: jobChangeAp.data?.lastRunAt, set: (m: string) => setJobChangeAp.mutate({ mode: m as any }) },
-    { key: "enrichSweep", label: "Enrichment Sweep", icon: Database, blurb: "Backfill missing emails from company sites", href: "/prospects", mode: sweepAp.data?.mode ?? "off", lastRunAt: sweepAp.data?.lastRunAt, set: (m: string) => setSweepAp.mutate({ mode: m as any }) },
-    { key: "companyBackfill", label: "Company Backfill", icon: Users, blurb: "Read missing employers off LinkedIn profiles", href: "/v2/data-enrichment", mode: backfillAp.data?.mode ?? "off", lastRunAt: backfillAp.data?.lastRunAt, set: (m: string) => setBackfillAp.mutate({ mode: m as any }) },
-    { key: "chat", label: "Inbound Chat Agent", icon: MessageSquare, blurb: "Qualify website visitors → book the meeting", href: "/v2/chat", mode: chatAp.data?.mode ?? "off", lastRunAt: undefined, set: (m: string) => setChatAp.mutate({ mode: m as any }) },
-    { key: "chatFollowUp", label: "Chat Follow-up", icon: Mail, blurb: "Email visitors who left the chat without booking", href: "/v2/chat", mode: chatFollowAp.data?.mode ?? "off", lastRunAt: undefined, set: (m: string) => setChatFollowAp.mutate({ mode: m as any }) },
-    { key: "optimization", label: "Continuous Optimisation", icon: Zap, blurb: "Measure what works and tune sequences", href: "/are/performance", mode: optAp.data?.mode ?? "off", lastRunAt: (optAp.data as any)?.lastRunAt, set: (m: string) => setOptAp.mutate({ mode: m as any }) },
+    { key: "jobChange", label: "Job Change Autopilot", icon: UserRoundCog, blurb: "Re-engage when an enrichment detects a job change (runs off the Enrichment Sweep — no schedule of its own)", href: "/v2/data-enrichment", mode: jobChangeAp.data?.mode ?? "off", lastRunAt: jobChangeAp.data?.lastRunAt, set: (m: string) => setJobChangeAp.mutate({ mode: m as any }), setAsync: (m: string) => setJobChangeAp.mutateAsync({ mode: m as any }) },
+    { key: "enrichSweep", label: "Enrichment Sweep", icon: Database, blurb: "Backfill missing emails from company sites", href: "/prospects", mode: sweepAp.data?.mode ?? "off", lastRunAt: sweepAp.data?.lastRunAt, set: (m: string) => setSweepAp.mutate({ mode: m as any }), setAsync: (m: string) => setSweepAp.mutateAsync({ mode: m as any }) },
+    { key: "companyBackfill", label: "Company Backfill", icon: Users, blurb: "Read missing employers off LinkedIn profiles", href: "/v2/data-enrichment", mode: backfillAp.data?.mode ?? "off", lastRunAt: backfillAp.data?.lastRunAt, set: (m: string) => setBackfillAp.mutate({ mode: m as any }), setAsync: (m: string) => setBackfillAp.mutateAsync({ mode: m as any }) },
+    { key: "chat", label: "Inbound Chat Agent", icon: MessageSquare, blurb: "Qualify website visitors → book the meeting", href: "/v2/chat", mode: chatAp.data?.mode ?? "off", lastRunAt: undefined, set: (m: string) => setChatAp.mutate({ mode: m as any }), setAsync: (m: string) => setChatAp.mutateAsync({ mode: m as any }) },
+    { key: "chatFollowUp", label: "Chat Follow-up", icon: Mail, blurb: "Email visitors who left the chat without booking", href: "/v2/chat", mode: chatFollowAp.data?.mode ?? "off", lastRunAt: undefined, set: (m: string) => setChatFollowAp.mutate({ mode: m as any }), setAsync: (m: string) => setChatFollowAp.mutateAsync({ mode: m as any }) },
+    { key: "optimization", label: "Continuous Optimisation", icon: Zap, blurb: "Measure what works and tune sequences", href: "/are/performance", mode: optAp.data?.mode ?? "off", lastRunAt: (optAp.data as any)?.lastRunAt, set: (m: string) => setOptAp.mutate({ mode: m as any }), setAsync: (m: string) => setOptAp.mutateAsync({ mode: m as any }) },
     // Phase 3: the best-fit campaign router. Approve = suggests picks for
     // review on the Revenue Engine hub; Auto = enrolls them.
-    { key: "routing", label: "Campaign Routing", icon: Bot, blurb: "Put people who are in nothing yet into the campaign that fits them best, and propose new campaigns for the ones nothing fits", href: "/are", mode: routingAp.data?.mode ?? "off", lastRunAt: (routingAp.data as any)?.lastRunAt, set: (m: string) => setRoutingAp.mutate({ mode: m as any }) },
+    { key: "routing", label: "Campaign Routing", icon: Bot, blurb: "Put people who are in nothing yet into the campaign that fits them best, and propose new campaigns for the ones nothing fits", href: "/are", mode: routingAp.data?.mode ?? "off", lastRunAt: (routingAp.data as any)?.lastRunAt, set: (m: string) => setRoutingAp.mutate({ mode: m as any }), setAsync: (m: string) => setRoutingAp.mutateAsync({ mode: m as any }) },
   ];
   const onCount = autopilots.filter((a) => a.mode !== "off").length;
 
-  const setAll = (mode: string) => {
-    setTaskAp.mutate({ mode: mode as any });
-    // No Autonomous meeting proposals: "All: Autonomous" leaves them on Approve.
-    setMeetAp.mutate({ mode: mode as any });
-    setConvAp.mutate({ mode: mode as any });
-    setDealAp.mutate({ mode: mode as any });
-    setSocialAp.mutate({ mode: mode as any });
-    setJobChangeAp.mutate({ mode: mode as any });
-    setChatAp.mutate({ mode: mode as any });
-    setSweepAp.mutate({ mode: mode as any });
-    setBackfillAp.mutate({ mode: mode as any });
-    setChatFollowAp.mutate({ mode: mode as any });
-    setOptAp.mutate({ mode: mode as any });
-    setRoutingAp.mutate({ mode: mode as any });
-    // Email AI auto-send is a boolean dial, not a mode — "All: Off" left it
-    // sending high-scoring drafts by itself while this page said everything
-    // was off (audit 2026-09-20). Off means off; other modes leave it alone
-    // (its own switch below controls it).
-    if (mode === "off" && (emailAuto.data as any)?.aiAutoSendEnabled) setEmailAutoEnabled(false);
-    // The engine has no "off": batch approval is its safest mode (nothing is
-    // approved without a human). "All: Off" used to skip it entirely, so the
-    // one system sending cold outbound kept its setting while the page said
-    // everything was off (audit 2026-09-02).
-    setAllEngineAutonomy.mutate({ mode: "batch_approval" });
-    toast.success(mode === "off"
-      ? "All autopilots turned off · engine set to batch approval (its safest mode — pause a campaign to stop its sends)"
-      : `All autopilots set to ${MODE_LABEL[mode]} · engine set to batch approval`);
+  // Every autopilot to one mode (G62). Each change is awaited and the toast says
+  // which failed; success is reported only when all of them went through.
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkPickKey, setBulkPickKey] = useState(0);
+  const runBulk = async (mode: AutopilotMode, successMessage?: string) => {
+    setBulkBusy(true);
+    try {
+      const tasks: { label: string; run: () => Promise<unknown> }[] = autopilots.map((a) => ({ label: a.label, run: () => a.setAsync(mode) }));
+      // Email AI auto-send is a boolean dial, not a mode — "All: Off" left it
+      // sending high-scoring drafts by itself while this page said everything
+      // was off (audit 2026-09-20). Off means off; other modes leave it alone
+      // (its own switch below controls it, and is deliberately never switched
+      // ON from here: it is the one dial that sends without review).
+      if (mode === "off" && (emailAuto.data as any)?.aiAutoSendEnabled) {
+        const cur = emailAuto.data as any;
+        tasks.push({ label: "Email AI auto-send", run: () => setEmailAuto.mutateAsync({
+          aiAutoSendEnabled: false,
+          aiAutoSendScoreMin: cur?.aiAutoSendScoreMin ?? 70,
+          aiAutoSendConfidenceMin: cur?.aiAutoSendConfidenceMin ?? 75,
+          aiAutoSendAllowUnscored: cur?.aiAutoSendAllowUnscored ?? false,
+        } as any) });
+      }
+      // The engine has no "off": batch approval is its safest mode (nothing is
+      // approved without a human). "All: Off" used to skip it entirely, so the
+      // one system sending cold outbound kept its setting while the page said
+      // everything was off (audit 2026-09-02).
+      tasks.push({ label: "Revenue Engine autonomy", run: () => setAllEngineAutonomy.mutateAsync({ mode: "batch_approval" }) });
+      const { failed } = await settleAll(tasks);
+      const out = bulkOutcome(mode, tasks.length, failed);
+      if (out.ok) toast.success(successMessage ?? out.message);
+      else toast.error(out.message);
+    } finally {
+      setBulkBusy(false);
+    }
   };
 
-  // One click to enable the whole autonomous stack in the safe Approve mode.
-  const turnOnFullAutonomy = () => {
-    setTaskAp.mutate({ mode: "approval" as any });
-    setMeetAp.mutate({ mode: "approval" as any });
-    setConvAp.mutate({ mode: "approval" as any });
-    setDealAp.mutate({ mode: "approval" as any });
-    setSocialAp.mutate({ mode: "approval" as any });
-    setJobChangeAp.mutate({ mode: "approval" as any });
-    setChatAp.mutate({ mode: "approval" as any });
-    setSweepAp.mutate({ mode: "approval" as any });
-    setBackfillAp.mutate({ mode: "approval" as any });
-    setChatFollowAp.mutate({ mode: "approval" as any });
-    setOptAp.mutate({ mode: "approval" as any });
-    setRoutingAp.mutate({ mode: "approval" as any });
-    // Deliberately NOT setEmailAutoEnabled(true): the toast promises "AI
-    // actions will queue for your review", and auto-send is the one dial that
-    // sends without review — enabling it here contradicted the promise
-    // (audit 2026-09-20). Its own switch below turns it on when wanted.
-    // Approve mode for the engine = batch approval (prospects queue for your OK).
-    setAllEngineAutonomy.mutate({ mode: "batch_approval" });
-    toast.success("Full autonomy on (Approve mode) — AI actions will queue for your review");
+  /** Ask first, naming each autopilot that changes; Off runs straight away. */
+  const setAll = (value: string, successMessage?: string) => {
+    const mode = value as AutopilotMode;
+    setBulkPickKey((k) => k + 1); // the picker goes back to its placeholder either way
+    if (!bulkNeedsConfirm(mode)) { void runBulk(mode, successMessage); return; }
+    const changes = bulkAutopilotChanges(autopilots, mode);
+    confirmAction(
+      {
+        title: mode === "auto" ? "Set every autopilot to Autonomous?" : "Set every autopilot to Approve?",
+        description: (
+          <div className="space-y-2 text-sm">
+            <p>
+              {mode === "auto"
+                ? "Autonomous means each of these acts on its own, without asking: drafts it writes are sent, invites go out, records change."
+                : "Approve means each of these does the work and stops before anything leaves: it waits as a task for you to review."}
+            </p>
+            {changes.length === 0 ? (
+              <p>Every autopilot is already on {MODE_NAME[mode]}.</p>
+            ) : (
+              <ul className="list-disc pl-5 space-y-0.5 max-h-56 overflow-auto">
+                {changes.map((c) => (
+                  <li key={c.key}><b>{c.label}</b>: {MODE_NAME[c.from] ?? c.from} → {MODE_NAME[c.to]}</li>
+                ))}
+              </ul>
+            )}
+            <p>The Revenue Engine is set to batch approval, so nothing it finds is approved without you.</p>
+          </div>
+        ),
+        confirmLabel: mode === "auto" ? `Turn on Autonomous (${changes.length})` : `Set to Approve (${changes.length})`,
+        destructive: mode === "auto",
+      },
+      () => void runBulk(mode, successMessage),
+    );
   };
+
+  // One click to enable the whole autonomous stack in the safe Approve mode,
+  // through the same confirm as "All: Approve" (G62).
+  const turnOnFullAutonomy = () => setAll("approval", "Full autonomy on (Approve mode) — AI actions will queue for your review");
 
   // ── ARE campaigns ──
   const campaigns = trpc.are.campaigns.list.useQuery({ limit: 20 } as any, { retry: false });
@@ -274,7 +297,7 @@ export default function WorkflowsV2() {
           <span className="text-[11px] text-muted-foreground hidden sm:inline">· Autonomy control center</span>
           <div className="flex-1" />
           <span className="text-[11px] text-muted-foreground mr-1">{onCount}/{autopilots.length} autopilots on</span>
-          <Select onValueChange={setAll}>
+          <Select key={bulkPickKey} onValueChange={(v) => setAll(v)} disabled={bulkBusy}>
             <SelectTrigger className="h-7 w-[150px] text-xs"><SelectValue placeholder="Set all autopilots" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="off">All: Off</SelectItem>
@@ -292,7 +315,7 @@ export default function WorkflowsV2() {
               <div className="text-sm font-medium">Autonomous operation</div>
               <div className="text-[12px] text-muted-foreground">Turn on the autopilots to run the pipeline — prospect → task → reply → meeting → deal — with limited or no manual work. Set each to <b>Approve</b> to review first, or <b>Autonomous</b> to run hands-off.</div>
             </div>
-            <Button data-tour-id="autonomy-turn-on-all" size="sm" className="shrink-0 gap-1.5" onClick={turnOnFullAutonomy}><Rocket className="size-3.5" /> Turn on full autonomy</Button>
+            <Button data-tour-id="autonomy-turn-on-all" size="sm" className="shrink-0 gap-1.5" onClick={turnOnFullAutonomy} disabled={bulkBusy}><Rocket className="size-3.5" /> Turn on full autonomy</Button>
           </div>
 
           {/* What Off / Approve / Autonomous actually mean. This is the concept
@@ -435,7 +458,10 @@ export default function WorkflowsV2() {
                     {c.status === "active" ? (
                       <Button size="icon" variant="ghost" className="size-7" title="Pause" onClick={() => setCampaignStatus.mutate({ id: c.id, status: "paused" })}><Pause className="size-3.5" /></Button>
                     ) : c.status === "paused" || c.status === "draft" ? (
-                      <Button size="icon" variant="ghost" className="size-7" title="Start" onClick={() => setCampaignStatus.mutate({ id: c.id, status: "active" })}><Play className="size-3.5" /></Button>
+                      <Button size="icon" variant="ghost" className="size-7" title="Start" aria-label={`Start ${c.name}`} onClick={() => confirmAction(
+                        { title: `Start "${c.name}"?`, description: "The campaign starts finding and contacting prospects at its own autonomy setting.", confirmLabel: "Start campaign" },
+                        () => setCampaignStatus.mutate({ id: c.id, status: "active" }),
+                      )}><Play className="size-3.5" /></Button>
                     ) : null}
                   </div>
                 ))
@@ -509,7 +535,10 @@ export default function WorkflowsV2() {
 
           {/* Segment auto-enroll */}
           <Section icon={Users} title="Auto-enroll rules"
-            action={segList.length > 0 ? <Button size="sm" variant="outline" className="h-7 gap-1.5" disabled={runSegRules.isPending} onClick={() => runSegRules.mutate()}><Play className="size-3.5" /> Run now</Button> : undefined}>
+            action={segList.length > 0 ? <Button size="sm" variant="outline" className="h-7 gap-1.5" disabled={runSegRules.isPending} onClick={() => confirmAction(
+              { title: "Enrol everyone these rules match, now?", description: "Each match is added to its rule's sequence, which then sends on its own schedule.", confirmLabel: "Run now" },
+              () => runSegRules.mutate(),
+            )}><Play className="size-3.5" /> Run now</Button> : undefined}>
             <div className="rounded-xl border bg-card overflow-hidden shadow-sm">
               {segRules.isLoading ? (
                 <div className="p-3 space-y-2">{Array.from({ length: 2 }).map((_, i) => <div key={i} className="h-10 rounded bg-muted/50 animate-pulse" />)}</div>
