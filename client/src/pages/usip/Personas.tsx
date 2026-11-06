@@ -383,18 +383,18 @@ export default function Personas() {
               actions={(canEdit || canDelete) &&
                 <div className="flex gap-1 shrink-0">
                   {canEdit && (<>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="New persona in this category" onClick={() => startCreate(c.id)}>
-                    <Plus className="size-3.5" />
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Move up" disabled={i === 0 || reorderCategories.isPending} onClick={() => moveCategory(i, -1)}>
-                    <ArrowUp className="size-3.5" />
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Move down" disabled={i === cats.length - 1 || reorderCategories.isPending} onClick={() => moveCategory(i, 1)}>
-                    <ArrowDown className="size-3.5" />
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Rename category" onClick={() => startEditCategory(c)}>
-                    <Pencil className="size-3.5" />
-                  </Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="New persona in this category" onClick={() => startCreate(c.id)}>
+                      <Plus className="size-3.5" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Move up" disabled={i === 0 || reorderCategories.isPending} onClick={() => moveCategory(i, -1)}>
+                      <ArrowUp className="size-3.5" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Move down" disabled={i === cats.length - 1 || reorderCategories.isPending} onClick={() => moveCategory(i, 1)}>
+                      <ArrowDown className="size-3.5" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Rename category" onClick={() => startEditCategory(c)}>
+                      <Pencil className="size-3.5" />
+                    </Button>
                   </>)}
                   {canDelete && (
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Delete category" onClick={() => removeCategory(c)}>

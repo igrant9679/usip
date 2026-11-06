@@ -420,7 +420,9 @@ describe("personas: presets, deletes and dropped values say what happened (P125)
     const page = read("client/src/pages/usip/Personas.tsx");
     expect(page).toContain("reportDropped((await create.mutateAsync(personaPayload(form))).dropped);");
     expect(page).toContain("if (fromPreset.isPending) return;");
-    expect(page).toContain("disabled={fromPreset.isPending}");
+    // 2026-11-06 (audit P31): also disabled for anyone below manager, who may
+    // not create personas; the pending guard is unchanged.
+    expect(page).toContain("disabled={!canEdit || fromPreset.isPending}");
     expect(page).toContain('toast.success("Persona deleted");');
     expect(read("client/src/pages/usip/research/ResearchSector.tsx")).toContain("onSuccess: async (r) => { reportDropped(r.dropped); toast.success(\"Persona added\");");
   });

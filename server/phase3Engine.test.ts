@@ -72,7 +72,8 @@ describe("web scraping is not a discovery source (A25, P62)", () => {
     const find = read("server/services/discovery/index.ts");
     expect(find).not.toMatch(/id: "web"/);
     const scraper = read("server/routers/are/scraper.ts");
-    expect(scraper).toMatch(/scrapeWeb: workspaceProcedure/);
+    // 2026-11-06 (audit A36): every scrape is managerProcedure now; the endpoint stays.
+    expect(scraper).toMatch(/scrapeWeb: managerProcedure/);
   });
 });
 
@@ -284,7 +285,8 @@ describe("a disabled scrape source says so rather than returning a zero", () => 
     // `scraper.run` is what the campaign's Scraper tab calls, and it never
     // offered industry events. Asserted so that re-adding it to that enum
     // without re-enabling the source fails here.
-    const run = scraper.slice(scraper.indexOf("  run: workspaceProcedure"));
+    // 2026-11-06 (audit A36): every scrape is managerProcedure now; the endpoint stays.
+    const run = scraper.slice(scraper.indexOf("  run: managerProcedure"));
     expect(run.slice(0, run.indexOf("mutation"))).toContain('source: z.enum(["google_business", "linkedin", "web", "news"])');
     const tab = read("client/src/pages/usip/ARECampaignDetail.tsx");
     expect(tab).not.toContain("industryEvents");
@@ -293,7 +295,8 @@ describe("a disabled scrape source says so rather than returning a zero", () => 
 
   it("keeps the enum member and the endpoint, because history is stored under them", () => {
     // Making it absent instead of honest would rewrite what already happened.
-    expect(scraper).toContain("scrapeIndustryEvents: workspaceProcedure");
+    // 2026-11-06 (audit A36): every scrape is managerProcedure now; the endpoint stays.
+    expect(scraper).toContain("scrapeIndustryEvents: managerProcedure");
     expect(read("drizzle/schema.ts")).toContain('"web_scrape", "news", "industry_events",');
     expect(scraper).toContain('industry_events: "industry_event",');
     // And a stored row still gets a name, which now says the source is off.
