@@ -23,6 +23,7 @@ import {
   BarChart3, TrendingUp, Users, Mail, MessageSquare, CalendarCheck, Trophy, ArrowDown, Share2,
 } from "lucide-react";
 import { FailedLoadsBanner } from "@/components/usip/QueryState";
+import { socialFunnelSteps, socialStepNote } from "@/lib/socialFunnel";
 
 /**
  * `email_log.source` values that are OUTREACH. The rest — proposal,
@@ -113,19 +114,17 @@ export default function AnalyticsV2() {
   const wsMeetings = revFunnel.data?.reconciliation.workspaceMeetingsBooked ?? (meet.booked ?? 0);
 
   // LinkedIn / Social channel funnel: invite → accept → opener → reply → interested → meeting.
-  const sf = socialFunnel.data ?? { invitesSent: 0, invitesAccepted: 0, openersSent: 0, inboundReplies: 0, willingToMeet: 0, meetingsFromSocial: 0 } as any;
-  const socialSteps = [
-    { key: "invited", label: "Invites sent", value: sf.invitesSent ?? 0, icon: Share2, color: "#0A66C2" },
-    { key: "accepted", label: "Invites accepted", value: sf.invitesAccepted ?? 0, icon: Users, color: "#3B82F6" },
-    // unipile.socialFunnelStats counts every OUTBOUND DM here, not just the
-    // first message of a thread; and the last band counts messages that
-    // produced a meetings row, which is created `proposed` — a candidate the
-    // attendee has not agreed to. Neither label said so (2026-09-20).
-    { key: "openers", label: "Outbound messages", value: sf.openersSent ?? 0, icon: MessageSquare, color: "#8B5CF6" },
-    { key: "replies", label: "Replies", value: sf.inboundReplies ?? 0, icon: MessageSquare, color: "#6366F1" },
-    { key: "interested", label: "Interested (willing to meet)", value: sf.willingToMeet ?? 0, icon: Users, color: "#a855f7" },
-    { key: "meetings", label: "Meetings proposed from social", value: sf.meetingsFromSocial ?? 0, icon: CalendarCheck, color: "#059669" },
-  ];
+  // The bands and which of them may carry a rate are in lib/socialFunnel: a
+  // rate between bands that count different things ran past 100% (G57).
+  const SOCIAL_LOOK: Record<string, { icon: typeof Mail; color: string }> = {
+    invited: { icon: Share2, color: "#0A66C2" },
+    accepted: { icon: Users, color: "#3B82F6" },
+    openers: { icon: MessageSquare, color: "#8B5CF6" },
+    replies: { icon: MessageSquare, color: "#6366F1" },
+    interested: { icon: Users, color: "#a855f7" },
+    meetings: { icon: CalendarCheck, color: "#059669" },
+  };
+  const socialSteps = socialFunnelSteps(socialFunnel.data ?? {}).map((st) => ({ ...st, ...SOCIAL_LOOK[st.key] }));
   const socialMax = Math.max(1, ...socialSteps.map((f) => f.value));
   const socialActive = socialSteps.some((s) => s.value > 0);
 
@@ -218,13 +217,11 @@ export default function AnalyticsV2() {
               <div className="rounded-xl border bg-card p-4 shadow-sm space-y-3">
                 {socialSteps.map((f, i) => {
                   const pct = Math.round((f.value / socialMax) * 100);
-                  const prev = i > 0 ? socialSteps[i - 1].value : null;
-                  const stepConv = prev && prev > 0 ? Math.round((f.value / prev) * 100) : null;
                   return (
                     <div key={f.key}>
                       {i > 0 && (
                         <div className="flex items-center gap-1 text-[10px] text-muted-foreground pl-1 mb-1">
-                          <ArrowDown className="size-3" /> {stepConv !== null ? `${stepConv}% conversion` : ""}
+                          <ArrowDown className="size-3" /> {socialStepNote(socialSteps, i)}
                         </div>
                       )}
                       <div className="flex items-center gap-3">
@@ -313,10 +310,10 @@ export default function AnalyticsV2() {
             </section>
 
             <section>
-              <h2 className="text-sm font-semibold mb-2 flex items-center gap-2"><Trophy className="size-4" style={{ color: accent }} /> Top reps</h2>
+              <h2 className="text-sm font-semibold mb-2 flex items-center gap-2"><Trophy className="size-4" style={{ color: accent }} /> Top reps <span className="text-[11px] font-normal text-muted-foreground">· won this month</span></h2>
               <div className="rounded-xl border bg-card overflow-hidden shadow-sm">
                 {reps.length === 0 ? (
-                  <div className="text-xs text-muted-foreground text-center py-6">No closed-won yet.</div>
+                  <div className="text-xs text-muted-foreground text-center py-6">No deals won this month yet.</div>
                 ) : reps.map((r: any, i: number) => (
                   <div key={r.userId ?? i} className="flex items-center gap-3 px-3 py-2 border-b border-border/60 last:border-0">
                     <span className={cn("shrink-0 size-6 rounded-full flex items-center justify-center text-[11px] font-semibold", i === 0 ? "text-white" : "bg-secondary text-muted-foreground")} style={i === 0 ? { backgroundColor: accent } : undefined}>{i + 1}</span>

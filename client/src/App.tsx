@@ -31,6 +31,7 @@ const ContactRedirect = lazyChunk(() => import("@/pages/usip/ContactRedirect"));
 const Customers = lazyChunk(() => import("@/pages/usip/Customers"));
 const Dashboard = lazyChunk(() => import("@/pages/usip/Dashboard"));
 const Dashboards = lazyChunk(() => import("@/pages/usip/Dashboards"));
+const HomeRoute = lazyChunk(() => import("@/pages/usip/HomeRoute"));
 const Reports = lazyChunk(() => import("@/pages/usip/Reports"));
 const EmailAnalytics = lazyChunk(() => import("@/pages/usip/EmailAnalytics"));
 const EmailSuppressions = lazyChunk(() => import("@/pages/usip/EmailSuppressions").then((m) => ({ default: m.EmailSuppressions })));
@@ -448,7 +449,8 @@ function Router() {
     <ErrorBoundary resetKey={path} inline>
     <Suspense fallback={<PageLoading />}>
     <Switch>
-      <Route path="/"><AuthGate><Dashboard /></AuthGate></Route>
+      {/* "/" is the home picked with "Set as home" (G56): the Dashboard unless Home was picked. */}
+      <Route path="/"><AuthGate><HomeRoute /></AuthGate></Route>
       <Route path="/dashboard"><AuthGate><Dashboard /></AuthGate></Route>
       <Route path="/inbox"><AuthGate><Inbox /></AuthGate></Route>
       <Route path="/mailbox"><AuthGate><Mailbox /></AuthGate></Route>
