@@ -2116,10 +2116,12 @@ describe("a merge nobody can reach is not a merge", () => {
     // can check, and these two passes group on different things.
     expect(page).toContain('<PeopleMergeSection by="linkedin" />');
     expect(page).toContain("the same LinkedIn profile");
-    expect(page).toContain("LinkedIn profile${clusters.length === 1 ? \"\" : \"s\"} held by more than one People row");
+    // 2026-11-06 (audit P158): the heading counts every mergeable group, not
+    // the 50 listed, so its number is `totalLabel`; the wording is unchanged.
+    expect(page).toContain("LinkedIn profile${mergeableTotal === 1 ? \"\" : \"s\"} held by more than one People row");
     // The email pass is still rendered exactly as it was.
     expect(page).toContain("<PeopleMergeSection />");
-    expect(page).toContain("email${clusters.length === 1 ? \"\" : \"s\"} held by more than one People row");
+    expect(page).toContain("email${mergeableTotal === 1 ? \"\" : \"s\"} held by more than one People row");
   });
 
   it("the rows dropped for a placeholder slug are REPORTED, not silently absent", () => {
