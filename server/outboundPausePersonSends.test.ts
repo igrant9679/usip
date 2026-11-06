@@ -142,8 +142,10 @@ describe("every send a person clicks asks first", () => {
   it("Find meetings in Autonomous drafts instead of sending while paused", () => {
     const body = procedure(read("routers/meetings.ts"), "  generateProposals: repProcedure");
     expect(body).toContain("const paused = await isOutboundPaused(ctx.workspace.id);");
-    expect(body).toContain('const send = s?.mode === "auto" && !paused;');
-    expect(body).toContain("{ send }");
+    // 2026-11-06 (audit O29): it also drafts when the page did not confirm a
+    // send; the pause still turns every send off.
+    expect(body).toContain('const send = s?.mode === "auto" && !paused && input?.allowSend !== false;');
+    expect(body).toContain("{ send, onlyProspectIds: input?.prospectIds }");
   });
 
   it("an update with unchanged attendees is checked against the stored ones", () => {
