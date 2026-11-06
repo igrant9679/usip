@@ -285,8 +285,10 @@ describe("only one rank map", () => {
       "server/routers/are/scraper.ts",
       "server/routers/linkedinFinder.ts",
       "client/src/pages/usip/Team.tsx",
-      "client/src/pages/usip/CompanyProfile.tsx",
-      "client/src/components/usip/scoring/ProspectScoringPanel.tsx",
+      // 2026-11-06 (audit R10): CompanyProfile and ProspectScoringPanel read
+      // the WORKSPACE role through this one hook now, which holds the shared
+      // helpers for them; they ranked the platform role before.
+      "client/src/hooks/useWorkspaceRole.ts",
     ]) {
       const f = files.find((x) => x.rel === rel);
       expect(f, rel).toBeDefined();
@@ -297,11 +299,14 @@ describe("only one rank map", () => {
   it("the client reaches the hierarchy through @shared, not a local copy", () => {
     for (const rel of [
       "client/src/pages/usip/Team.tsx",
-      "client/src/pages/usip/CompanyProfile.tsx",
-      "client/src/components/usip/scoring/ProspectScoringPanel.tsx",
+      "client/src/hooks/useWorkspaceRole.ts",
     ]) {
       const f = files.find((x) => x.rel === rel);
       expect(f!.src, rel).toContain('from "@shared/roleRank"');
+    }
+    // 2026-11-06 (R10): the two former copies get the rank from that hook.
+    for (const rel of ["client/src/pages/usip/CompanyProfile.tsx", "client/src/components/usip/scoring/ProspectScoringPanel.tsx"]) {
+      expect(files.find((x) => x.rel === rel)!.src, rel).toContain('from "@/hooks/useWorkspaceRole"');
     }
   });
 });

@@ -328,9 +328,11 @@ export default function People() {
 
   // ── server query ──
   // Client SortField → prospects.list sort enum ("relevance" = fit score).
-  const SERVER_SORT: Record<SortField, "fit" | "name" | "title" | "company" | "email" | "phone" | "industry"> = {
+  // "employees" is the company's headcount, sorted on the server (R96); it
+  // mapped to the company name.
+  const SERVER_SORT: Record<SortField, "fit" | "name" | "title" | "company" | "email" | "phone" | "industry" | "employees"> = {
     relevance: "fit", name: "name", title: "title", emails: "email",
-    company: "company", phone: "phone", employees: "company", industries: "industry",
+    company: "company", phone: "phone", employees: "employees", industries: "industry",
   };
   // Tier / seniority / sort are whole-dataset (server) filters — reset paging
   // whenever they change so Total + page 1 reflect the new query.
@@ -527,6 +529,8 @@ export default function People() {
   // meta: { silentError: true } — a failed "remember where I was" stamp costs
   // the user nothing and must not shout at them mid-click.
   const markApplied = trpc.savedSearches.markApplied.useMutation({ meta: { silentError: true } });
+  // Choosing the Default view is remembered too (R59), the same quiet way.
+  const clearApplied = trpc.savedSearches.clearApplied.useMutation({ meta: { silentError: true } });
 
   /** What the page is showing right now, in the stored vocabulary. Only the
    *  ACTIVE filters go in, so a round trip through normalizeViewConfig is the
@@ -598,6 +602,7 @@ export default function People() {
     setSortDir(v.config.sort.dir);
     setPage(1);
     if (stamp && !v.system) markApplied.mutate({ id: Number(v.id) });
+    if (stamp && v.system) clearApplied.mutate({ surface: "people" });
   };
 
   const createSavedSearch = (name: string) => {
@@ -739,7 +744,8 @@ export default function People() {
               {[
                 { v: "verified", l: "Verified" },
                 { v: "needs_review", l: "Needs review" },
-                { v: "rejected", l: "Rejected" },
+                // Archive sets this; archived people are hidden unless it is picked (R64).
+                { v: "rejected", l: "Archived" },
               ].map((o) => (
                 <CheckRow
                   key={o.v}
@@ -757,7 +763,8 @@ export default function People() {
             <div className="space-y-0.5">
               {[
                 { v: "all", l: "Any" },
-                { v: "promoted", l: "Saved (converted to lead)" },
+                // The server's "saved" is a lead OR a contact, as the tile says (R56).
+                { v: "promoted", l: "Saved (a lead or contact)" },
                 { v: "not", l: "Net new (not yet saved)" },
               ].map((o) => (
                 <CheckRow
@@ -988,7 +995,7 @@ export default function People() {
               <ResearchAiMenu />
               <CreateWorkflowMenu />
               <Button variant="outline" size="sm" onClick={() => setSettings({ open: true, mode: "create" })}>Save as new search</Button>
-              <SortMenu onApply={(field, dir) => { setSortField(field); setSortDir(dir); }} />
+              <SortMenu current={{ field: sortField, dir: sortDir }} onApply={(field, dir) => { setSortField(field); setSortDir(dir); }} />
               <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setSettings({ open: true, mode: "settings" })}>
                 <Settings2 className="size-4" /> Search settings
               </Button>
@@ -1019,7 +1026,8 @@ export default function People() {
                   quick={{
                     highFit: () => { setTiers(new Set(["high"])); if (!openGroups.has("fit")) toggleGroup("fit"); },
                     hasEmail: () => { setHasEmail(true); resetPage(); },
-                    verified: () => { setEmailStatus("verified"); resetPage(); },
+                    // "valid" is the verdict rows hold; "verified" matched nobody (R59).
+                    verified: () => { setEmailStatus("valid"); resetPage(); },
                     cLevel: () => { setSeniorities(new Set(["c-level", "vp"])); },
                   }}
                   onImport={() => setLocation("/v2/data-enrichment?tab=import-contacts")}
@@ -1136,6 +1144,9 @@ export default function People() {
           {/* ── detail panel ── */}
           {selected && (
             <DetailPanel
+              // One panel per person (R95): its Enrich fully must not finish
+              // against whoever is selected by then.
+              key={selected.id}
               p={selected}
               onClose={() => setSelectedId(null)}
               onOpenFull={() => setLocation(`/prospects/${selected.id}`)}
@@ -1180,7 +1191,7 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
   const { data: enr } = trpc.linkedinEnrichment.getProspectEnrichment.useQuery({ prospectId: p.id });
   const utils = trpc.useUtils();
   const enrichFull = trpc.prospects.enrichFull.useMutation({
-    onSuccess: (r) => {
+    onSuccess: (r, vars) => {
       const changed = (r.decisions as Array<{ action: string; field: string }>).filter((x) => x.action === "filled" || x.action === "replaced");
       const corroborated = (r.decisions as Array<{ action: string }>).filter((x) => x.action === "corroborated").length;
       toast.success(
@@ -1192,9 +1203,10 @@ function DetailPanel({ p, onClose, onOpenFull }: { p: Prospect; onClose: () => v
         { description: Object.entries(r.phases as Record<string, string>).map(([k, v]) => `${k}: ${v}`).join(" · ").slice(0, 200) },
       );
       if (r.queuedLinkedInJob) toast("LinkedIn profile lookup queued — profile fields land shortly");
-      utils.prospects.get.invalidate({ id: p.id });
+      // The person the run was for, from its own input (R95).
+      utils.prospects.get.invalidate({ id: vars.prospectId });
       utils.prospects.list.invalidate();
-      utils.linkedinEnrichment.getProspectEnrichment.invalidate({ prospectId: p.id });
+      utils.linkedinEnrichment.getProspectEnrichment.invalidate({ prospectId: vars.prospectId });
     },
     onError: (e2) => toast.error(e2.message),
   });

@@ -11,6 +11,11 @@
  *   Sequence  — one fixed message per step, the same to everyone
  * plus List (bookmark, no outreach). Any person type is accepted; the
  * server resolves contacts and leads to their People row.
+ *
+ * Picking a campaign or sequence is a REVIEW, not the enrolment (audit
+ * 2026-10-20, R48): a mis-click on a row used to put everyone in at once. The
+ * pick shows who goes where and enrols on Confirm. List picks a list here and
+ * adds the people to it; it used to open the Lists page and drop them.
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "wouter";
@@ -32,11 +37,14 @@ export interface AddToMenuProps {
   onDone?: () => void;
 }
 
-type Pane = "root" | "campaign" | "sequence" | "bestfit";
+type Pane = "root" | "campaign" | "sequence" | "bestfit" | "list";
+type Pick = { kind: "campaign" | "sequence"; id: number; name: string; status?: string };
 
 export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], trigger, label = "Add to…", align = "start", onDone }: AddToMenuProps) {
   const [open, setOpen] = useState(false);
   const [pane, setPane] = useState<Pane>("root");
+  const [picked, setPicked] = useState<Pick | null>(null);
+  const [listId, setListId] = useState<number | null>(null);
   const utils = trpc.useUtils();
   const n = prospectIds.length + contactIds.length + leadIds.length;
 
@@ -44,8 +52,11 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
   const sequencesQ = trpc.sequences.list.useQuery(undefined, { enabled: open && pane === "sequence" });
   const campaigns = useMemo(() => ((campaignsQ.data ?? []) as any[]).filter((c) => c.status !== "archived" && c.status !== "completed"), [campaignsQ.data]);
   const sequences = useMemo(() => ((sequencesQ.data ?? []) as any[]).filter((s) => s.status !== "archived"), [sequencesQ.data]);
+  const listsQ = trpc.recordLists.list.useQuery(undefined, { enabled: open && pane === "list" });
+  const lists = useMemo(() => ((listsQ.data ?? []) as any[]).filter((l) => l.entityType !== "companies"), [listsQ.data]);
+  const go = (p: Pane) => { setPane(p); setPicked(null); setListId(null); };
 
-  const close = () => { setOpen(false); setPane("root"); onDone?.(); };
+  const close = () => { setOpen(false); go("root"); onDone?.(); };
   const invalidatePeople = () => {
     utils.prospects.enrollmentsFor.invalidate();
     utils.prospects.list.invalidate();
@@ -96,11 +107,43 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
     },
     onError: (e: any) => toast.error(e.message),
   });
+  const addToList = trpc.recordLists.addMembers.useMutation({
+    onSuccess: (r: any) => {
+      const name = lists.find((l) => l.id === listId)?.name ?? "the list";
+      toast.success(r.added > 0 ? `Added ${r.added} to "${name}"` : `Already in "${name}"`);
+      utils.recordLists.list.invalidate();
+      close();
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
   const routable = ((bestFitQ.data?.picks ?? []) as any[]).filter((p) => p.campaignId != null);
-  const pending = pushExisting.isPending || bulkEnroll.isPending || applyBestFit.isPending;
+  const pending = pushExisting.isPending || bulkEnroll.isPending || applyBestFit.isPending || addToList.isPending;
+  const who = n === 1 ? "this person" : `${n} people`;
+  const confirm = () => {
+    if (!picked) return;
+    if (picked.kind === "campaign") pushExisting.mutate({ campaignId: picked.id, prospectIds, contactIds, leadIds });
+    else bulkEnroll.mutate({ sequenceId: picked.id, prospectIds, contactIds, leadIds });
+  };
+  // The review: what Confirm will do, in words, before it does it.
+  const review = picked && (
+    <div className="p-2.5 border-t space-y-2">
+      <p className="text-[12.5px]">
+        Add {who} to the {picked.kind} <span className="font-medium">"{picked.name}"</span>
+        {picked.kind === "campaign" ? " — the engine enriches them and writes their emails." : " — each step sends the same message to everyone."}
+        {picked.status && picked.status !== "active" ? <span className="block text-[11.5px] text-amber-700 mt-0.5">It is {picked.status}: nothing is sent until it is active.</span> : null}
+      </p>
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={() => setPicked(null)} disabled={pending}>Back</Button>
+        <Button size="sm" onClick={confirm} disabled={pending}>
+          {pending ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : null}
+          Confirm
+        </Button>
+      </div>
+    </div>
+  );
 
   return (
-    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setPane("root"); }}>
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) go("root"); }}>
       <PopoverTrigger asChild>
         {trigger ?? (
           <Button variant="outline" size="sm" className="gap-1.5">
@@ -112,7 +155,7 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
         {pane === "root" && (
           <div className="py-1">
             <div className="px-3 py-2 text-[11px] uppercase tracking-wide text-muted-foreground">Add {n === 1 ? "this person" : `${n} people`} to</div>
-            <button type="button" onClick={() => setPane("bestfit")} className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted text-left">
+            <button type="button" onClick={() => go("bestfit")} className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted text-left">
               <Bot className="size-4 mt-0.5 shrink-0 text-violet-600" />
               <span className="flex-1 min-w-0">
                 <span className="block text-[13px] font-medium">Best-fit campaign ✦</span>
@@ -120,7 +163,7 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
               </span>
               <ChevronRight className="size-3.5 mt-1 text-muted-foreground" />
             </button>
-            <button type="button" onClick={() => setPane("campaign")} className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted text-left">
+            <button type="button" onClick={() => go("campaign")} className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted text-left">
               <Bot className="size-4 mt-0.5 shrink-0 text-violet-600" />
               <span className="flex-1 min-w-0">
                 <span className="block text-[13px] font-medium">Campaign</span>
@@ -128,7 +171,7 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
               </span>
               <ChevronRight className="size-3.5 mt-1 text-muted-foreground" />
             </button>
-            <button type="button" onClick={() => setPane("sequence")} className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted text-left">
+            <button type="button" onClick={() => go("sequence")} className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted text-left">
               <Activity className="size-4 mt-0.5 shrink-0 text-sky-600" />
               <span className="flex-1 min-w-0">
                 <span className="block text-[13px] font-medium">Sequence</span>
@@ -137,19 +180,20 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
               <ChevronRight className="size-3.5 mt-1 text-muted-foreground" />
             </button>
             {prospectIds.length > 0 && contactIds.length === 0 && leadIds.length === 0 && (
-              <Link href="/v2/lists" onClick={close} className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted text-left">
+              <button type="button" onClick={() => go("list")} className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted text-left">
                 <ListChecks className="size-4 mt-0.5 shrink-0 text-muted-foreground" />
                 <span className="flex-1 min-w-0">
                   <span className="block text-[13px] font-medium">List</span>
                   <span className="block text-[11.5px] text-muted-foreground">Bookmark them — no outreach</span>
                 </span>
-              </Link>
+                <ChevronRight className="size-3.5 mt-1 text-muted-foreground" />
+              </button>
             )}
           </div>
         )}
         {pane === "bestfit" && (
           <div>
-            <button type="button" onClick={() => setPane("root")} className="w-full px-3 py-2 border-b text-[13px] font-medium text-left hover:bg-muted">‹ Best-fit campaign</button>
+            <button type="button" onClick={() => go("root")} className="w-full px-3 py-2 border-b text-[13px] font-medium text-left hover:bg-muted">‹ Best-fit campaign</button>
             <div className="max-h-72 overflow-y-auto py-1">
               {bestFitQ.isLoading ? (
                 <div className="px-3 py-4 text-xs text-muted-foreground flex items-center gap-2"><Loader2 className="size-3 animate-spin" /> Scoring against every active campaign…</div>
@@ -182,16 +226,16 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
         )}
         {pane === "campaign" && (
           <div>
-            <button type="button" onClick={() => setPane("root")} className="w-full px-3 py-2 border-b text-[13px] font-medium text-left hover:bg-muted">‹ Campaign</button>
+            <button type="button" onClick={() => go("root")} className="w-full px-3 py-2 border-b text-[13px] font-medium text-left hover:bg-muted">‹ Campaign</button>
             <div className="max-h-64 overflow-y-auto py-1">
               {campaignsQ.isLoading ? (
                 <div className="px-3 py-4 text-xs text-muted-foreground flex items-center gap-2"><Loader2 className="size-3 animate-spin" /> Loading…</div>
               ) : campaigns.length === 0 ? (
                 <p className="px-3 py-4 text-[13px] text-muted-foreground">No campaigns yet — <Link href="/are/campaigns" className="underline">create one</Link> first.</p>
               ) : campaigns.map((c) => (
-                <button key={c.id} type="button" disabled={pending}
-                  onClick={() => pushExisting.mutate({ campaignId: c.id, prospectIds, contactIds, leadIds })}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-muted text-left disabled:opacity-60">
+                <button key={c.id} type="button" disabled={pending} aria-pressed={picked?.kind === "campaign" && picked.id === c.id}
+                  onClick={() => setPicked({ kind: "campaign", id: c.id, name: c.name, status: c.status })}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-muted text-left disabled:opacity-60 ${picked?.kind === "campaign" && picked.id === c.id ? "bg-muted" : ""}`}>
                   <Bot className="size-3.5 shrink-0 text-muted-foreground" />
                   <span className="flex-1 truncate">{c.name}</span>
                   {/* Phase 6: the copy model is the difference the user is choosing. */}
@@ -200,25 +244,53 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
                 </button>
               ))}
             </div>
+            {review}
           </div>
         )}
         {pane === "sequence" && (
           <div>
-            <button type="button" onClick={() => setPane("root")} className="w-full px-3 py-2 border-b text-[13px] font-medium text-left hover:bg-muted">‹ Sequence</button>
+            <button type="button" onClick={() => go("root")} className="w-full px-3 py-2 border-b text-[13px] font-medium text-left hover:bg-muted">‹ Sequence</button>
             <div className="max-h-64 overflow-y-auto py-1">
               {sequencesQ.isLoading ? (
                 <div className="px-3 py-4 text-xs text-muted-foreground flex items-center gap-2"><Loader2 className="size-3 animate-spin" /> Loading…</div>
               ) : sequences.length === 0 ? (
                 <p className="px-3 py-4 text-[13px] text-muted-foreground">No sequences yet — <Link href="/v2/sequences" className="underline">create one</Link> first.</p>
               ) : sequences.map((s) => (
-                <button key={s.id} type="button" disabled={pending}
-                  onClick={() => bulkEnroll.mutate({ sequenceId: s.id, prospectIds, contactIds, leadIds })}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-muted text-left disabled:opacity-60">
+                <button key={s.id} type="button" disabled={pending} aria-pressed={picked?.kind === "sequence" && picked.id === s.id}
+                  onClick={() => setPicked({ kind: "sequence", id: s.id, name: s.name, status: s.status })}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-muted text-left disabled:opacity-60 ${picked?.kind === "sequence" && picked.id === s.id ? "bg-muted" : ""}`}>
                   <Activity className="size-3.5 shrink-0 text-muted-foreground" />
                   <span className="flex-1 truncate">{s.name}</span>
                   <span className="text-[10px] text-muted-foreground capitalize">{s.status}</span>
                 </button>
               ))}
+            </div>
+            {review}
+          </div>
+        )}
+        {pane === "list" && (
+          <div>
+            <button type="button" onClick={() => go("root")} className="w-full px-3 py-2 border-b text-[13px] font-medium text-left hover:bg-muted">‹ List</button>
+            <div className="max-h-64 overflow-y-auto py-1">
+              {listsQ.isLoading ? (
+                <div className="px-3 py-4 text-xs text-muted-foreground flex items-center gap-2"><Loader2 className="size-3 animate-spin" /> Loading…</div>
+              ) : lists.length === 0 ? (
+                <p className="px-3 py-4 text-[13px] text-muted-foreground">No lists yet — <Link href="/v2/lists" className="underline">create one</Link> first.</p>
+              ) : lists.map((l) => (
+                <label key={l.id} className="flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-muted cursor-pointer">
+                  <input type="radio" name="addto-list" checked={listId === l.id} onChange={() => setListId(l.id)} className="size-3.5 accent-current" />
+                  <ListChecks className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="flex-1 truncate">{l.name}</span>
+                  <span className="text-[11px] text-muted-foreground tabular-nums">{l.memberCount ?? 0}</span>
+                </label>
+              ))}
+            </div>
+            <div className="p-2 border-t flex justify-end">
+              <Button size="sm" disabled={listId == null || pending}
+                onClick={() => listId != null && addToList.mutate({ listId, recordType: "prospect", recordIds: prospectIds })}>
+                {addToList.isPending ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : null}
+                Add {who} to list
+              </Button>
             </div>
           </div>
         )}

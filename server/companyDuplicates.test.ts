@@ -14,7 +14,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "fs";
 import path from "path";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
-import { accounts, contacts } from "../drizzle/schema";
+import { accounts, contactAccountLinks, contacts, prospects } from "../drizzle/schema";
 import type { TrpcContext } from "./_core/context";
 
 const h = vi.hoisted(() => ({ db: null as any }));
@@ -28,7 +28,14 @@ import { appRouter } from "./routers";
 
 const WS = { id: 3, name: "Acme Corp" };
 
-function makeDb(accountRows: unknown[], countRows: unknown[], cap: { accountsWhere?: unknown; contactsWhere?: unknown }) {
+/**
+ * 2026-11-06 (audit R65): the review counts a company's people the way its
+ * list row and profile do — distinct linked people whose rows exist — so the
+ * count reads contact_account_links and then the people it names, not the
+ * legacy contacts.accountId column. `linkRows` scripts the links; every
+ * person they name exists.
+ */
+function makeDb(accountRows: unknown[], linkRows: Array<{ accountId: number; personType: string; personId: number }>, cap: { accountsWhere?: unknown; contactsWhere?: unknown }) {
   const builder = () => {
     const st: { table?: unknown; joined: boolean } = { joined: false };
     const b: any = {
@@ -36,7 +43,7 @@ function makeDb(accountRows: unknown[], countRows: unknown[], cap: { accountsWhe
       innerJoin() { st.joined = true; return b; },
       where(cond: unknown) {
         if (st.table === accounts) cap.accountsWhere = cond;
-        if (st.table === contacts) cap.contactsWhere = cond;
+        if (st.table === contactAccountLinks) cap.contactsWhere = cond;
         return b;
       },
       groupBy() { return b; },
@@ -50,8 +57,11 @@ function makeDb(accountRows: unknown[], countRows: unknown[], cap: { accountsWhe
           }]);
         } else if (st.table === accounts) {
           res(accountRows);
-        } else if (st.table === contacts) {
-          res(countRows);
+        } else if (st.table === contactAccountLinks) {
+          res(linkRows);
+        } else if (st.table === contacts || st.table === prospects) {
+          const type = st.table === contacts ? "contact" : "prospect";
+          res(linkRows.filter((l) => l.personType === type).map((l) => ({ id: l.personId })));
         } else {
           rej(new Error(`fake db: unscripted select from ${String((st.table as any)?.[Symbol.for("drizzle:Name")] ?? st.table)}`));
         }
@@ -87,7 +97,7 @@ describe("companies.duplicates", () => {
         { id: 3, key: "other.com", name: "Other", domain: "other.com", createdAt: new Date("2026-03-01") }, // singleton — not a duplicate
         { id: 4, key: null, name: "No domain", domain: null, createdAt: new Date("2026-04-01") }, // unkeyed — can't collide
       ],
-      [{ accountId: 1, c: 5 }],
+      [101, 102, 103, 104, 105].map((personId) => ({ accountId: 1, personType: "contact", personId })),
       cap,
     );
 
@@ -108,8 +118,8 @@ describe("companies.duplicates", () => {
     expect(accountsWhere.sql).toContain("`accounts`.`archived_at` is null");
 
     const contactsWhere = render(cap.contactsWhere);
-    expect(contactsWhere.sql).toContain("`contacts`.`workspaceId` = ?");
-    expect(contactsWhere.sql).toContain("`accountId` in (");
+    expect(contactsWhere.sql).toContain("`contact_account_links`.`workspaceId` = ?");
+    expect(contactsWhere.sql).toContain("`account_id` in (");
   });
 
   it("returns [] when nothing collides (and never runs the count query)", async () => {
@@ -138,7 +148,7 @@ describe("companies.duplicates", () => {
         { id: 2, key: "dc.gov", nameKey: "takoma childrens school", name: "Takoma Children's School", domain: "dc.gov", createdAt: new Date("2026-02-01") },
         { id: 3, key: "ftc.gov", nameKey: "takoma childrens school", name: "Takoma Children's School", domain: "ftc.gov", createdAt: new Date("2026-03-01") },
       ],
-      [{ accountId: 2, c: 3 }],
+      [1, 2, 3].map((personId) => ({ accountId: 2, personType: "prospect", personId })),
       cap,
     );
     const out = await appRouter.createCaller(makeCtx()).companies.duplicates();
