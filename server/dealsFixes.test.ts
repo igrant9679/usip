@@ -24,6 +24,7 @@
  *         saves nothing; a closed deal's win % is left alone.
  *   R41 — a rep's forecast is their own; a deal's forecast category decides
  *         Commit and Best case, and an unmarked deal keeps the win % rule.
+ *   R101 — pipeline rename is a dialog; settings dialogs close when saved.
  *
  * Procedures run through the real router against the SQL-evaluating fake;
  * screens render with a stub trpc.
@@ -545,5 +546,24 @@ describe("R41: the forecast", () => {
     expect(detail).toContain('aria-label="Forecast category"');
     expect(detail).toContain("patch: { forecastCategory: (e.target.value || null)");
     expect(read("server/_core/rawMigrations.ts")).toContain("ALTER TABLE `opportunities` ADD COLUMN `forecastCategory` varchar(16) NULL");
+  });
+});
+
+/* ── R101: pipeline settings ───────────────────────────────────────────── */
+
+describe("R101: pipeline settings save before they close", () => {
+  const page = () => read("client/src/pages/usip/SettingsPipelines.tsx");
+  it("rename is a dialog, not window.prompt, and closes when the rename succeeds", () => {
+    expect(page()).not.toMatch(/\bprompt\(/);
+    expect(page()).toContain("onSuccess: () => { invalidateAll(); setRenameOpen(false); toast.success(\"Renamed\"); }");
+    expect(page()).toContain('<Field name="name" label="Name" required defaultValue={detail.pipeline.name} />');
+  });
+  it("a new stage, and a renamed one, close only when the save comes back", () => {
+    const src = page();
+    expect(src).toContain("const createStage = trpc.crmPipelines.createStage.useMutation({ onSuccess: () => { invalidateAll(); setNewStageOpen(false); }");
+    const dialog = src.slice(src.indexOf('title="New stage"'), src.indexOf('<Field name="label" label="Label"'));
+    expect(dialog).not.toContain("setNewStageOpen(false)");
+    expect(src).toContain("const renameStage = trpc.crmPipelines.updateStage.useMutation({ onSuccess: () => { invalidateAll(); setEditingId(null); }");
+    expect(src).not.toContain("updateStage.mutate({ id: s.id, patch: { label: editLabel } }); setEditingId(null);");
   });
 });
