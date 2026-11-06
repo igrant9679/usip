@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { confirmAction } from "@/components/usip/Common";
+import { SubmissionExtras } from "@/components/usip/SubmissionExtras";
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from "@/components/ui/select";
@@ -236,10 +237,11 @@ function SubmissionsDialog({ form, onClose }: { form: Form | null; onClose: () =
           ) : rows.length === 0 ? (
             <div className="text-center py-10 text-xs text-muted-foreground">No submissions yet. Share the form link to start capturing leads.</div>
           ) : rows.map((r: any) => (
-            <div key={r.id} className="flex items-center gap-3 px-3 py-2 border-b border-border/60 last:border-0">
+            <div key={r.id} className="flex items-start gap-3 px-3 py-2 border-b border-border/60 last:border-0">
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium truncate">{r.name || r.email || "Anonymous"}</div>
                 <div className="text-[11px] text-muted-foreground truncate">{[r.email, r.company].filter(Boolean).join(" · ")}</div>
+                <SubmissionExtras data={r.data} />
               </div>
               {r.leadId && <span className="shrink-0 text-[10px] rounded px-1.5 py-0.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">lead #{r.leadId}</span>}
               <div className="shrink-0 text-[10px] text-muted-foreground tabular-nums">{r.createdAt ? new Date(r.createdAt).toLocaleDateString() : ""}</div>

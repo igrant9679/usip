@@ -16,6 +16,7 @@ import { FieldLabelContext } from "@/components/ui/field-label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { confirmAction } from "@/components/usip/Common";
+import { SubmissionExtras } from "@/components/usip/SubmissionExtras";
 import {
   ArrowLeft, LayoutTemplate, Plus, Trash2, Copy, ExternalLink, Check, Globe, Eye, Send, Loader2, GripVertical,
 } from "lucide-react";
@@ -332,18 +333,21 @@ export default function LandingPages() {
                 ) : (
                   <div className="rounded-lg border divide-y divide-border/60 max-h-64 overflow-auto">
                     {submissions.map((s) => (
-                      <div key={s.id} className="flex items-center gap-2 px-3 py-2 text-[13px]">
-                        <span className="font-medium truncate">{s.name || s.email || "Anonymous"}</span>
-                        {s.email && s.name && <span className="text-muted-foreground truncate">· {s.email}</span>}
-                        {s.company && <span className="text-muted-foreground truncate hidden sm:inline">· {s.company}</span>}
-                        <span className="flex-1" />
-                        {/* The whole point of the row: a capture with no lead is now visible. */}
-                        {s.leadId ? (
-                          <span className="shrink-0 text-[10px] rounded px-1.5 py-0.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">lead #{s.leadId}</span>
-                        ) : (
-                          <span className="shrink-0 text-[10px] rounded px-1.5 py-0.5 bg-muted text-muted-foreground">no lead</span>
-                        )}
-                        <span className="text-[11px] text-muted-foreground shrink-0">{s.createdAt ? new Date(s.createdAt).toLocaleDateString() : ""}</span>
+                      <div key={s.id} className="px-3 py-2 text-[13px]">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium truncate">{s.name || s.email || "Anonymous"}</span>
+                          {s.email && s.name && <span className="text-muted-foreground truncate">· {s.email}</span>}
+                          {s.company && <span className="text-muted-foreground truncate hidden sm:inline">· {s.company}</span>}
+                          <span className="flex-1" />
+                          {/* The whole point of the row: a capture with no lead is now visible. */}
+                          {s.leadId ? (
+                            <span className="shrink-0 text-[10px] rounded px-1.5 py-0.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">lead #{s.leadId}</span>
+                          ) : (
+                            <span className="shrink-0 text-[10px] rounded px-1.5 py-0.5 bg-muted text-muted-foreground">no lead</span>
+                          )}
+                          <span className="text-[11px] text-muted-foreground shrink-0">{s.createdAt ? new Date(s.createdAt).toLocaleDateString() : ""}</span>
+                        </div>
+                        <SubmissionExtras data={s.data} />
                       </div>
                     ))}
                   </div>
