@@ -7,12 +7,14 @@
  * - Pre-send suppression check (used by smtpConfig.sendDraft)
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, desc, eq, inArray, like, or } from "drizzle-orm";
 import { z } from "zod";
 import { emailSuppressions, contacts, prospects } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { isSuppressed, normalizeSuppressionEmail } from "../unsubscribe";
+
+const escapeLike = (v: string) => v.replace(/[\\%_]/g, (m) => `\\${m}`);
 
 export const emailSuppressionsRouter = {
   /** List all suppressions for the workspace */
@@ -20,8 +22,14 @@ export const emailSuppressionsRouter = {
     .input(
       z.object({
         reason: z.enum(["unsubscribe", "bounce", "spam_complaint", "manual", "all"]).default("all"),
-        limit: z.number().int().min(1).max(200).default(50),
+        limit: z.number().int().min(1).max(201).default(50),
         offset: z.number().int().min(0).default(0),
+        /**
+         * Part of an address, matched in SQL (audit 2026-10-20, O53): the page
+         * filtered the one page of 50 it had fetched, so an address on page
+         * three was "not found".
+         */
+        search: z.string().trim().max(320).optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -35,7 +43,8 @@ export const emailSuppressionsRouter = {
             eq(emailSuppressions.workspaceId, ctx.workspace.id),
             input.reason !== "all"
               ? eq(emailSuppressions.reason, input.reason as any)
-              : undefined
+              : undefined,
+            input.search ? like(emailSuppressions.email, `%${escapeLike(input.search.toLowerCase())}%`) : undefined,
           )
         )
         .orderBy(desc(emailSuppressions.createdAt))
