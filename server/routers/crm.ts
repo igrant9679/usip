@@ -44,6 +44,7 @@ import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { linkEmailLogToDraft } from "../services/email/logSend";
+import { insertIdOf } from "../_core/insertId";
 import { router } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull } from "../_core/activeMembers";
@@ -1062,7 +1063,7 @@ export const contactsRouter = router({
           });
           // Join the log row to the draft that owns this send's open/click
           // counters, so the Emails page can show them (migration 0163).
-          const draftId = Number((inserted as unknown as { insertId?: number })?.insertId ?? 0);
+          const draftId = insertIdOf(inserted);
           if (draftId) await linkEmailLogToDraft(ctx.workspace.id, sentMessageId, draftId);
           await db.insert(activities).values({
             workspaceId: ctx.workspace.id,
@@ -1829,7 +1830,7 @@ export const leadsRouter = router({
         });
         // Join the log row to the draft that owns this send's open/click
         // counters, so the Emails page can show them (migration 0163).
-        const draftId = Number((inserted as unknown as { insertId?: number })?.insertId ?? 0);
+        const draftId = insertIdOf(inserted);
         if (draftId) await linkEmailLogToDraft(ctx.workspace.id, sentMessageId, draftId);
         await db.insert(activities).values({
           workspaceId: ctx.workspace.id,

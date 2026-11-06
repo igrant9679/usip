@@ -418,7 +418,10 @@ export const voiceAgentsRouter = router({
       status: input.status,
       discoveryQuestions: cleanQuestions(input.discoveryQuestions),
     });
-    return { id: Number((r as unknown as { insertId?: number })?.insertId ?? 0) };
+    // mysql2 answers an insert with [ResultSetHeader, fields]: the id is on the
+    // first element. Reading it off the array returned 0, and the form's follow-up
+    // Plivo-number save (skipped on a falsy id) never ran for a new agent (N4).
+    return { id: Number((r as unknown as { insertId?: number }[])[0]?.insertId ?? 0) };
   }),
 
   update: workspaceProcedure
