@@ -194,21 +194,7 @@ async function cascadeDeleteAccountDependents(
     .where(and(eq(opportunities.workspaceId, workspaceId), inArray(opportunities.accountId, accountIds)));
   const oppIds = oppRows.map((o) => o.id);
   if (oppIds.length > 0) {
-    const quoteRows = await db
-      .select({ id: quotes.id })
-      .from(quotes)
-      .where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.opportunityId, oppIds)));
-    const quoteIds = quoteRows.map((q) => q.id);
-    if (quoteIds.length > 0) {
-      await db.delete(quoteLineItems).where(inArray(quoteLineItems.quoteId, quoteIds));
-      await db.delete(quotes).where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.id, quoteIds)));
-    }
-    await db.delete(dealLineItems).where(inArray(dealLineItems.opportunityId, oppIds));
-    await db.delete(opportunityContactRoles).where(inArray(opportunityContactRoles.opportunityId, oppIds));
-    await db.delete(opportunityStageHistory).where(inArray(opportunityStageHistory.opportunityId, oppIds));
-    await db.delete(opportunityIntelligence).where(inArray(opportunityIntelligence.opportunityId, oppIds));
-    await db.delete(stageApprovals).where(inArray(stageApprovals.opportunityId, oppIds));
-    await db.delete(pipelineAlerts).where(inArray(pipelineAlerts.opportunityId, oppIds));
+    await cascadeDeleteOpportunityDependents(db, workspaceId, oppIds);
     await db.delete(opportunities).where(and(eq(opportunities.workspaceId, workspaceId), inArray(opportunities.id, oppIds)));
   }
 
@@ -223,6 +209,36 @@ async function cascadeDeleteAccountDependents(
     // (Clodura execution tables removed 2026-08-11 — nothing to cascade.)
     await db.delete(contacts).where(and(eq(contacts.workspaceId, workspaceId), inArray(contacts.id, contactIds)));
   }
+}
+
+/**
+ * The rows that belong to the given deals and mean nothing without them:
+ * quotes (+ their lines), line items, contact roles, stage history, AI
+ * intelligence, stage approvals and pipeline alerts. `oppIds` must already be
+ * this workspace's; every delete is also scoped by workspace where the table
+ * has the column. Proposals, tasks and activities are soft links and stay.
+ */
+async function cascadeDeleteOpportunityDependents(
+  db: Pick<NonNullable<Awaited<ReturnType<typeof getDb>>>, "select" | "delete">,
+  workspaceId: number,
+  oppIds: number[],
+): Promise<void> {
+  if (oppIds.length === 0) return;
+  const quoteRows = await db
+    .select({ id: quotes.id })
+    .from(quotes)
+    .where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.opportunityId, oppIds)));
+  const quoteIds = quoteRows.map((q) => q.id);
+  if (quoteIds.length > 0) {
+    await db.delete(quoteLineItems).where(inArray(quoteLineItems.quoteId, quoteIds));
+    await db.delete(quotes).where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.id, quoteIds)));
+  }
+  await db.delete(dealLineItems).where(and(eq(dealLineItems.workspaceId, workspaceId), inArray(dealLineItems.opportunityId, oppIds)));
+  await db.delete(opportunityContactRoles).where(and(eq(opportunityContactRoles.workspaceId, workspaceId), inArray(opportunityContactRoles.opportunityId, oppIds)));
+  await db.delete(opportunityStageHistory).where(and(eq(opportunityStageHistory.workspaceId, workspaceId), inArray(opportunityStageHistory.opportunityId, oppIds)));
+  await db.delete(opportunityIntelligence).where(and(eq(opportunityIntelligence.workspaceId, workspaceId), inArray(opportunityIntelligence.opportunityId, oppIds)));
+  await db.delete(stageApprovals).where(and(eq(stageApprovals.workspaceId, workspaceId), inArray(stageApprovals.opportunityId, oppIds)));
+  await db.delete(pipelineAlerts).where(and(eq(pipelineAlerts.workspaceId, workspaceId), inArray(pipelineAlerts.opportunityId, oppIds)));
 }
 
 /* ──────────────────────────────────────────────────────────────────────── */
@@ -2011,11 +2027,20 @@ export const opportunitiesRouter = router({
     return { ok: true };
   }),
 
+  /**
+   * The deal and what the confirmation says goes with it (audit 2026-10-20,
+   * R32): line items, contact roles, quotes, stage history and alerts were
+   * left behind. One transaction, so a failure part-way leaves the deal whole.
+   */
   delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(opportunities).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
-    await db.delete(opportunities).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+    if (!before) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+    await db.transaction(async (tx) => {
+      await cascadeDeleteOpportunityDependents(tx, ctx.workspace.id, [before.id]);
+      await tx.delete(opportunities).where(and(eq(opportunities.id, before.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+    });
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "opportunity", entityId: input.id, before });
     return { ok: true };
   }),
@@ -2036,6 +2061,11 @@ export const opportunitiesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Both ids are caller-controlled; the deal page now sends them (R35).
+      const [opp] = await db.select({ id: opportunities.id }).from(opportunities)
+        .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+      if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+      await assertRowInWorkspace(db, "contact", input.contactId, ctx.workspace.id);
       try {
         await db.insert(opportunityContactRoles).values({ ...input, workspaceId: ctx.workspace.id });
       } catch (e) {
@@ -2072,6 +2102,10 @@ export const opportunitiesRouter = router({
       const [opp] = await db.select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value }).from(opportunities)
         .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
       if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+      // The product too: another workspace's would list as a line with no name.
+      const [product] = await db.select({ id: products.id }).from(products)
+        .where(and(eq(products.id, input.productId), eq(products.workspaceId, ctx.workspace.id)));
+      if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "Product not found" });
       // Same arithmetic rule as a quote line — @shared/quoteTotals, in integer
       // cents. This was a fourth copy of the formula: it stored `unitPrice`
       // rounded by the DECIMAL(14,2) column while computing `lineTotal` from the
