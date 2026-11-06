@@ -298,6 +298,8 @@ export function makeSqlFakeDb(opts: {
       orderBy(...o: unknown[]) { st.order = o; return b; },
       limit(n: number) { st.limit = n; return b; },
       offset(n: number) { st.offset = n; return b; },
+      // SELECT … FOR UPDATE: a lock between callers, and the fake has only one.
+      for() { return b; },
       then(res: (v: unknown) => void, rej: (e: unknown) => void) { try { res(run()); } catch (e) { rej(e); } },
       catch(rej: (e: unknown) => void) { return Promise.resolve().then(run).catch(rej); },
     };

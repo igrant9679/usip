@@ -18,6 +18,7 @@ import { ArrowDown, ArrowUp, Pencil, Plus, Sparkles, Trash2, GitMerge } from "lu
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 
 type Group = "all" | "any";
 type Rule = {
@@ -37,6 +38,8 @@ export default function LeadRouting() {
   const { data: members } = trpc.workspace.members.useQuery();
   const [editing, setEditing] = useState<Rule | null>(null);
   const memberList = (members as Member[] | undefined) ?? [];
+  // New, edit, delete and reorder are an admin's on the server (P120).
+  const isAdmin = useWorkspaceRole().isAdmin;
 
   const remove = trpc.leadRouting.remove.useMutation({ onSuccess: () => { utils.leadRouting.list.invalidate(); toast.success("Rule deleted"); }, onError: (e) => toast.error(e.message) });
   const reorder = trpc.leadRouting.reorder.useMutation({ onSuccess: () => utils.leadRouting.list.invalidate(), onError: (e) => toast.error(e.message) });
@@ -60,9 +63,11 @@ export default function LeadRouting() {
       <PageHeader title="Lead Routing Engine" description="Configure routing rules that automatically assign inbound leads to the right rep or team. Base assignments on territory, industry, lead score, or round-robin rotation. Rules run top to bottom; the first that matches assigns the lead." pageKey="lead-routing"
         icon={<GitMerge className="size-5" />}
       >
-        <Button onClick={() => setEditing({ name: "", priority: ((rules?.length ?? 0) + 1) * 10, enabled: true, conditions: { all: [], any: [] }, strategy: "round_robin", targetUserIds: [] })}>
-          <Plus className="size-4" /> New rule
-        </Button>
+        {isAdmin && (
+          <Button onClick={() => setEditing({ name: "", priority: ((rules?.length ?? 0) + 1) * 10, enabled: true, conditions: { all: [], any: [] }, strategy: "round_robin", targetUserIds: [] })}>
+            <Plus className="size-4" /> New rule
+          </Button>
+        )}
       </PageHeader>
       <SubNav items={LEAD_ASSIGNMENT_NAV} />
 
@@ -72,7 +77,7 @@ export default function LeadRouting() {
         ) : !rules ? (
           <TableSkeleton rows={4} />
         ) : rules.length === 0 ? (
-          <EmptyState icon={Sparkles} title="No routing rules yet" description="Add a rule to auto-assign new leads on creation." />
+          <EmptyState icon={Sparkles} title="No routing rules yet" description={isAdmin ? "Add a rule to auto-assign new leads on creation." : "An admin adds the rules that auto-assign new leads."} />
         ) : (
           <div className="rounded-lg border bg-card overflow-x-auto">
             <table className="w-full text-sm">
@@ -96,12 +101,12 @@ export default function LeadRouting() {
                   return (
                   <tr key={r.id}
                     className="hover:bg-secondary/30"
-                    draggable={!reordering}
+                    draggable={isAdmin && !reordering}
                     onDragStart={(e) => { e.dataTransfer.setData("text/plain", String(i)); e.dataTransfer.effectAllowed = "move"; }}
                     onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
                     onDrop={(e) => {
                       e.preventDefault();
-                      if (reordering) return;
+                      if (!isAdmin || reordering) return;
                       const fromIdx = Number(e.dataTransfer.getData("text/plain"));
                       if (Number.isNaN(fromIdx) || fromIdx === i) return;
                       const ids = rules.map((x) => x.id);
@@ -113,10 +118,14 @@ export default function LeadRouting() {
                     <td className="px-3 py-2">
                       {/* The position is the order rules run in; the stored priority is how it is kept (P124). */}
                       <div className="flex gap-1 items-center">
-                        <span className="cursor-grab text-muted-foreground select-none" title="Drag to reorder">⋮⋮</span>
+                        {isAdmin && <span className="cursor-grab text-muted-foreground select-none" title="Drag to reorder">⋮⋮</span>}
                         <span className="tabular-nums text-xs text-muted-foreground w-5">{i + 1}</span>
-                        <Button aria-label="Move rule up" size="icon" variant="ghost" className="h-6 w-6" onClick={() => move(i, -1)} disabled={i === 0 || reordering}><ArrowUp className="size-3" /></Button>
-                        <Button aria-label="Move rule down" size="icon" variant="ghost" className="h-6 w-6" onClick={() => move(i, +1)} disabled={i === rules.length - 1 || reordering}><ArrowDown className="size-3" /></Button>
+                        {isAdmin && (
+                          <>
+                            <Button aria-label="Move rule up" size="icon" variant="ghost" className="h-6 w-6" onClick={() => move(i, -1)} disabled={i === 0 || reordering}><ArrowUp className="size-3" /></Button>
+                            <Button aria-label="Move rule down" size="icon" variant="ghost" className="h-6 w-6" onClick={() => move(i, +1)} disabled={i === rules.length - 1 || reordering}><ArrowDown className="size-3" /></Button>
+                          </>
+                        )}
                       </div>
                     </td>
                     <td className="px-3 py-2 font-medium">
@@ -139,6 +148,7 @@ export default function LeadRouting() {
                       <span className="px-1.5 rounded text-xs bg-emerald-100 text-emerald-700">Active</span>
                     )}</td>
                     <td className="px-3 py-2 text-right space-x-1">
+                      {isAdmin && (<>
                       <Button size="sm" variant="ghost" onClick={() => setEditing({
                         id: r.id, name: r.name, priority: r.priority, enabled: r.enabled,
                         conditions: editableConditions(r.conditions),
@@ -146,6 +156,7 @@ export default function LeadRouting() {
                         targetUserIds: targets,
                       })}><Pencil className="size-3.5" /> Edit</Button>
                       <Button aria-label={`Delete rule ${r.name}`} size="sm" variant="ghost" className="text-rose-600" onClick={() => { confirmAction({ title: `Delete rule "${r.name}"?`, description: "This routing rule will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { remove.mutate({ id: r.id }); }); }}><Trash2 className="size-3.5" /></Button>
+                      </>)}
                     </td>
                   </tr>
                   );
