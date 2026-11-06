@@ -185,6 +185,8 @@ export default function DataEnrichment() {
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => setLocation("/are")}><Sparkles className="size-4 mr-2" /> Auto-enrich with ARE</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setLocation(SWEEP_SETTINGS)}><Activity className="size-4 mr-2" /> Schedule the enrichment sweep</DropdownMenuItem>
+                {/* Was reachable only from a People menu (audit 2026-10-20, P96). */}
+                <DropdownMenuItem onClick={() => setLocation("/v2/data-enrichment/linkedin")}><Upload className="size-4 mr-2" /> Import LinkedIn URLs</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
