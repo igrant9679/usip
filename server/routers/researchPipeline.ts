@@ -155,7 +155,6 @@ async function runStages(
 ): Promise<void> {
   const { pipelineId, recipient } = input;
   const ws = input.workspaceId;
-  const own = and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws));
   // The prospect's market research, by their title and industry.
   const marketFor = (surface: "research" | "outreach"): ResearchUse => ({ surface, prospectTitle: recipient.personTitle || null, industry: recipient.companyIndustry || null });
 
@@ -185,7 +184,7 @@ async function runStages(
       undefined,
       marketFor("research"),
     );
-    await db.update(researchPipelines).set({ stage1_prospect: stage1, currentStage: 2 }).where(own);
+    await db.update(researchPipelines).set({ stage1_prospect: stage1, currentStage: 2 }).where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
 
     /* ── Stage 2: Signal detection ── */
     const stage2 = await llmJson<any>(
@@ -218,7 +217,7 @@ async function runStages(
       undefined,
       marketFor("research"),
     );
-    await db.update(researchPipelines).set({ stage2_signals: stage2, currentStage: 3 }).where(own);
+    await db.update(researchPipelines).set({ stage2_signals: stage2, currentStage: 3 }).where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
 
     /* ── Stage 3: Angle generation ── */
     const stage3 = await llmJson<any>(
@@ -250,7 +249,7 @@ async function runStages(
       undefined,
       marketFor("research"),
     );
-    await db.update(researchPipelines).set({ stage3_angles: stage3, currentStage: 4 }).where(own);
+    await db.update(researchPipelines).set({ stage3_angles: stage3, currentStage: 4 }).where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
 
     /* ── Stage 4: Draft candidates ── */
     const angles = stage3?.angles ?? [];
@@ -288,7 +287,7 @@ async function runStages(
       { sendersBrand: true },
       marketFor("outreach"),
     );
-    await db.update(researchPipelines).set({ stage4_draft: stage4, currentStage: 5 }).where(own);
+    await db.update(researchPipelines).set({ stage4_draft: stage4, currentStage: 5 }).where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
 
     /* ── Stage 5: Final selection ── */
     const variants: { subject?: string; body?: string; rationale?: string }[] = stage4?.variants ?? [];
@@ -340,12 +339,12 @@ async function runStages(
     await db
       .update(researchPipelines)
       .set({ stage5_final: stage5, status: "complete", currentStage: 5, emailDraftId: draftId, completedAt: new Date() })
-      .where(own);
+      .where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
   } catch (err: any) {
     await db
       .update(researchPipelines)
       .set({ status: "failed", errorMessage: String(err?.message ?? err).slice(0, 2000) })
-      .where(own);
+      .where(and(eq(researchPipelines.id, pipelineId), eq(researchPipelines.workspaceId, ws)));
   }
 }
 
