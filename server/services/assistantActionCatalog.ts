@@ -49,7 +49,7 @@ export const ALLOWED_GROUPS: Record<string, { group: string; description: string
   contacts: { group: "CRM", description: "Contacts on accounts" },
   accounts: { group: "CRM", description: "Accounts (companies in the CRM)" },
   companies: { group: "CRM", description: "Company records: search, brand pin, enrich, duplicates" },
-  leads: { group: "CRM", description: "Leads: create, update, convert, rescore" },
+  leads: { group: "CRM", description: "Leads: create, update, convert (scores: leadScoring)" },
   opportunities: { group: "CRM", description: "Deals / opportunities: create, update, stage moves" },
   deals: { group: "CRM", description: "Deal autopilot and pipeline helpers" },
   tasks: { group: "CRM", description: "Tasks: create, complete, snooze, approve drafts" },
