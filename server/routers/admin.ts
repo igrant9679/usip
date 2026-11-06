@@ -510,6 +510,10 @@ export const teamRouter = router({
         avatarUrl: users.avatarUrl,
         loginMethod: users.loginMethod,
         hasPassword: sql<number>`CASE WHEN ${users.passwordHash} IS NOT NULL THEN 1 ELSE 0 END`,
+        // Whether the member signs in with an authenticator app — the Team
+        // page's 2FA badge and its Reset 2FA button read it (audit
+        // 2026-10-20, G15). A flag, never the secret.
+        mfaEnabled: sql<number>`CASE WHEN ${users.mfaTotpEnabledAt} IS NOT NULL THEN 1 ELSE 0 END`,
         role: workspaceMembers.role,
         title: workspaceMembers.title,
         quota: workspaceMembers.quota,

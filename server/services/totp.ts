@@ -78,6 +78,20 @@ export function matchTotpStep(secretB32: string, code: string, window = 1, nowMs
   return null;
 }
 
+/**
+ * Why a code was refused, for the person typing it (tracker 2026-11-06, item
+ * 16). `step` is matchTotpStep's answer: null means the code is not this
+ * account's current code; a number means it was, but its 30-second step was
+ * already spent. Both used to read "didn't match", so someone who enrolled
+ * and signed straight back in — the same code still on their screen — was
+ * told their working authenticator was wrong.
+ */
+export function totpRefusal(step: number | null): string {
+  return step === null
+    ? "That authentication code didn't match — check that your phone's clock is set automatically, then try the code your app shows now."
+    : "That code has already been used. Wait for your authenticator app to show the next code (they change every 30 seconds), then enter it.";
+}
+
 /** Verify a user-supplied code, allowing ±`window` 30s steps of clock drift. */
 export function verifyTotp(secretB32: string, code: string, window = 1, nowMs = Date.now()): boolean {
   return matchTotpStep(secretB32, code, window, nowMs) !== null;
