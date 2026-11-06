@@ -4909,6 +4909,16 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // The help seed re-applied its articles and tours on every boot, reverting an
+  // admin's edits and restoring what they deleted (audit G21). This records
+  // what a person changed so the seed leaves it alone. New table, additive.
+  {
+    name: "0270_help_seed_overrides.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `help_seed_overrides` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `kind` varchar(16) NOT NULL, `seedKey` varchar(200) NOT NULL, `action` varchar(16) NOT NULL, `userId` int NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY `ux_hso_key` (`workspaceId`, `kind`, `seedKey`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

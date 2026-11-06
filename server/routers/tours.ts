@@ -14,6 +14,7 @@ import {
   workspaceMembers,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { noteHelpOverride } from "../services/helpSeedOverrides";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 
@@ -52,6 +53,16 @@ const TOUR_STEP = z.object({
   backAllowed: z.boolean().default(true),
   branchingRules: z.any().optional(),
 });
+
+/**
+ * Tell the boot seeds a person changed this tour, by the name it has now, so
+ * the next deploy neither reverts the edit nor restores a delete (G21).
+ */
+async function noteTourChanged(db: Awaited<ReturnType<typeof requireDb>>, workspaceId: number, tourId: number, action: "edited" | "deleted", userId: number) {
+  const [row] = await db.select({ name: tours.name }).from(tours)
+    .where(and(eq(tours.id, tourId), eq(tours.workspaceId, workspaceId))).limit(1);
+  if (row) await noteHelpOverride(db, workspaceId, "tour", row.name, action, userId);
+}
 
 /** Steps are written by tourId, so the tour has to be proved this workspace's first. */
 async function assertTourHere(db: Awaited<ReturnType<typeof requireDb>>, tourId: number, workspaceId: number): Promise<void> {
@@ -171,6 +182,7 @@ export const toursRouter = router({
       let tourId = id;
       if (id) {
         await assertTourHere(db, id, ctx.workspace.id);
+        await noteTourChanged(db, ctx.workspace.id, id, "edited", ctx.user.id);
         await db
           .update(tours)
           .set(rest)
@@ -196,6 +208,7 @@ export const toursRouter = router({
         .where(and(eq(tours.id, input.tourId), eq(tours.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!tour) throw new TRPCError({ code: "NOT_FOUND" });
+      await noteHelpOverride(db, ctx.workspace.id, "tour", tour.name, "edited", ctx.user.id);
       await db.delete(tourSteps).where(and(eq(tourSteps.id, input.stepId), eq(tourSteps.tourId, input.tourId)));
     }),
 
@@ -214,6 +227,7 @@ export const toursRouter = router({
         .where(and(eq(tours.id, input.id), eq(tours.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!owned) throw new TRPCError({ code: "NOT_FOUND", message: "Tour not found" });
+      await noteTourChanged(db, ctx.workspace.id, owned.id, "deleted", ctx.user.id);
       await db.delete(tourSteps).where(eq(tourSteps.tourId, owned.id));
       await db.delete(tours).where(and(eq(tours.id, owned.id), eq(tours.workspaceId, ctx.workspace.id)));
     }),
@@ -471,6 +485,7 @@ export const toursRouter = router({
       const db = await requireDb();
       const { id, steps, ...rest } = input;
       await assertTourHere(db, id, ctx.workspace.id);
+      await noteTourChanged(db, ctx.workspace.id, id, "edited", ctx.user.id);
       await db.update(tours).set(rest).where(and(eq(tours.id, id), eq(tours.workspaceId, ctx.workspace.id)));
       if (steps) await writeSteps(db, id, steps);
       return { id };
@@ -491,6 +506,7 @@ export const toursRouter = router({
         .where(and(eq(tours.id, input.id), eq(tours.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!owned) throw new TRPCError({ code: "NOT_FOUND", message: "Tour not found" });
+      await noteTourChanged(db, ctx.workspace.id, owned.id, "deleted", ctx.user.id);
       await db.delete(tourSteps).where(eq(tourSteps.tourId, owned.id));
       await db.delete(tours).where(and(eq(tours.id, owned.id), eq(tours.workspaceId, ctx.workspace.id)));
       return { ok: true };

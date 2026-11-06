@@ -20,8 +20,19 @@ import { invokeLLM } from "../_core/llm";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { PRODUCT_KNOWLEDGE } from "../productKnowledge";
+import { noteHelpOverride } from "../services/helpSeedOverrides";
 
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
+
+/**
+ * Tell the boot seed a person changed this article, by the slug it has now, so
+ * the next deploy neither reverts the edit nor restores a delete (G21).
+ */
+async function noteArticleChanged(db: Awaited<ReturnType<typeof requireDb>>, workspaceId: number, id: number, action: "edited" | "deleted", userId: number) {
+  const [row] = await db.select({ slug: helpArticles.slug }).from(helpArticles)
+    .where(and(eq(helpArticles.id, id), eq(helpArticles.workspaceId, workspaceId))).limit(1);
+  if (row) await noteHelpOverride(db, workspaceId, "article", row.slug, action, userId);
+}
 
 async function requireDb() {
   const db = await getDb();
@@ -203,6 +214,7 @@ export const helpCenterRouter = router({
         tags: rest.tags ?? [],
       };
       if (id) {
+        await noteArticleChanged(db, ctx.workspace.id, id, "edited", ctx.user.id);
         await db
           .update(helpArticles)
           .set(payload)
@@ -217,6 +229,7 @@ export const helpCenterRouter = router({
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
+      await noteArticleChanged(db, ctx.workspace.id, input.id, "deleted", ctx.user.id);
       await db
         .delete(helpArticles)
         .where(and(eq(helpArticles.id, input.id), eq(helpArticles.workspaceId, ctx.workspace.id)));
@@ -682,6 +695,7 @@ Keep the article under 600 words. Be friendly and action-oriented.`,
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
       const { id, ...rest } = input;
+      await noteArticleChanged(db, ctx.workspace.id, id, "edited", ctx.user.id);
       await db.update(helpArticles).set(rest).where(and(eq(helpArticles.id, id), eq(helpArticles.workspaceId, ctx.workspace.id)));
       return { id };
     }),
