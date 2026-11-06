@@ -3,7 +3,7 @@
  * source the way the repo's other screen guards do.
  */
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -135,6 +135,25 @@ describe("the settings hub says where you are (G51)", () => {
 
   it("the audit page's row carries its title", () => {
     expect(hub).toContain('{ id: "system-activity", label: "Audit log", icon: Activity, href: "/audit" }');
+  });
+});
+
+describe("dead client code is gone (G67)", () => {
+  // Each was imported by nothing, routed nowhere and lazy-loaded by nobody
+  // (checked 2026-11-06): template leftovers, and a SendGrid card unmounted on
+  // 2026-08-14. A file brought back should be wired into something.
+  const gone = [
+    "client/src/pages/Placeholder.tsx",
+    "client/src/pages/ComponentShowcase.tsx",
+    "client/src/pages/Home.tsx",
+    "client/src/components/AIChatBox.tsx",
+    "client/src/components/DashboardLayout.tsx",
+    "client/src/components/DashboardLayoutSkeleton.tsx",
+    "client/src/components/LoginDialog.tsx",
+    "client/src/components/usip/settings/SendGridCard.tsx",
+  ];
+  it.each(gone)("%s", (f) => {
+    expect(existsSync(join(root, f))).toBe(false);
   });
 });
 
