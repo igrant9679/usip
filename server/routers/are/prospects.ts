@@ -30,7 +30,8 @@
  * decision, not something to infer.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, like, lt, ne, or, sql } from "drizzle-orm";
+import { enqueueJob, findActiveJob, getJob, registerJobKind } from "../../services/jobs/runner";
 import { retryAt } from "../../services/are/retryBackoff";
 import { HELD_PAUSED, holdProspectSteps, releaseProspectSteps } from "../../services/are/stepHold";
 import { z } from "zod";
@@ -39,6 +40,7 @@ import {
   areCampaigns,
   areEngineLogs,
   areExecutionQueue,
+  bulkJobs,
   icpProfiles,
   notifications,
   prospectIntelligence,
@@ -183,6 +185,15 @@ import { parseTargetPlaces, placeFit, placeStringOf } from "../../services/place
 const NO_REASON = "No reason given";
 
 /** Why Regenerate is refused for a sequence already on the calendar (A40). */
+/** The approve line when a campaign has none, as the engine's (areEngine DEFAULT_APPROVE_THRESHOLD). */
+const DEFAULT_REEVAL_THRESHOLD = 70;
+/** How every engine score rejection's reason begins (the screen pass and the enrichment gate). */
+export const AUTO_SCORE_REJECTION = "Auto-screened: ICP match";
+/** Rejections one Re-evaluate All run re-scores, each one model call (A11). */
+export const REEVAL_ALL_MAX = 500;
+export const REEVAL_ALL_JOB = "are.reevaluateRejections";
+type ReevalAllPayload = { campaignId: number; prospectIds: number[]; threshold: number; runId: number };
+
 export const REGENERATE_SCHEDULED_MESSAGE =
   "This sequence is already scheduled, and regenerating it would not change the emails waiting to go. Edit a step to change what sends, or cancel the sequence, regenerate, and approve again.";
 
@@ -1318,6 +1329,71 @@ export async function runSequenceAgent(
     throw err;
   }
 }
+
+/* ─── Re-evaluate All, in the background (audit A11) ──────────────────────── */
+
+/**
+ * One rejection re-scored. Only while it is still the engine's score
+ * rejection: a person may have restored or rejected it since the run began.
+ * One that now clears the line goes back to pending, and its rejection reason
+ * and date stay as the record of why it had been out. Returns whether it
+ * re-qualified.
+ */
+async function reEvaluateOneRejection(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  prospectId: number,
+  threshold: number,
+): Promise<boolean> {
+  const [p] = await db.select().from(prospectQueue)
+    .where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, workspaceId))).limit(1);
+  if (!p || p.sequenceStatus !== "skipped" || p.rejectedByUserId != null || !String(p.rejectionReason ?? "").startsWith(AUTO_SCORE_REJECTION)) return false;
+  const [icp] = await db.select().from(icpProfiles)
+    .where(and(eq(icpProfiles.workspaceId, workspaceId), eq(icpProfiles.isActive, true))).limit(1);
+  const [camp] = await db.select({ icpOverrides: areCampaigns.icpOverrides }).from(areCampaigns)
+    .where(and(eq(areCampaigns.id, p.campaignId), eq(areCampaigns.workspaceId, workspaceId))).limit(1);
+  const effectiveIcp = buildEffectiveIcp(icp, camp?.icpOverrides);
+  if (!effectiveIcp) throw new Error("No active ICP profile or campaign targeting");
+  const match = await scoreIcpMatch(p, effectiveIcp, workspaceId);
+  const requalifies = match.score >= threshold;
+  await db.update(prospectQueue).set({
+    icpMatchScore: match.score,
+    icpMatchBreakdown: JSON.stringify(match.breakdown),
+    ...(requalifies ? { sequenceStatus: "pending" as const } : {}),
+  }).where(and(
+    eq(prospectQueue.id, prospectId),
+    eq(prospectQueue.workspaceId, workspaceId),
+    eq(prospectQueue.sequenceStatus, "skipped"),
+    isNull(prospectQueue.rejectedByUserId),
+  ));
+  return requalifies;
+}
+
+registerJobKind<ReevalAllPayload>(REEVAL_ALL_JOB, {
+  async step(job, payload, budgetMs) {
+    const db = await getDb();
+    if (!db) throw new Error("Database unavailable");
+    const until = Date.now() + budgetMs;
+    const ids = payload.prospectIds ?? [];
+    let i = job.resumeFrom;
+    let done = 0;
+    const failures: Array<{ id: number; error: string }> = [];
+    while (i < ids.length && Date.now() < until) {
+      let requalified = false;
+      try {
+        requalified = await reEvaluateOneRejection(db, job.workspaceId, ids[i], payload.threshold);
+        done++;
+      } catch (e) {
+        failures.push({ id: ids[i], error: ((e as Error)?.message ?? String(e)).slice(0, 200) });
+      }
+      await db.update(reevalRuns)
+        .set({ processed: sql`${reevalRuns.processed} + 1`, ...(requalified ? { requalified: sql`${reevalRuns.requalified} + 1` } : {}) })
+        .where(and(eq(reevalRuns.id, payload.runId), eq(reevalRuns.workspaceId, job.workspaceId)));
+      i++;
+    }
+    return { cursor: i, done, failures, finished: i >= ids.length, message: `Re-evaluated ${i} of ${ids.length}` };
+  },
+});
 
 /* ─── Router ─────────────────────────────────────────────────────────────── */
 
@@ -2764,7 +2840,10 @@ export const prospectsRouter = router({
         .where(and(eq(prospectNotes.id, input.noteId), eq(prospectNotes.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!note) throw new TRPCError({ code: "NOT_FOUND" });
-      if (note.userId !== ctx.user.id && ctx.user.role !== "admin") {
+      // The WORKSPACE role (audit A75): `ctx.user.role` is the platform's, so a
+      // workspace admin could not delete a note while any platform admin could,
+      // in every workspace they belonged to.
+      if (note.userId !== ctx.user.id && !isAdminRole(ctx.member.role)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Only the note author or an admin can delete notes." });
       }
       await db.delete(prospectNotes).where(and(
@@ -2921,14 +3000,16 @@ export const prospectsRouter = router({
         .where(and(eq(icpProfiles.workspaceId, ctx.workspace.id), eq(icpProfiles.isActive, true)))
         .limit(1);
       const [reCamp] = await db
-        .select({ icpOverrides: areCampaigns.icpOverrides })
+        .select({ icpOverrides: areCampaigns.icpOverrides, autoApproveThreshold: areCampaigns.autoApproveThreshold })
         .from(areCampaigns)
         .where(and(eq(areCampaigns.id, prospect.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)))
         .limit(1);
       const effectiveIcp = buildEffectiveIcp(icp, reCamp?.icpOverrides);
       if (!effectiveIcp) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No active ICP profile or campaign targeting" });
       const match = await scoreIcpMatch(prospect, effectiveIcp, ctx.workspace.id);
-      const autoApproveThreshold = 70; // fallback default
+      // The campaign's own approve line (audit A75); 70 only when it has none,
+      // as in Re-evaluate All and the engine.
+      const autoApproveThreshold = reCamp?.autoApproveThreshold ?? DEFAULT_REEVAL_THRESHOLD;
       // Re-grading moves only a prospect that is not in a sequence (audit
       // 2026-10-20, A2): sending one who had replied, completed or was
       // enrolled back to "pending" was the first half of re-enrolling them.
@@ -2983,49 +3064,63 @@ export const prospectsRouter = router({
         .limit(1);
       const effectiveIcp = buildEffectiveIcp(icp, campaign.icpOverrides);
       if (!effectiveIcp) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No active ICP profile or campaign targeting" });
-      // Fetch all rejected (skipped) prospects for this campaign
+      // Use override threshold if provided (from quick-edit in dialog), else campaign's actual threshold, else 70
+      const autoApproveThreshold = input.overrideThreshold ?? campaign.autoApproveThreshold ?? DEFAULT_REEVAL_THRESHOLD;
+      // One run per campaign at a time: a second click gets the running one back.
+      const running = await findActiveJob<ReevalAllPayload>(ctx.workspace.id, REEVAL_ALL_JOB, (p) => p.campaignId === input.campaignId);
+      if (running) return { jobId: running.id, total: running.total, threshold: autoApproveThreshold, alreadyRunning: true };
+      /**
+       * Only the engine's own SCORE rejections (audit 2026-10-20, A11). This
+       * re-scored every rejected row — a person's rejection, a suppression, a
+       * territory or never-target verdict — and put any that scored well back
+       * in the queue with its reason erased. A person's decision has their id
+       * on it (rejectedByUserId); the engine's score verdicts all begin
+       * AUTO_SCORE_REJECTION. Bounded, and run as a background job so the
+       * request returns at once and the progress is real.
+       */
       const rejected = await db
-        .select()
+        .select({ id: prospectQueue.id })
         .from(prospectQueue)
         .where(and(
           eq(prospectQueue.campaignId, input.campaignId),
           eq(prospectQueue.workspaceId, ctx.workspace.id),
           eq(prospectQueue.sequenceStatus, "skipped"),
-        ));
-      if (rejected.length === 0) return { processed: 0, requalified: 0, threshold: campaign.autoApproveThreshold ?? 70 };
-      // Use override threshold if provided (from quick-edit in dialog), else campaign's actual threshold, else 70
-      const autoApproveThreshold = input.overrideThreshold ?? campaign.autoApproveThreshold ?? 70;
-      let requalified = 0;
-      for (const prospect of rejected) {
-        try {
-          const match = await scoreIcpMatch(prospect, effectiveIcp, ctx.workspace.id);
-          const newStatus = match.score >= autoApproveThreshold ? "pending" : "skipped";
-          if (newStatus === "pending") requalified++;
-          await db.update(prospectQueue).set({
-            icpMatchScore: match.score,
-            icpMatchBreakdown: JSON.stringify(match.breakdown),
-            sequenceStatus: newStatus,
-            rejectedAt: newStatus === "pending" ? null : prospect.rejectedAt,
-            rejectionReason: newStatus === "pending" ? null : prospect.rejectionReason,
-          }).where(eq(prospectQueue.id, prospect.id));
-        } catch (e) {
-          console.error("[reEvaluateAll] Failed for prospect", prospect.id, e);
-        }
-      }
-      // Log the run to reeval_runs for history tracking
-      try {
-        await db.insert(reevalRuns).values({
-          workspaceId: ctx.workspace.id,
-          campaignId: input.campaignId,
-          createdByUserId: ctx.user.id,
-          thresholdUsed: autoApproveThreshold,
-          processed: rejected.length,
-          requalified,
-        });
-      } catch (e) {
-        console.error("[reEvaluateAll] Failed to log run history", e);
-      }
-      return { processed: rejected.length, requalified, threshold: autoApproveThreshold };
+          isNull(prospectQueue.rejectedByUserId),
+          like(prospectQueue.rejectionReason, `${AUTO_SCORE_REJECTION}%`),
+        ))
+        .orderBy(prospectQueue.id)
+        .limit(REEVAL_ALL_MAX);
+      if (rejected.length === 0) return { jobId: null, total: 0, threshold: autoApproveThreshold, alreadyRunning: false };
+      // The run's history row is written first and counted up as it goes.
+      const [run] = await db.insert(reevalRuns).values({
+        workspaceId: ctx.workspace.id,
+        campaignId: input.campaignId,
+        createdByUserId: ctx.user.id,
+        thresholdUsed: autoApproveThreshold,
+        processed: 0,
+        requalified: 0,
+      }).$returningId();
+      const payload: ReevalAllPayload = { campaignId: input.campaignId, prospectIds: rejected.map((r) => r.id), threshold: autoApproveThreshold, runId: run.id };
+      const { job } = await enqueueJob({ workspaceId: ctx.workspace.id, userId: ctx.user.id, kind: REEVAL_ALL_JOB, payload, total: rejected.length });
+      return { jobId: job.id, total: rejected.length, threshold: autoApproveThreshold, alreadyRunning: false };
+    }),
+
+  /** Progress of a Re-evaluate All run (A11): how far it has got, and how many re-qualified. */
+  getReevalJob: workspaceProcedure
+    .input(z.object({ jobId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const job = await getJob(ctx.workspace.id, input.jobId);
+      if (!job || job.kind !== REEVAL_ALL_JOB) return null;
+      const db = await getDb();
+      if (!db) return null;
+      const [row] = await db.select({ payload: bulkJobs.payload }).from(bulkJobs)
+        .where(and(eq(bulkJobs.id, input.jobId), eq(bulkJobs.workspaceId, ctx.workspace.id))).limit(1);
+      const runId = (row?.payload as ReevalAllPayload | null)?.runId;
+      const [run] = runId
+        ? await db.select({ requalified: reevalRuns.requalified }).from(reevalRuns)
+          .where(and(eq(reevalRuns.id, runId), eq(reevalRuns.workspaceId, ctx.workspace.id))).limit(1)
+        : [];
+      return { status: job.status, total: job.total, done: job.done, failed: job.failed, requalified: Number(run?.requalified ?? 0), message: job.message };
     }),
 
   getReevalHistory: workspaceProcedure

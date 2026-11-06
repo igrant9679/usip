@@ -77,6 +77,13 @@ describe("a pause saved while a tick is sending (A29)", () => {
     expect(logs().join("\n")).toContain("Dispatch stopped part-way: outbound was paused for this workspace");
   });
 
+  it("a pause saved before the tick is honoured even while the cached window still reads open", async () => {
+    rows("workspace_settings")[0].outboundPausedAt = new Date();
+    await runAreEngine({ workspaceId: WS });
+    expect(h.sends).toEqual([]);
+    expect(steps().map((s) => s.status)).toEqual(["scheduled", "scheduled", "scheduled"]);
+  });
+
   it("stops when the campaign is paused", async () => {
     h.afterSend = (n) => { if (n === 1) rows("are_campaigns")[0].status = "paused"; };
     await runAreEngine({ workspaceId: WS });

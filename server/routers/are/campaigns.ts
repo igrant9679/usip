@@ -9,6 +9,22 @@ import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, sql } fr
 import { z } from "zod";
 import { areCampaigns, areEngineLogs, campaignRoutingSuggestions, personas, prospectIntelligence, prospectQueue, prospects, researchSectors, sequences, workspaceSettings } from "../../../drizzle/schema";
 
+/**
+ * A first launch asks for the workspace's time zone while it is still the UTC
+ * default (audit 2026-10-20, A31). The cap and the window moved to the
+ * workspace's zone, but a workspace that never chose one still ran on UTC with
+ * nothing saying so. A workspace that wants UTC launches with confirmTimezone.
+ */
+async function assertTimezoneChosen(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number): Promise<void> {
+  const [row] = await db
+    .select({ timezone: workspaceSettings.timezone })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId))
+    .limit(1);
+  const tz = String(row?.timezone ?? "").trim();
+  if (!tz || tz === "UTC") throw new TRPCError({ code: "PRECONDITION_FAILED", message: TIMEZONE_UNSET_ON_LAUNCH });
+}
+
 /** A caller-chosen research sector must be this workspace's. */
 async function assertResearchSectorInWorkspace(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, sectorId: number, workspaceId: number) {
   const [row] = await db
@@ -24,7 +40,7 @@ import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../../_c
 import { DISCOVERY_REST_MS, ENGINE_LOG_RETENTION_DAYS, runAreEngine } from "../../areEngine";
 import { getWorkspaceSendWindow } from "../../services/sendWindow";
 import { getWorkspaceTimezone, startOfLocalDay } from "../../services/workspaceTimezone";
-import { describeSendWindow, isWithinSendWindow, nextSendWindowOpening } from "@shared/sendWindow";
+import { TIMEZONE_UNSET_ON_LAUNCH, describeSendWindow, isWithinSendWindow, nextSendWindowOpening } from "@shared/sendWindow";
 import { promoteApprovedProspects } from "../../services/are/approvePromotion";
 import { respaceOverdueSteps } from "../../services/are/stepHold";
 import { campaignCapMessage, campaignHeadroom } from "../../services/are/campaignConcurrency";
@@ -158,11 +174,14 @@ export const campaignsRouter = router({
          * 10-minute cron tick.
          */
         launch: z.boolean().default(false),
+        /** Launch even though the workspace's zone is still the UTC default (A31). */
+        confirmTimezone: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      if (input.launch && !input.confirmTimezone) await assertTimezoneChosen(db, ctx.workspace.id);
 
       // Resolve persona → seed icpOverrides if a personaId was supplied.
       let icpOverrides: any = input.icpOverrides;
@@ -734,7 +753,12 @@ export const campaignsRouter = router({
     }),
 
   setStatus: workspaceProcedure
-    .input(z.object({ id: z.number(), status: z.enum(["draft", "active", "paused", "completed"]) }))
+    .input(z.object({
+      id: z.number(),
+      status: z.enum(["draft", "active", "paused", "completed"]),
+      /** Launch even though the workspace's zone is still the UTC default (A31). */
+      confirmTimezone: z.boolean().optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -743,10 +767,15 @@ export const campaignsRouter = router({
         // slot it is being counted against, so a no-op re-save (or a second
         // click on Start) would fail at exactly the limit and look like a bug.
         const [current] = await db
-          .select({ status: areCampaigns.status })
+          .select({ status: areCampaigns.status, startedAt: areCampaigns.startedAt })
           .from(areCampaigns)
           .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)))
           .limit(1);
+        // A first launch only: a campaign that has run before already ran in
+        // whatever zone the workspace has, and resuming it is not the moment.
+        if (current && !current.startedAt && current.status !== "active" && !input.confirmTimezone) {
+          await assertTimezoneChosen(db, ctx.workspace.id);
+        }
         if (current && current.status !== "active") {
           const h = await campaignHeadroom(ctx.workspace.id);
           if (!h.hasRoom) throw new TRPCError({ code: "FORBIDDEN", message: campaignCapMessage(h) });
@@ -1127,6 +1156,10 @@ export const campaignsRouter = router({
         .select({
           working: sql<number>`sum(case when ${prospectQueue.sequenceStatus} <> 'skipped' then 1 else 0 end)`,
           rejected: sql<number>`sum(case when ${prospectQueue.sequenceStatus} = 'skipped' then 1 else 0 end)`,
+          // Staged rows count toward "working" (the engine counts them) but the
+          // Prospects list hides them, so "queue full" over a near-empty list
+          // read as a lie (audit 2026-10-20, A26). Counted apart, and said.
+          staged: sql<number>`sum(case when ${prospectQueue.sequenceStatus} = 'sourcing' then 1 else 0 end)`,
         })
         .from(prospectQueue)
         .where(and(...scoped));
@@ -1158,6 +1191,8 @@ export const campaignsRouter = router({
           working,
           target: campaign.targetProspectCount,
           rejected: Number(queue?.rejected ?? 0),
+          /** Of `working`: discovered without an email, staged while one is found, not on the Prospects list. */
+          staged: Number(queue?.staged ?? 0),
           full: working >= campaign.targetProspectCount,
           /** Below target does not mean searching: discovery rests after an empty run. */
           discoveryRestingUntil: restUntilMs && restUntilMs > Date.now() ? new Date(restUntilMs).toISOString() : null,
