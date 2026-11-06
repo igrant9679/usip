@@ -283,30 +283,42 @@ export const toursRouter = router({
     .input(z.object({ tourId: z.number(), stepIndex: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
+      await assertTourHere(db, input.tourId, ctx.workspace.id);
+      const [row] = await db.select({ id: userTourProgress.id }).from(userTourProgress)
+        .where(and(eq(userTourProgress.userId, ctx.user.id), eq(userTourProgress.tourId, input.tourId))).limit(1);
+      // No row when startTour never landed (G59): record from here rather than drop it.
+      if (!row) {
+        await db.insert(userTourProgress).values({
+          workspaceId: ctx.workspace.id, userId: ctx.user.id, tourId: input.tourId,
+          status: "in_progress", currentStep: input.stepIndex, startedAt: new Date(),
+        });
+        return;
+      }
       await db
         .update(userTourProgress)
         .set({ currentStep: input.stepIndex, lastResumedAt: new Date() })
-        .where(
-          and(
-            eq(userTourProgress.userId, ctx.user.id),
-            eq(userTourProgress.tourId, input.tourId),
-          ),
-        );
+        .where(eq(userTourProgress.id, row.id));
     }),
 
   completeTour: workspaceProcedure
     .input(z.object({ tourId: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
-      await db
-        .update(userTourProgress)
-        .set({ status: "completed", completedAt: new Date() })
-        .where(
-          and(
-            eq(userTourProgress.userId, ctx.user.id),
-            eq(userTourProgress.tourId, input.tourId),
-          ),
-        );
+      await assertTourHere(db, input.tourId, ctx.workspace.id);
+      const [row] = await db.select({ id: userTourProgress.id }).from(userTourProgress)
+        .where(and(eq(userTourProgress.userId, ctx.user.id), eq(userTourProgress.tourId, input.tourId))).limit(1);
+      // A completion with no progress row (G59) still counts: write one.
+      if (!row) {
+        await db.insert(userTourProgress).values({
+          workspaceId: ctx.workspace.id, userId: ctx.user.id, tourId: input.tourId,
+          status: "completed", startedAt: new Date(), completedAt: new Date(),
+        });
+      } else {
+        await db
+          .update(userTourProgress)
+          .set({ status: "completed", completedAt: new Date() })
+          .where(eq(userTourProgress.id, row.id));
+      }
 
       // Award achievement
       const [tour] = await db.select().from(tours).where(eq(tours.id, input.tourId)).limit(1);

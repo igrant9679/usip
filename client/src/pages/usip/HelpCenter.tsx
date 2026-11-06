@@ -437,7 +437,9 @@ function AdminTab() {
   const [editArticle, setEditArticle] = useState<any | null>(null);
   const [isNew, setIsNew] = useState(false);
 
-  const { data: articles, refetch } = trpc.helpCenter.listArticles.useQuery({ limit: 50 });
+  // Every status, and every article: the default was published-only and the
+  // first 50, so drafts never showed here (G59).
+  const { data: articles, refetch } = trpc.helpCenter.listArticles.useQuery({ status: "all", limit: 500 });
   const { data: categories } = trpc.helpCenter.listCategories.useQuery();
   const { data: insights } = trpc.helpCenter.getInsights.useQuery();
 

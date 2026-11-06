@@ -21,6 +21,7 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { PRODUCT_KNOWLEDGE } from "../productKnowledge";
 import { noteHelpOverride } from "../services/helpSeedOverrides";
+import { isAdminRole } from "@shared/roleRank";
 
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -98,7 +99,8 @@ export const helpCenterRouter = router({
         categoryId: z.number().optional(),
         status: z.enum(["draft", "published", "all"]).default("published"),
         pageKey: z.string().optional(),
-        limit: z.number().min(1).max(100).default(50),
+        // 500: the admin list shows every article; the seed alone ships ~90 (G59).
+        limit: z.number().min(1).max(500).default(50),
         offset: z.number().default(0),
       }),
     )
@@ -106,7 +108,10 @@ export const helpCenterRouter = router({
       const db = await requireDb();
       const conditions = [eq(helpArticles.workspaceId, ctx.workspace.id)];
       if (input.categoryId) conditions.push(eq(helpArticles.categoryId, input.categoryId));
-      if (input.status !== "all") conditions.push(eq(helpArticles.status, input.status));
+      // Drafts and archived articles are an admin's to see (the Admin tab asks
+      // for "all"); anyone else gets published, whatever they ask for.
+      const status = isAdminRole(ctx.member.role) ? input.status : "published";
+      if (status !== "all") conditions.push(eq(helpArticles.status, status));
       if (input.pageKey) conditions.push(eq(helpArticles.pageKey, input.pageKey));
       return db
         .select()
