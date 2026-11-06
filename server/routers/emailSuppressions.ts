@@ -44,7 +44,7 @@ export const emailSuppressionsRouter = {
             input.reason !== "all"
               ? eq(emailSuppressions.reason, input.reason as any)
               : undefined,
-            input.search ? like(emailSuppressions.email, `%${escapeLike(input.search.toLowerCase())}%`) : undefined,
+            input.search ? like(emailSuppressions.email, `%${escapeLike(input.search.trim().toLowerCase())}%`) : undefined,
           )
         )
         .orderBy(desc(emailSuppressions.createdAt))
