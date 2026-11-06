@@ -486,9 +486,13 @@ describe("G7: SCIM filters, reports `active`, and deactivates", () => {
   });
 
   it("an IdP can't remove the last active super admin, or the owner", async () => {
+    // Owned by an admin here, so it is the super-admin rule that refuses.
+    row("workspaces", LSI).ownerUserId = 20;
     const r = await call("PATCH /api/scim/v2/Users/:id", { params: { id: "23" }, body: { active: false } });
     expect(r.statusCode).toBe(409);
+    expect(r.body.detail).toMatch(/only active super admin/);
     expect(row("workspace_members", 4).deactivatedAt).toBeNull();
+    row("workspaces", LSI).ownerUserId = 23;
     addSecondSuper();
     const owner = await call("DELETE /api/scim/v2/Users/:id", { params: { id: "23" } });
     expect(owner.statusCode).toBe(409);
@@ -528,6 +532,7 @@ describe("G49: SCIM tokens are hashed and audited; CSV cells can't run formulas"
     const { bearerToken: first } = await caller(20).scim.createProvider({ name: "Okta" });
     const id = rows("scim_providers")[0].id;
     const { bearerToken: second } = await caller(20).scim.rotateToken({ id });
+    expect(row("scim_providers", id).bearerToken, "stored hashed from the start").toBe(hashScimToken(second));
     expect((await verifyScimBearer(`Bearer ${first}`)).ok).toBe(false);
     expect((await verifyScimBearer(`Bearer ${second}`)).ok).toBe(true);
     expect(h.audits.some((a) => a.entityType === "scim_provider" && a.after?.tokenRotated)).toBe(true);
