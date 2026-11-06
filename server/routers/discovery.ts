@@ -16,11 +16,11 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { discoveryLogs, discoveryRuns, rawFinds } from "../../drizzle/schema";
+import { areCampaigns, discoveryLogs, discoveryRuns, rawFinds } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
-import { runDiscovery } from "../services/discovery";
+import { failOrphanedDiscoveryRuns, runDiscovery } from "../services/discovery";
 import { processRun } from "../services/discovery/consolidate";
 
 const PersonInput = z.object({
@@ -55,6 +55,15 @@ export const discoveryRouter = router({
       z.object({ mode: z.literal("account"), input: AccountInput, campaignId: z.number().optional(), sources: z.array(z.string().max(40)).min(1).max(20).optional() }),
     ]))
     .mutation(async ({ ctx, input }) => {
+      // The run is stored against this campaign and shows in its Logs tab, so
+      // it has to be one of this workspace's (audit 2026-10-20, P145).
+      if (input.campaignId != null) {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [c] = await db.select({ id: areCampaigns.id }).from(areCampaigns)
+          .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id))).limit(1);
+        if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "That campaign is not in this workspace." });
+      }
       return runDiscovery(ctx.workspace.id, ctx.user.id, input.mode, input.input, input.campaignId ?? null, { sources: input.sources ?? null });
     }),
 
@@ -111,6 +120,7 @@ export const discoveryRouter = router({
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await failOrphanedDiscoveryRuns(ctx.workspace.id);
       const [row] = await db.select().from(discoveryRuns)
         .where(and(eq(discoveryRuns.id, input.id), eq(discoveryRuns.workspaceId, ctx.workspace.id)))
         .limit(1);
@@ -123,6 +133,8 @@ export const discoveryRouter = router({
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // A run a restart cut off reads failed, not running for ever (P143).
+      await failOrphanedDiscoveryRuns(ctx.workspace.id);
       return db.select().from(discoveryRuns)
         .where(eq(discoveryRuns.workspaceId, ctx.workspace.id))
         .orderBy(desc(discoveryRuns.startedAt))
@@ -145,10 +157,13 @@ export const discoveryRouter = router({
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      return db.select().from(discoveryLogs)
+      // The newest `limit` lines, read in the order they happened (P147: the
+      // trace read bottom-up). Id breaks a tie inside one second.
+      const rows = await db.select().from(discoveryLogs)
         .where(and(eq(discoveryLogs.runId, input.runId), eq(discoveryLogs.workspaceId, ctx.workspace.id)))
-        .orderBy(desc(discoveryLogs.createdAt))
+        .orderBy(desc(discoveryLogs.createdAt), desc(discoveryLogs.id))
         .limit(input.limit);
+      return rows.reverse();
     }),
 
   /** Re-run the consolidate + score + persist pass against an existing
@@ -164,6 +179,13 @@ export const discoveryRouter = router({
         .where(and(eq(discoveryRuns.id, input.runId), eq(discoveryRuns.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!run) throw new TRPCError({ code: "NOT_FOUND" });
-      return processRun(ctx.workspace.id, input.runId, run.mode);
+      const r = await processRun(ctx.workspace.id, input.runId, run.mode);
+      // A run whose save failed is complete once the re-score has saved (P143).
+      if (run.status === "failed" && run.rawFindCount > 0) {
+        await db.update(discoveryRuns).set({ status: "complete", errorMessage: null })
+          .where(and(eq(discoveryRuns.id, input.runId), eq(discoveryRuns.workspaceId, ctx.workspace.id)));
+      }
+      const { saved: _saved, ...counts } = r;
+      return counts;
     }),
 });
