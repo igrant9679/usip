@@ -134,14 +134,15 @@ describe("R37: territories, pipelines and alerts", () => {
     const terr = read("client/src/pages/usip/Territories.tsx");
     expect(terr).toContain("const canEdit = useWorkspaceRole().isManager;");
     expect(terr).toContain("{canEdit && <Button onClick={() => setOpen(true)}><Plus className=\"size-4\" /> New territory</Button>}");
-    expect(terr).toContain("{canEdit && <Button aria-label=\"Delete territory\"");
-    expect(terr).toContain("{canEdit && <Button aria-label=\"Delete rule\"");
+    // The deletes are Ra's confirm buttons (R76), offered to managers only.
+    expect(block(terr, "{canEdit && (() => {", "</ConfirmButton>")).toContain('<ConfirmButton ariaLabel="Delete territory"');
+    expect(block(terr, "{canEdit && (\n                      <ConfirmButton", "</ConfirmButton>")).toContain('ariaLabel="Delete rule"');
     const pipes = read("client/src/pages/usip/SettingsPipelines.tsx");
     expect(pipes).toContain("const canEdit = useWorkspaceRole().isAdmin;");
     expect(pipes).toContain("{canEdit && <Button size=\"sm\" onClick={() => setNewOpen(true)}>");
     expect(block(pipes, "{canEdit && (\n                        <Button aria-label=\"Delete stage\"", "</Button>")).toContain("askDeleteStage(s)");
     expect(pipes).toContain("<input type=\"checkbox\" disabled={!canEdit} checked={s.isWon}");
-    expect(block(pipes, "{canEdit ? (\n                <div className=\"flex items-center gap-1\">", "An admin changes pipelines and stages.")).toContain("renamePipeline.mutate(");
+    expect(block(pipes, "{canEdit ? (\n                <div className=\"flex items-center gap-1\">", "An admin changes pipelines and stages.")).toContain("setRenameOpen(true)");
     const alerts = read("client/src/pages/usip/PipelineAlerts.tsx");
     expect(alerts).toContain("const canDismiss = isManager || (alert.opportunity?.ownerUserId != null && alert.opportunity.ownerUserId === user?.id);");
     expect(block(alerts, "{canDismiss && (", "</Button>")).toContain("dismiss.mutate({ alertId: alert.id })");

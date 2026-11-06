@@ -31,6 +31,7 @@ import { researchPriorForIcp } from "../../services/research/targetingPrior";
 import { router } from "../../_core/trpc";
 import { managerProcedure, workspaceProcedure } from "../../_core/workspace";
 import { icpStoredFromLabels } from "@shared/icpShape";
+import { ICP_PINNABLE_FIELDS, applyIcpPins, icpFieldChanged, readIcpPins, storedIcpPins } from "../../services/are/icpPins";
 
 /** An edited ICP list: plain labels, as the Override dialog sends them. */
 const icpLabelList = z.array(z.string().trim().min(1).max(120)).max(50);
@@ -355,6 +356,15 @@ Based on this data, produce a comprehensive ICP with:
       .limit(1);
     const nextVersion = (latest?.version ?? 0) + 1;
 
+    // The fields a person set by hand on the active version (A20) go over the
+    // model's answer and on to the new version.
+    const [active] = await tx
+      .select({ manualOverrides: icpProfiles.manualOverrides })
+      .from(icpProfiles)
+      .where(and(eq(icpProfiles.workspaceId, workspaceId), eq(icpProfiles.isActive, true)))
+      .limit(1);
+    const pins = readIcpPins(active?.manualOverrides);
+
     // 7. Mark all previous as inactive
     await tx
       .update(icpProfiles)
@@ -362,7 +372,7 @@ Based on this data, produce a comprehensive ICP with:
       .where(eq(icpProfiles.workspaceId, workspaceId));
 
     // 8. Insert new ICP version
-    await tx.insert(icpProfiles).values({
+    await tx.insert(icpProfiles).values(applyIcpPins({
       workspaceId,
       version: nextVersion,
       targetIndustries: icp.targetIndustries,
@@ -381,7 +391,8 @@ Based on this data, produce a comprehensive ICP with:
       sampleWonDeals: sampleCount,
       aiRationale: icp.aiRationale,
       isActive: true,
-    });
+      manualOverrides: storedIcpPins(pins),
+    }, pins));
   });
 }
 
@@ -546,7 +557,12 @@ export const icpRouter = router({
     return profile ?? null;
   }),
 
-  /** Return all ICP versions for the workspace */
+  /**
+   * Return all ICP versions for the workspace. With their lists (audit
+   * 2026-10-20, A21): the history rows and Compare read industries, titles,
+   * places, tech, anti-patterns and signals, and this selected none of them,
+   * so every row and every comparison showed nothing.
+   */
   getHistory: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -561,6 +577,13 @@ export const icpRouter = router({
         aiRationale: icpProfiles.aiRationale,
         avgDealValue: icpProfiles.avgDealValue,
         avgSalesCycleDays: icpProfiles.avgSalesCycleDays,
+        targetIndustries: icpProfiles.targetIndustries,
+        targetTitles: icpProfiles.targetTitles,
+        targetGeographies: icpProfiles.targetGeographies,
+        targetTechStack: icpProfiles.targetTechStack,
+        antiPatterns: icpProfiles.antiPatterns,
+        topConversionSignals: icpProfiles.topConversionSignals,
+        manualOverrides: icpProfiles.manualOverrides,
       })
       .from(icpProfiles)
       .where(eq(icpProfiles.workspaceId, ctx.workspace.id))
@@ -590,10 +613,19 @@ export const icpRouter = router({
    * the ICP page saved its "[object Object]" chips back as strings, leaving
    * rows of mixed objects and junk). A label already in the profile keeps its
    * stored entry and weight; a new one gets no weight.
+   *
+   * Since audit 2026-10-20 (A20, A21) an override is a new version, so the
+   * history records it and Restore can undo it, and every field it changes is
+   * pinned: the next inference keeps the person's value. `baseProfileId` is
+   * the version the dialog was opened on; a save over a version that has been
+   * replaced since is refused, so stale values cannot overwrite a new one.
+   * `releasePins` lets the AI set the pinned fields again.
    */
   override: managerProcedure
     .input(
       z.object({
+        baseProfileId: z.number().int().optional(),
+        releasePins: z.boolean().optional(),
         targetIndustries: icpLabelList.optional(),
         targetCompanySizeMin: z.number().optional(),
         targetCompanySizeMax: z.number().optional(),
@@ -614,6 +646,17 @@ export const icpRouter = router({
         .where(and(eq(icpProfiles.workspaceId, ctx.workspace.id), eq(icpProfiles.isActive, true)))
         .limit(1);
       if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "No active ICP. Run regenerate first." });
+      if (input.baseProfileId !== undefined && input.baseProfileId !== current.id) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `The ICP changed since you opened this; version ${current.version} is active now. Close and reopen Override to edit it.`,
+        });
+      }
+      if (input.releasePins) {
+        await db.update(icpProfiles).set({ manualOverrides: null })
+          .where(and(eq(icpProfiles.id, current.id), eq(icpProfiles.workspaceId, ctx.workspace.id)));
+        return { success: true, version: current.version, pinned: [] as string[] };
+      }
 
       const updates: Partial<typeof icpProfiles.$inferInsert> = {};
       if (input.targetIndustries !== undefined) updates.targetIndustries = icpStoredFromLabels(input.targetIndustries, current.targetIndustries, "industry");
@@ -626,8 +669,39 @@ export const icpRouter = router({
       if (input.targetTechStack !== undefined) updates.targetTechStack = icpStoredFromLabels(input.targetTechStack, current.targetTechStack, "technology");
       if (input.antiPatterns !== undefined) updates.antiPatterns = icpStoredFromLabels(input.antiPatterns, current.antiPatterns, "antiPattern");
 
-      await db.update(icpProfiles).set(updates).where(eq(icpProfiles.id, current.id));
-      return { success: true };
+      // Only what changed is an edit, and only an edit is pinned.
+      const pins = readIcpPins(current.manualOverrides);
+      const edited: string[] = [];
+      for (const f of ICP_PINNABLE_FIELDS) {
+        if (!(f in updates)) continue;
+        const next = (updates as Record<string, unknown>)[f];
+        if (!icpFieldChanged((current as Record<string, unknown>)[f], next)) continue;
+        pins[f] = next;
+        edited.push(f);
+      }
+      if (edited.length === 0) return { success: true, version: current.version, pinned: Object.keys(pins) };
+
+      const { id: _id, createdAt: _c, generatedAt: _g, ...rest } = current;
+      let version = current.version;
+      await db.transaction(async (tx) => {
+        const [latest] = await tx
+          .select({ version: icpProfiles.version })
+          .from(icpProfiles)
+          .where(eq(icpProfiles.workspaceId, ctx.workspace.id))
+          .orderBy(desc(icpProfiles.version))
+          .limit(1);
+        version = (latest?.version ?? current.version) + 1;
+        await tx.update(icpProfiles).set({ isActive: false }).where(eq(icpProfiles.workspaceId, ctx.workspace.id));
+        await tx.insert(icpProfiles).values({
+          ...rest,
+          ...updates,
+          workspaceId: ctx.workspace.id,
+          version,
+          isActive: true,
+          manualOverrides: storedIcpPins(pins),
+        });
+      });
+      return { success: true, version, pinned: Object.keys(pins) };
     }),
   /** Restore a previous ICP version — sets it as active, deactivates all others */
   restore: managerProcedure

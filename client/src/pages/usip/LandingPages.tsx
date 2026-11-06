@@ -4,7 +4,7 @@
  * it, and share the public /l/:slug URL. Management is Admin-only (the router
  * enforces it too); non-admins see a gate.
  */
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -16,10 +16,12 @@ import { FieldLabelContext } from "@/components/ui/field-label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { confirmAction } from "@/components/usip/Common";
+import { SubmissionExtras } from "@/components/usip/SubmissionExtras";
 import {
   ArrowLeft, LayoutTemplate, Plus, Trash2, Copy, ExternalLink, Check, Globe, Eye, Send, Loader2, GripVertical,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SaveTracker, confirmLeaveWhile } from "@/lib/saveTracker";
 import { isAdminRole } from "@shared/roleRank";
 
 const ALL_FIELDS = [
@@ -67,9 +69,33 @@ export default function LandingPages() {
   // ── Editor local state ──
   const [form, setForm] = useState<any>(null);
   const [copied, setCopied] = useState(false);
+  // Unsaved edits are counted (G60): a save clears only what it sent, a refetch
+  // of the open page never replaces them, and leaving asks first.
+  const tracker = useRef(new SaveTracker()).current;
+  const [dirty, setDirty] = useState(false);
+  const formId = useRef<number | null>(null);
   useEffect(() => {
-    if (detail.data) setForm({ ...detail.data, sections: detail.data.sections ?? [], formFields: detail.data.formFields ?? [] });
-  }, [detail.data]);
+    const d = detail.data;
+    if (!d) return;
+    if (formId.current === d.id && tracker.dirty) return;
+    formId.current = d.id;
+    tracker.reset();
+    setDirty(false);
+    setForm({ ...d, sections: d.sections ?? [], formFields: d.formFields ?? [] });
+  }, [detail.data, tracker]);
+  useEffect(() => {
+    const onBeforeUnload = confirmLeaveWhile(() => tracker.dirty);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [tracker]);
+  /** Run `go` now, or after the admin agrees to drop this page's unsaved edits. */
+  const leaveEditor = (go: () => void) => {
+    if (!tracker.dirty) { go(); return; }
+    confirmAction(
+      { title: "Discard unsaved changes?", description: "Your edits to this page have not been saved.", confirmLabel: "Discard changes" },
+      () => { tracker.reset(); setDirty(false); go(); },
+    );
+  };
 
   const pages = (list.data as any[]) ?? [];
   /**
@@ -81,21 +107,40 @@ export default function LandingPages() {
    */
   const olderThanStorage = !subsQ.isLoading && (form?.submitCount ?? 0) > submissions.length;
   const publicUrl = form?.slug ? `${window.location.origin}/l/${form.slug}` : "";
-  const patch = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+  const patch = (k: string, v: any) => {
+    tracker.edit();
+    setDirty(true);
+    setForm((f: any) => ({ ...f, [k]: v }));
+  };
 
-  const save = () => {
-    if (!form) return;
-    update.mutate({
-      id: form.id,
-      name: form.name, headline: form.headline, subheadline: form.subheadline,
-      heroImageUrl: form.heroImageUrl, themeColor: form.themeColor,
-      sections: (form.sections as Section[]).filter((s) => s.heading || s.body),
-      seoDescription: form.seoDescription, formHeading: form.formHeading,
-      ctaButtonLabel: form.ctaButtonLabel, formFields: form.formFields,
-      autoCreateLead: form.autoCreateLead, autoRoute: form.autoRoute,
-      autoEnrollSequenceId: form.autoEnrollSequenceId ?? null,
-      redirectUrl: form.redirectUrl, showBookingCta: form.showBookingCta,
-    } as any);
+  /** Save the form as it is now. Resolves false when the save failed (already toasted). */
+  const save = async (): Promise<boolean> => {
+    if (!form) return false;
+    const upTo = tracker.begin();
+    try {
+      await update.mutateAsync({
+        id: form.id,
+        name: form.name, headline: form.headline, subheadline: form.subheadline,
+        heroImageUrl: form.heroImageUrl, themeColor: form.themeColor,
+        sections: (form.sections as Section[]).filter((s) => s.heading || s.body),
+        seoDescription: form.seoDescription, formHeading: form.formHeading,
+        ctaButtonLabel: form.ctaButtonLabel, formFields: form.formFields,
+        autoCreateLead: form.autoCreateLead, autoRoute: form.autoRoute,
+        autoEnrollSequenceId: form.autoEnrollSequenceId ?? null,
+        redirectUrl: form.redirectUrl, showBookingCta: form.showBookingCta,
+      } as any);
+    } catch {
+      return false;
+    }
+    tracker.saved(upTo);
+    setDirty(tracker.dirty);
+    return true;
+  };
+
+  /** Publish what is on screen: unsaved edits are saved first (G60: Publish put the stored version live). */
+  const publish = async () => {
+    if (tracker.dirty && !(await save())) return;
+    setStatus.mutate({ id: form.id, status: "published" });
   };
 
   const toggleField = (key: string, label: string) => {
@@ -129,7 +174,7 @@ export default function LandingPages() {
             <span className="text-sm font-semibold">Landing Pages</span>
             <div className="flex-1" />
             <Button size="sm" className="h-7 gap-1" style={{ backgroundColor: accent }}
-              disabled={create.isPending} onClick={() => create.mutate({ name: "Untitled landing page", headline: "Your headline here" } as any)}>
+              disabled={create.isPending} onClick={() => leaveEditor(() => create.mutate({ name: "Untitled landing page", headline: "Your headline here" } as any))}>
               <Plus className="size-3.5" /> New
             </Button>
           </div>
@@ -137,7 +182,7 @@ export default function LandingPages() {
             {pages.length === 0 ? (
               <p className="text-xs text-muted-foreground p-3">No landing pages yet. Click <b>New</b> to create one.</p>
             ) : pages.map((p) => (
-              <button key={p.id} onClick={() => setSelectedId(p.id)}
+              <button key={p.id} onClick={() => p.id !== selectedId && leaveEditor(() => setSelectedId(p.id))}
                 className={`w-full text-left rounded-lg px-3 py-2 border transition-colors ${selectedId === p.id ? "border-primary bg-primary/5" : "border-transparent hover:bg-muted"}`}>
                 <div className="flex items-center gap-2">
                   <span className="text-[13px] font-medium truncate flex-1">{p.name}</span>
@@ -160,7 +205,7 @@ export default function LandingPages() {
             </div>
           ) : (
             <div className="max-w-2xl mx-auto p-4 sm:p-6 space-y-6">
-              <Button variant="ghost" size="sm" className="md:hidden -ml-2 h-7 gap-1" onClick={() => setSelectedId(null)}>
+              <Button variant="ghost" size="sm" className="md:hidden -ml-2 h-7 gap-1" onClick={() => leaveEditor(() => setSelectedId(null))}>
                 <ArrowLeft className="size-3.5" /> All pages
               </Button>
               {/* Header actions */}
@@ -169,9 +214,9 @@ export default function LandingPages() {
                 {form.status === "published" ? (
                   <Button variant="outline" size="sm" className="h-8" onClick={() => setStatus.mutate({ id: form.id, status: "draft" })}>Unpublish</Button>
                 ) : (
-                  <Button size="sm" className="h-8 gap-1" style={{ backgroundColor: accent }} onClick={() => setStatus.mutate({ id: form.id, status: "published" })}><Globe className="size-3.5" /> Publish</Button>
+                  <Button size="sm" className="h-8 gap-1" style={{ backgroundColor: accent }} disabled={update.isPending || setStatus.isPending} onClick={() => void publish()}><Globe className="size-3.5" /> {dirty ? "Save & publish" : "Publish"}</Button>
                 )}
-                <Button size="sm" className="h-8" disabled={update.isPending} onClick={save}>Save</Button>
+                <Button size="sm" className="h-8" disabled={update.isPending} onClick={() => void save()}>{dirty ? "Save" : "Saved"}</Button>
               </div>
 
               {/* Public URL */}
@@ -288,18 +333,21 @@ export default function LandingPages() {
                 ) : (
                   <div className="rounded-lg border divide-y divide-border/60 max-h-64 overflow-auto">
                     {submissions.map((s) => (
-                      <div key={s.id} className="flex items-center gap-2 px-3 py-2 text-[13px]">
-                        <span className="font-medium truncate">{s.name || s.email || "Anonymous"}</span>
-                        {s.email && s.name && <span className="text-muted-foreground truncate">· {s.email}</span>}
-                        {s.company && <span className="text-muted-foreground truncate hidden sm:inline">· {s.company}</span>}
-                        <span className="flex-1" />
-                        {/* The whole point of the row: a capture with no lead is now visible. */}
-                        {s.leadId ? (
-                          <span className="shrink-0 text-[10px] rounded px-1.5 py-0.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">lead #{s.leadId}</span>
-                        ) : (
-                          <span className="shrink-0 text-[10px] rounded px-1.5 py-0.5 bg-muted text-muted-foreground">no lead</span>
-                        )}
-                        <span className="text-[11px] text-muted-foreground shrink-0">{s.createdAt ? new Date(s.createdAt).toLocaleDateString() : ""}</span>
+                      <div key={s.id} className="px-3 py-2 text-[13px]">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium truncate">{s.name || s.email || "Anonymous"}</span>
+                          {s.email && s.name && <span className="text-muted-foreground truncate">· {s.email}</span>}
+                          {s.company && <span className="text-muted-foreground truncate hidden sm:inline">· {s.company}</span>}
+                          <span className="flex-1" />
+                          {/* The whole point of the row: a capture with no lead is now visible. */}
+                          {s.leadId ? (
+                            <span className="shrink-0 text-[10px] rounded px-1.5 py-0.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">lead #{s.leadId}</span>
+                          ) : (
+                            <span className="shrink-0 text-[10px] rounded px-1.5 py-0.5 bg-muted text-muted-foreground">no lead</span>
+                          )}
+                          <span className="text-[11px] text-muted-foreground shrink-0">{s.createdAt ? new Date(s.createdAt).toLocaleDateString() : ""}</span>
+                        </div>
+                        <SubmissionExtras data={s.data} />
                       </div>
                     ))}
                   </div>

@@ -3,19 +3,35 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Field, fmt$, FormDialog, SelectField } from "@/components/usip/Common";
+import { fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
+import { NewOpportunityDialog } from "@/components/usip/NewOpportunityDialog";
 import { trpc } from "@/lib/trpc";
+import { invalidateDealReads } from "@/lib/crmCache";
 import { usePermissions } from "@/hooks/usePermissions";
 import { ArrowRight, Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare, Sparkles, ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { tablistProps, tabProps } from "@/lib/tabs";
 import { csvCell } from "@shared/csvCell";
 
-type StageItem = { id: string; label: string; isWon: boolean; isLost: boolean };
+type StageItem = { id: string; label: string; isWon: boolean; isLost: boolean; defaultWinProb?: number | null };
+
+/**
+ * A card's drag payload (audit 2026-10-20, R82). The drop read "text/plain",
+ * so dropping any selected text that was a number onto a column moved the
+ * deal with that id.
+ */
+export const DEAL_DRAG_TYPE = "application/x-velocity-deal";
+
+/** The deal a drop carries, or null when it carries no card. */
+export function droppedDealId(dt: { types: ReadonlyArray<string>; getData(type: string): string }): number | null {
+  if (!Array.from(dt.types).includes(DEAL_DRAG_TYPE)) return null;
+  const id = Number(dt.getData(DEAL_DRAG_TYPE));
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
 
 /** Loading fallback only — the real flags come from crmPipelines.get. */
 const LEGACY_STAGES: StageItem[] = [
@@ -50,7 +66,7 @@ function useStagesFor(pipelineId?: number): StageItem[] {
   // The flags travel with the list: every "is this the closing column?"
   // question on this page used to be `id === "won"`, which is false for every
   // workspace that renamed its closing stage.
-  return data.stages.map((s) => ({ id: s.key, label: s.label, isWon: !!s.isWon, isLost: !!s.isLost }));
+  return data.stages.map((s) => ({ id: s.key, label: s.label, isWon: !!s.isWon, isLost: !!s.isLost, defaultWinProb: s.defaultWinProb ?? null }));
 }
 
 function WinProbBadge({ prob, aiGenerated }: { prob: number; aiGenerated?: boolean }) {
@@ -99,7 +115,7 @@ function DealCard({
   return (
     <div
       draggable
-      onDragStart={(e) => e.dataTransfer.setData("text/plain", String(opp.id))}
+      onDragStart={(e) => { e.dataTransfer.setData(DEAL_DRAG_TYPE, String(opp.id)); e.dataTransfer.effectAllowed = "move"; }}
       onClick={onOpen}
       tabIndex={0}
       role="button"
@@ -230,8 +246,8 @@ function DealCard({
 }
 
 /* ─── Forecast View ─────────────────────────────────────────────────────── */
-function ForecastView() {
-  const STAGES = useStagesFor();
+function ForecastView({ scope, scopeLabel }: { scope: { pipelineId?: number; ownerUserId?: number }; scopeLabel: string }) {
+  const STAGES = useStagesFor(scope.pipelineId);
   const [selectedStages, setSelectedStages] = useState<string[]>([]);
   const [commentary, setCommentary] = useState<string | null>(null);
   const commentaryMut = trpc.forecastAi.generateCommentary.useMutation({
@@ -239,11 +255,12 @@ function ForecastView() {
     onError: (e: any) => toast.error(e.message),
   });
   // Unfiltered query to always have the full availableStages list for the filter UI
-  const { data: allFc } = trpc.opportunities.forecast.useQuery(undefined);
+  // The board's pipeline and owner filter (R39): this tab and the board beside it count the same deals.
+  const { data: allFc } = trpc.opportunities.forecast.useQuery(scope);
   const availableStages = allFc?.availableStages ?? [];
   // Filtered query — passes selectedStages only when at least one is chosen
   const { data: fc, isLoading } = trpc.opportunities.forecast.useQuery(
-    selectedStages.length > 0 ? { stages: selectedStages } : undefined
+    selectedStages.length > 0 ? { ...scope, stages: selectedStages } : scope
   );
 
   function toggleStage(stage: string) {
@@ -281,6 +298,7 @@ function ForecastView() {
 
   return (
     <div className="p-4 md:p-5 space-y-6">
+      <p className="text-xs text-muted-foreground">{scopeLabel}</p>
       {/* Stage filter toolbar */}
       {availableStages.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
@@ -423,22 +441,15 @@ export default function Pipeline() {
   // browser. See the comment on reports.exportCsv.
   const { can } = usePermissions();
   const utils = trpc.useUtils();
-  const [location, navigate] = useLocation();
-  // Parse optional ?owner=<userId> from the URL for rep drill-down from Dashboard
+  const [, navigate] = useLocation();
+  // ?owner=<userId>, the rep drill-down from Dashboard and Forecast. From
+  // useSearch (audit 2026-10-20, R30): memoised on wouter's location, which is
+  // the path only, "Clear filter" changed the query string and nothing re-read it.
+  const search = useSearch();
   const ownerUserId = useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    const v = params.get("owner");
+    const v = new URLSearchParams(search).get("owner");
     return v ? Number(v) : undefined;
-  }, [location]);
-  const { data } = trpc.opportunities.board.useQuery(ownerUserId ? { ownerUserId } : undefined);
-  const { data: accounts } = trpc.accounts.list.useQuery();
-  const { data: boardIntel = [] } = trpc.oppIntelligence.getIntelligenceForBoard.useQuery();
-
-  const intelMap = useMemo(() => {
-    const m = new Map<number, any>();
-    boardIntel.forEach((i) => m.set(i.opportunityId, i));
-    return m;
-  }, [boardIntel]);
+  }, [search]);
 
   const [analyzingIds, setAnalyzingIds] = useState<Set<number>>(new Set());
   const [acceptingIds, setAcceptingIds] = useState<Set<number>>(new Set());
@@ -452,6 +463,20 @@ export default function Pipeline() {
   const [selectedPipelineId, setSelectedPipelineId] = useState<number | undefined>(undefined);
   const pipelineId = selectedPipelineId ?? defaultPipelineId;
   const STAGES = useStagesFor(pipelineId);
+  const pipelineName = pipelines?.find((p) => p.id === pipelineId)?.name;
+
+  // One pipeline's deals, read by the server (L7), and the same input for
+  // every read and write of this cache — the optimistic move wrote the
+  // unfiltered entry while a filtered board was on screen (R30).
+  const boardInput = useMemo(() => ({ ownerUserId, pipelineId }), [ownerUserId, pipelineId]);
+  const { data } = trpc.opportunities.board.useQuery(boardInput, { enabled: pipelines !== undefined });
+  const { data: boardIntel = [] } = trpc.oppIntelligence.getIntelligenceForBoard.useQuery(boardInput, { enabled: pipelines !== undefined });
+
+  const intelMap = useMemo(() => {
+    const m = new Map<number, any>();
+    boardIntel.forEach((i) => m.set(i.opportunityId, i));
+    return m;
+  }, [boardIntel]);
 
   const generateIntel = trpc.oppIntelligence.generateIntelligence.useMutation({
     onSuccess: (_data, vars) => {
@@ -506,33 +531,24 @@ export default function Pipeline() {
 
   const setStage = trpc.opportunities.setStage.useMutation({
     onMutate: async ({ id, stage }) => {
-      await utils.opportunities.board.cancel();
-      const prev = utils.opportunities.board.getData();
-      utils.opportunities.board.setData(undefined, (old) => (old ?? []).map((o) => (o.id === id ? { ...o, stage } : o)));
+      await utils.opportunities.board.cancel(boardInput);
+      const prev = utils.opportunities.board.getData(boardInput);
+      utils.opportunities.board.setData(boardInput, (old) => (old ?? []).map((o) => (o.id === id ? { ...o, stage } : o)));
       return { prev };
     },
-    onError: (_e, _v, ctx) => { if (ctx?.prev) utils.opportunities.board.setData(undefined, ctx.prev); toast.error("Move failed"); },
-    onSuccess: (res) => { if (res?.customerCreated) { toast.success("Closed won 🎉 — customer created"); utils.cs?.list?.invalidate?.(); } },
+    onError: (_e, _v, ctx) => { if (ctx?.prev) utils.opportunities.board.setData(boardInput, ctx.prev); toast.error("Move failed"); },
+    // Every read a stage move changes, not just this board (R31).
+    onSuccess: (res) => { if (res?.customerCreated) toast.success("Closed won 🎉 — customer created"); invalidateDealReads(utils); },
     onSettled: () => utils.opportunities.board.invalidate(),
   });
 
   const [addOpen, setAddOpen] = useState(false);
   const [drawer, setDrawer] = useState<{ id: number; name: string; subtitle: string } | null>(null);
 
-  const create = trpc.opportunities.create.useMutation({
-    onSuccess: () => { utils.opportunities.board.invalidate(); setAddOpen(false); toast.success("Opportunity created"); },
-    onError: (e) => toast.error(e.message),
-  });
-
-  // Filter opps to the selected pipeline. Legacy opps with NULL pipelineId
-  // belong to the default pipeline so they keep showing up after the upgrade.
-  const filteredOpps = useMemo(() => {
-    if (!pipelineId) return data ?? [];
-    return (data ?? []).filter((o: any) => {
-      if (o.pipelineId == null) return pipelineId === defaultPipelineId;
-      return o.pipelineId === pipelineId;
-    });
-  }, [data, pipelineId, defaultPipelineId]);
+  // The server returns the selected pipeline's deals (legacy deals with no
+  // pipeline sit on the default board), so the board is what it sent.
+  const filteredOpps = data ?? [];
+  const scopeLabel = `${pipelineName ? `${pipelineName} pipeline` : "All deals"}${ownerUserId ? ", one rep" : ", every owner"}: the deals on the board.`;
 
   const grouped = useMemo(() => {
     const buckets: Record<string, typeof data> = {};
@@ -592,14 +608,15 @@ export default function Pipeline() {
         </div>
         {can("export_data") && (
         <Button variant="outline" onClick={() => {
-          const rows = data ?? [];
+          // What the board shows — this pipeline, this owner filter (R39).
+          const rows = filteredOpps;
           if (!rows.length) return;
           const cols = ["id", "name", "stage", "value", "winProb", "closeDate", "accountName", "createdAt"];
           // One CSV cell rule (R63): quotes doubled, formulas neutralised.
           const lines = [cols.join(","), ...rows.map((r: any) => cols.map((c) => csvCell(r[c])).join(","))];
           const blob = new Blob([lines.join("\n")], { type: "text/csv" });
           const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `pipeline-${Date.now()}.csv`; a.click();
-        }} disabled={!data?.length}>
+        }} disabled={!filteredOpps.length}>
           <Download className="size-4" /> Export CSV
         </Button>
         )}
@@ -607,7 +624,7 @@ export default function Pipeline() {
       </PageHeader>
 
       {view === "forecast" ? (
-        <ForecastView />
+        <ForecastView scope={boardInput} scopeLabel={scopeLabel} />
       ) : (
         <div className="p-4 overflow-x-auto" tabIndex={0} role="region" aria-label="Pipeline board">
           <div className="flex gap-3 min-w-max" data-tour-id="pipeline-board">
@@ -624,9 +641,9 @@ export default function Pipeline() {
                 <div
                   key={s.id}
                   className="w-72 shrink-0 bg-secondary/40 border rounded-lg flex flex-col"
-                  onDragOver={(e) => e.preventDefault()}
+                  onDragOver={(e) => { if (Array.from(e.dataTransfer.types).includes(DEAL_DRAG_TYPE)) e.preventDefault(); }}
                   onDrop={(e) => {
-                    const id = Number(e.dataTransfer.getData("text/plain"));
+                    const id = droppedDealId(e.dataTransfer);
                     if (id) setStage.mutate({ id, stage: s.id });
                   }}
                 >
@@ -670,36 +687,7 @@ export default function Pipeline() {
         </div>
       )}
 
-      <FormDialog
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        title="New opportunity"
-        isPending={create.isPending}
-        onSubmit={(f) => create.mutate({
-          name: String(f.get("name")),
-          accountId: Number(f.get("accountId")),
-          value: Number(f.get("value")),
-          stage: String(f.get("stage")),
-          winProb: Number(f.get("winProb") ?? 25),
-          pipelineId,
-          // A calendar date, "YYYY-MM-DD" (R16): the dialog had no close date,
-          // so every new deal landed in the forecast's "No close date" bucket.
-          closeDate: String(f.get("closeDate") ?? "") || undefined,
-        })}
-      >
-        <Field name="name" label="Name" required />
-        <SelectField
-          name="accountId"
-          label="Account"
-          options={(accounts ?? []).map((a) => ({ value: String(a.id), label: a.name }))}
-        />
-        <div className="grid grid-cols-3 gap-3">
-          <Field name="value" label="Value ($)" type="money" required defaultValue={10000} />
-          <SelectField name="stage" label="Stage" options={STAGES.map((s) => ({ value: s.id, label: s.label }))} defaultValue="discovery" />
-          <Field name="winProb" label="Win %" type="number" min={0} max={100} defaultValue={25} />
-        </div>
-        <Field name="closeDate" label="Expected close date" type="date" />
-      </FormDialog>
+      <NewOpportunityDialog open={addOpen} onOpenChange={setAddOpen} stages={STAGES} pipelineId={pipelineId} />
 
       <RecordDrawer
         open={!!drawer}

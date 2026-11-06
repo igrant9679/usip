@@ -12,6 +12,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import { tours, tourSteps, workspaces } from "../drizzle/schema";
 import { getDb } from "./db";
+import { helpOverrideKeys } from "./services/helpSeedOverrides";
 
 type StepSeed = {
   title: string;
@@ -186,12 +187,15 @@ export async function seedToursForAllWorkspaces(): Promise<void> {
   // gate on "workspace has zero tours". Steps are delete+reinserted for a clean
   // re-seed (user_tour_progress tracks tourId + step index, not step IDs).
   for (const ws of allWorkspaces) {
+    // A tour an admin edited or deleted is theirs now (G21; services/helpSeedOverrides).
+    const changed = await helpOverrideKeys(db, ws.id, "tour");
     for (const tourSeed of DEMO_TOURS) {
       const [existingTour] = await db
         .select({ id: tours.id })
         .from(tours)
         .where(and(eq(tours.workspaceId, ws.id), eq(tours.name, tourSeed.name)))
         .limit(1);
+      if (changed === null ? !!existingTour : changed.has(tourSeed.name)) continue;
 
       let tourId: number;
       if (existingTour) {

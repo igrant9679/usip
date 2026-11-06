@@ -188,7 +188,11 @@ import { parseTargetPlaces, placeFit, placeStringOf } from "../../services/place
 const NO_REASON = "No reason given";
 
 /** Why Regenerate is refused for a sequence already on the calendar (A40). */
-/** The approve line when a campaign has none, as the engine's (areEngine DEFAULT_APPROVE_THRESHOLD). */
+/**
+ * The re-qualify line when a campaign has no approve threshold. Not an approve
+ * line: a re-qualified prospect goes back to review, and with no threshold the
+ * engine approves nobody (audit 2026-10-20, A16).
+ */
 const DEFAULT_REEVAL_THRESHOLD = 70;
 /** How every engine score rejection's reason begins (the screen pass and the enrichment gate). */
 export const AUTO_SCORE_REJECTION = "Auto-screened: ICP match";
@@ -2707,7 +2711,8 @@ export const prospectsRouter = router({
           }
         }
       }
-      return { imported, skippedDuplicates: skippedDup, skippedEmpty, skippedOtherCampaign, withEmail: rows.filter((r) => r.email).length };
+      // `failed`: rows the per-row fallback could not insert, said rather than lost (A54).
+      return { imported, skippedDuplicates: skippedDup, skippedEmpty, skippedOtherCampaign, failed: rows.length - imported, withEmail: rows.filter((r) => r.email).length };
     }),
 
   /** Reject a prospect with an optional reason */
@@ -2842,6 +2847,25 @@ export const prospectsRouter = router({
       return rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
     }),
 
+  /**
+   * Which campaign a prospect is in, so a notice about a person can link to
+   * them (audit 2026-10-20, A57): /are/prospects/:id resolves through here to
+   * the campaign page with that prospect's dossier open.
+   */
+  locate: workspaceProcedure
+    .input(z.object({ prospectId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select({ campaignId: prospectQueue.campaignId })
+        .from(prospectQueue)
+        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found" });
+      return { campaignId: row.campaignId };
+    }),
+
   /** Mass actions on this campaign's prospects — see prospectsBulk.ts. */
   bulk: workspaceProcedure
     .input(BULK_INPUT)
@@ -2902,10 +2926,19 @@ export const prospectsRouter = router({
       campaignId: z.number().optional(),
       body: z.string().min(1).max(4000),
       category: z.enum(["general", "qualification", "objection", "follow_up", "intel"]).optional().default("general"),
+      /** The teammates picked from the @ list, by id (audit 2026-10-20, A49). */
+      mentionUserIds: z.array(z.number().int()).max(20).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // The prospect must be this workspace's; its campaign is the deep link's.
+      const [prospect] = await db
+        .select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId })
+        .from(prospectQueue)
+        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!prospect) throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found" });
       const [row] = await db.insert(prospectNotes).values({
         workspaceId: ctx.workspace.id,
         prospectQueueId: input.prospectId,
@@ -2914,33 +2947,21 @@ export const prospectsRouter = router({
         category: input.category ?? "general",
         isPinned: false,
       }).$returningId();
-      // Parse @mentions and fire in-app mention notifications
-      const mentionRegex = /@([\w.\- ]+)/g;
-      const mentionedNames: string[] = [];
-      let mm: RegExpExecArray | null;
-      while ((mm = mentionRegex.exec(input.body)) !== null) {
-        mentionedNames.push(mm[1].trim().toLowerCase());
-      }
-      if (mentionedNames.length > 0) {
+      /**
+       * Mentions are the people picked from the @ list, by id (A49). They were
+       * matched by name substring, so "@Al" notified Alice and Alan, and a
+       * mention of "Sam Lee" reached a "Sam". Only this workspace's members.
+       */
+      const picked = Array.from(new Set(input.mentionUserIds ?? [])).filter((uid) => uid !== ctx.user.id);
+      if (picked.length > 0) {
         const members = await db
-          .select({ userId: users.id, name: users.name })
+          .select({ userId: workspaceMembers.userId })
           .from(workspaceMembers)
-          .innerJoin(users, eq(workspaceMembers.userId, users.id))
-          .where(eq(workspaceMembers.workspaceId, ctx.workspace.id));
-        const mentionedUserIds = members
-          .filter((mem) =>
-            mentionedNames.some((mn) =>
-              (mem.name ?? "").toLowerCase().includes(mn) ||
-              mn.includes((mem.name ?? "").toLowerCase())
-            )
-          )
-          .map((mem) => mem.userId)
-          .filter((uid) => uid !== ctx.user.id);
+          .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), inArray(workspaceMembers.userId, picked)));
+        const mentionedUserIds = members.map((m) => m.userId);
         if (mentionedUserIds.length > 0) {
           // Encode campaignId + prospectId in the body as a JSON prefix so the Inbox can deep-link
-          const deepLinkMeta = input.campaignId
-            ? `{"campaignId":${input.campaignId},"prospectId":${input.prospectId}}\n`
-            : "";
+          const deepLinkMeta = `{"campaignId":${prospect.campaignId},"prospectId":${prospect.id}}\n`;
           /**
            * One at a time through the shared gate rather than a bulk insert.
            * Two things it fixes: the "Someone @mentions me" switch was never
@@ -3184,7 +3205,7 @@ export const prospectsRouter = router({
       if (!effectiveIcp) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No active ICP profile or campaign targeting" });
       const match = await scoreIcpMatch(prospect, effectiveIcp, ctx.workspace.id);
       // The campaign's own approve line (audit A75); 70 only when it has none,
-      // as in Re-evaluate All and the engine.
+      // as in Re-evaluate All. Either way the row returns to review, not approval.
       const autoApproveThreshold = reCamp?.autoApproveThreshold ?? DEFAULT_REEVAL_THRESHOLD;
       // Re-grading moves only a prospect that is not in a sequence (audit
       // 2026-10-20, A2): sending one who had replied, completed or was

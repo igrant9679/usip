@@ -17,6 +17,10 @@
  * past wins into open pipeline. Each stage now shows how many deals it holds;
  * deleting one that has deals asks where they go (a stage of the same kind),
  * and changing Won/Lost on a stage with deals says what that reclassifies.
+ *
+ * R101: Rename used window.prompt, and the new-stage dialog and the stage
+ * label editor closed before the save came back, so a refused save lost what
+ * was typed. Each now closes when its save succeeds and stays open on an error.
  */
 import { useState } from "react";
 import { Link } from "wouter";
@@ -49,7 +53,7 @@ export default function SettingsPipelines() {
     onSuccess: ({ id }) => { invalidateAll(); setSelectedId(id); setNewOpen(false); toast.success("Pipeline created"); },
     onError: (e) => toast.error(e.message),
   });
-  const renamePipeline = trpc.crmPipelines.renamePipeline.useMutation({ onSuccess: () => { invalidateAll(); toast.success("Renamed"); }, onError: (e) => toast.error(e.message) });
+  const renamePipeline = trpc.crmPipelines.renamePipeline.useMutation({ onSuccess: () => { invalidateAll(); setRenameOpen(false); toast.success("Renamed"); }, onError: (e) => toast.error(e.message) });
   const setDefault = trpc.crmPipelines.setDefault.useMutation({ onSuccess: () => { invalidateAll(); toast.success("Default updated"); }, onError: (e) => toast.error(e.message) });
   const deletePipeline = trpc.crmPipelines.deletePipeline.useMutation({
     onSuccess: (r) => {
@@ -58,8 +62,10 @@ export default function SettingsPipelines() {
     },
     onError: (e) => toast.error(e.message),
   });
-  const createStage = trpc.crmPipelines.createStage.useMutation({ onSuccess: () => invalidateAll(), onError: (e) => toast.error(e.message) });
+  const createStage = trpc.crmPipelines.createStage.useMutation({ onSuccess: () => { invalidateAll(); setNewStageOpen(false); }, onError: (e) => toast.error(e.message) });
   const updateStage = trpc.crmPipelines.updateStage.useMutation({ onSuccess: () => invalidateAll(), onError: (e) => toast.error(e.message) });
+  // The label editor closes on a saved label, and stays open on a refusal.
+  const renameStage = trpc.crmPipelines.updateStage.useMutation({ onSuccess: () => { invalidateAll(); setEditingId(null); }, onError: (e) => toast.error(e.message) });
   const deleteStage = trpc.crmPipelines.deleteStage.useMutation({
     onSuccess: (r) => { invalidateAll(); utils.opportunities.board.invalidate(); setStageToDelete(null); if (r.moved) toast.success(`Deleted — ${r.moved} deal${r.moved === 1 ? "" : "s"} moved`); },
     onError: (e) => toast.error(e.message),
@@ -68,6 +74,7 @@ export default function SettingsPipelines() {
 
   const [newOpen, setNewOpen] = useState(false);
   const [newStageOpen, setNewStageOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editLabel, setEditLabel] = useState("");
   const [stageToDelete, setStageToDelete] = useState<(typeof stages)[number] | null>(null);
@@ -157,11 +164,7 @@ export default function SettingsPipelines() {
                       <Star className="size-3.5 mr-1" /> Make default
                     </Button>
                   )}
-                  <Button size="sm" variant="ghost"
-                    onClick={() => {
-                      const next = prompt("Rename pipeline", detail.pipeline.name);
-                      if (next && next.trim() && next !== detail.pipeline.name) renamePipeline.mutate({ id: detail.pipeline.id, name: next.trim() });
-                    }}>
+                  <Button size="sm" variant="ghost" onClick={() => setRenameOpen(true)}>
                     Rename
                   </Button>
                   {!detail.pipeline.isDefault && (
@@ -192,7 +195,8 @@ export default function SettingsPipelines() {
                       {editingId === s.id ? (
                         <div className="flex gap-2">
                           <Input aria-label="Stage name" value={editLabel} onChange={(e) => setEditLabel(e.target.value)} autoFocus />
-                          <Button aria-label="Save" size="sm" onClick={() => { updateStage.mutate({ id: s.id, patch: { label: editLabel } }); setEditingId(null); }}>
+                          <Button aria-label="Save" size="sm" disabled={!editLabel.trim() || renameStage.isPending}
+                            onClick={() => { if (editLabel.trim() === s.label) setEditingId(null); else renameStage.mutate({ id: s.id, patch: { label: editLabel.trim() } }); }}>
                             <Check className="size-3.5" />
                           </Button>
                           <Button aria-label="Cancel" size="sm" variant="ghost" onClick={() => setEditingId(null)}><X className="size-3.5" /></Button>
@@ -252,6 +256,17 @@ export default function SettingsPipelines() {
         <p className="text-xs text-muted-foreground">Stages will be cloned from the currently selected pipeline.</p>
       </FormDialog>
 
+      {detail && renameOpen && (
+        <FormDialog open onOpenChange={setRenameOpen} title={`Rename pipeline "${detail.pipeline.name}"`} isPending={renamePipeline.isPending}
+          onSubmit={(f) => {
+            const name = String(f.get("name") ?? "").trim();
+            if (!name || name === detail.pipeline.name) { setRenameOpen(false); return; }
+            renamePipeline.mutate({ id: detail.pipeline.id, name });
+          }}>
+          <Field name="name" label="Name" required defaultValue={detail.pipeline.name} />
+        </FormDialog>
+      )}
+
       {stageToDelete && (
         <FormDialog open onOpenChange={(v) => { if (!v) setStageToDelete(null); }} title={`Delete stage "${stageToDelete.label}"`}
           submitLabel="Move deals and delete" isPending={deleteStage.isPending}
@@ -295,7 +310,6 @@ export default function SettingsPipelines() {
               isWon: f.get("isWon") === "on" && f.get("isLost") !== "on",
               isLost: f.get("isLost") === "on",
             });
-            setNewStageOpen(false);
           }}>
           <Field name="label" label="Label" required placeholder="e.g. Demo scheduled" />
           <Field name="key" label="Key (lowercase, no spaces)" required placeholder="demo_scheduled" />

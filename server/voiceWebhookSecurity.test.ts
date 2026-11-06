@@ -51,7 +51,10 @@ const fakeDb = {
   insert: (table: unknown) => ({
     values: (v: Row) => {
       state.inserts.push({ table, v });
-      return Promise.resolve({ insertId: 77 });
+      // mysql2's real shape, [ResultSetHeader, fields]. This returned a bare
+      // { insertId } until 2026-11-06, a shape the driver never produces, which
+      // is how the webhook's call-row id read as 0 in production went unseen.
+      return Promise.resolve([{ insertId: 77 }, []]);
     },
   }),
   update: (table: unknown) => ({
@@ -203,6 +206,8 @@ describe("the webhook", () => {
     expect(out.status).toBe(200);
     expect(out.json).toMatchObject({ ok: true, answered: true });
     expect(answerInboundCall).toHaveBeenCalledTimes(1);
+    // The bridge is handed the row it must update with the call's outcome.
+    expect(answerInboundCall).toHaveBeenCalledWith(expect.objectContaining({ callRowId: 77 }));
     expect(callInserts()[0].v).toMatchObject({ workspaceId: 5, agentId: 1, status: "ringing", xaiCallId: "call-1" });
   });
 

@@ -5,7 +5,7 @@
  *   list, get, create, update, setStatus
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { areCampaigns, areEngineLogs, campaignRoutingSuggestions, personas, prospectIntelligence, prospectQueue, prospects, researchSectors, sequences, workspaceSettings } from "../../../drizzle/schema";
 
@@ -51,6 +51,7 @@ import { invokeLLM, contentText } from "../../_core/llm";
 import { ARE_DEFAULT_SOURCES, ARE_SOURCES, campaignSources, discoveryIsOff, normalizeSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 import { MIN_STEP_GAP_DAYS, MAX_STEP_GAP_DAYS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { areExecutionQueue, spendLedger } from "../../../drizzle/schema";
+import { EMPTY_FIXED_COPY, usableFixedSteps } from "@shared/areFixedCopy";
 import { describeSources } from "../../services/prospectSources/registry";
 import { spendDay } from "../../services/spend";
 
@@ -75,8 +76,9 @@ const POOL_HELD_MARKER = "email steps held and re-scheduled: ";
 const DISCOVERY_SUMMARY_MARKER = "Discovery slice ";
 
 export const campaignsRouter = router({
+  /** A page of campaigns, newest first; `count` is how many there are (audit 2026-10-20, A62). */
   list: workspaceProcedure
-    .input(z.object({ status: z.string().optional(), limit: z.number().default(50) }))
+    .input(z.object({ status: z.string().optional(), limit: z.number().int().min(1).max(200).default(50), offset: z.number().int().min(0).default(0) }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -88,8 +90,23 @@ export const campaignsRouter = router({
         .select()
         .from(areCampaigns)
         .where(and(...conditions))
-        .orderBy(desc(areCampaigns.createdAt))
-        .limit(input.limit);
+        // The id breaks createdAt ties, so a campaign is on exactly one page.
+        .orderBy(desc(areCampaigns.createdAt), desc(areCampaigns.id))
+        .limit(input.limit)
+        .offset(input.offset);
+    }),
+
+  count: workspaceProcedure
+    .input(z.object({ status: z.string().optional() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const conditions = [eq(areCampaigns.workspaceId, ctx.workspace.id)];
+      if (input.status) {
+        conditions.push(eq(areCampaigns.status, input.status as "draft" | "active" | "paused" | "completed"));
+      }
+      const [row] = await db.select({ n: sql<number>`count(*)` }).from(areCampaigns).where(and(...conditions));
+      return { total: Number(row?.n ?? 0) };
     }),
 
   /**
@@ -620,6 +637,25 @@ export const campaignsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const { id, ...rest } = input;
+      // A fixed-copy campaign with no usable step fails every prospect's
+      // sequence (audit 2026-10-20, A47), so it is refused here, whichever of
+      // the two fields this save changes.
+      if (rest.copyMode !== undefined || rest.fixedSteps !== undefined) {
+        let mode: string | null | undefined = rest.copyMode;
+        let steps: unknown = rest.fixedSteps;
+        if (mode === undefined || steps === undefined) {
+          const [cur] = await db
+            .select({ copyMode: areCampaigns.copyMode, fixedSteps: areCampaigns.fixedSteps })
+            .from(areCampaigns)
+            .where(and(eq(areCampaigns.id, id), eq(areCampaigns.workspaceId, ctx.workspace.id)))
+            .limit(1);
+          mode ??= cur?.copyMode;
+          if (steps === undefined) steps = cur?.fixedSteps;
+        }
+        if (mode === "fixed" && usableFixedSteps(steps) === 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: EMPTY_FIXED_COPY });
+        }
+      }
       const updates: Partial<typeof areCampaigns.$inferInsert> = {};
       if (rest.name !== undefined) updates.name = rest.name;
       if (rest.description !== undefined) updates.description = rest.description;
@@ -690,6 +726,33 @@ export const campaignsRouter = router({
         .set(updates)
         .where(and(eq(areCampaigns.id, id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
       return { success: true };
+    }),
+
+  /**
+   * How many prospects a fit gate of `minConfidence` would reject (audit
+   * 2026-10-20, A14). The engine's screen pass rejects, within a tick, every
+   * row scored above 0 and below the gate that is not enriched yet
+   * (areEngine, "1a. Reject what can never be enriched"), so moving the slider
+   * up is a mass rejection. Same predicate, counted, so Settings can say how
+   * many before it saves.
+   */
+  fitGatePreview: workspaceProcedure
+    .input(z.object({ id: z.number().int(), minConfidence: z.number().int().min(0).max(100) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .where(and(
+          eq(prospectQueue.campaignId, input.id),
+          eq(prospectQueue.workspaceId, ctx.workspace.id),
+          inArray(prospectQueue.sequenceStatus, ["pending", "sourcing"]),
+          inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
+          gt(prospectQueue.icpMatchScore, 0),
+          lt(prospectQueue.icpMatchScore, input.minConfidence),
+        ));
+      return { wouldReject: Number(row?.n ?? 0) };
     }),
 
   /**
@@ -1456,16 +1519,56 @@ export const campaignsRouter = router({
       };
     }),
 
-  // Deleting a campaign is a manager's (audit 2026-10-20, A36); any member could.
+  /**
+   * Delete a campaign: managers only, audited, in one transaction (audit
+   * 2026-10-20, A18). It deleted the campaign row alone, for any member, with
+   * no record. Its people stayed claimed by a campaign that no longer existed,
+   * so they could never join another, and their scheduled steps stayed on the
+   * calendar. Now its unsent steps are stopped and the people still in it are
+   * taken out (canceled, with the reason), and the identity index counts only
+   * rows whose campaign exists, so they are free to join another. Sent steps,
+   * signals and replies are kept: they are those people's history.
+   */
   delete: managerProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db
-        .delete(areCampaigns)
-        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
-      return { success: true };
+      const ws = ctx.workspace.id;
+      const reason = "Campaign deleted";
+      const affected = (res: unknown) => Number((res as Array<{ affectedRows?: number }> | undefined)?.[0]?.affectedRows ?? 0);
+      const done = await db.transaction(async (tx) => {
+        const [campaign] = await tx
+          .select({ id: areCampaigns.id, name: areCampaigns.name, status: areCampaigns.status })
+          .from(areCampaigns)
+          .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ws)))
+          .limit(1);
+        if (!campaign) throw new TRPCError({ code: "NOT_FOUND" });
+        const steps = await tx
+          .update(areExecutionQueue)
+          .set({ status: "skipped", failureReason: reason, executedAt: new Date() })
+          .where(and(
+            eq(areExecutionQueue.workspaceId, ws),
+            eq(areExecutionQueue.campaignId, input.id),
+            inArray(areExecutionQueue.status, ["scheduled", "paused"]),
+          ));
+        const people = await tx
+          .update(prospectQueue)
+          .set({ sequenceStatus: "canceled", rejectedAt: new Date(), rejectionReason: reason })
+          .where(and(
+            eq(prospectQueue.workspaceId, ws),
+            eq(prospectQueue.campaignId, input.id),
+            inArray(prospectQueue.sequenceStatus, ["pending", "approved", "enrolled", "paused", "sourcing"]),
+          ));
+        await tx.delete(areCampaigns).where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ws)));
+        return { campaign, stepsStopped: affected(steps), peopleReleased: affected(people) };
+      });
+      await recordAudit({
+        workspaceId: ws, actorUserId: ctx.user.id, action: "delete", entityType: "are_campaign", entityId: input.id,
+        before: { name: done.campaign.name, status: done.campaign.status },
+        after: { stepsStopped: done.stepsStopped, peopleReleased: done.peopleReleased },
+      });
+      return { success: true, stepsStopped: done.stepsStopped, peopleReleased: done.peopleReleased };
     }),
 
   /**

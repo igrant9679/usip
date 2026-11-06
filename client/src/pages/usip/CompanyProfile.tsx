@@ -33,18 +33,16 @@ import {
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { pressable } from "@/lib/pressable";
+import { formatAmount } from "@shared/money";
 
 const RATING_STYLE: Record<string, string> = {
   excellent: "bg-emerald-100 text-emerald-800", good: "bg-blue-100 text-blue-800",
   fair: "bg-amber-100 text-amber-800", not_a_fit: "bg-gray-100 text-gray-600",
 };
 
+// The shared compact format (R98); nothing shown for no amount.
 function fmtMoney(n?: number | null) {
-  if (!n) return null;
-  if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
-  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `$${(n / 1e3).toFixed(0)}k`;
-  return `$${Math.round(n)}`;
+  return n ? formatAmount(n, { compact: true }) : null;
 }
 
 export default function CompanyProfile() {
@@ -59,8 +57,10 @@ export default function CompanyProfile() {
 
   const { data: c, isLoading } = trpc.companies.get.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   const { data: contacts } = trpc.companies.contacts.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
-  const { data: allOpps } = trpc.opportunities.list.useQuery(undefined, { enabled: Number.isFinite(id) });
-  const opps = useMemo(() => ((allOpps ?? []) as any[]).filter((o) => o.accountId === id), [allOpps, id]);
+  // This company's deals, asked of the server; it loaded every deal in the
+  // workspace and filtered here (audit 2026-10-20, R66).
+  const { data: companyOpps } = trpc.opportunities.list.useQuery({ accountId: id }, { enabled: Number.isFinite(id) && id > 0 });
+  const opps = (companyOpps ?? []) as any[];
   const { data: history } = trpc.companies.enrichmentHistory.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   const { data: activity } = trpc.companies.activity.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
 

@@ -28,7 +28,7 @@ const ENTITY_TABLE = {
   opportunity: opportunities,
 } as const;
 
-const fieldDefInput = z.object({
+const fieldDefFields = z.object({
   entityType: z.enum(ENTITY_TYPES),
   fieldKey: z
     .string()
@@ -40,9 +40,17 @@ const fieldDefInput = z.object({
   options: z
     .array(z.object({ value: z.string(), label: z.string() }))
     .optional(),
-  required: z.boolean().default(false),
-  showInList: z.boolean().default(false),
-  sortOrder: z.number().int().default(0),
+  required: z.boolean(),
+  showInList: z.boolean(),
+  sortOrder: z.number().int(),
+});
+// The defaults live here and not on fieldDefFields: updateDef's patch is
+// fieldDefFields.partial(), and Zod 4's .partial() still applies a default, so a
+// patch that left these out reset them to false/false/0 (audit N5).
+const fieldDefInput = fieldDefFields.extend({
+  required: fieldDefFields.shape.required.default(false),
+  showInList: fieldDefFields.shape.showInList.default(false),
+  sortOrder: fieldDefFields.shape.sortOrder.default(0),
 });
 
 export const customFieldsRouter = router({
@@ -96,7 +104,7 @@ export const customFieldsRouter = router({
     .input(
       z.object({
         id: z.number(),
-        patch: fieldDefInput.partial().omit({ entityType: true, fieldKey: true }),
+        patch: fieldDefFields.partial().omit({ entityType: true, fieldKey: true }),
       }),
     )
     .mutation(async ({ ctx, input }) => {

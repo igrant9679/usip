@@ -181,6 +181,12 @@ function RangeBar({
 }
 
 /* ─── Override dialog ────────────────────────────────────────────────────── */
+/** Names for the pinned fields (server/services/are/icpPins.ts). */
+const PIN_LABEL: Record<string, string> = {
+  targetIndustries: "industries", targetTitles: "job titles", targetGeographies: "geographies",
+  targetTechStack: "tech stack", antiPatterns: "anti-patterns", targetCompanySizeMin: "smallest size",
+  targetCompanySizeMax: "largest size", targetRevenueMin: "lowest revenue", targetRevenueMax: "highest revenue",
+};
 function OverrideDialog({
   icp,
   open,
@@ -209,14 +215,18 @@ function OverrideDialog({
   const [sizeMin, setSizeMin] = useState(String(icp?.targetCompanySizeMin ?? ""));
   const [sizeMax, setSizeMax] = useState(String(icp?.targetCompanySizeMax ?? ""));
 
+  // A save is a new version, pinned against the next inference (A20), so
+  // history refreshes too.
   const override = trpc.are.icp.override.useMutation({
-    onSuccess: () => {
-      toast.success("ICP profile updated");
+    onSuccess: (r) => {
+      toast.success(r.pinned.length > 0 ? `ICP saved as version ${r.version}. Your edits are kept when it is regenerated.` : "The AI sets every field again from the next regeneration.");
       utils.are.icp.getCurrent.invalidate();
+      utils.are.icp.getHistory.invalidate();
       onClose();
     },
     onError: (e) => toast.error(e.message),
   });
+  const pinned = Object.keys((icp?.manualOverrides ?? {}) as Record<string, unknown>);
 
   function toArray(s: string, sep: string | RegExp = ",") {
     return s
@@ -227,6 +237,8 @@ function OverrideDialog({
 
   function handleSave() {
     override.mutate({
+      // The version this dialog was opened on: a save over a newer one is refused.
+      baseProfileId: icp?.id,
       targetIndustries: toArray(industries),
       targetTitles: toArray(titles),
       targetGeographies: toArray(geos, /\n/),
@@ -246,8 +258,8 @@ function OverrideDialog({
           </DialogTitle>
           <p className="text-sm text-muted-foreground">
             Manually adjust any ICP dimension. Comma-separate multiple values (geographies: one per line).
-            Values you keep keep their weight from the AI. The AI will incorporate these overrides in the
-            next enrichment cycle.
+            Values you keep keep their weight from the AI. Saving makes a new version, and the fields you
+            change are kept when the ICP is regenerated, until you let the AI set them again.
           </p>
         </DialogHeader>
 
@@ -323,6 +335,15 @@ function OverrideDialog({
           </div>
         </div>
 
+        {pinned.length > 0 && (
+          <p className="text-[11px] text-muted-foreground">
+            Kept from your edits: {pinned.map((f) => PIN_LABEL[f] ?? f).join(", ")}.{" "}
+            <button type="button" className="underline hover:text-foreground" disabled={override.isPending}
+              onClick={() => override.mutate({ baseProfileId: icp?.id, releasePins: true })}>
+              Let the AI set these again
+            </button>
+          </p>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel
@@ -470,6 +491,9 @@ function VersionRow({ v, isActive, onRestore, isRestoring }: { v: any; isActive:
             {v.confidenceScore != null && (
               <ConfidenceBadge score={v.confidenceScore} />
             )}
+            {Object.keys(v.manualOverrides ?? {}).length > 0 && (
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">Edited by hand</Badge>
+            )}
           </div>
           <div className="text-xs text-muted-foreground mt-0.5">
             {new Date(v.generatedAt).toLocaleDateString([], {
@@ -575,7 +599,7 @@ export default function AREIcpAgent() {
       {/* ── Header ── */}
       <PageHeader
         title="ICP Agent" pageKey="are-icp-agent"
-        description="Define and continuously refine your Ideal Customer Profile to sharpen prospect qualification. The AI infers your ICP from won and lost deals and updates it automatically."
+        description="Your Ideal Customer Profile, inferred by the AI from won and lost deals and from how contacted prospects replied, and re-inferred on the schedule set in ARE Settings. Fields you edit by hand are kept."
       
         icon={<Target className="size-5" />}
       >
@@ -828,19 +852,21 @@ export default function AREIcpAgent() {
                 step: "01",
                 title: "Reads your CRM",
                 color: "#60A5FA",
-                desc: "The agent reads every opportunity (won and lost), account, and contact in your workspace to build a training dataset.",
+                // What inferIcp reads, no more (A73): up to 200 won and 100 lost deals,
+                // their accounts and contact titles, and reply rates by segment.
+                desc: "The agent reads up to 200 won and 100 lost deals, their companies and the titles of the people on them, and how contacted prospects replied, by segment.",
               },
               {
                 step: "02",
                 title: "LLM Pattern Extraction",
                 color: "#A78BFA",
-                desc: "An LLM analyses the dataset to extract patterns: which industries close fastest, which titles champion deals, which pain points recur in won deals.",
+                desc: "An LLM looks for the patterns in that summary: which industries and sizes win, which titles champion deals, what goes with losses.",
               },
               {
                 step: "03",
                 title: "Structured ICP Output",
                 color: "#34D399",
-                desc: "The result is a versioned, structured ICP with confidence scores, buying triggers, pain points, and anti-patterns — ready to score every new prospect.",
+                desc: "The result is a new version: industries, titles, places, company size, tech signals, anti-patterns and conversion signals, with a confidence score. Fields you set by hand are carried over unchanged.",
               },
             ].map(({ step, title, desc, color }) => (
               <div key={step} className="rounded-xl border bg-card p-4 space-y-2">
@@ -862,7 +888,9 @@ export default function AREIcpAgent() {
 
       {/* ── Override dialog ── */}
       {icp && (
-        <OverrideDialog icp={icp} open={overrideOpen} onClose={() => setOverrideOpen(false)} />
+        // Keyed by version (A20): the form is built from the version it opened on,
+        // so a new version means a new form, never stale values over it.
+        <OverrideDialog key={icp.id} icp={icp} open={overrideOpen} onClose={() => setOverrideOpen(false)} />
       )}
     </Shell>
   );

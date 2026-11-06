@@ -78,7 +78,7 @@ export function OutreachExplainer({ current, className }: { current: OutreachSur
         </div>
         <p className="mt-3 text-[11.5px] text-muted-foreground">
           Rule of thumb: one message for everyone → a Sequence (or a fixed-copy campaign). A different message for each person, or anything you want the engine to source and run → a Campaign.{" "}
-          <Link href="/help/sequences-vs-campaigns" className="underline">Learn more</Link>
+          <Link href="/help/articles/sequences-vs-campaigns" className="underline">Learn more</Link>
         </p>
       </div>
     </details>

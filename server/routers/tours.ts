@@ -14,6 +14,7 @@ import {
   workspaceMembers,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { noteHelpOverride } from "../services/helpSeedOverrides";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 
@@ -53,11 +54,48 @@ const TOUR_STEP = z.object({
   branchingRules: z.any().optional(),
 });
 
+/**
+ * Tell the boot seeds a person changed this tour, by the name it has now, so
+ * the next deploy neither reverts the edit nor restores a delete (G21).
+ */
+async function noteTourChanged(db: Awaited<ReturnType<typeof requireDb>>, workspaceId: number, tourId: number, action: "edited" | "deleted", userId: number) {
+  const [row] = await db.select({ name: tours.name }).from(tours)
+    .where(and(eq(tours.id, tourId), eq(tours.workspaceId, workspaceId))).limit(1);
+  if (row) await noteHelpOverride(db, workspaceId, "tour", row.name, action, userId);
+}
+
 /** Steps are written by tourId, so the tour has to be proved this workspace's first. */
 async function assertTourHere(db: Awaited<ReturnType<typeof requireDb>>, tourId: number, workspaceId: number): Promise<void> {
   const [tour] = await db.select({ id: tours.id }).from(tours)
     .where(and(eq(tours.id, tourId), eq(tours.workspaceId, workspaceId))).limit(1);
   if (!tour) throw new TRPCError({ code: "NOT_FOUND" });
+}
+
+/**
+ * Write a tour's steps from the builder, which sends the whole list: a step that
+ * carries its id is updated, one without is inserted, and a saved step missing
+ * from the list was removed in the builder, so it is deleted. Without the last
+ * part a removed step came back on the next load (G20, 2026-11-06).
+ */
+async function writeSteps(
+  db: Awaited<ReturnType<typeof requireDb>>,
+  tourId: number,
+  steps: z.infer<typeof TOUR_STEP>[],
+): Promise<void> {
+  const kept = new Set(steps.map((s) => s.id).filter((id): id is number => typeof id === "number"));
+  const saved = await db.select({ id: tourSteps.id }).from(tourSteps).where(eq(tourSteps.tourId, tourId));
+  const removed = saved.map((s) => s.id).filter((id) => !kept.has(id));
+  if (removed.length) {
+    await db.delete(tourSteps).where(and(eq(tourSteps.tourId, tourId), inArray(tourSteps.id, removed)));
+  }
+  for (const step of steps) {
+    const { id: stepId, ...stepRest } = step;
+    if (stepId) {
+      await db.update(tourSteps).set(stepRest).where(and(eq(tourSteps.id, stepId), eq(tourSteps.tourId, tourId)));
+    } else {
+      await db.insert(tourSteps).values({ ...stepRest, tourId });
+    }
+  }
 }
 
 export const toursRouter = router({
@@ -132,7 +170,7 @@ export const toursRouter = router({
         estimatedMinutes: z.number().min(1).max(60).default(3),
         prerequisiteTourId: z.number().optional(),
         status: z.enum(["draft", "published"]).default("draft"),
-        pageKey: z.string().max(120).optional(),
+        pageKey: z.string().max(120).nullable().optional(),
         steps: z.array(TOUR_STEP).optional(),
       }),
     )
@@ -144,6 +182,7 @@ export const toursRouter = router({
       let tourId = id;
       if (id) {
         await assertTourHere(db, id, ctx.workspace.id);
+        await noteTourChanged(db, ctx.workspace.id, id, "edited", ctx.user.id);
         await db
           .update(tours)
           .set(rest)
@@ -153,20 +192,7 @@ export const toursRouter = router({
         tourId = (res as any).insertId as number;
       }
 
-      // Upsert steps
-      if (steps && tourId) {
-        for (const step of steps) {
-          const { id: stepId, ...stepRest } = step;
-          if (stepId) {
-            await db
-              .update(tourSteps)
-              .set(stepRest)
-              .where(and(eq(tourSteps.id, stepId), eq(tourSteps.tourId, tourId)));
-          } else {
-            await db.insert(tourSteps).values({ ...stepRest, tourId });
-          }
-        }
-      }
+      if (steps && tourId) await writeSteps(db, tourId, steps);
 
       return { id: tourId };
     }),
@@ -182,6 +208,7 @@ export const toursRouter = router({
         .where(and(eq(tours.id, input.tourId), eq(tours.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!tour) throw new TRPCError({ code: "NOT_FOUND" });
+      await noteHelpOverride(db, ctx.workspace.id, "tour", tour.name, "edited", ctx.user.id);
       await db.delete(tourSteps).where(and(eq(tourSteps.id, input.stepId), eq(tourSteps.tourId, input.tourId)));
     }),
 
@@ -200,6 +227,7 @@ export const toursRouter = router({
         .where(and(eq(tours.id, input.id), eq(tours.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!owned) throw new TRPCError({ code: "NOT_FOUND", message: "Tour not found" });
+      await noteTourChanged(db, ctx.workspace.id, owned.id, "deleted", ctx.user.id);
       await db.delete(tourSteps).where(eq(tourSteps.tourId, owned.id));
       await db.delete(tours).where(and(eq(tours.id, owned.id), eq(tours.workspaceId, ctx.workspace.id)));
     }),
@@ -255,30 +283,42 @@ export const toursRouter = router({
     .input(z.object({ tourId: z.number(), stepIndex: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
+      await assertTourHere(db, input.tourId, ctx.workspace.id);
+      const [row] = await db.select({ id: userTourProgress.id }).from(userTourProgress)
+        .where(and(eq(userTourProgress.userId, ctx.user.id), eq(userTourProgress.tourId, input.tourId))).limit(1);
+      // No row when startTour never landed (G59): record from here rather than drop it.
+      if (!row) {
+        await db.insert(userTourProgress).values({
+          workspaceId: ctx.workspace.id, userId: ctx.user.id, tourId: input.tourId,
+          status: "in_progress", currentStep: input.stepIndex, startedAt: new Date(),
+        });
+        return;
+      }
       await db
         .update(userTourProgress)
         .set({ currentStep: input.stepIndex, lastResumedAt: new Date() })
-        .where(
-          and(
-            eq(userTourProgress.userId, ctx.user.id),
-            eq(userTourProgress.tourId, input.tourId),
-          ),
-        );
+        .where(eq(userTourProgress.id, row.id));
     }),
 
   completeTour: workspaceProcedure
     .input(z.object({ tourId: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
-      await db
-        .update(userTourProgress)
-        .set({ status: "completed", completedAt: new Date() })
-        .where(
-          and(
-            eq(userTourProgress.userId, ctx.user.id),
-            eq(userTourProgress.tourId, input.tourId),
-          ),
-        );
+      await assertTourHere(db, input.tourId, ctx.workspace.id);
+      const [row] = await db.select({ id: userTourProgress.id }).from(userTourProgress)
+        .where(and(eq(userTourProgress.userId, ctx.user.id), eq(userTourProgress.tourId, input.tourId))).limit(1);
+      // A completion with no progress row (G59) still counts: write one.
+      if (!row) {
+        await db.insert(userTourProgress).values({
+          workspaceId: ctx.workspace.id, userId: ctx.user.id, tourId: input.tourId,
+          status: "completed", startedAt: new Date(), completedAt: new Date(),
+        });
+      } else {
+        await db
+          .update(userTourProgress)
+          .set({ status: "completed", completedAt: new Date() })
+          .where(eq(userTourProgress.id, row.id));
+      }
 
       // Award achievement
       const [tour] = await db.select().from(tours).where(eq(tours.id, input.tourId)).limit(1);
@@ -420,7 +460,7 @@ export const toursRouter = router({
         roleTags: z.array(z.string()).optional(),
         estimatedMinutes: z.number().min(1).max(60).default(3),
         status: z.enum(["draft", "published"]).default("draft"),
-        pageKey: z.string().max(120).optional(),
+        pageKey: z.string().max(120).nullable().optional(),
         steps: z.array(TOUR_STEP).optional(),
       }),
     )
@@ -449,7 +489,7 @@ export const toursRouter = router({
         roleTags: z.array(z.string()).optional(),
         estimatedMinutes: z.number().min(1).max(60).optional(),
         status: z.enum(["draft", "published"]).optional(),
-        pageKey: z.string().max(120).optional(),
+        pageKey: z.string().max(120).nullable().optional(),
         steps: z.array(TOUR_STEP).optional(),
       }),
     )
@@ -457,17 +497,9 @@ export const toursRouter = router({
       const db = await requireDb();
       const { id, steps, ...rest } = input;
       await assertTourHere(db, id, ctx.workspace.id);
+      await noteTourChanged(db, ctx.workspace.id, id, "edited", ctx.user.id);
       await db.update(tours).set(rest).where(and(eq(tours.id, id), eq(tours.workspaceId, ctx.workspace.id)));
-      if (steps) {
-        for (const step of steps) {
-          const { id: stepId, ...stepRest } = step;
-          if (stepId) {
-            await db.update(tourSteps).set(stepRest).where(and(eq(tourSteps.id, stepId), eq(tourSteps.tourId, id)));
-          } else {
-            await db.insert(tourSteps).values({ ...stepRest, tourId: id });
-          }
-        }
-      }
+      if (steps) await writeSteps(db, id, steps);
       return { id };
     }),
 
@@ -486,6 +518,7 @@ export const toursRouter = router({
         .where(and(eq(tours.id, input.id), eq(tours.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!owned) throw new TRPCError({ code: "NOT_FOUND", message: "Tour not found" });
+      await noteTourChanged(db, ctx.workspace.id, owned.id, "deleted", ctx.user.id);
       await db.delete(tourSteps).where(eq(tourSteps.tourId, owned.id));
       await db.delete(tours).where(and(eq(tours.id, owned.id), eq(tours.workspaceId, ctx.workspace.id)));
       return { ok: true };

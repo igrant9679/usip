@@ -17,6 +17,7 @@ import type { MySqlColumn } from "drizzle-orm/mysql-core";
 import { z } from "zod";
 import { activities, contacts, emailLog, leads, opportunities, prospects, savedReports, users } from "../../drizzle/schema";
 import { checkPermission, getDb } from "../db";
+import { insertIdOf } from "../_core/insertId";
 import { stageIndexFor } from "../_core/stageSemantics";
 import type { StageIndex } from "@shared/stageSemantics";
 import { router } from "../_core/trpc";
@@ -422,7 +423,7 @@ export const reportsRouter = router({
         object: input.spec.object,
         config: input.spec,
       });
-      return { id: Number((r as unknown as { insertId?: number })?.insertId ?? 0) };
+      return { id: insertIdOf(r) };
     }),
 
   remove: workspaceProcedure.input(z.object({ id: z.number().int() })).mutation(async ({ ctx, input }) => {

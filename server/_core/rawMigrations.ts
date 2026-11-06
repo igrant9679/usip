@@ -4958,6 +4958,27 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0250: The ICP fields a person set by hand (audit 2026-10-20, A20) ───
+  // The daily re-inference wrote a fresh version over every manual override.
+  // The fields a person edited, and their values, are kept on each version
+  // and applied again over the next inferred one. NULL: nothing edited.
+  {
+    name: "0250_icp_manual_overrides.sql",
+    statements: [
+      "ALTER TABLE `icp_profiles` ADD COLUMN `manualOverrides` json NULL",
+    ],
+  },
+
+  // The help seed re-applied its articles and tours on every boot, reverting an
+  // admin's edits and restoring what they deleted (audit G21). This records
+  // what a person changed so the seed leaves it alone. New table, additive.
+  {
+    name: "0270_help_seed_overrides.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `help_seed_overrides` (`id` int AUTO_INCREMENT PRIMARY KEY, `workspaceId` int NOT NULL, `kind` varchar(16) NOT NULL, `seedKey` varchar(200) NOT NULL, `action` varchar(16) NOT NULL, `userId` int NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY `ux_hso_key` (`workspaceId`, `kind`, `seedKey`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+
   // Audit 2026-10-20, P61: a discovery run recorded only the people it
   // created, so a run that updated twenty and skipped five read "0 new" and
   // nothing else, and the companies it saved were nowhere on it.
@@ -4967,6 +4988,26 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       "ALTER TABLE `discovery_runs` ADD COLUMN `prospectsUpdated` int NOT NULL DEFAULT 0",
       "ALTER TABLE `discovery_runs` ADD COLUMN `prospectsSkipped` int NOT NULL DEFAULT 0",
       "ALTER TABLE `discovery_runs` ADD COLUMN `accountsCreated` int NOT NULL DEFAULT 0",
+    ],
+  },
+
+  // A deal whose close date has passed was alerted as "closing soon" (audit
+  // 2026-10-20, R38). Appending an enum value is in place in MySQL: no copy,
+  // and every stored value keeps its meaning.
+  {
+    name: "0300_pipeline_alert_past_close.sql",
+    statements: [
+      "ALTER TABLE `pipeline_alerts` MODIFY COLUMN `alertType` enum('no_activity','closing_soon_regression','amount_change','no_champion','past_close_date') NOT NULL",
+    ],
+  },
+
+  // A rep's forecast category on a deal (audit 2026-10-20, R41): Commit was
+  // "90% or more" and no stage defaults that high. Nullable with no default,
+  // so every existing deal keeps being counted by its win %.
+  {
+    name: "0301_opportunity_forecast_category.sql",
+    statements: [
+      "ALTER TABLE `opportunities` ADD COLUMN `forecastCategory` varchar(16) NULL",
     ],
   },
 

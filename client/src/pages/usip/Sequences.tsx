@@ -12,6 +12,8 @@ import { EmailClientPreview } from "@/components/usip/EmailClientPreview";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { trpc } from "@/lib/trpc";
 import { invalidateEnrollmentReads } from "@/lib/enrollmentCache";
+import { SequenceDraftsNote } from "@/components/usip/SequenceDraftsNote";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { usePermissions } from "@/hooks/usePermissions";
 import {
   Activity, GitBranch, Pause, Play, Plus, Power, CheckCircle2, XCircle,
@@ -55,7 +57,13 @@ interface WaitStep { type: "wait"; days: number }
 interface TaskStep { type: "task"; body: string }
 type Step = EmailStep | WaitStep | TaskStep;
 
+/** What a template-linked step is: a copy (O26) — the same words the v2 editor uses. */
+const TEMPLATE_COPY_NOTE = "This is the copy that sends. Later changes to the template don't reach it; pick the template again to refresh it.";
+
 // ─── EnrollDialog ────────────────────────────────────────────────────────────
+/** Prospects the enrol dialog shows a page; the server searches and counts all of them. */
+const ENROLL_PROSPECTS_PER_PAGE = 50;
+
 /**
  * Picker for bulk-enrolling contacts and/or leads into a sequence.
  * Two tabs (Contacts, Leads), each with a search box and multi-select
@@ -86,53 +94,50 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
     }
   }, [open]);
 
-  // Important: don't gate these on `enabled: open` — that pattern was
-  // returning empty data on first dialog open in some cases. The lists
-  // are tiny and the cache is shared with the main sidebar pages, so
-  // there's no real cost to loading them eagerly.
-  const contactsQ = trpc.contacts.list.useQuery({});
-  const leadsQ = trpc.leads.list.useQuery({});
-  // Prospects: show ALL non-rejected. Single query without a
-  // verificationStatus filter so CSV-imported rows (NULL status) are
-  // included alongside Discovery v2's verified/needs_review rows. We
-  // filter rejected client-side below. The engine's per-message
-  // suppression check handles outright-bad addresses at send time.
-  const prospectsAllQ = trpc.prospects.list.useQuery({ page: 1, perPage: 200 });
+  /**
+   * Searched and paged ON THE SERVER (audit 2026-10-20, O40). This loaded the
+   * first 200 prospects and searched them in the browser, so anyone past the
+   * 200th could not be found at all. Contacts and leads take the server's
+   * `search` too; prospects come a page at a time with the total.
+   *
+   * Important: don't gate these on `enabled: open` — that pattern was
+   * returning empty data on first dialog open in some cases.
+   */
+  const debounced = useDebouncedValue(search.trim());
+  const [prospectPage, setProspectPage] = useState(1);
+  useEffect(() => { setProspectPage(1); }, [debounced]);
+  const contactsQ = trpc.contacts.list.useQuery({ search: debounced || undefined });
+  const leadsQ = trpc.leads.list.useQuery({ search: debounced || undefined });
+  // Prospects: every non-rejected one. No verificationStatus filter, so
+  // CSV-imported rows (NULL status) are included alongside Discovery v2's
+  // verified/needs_review rows; rejected ones are dropped below. The
+  // engine's per-message suppression check handles outright-bad addresses.
+  const prospectsAllQ = trpc.prospects.list.useQuery({ page: prospectPage, perPage: ENROLL_PROSPECTS_PER_PAGE, search: debounced || undefined });
+  const prospectTotal = Number((prospectsAllQ.data as any)?.total ?? 0);
+  const prospectPages = Math.max(1, Math.ceil(prospectTotal / ENROLL_PROSPECTS_PER_PAGE));
 
   // Already enrolled in this sequence — show a disabled checkbox + "already enrolled" label.
   const { data: existingEnrollments = [] } = trpc.sequences.listEnrollments.useQuery({ sequenceId }, { enabled: open });
   const alreadyContactIds = new Set<number>();
   const alreadyLeadIds = new Set<number>();
+  const alreadyProspectIds = new Set<number>();
   for (const e of existingEnrollments as any[]) {
     if (e.status === "exited") continue;
     if (e.contactId) alreadyContactIds.add(e.contactId);
     if (e.leadId) alreadyLeadIds.add(e.leadId);
+    // Most enrolments are prospect enrolments; this id was never read, so
+    // the people already in the sequence looked selectable (O40).
+    if (e.prospectId) alreadyProspectIds.add(e.prospectId);
   }
-  // Prospects can also be "already enrolled" via their linkedContactId
-  // pointing at an already-enrolled contact. We compute that per-row
-  // below using alreadyContactIds.
 
-  const q = search.trim().toLowerCase();
-  const filteredContacts = ((contactsQ.data ?? []) as any[]).filter((c) => {
-    if (!q) return true;
-    const hay = `${c.firstName ?? ""} ${c.lastName ?? ""} ${c.email ?? ""} ${(c as any).accountName ?? ""} ${c.title ?? ""}`.toLowerCase();
-    return hay.includes(q);
-  });
-  const filteredLeads = ((leadsQ.data ?? []) as any[]).filter((l) => {
-    if (!q) return true;
-    const hay = `${l.firstName ?? ""} ${l.lastName ?? ""} ${l.email ?? ""} ${l.company ?? ""} ${l.title ?? ""}`.toLowerCase();
-    return hay.includes(q);
-  });
+  const filteredContacts = (contactsQ.data ?? []) as any[];
+  const filteredLeads = (leadsQ.data ?? []) as any[];
   // prospects.list returns { data, total, page, perPage }. Drop only
   // rejected (soft-archived) rows; keep verified, needs_review, AND
   // NULL-status rows (the CSV-import path doesn't set verificationStatus).
   const prospectsCombined: any[] = (((prospectsAllQ.data as any)?.data ?? []) as any[])
     .filter((p) => p.verificationStatus !== "rejected");
-  const filteredProspects = prospectsCombined.filter((p) => {
-    if (!q) return true;
-    const hay = `${p.firstName ?? ""} ${p.lastName ?? ""} ${p.email ?? ""} ${p.companyName ?? p.company ?? ""} ${p.title ?? ""}`.toLowerCase();
-    return hay.includes(q);
-  });
+  const filteredProspects = prospectsCombined;
 
   const bulkEnroll = trpc.sequences.bulkEnroll.useMutation({
     onSuccess: (r) => {
@@ -140,6 +145,7 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
       if (r.skippedAlreadyEnrolled > 0) parts.push(`${r.skippedAlreadyEnrolled} already enrolled`);
       if (r.blockedInvalidEmail > 0) parts.push(`${r.blockedInvalidEmail} blocked (invalid email)`);
       if (r.skippedSuppressed > 0) parts.push(`${r.skippedSuppressed} skipped (suppressed)`);
+      if (r.skippedInCampaign > 0) parts.push(`${r.skippedInCampaign} skipped (in a Revenue Engine campaign)`);
       toast.success(parts.join(" · "));
       // A paused or draft sequence holds new enrolments (audit 2026-10-20, O1).
       if (r.enrolled > 0 && r.heldUntilActive) toast.info("This sequence is not active — nothing is sent until it is activated");
@@ -151,10 +157,9 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
 
   const totalSelected = selectedContactIds.size + selectedLeadIds.size + selectedProspectIds.size;
 
-  /** A prospect is "already enrolled" if its linked contact is in the
-   *  alreadyContactIds set we computed from existing enrollments. */
+  /** A prospect is "already enrolled" by its own enrolment, or through the contact it is linked to. */
   function isProspectAlreadyEnrolled(p: any): boolean {
-    return typeof p.linkedContactId === "number" && alreadyContactIds.has(p.linkedContactId);
+    return alreadyProspectIds.has(p.id) || (typeof p.linkedContactId === "number" && alreadyContactIds.has(p.linkedContactId));
   }
 
   function toggleContact(id: number) {
@@ -216,7 +221,7 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
           {([
             { k: "contacts", label: "Contacts", count: filteredContacts.length },
             { k: "leads", label: "Leads", count: filteredLeads.length },
-            { k: "prospects", label: "Prospects", count: filteredProspects.length },
+            { k: "prospects", label: "Prospects", count: prospectTotal },
           ] as const).map((t) => (
             <button {...tabProps(tab === t.k)} key={t.k} onClick={() => setTab(t.k)}
               className={`px-4 py-2 text-sm ${tab === t.k ? "border-b-2 border-[#14B89A] font-semibold" : "text-muted-foreground"}`}>
@@ -251,7 +256,7 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
               <div className="p-4 text-sm text-muted-foreground">Loading contacts…</div>
             ) : contactsQ.error ? (
               <div className="p-4 text-sm text-destructive">Couldn't load contacts: {contactsQ.error.message}</div>
-            ) : (contactsQ.data ?? []).length === 0 ? (
+            ) : filteredContacts.length === 0 && !debounced ? (
               <div className="p-4 text-sm text-muted-foreground">No contacts in this workspace yet.</div>
             ) : filteredContacts.length === 0 ? (
               <div className="p-4 text-sm text-muted-foreground">No contacts match your search.</div>
@@ -287,7 +292,7 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
               <div className="p-4 text-sm text-muted-foreground">Loading leads…</div>
             ) : leadsQ.error ? (
               <div className="p-4 text-sm text-destructive">Couldn't load leads: {leadsQ.error.message}</div>
-            ) : (leadsQ.data ?? []).length === 0 ? (
+            ) : filteredLeads.length === 0 && !debounced ? (
               <div className="p-4 text-sm text-muted-foreground">No leads in this workspace yet.</div>
             ) : filteredLeads.length === 0 ? (
               <div className="p-4 text-sm text-muted-foreground">No leads match your search.</div>
@@ -325,7 +330,7 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
               <div className="p-4 text-sm text-destructive">
                 Couldn't load prospects: {prospectsAllQ.error.message}
               </div>
-            ) : prospectsCombined.length === 0 ? (
+            ) : prospectsCombined.length === 0 && !debounced && prospectPage === 1 ? (
               <div className="p-4 text-sm text-muted-foreground">
                 No prospects in this workspace yet. Run discovery from <strong>Find Prospects</strong> or an ARE campaign first.
               </div>
@@ -373,6 +378,17 @@ function EnrollDialog({ sequenceId, open, onClose, onEnrolled }: {
           )}
         </div>
 
+        {tab === "prospects" && prospectTotal > ENROLL_PROSPECTS_PER_PAGE && (
+          <div className="flex items-center gap-2 pt-2 text-xs text-muted-foreground shrink-0">
+            <span className="mr-auto">
+              {(prospectPage - 1) * ENROLL_PROSPECTS_PER_PAGE + 1}–{Math.min(prospectPage * ENROLL_PROSPECTS_PER_PAGE, prospectTotal)} of {prospectTotal.toLocaleString()}
+              {" "}— search to narrow it down; your selection is kept across pages.
+            </span>
+            <Button size="sm" variant="outline" className="h-7 text-xs" disabled={prospectPage <= 1} onClick={() => setProspectPage((n) => n - 1)}>Previous</Button>
+            <Button size="sm" variant="outline" className="h-7 text-xs" disabled={prospectPage >= prospectPages} onClick={() => setProspectPage((n) => n + 1)}>Next</Button>
+          </div>
+        )}
+
         <DialogFooter className="shrink-0 pt-2 border-t">
           <span className="text-xs text-muted-foreground self-center mr-auto">
             {totalSelected} selected
@@ -416,6 +432,13 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
   });
   const pauseOnReply = trpc.sequences.pauseOnReply.useMutation({
     onSuccess: () => { refreshed(); toast.success("Enrollment paused (reply detected)"); },
+    onError: (e) => toast.error(e.message),
+  });
+  // A plain pause (audit 2026-10-20, O37): "Reply" was the only way to pause
+  // someone here, and it files a "Reply detected" task for a reply that may
+  // never have happened.
+  const pause = trpc.sequences.pauseEnrollment.useMutation({
+    onSuccess: () => { refreshed(); toast.success("Enrollment paused"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -468,7 +491,7 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
           <Button size="sm" onClick={() => setEnrollOpen(true)}>
             <UserPlus className="h-3 w-3 mr-1" /> Enroll
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => refetch()}>
+          <Button size="sm" variant="ghost" onClick={() => refreshed()}>
             <RefreshCw className="h-3 w-3 mr-1" /> Refresh
           </Button>
         </div>
@@ -516,7 +539,10 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
                     <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => resume.mutate({ id: e.id })} disabled={resume.isPending}>Resume</Button>
                   )}
                   {e.status === "active" && (
-                    <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-amber-600" onClick={() => pauseOnReply.mutate({ enrollmentId: e.id })} disabled={pauseOnReply.isPending}>Reply</Button>
+                    <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => pause.mutate({ id: e.id })} disabled={pause.isPending}>Pause</Button>
+                  )}
+                  {e.status === "active" && (
+                    <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-amber-600" title="They replied: pause them and file a task to follow up" onClick={() => pauseOnReply.mutate({ enrollmentId: e.id })} disabled={pauseOnReply.isPending}>Mark replied</Button>
                   )}
                   {(e.status === "active" || e.status === "paused") && (
                     <Button size="sm" variant="ghost" className="h-6 text-xs px-2 text-muted-foreground" onClick={() => exit.mutate({ id: e.id })} disabled={exit.isPending}>Exit</Button>
@@ -579,10 +605,7 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
 
   /** One-line summary shown in a minimized step's header. */
   function stepSummary(step: Step): string {
-    if (step.type === "email") {
-      const linked = step.templateId ? templateById.get(step.templateId) : null;
-      return linked?.subject || step.subject || "(no subject)";
-    }
+    if (step.type === "email") return step.subject || "(no subject)";
     if (step.type === "wait") return `${step.days} day${step.days === 1 ? "" : "s"}`;
     return htmlToPlainText(step.body ?? "");
   }
@@ -738,34 +761,29 @@ function StepEditor({ steps, onChange, disabled }: { steps: Step[]; onChange: (s
                       <button
                         type="button"
                         className="text-[11px] underline-offset-2 hover:underline shrink-0"
-                        onClick={() => updateStep(i, {
-                          templateId: undefined,
-                          // Copy the template's CURRENT content (what's shown
-                          // above) so the detached step starts from exactly
-                          // what the user was looking at.
-                          subject: appliedTemplate.subject ?? step.subject,
-                          body: appliedTemplate.htmlOutput ?? step.body,
-                        } as Partial<EmailStep>)}
-                        title="Detach from the source template (keeps a copy for inline editing)"
+                        // The copy shown is the one that sends, so detaching keeps it.
+                        onClick={() => updateStep(i, { templateId: undefined } as Partial<EmailStep>)}
+                        title="Detach from the source template (keeps this copy for inline editing)"
                       >
                         Detach
                       </button>
                     )}
                   </div>
                 )}
-                {appliedTemplate ? (
-                  /* Linked step — the template is the source of truth. Show
-                     its CURRENT subject + fully formatted output read-only
-                     (the rich-text editor can't faithfully edit builder
-                     HTML), so what you see here is exactly what the Email
-                     Builder produces. Edit there via the link, or Detach
-                     for a one-off inline copy. */
+                {step.templateId ? (
+                  /* A step from a template holds a COPY, and the copy is what
+                     sends (audit 2026-10-20, O26; the v2 editor's rule since
+                     PR #29). This used to show the template's current
+                     version, which is not what went out once the template had
+                     changed. Read-only, because the rich-text editor can't
+                     hold Email Builder HTML faithfully; Detach to edit it. */
                   <>
-                    <div className="text-sm font-medium px-1">{appliedTemplate.subject || step.subject || "(no subject)"}</div>
+                    <div className="text-sm font-medium px-1">{step.subject || "(no subject)"}</div>
                     <div
                       className="border rounded-md bg-white text-[#202124] p-3 text-sm max-h-[300px] overflow-y-auto [&_a]:text-blue-600 [&_a]:underline [&_p]:my-2 break-words [&_table]:max-w-full [&_td]:break-words [&_img]:max-w-full [&_img]:h-auto"
-                      dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(appliedTemplate.htmlOutput ?? step.body ?? "") }}
+                      dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(step.body ?? "") }}
                     />
+                    <p className="text-[11px] text-muted-foreground px-1">{TEMPLATE_COPY_NOTE}</p>
                   </>
                 ) : (
                   <>
@@ -929,21 +947,11 @@ function SequenceEditDialog({ seq, open, onClose }: { seq: any; open: boolean; o
     });
   }
 
-  // The send engine reads steps.subject/body JSON, so template-linked steps
-  // must carry content. Re-sync linked steps from the template's CURRENT
-  // subject/htmlOutput at save time — keeps Email Builder formatting
-  // constant across the builder, this editor, the preview, and what's sent.
-  const allTemplatesForSyncQ = trpc.emailTemplates?.list?.useQuery({ status: "all" });
+  // Saved as shown (O26). Saving used to re-copy every template-linked step
+  // from the template's current version without saying so; a step now keeps
+  // its copy until someone picks the template again, as in the v2 editor.
   function handleSaveSteps() {
-    const tplById = new Map<number, any>(((allTemplatesForSyncQ?.data ?? []) as any[]).map((t) => [t.id, t]));
-    const synced = steps.map((s) => {
-      if (s.type === "email" && (s as EmailStep).templateId) {
-        const t = tplById.get((s as EmailStep).templateId!);
-        if (t) return { ...s, subject: t.subject ?? (s as EmailStep).subject, body: t.htmlOutput ?? (s as EmailStep).body };
-      }
-      return s;
-    });
-    updateSteps.mutate({ id: seq.id, steps: synced });
+    updateSteps.mutate({ id: seq.id, steps });
   }
 
   return (
@@ -1501,13 +1509,15 @@ export default function Sequences() {
   const [selected, setSelected] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"steps" | "stats" | "analytics" | "ab">("steps");
   const utils = trpc.useUtils();
-  const { data } = trpc.sequences.list.useQuery();
+  const { data, isLoading, isError, error } = trpc.sequences.list.useQuery();
   const create = trpc.sequences.create.useMutation({
     onSuccess: () => { utils.sequences.list.invalidate(); setOpen(false); toast.success("Sequence created"); },
     onError: (e) => toast.error("Failed to create sequence", { description: e.message }),
   });
+  // The detail pane reads sequences.get, so a status change invalidates it
+  // too; it used to refresh only the list and the pane kept the old status (O37).
   const setStatus = trpc.sequences.setStatus.useMutation({
-    onSuccess: () => utils.sequences.list.invalidate(),
+    onSuccess: (_d, vars) => { utils.sequences.list.invalidate(); utils.sequences.get.invalidate({ id: vars.id }); },
     onError: (e) => toast.error("Failed to change status", { description: e.message }),
   });
   const remove = trpc.sequences.delete.useMutation({
@@ -1530,7 +1540,7 @@ export default function Sequences() {
 
   return (
     <Shell title="Sequences">
-      <PageHeader title="Sequences" description="Build multi-step email and task cadences to engage prospects at scale with personalised touchpoints. Set delays, branching conditions, and auto-stop rules to keep every sequence relevant." pageKey="sequences"
+      <PageHeader title="Sequences" description="Build multi-step email and task cadences to engage prospects at scale with personalised touchpoints. Set the steps, the delays between them and a daily cap; a reply pauses the person." pageKey="sequences"
         icon={<ListOrdered className="size-5" />}
       >
         {can("manage_sequences") && <Button onClick={() => setOpen(true)} data-tour-id="sequences-new-button"><Plus className="size-4" /> New sequence</Button>}
@@ -1539,10 +1549,16 @@ export default function Sequences() {
         { href: "/v2/emails?status=awaiting&source=sequence", label: "Email Drafts", title: "Review and edit drafts created by sequence steps" },
         { href: "/email-analytics", label: "Email Analytics", title: "Open / click / reply rates per sequence and per step" },
       ]} />
+      <div className="px-4 md:px-5 pt-4"><SequenceDraftsNote /></div>
       <div className="p-4 md:p-5 grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-1">
           <Section title="All sequences">
-            {(data ?? []).length === 0 ? <EmptyState icon={Activity} title="None yet" /> : (
+            {/* Not read yet is not empty (audit 2026-10-20, O56). */}
+            {isLoading ? (
+              <div className="p-3 text-sm text-muted-foreground flex items-center gap-2"><Loader2 className="size-3.5 animate-spin" /> Loading sequences…</div>
+            ) : isError ? (
+              <div className="p-3 text-sm text-destructive">Sequences could not be loaded{error?.message ? `: ${error.message}` : "."}</div>
+            ) : (data ?? []).length === 0 ? <EmptyState icon={Activity} title="None yet" /> : (
               <ul className="divide-y">
                 {data!.map((s) => (
                   <li key={s.id}
@@ -1557,7 +1573,7 @@ export default function Sequences() {
                           className="text-muted-foreground hover:text-destructive p-1 h-auto rounded"
                           ariaLabel="Delete sequence"
                           title="Delete this sequence?"
-                          description={`"${s.name}" and its steps will be deleted, and enrollments will stop. This cannot be undone.`}
+                          description={`"${s.name}" is deleted with its steps, its enrolments and any drafts not yet sent. Emails it already sent stay in the Emails log, and their unsubscribe links keep working. This cannot be undone.`}
                           confirmLabel="Delete"
                           onConfirm={() => remove.mutate({ id: s.id })}
                         >
@@ -1637,22 +1653,20 @@ export default function Sequences() {
                             <span className="font-mono">Step {i + 1}</span> · {step.type}
                             {step.type === "wait" ? ` · ${step.days}d` : ""}
                           </div>
-                          {tmplName ? (
-                            /* Template-linked step: the template is the source
-                               of truth, so no subject/body dump here — just a
-                               link straight to it in Email Builder. */
-                            <Link
-                              href={`/email-builder/${step.templateId}`}
-                              className="inline-flex items-center gap-1.5 mt-1 text-sm font-medium text-blue-700 dark:text-blue-300 hover:underline underline-offset-2"
-                              title="Open this template in Email Builder"
-                            >
-                              <Mail className="size-3.5" /> From template: {tmplName} →
-                            </Link>
-                          ) : (
-                            <>
-                              {step.subject && <div className="text-sm font-medium mt-1">{step.subject}</div>}
-                              {bodyPreview && <div className="text-xs text-muted-foreground line-clamp-3 mt-1 whitespace-pre-wrap">{bodyPreview}</div>}
-                            </>
+                          {/* What sends is the step's own copy, template or not
+                              (O26), so the copy is what is shown; a template
+                              step says where its copy came from. */}
+                          {step.subject && <div className="text-sm font-medium mt-1">{step.subject}</div>}
+                          {bodyPreview && <div className="text-xs text-muted-foreground line-clamp-3 mt-1 whitespace-pre-wrap">{bodyPreview}</div>}
+                          {step.type === "email" && typeof step.templateId === "number" && (
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              <Mail className="size-3 inline mr-1" />
+                              A copy of{" "}
+                              {tmplName
+                                ? <Link href={`/email-builder/${step.templateId}`} className="font-medium text-blue-700 dark:text-blue-300 hover:underline underline-offset-2">{tmplName}</Link>
+                                : "a template you can't open, or that has been deleted"}
+                              . {TEMPLATE_COPY_NOTE}
+                            </div>
                           )}
                         </li>
                       );

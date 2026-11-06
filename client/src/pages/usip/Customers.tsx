@@ -5,14 +5,17 @@ import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { isAdminRole, rankOf } from "@shared/roleRank";
 import { trpc } from "@/lib/trpc";
+import { invalidateCustomerReads } from "@/lib/crmCache";
 import { AlertTriangle, FolderOpen, Heart, TrendingUp, HeartHandshake, Trash2, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { pressable } from "@/lib/pressable";
+import { churnRiskFor, HEALTH_TIER_TONE } from "@shared/customerHealth";
 
-const TIER_TONE: Record<string, "success" | "info" | "warning" | "danger"> = {
-  thriving: "success", healthy: "info", neutral: "info", at_risk: "warning", critical: "danger",
-};
+// The tiers the server writes, coloured from the one shared reading (R58).
+// This listed "thriving" and "neutral", which no customer holds, and missed
+// "watch", so a watch customer's pill had no colour.
+const TIER_TONE: Record<string, "success" | "info" | "warning" | "danger"> = HEALTH_TIER_TONE;
 
 export default function Customers() {
   const [selected, setSelected] = useState<number | null>(null);
@@ -21,22 +24,23 @@ export default function Customers() {
   const { data: kpis } = trpc.cs.kpis.useQuery();
   const detail = trpc.cs.get.useQuery({ id: selected! }, { enabled: !!selected });
   const amendments = trpc.cs.listAmendments.useQuery({ customerId: selected! }, { enabled: !!selected });
-  const submitNps = trpc.cs.submitNps.useMutation({ onSuccess: () => { utils.cs.list.invalidate(); utils.cs.get.invalidate({ id: selected! }); toast.success("NPS recorded"); }, onError: (e) => toast.error(e.message) });
-  const updateHealth = trpc.cs.updateHealthComponents.useMutation({ onSuccess: () => { utils.cs.list.invalidate(); utils.cs.get.invalidate({ id: selected! }); }, onError: (e) => toast.error(e.message) });
+  const submitNps = trpc.cs.submitNps.useMutation({ onSuccess: () => { invalidateCustomerReads(utils); toast.success("NPS recorded"); }, onError: (e) => toast.error(e.message) });
+  const updateHealth = trpc.cs.updateHealthComponents.useMutation({ onSuccess: () => { invalidateCustomerReads(utils); }, onError: (e) => toast.error(e.message) });
   const [amendOpen, setAmendOpen] = useState(false);
   const [drawer, setDrawer] = useState<{ id: number; name: string } | null>(null);
 
-  const churnRisk = (s: number): { tier: "low" | "medium" | "high"; tone: "success" | "warning" | "danger" } => {
-    if (s < 45) return { tier: "high", tone: "danger" };
-    if (s < 65) return { tier: "medium", tone: "warning" };
-    return { tier: "low", tone: "success" };
+  // Churn risk IS the health tier, read as a risk (R58): this had its own
+  // 45 / 65 cut-offs, so a 60 was "watch" in the table and "medium risk" here
+  // while a 50 was "at risk" there and "medium" here.
+  const churnRisk = (healthTier: string): { tier: "low" | "medium" | "high"; tone: "success" | "warning" | "danger" } => {
+    const tier = churnRiskFor(healthTier);
+    return { tier, tone: tier === "high" ? "danger" : tier === "medium" ? "warning" : "success" };
   };
-  const addAmendment = trpc.cs.addAmendment.useMutation({ onSuccess: () => { utils.cs.listAmendments.invalidate({ customerId: selected! }); utils.cs.list.invalidate(); setAmendOpen(false); toast.success("Amendment added"); }, onError: (e) => toast.error(e.message) });
+  const addAmendment = trpc.cs.addAmendment.useMutation({ onSuccess: () => { invalidateCustomerReads(utils); setAmendOpen(false); toast.success("Amendment added"); }, onError: (e) => toast.error(e.message) });
   const { current } = useWorkspace();
   const removeCustomer = trpc.cs.delete.useMutation({
     onSuccess: (_d, vars) => {
-      utils.cs.list.invalidate();
-      utils.cs.kpis.invalidate();
+      invalidateCustomerReads(utils);
       if (selected === vars.id) setSelected(null);
       toast.success("Customer deleted");
     },
@@ -44,8 +48,7 @@ export default function Customers() {
   });
   const resetCs = trpc.cs.clearAll.useMutation({
     onSuccess: (data) => {
-      utils.cs.list.invalidate();
-      utils.cs.kpis.invalidate();
+      invalidateCustomerReads(utils);
       setSelected(null);
       toast.success(`Reset — cleared ${data.deletedCustomers} customer record${data.deletedCustomers === 1 ? "" : "s"}`);
     },
@@ -128,25 +131,33 @@ export default function Customers() {
             </Section>
           </div>
           <div className="space-y-4">
-            {!selected || !detail.data ? <EmptyState icon={Heart} title="Select a customer" /> : (
+            {/* "Select a customer" only when none is selected (R99): it also
+                showed while the picked one loaded, and when it failed. */}
+            {!selected ? <EmptyState icon={Heart} title="Select a customer" /> : detail.isLoading ? <TableSkeleton rows={4} /> : detail.error ? <QueryError message={detail.error.message} what="this customer" onRetry={() => detail.refetch()} /> : !detail.data ? <EmptyState icon={Heart} title="Customer not found" description="It may have been deleted." /> : (
               <>
                 {(() => {
-                  const r = churnRisk(detail.data.healthScore);
+                  const r = churnRisk(detail.data.healthTier);
                   return r.tier !== "low" ? (
                     <div className={`rounded-md border p-3 flex items-start gap-2 text-xs ${r.tone === "danger" ? "bg-rose-50 border-rose-300" : "bg-amber-50 border-amber-300"}`}>
                       <AlertTriangle className="size-4 mt-0.5" />
                       <div>
                         <div className="font-semibold uppercase tracking-wide">Churn risk: {r.tier}</div>
-                        <div className="text-muted-foreground mt-0.5">{detail.data.aiPlay ?? "Recommend exec sponsor outreach + roadmap alignment."}</div>
+                        {/* The stored play only (R74): a canned line stood in
+                            for it, read as advice written for this customer. */}
+                        {detail.data.aiPlay && <div className="text-muted-foreground mt-0.5">{detail.data.aiPlay}</div>}
                       </div>
                     </div>
                   ) : null;
                 })()}
                 <Section title={detail.data.account?.name ?? "Customer"} description={`Health ${detail.data.healthScore} · ${detail.data.healthTier}`} right={<Button size="sm" variant="outline" className="bg-card" onClick={() => setDrawer({ id: detail.data!.id, name: detail.data!.account?.name ?? "Customer" })}><FolderOpen className="size-3 mr-1" />Timeline & files</Button>}>
                   <div className="p-3 space-y-2 text-xs">
-                    <SliderRow label="Usage" value={detail.data.usageScore} onChange={(v) => updateHealth.mutate({ id: detail.data!.id, usage: v, engagement: detail.data!.engagementScore, support: detail.data!.supportScore })} />
-                    <SliderRow label="Engagement" value={detail.data.engagementScore} onChange={(v) => updateHealth.mutate({ id: detail.data!.id, usage: detail.data!.usageScore, engagement: v, support: detail.data!.supportScore })} />
-                    <SliderRow label="Support" value={detail.data.supportScore} onChange={(v) => updateHealth.mutate({ id: detail.data!.id, usage: detail.data!.usageScore, engagement: detail.data!.engagementScore, support: v })} />
+                    {/* Each slider saves when it is let go, and sends only
+                        its own value (R58): every step of a drag sent all
+                        three from the loaded detail, so the sliders wrote
+                        over each other with stale numbers. */}
+                    <SliderRow key={`u-${detail.data.id}`} label="Usage" value={detail.data.usageScore} onCommit={(v) => updateHealth.mutate({ id: detail.data!.id, usage: v })} />
+                    <SliderRow key={`e-${detail.data.id}`} label="Engagement" value={detail.data.engagementScore} onCommit={(v) => updateHealth.mutate({ id: detail.data!.id, engagement: v })} />
+                    <SliderRow key={`s-${detail.data.id}`} label="Support" value={detail.data.supportScore} onCommit={(v) => updateHealth.mutate({ id: detail.data!.id, support: v })} />
                   </div>
                   <div className="px-3 py-2 border-t flex items-center gap-3 text-xs">
                     <TrendingUp className="size-3 text-emerald-600" />
@@ -158,7 +169,16 @@ export default function Customers() {
                   <NpsSparkline history={(detail.data as any).npsHistory ?? []} current={detail.data.npsScore ?? 0} />
                 </Section>
                 <Section title="Submit NPS">
-                  <form className="p-3 flex gap-2" onSubmit={(e) => { e.preventDefault(); const v = Number(new FormData(e.currentTarget).get("nps")); submitNps.mutate({ id: detail.data!.id, score: v }); e.currentTarget.reset(); }}>
+                  {/* An empty box is not a score of 0 (R58): Number("") is 0,
+                      and a blank submit recorded a neutral NPS. */}
+                  <form className="p-3 flex gap-2" onSubmit={(e) => {
+                    e.preventDefault();
+                    const raw = String(new FormData(e.currentTarget).get("nps") ?? "").trim();
+                    const v = Number(raw);
+                    if (raw === "" || !Number.isInteger(v) || v < -100 || v > 100) { toast.error("Enter a whole number from -100 to 100"); return; }
+                    submitNps.mutate({ id: detail.data!.id, score: v });
+                    e.currentTarget.reset();
+                  }}>
                     <input aria-label="NPS score" name="nps" type="number" min={-100} max={100} placeholder="-100 to 100" className="flex-1 border rounded px-2 py-1.5 text-sm" />
                     <Button size="sm" type="submit">Submit</Button>
                   </form>
@@ -213,7 +233,10 @@ function NpsSparkline({ history, current }: { history: Array<{ month: number; sc
         <span className="font-mono tabular-nums font-semibold text-base">{last}</span>
         <span className="ml-auto text-muted-foreground">{series.length} pts</span>
       </div>
-      <svg width={w} height={h} className="w-full">
+      {/* viewBox (R99): with only width and height the line was drawn at
+          220px inside a box CSS stretched to full width, so it filled the
+          left part and was cut off on narrow panels. */}
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="w-full">
         <line x1={0} y1={h / 2} x2={w} y2={h / 2} stroke="#e5e7eb" strokeDasharray="2 2" />
         <polyline fill="none" stroke="#14B89A" strokeWidth={2} points={pts} />
       </svg>
@@ -221,12 +244,26 @@ function NpsSparkline({ history, current }: { history: Array<{ month: number; sc
   );
 }
 
-function SliderRow({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
+/**
+ * A health slider that follows the hand while it moves and saves once, when
+ * it is let go (pointer up, key up, or leaving the control) — and only when
+ * the value changed (R58).
+ */
+function SliderRow({ label, value, onCommit }: { label: string; value: number; onCommit: (v: number) => void }) {
+  const [draft, setDraft] = useState<number | null>(null);
+  const shown = draft ?? value;
+  const commit = () => {
+    if (draft !== null && draft !== value) onCommit(draft);
+    setDraft(null);
+  };
   return (
     <div className="flex items-center gap-2">
       <div className="w-20">{label}</div>
-      <input aria-label={label} type="range" min={0} max={100} value={value} onChange={(e) => onChange(Number(e.target.value))} className="flex-1" />
-      <div className="w-10 text-right font-mono tabular-nums">{value}</div>
+      <input aria-label={label} type="range" min={0} max={100} value={shown}
+        onChange={(e) => setDraft(Number(e.target.value))}
+        onPointerUp={commit} onKeyUp={commit} onBlur={commit}
+        className="flex-1" />
+      <div className="w-10 text-right font-mono tabular-nums">{shown}</div>
     </div>
   );
 }

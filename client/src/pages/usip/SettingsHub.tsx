@@ -133,7 +133,9 @@ const GROUPS: HubGroup[] = [
       { id: "branding", label: "Branding", icon: Palette, internal: true },
       { id: "proposals", label: "Proposals", icon: FileText, internal: true },
       { id: "billing", label: "Billing and credits", icon: CreditCard, internal: true },
-      { id: "system-activity", label: "System activity", icon: Activity, href: "/audit" },
+      // "Audit log", the page's own title: as "System activity" it read as a
+      // different page (the Shell's admin menu made the same fix) (G51).
+      { id: "system-activity", label: "Audit log", icon: Activity, href: "/audit" },
       { id: "tour-builder", label: "Tour builder", icon: Zap, href: "/tour-builder" },
       { id: "danger", label: "Danger zone", icon: AlertTriangle, internal: true },
     ],
@@ -156,10 +158,15 @@ export default function SettingsHub() {
   const [, navigate] = useLocation();
   const [query, setQuery] = useState("");
 
-  // Unknown/absent section → Profile (the default landing subpage).
-  const section = GROUPS.flatMap((g) => g.items).some((i) => i.internal && i.id === params.section)
-    ? (params.section as string)
-    : "profile";
+  // Absent section → Profile (the default landing subpage). A row that links
+  // out, reached by its id, goes where the rail would send it; an id that is no
+  // section says so. Both used to show Profile as if it had been asked for (G51).
+  const askedItem = params.section ? GROUPS.flatMap((g) => g.items).find((i) => i.id === params.section) : undefined;
+  const unknownSection = !!params.section && !askedItem ? params.section : null;
+  useEffect(() => {
+    if (askedItem && !askedItem.internal && askedItem.href) navigate(askedItem.href, { replace: true });
+  }, [askedItem, navigate]);
+  const section = askedItem?.internal ? askedItem.id : "profile";
 
   // "Billing and credits" is the one section behind a per-member permission
   // (access_billing). Granted by default — only an explicit deny row on the
@@ -281,7 +288,15 @@ export default function SettingsHub() {
             <SettingsWorkspaceSwitcher />
           </div>
         </div>
-        {section === "profile" && <ProfileSection />}
+        {unknownSection ? (
+          <div role="alert" className="max-w-xl rounded-xl border bg-card p-5">
+            <div className="text-sm font-semibold">There is no settings section called “{unknownSection}”</div>
+            <p className="mt-1 text-sm text-muted-foreground">The link may be out of date. Pick a section on the left, or go to your profile.</p>
+            <button type="button" onClick={() => navigate("/v2/settings/profile", { replace: true })} className="mt-3 text-sm font-medium text-primary hover:underline">
+              Go to Profile
+            </button>
+          </div>
+        ) : section === "profile" && <ProfileSection />}
         {section === "mailboxes" && <MailboxesSection />}
         {section === "voice-agents" && <VoiceAgentsSection />}
         {section === "knowledge" && <KnowledgeSection />}

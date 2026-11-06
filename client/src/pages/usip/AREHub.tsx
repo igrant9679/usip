@@ -8,7 +8,9 @@
  *   4. Active campaigns — progress bars, autonomy mode, quick actions
  *   5. Live signal feed — colour-coded by sentiment with action badges
  */
-import { Shell, PageHeader, StatCard, EmptyState, SubNav, useAccentColor } from "@/components/usip/Shell";
+import { Shell, PageHeader, StatCard, EmptyState, useAccentColor } from "@/components/usip/Shell";
+import { AreSubNav } from "@/components/usip/are/AreSubNav";
+import { areAutonomyLabel } from "@shared/areCampaignLabels";
 import { RoutingSuggestions } from "@/components/usip/RoutingSuggestions";
 import { CampaignProposals } from "@/components/usip/CampaignProposals";
 import { Badge } from "@/components/ui/badge";
@@ -154,7 +156,7 @@ function CampaignRow({ c }: { c: any }) {
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium truncate">{c.name}</span>
             <Badge variant="outline" className={`text-[10px] px-1.5 py-0 border ${autonomyColor}`}>
-              {c.autonomyMode?.replace("_", " ")}
+              {areAutonomyLabel(c.autonomyMode)}
             </Badge>
           </div>
           <div className="flex items-center gap-2">
@@ -333,19 +335,15 @@ export default function AREHub() {
           <RefreshCw className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} />
           {refreshing ? "Refreshing…" : "Refresh"}
         </Button>
-        <Link href="/are/campaigns">
+        {/* Opens the wizard, not just the list (A76). */}
+        <Link href="/are/campaigns?new=1">
           <Button size="sm" className="gap-1.5 text-xs">
             <Plus className="size-3.5" />
             New Campaign
           </Button>
         </Link>
       </PageHeader>
-      <SubNav items={[
-        { href: "/are/performance", label: "What's Working", title: "Measured performance — which steps and sources actually book meetings" },
-        { href: "/are/icp", label: "ICP Agent", title: "Manage the Ideal Customer Profile agent" },
-        { href: "/are/campaigns", label: "Campaigns", title: "All ARE-managed outbound campaigns" },
-        { href: "/are/settings", label: "ARE Settings", title: "ARE configuration, throttles, and limits" },
-      ]} />
+      <AreSubNav />
 
       <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
 

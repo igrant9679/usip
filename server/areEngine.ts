@@ -185,8 +185,15 @@ const FINAL_CHECKS_PER_TICK = 5;
 const ENRICH_MIN_CONFIDENCE_DEFAULT = 40;
 
 const AUTO_REJECT_FLOOR = 30;
-/** Fallback approve line for `full` autonomy when autoApproveThreshold is null. */
-const DEFAULT_APPROVE_THRESHOLD = 70;
+/**
+ * The approve line a campaign's screen pass uses, or null for none. Null means
+ * nothing is approved automatically, in every mode (audit 2026-10-20, A16): an
+ * unset threshold read "Off" or "Disabled" on two screens while Full Auto
+ * approved at 70 and rejected below it. Only Full Auto has an approve line.
+ */
+export function approveLineFor(campaign: { autonomyMode: string | null; autoApproveThreshold: number | null }): number | null {
+  return campaign.autonomyMode === "full" ? campaign.autoApproveThreshold ?? null : null;
+}
 
 type Campaign = typeof areCampaigns.$inferSelect;
 type Prospect = typeof prospectQueue.$inferSelect;
@@ -806,6 +813,42 @@ export async function enrolledElsewhere(
   return twin?.id ?? null;
 }
 
+/** ARE Settings' Daily Send Cap when the workspace has no settings row: the column's default. */
+const ARE_WORKSPACE_DAILY_CAP_DEFAULT = 50;
+
+/**
+ * Sends the Revenue Engine has left today across all of a workspace's
+ * campaigns, under ARE Settings' Daily Send Cap (audit 2026-10-20, A19). Every
+ * sent step counts, email or LinkedIn, as a campaign's own cap counts them.
+ * Fails closed like the pause read: a read that throws leaves nothing to send.
+ */
+export async function areWorkspaceSendsLeft(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  wsId: number,
+  startOfDay: Date,
+): Promise<{ left: number; reason: string }> {
+  try {
+    const [s] = await db
+      .select({ cap: workspaceSettings.areDefaultDailySendCap })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, wsId))
+      .limit(1);
+    const cap = Number(s?.cap ?? ARE_WORKSPACE_DAILY_CAP_DEFAULT);
+    const [sent] = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(areExecutionQueue)
+      .where(and(
+        eq(areExecutionQueue.workspaceId, wsId),
+        eq(areExecutionQueue.status, "sent"),
+        gte(areExecutionQueue.executedAt, startOfDay),
+      ));
+    const n = Number(sent?.n ?? 0);
+    return { left: Math.max(0, cap - n), reason: `the workspace's Revenue Engine daily cap: ${n} of ${cap} sent today across all campaigns` };
+  } catch (e) {
+    return { left: 0, reason: `the workspace's Revenue Engine daily cap could not be read (${(e as Error)?.message ?? e}), so nothing is sent` };
+  }
+}
+
 /**
  * Why a dispatch loop already running must stop now, or null to go on (A29).
  * Read fresh, not through the send window's one-minute cache, and FAILS
@@ -1386,7 +1429,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
       .orderBy(prospectQueue.id)
       .limit(SCREEN_BATCH);
     const mode = campaign.autonomyMode;
-    const threshold = campaign.autoApproveThreshold ?? DEFAULT_APPROVE_THRESHOLD;
+    const threshold = approveLineFor(campaign);
     // Counted, not notified per prospect: a full-autonomy tick can approve a
     // hundred people, and a hundred rows in the Inbox is how a channel gets
     // muted permanently. One digest per campaign per tick, below.
@@ -1443,11 +1486,14 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         continue;
       }
       const score = p.icpMatchScore ?? 0;
-      if (mode === "full") {
-        // Fully autonomous — the threshold IS the approve/reject line.
+      if (threshold !== null) {
+        // Fully autonomous with a threshold — it IS the approve/reject line,
+        // and the Settings copy says so: at or above approves, below rejects.
         if (score >= threshold) approveIds.push(p.id);
         else rejectFor(p.id, `Auto-screened: ICP match ${score}/100 below approve threshold ${threshold}`);
-      } else if (mode === "batch_approval") {
+      } else if (mode === "batch_approval" || mode === "full") {
+        // Full Auto with no threshold approves nothing on its own (A16): it
+        // screens like batch approval and leaves the rest for a person.
         // Engine screens out obvious junk; humans approve the rest in batches.
         if (score < AUTO_REJECT_FLOOR) rejectFor(p.id, `Auto-screened: ICP match ${score}/100 below floor ${AUTO_REJECT_FLOOR}`);
         // else: leave 'pending' for human batch approval
@@ -1480,7 +1526,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
     }
     if (enriched.length > 0) {
       await emitLog(wsId, campId, "screen", "info",
-        `Screened ${enriched.length} (mode=${mode}, threshold=${threshold})` +
+        `Screened ${enriched.length} (mode=${mode}, threshold=${threshold ?? "off"})` +
           (neverTargeted ? `; ${neverTargeted} rejected for a never-target word` : ""));
     }
     // "Prospect auto-approved" on ARE Settings named an event this engine had
@@ -1674,7 +1720,13 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
           gte(areExecutionQueue.executedAt, startOfDay),
         ),
       );
-    const remaining = Math.max(0, campaign.dailySendCap - Number(sentToday?.n ?? 0));
+    const campaignLeft = Math.max(0, campaign.dailySendCap - Number(sentToday?.n ?? 0));
+    // ARE Settings' Daily Send Cap is the engine's own, across every campaign
+    // (audit 2026-10-20, A19): it capped reps' manual and Sequence mail and
+    // never the engine it is labelled for. Read per campaign, so each one sees
+    // what the campaigns before it sent this tick.
+    const workspaceLeft = await areWorkspaceSendsLeft(db, wsId, startOfDay);
+    const remaining = Math.min(campaignLeft, workspaceLeft.left);
 
     /**
      * The OTHER capacity ceiling: the mailboxes themselves. Set once the sender
@@ -2291,6 +2343,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
     }
     await emitLog(wsId, campId, "dispatch", "info",
       `Dispatched (sent this tick: ${result.sent - sentBeforeThisCampaign}, daily remaining cap: ${remaining})`
+      + (workspaceLeft.left < campaignLeft ? ` — ${workspaceLeft.reason}` : "")
       + (poolHeld ? ` — email steps held and re-scheduled: ${poolHeld}` : ""));
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} dispatch phase failed:`, e);

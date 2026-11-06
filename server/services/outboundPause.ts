@@ -35,8 +35,9 @@ export async function isOutboundPaused(workspaceId: number): Promise<boolean> {
   try {
     return (await getWorkspaceSendWindow(workspaceId)).paused;
   } catch {
-    // Unknown is not "paused": a lookup failure must not silently block a workspace that is live.
-    return false;
+    // Unknown counts as paused (audit 2026-10-20, O50): a send refused on a
+    // blip can be clicked again; one let through a pause cannot be unsent.
+    return true;
   }
 }
 

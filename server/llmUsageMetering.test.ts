@@ -182,12 +182,14 @@ describe("emailsSent", () => {
       sends: 1,
     },
     "server/routers/smtpConfig.ts": {
-      // TWO, and the count matters: this file has two distinct send paths and
-      // asserting only that the FILE records lets one of them be deleted while
-      // the other keeps the test green — the whole-file `toContain` weakness,
-      // caught here by a mutation that removed the sendDraft increment.
-      why: "sendDraft + sendBulkApproved — the primary outbound sales path.",
-      sends: 2,
+      // The count matters: asserting only that the FILE records lets a send
+      // path be deleted while another keeps the test green — the whole-file
+      // `toContain` weakness, caught here by a mutation that removed the
+      // sendDraft increment. 2026-11-06 (audit O47): ONE now. sendBulkApproved
+      // sends through deliverEmailDraft, the metered adapter path the row's
+      // Send uses, and no longer calls the transporter itself.
+      why: "sendDraft — an approved draft through the workspace SMTP config.",
+      sends: 1,
     },
   };
 
