@@ -597,7 +597,9 @@ async function applySuggestionRow(
     triggerConfig: triggerConfig as object,
     conditions: sug.conditions as object,
     actions: sug.actions as object,
-    enabled: true,
+    // Off until someone reviews it (G61): "Apply all" used to put every
+    // generated rule live at once, actions and all.
+    enabled: false,
   }).$returningId();
 
   await db
