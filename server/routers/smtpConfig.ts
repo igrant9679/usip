@@ -6,11 +6,11 @@
  *   - smtpConfig.save           — upsert SMTP config (password AES-256-GCM encrypted)
  *   - smtpConfig.test           — send a test email to the calling user's email
  *   - smtpConfig.sendDraft      — send a single approved draft via Nodemailer
- *   - smtpConfig.sendBulkApproved — send all approved drafts (rate-limited 1/sec, max 200)
+ *   - smtpConfig.sendBulkApproved — send approved drafts, oldest first (1/sec, 25 a request)
  */
 import { TRPCError } from "@trpc/server";
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "crypto";
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import nodemailer from "nodemailer";
 import { z } from "zod";
 import {
@@ -39,6 +39,20 @@ import { describeSuppression, findSuppression } from "../services/suppression";
 import { claimDraftForSend, draftHoldReason, isDefinitelyNotSent, markDraftFailed, releaseDraftClaim } from "../services/draftSend";
 import { makeUnsubscribeUrl, unsubscribeFooter, unsubscribeHeaders } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
+
+/**
+ * "Send approved" sends at most this many drafts a request, oldest first, one
+ * a second (audit 2026-10-20, O16). It took 200, so one request ran for over
+ * three minutes: long enough for a proxy to time it out while it kept
+ * sending, and for the admin to press it again.
+ */
+export const BULK_SEND_MAX = 25;
+/**
+ * Workspaces with a "Send approved" run in progress in this process. A second
+ * press, a retried request or a second admin is refused while one runs; the
+ * per-draft claim still stops a double send across processes.
+ */
+const bulkSendRuns = new Set<number>();
 
 /** Still 'sending' — i.e. the send itself, not the bookkeeping after it, failed. */
 async function isClaimed(db: any, draftId: number): Promise<boolean> {
@@ -89,6 +103,261 @@ export function buildTransporter(cfg: {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /* ─── Router ──────────────────────────────────────────────────────────── */
+/**
+ * One "Send approved" run: up to BULK_SEND_MAX approved drafts, each claimed
+ * (approved → sending) right before its own send, with pause and the daily
+ * caps asked again before every one (audit 2026-10-20, O16).
+ */
+async function sendApprovedBatch(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  ctx: { workspace: { id: number }; user: { id: number } },
+  input: { draftIds?: number[] },
+) {
+  // Load SMTP config
+  const [cfg] = await db.select().from(smtpConfigs)
+    .where(and(eq(smtpConfigs.workspaceId, ctx.workspace.id), eq(smtpConfigs.enabled, true)));
+  if (!cfg) throw new TRPCError({ code: "NOT_FOUND", message: "No active SMTP config. Configure SMTP in Settings → Email Delivery." });
+
+  let password: string;
+  try { password = decrypt(cfg.encryptedPassword); }
+  catch { throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to decrypt SMTP password" }); }
+
+  /**
+   * What a run leaves: drafts still approved, for the next press, and drafts
+   * already claimed by a sender. A retry that arrives after a run was cut off
+   * finds that run's draft claimed and reports it instead of sending it again.
+   */
+  const leftOver = async () => {
+    const scope = input.draftIds?.length ? inArray(emailDrafts.id, input.draftIds) : undefined;
+    const [[approved], [sending]] = await Promise.all([
+      db.select({ n: count() }).from(emailDrafts).where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "approved"), scope)),
+      db.select({ n: count() }).from(emailDrafts).where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "sending"), scope)),
+    ]);
+    return { remaining: Number(approved?.n ?? 0), inProgress: Number(sending?.n ?? 0) };
+  };
+
+  // Load approved drafts, oldest first
+  const whereClause = input.draftIds?.length
+    ? and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "approved"), inArray(emailDrafts.id, input.draftIds))
+    : and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "approved"));
+
+  const drafts = await db.select().from(emailDrafts).where(whereClause).orderBy(asc(emailDrafts.id)).limit(BULK_SEND_MAX);
+  if (!drafts.length) return { ok: true, sent: 0, failed: 0, skipped: 0, ...(await leftOver()) };
+
+  // Load contact/lead emails in bulk
+  const contactIds = drafts.filter((d) => d.toContactId).map((d) => d.toContactId!);
+  const leadIds = drafts.filter((d) => d.toLeadId).map((d) => d.toLeadId!);
+  const contactEmails = contactIds.length
+    ? await db.select({ id: contacts.id, email: contacts.email }).from(contacts).where(inArray(contacts.id, contactIds))
+    : [];
+  const leadEmails = leadIds.length
+    ? await db.select({ id: leads.id, email: leads.email }).from(leads).where(inArray(leads.id, leadIds))
+    : [];
+  const contactEmailMap = new Map(contactEmails.map((c) => [c.id, c.email]));
+  const leadEmailMap = new Map(leadEmails.map((l) => [l.id, l.email]));
+
+  const transporter = buildTransporter({ host: cfg.host, port: cfg.port, secure: cfg.secure, username: cfg.username, password });
+  let sent = 0, failed = 0, skipped = 0;
+
+  // Workspace email sending preferences (migration 0117) — gate tracking
+  // injection and the RFC 8058 one-click unsubscribe headers.
+  const [sendPrefs] = await db
+    .select({
+      openTracking: workspaceSettings.emailOpenTracking,
+      clickTracking: workspaceSettings.emailClickTracking,
+      unsubHeader: workspaceSettings.emailUnsubscribeHeader,
+      optOutEnabled: workspaceSettings.emailSequenceOptOutEnabled,
+      optOutMessage: workspaceSettings.emailSequenceOptOutMessage,
+    })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+  const openTracking = sendPrefs?.openTracking !== false;
+  const clickTracking = sendPrefs?.clickTracking !== false;
+  const optOutEnabled = sendPrefs?.optOutEnabled === true;
+  const optOutMessage = sendPrefs?.optOutMessage ?? "";
+
+  // Inbox-level defaults (owner ask 2026-08-14). This path predates the
+  // adapter and sends through the workspace SMTP transporter, so
+  // createEmailAdapter's wrapper never sees it — the drafts still carry
+  // the mailbox that owns them, which is enough to honour its settings.
+  const acctIds = Array.from(new Set(drafts.map((d) => d.sendingAccountId).filter((x): x is number => !!x)));
+  const acctRows = acctIds.length
+    ? await db
+        .select({
+          id: sendingAccounts.id,
+          signature: sendingAccounts.signature,
+          optOutEnabled: sendingAccounts.optOutEnabled,
+          optOutMessage: sendingAccounts.optOutMessage,
+          fromEmail: sendingAccounts.fromEmail,
+        })
+        .from(sendingAccounts)
+        .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), inArray(sendingAccounts.id, acctIds)))
+    : [];
+  const acctById = new Map(acctRows.map((a) => [a.id, a]));
+
+  for (const draft of drafts) {
+    const toEmail =
+      draft.toEmail ??
+      (draft.toContactId ? contactEmailMap.get(draft.toContactId) : null) ??
+      (draft.toLeadId ? leadEmailMap.get(draft.toLeadId) : null) ??
+      null;
+
+    if (!toEmail) { skipped++; continue; }
+
+    /**
+     * Asked again for EVERY draft (audit 2026-10-20, O16): this loop runs
+     * for up to 200 seconds, and pause and the daily caps were checked
+     * once, before the first send. Either one ends the run; what is left
+     * stays approved for later.
+     */
+    if (await isOutboundPaused(ctx.workspace.id)) { skipped += drafts.length - (sent + failed + skipped); break; }
+    try {
+      await assertSendAllowed(ctx.workspace.id, draft.sendingAccountId ?? null);
+    } catch {
+      skipped += drafts.length - (sent + failed + skipped);
+      break;
+    }
+
+    // Claimed per draft: a second admin, a retried request or the row's
+    // own Send button can no longer send the same draft again.
+    if (!(await claimDraftForSend(db, ctx.workspace.id, draft.id, "approved", ["approved"]))) { skipped++; continue; }
+    const release = () => releaseDraftClaim(db, draft.id, "approved");
+    if (await draftHoldReason(db, draft)) { await release(); skipped++; continue; }
+    // The ONE suppression check: both lists, by address and company domain.
+    if (await findSuppression(ctx.workspace.id, { email: toEmail }, "email")) { await release(); skipped++; continue; }
+    let transportCalled = false;
+    try {
+      // Pre-send: resolve merge vars — drafts may target a contact, lead,
+      // or prospect (sequence-engine drafts often have no contact row).
+      const mergeCtx = await buildMergeContextFromDb({
+        contactId: draft.toContactId,
+        leadId: draft.toLeadId,
+        prospectId: draft.toProspectId,
+      });
+      mergeCtx.sender = {
+        name: cfg.fromName, email: cfg.fromEmail,
+        bookingUrl: await resolveBookingUrl(ctx.workspace.id, draft.createdByUserId),
+      };
+      const resolvedSubject = resolveMergeVars(draft.subject, mergeCtx);
+      const resolvedBody = resolveMergeVars(draft.body, mergeCtx);
+      // Pre-send: tracking token + pixel injection
+      const token = draft.trackingToken ?? randomUUID().replace(/-/g, "");
+      if (!draft.trackingToken) {
+        await db.update(emailDrafts).set({ trackingToken: token }).where(eq(emailDrafts.id, draft.id));
+      }
+      // The ONE public origin (server/appUrl.ts). Previously the identity
+      // provider's URL, which made the open pixel AND the RFC 8058
+      // one-click unsubscribe link 404 for every recipient.
+      const appBaseUrl = publicAppOrigin();
+      let htmlBody = injectTracking(bodyToHtmlDocument(resolvedBody), token, appBaseUrl, {
+        open: openTracking,
+        click: clickTracking,
+      });
+      // A rich-editor body is HTML — the text/plain part must be its
+      // readable conversion, not the raw markup.
+      let textBody = isHtmlBody(resolvedBody) ? htmlBodyToText(resolvedBody) : resolvedBody;
+      // The sending inbox's own signature, if it has one configured.
+      const acct = draft.sendingAccountId ? acctById.get(draft.sendingAccountId) : undefined;
+      if (acct?.signature?.trim()) {
+        const decorated = applyAccountSendDefaults(
+          { signature: acct.signature },
+          { bodyHtml: htmlBody, bodyText: textBody },
+        );
+        htmlBody = decorated.bodyHtml;
+        textBody = decorated.bodyText ?? textBody;
+      }
+
+      // Opt-out footer: appended AFTER tracking injection so its one-click
+      // unsubscribe link isn't click-wrapped.
+      //
+      // EVERY email has one (audit 2026-10-20, O15) — it used to appear
+      // only when an opt-out message was switched on, and it was off by
+      // default. The INBOX decides the wording when it has one configured;
+      // the workspace setting is the fallback; the standard footer is used
+      // when neither has wording. The link is always this path's
+      // tokenised URL, which asks before it acts (emailTracking.ts).
+      const unsubscribeUrl = `${appBaseUrl}/api/track/unsubscribe/${encodeURIComponent(token)}`;
+      const inboxOptOut = acct?.optOutEnabled === true && !!acct.optOutMessage?.trim();
+      const effectiveOptOutEnabled = inboxOptOut || optOutEnabled;
+      const effectiveOptOutMessage = inboxOptOut ? acct!.optOutMessage! : optOutMessage;
+      const optOut = (effectiveOptOutEnabled ? renderSequenceOptOut(effectiveOptOutMessage, { unsubscribeUrl }) : null)
+        ?? (() => { const f = unsubscribeFooter(unsubscribeUrl); return { text: f.text.trim(), html: f.html }; })();
+      textBody = `${textBody}\n\n${optOut.text}`;
+      htmlBody = htmlBody.includes("</body>")
+        ? htmlBody.replace("</body>", `${optOut.html}</body>`)
+        : htmlBody + optOut.html;
+      transportCalled = true;
+      await transporter.sendMail({
+        from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
+        to: toEmail,
+        replyTo: cfg.replyTo ?? undefined,
+        subject: resolvedSubject,
+        text: textBody,
+        html: htmlBody,
+        // RFC 8058 one-click unsubscribe — the POST endpoint suppresses the
+        // recipient via the existing email_suppressions system. Always on
+        // (O15): Gmail and Yahoo require it of bulk senders.
+        headers: {
+          "List-Unsubscribe": `<${unsubscribeUrl}>, <mailto:${cfg.fromEmail}?subject=unsubscribe>`,
+          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        },
+      });
+      // Sent. Marked first, so no bookkeeping below can make it look
+      // unsent and send it again (A4).
+      await db.update(emailDrafts).set({ status: "sent", sentAt: new Date(), sendError: null, sendClaimedAt: null } as never).where(eq(emailDrafts.id, draft.id));
+      // Per message, not per batch: this loop sends one email per draft.
+      await recordEmailsSent(ctx.workspace.id, 1);
+      // Per message for the same reason. Without this row the bulk blast —
+      // the primary outbound sales path — was invisible to the per-mailbox
+      // daily cap, which now counts email_log (sendLimits.accountsSentToday).
+      await logEmailSend({
+        workspaceId: ctx.workspace.id,
+        meta: {
+          source: draft.sequenceId ? "sequence" : draft.aiGenerated ? "ai_draft" : "crm",
+          draftId: draft.id,
+          sequenceId: draft.sequenceId ?? null,
+          contactId: draft.toContactId ?? null,
+          leadId: draft.toLeadId ?? null,
+          userId: ctx.user.id,
+        },
+        sendingAccountId: draft.sendingAccountId ?? null,
+        fromEmail: cfg.fromEmail,
+        fromName: cfg.fromName,
+        to: toEmail,
+        subject: resolvedSubject,
+        bodyText: textBody,
+        status: "sent",
+      });
+      if (draft.toContactId || draft.toLeadId) {
+        await db.insert(activities).values({
+          workspaceId: ctx.workspace.id,
+          type: "email",
+          relatedType: draft.toContactId ? "contact" : "lead",
+          relatedId: (draft.toContactId ?? draft.toLeadId)!,
+          subject: resolvedSubject,
+          body: resolvedBody,
+          actorUserId: ctx.user.id,
+        });
+      }
+      sent++;
+    } catch (err) {
+      if (!(await isClaimed(db, draft.id).catch(() => true))) {
+        sent++; // sent and marked sent; only the bookkeeping after it failed
+      } else {
+        const reason = err instanceof Error ? err.message : String(err);
+        if (!transportCalled || isDefinitelyNotSent(err)) await releaseDraftClaim(db, draft.id, "approved", reason).catch(() => {});
+        else await markDraftFailed(db, draft.id, reason).catch(() => {});
+        failed++;
+      }
+    }
+
+    // Rate limit: 1 email per second
+    await sleep(1000);
+  }
+
+  return { ok: true, sent, failed, skipped, ...(await leftOver()) };
+}
+
 export const smtpConfigRouter = router({
   /** Return the current SMTP config (password masked) */
   get: workspaceProcedure.query(async ({ ctx }) => {
@@ -369,7 +638,7 @@ export const smtpConfigRouter = router({
       }
     }),
 
-  /** Send all approved drafts for the workspace (rate-limited 1/sec, max 200) */
+  /** Send approved drafts for the workspace, oldest first: one a second, BULK_SEND_MAX a request. */
   sendBulkApproved: adminWsProcedure
     .input(z.object({ draftIds: z.array(z.number().int()).max(200).optional() }))
     .mutation(async ({ ctx, input }) => {
@@ -378,235 +647,17 @@ export const smtpConfigRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      // Load SMTP config
-      const [cfg] = await db.select().from(smtpConfigs)
-        .where(and(eq(smtpConfigs.workspaceId, ctx.workspace.id), eq(smtpConfigs.enabled, true)));
-      if (!cfg) throw new TRPCError({ code: "NOT_FOUND", message: "No active SMTP config. Configure SMTP in Settings → Email Delivery." });
-
-      let password: string;
-      try { password = decrypt(cfg.encryptedPassword); }
-      catch { throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to decrypt SMTP password" }); }
-
-      // Load approved drafts
-      const whereClause = input.draftIds?.length
-        ? and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "approved"), inArray(emailDrafts.id, input.draftIds))
-        : and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "approved"));
-
-      const drafts = await db.select().from(emailDrafts).where(whereClause).limit(200);
-      if (!drafts.length) return { ok: true, sent: 0, failed: 0, skipped: 0 };
-
-      // Load contact/lead emails in bulk
-      const contactIds = drafts.filter((d) => d.toContactId).map((d) => d.toContactId!);
-      const leadIds = drafts.filter((d) => d.toLeadId).map((d) => d.toLeadId!);
-      const contactEmails = contactIds.length
-        ? await db.select({ id: contacts.id, email: contacts.email }).from(contacts).where(inArray(contacts.id, contactIds))
-        : [];
-      const leadEmails = leadIds.length
-        ? await db.select({ id: leads.id, email: leads.email }).from(leads).where(inArray(leads.id, leadIds))
-        : [];
-      const contactEmailMap = new Map(contactEmails.map((c) => [c.id, c.email]));
-      const leadEmailMap = new Map(leadEmails.map((l) => [l.id, l.email]));
-
-      const transporter = buildTransporter({ host: cfg.host, port: cfg.port, secure: cfg.secure, username: cfg.username, password });
-      let sent = 0, failed = 0, skipped = 0;
-
-      // Workspace email sending preferences (migration 0117) — gate tracking
-      // injection and the RFC 8058 one-click unsubscribe headers.
-      const [sendPrefs] = await db
-        .select({
-          openTracking: workspaceSettings.emailOpenTracking,
-          clickTracking: workspaceSettings.emailClickTracking,
-          unsubHeader: workspaceSettings.emailUnsubscribeHeader,
-          optOutEnabled: workspaceSettings.emailSequenceOptOutEnabled,
-          optOutMessage: workspaceSettings.emailSequenceOptOutMessage,
-        })
-        .from(workspaceSettings)
-        .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
-      const openTracking = sendPrefs?.openTracking !== false;
-      const clickTracking = sendPrefs?.clickTracking !== false;
-      const optOutEnabled = sendPrefs?.optOutEnabled === true;
-      const optOutMessage = sendPrefs?.optOutMessage ?? "";
-
-      // Inbox-level defaults (owner ask 2026-08-14). This path predates the
-      // adapter and sends through the workspace SMTP transporter, so
-      // createEmailAdapter's wrapper never sees it — the drafts still carry
-      // the mailbox that owns them, which is enough to honour its settings.
-      const acctIds = Array.from(new Set(drafts.map((d) => d.sendingAccountId).filter((x): x is number => !!x)));
-      const acctRows = acctIds.length
-        ? await db
-            .select({
-              id: sendingAccounts.id,
-              signature: sendingAccounts.signature,
-              optOutEnabled: sendingAccounts.optOutEnabled,
-              optOutMessage: sendingAccounts.optOutMessage,
-              fromEmail: sendingAccounts.fromEmail,
-            })
-            .from(sendingAccounts)
-            .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), inArray(sendingAccounts.id, acctIds)))
-        : [];
-      const acctById = new Map(acctRows.map((a) => [a.id, a]));
-
-      for (const draft of drafts) {
-        const toEmail =
-          draft.toEmail ??
-          (draft.toContactId ? contactEmailMap.get(draft.toContactId) : null) ??
-          (draft.toLeadId ? leadEmailMap.get(draft.toLeadId) : null) ??
-          null;
-
-        if (!toEmail) { skipped++; continue; }
-
-        /**
-         * Asked again for EVERY draft (audit 2026-10-20, O16): this loop runs
-         * for up to 200 seconds, and pause and the daily caps were checked
-         * once, before the first send. Either one ends the run; what is left
-         * stays approved for later.
-         */
-        if (await isOutboundPaused(ctx.workspace.id)) { skipped += drafts.length - (sent + failed + skipped); break; }
-        try {
-          await assertSendAllowed(ctx.workspace.id, draft.sendingAccountId ?? null);
-        } catch {
-          skipped += drafts.length - (sent + failed + skipped);
-          break;
-        }
-
-        // Claimed per draft: a second admin, a retried request or the row's
-        // own Send button can no longer send the same draft again.
-        if (!(await claimDraftForSend(db, ctx.workspace.id, draft.id, "approved", ["approved"]))) { skipped++; continue; }
-        const release = () => releaseDraftClaim(db, draft.id, "approved");
-        if (await draftHoldReason(db, draft)) { await release(); skipped++; continue; }
-        // The ONE suppression check: both lists, by address and company domain.
-        if (await findSuppression(ctx.workspace.id, { email: toEmail }, "email")) { await release(); skipped++; continue; }
-        let transportCalled = false;
-        try {
-          // Pre-send: resolve merge vars — drafts may target a contact, lead,
-          // or prospect (sequence-engine drafts often have no contact row).
-          const mergeCtx = await buildMergeContextFromDb({
-            contactId: draft.toContactId,
-            leadId: draft.toLeadId,
-            prospectId: draft.toProspectId,
-          });
-          mergeCtx.sender = {
-            name: cfg.fromName, email: cfg.fromEmail,
-            bookingUrl: await resolveBookingUrl(ctx.workspace.id, draft.createdByUserId),
-          };
-          const resolvedSubject = resolveMergeVars(draft.subject, mergeCtx);
-          const resolvedBody = resolveMergeVars(draft.body, mergeCtx);
-          // Pre-send: tracking token + pixel injection
-          const token = draft.trackingToken ?? randomUUID().replace(/-/g, "");
-          if (!draft.trackingToken) {
-            await db.update(emailDrafts).set({ trackingToken: token }).where(eq(emailDrafts.id, draft.id));
-          }
-          // The ONE public origin (server/appUrl.ts). Previously the identity
-          // provider's URL, which made the open pixel AND the RFC 8058
-          // one-click unsubscribe link 404 for every recipient.
-          const appBaseUrl = publicAppOrigin();
-          let htmlBody = injectTracking(bodyToHtmlDocument(resolvedBody), token, appBaseUrl, {
-            open: openTracking,
-            click: clickTracking,
-          });
-          // A rich-editor body is HTML — the text/plain part must be its
-          // readable conversion, not the raw markup.
-          let textBody = isHtmlBody(resolvedBody) ? htmlBodyToText(resolvedBody) : resolvedBody;
-          // The sending inbox's own signature, if it has one configured.
-          const acct = draft.sendingAccountId ? acctById.get(draft.sendingAccountId) : undefined;
-          if (acct?.signature?.trim()) {
-            const decorated = applyAccountSendDefaults(
-              { signature: acct.signature },
-              { bodyHtml: htmlBody, bodyText: textBody },
-            );
-            htmlBody = decorated.bodyHtml;
-            textBody = decorated.bodyText ?? textBody;
-          }
-
-          // Opt-out footer: appended AFTER tracking injection so its one-click
-          // unsubscribe link isn't click-wrapped.
-          //
-          // EVERY email has one (audit 2026-10-20, O15) — it used to appear
-          // only when an opt-out message was switched on, and it was off by
-          // default. The INBOX decides the wording when it has one configured;
-          // the workspace setting is the fallback; the standard footer is used
-          // when neither has wording. The link is always this path's
-          // tokenised URL, which asks before it acts (emailTracking.ts).
-          const unsubscribeUrl = `${appBaseUrl}/api/track/unsubscribe/${encodeURIComponent(token)}`;
-          const inboxOptOut = acct?.optOutEnabled === true && !!acct.optOutMessage?.trim();
-          const effectiveOptOutEnabled = inboxOptOut || optOutEnabled;
-          const effectiveOptOutMessage = inboxOptOut ? acct!.optOutMessage! : optOutMessage;
-          const optOut = (effectiveOptOutEnabled ? renderSequenceOptOut(effectiveOptOutMessage, { unsubscribeUrl }) : null)
-            ?? (() => { const f = unsubscribeFooter(unsubscribeUrl); return { text: f.text.trim(), html: f.html }; })();
-          textBody = `${textBody}\n\n${optOut.text}`;
-          htmlBody = htmlBody.includes("</body>")
-            ? htmlBody.replace("</body>", `${optOut.html}</body>`)
-            : htmlBody + optOut.html;
-          transportCalled = true;
-          await transporter.sendMail({
-            from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
-            to: toEmail,
-            replyTo: cfg.replyTo ?? undefined,
-            subject: resolvedSubject,
-            text: textBody,
-            html: htmlBody,
-            // RFC 8058 one-click unsubscribe — the POST endpoint suppresses the
-            // recipient via the existing email_suppressions system. Always on
-            // (O15): Gmail and Yahoo require it of bulk senders.
-            headers: {
-              "List-Unsubscribe": `<${unsubscribeUrl}>, <mailto:${cfg.fromEmail}?subject=unsubscribe>`,
-              "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-            },
-          });
-          // Sent. Marked first, so no bookkeeping below can make it look
-          // unsent and send it again (A4).
-          await db.update(emailDrafts).set({ status: "sent", sentAt: new Date(), sendError: null, sendClaimedAt: null } as never).where(eq(emailDrafts.id, draft.id));
-          // Per message, not per batch: this loop sends one email per draft.
-          await recordEmailsSent(ctx.workspace.id, 1);
-          // Per message for the same reason. Without this row the bulk blast —
-          // the primary outbound sales path — was invisible to the per-mailbox
-          // daily cap, which now counts email_log (sendLimits.accountsSentToday).
-          await logEmailSend({
-            workspaceId: ctx.workspace.id,
-            meta: {
-              source: draft.sequenceId ? "sequence" : draft.aiGenerated ? "ai_draft" : "crm",
-              draftId: draft.id,
-              sequenceId: draft.sequenceId ?? null,
-              contactId: draft.toContactId ?? null,
-              leadId: draft.toLeadId ?? null,
-              userId: ctx.user.id,
-            },
-            sendingAccountId: draft.sendingAccountId ?? null,
-            fromEmail: cfg.fromEmail,
-            fromName: cfg.fromName,
-            to: toEmail,
-            subject: resolvedSubject,
-            bodyText: textBody,
-            status: "sent",
-          });
-          if (draft.toContactId || draft.toLeadId) {
-            await db.insert(activities).values({
-              workspaceId: ctx.workspace.id,
-              type: "email",
-              relatedType: draft.toContactId ? "contact" : "lead",
-              relatedId: (draft.toContactId ?? draft.toLeadId)!,
-              subject: resolvedSubject,
-              body: resolvedBody,
-              actorUserId: ctx.user.id,
-            });
-          }
-          sent++;
-        } catch (err) {
-          if (!(await isClaimed(db, draft.id).catch(() => true))) {
-            sent++; // sent and marked sent; only the bookkeeping after it failed
-          } else {
-            const reason = err instanceof Error ? err.message : String(err);
-            if (!transportCalled || isDefinitelyNotSent(err)) await releaseDraftClaim(db, draft.id, "approved", reason).catch(() => {});
-            else await markDraftFailed(db, draft.id, reason).catch(() => {});
-            failed++;
-          }
-        }
-
-        // Rate limit: 1 email per second
-        await sleep(1000);
+      // One run per workspace at a time (O16). Checked and taken with no await
+      // in between, so two presses cannot both get past it.
+      if (bulkSendRuns.has(ctx.workspace.id)) {
+        throw new TRPCError({ code: "CONFLICT", message: "Send approved is already running in this workspace. Wait for it to finish, then press it again for what is left." });
       }
-
-      return { ok: true, sent, failed, skipped };
+      bulkSendRuns.add(ctx.workspace.id);
+      try {
+        return await sendApprovedBatch(db, ctx, input);
+      } finally {
+        bulkSendRuns.delete(ctx.workspace.id);
+      }
     }),
 
   /** Get tracking stats (open/click counts + recent events) for a sent draft */
