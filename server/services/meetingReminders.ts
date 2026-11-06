@@ -20,6 +20,11 @@ import { sendWorkspaceEmail } from "../emailDelivery";
 import { resolveBookingUrl } from "../mergeVars";
 import { escapeHtml } from "@shared/escapeHtml";
 import { confirmedMeetingStatuses } from "@shared/meetingStatus";
+import { formatInZone } from "@shared/availability";
+import { getWorkspaceTimezone } from "./workspaceTimezone";
+import { findSuppression } from "./suppression";
+import { makeUnsubscribeUrl, unsubscribeHeaders } from "../unsubscribe";
+import { appBaseUrl } from "../appUrl";
 
 /**
  * ⚠️ BEHAVIOUR CHANGE: `rescheduled` was missing, so a meeting the attendee
@@ -34,12 +39,15 @@ import { confirmedMeetingStatuses } from "@shared/meetingStatus";
  */
 const REMINDER_STATUSES = confirmedMeetingStatuses();
 
-function fmtWhen(d: Date): string {
-  // No attendee timezone on file — label UTC explicitly to avoid ambiguity.
-  return d.toLocaleString("en-US", {
-    weekday: "short", month: "short", day: "numeric",
-    hour: "numeric", minute: "2-digit", timeZone: "UTC",
-  }) + " UTC";
+/**
+ * The time in the WORKSPACE's zone, with the zone named (audit 2026-10-20,
+ * O30). It was always UTC: a 9am New York meeting read "1:00 PM UTC" in the
+ * reminder, while the invite and the booking page said 9am. There is still no
+ * attendee zone on file; the workspace's is the one every other meeting
+ * message uses (proposals, the booking notification).
+ */
+function fmtWhen(d: Date, timezone: string): string {
+  return formatInZone(d, timezone);
 }
 
 const esc = escapeHtml; // one escaper — @shared/escapeHtml
@@ -80,7 +88,28 @@ export async function sendDueMeetingReminders(): Promise<{ sent: number; conside
     // The workspace send window (owner ask 2026-09-25, see @shared/sendWindow). Left unstamped, so the first hourly
     // tick inside the window (still 1–24h before the meeting) sends it.
     if (!(await inSendWindow(m.workspaceId))) continue;
-    const when = fmtWhen(m.scheduledAt as Date);
+    /**
+     * Suppression (audit O30). Invites have checked it since 2026-10-06 and
+     * reminders never did, so someone who unsubscribed after booking was still
+     * reminded. The ONE check, both lists. Stamped, so it is asked once; a
+     * failed check sends nothing and is asked again next hour.
+     */
+    let suppressed: boolean;
+    try {
+      suppressed = !!(await findSuppression(m.workspaceId, { email: m.contactEmail }, "email"));
+    } catch (e) {
+      console.error(`[MeetingReminders] suppression check failed for meeting ${m.id}:`, (e as Error).message);
+      continue;
+    }
+    if (suppressed) {
+      try {
+        await db.update(meetings).set({ reminderSentAt: new Date() } as never).where(eq(meetings.id, m.id));
+      } catch (e) {
+        console.error(`[MeetingReminders] stamp failed for meeting ${m.id}:`, (e as Error).message);
+      }
+      continue;
+    }
+    const when = fmtWhen(m.scheduledAt as Date, await getWorkspaceTimezone(m.workspaceId));
     const name = m.contactName?.trim() || "there";
 
     let bookingUrl = "";
@@ -92,17 +121,23 @@ export async function sendDueMeetingReminders(): Promise<{ sent: number; conside
     const rescheduleLine = bookingUrl
       ? `<p style="color:#6b7280;font-size:13px">Need a different time? <a href="${esc(bookingUrl)}">Reschedule here</a>.</p>`
       : "";
+    // An opt-out on every reminder (audit O30), as the proposal email has:
+    // a link in the body and the RFC 8058 List-Unsubscribe pair.
+    const base = appBaseUrl();
+    const unsubscribeUrl = makeUnsubscribeUrl(base, m.workspaceId, m.contactEmail);
     const html =
       `<p>Hi ${esc(name)},</p>` +
       `<p>A quick reminder about our meeting <strong>${esc(m.title)}</strong> on <strong>${esc(when)}</strong>.</p>` +
       joinLine +
       `<p>Looking forward to speaking with you.</p>` +
-      rescheduleLine;
+      rescheduleLine +
+      `<p style="margin:32px 0 0;color:#9ca3af;font-size:11px;text-align:center">Don't want these emails? <a href="${esc(unsubscribeUrl)}" style="color:#9ca3af">Unsubscribe</a></p>`;
 
     const res = await sendWorkspaceEmail(m.workspaceId, {
       to: m.contactEmail,
       subject: `Reminder: ${m.title} — ${when}`,
       html,
+      headers: unsubscribeHeaders(base, m.workspaceId, m.contactEmail),
     });
 
     // Skip (leave unstamped) only when the workspace simply has no delivery set
