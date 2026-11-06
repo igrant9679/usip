@@ -1,7 +1,11 @@
 /**
  * The workspace send window, read for the senders (see @shared/sendWindow).
  * Cached for a minute per workspace: every engine tick asks, and the answer
- * changes only when an admin saves Settings.
+ * changes only when an admin saves Settings (which clears the cache).
+ *
+ * A read that fails counts as PAUSED, and is not cached (audit 2026-10-20,
+ * O50): it used to count as "not paused" for a minute, so a database blip on
+ * a paused workspace opened it to every sender until the next read.
  */
 import { eq } from "drizzle-orm";
 import { workspaceSettings } from "../../drizzle/schema";
@@ -24,24 +28,26 @@ export async function getWorkspaceSendWindow(workspaceId: number, nowMs = Date.n
   let paused = false;
   try {
     const db = await getDb();
-    if (db) {
-      const [row] = await db.select({
-        timezone: workspaceSettings.timezone,
-        startHour: workspaceSettings.sendWindowStartHour,
-        endHour: workspaceSettings.sendWindowEndHour,
-        days: workspaceSettings.sendWindowDays,
-        pausedAt: workspaceSettings.outboundPausedAt,
-      }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, workspaceId)).limit(1);
-      if (row) {
-        tz = row.timezone || "UTC";
-        window = normalizeSendWindow({ startHour: row.startHour, endHour: row.endHour, days: row.days });
-        paused = !!row.pausedAt;
-      }
+    if (!db) throw new Error("no database");
+    const [row] = await db.select({
+      timezone: workspaceSettings.timezone,
+      startHour: workspaceSettings.sendWindowStartHour,
+      endHour: workspaceSettings.sendWindowEndHour,
+      days: workspaceSettings.sendWindowDays,
+      pausedAt: workspaceSettings.outboundPausedAt,
+    }).from(workspaceSettings).where(eq(workspaceSettings.workspaceId, workspaceId)).limit(1);
+    if (row) {
+      tz = row.timezone || "UTC";
+      window = normalizeSendWindow({ startHour: row.startHour, endHour: row.endHour, days: row.days });
+      paused = !!row.pausedAt;
     }
   } catch (e) {
     // Fail to the default window, never to "always open": a read failure
-    // must not become a 3 AM send.
+    // must not become a 3 AM send. And to paused: an unreadable pause may be
+    // on, so nothing goes until a read says otherwise. Not cached, so the
+    // next ask reads again.
     console.error(`[SendWindow] read failed for workspace ${workspaceId}:`, (e as Error).message);
+    return { timezone: tz, window, paused: true };
   }
   cache.set(workspaceId, { at: nowMs, tz, window, paused });
   return { timezone: tz, window, paused };

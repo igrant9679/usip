@@ -345,7 +345,7 @@ All on **Daily → Autonomy Center**; admin-only. Everything defaults to Off exc
 | Optimisation | proposals from outcomes | edits sequences within limits; auto-reverts what made outbound worse |
 | Email AI auto-send | off | high-scoring AI drafts send themselves |
 
-**The send window.** Everything above that sends to prospects on its own (campaign emails, sequence auto-send and LinkedIn DMs, Autonomous invites, reminders, booking-link replies, chat follow-ups) waits for the workspace's send window: Settings → Workspace overview, default 6 AM–5 PM Monday to Friday in the workspace time zone. Held work goes at the first check inside it; nothing is dropped. What a person clicks (Approve & send, Send now) is never held.
+**The send window.** Everything above that sends to prospects on its own (campaign emails, sequence auto-send and LinkedIn DMs, Autonomous invites, reminders, booking-link replies, chat follow-ups) waits for the workspace's send window: Settings → Workspace overview, default 6 AM–5 PM Monday to Friday in the workspace time zone. Held work goes at the first check inside it, except a Social Autopilot opener, which becomes a task for the rep, and a booking-link reply still held after a week, which is dropped. What a person clicks (Approve & send, Send now) is never held.
 
 A sane starting posture: everything that only does work (tasks, deals, sweeps, backfill, job change, the chat agent) on Auto; everything that sends (meetings, conversation replies, social, chat follow-up, email auto-send, campaigns in full mode) on Approve until you have read a week of its output. Promote one dial at a time so you can tell which change caused what.
 

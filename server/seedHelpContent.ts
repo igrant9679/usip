@@ -85,7 +85,7 @@ export const ARTICLES: ArticleSeed[] = [
     tags: ["send window", "sending", "schedule", "settings", "timezone", "weekends"],
     bodyMarkdown: `**The send window** is when Velocity may send to prospects **on its own**. It lives in **Settings → Workspace overview → Send window**, one per workspace, and uses the workspace time zone set just above it in **General**. The default is **6:00 AM–5:00 PM, Monday to Friday**. Choose the hours with **From** and **Until**, toggle the days, and **Save**; the card says in plain words what the window is and whether it is open right now. A change applies at once.
 
-**Pause all outbound.** The switch at the top of the card stops everything Velocity sends on its own, in that workspace, until you switch it off: the window simply stays closed. Nothing is dropped; held work goes once you switch it off (inside the window). The card says since when it has been paused.\n\n**While paused, what a person clicks is held too.** Nothing goes to prospects, whoever presses the button: meeting **Approve & send** (one or all), an email from a contact or lead, the **mailbox** (new, reply, forward), sending an approved draft (one or all), a **proposal** to its client and the extension decisions mailed to the client, **chat follow-up** and **Social Autopilot invite** tasks, LinkedIn **messages, InMail, invites, comments and reactions**, and calendar events with outside attendees. The button says outbound is paused instead of sending. **Find meetings** in Autonomous drafts the proposals for approval instead of sending them. The assistant (Elsie) runs the same checks. Still allowed: mail and calendar invites that go only to your own team, cancelling a meeting, a post on your own LinkedIn feed, what prospects do themselves (booking a time on your page, the chat widget's email code), and AI phone calls, which have their own switch (Settings → Voice agents).\n\n**What waits for the window.** Everything Velocity sends without a person clicking a send button:
+**Pause all outbound.** The switch at the top of the card stops everything Velocity sends on its own, in that workspace, until you switch it off: the window simply stays closed. Held work goes once you switch it off (inside the window), with two exceptions: a Social Autopilot opener held by the pause becomes a task for the rep and is not sent later, and a booking-link reply still held after a week is dropped. The card says since when it has been paused.\n\n**While paused, what a person clicks is held too.** Nothing goes to prospects, whoever presses the button: meeting **Approve & send** (one or all), an email from a contact or lead, the **mailbox** (new, reply, forward), sending an approved draft (one or all), a **proposal** to its client and the extension decisions mailed to the client, **chat follow-up** and **Social Autopilot invite** tasks, LinkedIn **messages, InMail, invites, comments and reactions**, and calendar events with outside attendees. The button says outbound is paused instead of sending. **Find meetings** in Autonomous drafts the proposals for approval instead of sending them. The assistant (Elsie) runs the same checks. Still allowed: mail and calendar invites that go only to your own team, cancelling a meeting, a post on your own LinkedIn feed, what prospects do themselves (booking a time on your page, the chat widget's email code), and AI phone calls, which have their own switch (Settings → Voice agents).\n\n**What waits for the window.** Everything Velocity sends without a person clicking a send button:
 - Revenue Engine campaign emails
 - sequence **AI auto-send**, and sequence **LinkedIn DM** and **LinkedIn invite** steps
 - **Social Autopilot** in Autonomous: its connection invites (and the like on the person's latest post before each), and the opener when someone accepts. A held opener becomes a task for the rep instead, so the accept is not lost; held invites go at the next hourly run inside the window
@@ -95,7 +95,7 @@ export const ARTICLES: ArticleSeed[] = [
 - **chat follow-ups** from a chat agent in Auto
 - **proposal expiry reminders** to the client
 
-**Nothing is dropped.** Work that comes due outside the window stays queued and goes out at the first check inside it: Monday 6:00 AM for anything due over the weekend. A booking-link reply to someone who wrote in at night is marked pending and sent once the window opens; one still pending after a week is dropped, because the conversation has moved on by then. A reminder goes at the first hour inside the window that is still 1 to 24 hours before the meeting.
+**Held work waits.** Work that comes due outside the window stays queued and goes out at the first check inside it: Monday 6:00 AM for anything due over the weekend. A booking-link reply to someone who wrote in at night is marked pending and sent once the window opens; one still pending after a week is dropped, because the conversation has moved on by then. A reminder goes at the first hour inside the window that is still 1 to 24 hours before the meeting.
 
 **What does not wait.** Unless outbound is paused, anything **a person clicks** goes immediately, whatever the time: **Approve & send**, **Approve & send all**, **Send now**, sending a draft yourself. So if you approve meeting proposals at 5:30 PM on a Friday, the invites go out then; the meeting times they offer are still between 9 AM and 4 PM, but the invitation lands in the prospect's inbox as soon as you approve. If you want an invite to arrive in business hours, approve it in business hours. Also not held: reading and classifying replies, unsubscribes and pausing a sequence when someone replies (those must never wait), internal reports and notifications, and mailbox warmup (its own schedule). LinkedIn activity also follows the working hours on **LinkedIn Limits**, on top of the window.
 
@@ -634,12 +634,12 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     slug: "unified-inbox",
     categorySlug: "sequences-email",
     title: "The Unified Inbox",
-    summary: "Handle replies across channels in one inbox.",
+    summary: "Your social conversations (LinkedIn, WhatsApp and the like) in one list.",
     readingTimeMinutes: 3,
     tags: ["inbox", "replies", "sequences"],
     pageKey: "unified-inbox",
     tourName: "Handle Replies (Unified Inbox)",
-    bodyMarkdown: `The **Unified Inbox** consolidates inbound replies across every connected email account. Conversations list on the left; open one to read the thread and reply, forward, or log it to a CRM record without leaving the page. An inbound reply automatically **pauses** the prospect's sequence and mirrors to the record timeline, so you won't double-touch someone who already answered. Use the channel filter to focus. Header shortcuts: **Refresh**, **Manage Accounts**, and **Email Drafts**.`,
+    bodyMarkdown: `The **Unified Inbox** lists the conversations from the social accounts you connected (LinkedIn, WhatsApp and the like, through Settings › Social accounts). Chats list on the left; open one to read the thread and reply. A LinkedIn reply from someone you reached out to **pauses** their sequences, so you won't double-touch someone who already answered. Use the channel filter to focus. Header shortcuts: **Refresh**, **Manage Accounts**, and **Email Drafts**. Email replies are not here: they are in **Conversations** and **My Mailbox**.`,
   },
   {
     slug: "email-drafts-sending",
@@ -1859,9 +1859,9 @@ export const TOURS: TourSeed[] = [
     route: "/unified-inbox",
     roleTags: ["sdr"],
     steps: [
-      { title: "All replies, one place", bodyMarkdown: "Inbound across every connected account.", routeTo: "/unified-inbox", visualTreatment: "coach", advanceCondition: "route_changed" },
-      { title: "Reply & log", bodyMarkdown: "Respond, forward, or log to a CRM record without leaving.", visualTreatment: "coach", advanceCondition: "next_button" },
-      { title: "Auto-pause", bodyMarkdown: "A reply pauses that prospect's sequence automatically.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Social chats, one place", bodyMarkdown: "LinkedIn, WhatsApp and other connected accounts' conversations.", routeTo: "/unified-inbox", visualTreatment: "coach", advanceCondition: "route_changed" },
+      { title: "Reply", bodyMarkdown: "Open a chat and reply without leaving.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Auto-pause", bodyMarkdown: "A LinkedIn reply to your outreach pauses that person's sequences.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
   {

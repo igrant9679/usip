@@ -261,6 +261,9 @@ export default function UnifiedInbox() {
         unipileAccountId: selectedChat.account_id,
         text: replyText.trim(),
       });
+    } catch {
+      // The mutation's onError has already said why; without this catch the
+      // rejection went unhandled (audit 2026-10-20, O54). The text is kept.
     } finally {
       setIsSending(false);
     }
@@ -279,7 +282,7 @@ export default function UnifiedInbox() {
     <Shell>
       <PageHeader
         title="Unified Inbox"
-        description="A single unified inbox for all inbound replies across every connected email account. Reply, forward, and log conversations directly to CRM records without leaving the inbox."
+        description="Your LinkedIn, WhatsApp and other social conversations from the accounts you connected, in one list. Read a thread and reply from here. Email replies are in Conversations and My Mailbox."
         pageKey="unified-inbox"
         icon={<Inbox className="size-5" />}
       >

@@ -405,7 +405,8 @@ describe('"Send approved" sends a capped batch, oldest first, one run at a time 
     for (let i = 29; i >= 0; i--) draft(200 + i, { status: "approved", toEmail: `p${i}@acme.example` });
     const res = await caller(ADMIN).smtpConfig.sendBulkApproved({});
     expect(res).toMatchObject({ sent: 25, failed: 0, remaining: 5, inProgress: 0 });
-    expect(h.smtp.map((m) => m.to)).toEqual(Array.from({ length: 25 }, (_, i) => `p${i}@acme.example`));
+    // 2026-11-06: since O47 each draft goes through deliverEmailDraft and the mailbox adapter, not SMTP.
+    expect(h.emails.map((m) => m.to)).toEqual(Array.from({ length: 25 }, (_, i) => `p${i}@acme.example`));
     expect(drafts().filter((d) => d.status === "approved").map((d) => d.id).sort()).toEqual([225, 226, 227, 228, 229]);
   }, 30_000);
 
@@ -417,7 +418,7 @@ describe('"Send approved" sends a capped batch, oldest first, one run at a time 
     const [first, second] = await Promise.allSettled([caller(ADMIN).smtpConfig.sendBulkApproved({}), caller(ADMIN).smtpConfig.sendBulkApproved({})]);
     expect(first).toMatchObject({ status: "fulfilled", value: { sent: 1, remaining: 0, inProgress: 1 } });
     expect(second).toMatchObject({ status: "rejected", reason: { code: "CONFLICT" } });
-    expect(h.smtp.map((m) => m.to)).toEqual(["bo@beta.example"]);
+    expect(h.emails.map((m) => m.to)).toEqual(["bo@beta.example"]);
     expect(row("email_drafts", 301).status).toBe("sending");
     // The run let go: the next press works.
     draft(302, { status: "approved", toEmail: "cy@gamma.example" });
@@ -432,7 +433,8 @@ describe('"Send approved" sends a capped batch, oldest first, one run at a time 
     const run = src.slice(src.indexOf("async function sendApprovedBatch("), src.indexOf("export const smtpConfigRouter"));
     const loop = run.slice(run.indexOf("for (const draft of drafts)"));
     expect(loop.indexOf("isOutboundPaused(")).toBeGreaterThan(-1);
-    expect(loop.indexOf("isOutboundPaused(")).toBeLessThan(loop.indexOf("transporter.sendMail("));
+    expect(loop.indexOf("deliverEmailDraft(")).toBeGreaterThan(-1);
+    expect(loop.indexOf("isOutboundPaused(")).toBeLessThan(loop.indexOf("deliverEmailDraft("));
   });
 });
 
