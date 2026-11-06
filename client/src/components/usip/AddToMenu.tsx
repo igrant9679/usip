@@ -17,6 +17,8 @@ import { Link } from "wouter";
 import { Activity, Bot, ChevronDown, ChevronRight, Loader2, ListChecks, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { PUSH_BATCH, pushChunks } from "@/lib/pushChunks";
+import { confirmAction } from "@/components/usip/Common";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
@@ -50,20 +52,47 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
     utils.prospects.list.invalidate();
   };
 
+  // A campaign takes 100 people a call, so more go in batches, one after
+  // another, and are reported once (audit 2026-10-20, P48).
   const pushExisting = trpc.are.prospects.pushExisting.useMutation({
-    onSuccess: (r: any, vars: any) => {
-      const name = campaigns.find((c) => c.id === vars.campaignId)?.name ?? "campaign";
-      if (r.added.length > 0) toast.success(`Added ${r.added.length} to "${name}" — the engine will enrich and write their emails`);
-      if (r.skipped.length > 0) {
-        const reasons = Array.from(new Set(r.skipped.map((s: any) => String(s.reason)))).slice(0, 2).join(" · ");
-        toast[r.added.length > 0 ? "info" : "error"](`${r.skipped.length} skipped: ${reasons}`);
-      }
-      invalidatePeople();
-      utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
-      close();
-    },
     onError: (e: any) => toast.error(e.message),
   });
+  const [pushing, setPushing] = useState(false);
+  const pushToCampaign = async (campaign: { id: number; name: string }) => {
+    setPushing(true);
+    const added: number[] = [];
+    const skipped: Array<{ reason: string }> = [];
+    let failed = false;
+    try {
+      for (const batch of pushChunks({ prospectIds, contactIds, leadIds })) {
+        const r: any = await pushExisting.mutateAsync({ campaignId: campaign.id, ...batch });
+        added.push(...r.added);
+        skipped.push(...r.skipped);
+      }
+    } catch {
+      failed = true; // onError said why; what went in before it is reported below
+    } finally {
+      setPushing(false);
+    }
+    if (added.length > 0) toast.success(`Added ${added.length} to "${campaign.name}" — the engine will enrich and write their emails`);
+    if (skipped.length > 0) {
+      const reasons = Array.from(new Set(skipped.map((s) => String(s.reason)))).slice(0, 2).join(" · ");
+      toast[added.length > 0 ? "info" : "error"](`${skipped.length} skipped: ${reasons}`);
+    }
+    if (failed && n > PUSH_BATCH) toast.error(`Stopped after ${added.length + skipped.length} of ${n}; the rest were not added.`);
+    invalidatePeople();
+    utils.are.prospects.list.invalidate(); utils.are.prospects.statusCounts.invalidate();
+    if (!failed) close();
+  };
+  // Over one batch, the engine enriches and writes for each person, so say how many first.
+  const chooseCampaign = (c: { id: number; name: string }) => {
+    if (n <= PUSH_BATCH) { void pushToCampaign(c); return; }
+    confirmAction({
+      title: `Add ${n.toLocaleString()} people to "${c.name}"?`,
+      description: `The engine will enrich each of them and write their emails. They go in ${PUSH_BATCH} at a time.`,
+      confirmLabel: `Add ${n.toLocaleString()}`, destructive: false,
+    }, () => { void pushToCampaign(c); });
+  };
   const bulkEnroll = trpc.sequences.bulkEnroll.useMutation({
     onSuccess: (r: any, vars: any) => {
       const name = sequences.find((s) => s.id === vars.sequenceId)?.name ?? "sequence";
@@ -96,7 +125,9 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
     onError: (e: any) => toast.error(e.message),
   });
   const routable = ((bestFitQ.data?.picks ?? []) as any[]).filter((p) => p.campaignId != null);
-  const pending = pushExisting.isPending || bulkEnroll.isPending || applyBestFit.isPending;
+  const pending = pushing || pushExisting.isPending || bulkEnroll.isPending || applyBestFit.isPending;
+  // Best-fit scores at most one batch; it is not split, since scoring can call the model.
+  const bestFitTooMany = n > PUSH_BATCH;
 
   return (
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setPane("root"); }}>
@@ -111,11 +142,11 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
         {pane === "root" && (
           <div className="py-1">
             <div className="px-3 py-2 text-[11px] uppercase tracking-wide text-muted-foreground">Add {n === 1 ? "this person" : `${n} people`} to</div>
-            <button type="button" onClick={() => setPane("bestfit")} className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted text-left">
+            <button type="button" disabled={bestFitTooMany} onClick={() => setPane("bestfit")} className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-muted text-left disabled:opacity-60 disabled:hover:bg-transparent">
               <Bot className="size-4 mt-0.5 shrink-0 text-violet-600" />
               <span className="flex-1 min-w-0">
                 <span className="block text-[13px] font-medium">Best-fit campaign ✦</span>
-                <span className="block text-[11.5px] text-muted-foreground">The engine scores every active campaign and shows its pick</span>
+                <span className="block text-[11.5px] text-muted-foreground">{bestFitTooMany ? `Scores up to ${PUSH_BATCH} people at a time; pick a campaign below instead` : "The engine scores every active campaign and shows its pick"}</span>
               </span>
               <ChevronRight className="size-3.5 mt-1 text-muted-foreground" />
             </button>
@@ -189,7 +220,7 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
                 <p className="px-3 py-4 text-[13px] text-muted-foreground">No campaigns yet — <Link href="/are/campaigns" className="underline">create one</Link> first.</p>
               ) : campaigns.map((c) => (
                 <button key={c.id} type="button" disabled={pending}
-                  onClick={() => pushExisting.mutate({ campaignId: c.id, prospectIds, contactIds, leadIds })}
+                  onClick={() => chooseCampaign(c)}
                   className="w-full flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-muted text-left disabled:opacity-60">
                   <Bot className="size-3.5 shrink-0 text-muted-foreground" />
                   <span className="flex-1 truncate">{c.name}</span>
