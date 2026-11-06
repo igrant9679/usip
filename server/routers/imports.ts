@@ -17,6 +17,7 @@ import { stripNameCredentials } from "../services/enrichment/personName";
 import { buildCompanyCanonicalizer } from "../services/enrichment/companyCanonical";
 import { normalizedAccountFields } from "../services/company/normalize";
 import { describeWriteError } from "../services/dbWriteError";
+import { assertOwnerInWorkspace } from "../services/foreignIds";
 import {
   CONTACT_IMPORT_FIELDS,
   describeDuplicateMappings,
@@ -650,6 +651,9 @@ export const importsRouter = router({
       assertNoDuplicateMappings(mapping);
       assertRequiredFieldsMapped(mapping, input.destination);
       const requiredFields = requiredFieldKeysFor(input.destination);
+      // Every imported row is filed under this owner: they must work here now
+      // (audit 2026-10-20, R55), not be another workspace's user or a leaver.
+      await assertOwnerInWorkspace(wsId, input.postImportActions?.ownerUserId);
 
       // Create import record
       const [importRecord] = await db

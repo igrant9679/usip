@@ -41,7 +41,10 @@ const caller = () => appRouter.createCaller({
 const title = (t: string) => ({ title: t, seniority: "Director", role: "champion", weight: 40 });
 
 beforeEach(() => {
-  h.db = makeSqlFakeDb({ roles: { [WS]: "rep" }, wsId: () => WS });
+  // 2026-11-06 (audit A36, batch S1c): ICP override, restore and regenerate
+  // are a manager's, so the person editing the profile here is one. Nothing
+  // below is about who may edit; s1cAreRoles.test.ts pins that a rep can't.
+  h.db = makeSqlFakeDb({ roles: { [WS]: "manager" }, wsId: () => WS });
   rows("icp_profiles").push({
     id: 1, workspaceId: WS, version: 1, isActive: true, confidenceScore: 30, sampleWonDeals: 0,
     targetIndustries: [{ industry: "Government", weight: 60, examples: [] }],

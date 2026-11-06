@@ -32,6 +32,7 @@ import { confirmAction } from "@/components/usip/Common";
 import { ResearchSubNav, reportDropped } from "@/components/usip/research/ResearchFields";
 import { EMPTY_PERSONA, PersonaFormFields, personaFormFrom, personaPayload, type PersonaForm } from "@/components/usip/research/PersonaFormFields";
 import { icpLabels } from "@shared/icpShape";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 
 /** Per-section collapse map, keyed "cat:<id>" / "uncat". UI-only state. */
 const SECTIONS_LS_KEY = "velocity_personas_sections_collapsed";
@@ -88,6 +89,9 @@ export default function Personas() {
   const deleteCategory = trpc.personas.deleteCategory.useMutation();
   const reorderCategories = trpc.personas.reorderCategories.useMutation();
   const utils = trpc.useUtils();
+  // A manager writes personas and categories, an admin deletes them (P31);
+  // nobody is offered a control the server would refuse.
+  const { isManager: canEdit, isAdmin: canDelete } = useWorkspaceRole();
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -277,12 +281,16 @@ export default function Personas() {
         </div>
       </div>
       <div className="flex gap-1 shrink-0">
-        <Button aria-label="Edit persona" size="sm" variant="ghost" onClick={() => startEdit(p)}>
-          <Pencil className="size-3.5" />
-        </Button>
-        <Button aria-label="Delete persona" size="sm" variant="ghost" onClick={() => remove(p.id)}>
-          <Trash2 className="size-3.5 text-destructive" />
-        </Button>
+        {canEdit && (
+          <Button aria-label="Edit persona" size="sm" variant="ghost" onClick={() => startEdit(p)}>
+            <Pencil className="size-3.5" />
+          </Button>
+        )}
+        {canDelete && (
+          <Button aria-label="Delete persona" size="sm" variant="ghost" onClick={() => remove(p.id)}>
+            <Trash2 className="size-3.5 text-destructive" />
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -303,12 +311,16 @@ export default function Personas() {
         title="Personas"
         description="The buyers you sell to: who to find, what they care about, and what they push back on."
       >
-        <Button variant="outline" onClick={startCreateCategory}>
-          <FolderPlus className="size-4 mr-1" /> New category
-        </Button>
-        <Button onClick={() => startCreate()}>
-          <Plus className="size-4 mr-1" /> New persona
-        </Button>
+        {canEdit && (
+          <>
+            <Button variant="outline" onClick={startCreateCategory}>
+              <FolderPlus className="size-4 mr-1" /> New category
+            </Button>
+            <Button onClick={() => startCreate()}>
+              <Plus className="size-4 mr-1" /> New persona
+            </Button>
+          </>
+        )}
       </PageHeader>
       <ResearchSubNav />
 
@@ -327,7 +339,7 @@ export default function Personas() {
             <ChevronDown className={`size-4 text-muted-foreground transition-transform ${presetsCollapsed ? "-rotate-90" : ""}`} />
           </button>
           {!presetsCollapsed && (
-            <CardDescription>One-click starting points. Click to clone into your personas list.</CardDescription>
+            <CardDescription>{canEdit ? "One-click starting points. Click to clone into your personas list." : "Starting points a manager can clone into your personas list."}</CardDescription>
           )}
         </CardHeader>
         {!presetsCollapsed && (
@@ -337,7 +349,7 @@ export default function Personas() {
                 <button
                   key={p.key}
                   onClick={() => applyPreset(p.key)}
-                  disabled={fromPreset.isPending}
+                  disabled={!canEdit || fromPreset.isPending}
                   className="text-left border rounded p-3 hover:bg-accent transition disabled:opacity-60 disabled:pointer-events-none"
                 >
                   <div className="font-medium text-sm">{p.name}</div>
@@ -368,27 +380,31 @@ export default function Personas() {
               count={(personasByCat.get(c.id) ?? []).length}
               collapsed={!!collapsedSections[`cat:${c.id}`]}
               onToggle={() => toggleSection(`cat:${c.id}`)}
-              actions={
+              actions={(canEdit || canDelete) &&
                 <div className="flex gap-1 shrink-0">
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="New persona in this category" onClick={() => startCreate(c.id)}>
-                    <Plus className="size-3.5" />
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Move up" disabled={i === 0 || reorderCategories.isPending} onClick={() => moveCategory(i, -1)}>
-                    <ArrowUp className="size-3.5" />
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Move down" disabled={i === cats.length - 1 || reorderCategories.isPending} onClick={() => moveCategory(i, 1)}>
-                    <ArrowDown className="size-3.5" />
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Rename category" onClick={() => startEditCategory(c)}>
-                    <Pencil className="size-3.5" />
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Delete category" onClick={() => removeCategory(c)}>
-                    <Trash2 className="size-3.5 text-destructive" />
-                  </Button>
+                  {canEdit && (<>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="New persona in this category" onClick={() => startCreate(c.id)}>
+                      <Plus className="size-3.5" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Move up" disabled={i === 0 || reorderCategories.isPending} onClick={() => moveCategory(i, -1)}>
+                      <ArrowUp className="size-3.5" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Move down" disabled={i === cats.length - 1 || reorderCategories.isPending} onClick={() => moveCategory(i, 1)}>
+                      <ArrowDown className="size-3.5" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Rename category" onClick={() => startEditCategory(c)}>
+                      <Pencil className="size-3.5" />
+                    </Button>
+                  </>)}
+                  {canDelete && (
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Delete category" onClick={() => removeCategory(c)}>
+                      <Trash2 className="size-3.5 text-destructive" />
+                    </Button>
+                  )}
                 </div>
               }
             >
-              {personaList(personasByCat.get(c.id) ?? [], "No personas in this category yet. Use the + above to add one.")}
+              {personaList(personasByCat.get(c.id) ?? [], canEdit ? "No personas in this category yet. Use the + above to add one." : "No personas in this category yet.")}
             </SectionCard>
           ))}
 
@@ -402,7 +418,7 @@ export default function Personas() {
               collapsed={!!collapsedSections["uncat"]}
               onToggle={() => toggleSection("uncat")}
             >
-              {personaList(uncategorized, "No personas yet. Create one above or clone a preset.")}
+              {personaList(uncategorized, canEdit ? "No personas yet. Create one above or clone a preset." : "No personas yet.")}
             </SectionCard>
           )}
         </div>

@@ -252,7 +252,10 @@ describe("dashboards (G5, G28)", () => {
     caller(id).dashboards.addWidget({ dashboardId: 1, ...widget }),
     caller(id).dashboards.updateWidget({ id: 11, patch: { title: "T" } }),
     caller(id).dashboards.saveLayout({ dashboardId: 1, positions: [{ id: 11, x: 1, y: 1, w: 1, h: 1 }] }),
-    caller(id).dashboards.createSchedule({ dashboardId: 1, frequency: "daily", recipients: ["a@example.com"] }),
+    // 2026-11-06 (audit G26): a member's address, not a@example.com. An outside
+    // address now needs a manager, which s1cPlatformRoles.test.ts pins; this
+    // still pins that only the owner or a manager may schedule at all.
+    caller(id).dashboards.createSchedule({ dashboardId: 1, frequency: "daily", recipients: ["u22@example.com"] }),
     caller(id).dashboards.toggleSchedule({ id: 21, enabled: true }),
   ];
 

@@ -7,6 +7,7 @@ import { trpc } from "@/lib/trpc";
 import { LEAD_ASSIGNMENT_NAV } from "@/lib/leadAssignmentNav";
 import { readableErrorMessage } from "@/lib/trpcErrorMessage";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { componentMaxes, tierBands as bandsFor, tierThresholdProblem } from "@shared/leadScoreModel";
 import { leadTierLabel, type LeadTier } from "@shared/leadTier";
 import { savedScoreLine, type SavedScore } from "@/lib/leadScoreText";
@@ -57,6 +58,9 @@ export default function LeadScoring() {
   const { data: serverCfg, isLoading, error: cfgError, refetch: refetchCfg } = trpc.leadScoring.getConfig.useQuery();
   const [cfg, setCfg] = useState<Cfg>(DEFAULTS);
   const utils = trpc.useUtils();
+  // Save, Recompute all and Cancel are an admin's on the server (P120). Anyone
+  // may still try weights here and see the preview.
+  const isAdmin = useWorkspaceRole().isAdmin;
 
   useEffect(() => {
     if (serverCfg) {
@@ -128,15 +132,22 @@ export default function LeadScoring() {
       <PageHeader title="Lead Scoring Engine" pageKey="lead-scoring" description={`Three components, added up and capped at 100: firmographic up to ${max.firmographic}, behavioral up to ${max.behavioral}, AI fit up to ${max.aiFit} (${max.sum} pts in all).`}
         icon={<Gauge className="size-5" />}
       >
-        <Button variant="outline" className="bg-card" onClick={askRecompute} disabled={recomputeAll.isPending || jobActive}>
-          <RefreshCw className={`size-4 ${recomputeAll.isPending || jobActive ? "animate-spin" : ""}`} /> Recompute all
-        </Button>
-        {/* Live only once the saved weights are loaded (P35): before that, or
-            after a failed load, cfg is the defaults and Save would write them
-            over the real ones. */}
-        <Button onClick={() => save.mutate(cfg)} disabled={save.isPending || !serverCfg || !!tierProblem} title={tierProblem ?? undefined}><Save className="size-4" /> Save</Button>
+        {isAdmin && (
+          <>
+            <Button variant="outline" className="bg-card" onClick={askRecompute} disabled={recomputeAll.isPending || jobActive}>
+              <RefreshCw className={`size-4 ${recomputeAll.isPending || jobActive ? "animate-spin" : ""}`} /> Recompute all
+            </Button>
+            {/* Live only once the saved weights are loaded (P35): before that, or
+                after a failed load, cfg is the defaults and Save would write them
+                over the real ones. */}
+            <Button onClick={() => save.mutate(cfg)} disabled={save.isPending || !serverCfg || !!tierProblem} title={tierProblem ?? undefined}><Save className="size-4" /> Save</Button>
+          </>
+        )}
       </PageHeader>
       <SubNav items={LEAD_ASSIGNMENT_NAV} />
+      {!isAdmin && (
+        <div className="px-4 md:px-5 pt-3 text-[13px] text-muted-foreground">An admin changes the scoring rules. You can try weights here and see the preview; they are not saved.</div>
+      )}
       {serverCfg && tierProblem && (
         <div role="alert" className="px-4 md:px-5 pt-3 text-[13px] text-rose-600">{tierProblem}</div>
       )}
@@ -147,7 +158,7 @@ export default function LeadScoring() {
             <>
               <Loader2 className="size-3.5 animate-spin" />
               <span>Re-scoring leads: {job.done.toLocaleString()} of {job.total.toLocaleString()}{job.failed ? ` (${job.failed} failed)` : ""}</span>
-              <Button size="sm" variant="ghost" className="h-6" disabled={cancelRecompute.isPending} onClick={() => cancelRecompute.mutate({ jobId: job.id })}>Cancel</Button>
+              {isAdmin && <Button size="sm" variant="ghost" className="h-6" disabled={cancelRecompute.isPending} onClick={() => cancelRecompute.mutate({ jobId: job.id })}>Cancel</Button>}
             </>
           ) : (
             <span>

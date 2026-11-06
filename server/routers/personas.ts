@@ -13,7 +13,7 @@ import { cleanPersonaResearch } from "@shared/researchShape";
 import { getDb } from "../db";
 import { forgetResearchContext } from "../services/research/context";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../_core/workspace";
 
 const PersonaFields = z.object({
   name: z.string().min(2).max(120),
@@ -149,6 +149,11 @@ export const PRESET_PERSONAS = [
   },
 ] as const;
 
+/**
+ * Personas and their categories steer every research writer and campaign that
+ * uses them: a manager writes them and an admin deletes them, as in Research
+ * (audit 2026-10-20, P31). Any member, viewers included, could do both.
+ */
 export const personasRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
@@ -176,7 +181,7 @@ export const personasRouter = router({
       return row;
     }),
 
-  create: workspaceProcedure
+  create: managerProcedure
     .input(PersonaInput)
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -207,7 +212,7 @@ export const personasRouter = router({
     }),
 
   /** Create from a preset key (also accepts overrides if user customized). */
-  createFromPreset: workspaceProcedure
+  createFromPreset: managerProcedure
     .input(z.object({ presetKey: z.string(), overrides: PersonaPatch.optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -244,7 +249,7 @@ export const personasRouter = router({
       return { id: row.id };
     }),
 
-  update: workspaceProcedure
+  update: managerProcedure
     .input(z.object({ id: z.number() }).merge(PersonaPatch))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -297,7 +302,7 @@ export const personasRouter = router({
    * writers say they use none (audit 2026-10-20, P32: they kept it and fell
    * back to guessing from titles).
    */
-  delete: workspaceProcedure
+  delete: adminWsProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -337,7 +342,7 @@ export const personasRouter = router({
       .orderBy(asc(personaCategories.sortOrder), asc(personaCategories.id));
   }),
 
-  createCategory: workspaceProcedure
+  createCategory: managerProcedure
     .input(z.object({ name: z.string().min(1).max(120) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -360,7 +365,7 @@ export const personasRouter = router({
       return { id: row.id };
     }),
 
-  updateCategory: workspaceProcedure
+  updateCategory: managerProcedure
     .input(z.object({ id: z.number(), name: z.string().min(1).max(120) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -374,7 +379,7 @@ export const personasRouter = router({
     }),
 
   /** Personas in the category survive — they fall back to Uncategorized. */
-  deleteCategory: workspaceProcedure
+  deleteCategory: adminWsProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -393,7 +398,7 @@ export const personasRouter = router({
   /** Full ordered id list → sortOrder = array index. Ids not owned by the
    *  workspace are ignored by the scoped WHERE (not an error — a stale
    *  client list shouldn't fail the whole reorder). */
-  reorderCategories: workspaceProcedure
+  reorderCategories: managerProcedure
     .input(z.object({ ids: z.array(z.number().int()).min(1).max(200) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();

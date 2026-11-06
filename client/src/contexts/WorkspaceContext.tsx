@@ -6,6 +6,7 @@ import {
   keepAcrossWorkspaceSwitch,
   setActiveWorkspaceId,
 } from "@/lib/activeWorkspace";
+import { assistantStore } from "@/lib/assistantStore";
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
@@ -43,6 +44,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
    */
   const clearWorkspaceData = useCallback(() => {
     void queryClient.resetQueries({ predicate: (q) => !keepAcrossWorkspaceSwitch(q.queryKey) });
+    // The assistant's conversation is the old workspace's too: its names,
+    // emails and answers stay behind (audit 2026-10-20, G39).
+    assistantStore.reset();
   }, [queryClient]);
 
   // The server refused this tab's workspace (G11): reload the list, and the

@@ -71,8 +71,8 @@ export function SelectionToolbar({
   onClear: () => void;
 }) {
   const n = selectedIds.length;
-  // UX, not a boundary — the rows come back through prospects.exportSelected
-  // and the file is built here. See the comment on reports.exportCsv.
+  // Hidden here as UX; prospects.exportSelected, which the file is built from,
+  // refuses without export_data too (audit 2026-10-20, R63).
   const { can } = usePermissions();
   const utils = trpc.useUtils();
   const [exporting, setExporting] = useState(false);

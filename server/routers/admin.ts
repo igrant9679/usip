@@ -24,6 +24,7 @@ import {
   loginHistory,
   memberPermissions,
   opportunities,
+  reportSchedules,
   savedReports,
   tasks,
   usageCounters,
@@ -1020,6 +1021,21 @@ export const teamRouter = router({
               ? { scheduleRecipients: kept.join(", ") }
               : { scheduleRecipients: null, scheduleFreq: "none" })
             .where(and(eq(savedReports.id, row.id), eq(savedReports.workspaceId, ctx.workspace.id)));
+          strippedFromReports++;
+        }
+        // Dashboard schedules too (audit 2026-10-20, G26): the same free list,
+        // and once the member row is gone the address reads as an outside one.
+        const dashSchedules = await db
+          .select({ id: reportSchedules.id, recipients: reportSchedules.recipients })
+          .from(reportSchedules)
+          .where(eq(reportSchedules.workspaceId, ctx.workspace.id));
+        for (const row of dashSchedules) {
+          const all = Array.isArray(row.recipients) ? (row.recipients as string[]) : [];
+          const kept = all.filter((e) => String(e).trim().toLowerCase() !== tgtEmail);
+          if (kept.length === all.length) continue;
+          await db.update(reportSchedules)
+            .set(kept.length > 0 ? { recipients: kept } : { recipients: kept, enabled: false })
+            .where(and(eq(reportSchedules.id, row.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));
           strippedFromReports++;
         }
       }

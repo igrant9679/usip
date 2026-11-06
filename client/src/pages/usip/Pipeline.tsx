@@ -15,6 +15,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link, useLocation, useSearch } from "wouter";
 import { tablistProps, tabProps } from "@/lib/tabs";
+import { csvCell } from "@shared/csvCell";
 
 type StageItem = { id: string; label: string; isWon: boolean; isLost: boolean; defaultWinProb?: number | null };
 
@@ -611,7 +612,8 @@ export default function Pipeline() {
           const rows = filteredOpps;
           if (!rows.length) return;
           const cols = ["id", "name", "stage", "value", "winProb", "closeDate", "accountName", "createdAt"];
-          const lines = [cols.join(","), ...rows.map((r: any) => cols.map((c) => JSON.stringify(r[c] ?? "")).join(","))];
+          // One CSV cell rule (R63): quotes doubled, formulas neutralised.
+          const lines = [cols.join(","), ...rows.map((r: any) => cols.map((c) => csvCell(r[c])).join(","))];
           const blob = new Blob([lines.join("\n")], { type: "text/csv" });
           const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `pipeline-${Date.now()}.csv`; a.click();
         }} disabled={!filteredOpps.length}>

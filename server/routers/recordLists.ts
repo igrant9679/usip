@@ -116,47 +116,56 @@ export const recordListsRouter = router({
       recordIds: z.array(z.number()).min(1),
     }))
     .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new Error("Database unavailable");
-      const [list] = await db.select({ entityType: recordLists.entityType }).from(recordLists)
-        .where(and(eq(recordLists.id, input.listId), eq(recordLists.workspaceId, ctx.workspace.id)));
-      if (!list) throw new TRPCError({ code: "NOT_FOUND", message: "That list is not in this workspace." });
-      const wants = list.entityType === "companies" ? "account" : "prospect";
-      if (input.recordType !== wants) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: `A ${list.entityType === "companies" ? "Companies" : "People"} list holds ${list.entityType === "companies" ? "companies" : "people"} only.` });
-      }
-      const ids = Array.from(new Set(input.recordIds));
-      const live = wants === "account"
-        ? await db.select({ id: accounts.id }).from(accounts)
-            .where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, ids), isNull(accounts.archivedAt)))
-        : await db.select({ id: prospects.id }).from(prospects)
-            .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, ids)));
-      const liveIds = new Set(live.map((r) => r.id));
-      const existing = await db
-        .select({ rid: recordListMembers.recordId })
-        .from(recordListMembers)
-        .where(and(
-          eq(recordListMembers.listId, input.listId),
-          eq(recordListMembers.workspaceId, ctx.workspace.id),
-          eq(recordListMembers.recordType, input.recordType),
-        ));
-      const have = new Set(existing.map((e) => e.rid));
-      const toAdd = ids.filter((id) => liveIds.has(id) && !have.has(id));
-      const alreadyOn = ids.filter((id) => liveIds.has(id) && have.has(id)).length;
-      if (toAdd.length) {
-        await db.insert(recordListMembers).values(
-          toAdd.map((id) => ({
-            workspaceId: ctx.workspace.id,
-            listId: input.listId,
-            recordType: input.recordType,
-            recordId: id,
-            addedByUserId: ctx.user.id,
-          })),
-        );
-        // bump the list's updatedAt
-        await db.update(recordLists).set({ updatedAt: new Date() }).where(and(eq(recordLists.id, input.listId), eq(recordLists.workspaceId, ctx.workspace.id)));
-      }
-      return { added: toAdd.length, alreadyOn, skipped: ids.length - liveIds.size };
+      const db0 = await getDb();
+      if (!db0) throw new Error("Database unavailable");
+      /**
+       * One add at a time per list (audit 2026-10-20, P47): two clicks both
+       * read the members before either wrote, and both inserted. The list row
+       * is locked first, so the second add waits for the first and then reads
+       * its rows. No unique key, because live data may already hold duplicates.
+       */
+      return db0.transaction(async (db) => {
+        const [list] = await db.select({ entityType: recordLists.entityType }).from(recordLists)
+          .where(and(eq(recordLists.id, input.listId), eq(recordLists.workspaceId, ctx.workspace.id)))
+          .for("update");
+        if (!list) throw new TRPCError({ code: "NOT_FOUND", message: "That list is not in this workspace." });
+        const wants = list.entityType === "companies" ? "account" : "prospect";
+        if (input.recordType !== wants) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `A ${list.entityType === "companies" ? "Companies" : "People"} list holds ${list.entityType === "companies" ? "companies" : "people"} only.` });
+        }
+        const ids = Array.from(new Set(input.recordIds));
+        const live = wants === "account"
+          ? await db.select({ id: accounts.id }).from(accounts)
+              .where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, ids), isNull(accounts.archivedAt)))
+          : await db.select({ id: prospects.id }).from(prospects)
+              .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, ids)));
+        const liveIds = new Set(live.map((r) => r.id));
+        const existing = await db
+          .select({ rid: recordListMembers.recordId })
+          .from(recordListMembers)
+          .where(and(
+            eq(recordListMembers.listId, input.listId),
+            eq(recordListMembers.workspaceId, ctx.workspace.id),
+            eq(recordListMembers.recordType, input.recordType),
+          ));
+        const have = new Set(existing.map((e) => e.rid));
+        const toAdd = ids.filter((id) => liveIds.has(id) && !have.has(id));
+        const alreadyOn = ids.filter((id) => liveIds.has(id) && have.has(id)).length;
+        if (toAdd.length) {
+          await db.insert(recordListMembers).values(
+            toAdd.map((id) => ({
+              workspaceId: ctx.workspace.id,
+              listId: input.listId,
+              recordType: input.recordType,
+              recordId: id,
+              addedByUserId: ctx.user.id,
+            })),
+          );
+          // bump the list's updatedAt
+          await db.update(recordLists).set({ updatedAt: new Date() }).where(and(eq(recordLists.id, input.listId), eq(recordLists.workspaceId, ctx.workspace.id)));
+        }
+        return { added: toAdd.length, alreadyOn, skipped: ids.length - liveIds.size };
+      });
     }),
 
   /** Returns what it removed, so the page can offer Undo (audit 2026-10-20, P139). */

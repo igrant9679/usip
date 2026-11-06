@@ -627,6 +627,12 @@ export default function Dashboards() {
           options={[{ value: "daily", label: "Daily" }, { value: "weekly", label: "Weekly" }, { value: "monthly", label: "Monthly" }]}
           defaultValue="weekly" />
         <Field name="recipients" label="Recipients (comma-separated)" required />
+        {/* The server's rule (G26), said before it refuses. */}
+        <p className="text-xs text-muted-foreground">
+          {rankOf(current?.role) >= rankOf("manager")
+            ? "Members of this workspace, or any address: an address outside it is recorded in the audit log. Each recipient gets their own email."
+            : "Members of this workspace only; a manager can add an address outside it. Each recipient gets their own email."}
+        </p>
         {/* The hourly sweep (services/dashboardReportScheduler) sends it; the note said an outside cron was needed. */}
         <p className="text-xs text-muted-foreground">Checked every hour and sent when due. Send now from the list at any time.</p>
       </FormDialog>

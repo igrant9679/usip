@@ -306,7 +306,8 @@ async function recomputeOne(workspaceId: number, leadId: number, opts: { ai: boo
   const previousTotal = lead.score ?? 0;
   // The schedule's first score of a lead is the backfill: stored, nothing fired.
   const backfill = opts.trigger === "schedule" && lead.scoredAt == null;
-  await db.update(leads).set({ score: breakdown.total, grade, scoreReasons: breakdown.reasons, scoredAt: new Date() }).where(eq(leads.id, leadId));
+  // Scoped like the read above it (audit 2026-10-20, P127).
+  await db.update(leads).set({ score: breakdown.total, grade, scoreReasons: breakdown.reasons, scoredAt: new Date() }).where(and(eq(leads.id, leadId), eq(leads.workspaceId, workspaceId)));
   // A scheduled re-score that changed nothing adds no history row, so the
   // 90-day history shows changes, not the schedule.
   const changed = !last || last.total !== breakdown.total || last.firmographic !== breakdown.firmographic
@@ -739,25 +740,40 @@ export const leadRoutingRouter = router({
       if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Every target works here now (audit 2026-10-20, P127): any user id was
+      // stored, and the router then skipped it on every lead.
+      const active = await activeMemberIds(ctx.workspace.id, input.targetUserIds);
+      if (input.targetUserIds.some((u) => !active.has(u))) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Every target must be an active member of this workspace." });
+      }
+      const values = {
+        name: input.name, priority: input.priority, enabled: input.enabled,
+        conditions: input.conditions, strategy: input.strategy, targetUserIds: input.targetUserIds,
+      };
+      // Who changed which rule is kept, like the scoring weights (P127).
       if (input.id) {
-        await db.update(leadRoutingRules).set({
-          name: input.name, priority: input.priority, enabled: input.enabled,
-          conditions: input.conditions, strategy: input.strategy, targetUserIds: input.targetUserIds,
-        }).where(and(eq(leadRoutingRules.id, input.id), eq(leadRoutingRules.workspaceId, ctx.workspace.id)));
+        const [before] = await db.select().from(leadRoutingRules)
+          .where(and(eq(leadRoutingRules.id, input.id), eq(leadRoutingRules.workspaceId, ctx.workspace.id)));
+        if (!before) throw new TRPCError({ code: "NOT_FOUND", message: "That rule is not in this workspace." });
+        await db.update(leadRoutingRules).set(values)
+          .where(and(eq(leadRoutingRules.id, input.id), eq(leadRoutingRules.workspaceId, ctx.workspace.id)));
+        await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "lead_routing_rule", entityId: input.id, before, after: values });
         return { id: input.id };
       }
-      const r = await db.insert(leadRoutingRules).values({
-        workspaceId: ctx.workspace.id,
-        name: input.name, priority: input.priority, enabled: input.enabled,
-        conditions: input.conditions, strategy: input.strategy, targetUserIds: input.targetUserIds, rrCursor: 0,
-      });
-      return { id: Number((r as any)[0]?.insertId ?? 0) };
+      const r = await db.insert(leadRoutingRules).values({ workspaceId: ctx.workspace.id, ...values, rrCursor: 0 });
+      const id = Number((r as any)[0]?.insertId ?? 0);
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "lead_routing_rule", entityId: id, after: values });
+      return { id };
     }),
 
   remove: adminWsProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [before] = await db.select().from(leadRoutingRules)
+      .where(and(eq(leadRoutingRules.id, input.id), eq(leadRoutingRules.workspaceId, ctx.workspace.id)));
+    if (!before) return { ok: true };
     await db.delete(leadRoutingRules).where(and(eq(leadRoutingRules.id, input.id), eq(leadRoutingRules.workspaceId, ctx.workspace.id)));
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "lead_routing_rule", entityId: input.id, before });
     return { ok: true };
   }),
 
@@ -775,6 +791,7 @@ export const leadRoutingRouter = router({
           .where(and(eq(leadRoutingRules.id, p.id), eq(leadRoutingRules.workspaceId, ctx.workspace.id)));
       }
     });
+    await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "lead_routing_rule", entityId: 0, after: { order: input.orderedIds } });
     return { ok: true };
   }),
 
@@ -789,7 +806,7 @@ export const leadRoutingRouter = router({
       industry: null, country: null, state: null, city: null,
     });
     if (owner != null) {
-      await db.update(leads).set({ ownerUserId: owner }).where(eq(leads.id, lead.id));
+      await db.update(leads).set({ ownerUserId: owner }).where(and(eq(leads.id, lead.id), eq(leads.workspaceId, ctx.workspace.id)));
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "lead", entityId: lead.id, after: { ownerUserId: owner, routed: true } });
     }
     return { ownerUserId: owner };

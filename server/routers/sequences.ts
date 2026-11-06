@@ -2,7 +2,7 @@ import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { inSendWindow } from "../services/sendWindow";
 import { TRPCError } from "@trpc/server";
 import { createHash } from "crypto";
-import { and, asc, count, desc, eq, gt, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { accounts, activities, campaigns, chatAgents, contacts, emailDrafts, emailReplies, enrollments, forms, landingPages, leads, prospects, segmentSequenceRules, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaceMembers, workspaces, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
@@ -1944,6 +1944,9 @@ async function sendClaimedDraft(
       .where(
         and(
           eq(sendingAccounts.workspaceId, workspaceId),
+          // The sender's account in THIS workspace (audit 2026-10-20, O33),
+          // not one they connected in another.
+          eq(unipileAccounts.workspaceId, workspaceId),
           eq(unipileAccounts.userId, userId),
           isNotNull(sendingAccounts.unipileAccountId),
           eq(sendingAccounts.enabled, true),
@@ -1966,10 +1969,13 @@ async function sendClaimedDraft(
   if (!fromAccount) {
     // Ordered, because `.limit(1)` with no ORDER BY let the row the database
     // happened to return decide which mailbox a campaign sent from.
+    // A workspace mailbox, never another rep's bridged personal one (audit
+    // 2026-10-20, O33): that is theirs, and the step above already took the
+    // sender's own. This can only send less.
     const [fallback] = await db
       .select()
       .from(sendingAccounts)
-      .where(and(eq(sendingAccounts.workspaceId, workspaceId), eq(sendingAccounts.enabled, true)))
+      .where(and(eq(sendingAccounts.workspaceId, workspaceId), eq(sendingAccounts.enabled, true), isNull(sendingAccounts.unipileAccountId)))
       .orderBy(asc(sendingAccounts.id))
       .limit(1);
     if (fallback) fromAccount = fallback;

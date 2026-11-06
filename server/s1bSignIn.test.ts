@@ -125,7 +125,10 @@ describe("G9: failed sign-ins lock the account, from any address", () => {
     }
     const locked = await post("/api/auth/password-login", { email: "nobody@velocity.test", password: "x" });
     expect(locked).toEqual({ status: 429, body: { error: SIGN_IN_LOCKED } });
-  });
+    // Each unknown-email attempt runs a real cost-12 bcrypt compare (G31), so
+    // eleven of them take about 3.5 s alone; the default 5 s timed out under
+    // full-suite load (2026-11-06).
+  }, 20_000);
 
   it("wrong authenticator codes count too, so the password holder gets ten guesses at the code", async () => {
     me().mfaTotpSecret = SECRET;

@@ -1,9 +1,9 @@
 import { TRPCError } from "@trpc/server";
 import { TASK_STATUSES } from "@shared/taskStatus";
-import { and, desc, eq, lte } from "drizzle-orm";
+import { and, desc, eq, inArray, lte } from "drizzle-orm";
 import { seesAllTasks, taskDueState } from "@shared/taskRules";
 import { z } from "zod";
-import { activities, attachments, notifications, tasks, workspaceSettings } from "../../drizzle/schema";
+import { activities, attachments, notifications, prospects, tasks, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { storageErase, storagePut } from "../storage";
@@ -13,7 +13,7 @@ import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/wor
 import { generateTasksForWorkspace } from "../services/taskAutopilot";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { assertOutboundNotPaused } from "../services/outboundPause";
-import { assertOwnerInWorkspace } from "../services/foreignIds";
+import { assertOwnerInWorkspace, assertRelatedInWorkspace } from "../services/foreignIds";
 import { deadlineFrom } from "../services/calendarDeadline";
 
 const TASK_TYPES = ["call", "email", "meeting", "linkedin", "todo", "follow_up", "social_touch", "manual_email", "meeting_prep", "crm_update", "generic_action"] as const;
@@ -99,6 +99,7 @@ export const tasksRouter = router({
       // Assigning to another workspace's user (or a leaver) filed the task
       // under someone who can never see it (audit 2026-10-20, C7).
       await assertOwnerInWorkspace(ctx.workspace.id, input.ownerUserId);
+      await assertRelatedInWorkspace(db, input.relatedType, input.relatedId, ctx.workspace.id);
       const r = await db.insert(tasks).values({
         ...input,
         workspaceId: ctx.workspace.id,
@@ -136,7 +137,11 @@ export const tasksRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const dueAt = new Date(Date.now() + input.dueInDays * 86400000);
-      const values = input.prospectIds.map((pid) => ({
+      // Only this workspace's people get a task (audit 2026-10-20, R73).
+      const here = await db.select({ id: prospects.id }).from(prospects)
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, input.prospectIds)));
+      if (here.length === 0) return { created: 0 };
+      const values = here.map(({ id: pid }) => ({
         workspaceId: ctx.workspace.id,
         title: input.title,
         type: input.type,

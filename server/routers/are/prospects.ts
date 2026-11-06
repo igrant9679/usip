@@ -31,7 +31,7 @@
  */
 import { csvCell } from "@shared/csvCell";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, like, lt, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, like, lt, ne, or, sql, type SQL } from "drizzle-orm";
 import { enqueueJob, findActiveJob, getJob, registerJobKind } from "../../services/jobs/runner";
 import { retryAt } from "../../services/are/retryBackoff";
 import { HELD_PAUSED, holdProspectSteps, releaseProspectSteps, stopProspectSteps } from "../../services/are/stepHold";
@@ -1439,6 +1439,8 @@ export interface QueueRowFilter {
   sequenceStatus?: string;
   enrichmentStatus?: string;
   search?: string;
+  /** Accepted and never applied until audit 2026-10-20, A41. */
+  minIcpScore?: number;
 }
 
 /**
@@ -1471,6 +1473,7 @@ export function queueRowsWhere(workspaceId: number, f: QueueRowFilter): SQL {
     // the Prospects tab shows them only via the explicit filter.
     conditions.push(ne(prospectQueue.sequenceStatus, "sourcing"));
   }
+  if (f.minIcpScore != null) conditions.push(gte(prospectQueue.icpMatchScore, f.minIcpScore));
   conditions.push(...queueSearchConditions(f.search));
   return and(...conditions)!;
 }
@@ -1585,9 +1588,11 @@ export const prospectsRouter = router({
         /** A Prospects-tab view (shared/areProspectViews.ts); sequenceStatus wins over it. */
         view: z.enum(PROSPECT_VIEW_KEYS as [ProspectView, ...ProspectView[]]).optional(),
         search: z.string().max(200).optional(),
-        minIcpScore: z.number().optional(),
-        limit: z.number().default(50),
-        offset: z.number().default(0),
+        minIcpScore: z.number().min(0).max(100).optional(),
+        // A page, as People's list is (audit 2026-10-20, A41): with no cap one
+        // call read a whole campaign's people and their addresses at once.
+        limit: z.number().int().min(1).max(200).default(50),
+        offset: z.number().int().min(0).default(0),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -2200,6 +2205,8 @@ export const prospectsRouter = router({
   releaseCopyHold: workspaceProcedure
     .input(z.object({ prospectId: z.number() }))
     .mutation(async ({ ctx, input }) => {
+      // Overrides a research avoid rule, so it is a manager's (audit 2026-10-20, A36).
+      requireMinRole(ctx.member.role, "manager", "Only managers and admins can release a held sequence.");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [intel] = await db
@@ -2569,6 +2576,12 @@ export const prospectsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const { campaignId, ...rest } = input;
+      // The campaign must be this workspace's (audit 2026-10-20, A42), as in importRows.
+      const [camp] = await db.select({ id: areCampaigns.id })
+        .from(areCampaigns)
+        .where(and(eq(areCampaigns.id, campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!camp) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
       // Campaign exclusivity: refuse loudly rather than silently creating the
       // workspace's second copy of a person — the message names where they
       // already live so the user can go act on THAT row.
@@ -3162,6 +3175,9 @@ export const prospectsRouter = router({
   reEvaluate: workspaceProcedure
     .input(z.object({ prospectId: z.number() }))
     .mutation(async ({ ctx, input }) => {
+      // Re-grading moves a prospect back into review or out of it, as the bulk
+      // re-evaluate already required (audit 2026-10-20, A36).
+      requireMinRole(ctx.member.role, "manager", "Only managers and admins can re-evaluate prospects.");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
       const [prospect] = await db
@@ -3228,6 +3244,7 @@ export const prospectsRouter = router({
   reEvaluateAll: workspaceProcedure
     .input(z.object({ campaignId: z.number(), overrideThreshold: z.number().min(0).max(100).optional() }))
     .mutation(async ({ ctx, input }) => {
+      requireMinRole(ctx.member.role, "manager", "Only managers and admins can re-evaluate prospects.");
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
       // Get the campaign to read its actual autoApproveThreshold + targeting

@@ -280,38 +280,50 @@ export const segmentRulesRouter = router({
         return { ok: true };
       }
 
-      await assertRowInWorkspace(db, "segment", input.segmentId, ctx.workspace.id);
       await assertRowInWorkspace(db, "sequence", input.sequenceId, ctx.workspace.id);
 
-      // Check if rule already exists
-      const [existing] = await db
-        .select()
-        .from(segmentSequenceRules)
-        .where(
-          and(
-            eq(segmentSequenceRules.workspaceId, ctx.workspace.id),
-            eq(segmentSequenceRules.segmentId, input.segmentId),
-            eq(segmentSequenceRules.sequenceId, input.sequenceId),
-          ),
-        );
+      /**
+       * One save at a time per segment (audit 2026-10-20, P133): two saves of
+       * the same new rule both found none and both inserted. The segment row is
+       * locked first, and it is the workspace check too. The index stays
+       * non-unique, because live data may already hold duplicates.
+       */
+      await db.transaction(async (tx) => {
+        const [segment] = await tx.select({ id: audienceSegments.id }).from(audienceSegments)
+          .where(and(eq(audienceSegments.id, input.segmentId), eq(audienceSegments.workspaceId, ctx.workspace.id)))
+          .for("update");
+        if (!segment) throw new TRPCError({ code: "BAD_REQUEST", message: "That segment is not in this workspace." });
 
-      if (input.enabled && !existing?.enabled) {
-        await assertConfirmedCount(db, ctx.workspace.id, input.segmentId, input.sequenceId, input.confirmedWouldEnrol);
-      }
+        // Check if rule already exists
+        const [existing] = await tx
+          .select()
+          .from(segmentSequenceRules)
+          .where(
+            and(
+              eq(segmentSequenceRules.workspaceId, ctx.workspace.id),
+              eq(segmentSequenceRules.segmentId, input.segmentId),
+              eq(segmentSequenceRules.sequenceId, input.sequenceId),
+            ),
+          );
 
-      if (existing) {
-        await db
-          .update(segmentSequenceRules)
-          .set({ enabled: input.enabled })
-          .where(and(eq(segmentSequenceRules.id, existing.id), eq(segmentSequenceRules.workspaceId, ctx.workspace.id)));
-      } else {
-        await db.insert(segmentSequenceRules).values({
-          workspaceId: ctx.workspace.id,
-          segmentId: input.segmentId,
-          sequenceId: input.sequenceId,
-          enabled: input.enabled,
-        });
-      }
+        if (input.enabled && !existing?.enabled) {
+          await assertConfirmedCount(db, ctx.workspace.id, input.segmentId, input.sequenceId, input.confirmedWouldEnrol);
+        }
+
+        if (existing) {
+          await tx
+            .update(segmentSequenceRules)
+            .set({ enabled: input.enabled })
+            .where(and(eq(segmentSequenceRules.id, existing.id), eq(segmentSequenceRules.workspaceId, ctx.workspace.id)));
+        } else {
+          await tx.insert(segmentSequenceRules).values({
+            workspaceId: ctx.workspace.id,
+            segmentId: input.segmentId,
+            sequenceId: input.sequenceId,
+            enabled: input.enabled,
+          });
+        }
+      });
       return { ok: true };
     }),
 

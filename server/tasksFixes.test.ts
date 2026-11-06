@@ -211,6 +211,9 @@ describe("R104: a task is linked by name, and the v2 dialog keeps its text until
   });
 
   it("a linked task stores its record", async () => {
+    // 2026-11-06 (audit R73, batch S1c): tasks.create now checks the record is
+    // this workspace's, so the deal the picker named exists here.
+    rows("opportunities").push({ id: 9, workspaceId: WS, name: "Acme renewal", stage: "discovery" });
     await caller("rep").tasks.create({ title: "Call about renewal", relatedType: "opportunity", relatedId: 9 });
     expect(rows("tasks")[0]).toMatchObject({ relatedType: "opportunity", relatedId: 9 });
   });
