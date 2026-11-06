@@ -65,7 +65,12 @@ describe("phase 3 selects only enrollable rows", () => {
   it("enrolment RESUMES a partly-sent sequence instead of restarting it", () => {
     // 2026-08-17: 112 prospects with step 1 delivered were about to be
     // handed step 1 again, with the whole cadence re-anchored to today.
-    expect(phase).toContain('eq(areExecutionQueue.status, "sent")');
+    // 2026-11-06 (audit A70): the sent-row read moved into stepsAlreadySent,
+    // which also counts a step whose send state is unknown; pinned there, and
+    // its behaviour run in areE1Sequence.test.ts.
+    expect(phase).toContain("const priorSends = await stepsAlreadySent(db, wsId, row.id);");
+    const reader = src.slice(src.indexOf("export async function stepsAlreadySent"), src.indexOf("async function dispatchStopReason"));
+    expect(reader).toContain('eq(areExecutionQueue.status, "sent")');
     expect(phase).toContain("const sentIdx = new Set(priorSends.map((r) => r.stepIndex))");
     expect(phase).toContain("steps.filter((s) => !sentIdx.has(s.stepIndex))");
   });

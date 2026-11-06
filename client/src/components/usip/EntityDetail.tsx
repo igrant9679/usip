@@ -140,6 +140,7 @@ function CallLogForm({ onSubmit, isPending, onCancel }: {
 }
 
 /* ─── Notes tab ─────────────────────────────────────────────────────── */
+/** Also the record drawer's notes, as RecordNotes: one notes store (R45). */
 function NotesTab({ entityType, entityId }: { entityType: CrmEntityType; entityId: number }) {
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.crmNotes.list.useQuery({ entityType, entityId });
@@ -190,6 +191,7 @@ function NotesTab({ entityType, entityId }: { entityType: CrmEntityType; entityI
 }
 
 /* ─── Files tab ─────────────────────────────────────────────────────── */
+/** Also the record drawer's Files, as RecordAttachments: one list (R46). */
 function FilesTab({ entityType, entityId }: { entityType: CrmEntityType; entityId: number }) {
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.attachments.list.useQuery({ relatedType: entityType, relatedId: entityId });
@@ -255,6 +257,8 @@ function FilesTab({ entityType, entityId }: { entityType: CrmEntityType; entityI
     </div>
   );
 }
+
+export { NotesTab as RecordNotes, FilesTab as RecordAttachments };
 
 /* ─── Public component ──────────────────────────────────────────────── */
 export function EntityDetailTabs({

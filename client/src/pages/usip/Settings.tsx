@@ -1958,6 +1958,7 @@ function BillingTab({ usage, canEdit }: { usage: any; canEdit: boolean }) {
 }
 
 function DangerTab({ canEdit, isSuperAdmin }: { canEdit: boolean; isSuperAdmin: boolean }) {
+  const superOnly = canEdit && isSuperAdmin;
   const [exportResult, setExportResult] = useState<Record<string, number> | null>(null);
   const [transferUserId, setTransferUserId] = useState("");
   const [archiveConfirm, setArchiveConfirm] = useState("");
@@ -1993,10 +1994,10 @@ function DangerTab({ canEdit, isSuperAdmin }: { canEdit: boolean; isSuperAdmin: 
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `workspace-export-${todayLocal()}.json`;
+      a.download = `workspace-summary-${todayLocal()}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      toast.success("Export downloaded");
+      toast.success("Summary downloaded");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -2018,22 +2019,29 @@ function DangerTab({ canEdit, isSuperAdmin }: { canEdit: boolean; isSuperAdmin: 
   });
 
   return (
-    <Section title="Danger zone" description="Destructive actions. Admin role required — ownership transfer needs the super admin.">
+    <Section title="Danger zone" description="Destructive actions. Only a super admin can run them.">
       <div className="p-4 space-y-4">
-        {/* Export */}
+        {/* Every action on this card is super-admin-only on the server; the
+            buttons were enabled for any admin and failed on click (audit
+            2026-10-20, G48). `superOnly` is the one gate for them. */}
+        {!isSuperAdmin && (
+          <p className="text-xs text-muted-foreground">You can see this card because you're an admin. Only a super admin can run these actions.</p>
+        )}
+        {/* Export — a SUMMARY: counts per record type, no records. It was
+            called "Export all workspace data" (G48). */}
         <div className="flex items-start gap-3">
           <div className="flex-1">
-            <div className="text-sm font-medium">Export all workspace data</div>
-            <div className="text-xs text-muted-foreground">Downloads a JSON summary with record counts for all entity types.</div>
+            <div className="text-sm font-medium">Download workspace summary</div>
+            <div className="text-xs text-muted-foreground">A JSON file with how many contacts, leads, accounts, deals, customers and tasks this workspace holds. Counts only, not the records themselves.</div>
             {exportResult && (
               <div className="mt-1 text-xs text-emerald-600">
-                Exported: {Object.entries(exportResult).map(([k, v]) => `${v} ${k}`).join(" · ")}
+                In this workspace: {Object.entries(exportResult).map(([k, v]) => `${v} ${k}`).join(" · ")}
               </div>
             )}
           </div>
-          <Button variant="outline" size="sm" disabled={!canEdit || exportMut.isPending} onClick={() => exportMut.mutate()}>
+          <Button variant="outline" size="sm" disabled={!superOnly || exportMut.isPending} onClick={() => exportMut.mutate()}>
             {exportMut.isPending ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-            Export
+            Download
           </Button>
         </div>
 
@@ -2060,7 +2068,7 @@ function DangerTab({ canEdit, isSuperAdmin }: { canEdit: boolean; isSuperAdmin: 
               variant="outline"
               size="sm"
               className="text-rose-700"
-              disabled={!canEdit || sampleTotal === 0 || removeSample.isPending}
+              disabled={!superOnly || sampleTotal === 0 || removeSample.isPending}
               onClick={() => setShowSample((v) => !v)}
             >
               {removeSample.isPending ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
@@ -2095,7 +2103,7 @@ function DangerTab({ canEdit, isSuperAdmin }: { canEdit: boolean; isSuperAdmin: 
             {/* The server refuses this for plain admins (FORBIDDEN) — the
                 button used to invite the click and fail after (audit
                 2026-09-20). */}
-            <Button variant="outline" size="sm" disabled={!canEdit || !isSuperAdmin} onClick={() => setShowTransfer((v) => !v)}>
+            <Button variant="outline" size="sm" disabled={!superOnly} onClick={() => setShowTransfer((v) => !v)}>
               Transfer
             </Button>
           </div>
@@ -2137,7 +2145,7 @@ function DangerTab({ canEdit, isSuperAdmin }: { canEdit: boolean; isSuperAdmin: 
                   re-opens access and lets the engines resume on their next run.
                 </div>
               </div>
-              <Button variant="outline" size="sm" disabled={!canEdit || unarchiveMut.isPending} onClick={() => unarchiveMut.mutate()}>
+              <Button variant="outline" size="sm" disabled={!superOnly || unarchiveMut.isPending} onClick={() => unarchiveMut.mutate()}>
                 {unarchiveMut.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
                 Restore workspace
               </Button>
@@ -2152,7 +2160,7 @@ function DangerTab({ canEdit, isSuperAdmin }: { canEdit: boolean; isSuperAdmin: 
                 super admin can restore the workspace from this card at any time.
               </div>
             </div>
-            <Button variant="outline" size="sm" disabled={!canEdit} className="text-rose-700" onClick={() => setShowArchive((v) => !v)}>
+            <Button variant="outline" size="sm" disabled={!superOnly} className="text-rose-700" onClick={() => setShowArchive((v) => !v)}>
               Archive
             </Button>
           </div>

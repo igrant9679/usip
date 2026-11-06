@@ -40,7 +40,7 @@ export interface NotStartedTarget {
   campaignId: number;
 }
 
-export type RewriteOutcome = "rewritten" | "started_meanwhile" | "no_steps" | "failed";
+export type RewriteOutcome = "rewritten" | "started_meanwhile" | "no_steps" | "held" | "failed";
 
 export interface RewriteJobState {
   running: boolean;
@@ -49,6 +49,8 @@ export interface RewriteJobState {
   rewritten: number;
   startedMeanwhile: number;
   noSteps: number;
+  /** New copy broke a research avoid rule, so the prospect kept its old sends (A13). */
+  held: number;
   failed: number;
   startedAt: string | null;
   finishedAt: string | null;
@@ -84,13 +86,23 @@ export async function rewriteOneNotStarted(
   const db = await getDb();
   if (!db) return "failed";
   const { runSequenceAgent } = await import("../../routers/are/prospects");
-  await runSequenceAgent(target.prospectQueueId, workspaceId, target.campaignId, { force: true });
+  /**
+   * Draft, and commit only clean copy (audit 2026-10-20, A13). This copies the
+   * new sequence straight into scheduled sends, past the enrolment gate that
+   * holds copy breaking a research avoid rule — so held copy went out. Now the
+   * agent does not save copy that breaks a rule, the prospect keeps the
+   * sequence and the sends it had, and the job counts it as held. The hold is
+   * read again below as well: a row released or held since must be honoured.
+   */
+  const drafted = await runSequenceAgent(target.prospectQueueId, workspaceId, target.campaignId, { force: true, onlyIfClean: true });
+  if (drafted.held) return "held";
 
   const [intel] = await db
-    .select({ seq: prospectIntelligence.generatedSequence })
+    .select({ seq: prospectIntelligence.generatedSequence, hold: prospectIntelligence.copyHoldReason })
     .from(prospectIntelligence)
-    .where(eq(prospectIntelligence.prospectQueueId, target.prospectQueueId))
+    .where(and(eq(prospectIntelligence.prospectQueueId, target.prospectQueueId), eq(prospectIntelligence.workspaceId, workspaceId)))
     .limit(1);
+  if (intel?.hold) return "held";
   const steps = normalizeSequence(intel?.seq);
   if (steps.length === 0) return "no_steps";
   const byIndex = new Map(steps.map((s) => [s.stepIndex, s] as const));
@@ -126,7 +138,7 @@ export async function rewriteOneNotStarted(
 
 export function rewriteJobState(workspaceId: number): RewriteJobState {
   return jobs.get(workspaceId) ?? {
-    running: false, total: 0, done: 0, rewritten: 0, startedMeanwhile: 0, noSteps: 0, failed: 0,
+    running: false, total: 0, done: 0, rewritten: 0, startedMeanwhile: 0, noSteps: 0, held: 0, failed: 0,
     startedAt: null, finishedAt: null, lastError: null,
   };
 }
@@ -135,7 +147,7 @@ export function rewriteJobState(workspaceId: number): RewriteJobState {
 export function startRewriteNotStarted(workspaceId: number, targets: NotStartedTarget[]): boolean {
   if (jobs.get(workspaceId)?.running) return false;
   const state: RewriteJobState = {
-    running: true, total: targets.length, done: 0, rewritten: 0, startedMeanwhile: 0, noSteps: 0, failed: 0,
+    running: true, total: targets.length, done: 0, rewritten: 0, startedMeanwhile: 0, noSteps: 0, held: 0, failed: 0,
     startedAt: new Date().toISOString(), finishedAt: null, lastError: null,
   };
   jobs.set(workspaceId, state);
@@ -147,6 +159,7 @@ export function startRewriteNotStarted(workspaceId: number, targets: NotStartedT
           if (outcome === "rewritten") state.rewritten++;
           else if (outcome === "started_meanwhile") state.startedMeanwhile++;
           else if (outcome === "no_steps") state.noSteps++;
+          else if (outcome === "held") state.held++;
           else state.failed++;
         } catch (e) {
           state.failed++;
@@ -157,7 +170,7 @@ export function startRewriteNotStarted(workspaceId: number, targets: NotStartedT
       }
       state.running = false;
       state.finishedAt = new Date().toISOString();
-      console.log(`[RewriteNotStarted] ws ${workspaceId}: ${state.rewritten} rewritten, ${state.startedMeanwhile} started meanwhile, ${state.noSteps} no steps, ${state.failed} failed of ${state.total}`);
+      console.log(`[RewriteNotStarted] ws ${workspaceId}: ${state.rewritten} rewritten, ${state.startedMeanwhile} started meanwhile, ${state.noSteps} no steps, ${state.held} held for an avoid rule, ${state.failed} failed of ${state.total}`);
     })();
   });
   return true;

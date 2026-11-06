@@ -25,6 +25,16 @@ export interface SendWindow {
 
 export const DEFAULT_SEND_WINDOW: SendWindow = { startHour: 6, endHour: 17, days: [1, 2, 3, 4, 5] };
 
+/**
+ * A campaign's FIRST launch, while the workspace's zone is still the UTC
+ * default, asks first (audit 2026-10-20, A31): the send window and the daily
+ * cap both run in that zone, so an Eastern workspace that never set one sends
+ * from 1 AM. The server refuses with exactly this text; the screens recognise
+ * it and offer to launch on UTC anyway (`confirmTimezone`).
+ */
+export const TIMEZONE_UNSET_ON_LAUNCH =
+  "This workspace's time zone is still the UTC default, and the send window and daily cap run in it. Set it under Settings → Workspace overview, or launch on UTC.";
+
 export const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
 /** "1,2,3,4,5" → [1,2,3,4,5]; anything unreadable falls back to weekdays. */

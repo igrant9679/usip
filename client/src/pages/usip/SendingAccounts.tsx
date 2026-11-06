@@ -569,7 +569,10 @@ function AccountFormDialog({
             <div className="space-y-3 border rounded-lg p-3 bg-muted/30">
               <div className="flex items-center justify-between">
                 <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">IMAP — inbox reading</p>
-                <span className="text-xs text-muted-foreground">Required for My Mailbox</span>
+                {/* It said IMAP was required for My Mailbox, which lists only
+                    the Outlook mailboxes connected on Connected Accounts — IMAP
+                    set here never appears there (tracker 2026-11-06, item 1). */}
+                <span className="text-xs text-muted-foreground">Used to detect replies</span>
               </div>
               {form.provider === "outlook_oauth" && (
                 <p className="text-xs text-blue-600 bg-blue-50 rounded px-2 py-1">

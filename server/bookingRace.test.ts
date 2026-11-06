@@ -18,6 +18,11 @@ const h = vi.hoisted(() => {
   return { db: null as any, invites: [] as number[] };
 });
 vi.mock("./db", async (a) => ({ ...(await a<typeof import("./db")>()), getDb: async () => h.db, checkPermission: async () => {} }));
+// The booker's confirmation email (sent when no invite went) is not sent here.
+vi.mock("./services/bookingConfirmationEmail", async (a) => ({
+  ...(await a<typeof import("./services/bookingConfirmationEmail")>()),
+  sendBookingConfirmationEmail: async () => ({ ok: true as const, fromEmail: "rep@example.com" }),
+}));
 vi.mock("./services/meetingScheduler", async (a) => ({
   ...(await a<typeof import("./services/meetingScheduler")>()),
   sendMeetingInvite: async (_ws: number, meetingId: number, at: string) => { h.invites.push(meetingId); return { sent: false, scheduledAt: at }; },

@@ -45,6 +45,9 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { toast } from "sonner";
+import { useState } from "react";
+import { groupHubCampaigns, refreshHub } from "./areHubModel";
+import { ProspectQualityCard } from "@/components/usip/are/ProspectQualityCard";
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from "recharts";
 
 /* ─── helpers ─────────────────────────────────────────────────────────────── */
@@ -221,71 +224,25 @@ function SignalRow({ s }: { s: any }) {
 }
 
 /* ─── Main page ────────────────────────────────────────────────────────────── */
-/**
- * Workspace-wide prospect data quality (owner ask, 2026-08-12): what the
- * audit sees across ALL campaigns, and the one-click fix. Fixes flow through
- * the canonical person + the capped enrichment machinery — nothing here
- * fabricates data; unreconcilable rows land in the Rejections tab, and
- * cross-campaign duplicates collapse to the most-engaged row (one campaign
- * per prospect).
- */
-function ProspectQualityCard() {
-  const audit = trpc.are.prospects.audit.useQuery(undefined, { refetchOnWindowFocus: false });
-  const reconcile = trpc.are.prospects.reconcile.useMutation({
-    onSuccess: (r) => {
-      toast.success(
-        `Reconciled ${r.scanned} prospects — ${r.linksScrubbed} links scrubbed, ${r.personsLinked} linked, ` +
-        `${r.linkedinFound} LinkedIn profiles found, ${r.profileRetrievesQueued} profile retrieves queued ` +
-        `(names + photos fill as they complete), ${r.duplicatesSkipped} duplicates collapsed, ` +
-        `${r.flaggedUnreconcilable} flagged to Rejections.`,
-        { duration: 12000 },
-      );
-      for (const n of r.notes.slice(0, 3)) toast.warning(n, { duration: 12000 });
-      if (r.notes.length > 0) console.log("[reconcile] edge-case notes:", r.notes);
-      audit.refetch();
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const a = audit.data;
-  if (!a || a.scanned === 0) return null;
-
-  const issues = a.missingName + a.badLinkedinUrl + a.badSourceUrl + a.unlinkedPerson + a.duplicateRows + a.unreconcilable;
-  const stat = (label: string, value: number, warn: boolean) => (
-    <div className="flex items-center gap-1.5 text-xs">
-      <span className={warn && value > 0 ? "font-semibold text-amber-600" : "font-semibold"}>{value}</span>
-      <span className="text-muted-foreground">{label}</span>
-    </div>
-  );
-
-  return (
-    <Card className="bg-card border">
-      <CardContent className="p-4 flex flex-wrap items-center gap-x-6 gap-y-2">
-        <div className="text-sm font-medium shrink-0">Prospect data quality</div>
-        {stat("prospects", a.scanned, false)}
-        {stat("missing names", a.missingName, true)}
-        {stat("broken links", a.badLinkedinUrl + a.badSourceUrl, true)}
-        {stat("no LinkedIn", a.missingLinkedinUrl, false)}
-        {stat("duplicates", a.duplicateRows, true)}
-        {stat("in multiple campaigns", a.crossCampaignGroups, true)}
-        {stat("unreconcilable", a.unreconcilable, true)}
-        <div className="ml-auto">
-          <Button
-            size="sm" variant={issues > 0 ? "default" : "outline"} className="gap-1.5 text-xs"
-            disabled={reconcile.isPending}
-            onClick={() => reconcile.mutate({ linkedinSearchBudget: 10 })}
-          >
-            {reconcile.isPending ? <RefreshCw className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
-            {reconcile.isPending ? "Reconciling…" : issues > 0 ? "Audit & fix" : "Re-audit"}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 export default function AREHub() {
-  const { data: campaigns, isLoading: loadingCampaigns, refetch } = trpc.are.campaigns.list.useQuery({ limit: 100 });
+  const utils = trpc.useUtils();
+  const { data: campaigns, isLoading: loadingCampaigns } = trpc.are.campaigns.list.useQuery({ limit: 100 });
   const { data: signals, isLoading: loadingSignals } = trpc.are.execution.getSignalLog.useQuery({ limit: 30 });
+  // Workspace-wide signal numbers (A61): the feed below is only the newest 30.
+  const { data: signalSummary } = trpc.are.execution.signalSummary.useQuery();
+  // Refresh reloads every panel on the page and says when it is done (tracker 11).
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await refreshHub(utils);
+      toast.success("Revenue Engine refreshed");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Refresh failed");
+    } finally {
+      setRefreshing(false);
+    }
+  };
   // Cross-campaign approval count — the hub is the natural home for the one
   // number that says whether the engine is waiting on a human.
   const { data: attention } = trpc.attention.summary.useQuery(undefined, { refetchInterval: 60_000 });
@@ -302,19 +259,16 @@ export default function AREHub() {
   const { data: funnelTotals } = trpc.are.campaigns.funnelTotals.useQuery();
   const totals = funnelTotals ?? { discovered: 0, enriched: 0, approved: 0, contacted: 0, replied: 0, meetings: 0, opps: 0 };
 
-  const activeCampaigns = (campaigns ?? []).filter((c) => c.status === "active");
-  const pausedCampaigns = (campaigns ?? []).filter((c) => c.status === "paused");
   // Drafts were rendered nowhere on this page while still being counted in the
   // "Campaigns" stat — so a campaign you created but didn't activate vanished,
-  // and the tile read one higher than the list. Give them their own group.
-  const draftCampaigns = (campaigns ?? []).filter(
-    (c) => c.status !== "active" && c.status !== "paused",
-  );
+  // and the tile read one higher than the list. Give them their own group,
+  // and completed campaigns theirs (A61): they were listed as drafts.
+  const { active: activeCampaigns, paused: pausedCampaigns, draft: draftCampaigns, completed: completedCampaigns } = groupHubCampaigns(campaigns);
   const totalCampaigns = (campaigns ?? []).length;
 
-  /* signal breakdown */
-  const positiveSignals = (signals ?? []).filter((s) => s.sentiment === "positive").length;
-  const meetingSignals = (signals ?? []).filter((s) => s.signalType === "meeting_booked").length;
+  /* signal breakdown — counted by the server over every signal (A61) */
+  const positiveSignals = signalSummary?.positive ?? 0;
+  const meetingSignals = signalSummary?.meetings ?? 0;
 
   /* funnel data for mini sparkline */
   const funnelData = [
@@ -375,9 +329,9 @@ export default function AREHub() {
 
         icon={<Rocket className="size-5" />}
       >
-        <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-1.5 text-xs">
-          <RefreshCw className="size-3.5" />
-          Refresh
+        <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing} className="gap-1.5 text-xs">
+          <RefreshCw className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} />
+          {refreshing ? "Refreshing…" : "Refresh"}
         </Button>
         <Link href="/are/campaigns">
           <Button size="sm" className="gap-1.5 text-xs">
@@ -424,6 +378,12 @@ export default function AREHub() {
                     <span className="size-1.5 rounded-full bg-muted-foreground/40" />
                     <span className="text-muted-foreground">Draft</span>
                     <span className="font-semibold tabular-nums">{draftCampaigns.length}</span>
+                  </div>
+                )}
+                {completedCampaigns.length > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-muted-foreground">Completed</span>
+                    <span className="font-semibold tabular-nums">{completedCampaigns.length}</span>
                   </div>
                 )}
                 <div className="flex items-center gap-1.5">
@@ -622,15 +582,29 @@ export default function AREHub() {
                 ))}
               </div>
             )}
+
+            {/* Completed campaigns — ran to the end (A61: they were listed as drafts) */}
+            {completedCampaigns.length > 0 && (
+              <div className="mt-4 space-y-2">
+                <div className="text-xs text-muted-foreground uppercase tracking-wider">Completed ({completedCampaigns.length})</div>
+                {completedCampaigns.slice(0, 3).map((c) => (
+                  <Link key={c.id} href={`/are/campaigns/${c.id}`}>
+                    <div className="flex items-center gap-3 rounded-xl border bg-card/50 px-4 py-3 hover:border-primary/30 transition-all cursor-pointer opacity-70 hover:opacity-100">
+                      <CheckCircle2 className="size-3.5 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{c.name}</div>
+                        <div className="text-xs text-muted-foreground">Completed · {c.prospectsContacted ?? 0} contacted</div>
+                      </div>
+                      <ArrowRight className="size-4 text-muted-foreground shrink-0" />
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
           </section>
 
-          {/* Proposed NEW campaigns (2026-09-04) — audiences nothing targets yet. */}
-          <CampaignProposals />
-
-          {/* Best-fit routing suggestions (phase 3) — approval mode's queue. */}
-          <RoutingSuggestions />
-
-          {/* Signal feed — 2/5 */}
+          {/* Signal feed — 2/5, beside the campaigns (A61). It came after the
+              two full-width sections below, so it landed under them. */}
           <section className="lg:col-span-2" data-tour-id="are-signal-feed">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Live Signals</h2>
@@ -656,13 +630,19 @@ export default function AREHub() {
               {signals && signals.length > 0 && (
                 <div className="px-3 py-2 border-t bg-muted/30">
                   <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                    <span>{signals.length} signals logged</span>
-                    <span className="text-emerald-600 font-medium">{meetingSignals} meetings booked</span>
+                    <span>{(signalSummary?.total ?? signals.length).toLocaleString()} signals logged</span>
+                    <span className="text-emerald-600 font-medium">{meetingSignals.toLocaleString()} meetings booked</span>
                   </div>
                 </div>
               )}
             </Card>
           </section>
+
+          {/* Proposed NEW campaigns (2026-09-04) — audiences nothing targets yet. */}
+          <CampaignProposals />
+
+          {/* Best-fit routing suggestions (phase 3) — approval mode's queue. */}
+          <RoutingSuggestions />
         </div>
 
         {/* ── How it works ── */}

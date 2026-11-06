@@ -31,6 +31,8 @@ export default function BookingPage() {
   const [notes, setNotes] = useState("");
   const [done, setDone] = useState(false);
   const [calendarBooked, setCalendarBooked] = useState(false);
+  // No invite went and a confirmation email did instead (tracker item 10).
+  const [confirmationSent, setConfirmationSent] = useState(false);
 
   const tz = useMemo(() => {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return "your local time"; }
@@ -57,7 +59,7 @@ export default function BookingPage() {
     e.preventDefault();
     if (!selected) return;
     book.mutate({ slug, startAt: selected, name, email, notes: notes || undefined }, {
-      onSuccess: (r: any) => { setCalendarBooked(!!r?.calendarBooked); setDone(true); },
+      onSuccess: (r: any) => { setCalendarBooked(!!r?.calendarBooked); setConfirmationSent(!!r?.confirmationSent); setDone(true); },
     });
   };
 
@@ -80,7 +82,13 @@ export default function BookingPage() {
               <span className="font-medium text-foreground">{selected ? fmtFull(selected) : ""}</span>.
             </p>
             <p className="text-xs text-muted-foreground mt-3">
-              {calendarBooked ? <>A calendar invite is on its way to {email}.</> : <>We've noted your details — {link.data.ownerName} will confirm shortly.</>}
+              {/* Each line says only what happened. "Will confirm shortly" was the
+                  whole answer whenever no invite went, and nothing followed it. */}
+              {calendarBooked
+                ? <>A calendar invite is on its way to {email}.</>
+                : confirmationSent
+                  ? <>A confirmation email is on its way to {email}.</>
+                  : <>We've noted your details, but no email could be sent to you — {link.data.ownerName} will be in touch to confirm.</>}
             </p>
           </div>
         ) : (

@@ -29,6 +29,7 @@ import { roleRank } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { recordAudit } from "../audit";
+import { assertOwnerInWorkspace } from "../services/foreignIds";
 import { assignNumber, ensureApplication, getAccount, listNumbers, plivoCreds } from "../services/plivo";
 import {
   agentNumbers,
@@ -409,6 +410,10 @@ export const voiceAgentsRouter = router({
         ? (input.ownerUserId ?? ctx.user.id)
         : (input.ownerUserId ?? null);
     assertCanManage(ctx.member.role, ctx.user.id, { purpose: input.purpose, ownerUserId });
+    // The agent answers in its owner's name and books on their calendar, so
+    // the owner is someone working here (audit 2026-10-20, G68): any user id
+    // was accepted, another workspace's people and leavers included.
+    await assertOwnerInWorkspace(ctx.workspace.id, ownerUserId);
     const r = await db.insert(voiceAgents).values({
       workspaceId: ctx.workspace.id,
       ownerUserId,
@@ -456,6 +461,8 @@ export const voiceAgentsRouter = router({
           : effectivePurpose === "callback_receptionist"
             ? (input.ownerUserId ?? ctx.user.id)
             : input.ownerUserId;
+        // Same rule as create (G68): a new owner works here.
+        if (patch.ownerUserId !== agent.ownerUserId) await assertOwnerInWorkspace(ctx.workspace.id, patch.ownerUserId as number | null);
       }
       if (input.voice !== undefined) patch.voice = input.voice.trim();
       if (input.model !== undefined) patch.model = input.model.trim();

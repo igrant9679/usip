@@ -3,6 +3,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
+import { WorkspaceAccessGate } from "@/components/usip/WorkspaceAccessGate";
 import NotFound from "@/pages/NotFound";
 import { TourEngineProvider } from "@/components/usip/TourEngine";
 import { ElsieController } from "@/components/usip/Elsie";
@@ -432,10 +433,11 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   if (loading) return <PageLoading />;
   if (!user) return <Landing />;
   // WorkspaceBrandingSync sits here, not in Shell — the settings hub renders
-  // without Shell, so brand colours would otherwise never reach it.
-  // The enforce2fa gate lives here so it covers every authed page; in Shell it
-  // missed the settings hub, which renders without Shell (G66).
-  return <WorkspaceProvider><InviteReturnRedirect /><WorkspaceBrandingSync /><MfaRequiredGate />{children}</WorkspaceProvider>;
+  // without Shell, so brand colours would otherwise never reach it. The access
+  // gate too: someone with no workspace to work in gets a screen that says
+  // why, on every page (audit 2026-10-20, G35). The enforce2fa gate lives here
+  // so it covers every authed page; in Shell it missed the settings hub (G66).
+  return <WorkspaceProvider><InviteReturnRedirect /><WorkspaceBrandingSync /><MfaRequiredGate /><WorkspaceAccessGate>{children}</WorkspaceAccessGate></WorkspaceProvider>;
 }
 
 function PageLoading() {

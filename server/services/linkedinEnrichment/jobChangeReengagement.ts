@@ -45,6 +45,25 @@ function isNotAnEmployer(value: string): boolean {
   return NOT_AN_EMPLOYER.has(v);
 }
 
+/**
+ * Why a company change can't become a re-engagement task, or null when it
+ * can. The ONE rule, read by the task writer below and by the alerts feed, so
+ * the feed never offers a Re-engage button the writer will refuse — which is
+ * what the tester pressed (tracker 2026-11-06, items 8 and 14): a first
+ * sighting (no previous employer) listed as a move, and a Re-engage that
+ * answered "Could not create the re-engagement task."
+ */
+export function reengageBlocker(
+  oldValue: string | null | undefined,
+  newValue: string | null | undefined,
+): "incomplete_company_change" | "new_company_not_an_employer" | null {
+  const oldCompany = oldValue?.trim() ?? "";
+  const newCompany = newValue?.trim() ?? "";
+  if (!oldCompany || !newCompany) return "incomplete_company_change";
+  if (isNotAnEmployer(newCompany)) return "new_company_not_an_employer";
+  return null;
+}
+
 
 export interface JobChangeReengageResult {
   created: boolean;
@@ -55,7 +74,9 @@ export interface JobChangeReengageResult {
      *  from it — usually a first observation recorded as a change. */
     | "incomplete_company_change"
     /** The "new company" is a life state ("Retired"), not an employer. */
-    | "new_company_not_an_employer";
+    | "new_company_not_an_employer"
+    /** The person is marked rejected; nobody re-engages them. */
+    | "prospect_rejected";
   taskStatus?: "draft" | "open";
 }
 
@@ -206,7 +227,9 @@ export async function maybeCreateJobChangeReengagement(
       .from(prospects)
       .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.id, prospectId)));
     if (!p) return { created: false, reason: "no_prospect" };
-    if (p.verificationStatus === "rejected") return { created: false, reason: "off" };
+    // Its own reason, not "off": a manual Re-engage reported it as a server
+    // error the person could do nothing about.
+    if (p.verificationStatus === "rejected") return { created: false, reason: "prospect_rejected" };
 
     // Dedupe: never stack two open re-engagement tasks on the same prospect.
     const existing = await db
@@ -254,8 +277,8 @@ export async function maybeCreateJobChangeReengagement(
      * live task read "moved to Retired" with a matching title. Re-engaging
      * someone about their retirement is worse than sending nothing.
      */
-    if (!oldCompany || !newCompany) return { created: false, reason: "incomplete_company_change" };
-    if (isNotAnEmployer(newCompany)) return { created: false, reason: "new_company_not_an_employer" };
+    const blocked = reengageBlocker(oldCompany, newCompany);
+    if (blocked) return { created: false, reason: blocked };
 
     const targetStatus = mode === "auto" ? "open" : "draft";
 

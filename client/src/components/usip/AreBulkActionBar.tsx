@@ -26,6 +26,9 @@ import {
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Loader2, X } from "lucide-react";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { ROLE_RANK, rankOf } from "@shared/roleRank";
+import { bulkActionNeedsManager } from "@shared/areProspectViews";
 
 export type BulkActionKey =
   | "approve" | "reject" | "skip" | "restore" | "reEvaluate" | "enrich" | "generateSequence"
@@ -43,6 +46,17 @@ export interface BulkActionDef {
   /** Quick-pick chips for the reason prompt. */
   presets?: string[];
   title?: string;
+}
+
+/**
+ * The actions this person may run (tracker 9). The bar offered a rep every
+ * action and the server refused each one, Approve and Reject included. A rep
+ * now runs approve, reject and skip in bulk; the rest are a manager's and
+ * are not offered. The server applies the same rule (shared/areProspectViews).
+ */
+export function actionsForRole(actions: BulkActionDef[], role: string | null | undefined): BulkActionDef[] {
+  if (rankOf(role) >= ROLE_RANK.manager) return actions;
+  return actions.filter((a) => !bulkActionNeedsManager(a.key));
 }
 
 /** What the timeline editor needs to know about the current selection —
@@ -123,6 +137,7 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
   timeline?: TimelineInfo;
 }) {
   const utils = trpc.useUtils();
+  const { current } = useWorkspace();
   const [pending, setPending] = useState<BulkActionDef | null>(null);
   // param state
   const [reason, setReason] = useState("");
@@ -238,13 +253,15 @@ export function AreBulkActionBar({ campaignId, selection, actions, onDone, timel
 
   if (selection.count === 0) return null;
   const n = selection.count;
+  const offered = actionsForRole(actions, current?.role);
 
   return (
     <>
       <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
         <span className="text-xs font-medium text-primary tabular-nums">{n} selected</span>
         <span className="mx-1 h-4 w-px bg-border" />
-        {actions.map((a) => (
+        {offered.length === 0 && <span className="text-[11px] text-muted-foreground">The actions here need a manager.</span>}
+        {offered.map((a) => (
           <Button key={a.key} size="sm" variant={a.variant ?? "outline"} className="h-7 text-[11px] gap-1"
             title={a.title} disabled={bulk.isPending}
             onClick={() => open(a)}>

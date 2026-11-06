@@ -7,7 +7,6 @@
  * timeline. Reads via the `companies` router; logo falls back to favicon/initials.
  */
 import { useMemo, useState } from "react";
-import { isAdminRole, rankOf, ROLE_RANK } from "@shared/roleRank";
 import { useRoute, useLocation } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { AddToMenu } from "@/components/usip/AddToMenu";
@@ -19,7 +18,9 @@ import { EntityDetailTabs } from "@/components/usip/EntityDetail";
 import { RelatedTasks } from "@/pages/usip/Tasks";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { useAuth } from "@/_core/hooks/useAuth";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
+import { companyOutreachTargets } from "@/lib/companyPeople";
+import { AccountBriefPanel } from "@/components/usip/company/AccountBriefPanel";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
@@ -28,7 +29,7 @@ import { CompanyResearchCard } from "@/components/usip/company/CompanyResearchCa
 import { confirmAction } from "@/components/usip/Common";
 import {
   Globe, Link2, ExternalLink, Users, Building2, MapPin, DollarSign, Briefcase,
-  RefreshCw, Archive, ArrowLeft, Sparkles, Calendar, Gauge, BadgeCheck, Lock,
+  RefreshCw, Archive, ArchiveRestore, ArrowLeft, Sparkles, Calendar, Gauge, BadgeCheck, Lock,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { pressable } from "@/lib/pressable";
@@ -50,9 +51,9 @@ export default function CompanyProfile() {
   const [, params] = useRoute("/v2/companies/:id");
   const [, setLocation] = useLocation();
   const accent = useAccentColor();
-  const auth = useAuth();
-  const canManage = rankOf((auth.user as any)?.role ?? "rep") >= ROLE_RANK.manager;
-  const isAdmin = isAdminRole((auth.user as any)?.role ?? "rep");
+  // The workspace role, which companies.enrich and archive check (R10). The
+  // platform role this read hid both from every workspace manager and admin.
+  const { isManager: canManage, isAdmin } = useWorkspaceRole();
   const id = Number(params?.id);
   const utils = trpc.useUtils();
 
@@ -71,6 +72,12 @@ export default function CompanyProfile() {
     onSuccess: () => { toast.success("Company archived"); setLocation("/v2/companies"); },
     onError: (e) => toast.error(e.message),
   });
+  const restore = trpc.companies.restore.useMutation({
+    onSuccess: () => { toast.success("Company restored"); utils.companies.get.invalidate({ accountId: id }); utils.companies.search.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+  // Each kind of row in its own list, each person once (R3).
+  const targets = useMemo(() => companyOutreachTargets((contacts ?? []) as any[]), [contacts]);
 
   const hq = useMemo(() => c ? [c.hqCity, c.hqState, c.hqCountry].filter(Boolean).join(", ") || c.region || null : null, [c]);
 
@@ -94,6 +101,7 @@ export default function CompanyProfile() {
                 {score?.rating && <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${RATING_STYLE[score.rating] ?? RATING_STYLE.not_a_fit}`}>{score.value != null ? Math.round(score.value) : "–"} {score.rating.replace("_", " ")}</span>}
                 {c.accountStage && <Badge variant="outline" className="text-[11px]">{c.accountStage}</Badge>}
                 {c.dataStatus && <Badge variant="secondary" className="text-[11px] capitalize">{c.dataStatus}</Badge>}
+                {(c as any).archivedAt && <Badge variant="outline" className="text-[11px] border-amber-500/50 text-amber-700">Archived</Badge>}
               </div>
               <div className="mt-1 flex items-center gap-3 text-[13px] text-muted-foreground flex-wrap">
                 {c.domain && <a href={`https://${c.domain}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline"><Globe className="size-3.5" />{c.domain}</a>}
@@ -107,11 +115,13 @@ export default function CompanyProfile() {
               {/* Put this company's people into outreach from here (seams
                   audit, phase 2) — the profile could only "Find people" before,
                   which opened People unfiltered and enrolled no one. */}
-              {(contacts ?? []).length > 0 && (
-                <AddToMenu contactIds={(contacts ?? []).map((x: any) => x.id)} label={`Add ${(contacts ?? []).length} people to…`} />
+              {targets.count > 0 && (
+                <AddToMenu prospectIds={targets.prospectIds} contactIds={targets.contactIds} label={`Add ${targets.count} ${targets.count === 1 ? "person" : "people"} to…`} />
               )}
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setLocation(`/v2/people?q=${encodeURIComponent(c.name ?? "")}`)}><Sparkles className="size-3.5" /> Find people</Button>
-              {isAdmin && <Button aria-label="Archive company" size="sm" variant="outline" className="gap-1.5 text-red-600" onClick={() => { confirmAction({ title: `Archive ${c.name}?`, description: "The company is hidden from active views. You can restore it later.", confirmLabel: "Archive", destructive: false }, () => { archive.mutate({ accountId: id }); }); }}><Archive className="size-3.5" /></Button>}
+              {isAdmin && ((c as any).archivedAt
+                ? <Button size="sm" variant="outline" className="gap-1.5" disabled={restore.isPending} onClick={() => restore.mutate({ accountId: id })}><ArchiveRestore className="size-3.5" /> Restore</Button>
+                : <Button aria-label="Archive company" size="sm" variant="outline" className="gap-1.5 text-red-600" onClick={() => { confirmAction({ title: `Archive ${c.name}?`, description: "The company is hidden from active views. You can restore it from Companies → Archived.", confirmLabel: "Archive", destructive: false }, () => { archive.mutate({ accountId: id }); }); }}><Archive className="size-3.5" /></Button>)}
             </div>
           </div>
         </div>
@@ -138,6 +148,12 @@ export default function CompanyProfile() {
           <CompanyResearchCard account={c as any} />
 
           <BrandIdentityCard accountId={id} account={c as any} isAdmin={isAdmin} />
+
+          {/* The AI Account Brief lived only in the drawer's retired account
+              view (R47). */}
+          <section className="rounded-lg border border-border p-4">
+            <AccountBriefPanel accountId={id} />
+          </section>
 
           {/* contacts */}
           <section className="rounded-lg border border-border">
