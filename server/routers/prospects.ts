@@ -46,6 +46,42 @@ import { describeWriteError } from "../services/dbWriteError";
 const escapeLike = (v: string) => v.replace(/[\\%_]/g, (m) => `\\${m}`);
 const contains = (v: string) => `%${escapeLike(v)}%`;
 
+/**
+ * The People list's repairs, written after the list has answered (audit
+ * 2026-10-20, R86). The list filled company blanks and healed names with an
+ * UPDATE per row INSIDE the read, so every page view waited on up to a page
+ * of writes and two views of one page wrote the same rows twice. The page
+ * still shows the repaired values at once; the writes queue here, one per
+ * person however many views asked, and run on the next turn of the event loop.
+ */
+const pendingRepairs = new Map<string, { ws: number; id: number; patch: Record<string, unknown> }>();
+let repairFlush: Promise<void> | null = null;
+export function flushProspectRepairs(): Promise<void> {
+  if (repairFlush) return repairFlush;
+  repairFlush = new Promise<void>((resolve) => setImmediate(resolve))
+    .then(async () => {
+      const batch = Array.from(pendingRepairs.values());
+      pendingRepairs.clear();
+      const db = await getDb();
+      if (!db) return;
+      for (const { ws, id, patch } of batch) {
+        await db.update(prospects).set(patch as never)
+          .where(and(eq(prospects.workspaceId, ws), eq(prospects.id, id)))
+          .catch((err) => console.warn(`[prospects.list] read-repair failed for ${id}:`, err));
+      }
+    })
+    .finally(() => {
+      repairFlush = null;
+      if (pendingRepairs.size) void flushProspectRepairs();
+    });
+  return repairFlush;
+}
+function queueProspectRepair(ws: number, id: number, patch: Record<string, unknown>) {
+  const key = `${ws}:${id}`;
+  pendingRepairs.set(key, { ws, id, patch: { ...(pendingRepairs.get(key)?.patch ?? {}), ...patch } });
+  void flushProspectRepairs();
+}
+
 /** An edited text field: trimmed, and a cleared one stored as NULL, not "" (R87). */
 const editText = (max: number) => z.string().trim().max(max).nullable().optional()
   .transform((v) => (v === "" ? null : v));
@@ -819,8 +855,9 @@ export const prospectsRouter = router({
        * runner, which logs and continues on failure). The list is the
        * surface the owner keeps catching this on, so the list is where it
        * self-heals: blanks are filled from the enrichment row for DISPLAY,
-       * and the same values are persisted fill-if-empty (with provenance) so
-       * each page render permanently repairs the rows it shows. Names stored
+       * and the same values are persisted fill-if-empty (with provenance),
+       * queued to be written once the list has answered (R86), so each page
+       * render permanently repairs the rows it shows. Names stored
        * with vendor credential suffixes ("Flournoy, PSP") heal the same way.
        */
       const repairCompanyBlanks = async (rowsIn: (typeof prospects.$inferSelect)[]) => {
@@ -839,7 +876,6 @@ export const prospectsRouter = router({
             inArray(prospectLinkedinEnrichments.prospectId, blanks.map((r) => r.id)),
           ));
         const byId = new Map(enrRows.map((e) => [e.prospectId, e]));
-        const heals: Array<Promise<unknown>> = [];
         for (const r of rowsIn) {
           const e = byId.get(r.id);
           const patch: Record<string, unknown> = {};
@@ -892,14 +928,10 @@ export const prospectsRouter = router({
               }
               patch.fieldProvenance = ledger;
             }
-            heals.push(
-              db.update(prospects).set(patch as never)
-                .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.id, r.id)))
-                .catch((err) => console.warn(`[prospects.list] read-repair failed for ${r.id}:`, err)),
-            );
+            // Persisted after the response, not inside it (R86).
+            queueProspectRepair(ctx.workspace.id, r.id, patch);
           }
         }
-        if (heals.length) await Promise.all(heals);
         return rowsIn;
       };
 
