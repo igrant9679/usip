@@ -182,8 +182,8 @@ export default function Tasks() {
   }, [all, assigneeFilter, relTypeFilter]);
 
   const buckets = useMemo(() => bucketize(filtered, timezone), [filtered, timezone]);
-  // Latest closed first (R72), done and dismissed alike.
-  const done = useMemo(() => recentlyClosed(filtered), [filtered]);
+  // Done tasks, latest first (R72); this tab never held cancelled ones.
+  const done = useMemo(() => recentlyClosed(filtered.filter((t) => t.status === "done")), [filtered]);
 
   const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: () => utils.tasks.list.invalidate(), onError: (e) => toast.error(e.message) });
   const create = trpc.tasks.create.useMutation({
