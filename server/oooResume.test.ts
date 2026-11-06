@@ -290,7 +290,11 @@ describe("the sweep runs on the existing sequence tick", () => {
     // replaced. Neither touches the sequence tables.
     // 43 the same day: the daily engine-log retention (audit A24), which
     // deletes only are_engine_logs and discovery_logs.
-    expect(read("_core", "index.ts").split("setInterval(").length - 1).toBe(43);
+    // 44 since 2026-11-06 (audit P12): the hourly lead re-score, which writes
+    // leads and lead_score_history. Its score-threshold enrolments insert the
+    // same rows a rep's Recompute does, and the bulk-job tick already makes
+    // them every 15 s while a "Recompute all" runs; it never advances one.
+    expect(read("_core", "index.ts").split("setInterval(").length - 1).toBe(44);
   });
 });
 

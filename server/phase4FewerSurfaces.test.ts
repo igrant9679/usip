@@ -85,6 +85,9 @@ describe("clusters link to themselves", () => {
     for (const h of ['"/sender-pools"', '"/v2/deliverability"', '"/email-suppressions"']) expect(sa).toContain(h);
   });
   it("Lead Routing's SubNav reaches Lead Scoring", () => {
-    expect(client("pages", "usip", "LeadRouting.tsx")).toContain('{ href: "/lead-scoring", label: "Lead Scoring"');
+    // 2026-11-06 (audit P123): the cluster's items moved to one list that Lead
+    // Scoring renders too, so the two pages can't differ again.
+    expect(client("lib", "leadAssignmentNav.ts")).toContain('{ href: "/lead-scoring", label: "Lead Scoring"');
+    expect(client("pages", "usip", "LeadRouting.tsx")).toContain("<SubNav items={LEAD_ASSIGNMENT_NAV} />");
   });
 });
