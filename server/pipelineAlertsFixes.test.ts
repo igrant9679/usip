@@ -5,6 +5,10 @@
  *         workspace's own people, not the platform operator; deal names are
  *         text in the mail, not markup · no sender pushes a workspace's records
  *         to the operator's notification service.
+ *   R15 — a dismissal is a seven-day snooze, not fifteen minutes; an alert
+ *         whose cause clears, or whose deal closes, resolves itself.
+ *   R38 — a passed close date is its own alert, not "closing soon";
+ *         amount_change is raised; one stage's stuck rule is that stage's.
  *
  * Procedures run through the real router against the SQL-evaluating fake.
  */
@@ -33,6 +37,8 @@ vi.mock("./_core/notification", () => ({ notifyOwner: async (p: unknown) => { h.
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { appRouter } from "./routers";
 import { invalidateStageIndex } from "./_core/stageSemantics";
+import { _clearWorkspaceTimezoneCache } from "./services/workspaceTimezone";
+import { scanPipelineAlertsForWorkspace, stuckThresholds } from "./routers/pipelineAlerts";
 
 const WS = 2, ME = 1, OWNER = 7, PLATFORM = 99, AUTHOR = 5;
 const root = join(__dirname, "..");
@@ -145,5 +151,160 @@ describe("R2: no sender pushes a workspace's records to the platform operator", 
     const mail = read("server/unipileWebhook.ts");
     expect(mail).toContain("<p>Hi ${escapeHtml(user.name ?? user.email.split(\"@\")[0])},</p>");
     expect(mail).toContain("<em>${escapeHtml(accountLabel)}</em>");
+  });
+});
+
+/* ── The sweep (R15, R38) ──────────────────────────────────────────────── */
+
+const DAY = 86_400_000;
+/** A calendar date `n` days from today, stored as the app stores one (noon UTC). */
+const dayFromToday = (n: number) => {
+  const d = new Date(Date.now() + n * DAY);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12));
+};
+const deal = (id: number, o: Record<string, unknown> = {}) => rows("opportunities").push({
+  id, workspaceId: WS, accountId: 1, name: `Deal ${id}`, stage: "discovery", value: "10000", winProb: 60,
+  closeDate: null, pipelineId: 1, daysInStage: 0, stageEnteredAt: new Date(), ownerUserId: ME, ...o,
+});
+const live = () => rows("pipeline_alerts").filter((a) => a.dismissedAt == null).map((a) => `${a.opportunityId}:${a.alertType}`).sort();
+const stagesOf = (...extra: Array<Record<string, unknown>>) => {
+  rows("crm_pipelines").push({ id: 1, workspaceId: WS, name: "Default", isDefault: true, sortOrder: 0 });
+  rows("crm_pipeline_stages").push(
+    { id: 11, workspaceId: WS, pipelineId: 1, key: "discovery", label: "Discovery", sortOrder: 10, defaultWinProb: 20, isWon: false, isLost: false },
+    { id: 15, workspaceId: WS, pipelineId: 1, key: "signed", label: "Signed", sortOrder: 50, defaultWinProb: 100, isWon: true, isLost: false },
+    ...extra,
+  );
+};
+
+describe("R15 and R38: the alert sweep", () => {
+  beforeEach(() => {
+    _clearWorkspaceTimezoneCache();
+    stagesOf();
+    // Championed, so only the alert under test fires.
+    rows("opportunity_contact_roles").push({ id: 1, workspaceId: WS, opportunityId: 1, contactId: 1, role: "champion" });
+  });
+
+  it("a dismissal holds for seven days, then the alert comes back if the deal still needs it", async () => {
+    deal(1);
+    await caller().pipelineAlerts.scan();
+    expect(live()).toEqual(["1:no_activity"]);
+    const [a] = rows("pipeline_alerts");
+    await caller().pipelineAlerts.dismiss({ alertId: a.id });
+    expect((await caller().pipelineAlerts.scan()).created).toBe(0);
+    expect(live()).toEqual([]);
+    a.dismissedAt = new Date(Date.now() - 8 * DAY);
+    expect((await caller().pipelineAlerts.scan()).created).toBe(1);
+    expect(live()).toEqual(["1:no_activity"]);
+  });
+
+  it("an alert whose cause clears resolves itself, and a new one is raised when it returns", async () => {
+    deal(1);
+    await scanPipelineAlertsForWorkspace(WS);
+    rows("activities").push({ id: 1, workspaceId: WS, relatedType: "opportunity", relatedId: 1, type: "note", createdAt: new Date() });
+    const r = await scanPipelineAlertsForWorkspace(WS);
+    expect(r.resolved).toBe(1);
+    expect(live()).toEqual([]);
+    expect(rows("pipeline_alerts")[0].dismissedByUserId).toBeNull();
+    // The activity ages out: a resolution does not snooze, so it is back.
+    rows("activities")[0].createdAt = new Date(Date.now() - 20 * DAY);
+    expect((await scanPipelineAlertsForWorkspace(WS)).created).toBe(1);
+  });
+
+  it("a deal that closes: its alerts leave the list and the counts at once, and the sweep resolves them", async () => {
+    deal(1);
+    deal(2);
+    rows("opportunity_contact_roles").push({ id: 2, workspaceId: WS, opportunityId: 2, contactId: 1, role: "champion" });
+    await scanPipelineAlertsForWorkspace(WS);
+    expect(live()).toEqual(["1:no_activity", "2:no_activity"]);
+    rows("opportunities").find((o) => o.id === 2).stage = "signed";
+    invalidateStageIndex();
+    expect((await caller().pipelineAlerts.list()).map((a: any) => a.opportunityId)).toEqual([1]);
+    expect(await caller().pipelineAlerts.summary()).toMatchObject({ total: 1, byType: { no_activity: 1 } });
+    expect((await scanPipelineAlertsForWorkspace(WS)).resolved).toBe(1);
+    expect(live()).toEqual(["1:no_activity"]);
+  });
+
+  it("an alert on a deal that is gone is neither listed nor counted, and the sweep resolves it", async () => {
+    deal(1);
+    rows("pipeline_alerts").push({ id: 50, workspaceId: WS, opportunityId: 404, alertType: "no_champion", details: {}, dismissedAt: null, createdAt: new Date() });
+    await scanPipelineAlertsForWorkspace(WS);
+    rows("pipeline_alerts").find((a) => a.id === 50).dismissedAt = null;
+    expect((await caller().pipelineAlerts.list()).map((a: any) => a.opportunityId)).toEqual([1]);
+    expect((await caller().pipelineAlerts.summary()).total).toBe(1);
+    expect((await scanPipelineAlertsForWorkspace(WS)).resolved).toBe(1);
+  });
+
+  it("a close date that has passed is past_close_date, not closing soon", async () => {
+    rows("activities").push({ id: 1, workspaceId: WS, relatedType: "opportunity", relatedId: 1, type: "note", createdAt: new Date() });
+    deal(1, { closeDate: dayFromToday(-12), winProb: 30 });
+    await scanPipelineAlertsForWorkspace(WS);
+    expect(live()).toEqual(["1:past_close_date"]);
+    expect(rows("pipeline_alerts")[0].details).toMatchObject({ daysPastClose: 12, winProb: 30 });
+  });
+
+  it("closing soon is today up to 30 days out; a date that slips past swaps the alert", async () => {
+    rows("activities").push({ id: 1, workspaceId: WS, relatedType: "opportunity", relatedId: 1, type: "note", createdAt: new Date() });
+    deal(1, { closeDate: dayFromToday(10), winProb: 30 });
+    await scanPipelineAlertsForWorkspace(WS);
+    expect(live()).toEqual(["1:closing_soon_regression"]);
+    expect(rows("pipeline_alerts")[0].details).toMatchObject({ daysUntilClose: 10 });
+    rows("opportunities")[0].closeDate = dayFromToday(-1);
+    await scanPipelineAlertsForWorkspace(WS);
+    expect(live()).toEqual(["1:past_close_date"]);
+  });
+
+  it("the alerts page names the new type, counts it, and says what a dismissal does", () => {
+    const page = read("client/src/pages/usip/PipelineAlerts.tsx");
+    expect(page).toContain("past_close_date: {");
+    expect(page).toContain('{ type: "past_close_date", label: "Past Close"');
+    expect(page).toContain('"closing_soon_regression", "past_close_date", "amount_change"');
+    expect(page).toContain("Dismissed for 7 days.");
+    expect(read("server/_core/rawMigrations.ts")).toContain("'no_champion','past_close_date') NOT NULL");
+  });
+});
+
+describe("R38: amount_change is raised when a deal's amount moves", () => {
+  beforeEach(() => stagesOf());
+  const amountAlerts = () => rows("pipeline_alerts").filter((a) => a.alertType === "amount_change");
+
+  it("a fifth or more either way raises one; a further change updates it", async () => {
+    deal(1);
+    await caller().opportunities.update({ id: 1, patch: { value: 10500 } });
+    expect(amountAlerts()).toEqual([]);
+    await caller().opportunities.update({ id: 1, patch: { value: 6000 } });
+    expect(amountAlerts().map((a) => a.details)).toEqual([{ previousAmount: 10500, currentAmount: 6000, oppName: "Deal 1" }]);
+    await caller().opportunities.update({ id: 1, patch: { value: 2000 } });
+    expect(amountAlerts().map((a) => a.details)).toEqual([{ previousAmount: 10500, currentAmount: 2000, oppName: "Deal 1" }]);
+  });
+
+  it("line items that rewrite the amount count too; a closed deal raises nothing", async () => {
+    deal(1);
+    deal(2, { stage: "signed" });
+    rows("products").push({ id: 4, workspaceId: WS, sku: "S", name: "Seat", listPrice: "100", active: true });
+    await caller().opportunities.addLineItem({ opportunityId: 1, productId: 4, quantity: 2, unitPrice: 100 });
+    expect(amountAlerts().map((a) => a.details)).toEqual([{ previousAmount: 10000, currentAmount: 200, oppName: "Deal 1" }]);
+    await caller().opportunities.addLineItem({ opportunityId: 2, productId: 4, quantity: 2, unitPrice: 100 });
+    expect(amountAlerts().map((a) => a.opportunityId)).toEqual([1]);
+  });
+});
+
+describe("R38: a stage's stuck rule is that stage's alone", () => {
+  beforeEach(() => {
+    stagesOf({ id: 12, workspaceId: WS, pipelineId: 1, key: "proposal", label: "Proposal", sortOrder: 20, defaultWinProb: 50, isWon: false, isLost: false });
+    rows("workflow_rules").push({ id: 1, workspaceId: WS, name: "Proposal stuck", enabled: true, triggerType: "deal_stuck", triggerConfig: { stage: "proposal", days: 2 } });
+  });
+
+  it("other stages keep the default", async () => {
+    deal(1, { stage: "discovery", daysInStage: 3 });
+    deal(2, { stage: "proposal", daysInStage: 3 });
+    deal(3, { stage: "discovery", daysInStage: 8 });
+    const stuck = await caller().pipelineAlerts.getStuckDeals({});
+    expect(stuck.map((d: any) => [d.id, d.threshold])).toEqual([[2, 2], [3, 7]]);
+  });
+
+  it("a rule with no stage sets the default for every other stage", () => {
+    const at = stuckThresholds([{ triggerConfig: { stage: "proposal", days: 2 } }, { triggerConfig: { days: 10 } }, { triggerConfig: { days: 12 } }], 7);
+    expect([at("proposal"), at("discovery"), at(null)]).toEqual([2, 10, 10]);
+    expect(stuckThresholds([], 7)("proposal")).toBe(7);
   });
 });

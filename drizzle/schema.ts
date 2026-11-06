@@ -3137,6 +3137,8 @@ export const pipelineAlerts = mysqlTable(
       "closing_soon_regression",
       "amount_change",
       "no_champion",
+      // A close date that has passed (migration 0300, audit R38).
+      "past_close_date",
     ]).notNull(),
     details: json("details"), // {daysSinceActivity, closeDate, previousAmount, currentAmount, etc.}
     dismissedAt: timestamp("dismissedAt"),

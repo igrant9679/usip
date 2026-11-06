@@ -4909,6 +4909,16 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // A deal whose close date has passed was alerted as "closing soon" (audit
+  // 2026-10-20, R38). Appending an enum value is in place in MySQL: no copy,
+  // and every stored value keeps its meaning.
+  {
+    name: "0300_pipeline_alert_past_close.sql",
+    statements: [
+      "ALTER TABLE `pipeline_alerts` MODIFY COLUMN `alertType` enum('no_activity','closing_soon_regression','amount_change','no_champion','past_close_date') NOT NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

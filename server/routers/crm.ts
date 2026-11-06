@@ -71,6 +71,7 @@ import { renderMergeFields, resolveBookingUrl, scrubForSend } from "../mergeVars
 import { businessDomainFromEmail, normalizedAccountFields } from "../services/company/normalize";
 import { accountMatchesForLead, findContactByEmail } from "../services/crmMatching";
 import { ACTIVE_ENROLLMENT_STATUSES } from "../services/crossEngineEnrollment";
+import { noteAmountChange } from "./pipelineAlerts";
 import { assertOutboundNotPaused } from "../services/outboundPause";
 import { LEAD_LIST_COLUMNS, LEAD_ORDER, leadWhere, searchLeads } from "../services/leadSearch";
 
@@ -2050,6 +2051,8 @@ export const opportunitiesRouter = router({
     if (patch.closeDate !== undefined) patch.closeDate = normalizeCalendarDate(patch.closeDate);
     if (Object.keys(patch).length === 0) return { ok: true };
     await db.update(opportunities).set(patch).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+    // R38: a large change of amount is an alert (it was named, never raised).
+    if (patch.value != null) await noteAmountChange(db, ctx.workspace.id, before, Number(before.value ?? 0), Number(patch.value));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id, before, after: input.patch });
     // Stage is refused above, so this can never double with stage_changed.
     void import("../services/workflowEngine")
@@ -2116,7 +2119,7 @@ export const opportunitiesRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       // opportunityId is caller-controlled — verify it belongs to this
       // workspace before attaching items or rewriting its value.
-      const [opp] = await db.select({ id: opportunities.id }).from(opportunities)
+      const [opp] = await db.select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value }).from(opportunities)
         .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
       if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
       // Same arithmetic rule as a quote line — @shared/quoteTotals, in integer
@@ -2139,18 +2142,23 @@ export const opportunitiesRouter = router({
       const items = await db.select().from(dealLineItems).where(and(eq(dealLineItems.opportunityId, input.opportunityId), eq(dealLineItems.workspaceId, ctx.workspace.id)));
       const totalCents = items.reduce((s, i) => s + toCents(Number(i.lineTotal)), 0);
       await db.update(opportunities).set({ value: centsToDecimal(totalCents) }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+      await noteAmountChange(db, ctx.workspace.id, opp, Number(opp.value ?? 0), totalCents / 100);
       return { ok: true };
     }),
 
   removeLineItem: repProcedure.input(z.object({ id: z.number(), opportunityId: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.delete(dealLineItems).where(and(eq(dealLineItems.id, input.id), eq(dealLineItems.workspaceId, ctx.workspace.id)));
+    const [opp] = await db.select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value }).from(opportunities)
+      .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+    if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+    await db.delete(dealLineItems).where(and(eq(dealLineItems.id, input.id), eq(dealLineItems.opportunityId, input.opportunityId), eq(dealLineItems.workspaceId, ctx.workspace.id)));
     const items = await db.select().from(dealLineItems).where(and(eq(dealLineItems.opportunityId, input.opportunityId), eq(dealLineItems.workspaceId, ctx.workspace.id)));
     const totalCents = items.reduce((s, i) => s + toCents(Number(i.lineTotal)), 0);
     // Workspace-scoped: opportunityId is caller-controlled, so an unscoped
     // update could rewrite another tenant's opportunity value.
     await db.update(opportunities).set({ value: centsToDecimal(totalCents) }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+    await noteAmountChange(db, ctx.workspace.id, opp, Number(opp.value ?? 0), totalCents / 100);
     return { ok: true };
   }),
 
