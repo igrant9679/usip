@@ -238,17 +238,21 @@ export const companiesRouter = router({
     .input(z.object({ limit: z.number().int().min(1).max(2000).default(800), dryRun: z.boolean().default(false) }).optional())
     .mutation(async ({ ctx, input }) => {
       requireMinRole(ctx.member.role, "admin", "Only admins can run firmographic inference.");
-      const { runFirmographicInference, firmographicStatus } = await import("../services/firmographicInference");
+      const { runFirmographicInference, startFirmographicInference, firmographicStatus } = await import("../services/firmographicInference");
       const before = await firmographicStatus(ctx.workspace.id);
       const limit = input?.limit ?? 800;
       if (input?.dryRun) {
-        const t = await runFirmographicInference(ctx.workspace.id, { limit: Math.min(limit, 20), dryRun: true });
+        // Counts what a pass would send to the model, and calls none (P156).
+        const t = await runFirmographicInference(ctx.workspace.id, { limit, dryRun: true });
         return { started: false as const, before, sample: t };
       }
       const ws = ctx.workspace.id;
       const actor = ctx.user.id;
-      // Fire-and-forget: a 700-company pass is minutes, not a request.
-      void runFirmographicInference(ws, { limit }).then(async (t) => {
+      // Fire-and-forget: a 700-company pass is minutes, not a request. One
+      // pass per workspace at a time (P156).
+      const pass = startFirmographicInference(ws, { limit });
+      if (!pass) return { started: false as const, alreadyRunning: true as const, before, limit };
+      void pass.then(async (t) => {
         await recordAudit({ workspaceId: ws, actorUserId: actor, action: "update", entityType: "firmographic_inference", entityId: ws, after: t as unknown as Record<string, unknown> });
         console.log(`[FirmographicInference] ws=${ws} done`, t);
       }).catch((e) => console.error(`[FirmographicInference] ws=${ws} crashed:`, (e as Error).message));
