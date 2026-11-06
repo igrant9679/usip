@@ -112,6 +112,15 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
   const [contactSearch, setContactSearch] = useState("");
   // Track which account id to fetch when a contact with accountId is selected
   const [selectedContactAccountId, setSelectedContactAccountId] = useState<number | null>(null);
+  // What the proposal is FOR (audit 2026-10-20, R25): the contact picked, their
+  // company, and the deal accepting it closes. The wizard sent none of these,
+  // so accepting a proposal made here never closed a deal.
+  const [linkedContact, setLinkedContact] = useState<{ id: number; name: string } | null>(null);
+  const [dealId, setDealId] = useState<number | null>(null);
+  const { data: dealOptions } = trpc.proposals.dealOptions.useQuery(
+    { accountId: selectedContactAccountId! },
+    { enabled: selectedContactAccountId !== null },
+  );
 
   // Use trpc.contacts.list with search param (NOT trpc.contacts.search which doesn't exist)
   const { data: contactResults } = trpc.contacts.list.useQuery(
@@ -152,6 +161,8 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
     setForm({ title: "", clientName: "", clientEmail: "", clientWebsite: "", orgAbbr: "", projectType: "", rfpDeadline: "", completionDate: "", expiresAt: "", budget: "", description: "" });
     setContactSearch("");
     setSelectedContactAccountId(null);
+    setLinkedContact(null);
+    setDealId(null);
     onClose();
   }
 
@@ -163,10 +174,16 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
       clientEmail: c.email || f.clientEmail,
     }));
     setContactSearch("");
+    setLinkedContact({ id: c.id, name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || c.email || `Contact #${c.id}` });
+    setDealId(null);
     // If the contact has a linked account, trigger account lookup for org name + website
-    if (c.accountId) {
-      setSelectedContactAccountId(c.accountId);
-    }
+    setSelectedContactAccountId(c.accountId ?? null);
+  }
+
+  function clearContact() {
+    setLinkedContact(null);
+    setSelectedContactAccountId(null);
+    setDealId(null);
   }
 
   const step1Valid = form.title.trim() && form.clientName.trim();
@@ -184,6 +201,9 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
       expiresAt: form.expiresAt || undefined,
       budget: form.budget ? parseFloat(form.budget) : undefined,
       description: form.description || undefined,
+      contactId: linkedContact?.id,
+      accountId: selectedContactAccountId ?? undefined,
+      linkedOpportunityId: dealId ?? undefined,
     });
   }
 
@@ -246,7 +266,39 @@ function NewProposalWizard({ open, onClose, onCreated }: WizardProps) {
                   ))}
                 </div>
               )}
+              {linkedContact && (
+                <div className="mt-1.5 flex items-center gap-2 text-xs text-muted-foreground">
+                  <UserCheck className="size-3.5 shrink-0" />
+                  <span className="truncate">
+                    For <span className="font-medium text-foreground">{linkedContact.name}</span>
+                    {linkedAccount?.name ? <> at <span className="font-medium text-foreground">{linkedAccount.name}</span></> : null}
+                  </span>
+                  <button type="button" className="ml-auto underline hover:text-foreground" onClick={clearContact}>Clear</button>
+                </div>
+              )}
             </div>
+
+            {/* The deal accepting this proposal closes won (R25). Only the
+                company's open deals: a closed one is never moved. */}
+            {selectedContactAccountId !== null && (
+              <div>
+                <Label htmlFor="proposal-deal">Deal (optional)</Label>
+                <select
+                  id="proposal-deal"
+                  className="mt-1 h-9 w-full rounded-md border bg-background px-2 text-sm"
+                  value={dealId ?? ""}
+                  onChange={(e) => setDealId(e.target.value ? Number(e.target.value) : null)}
+                >
+                  <option value="">No deal — accepting creates a won deal for the company</option>
+                  {(dealOptions ?? []).map((d) => (
+                    <option key={d.id} value={d.id}>{d.name} · {d.stage}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {dealId ? "Accepting the proposal closes this deal as won." : "Pick an open deal and accepting the proposal closes it as won."}
+                </p>
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               <div>

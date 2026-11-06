@@ -74,7 +74,9 @@ import {
   ResponsiveContainer,
   Tooltip as RechartsTooltip,
 } from "recharts";
-import { Shell } from "@/components/usip/Shell";
+import { QueryError, Shell } from "@/components/usip/Shell";
+import { isNotFoundError } from "@/components/usip/QueryState";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { buildPrintHTML, openPrintWindow } from "./proposalExports/buildPrintHTML";
 import { downloadProposalDocx } from "./proposalExports/buildDocx";
 import { ProposalTimeline } from "./proposalExports/ProposalTimeline";
@@ -295,9 +297,14 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
           const expDate = new Date(proposal.expiresAt);
           const now = Date.now();
           const msLeft = expDate.getTime() - now;
-          const isExpired = msLeft < 0;
-          const daysLeft = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
-          const label = isExpired
+          // Accepted is done with its expiry (R91): it read "Expired" once the
+          // date passed, on a proposal the client had already accepted.
+          const accepted = proposal.status === "accepted";
+          const isExpired = !accepted && msLeft < 0;
+          const daysLeft = accepted ? Infinity : Math.ceil(msLeft / (1000 * 60 * 60 * 24));
+          const label = accepted
+            ? "Accepted"
+            : isExpired
             ? "Expired"
             : daysLeft <= 1
             ? "Expires today"
@@ -486,29 +493,63 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
   }, [sections]);
 
   const currentContent = editContent ?? sectionMap[activeSection] ?? "";
+  // An accepted proposal is what the client agreed to: read-only here, and
+  // refused by the server too (audit 2026-10-20, R69).
+  const locked = proposal.status === "accepted";
+  const dirty = editContent !== null && editContent !== (sectionMap[activeSection] ?? "");
+  // The section a running AI stream belongs to. Its text goes into that
+  // section only; the URL named it, but the deltas wrote into whichever
+  // section was open when they arrived (R69).
+  const streamSectionRef = useRef<string | null>(null);
 
   const saveRevision = trpc.proposals.saveRevision.useMutation({ onError: (e) => toast.error(e.message) });
   const updateSection = trpc.proposals.updateSection.useMutation({
-    onSuccess: () => {
+    // The section and text that were SAVED, from the call itself: read from
+    // state here, a switch during the save recorded the wrong section.
+    onSuccess: (_d, vars) => {
       toast.success("Section saved");
       onRefetch();
       // Snapshot revision after save
-      if (editContent !== null) {
-        saveRevision.mutate({ proposalId: proposal.id, sectionKey: activeSection, content: editContent });
-      }
-      setEditContent(null);
+      saveRevision.mutate({ proposalId: proposal.id, sectionKey: vars.sectionKey, content: vars.content });
+      setEditContent((cur) => (cur === vars.content ? null : cur));
     },
     onError: (e) => toast.error(e.message),
   });
+
+  // Switching sections drops what is in the editor, so it asks first when
+  // that is unsaved work or a draft still being written (R69). It used to
+  // drop it silently.
+  function switchSection(key: string) {
+    if (key === activeSection) return;
+    const go = () => {
+      abortRef.current?.abort();
+      streamSectionRef.current = null;
+      setGenerating(false);
+      setActiveSection(key);
+      setEditContent(null);
+    };
+    if (!dirty && !generating) { go(); return; }
+    const label = SECTION_KEYS.find((s) => s.key === activeSection)?.label ?? "this section";
+    confirmAction({
+      title: `Discard your changes to ${label}?`,
+      description: generating
+        ? "The AI draft is still being written. Switching stops it and drops what it has written so far."
+        : "You have unsaved changes in this section. Switching drops them — save first to keep them.",
+      confirmLabel: "Discard and switch",
+    }, go);
+  }
 
   // Streaming generation via /api/proposals/:id/section/:key/stream — replaces
   // the prior `generateSectionContent` tRPC mutation. Text appears in the
   // editor as it arrives; on completion the user can review and click Save.
   async function handleGenerate() {
+    if (locked) return;
     // Cancel any in-flight stream
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    const sectionKey = activeSection;
+    streamSectionRef.current = sectionKey;
 
     setGenerating(true);
     setEditContent(""); // clear any prior content; stream will fill in
@@ -517,7 +558,7 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
 
     try {
       const res = await fetch(
-        `/api/proposals/${proposal.id}/section/${activeSection}/stream`,
+        `/api/proposals/${proposal.id}/section/${sectionKey}/stream`,
         {
           method: "POST",
           headers: {
@@ -568,7 +609,8 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
               | { type: "error"; error: string };
             if (ev.type === "delta") {
               accumulated += ev.text;
-              setEditContent(accumulated);
+              // Only into the section this stream was started for.
+              if (streamSectionRef.current === sectionKey && !controller.signal.aborted) setEditContent(accumulated);
             } else if (ev.type === "error") {
               toast.error(ev.error);
             }
@@ -582,8 +624,10 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
         toast.error(err instanceof Error ? err.message : "Generation failed");
       }
     } finally {
-      setGenerating(false);
-      if (abortRef.current === controller) abortRef.current = null;
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        setGenerating(false);
+      }
     }
   }
 
@@ -593,7 +637,7 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
   }
 
   function handleSave() {
-    if (editContent === null) return;
+    if (editContent === null || locked) return;
     updateSection.mutate({ proposalId: proposal.id, sectionKey: activeSection, content: editContent });
   }
 
@@ -606,7 +650,7 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
           return (
             <button
               key={s.key}
-              onClick={() => { setActiveSection(s.key); setEditContent(null); }}
+              onClick={() => switchSection(s.key)}
               className={cn(
                 "w-full text-left px-3 py-2 rounded-lg text-sm transition-all flex items-center justify-between gap-1",
                 activeSection === s.key
@@ -632,7 +676,7 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
               variant="outline"
               size="sm"
               onClick={handleGenerate}
-              disabled={generating}
+              disabled={generating || locked}
               className="gap-1.5 text-purple-400 border-purple-500/30 hover:bg-purple-500/10"
             >
               <Sparkles className="size-3.5" />
@@ -648,7 +692,7 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
                 Stop
               </Button>
             )}
-            {editContent !== null && (
+            {editContent !== null && !locked && (
               <Button
                 size="sm"
                 onClick={handleSave}
@@ -661,16 +705,22 @@ function ContentTab({ proposal, sections, onRefetch }: { proposal: any; sections
             )}
           </div>
         </div>
+        {locked && (
+          <p className="text-xs text-muted-foreground">
+            Accepted proposals are locked — this is the content the client accepted, and History keeps a copy of it. Duplicate the proposal to work on a new version.
+          </p>
+        )}
         <RichTextEditor
           value={currentContent}
-          onChange={(html) => setEditContent(html)}
+          onChange={(html) => { if (!locked) setEditContent(html); }}
+          disabled={locked}
           placeholder={`Write the ${SECTION_KEYS.find((s) => s.key === activeSection)?.label} section here, or use AI Generate to create a draft...`}
           minHeight="400px"
           maxHeight="700px"
           showCount
           className="flex-1"
         />
-        {editContent !== null && editContent !== (sectionMap[activeSection] ?? "") && (
+        {dirty && (
           <p className="text-xs text-amber-600">Unsaved changes</p>
         )}
       </div>
@@ -783,14 +833,19 @@ function TimelineTab({ proposal, milestones, onRefetch }: { proposal: any; miles
                 <Button aria-label="Edit milestone" variant="ghost" size="icon" className="size-7" onClick={() => openEdit(m)}>
                   <Edit2 className="size-3.5" />
                 </Button>
-                <Button aria-label="Delete milestone"
+                {/* Asks first (R76): one click removed a milestone the
+                    client's portal shows, with no undo. */}
+                <ConfirmButton ariaLabel="Delete milestone"
                   variant="ghost"
                   size="icon"
                   className="size-7 text-red-400 hover:text-red-300"
-                  onClick={() => deleteMilestone.mutate({ proposalId: proposal.id, milestoneId: m.id })}
+                  title={`Delete the milestone "${m.name}"?`}
+                  description="It is removed from this proposal's timeline and from the client's portal. This can't be undone."
+                  confirmLabel="Delete"
+                  onConfirm={() => deleteMilestone.mutate({ proposalId: proposal.id, milestoneId: m.id })}
                 >
                   <Trash2 className="size-3.5" />
-                </Button>
+                </ConfirmButton>
               </div>
             </div>
           ))}
@@ -892,7 +947,10 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
   const [selectedAccountId, setSelectedAccountId] = useState<"auto" | number>("auto");
   const [showPreview, setShowPreview] = useState(false);
 
-  const { data: sendingAccounts } = trpc.sendingAccounts.list.useQuery();
+  // The list the send itself picks from, in its order (audit 2026-10-20, R70):
+  // sendingAccounts.list held disabled mailboxes and left out connected ones,
+  // so "Auto (x)" could name a mailbox the send would never use.
+  const { data: sendingAccounts } = trpc.proposals.listSendingAccounts.useQuery();
 
   const generateLink = trpc.proposals.generateShareLink.useMutation({
     onSuccess: () => { toast.success("Share link generated"); onRefetch(); },
@@ -981,16 +1039,23 @@ function ShareTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => voi
               <Send className="size-3.5" />
               Send to Client
             </Button>
-            <Button
+            {/* Asks first (audit 2026-10-20, R76): a new link retires the old
+                one, so every email already sent to the client stops working. */}
+            <ConfirmButton
               variant="outline"
               size="sm"
-              onClick={() => generateLink.mutate({ id: proposal.id })}
+              onConfirm={() => generateLink.mutate({ id: proposal.id })}
               disabled={generateLink.isPending}
               className="gap-1.5 text-amber-400 border-amber-500/30 hover:bg-amber-500/10"
+              title="Replace the client link?"
+              description={proposal.sentAt
+                ? "The link already emailed to the client stops working. They will need the new link, so you will have to send it again."
+                : "The current link stops working. Anyone you shared it with will need the new one."}
+              confirmLabel="Replace link"
             >
               <RotateCcw className="size-3.5" />
               Regenerate Link
-            </Button>
+            </ConfirmButton>
           </div>
           {!hasClientEmail && (
             <p className="text-xs text-amber-600">
@@ -1251,7 +1316,7 @@ export default function ProposalDetail() {
   const { current } = useWorkspace();
   const proposalId = parseInt(params.id ?? "0", 10);
 
-  const { data, isLoading, refetch } = trpc.proposals.get.useQuery(
+  const { data, isLoading, error, refetch } = trpc.proposals.get.useQuery(
     { id: proposalId },
     { enabled: !!current && proposalId > 0 },
   );
@@ -1277,6 +1342,17 @@ export default function ProposalDetail() {
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-4 w-48" />
         <Skeleton className="h-64 w-full" />
+      </div>
+    );
+  }
+
+  // A load that FAILED is not a proposal that doesn't exist (audit
+  // 2026-10-20, R70): a timeout or a 500 read "Proposal not found", and the
+  // only way out was Back. It says it couldn't load, and offers a retry.
+  if (error && !isNotFoundError(error)) {
+    return (
+      <div className="p-4 md:p-5">
+        <QueryError what="this proposal" message={error.message} onRetry={() => refetch()} />
       </div>
     );
   }
@@ -1926,9 +2002,12 @@ function ExpandedRevision({ rev, proposalId, onRestored }: { rev: any; proposalI
   return (
     <>
       <div className="border-t border-border bg-muted/20 p-3 space-y-2">
-        <pre className="text-xs text-foreground whitespace-pre-wrap font-mono leading-relaxed max-h-48 overflow-y-auto">
-          {rev.content || <span className="text-muted-foreground italic">(empty)</span>}
-        </pre>
+        {/* The section as it reads, not its HTML source (audit 2026-10-20,
+            R91): sections are rich text, and a <pre> printed every tag. */}
+        {rev.content
+          ? <div className="prose prose-sm dark:prose-invert max-w-none text-xs text-foreground max-h-48 overflow-y-auto"
+              dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(rev.content) }} />
+          : <p className="text-xs text-muted-foreground italic">(empty)</p>}
         <div className="flex justify-end">
           <Button
             size="sm"
