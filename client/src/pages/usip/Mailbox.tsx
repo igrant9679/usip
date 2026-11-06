@@ -42,7 +42,7 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { NoMailboxConnected } from "@/components/usip/NoMailboxConnected";
-import { rankOf, ROLE_RANK } from "@shared/roleRank";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import {
@@ -1055,7 +1055,8 @@ export default function MailboxPage() {
   const { data: folders = [] } = trpc.mailbox.listFolders.useQuery({ accountId: currentAccountId!, repUserId }, { enabled: !!currentAccountId });
   const { data: teamData } = trpc.team.list.useQuery(undefined, { enabled: true });
 
-  const isManager = rankOf((user as any)?.role) >= ROLE_RANK.manager;
+  // The workspace role, as mailbox's resolveTargetUser checks it (R10).
+  const isManager = useWorkspaceRole().isManager;
 
   const folderList: Array<{ name: string; path: string }> = (folders as any[]).length
     ? (folders as Array<{ name: string; path: string }>)

@@ -146,12 +146,17 @@ describe("rows that tie keep one order (R61)", () => {
 });
 
 describe("Most contacts is ordered in SQL across every match", () => {
+  // 2026-11-06 (audit R65): the sort counts each linked person once, and only
+  // a person whose row exists, as the row's number now does. Still this
+  // workspace's links, people and contacts only, for the row being sorted.
   it("counts this workspace's links to the row being sorted", () => {
     const q = new MySqlDialect().sqlToQuery(searchOrder(LSI, { field: "contactCount", direction: "desc" })[0] as SQL);
     expect(q.sql.replace(/\s+/g, " ")).toBe(
-      "( SELECT COUNT(*) FROM `contact_account_links` cal WHERE cal.`workspaceId` = ? AND cal.`account_id` = `accounts`.`id` ) desc",
+      "( SELECT COUNT(DISTINCT cal.`person_type`, cal.`person_id`) FROM `contact_account_links` cal WHERE cal.`workspaceId` = ? AND cal.`account_id` = `accounts`.`id` "
+      + "AND ((cal.`person_type` = 'prospect' AND EXISTS (SELECT 1 FROM `prospects` p WHERE p.`id` = cal.`person_id` AND p.`workspaceId` = ?)) "
+      + "OR (cal.`person_type` = 'contact' AND EXISTS (SELECT 1 FROM `contacts` c WHERE c.`id` = cal.`person_id` AND c.`workspaceId` = ?))) ) desc",
     );
-    expect(q.params).toEqual([LSI]);
+    expect(q.params).toEqual([LSI, LSI, LSI]);
   });
 
   it("the default sort is newest first", () => {
@@ -161,6 +166,9 @@ describe("Most contacts is ordered in SQL across every match", () => {
 
   it("contact counts and the total are this workspace's", async () => {
     h.db.rowsOf("accounts").push(acct(1), acct(2), acct(3), { ...acct(4), workspaceId: OTHER });
+    // 2026-11-06 (audit R65): a count is of people whose rows exist, so the
+    // contacts are seeded too.
+    h.db.rowsOf("contacts").push(...[10, 11, 12, 13, 14].map((id) => ({ id, workspaceId: LSI, firstName: "C", lastName: String(id) })));
     h.db.rowsOf("contact_account_links").push(link(1, 10), link(1, 11), link(2, 12), link(3, 13, OTHER), link(3, 14, OTHER));
     const r = await search({ field: "name", direction: "asc" });
     expect(r.total).toBe(3);

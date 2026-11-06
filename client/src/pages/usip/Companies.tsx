@@ -26,7 +26,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { CompanyAvatar } from "@/components/usip/company/CompanyAvatar";
 import {
   Search, Upload, ChevronDown, Filter, X, Building2, Globe, Link2, Users, Briefcase,
-  MapPin, DollarSign, BarChart3, ArrowUpDown, RefreshCw, GitMerge, ListPlus, Sparkles, Gauge, Telescope,
+  MapPin, DollarSign, BarChart3, ArrowUpDown, RefreshCw, GitMerge, ListPlus, Sparkles, Gauge, Telescope, Archive,
 } from "lucide-react";
 import { isAdminRole } from "@shared/roleRank";
 import { companySourceLabel, isResearchSource } from "@shared/researchSource";
@@ -215,6 +215,8 @@ export default function Companies() {
   const [industries, setIndustries] = useState<Set<string>>(new Set());
   const [locations, setLocations] = useState<Set<string>>(new Set());
   const [hasContacts, setHasContacts] = useState(false);
+  // Archived companies, where a restore starts (R64).
+  const [archivedOnly, setArchivedOnly] = useState(false);
   const [minRating, setMinRating] = useState<"" | "fair" | "good" | "excellent">("");
   const [empMin, setEmpMin] = useState(""); const [empMax, setEmpMax] = useState("");
   // Research (2026-10-16): companies sourced by Research, or in a research sector.
@@ -247,6 +249,7 @@ export default function Companies() {
     industries: industries.size ? [...industries] : undefined,
     locations: locations.size ? [...locations] : undefined,
     hasContacts: hasContacts || undefined,
+    archivedOnly: archivedOnly || undefined,
     minRating: minRating || undefined,
     employeeMin: empMin ? Number(empMin) : undefined,
     employeeMax: empMax ? Number(empMax) : undefined,
@@ -260,8 +263,8 @@ export default function Companies() {
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / perPage));
 
-  const activeCount = (q ? 1 : 0) + industries.size + locations.size + (hasContacts ? 1 : 0) + (minRating ? 1 : 0) + (empMin ? 1 : 0) + (empMax ? 1 : 0) + (research ? 1 : 0) + researchSectors.size;
-  const clearAll = () => { setSearchInput(""); setQ(""); setIndustries(new Set()); setLocations(new Set()); setHasContacts(false); setMinRating(""); setEmpMin(""); setEmpMax(""); setResearch(""); setResearchSectors(new Set()); setPage(1); };
+  const activeCount = (q ? 1 : 0) + industries.size + locations.size + (hasContacts ? 1 : 0) + (archivedOnly ? 1 : 0) + (minRating ? 1 : 0) + (empMin ? 1 : 0) + (empMax ? 1 : 0) + (research ? 1 : 0) + researchSectors.size;
+  const clearAll = () => { setSearchInput(""); setQ(""); setIndustries(new Set()); setLocations(new Set()); setHasContacts(false); setArchivedOnly(false); setMinRating(""); setEmpMin(""); setEmpMax(""); setResearch(""); setResearchSectors(new Set()); setPage(1); };
 
   const allChecked = rows.length > 0 && rows.every((r) => checked.has(r.id));
   const toggleAll = () => setChecked((prev) => { const n = new Set(prev); if (allChecked) rows.forEach((r) => n.delete(r.id)); else rows.forEach((r) => n.add(r.id)); return n; });
@@ -428,6 +431,11 @@ export default function Companies() {
                 <FilterGroup label="Has contacts" icon={Users} count={hasContacts ? 1 : 0} open={openGroups.has("hasc")} onToggle={() => toggleGroup("hasc")}>
                   <label className="flex items-center gap-2 cursor-pointer text-[13px] py-0.5">
                     <Checkbox checked={hasContacts} onCheckedChange={() => { setHasContacts(!hasContacts); setPage(1); }} className="size-3.5" /><span>Only companies with linked people</span>
+                  </label>
+                </FilterGroup>
+                <FilterGroup label="Archived" icon={Archive} count={archivedOnly ? 1 : 0} open={openGroups.has("archived")} onToggle={() => toggleGroup("archived")}>
+                  <label className="flex items-center gap-2 cursor-pointer text-[13px] py-0.5">
+                    <Checkbox checked={archivedOnly} onCheckedChange={() => { setArchivedOnly(!archivedOnly); setPage(1); }} className="size-3.5" /><span>Only archived companies</span>
                   </label>
                 </FilterGroup>
               </div>

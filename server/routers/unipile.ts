@@ -42,6 +42,19 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { stripNameCredentials } from "../services/enrichment/personName";
 import { genuineSocialReplyScope } from "../services/replyScope";
 import { assertOutboundNotPaused } from "../services/outboundPause";
+import { extractLinkedInIdentifier } from "../services/linkedinLookup";
+
+/**
+ * Who a hand-sent LinkedIn action is for: the slug of a profile URL, or an id
+ * given as is (a provider id such as "ACoAA…" or a bare slug). Null for a URL
+ * that is not a LinkedIn profile.
+ */
+export function linkedInRecipient(input: string): string | null {
+  const s = input.trim();
+  if (!s) return null;
+  if (/linkedin\.com/i.test(s) || /^https?:\/\//i.test(s)) return extractLinkedInIdentifier(s);
+  return /^[A-Za-z0-9_-]{2,200}$/.test(s) ? s : null;
+}
 
 // ─── Provider metadata ────────────────────────────────────────────────────────
 
@@ -306,6 +319,8 @@ export const unipileRouter = router({
         chatId: z.string().optional(),
         unipileAccountId: z.string(),
         attendeesIds: z.array(z.string()).optional(),
+        /** A LinkedIn profile URL or id to start a conversation with (R44). */
+        recipientProfile: z.string().trim().min(1).max(500).optional(),
         text: z.string().min(1).max(4000),
         linkedContactId: z.number().optional(),
         linkedLeadId: z.number().optional(),
@@ -333,6 +348,19 @@ export const unipileRouter = router({
         .limit(1);
       if (!account) throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
 
+      // A profile starts a new conversation with that person as the attendee,
+      // as the sequence engine does (R44). The drawer put the profile URL in
+      // chatId, which names an EXISTING conversation, so no DM ever started.
+      let attendeesIds = input.attendeesIds;
+      if (!input.chatId && !attendeesIds?.length && input.recipientProfile) {
+        const who = linkedInRecipient(input.recipientProfile);
+        if (!who) throw new TRPCError({ code: "BAD_REQUEST", message: "That isn't a LinkedIn profile URL or id." });
+        attendeesIds = [who];
+      }
+      if (!input.chatId && !attendeesIds?.length) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Say who the message is to." });
+      }
+
       // The LinkedIn limit gate (audit 2026-10-20, O11): a person's own DM is
       // still activity on the account the gate protects. Person-initiated, so
       // it may go while the account's automation is switched off; the caps,
@@ -347,12 +375,12 @@ export const unipileRouter = router({
       const result = await sendMessage({
         chatId: input.chatId,
         accountId: input.unipileAccountId,
-        attendeesIds: input.attendeesIds,
+        attendeesIds,
         text: input.text,
         linkedinInmail: input.linkedinInmail,
       });
       if (isLinkedIn) {
-        await recordLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: input.unipileAccountId, kind: "message", source: "manual", targetIdentifier: input.attendeesIds?.[0] ?? null });
+        await recordLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: input.unipileAccountId, kind: "message", source: "manual", targetIdentifier: attendeesIds?.[0] ?? null });
       }
 
       // Store message record. recipientProviderId is not decoration: it is one
@@ -367,7 +395,7 @@ export const unipileRouter = router({
         messageId: result.id,
         direction: "outbound",
         senderName: ctx.user.name ?? undefined,
-        recipientProviderId: input.attendeesIds?.[0] ?? null,
+        recipientProviderId: attendeesIds?.[0] ?? null,
         text: input.text,
         linkedContactId: input.linkedContactId,
         linkedLeadId: input.linkedLeadId,
@@ -436,9 +464,12 @@ export const unipileRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: `Held by LinkedIn limits: ${inviteGate.reason ?? "cap reached"}` });
       }
 
+      // The drawer sends the profile as typed; a URL is not a provider id (R44).
+      const recipientProviderId = linkedInRecipient(input.recipientProviderId);
+      if (!recipientProviderId) throw new TRPCError({ code: "BAD_REQUEST", message: "That isn't a LinkedIn profile URL or id." });
       await sendLinkedInInvitation({
         accountId: input.unipileAccountId,
-        providerId: input.recipientProviderId,
+        providerId: recipientProviderId,
         message: input.message,
       });
       await recordLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: input.unipileAccountId, kind: "invite" });
@@ -448,7 +479,7 @@ export const unipileRouter = router({
         workspaceId: ctx.workspace.id,
         userId: ctx.user.id,
         unipileAccountId: input.unipileAccountId,
-        recipientProviderId: input.recipientProviderId,
+        recipientProviderId,
         recipientName: input.recipientName,
         message: input.message,
         status: "pending",

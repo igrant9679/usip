@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 import { Streamdown } from "@/components/usip/LazyStreamdown";
 import { confirmAction } from "@/components/usip/Common";
-import { rankOf, ROLE_RANK } from "@shared/roleRank";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { pressable } from "@/lib/pressable";
 
 // ─── Connect Calendar Dialog ───────────────────────────────────────────────────
@@ -483,7 +483,8 @@ export default function CalendarPage() {
     onError: (e) => toast.error(e.message),
   });
 
-  const isManager = rankOf((user as any)?.role) >= ROLE_RANK.manager;
+  // The workspace role, as calendar's resolveTargetUser checks it (R10).
+  const isManager = useWorkspaceRole().isManager;
 
   // Velocity's OWN meetings (booked by the autopilots, booking links, or by
   // hand) overlay the provider events. Without this, the calendar was empty

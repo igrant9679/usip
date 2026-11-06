@@ -16,6 +16,7 @@ import { canonicalizeCompanyDisplayName, cleanPlaceholder, normalizeJobTitle } f
 import { stripNameCredentials } from "../services/enrichment/personName";
 import { buildCompanyCanonicalizer } from "../services/enrichment/companyCanonical";
 import { normalizedAccountFields } from "../services/company/normalize";
+import { describeWriteError } from "../services/dbWriteError";
 import {
   CONTACT_IMPORT_FIELDS,
   describeDuplicateMappings,
@@ -923,6 +924,11 @@ export const importsRouter = router({
         title: p.mapped.title?.trim()?.slice(0, 120) || null,
         linkedinUrl: p.mapped.linkedinUrl?.trim() || null,
         city: p.mapped.city?.trim()?.slice(0, 80) || null,
+        // People rows have these columns, unlike contacts; the import mapped
+        // them and then dropped them (audit 2026-10-20, R54).
+        state: p.mapped.state?.trim()?.slice(0, 80) || null,
+        country: p.mapped.country?.trim()?.slice(0, 80) || null,
+        industry: p.mapped.industry?.trim()?.slice(0, 80) || null,
         seniority: p.mapped.seniority?.trim()?.slice(0, 64) || null,
         company: p.mapped.company?.trim()?.slice(0, 200) || null,
         companyDomain: normDomain(p.mapped.website)?.slice(0, 200) ?? null,
@@ -966,8 +972,11 @@ export const importsRouter = router({
                 prospectId: toProspects ? c.id : null,
               });
               importedRows++;
-            } catch {
-              importRowValues.push({ importId, rowIndex: p.rowIndex, rowData: p.row, mappedData: p.mapped, status: "error", errorReason: "Database insert failed" });
+            } catch (e) {
+              // The row's own reason when the database gave one (R54): every
+              // refusal read "Database insert failed", whatever it was.
+              const why = describeWriteError(e);
+              importRowValues.push({ importId, rowIndex: p.rowIndex, rowData: p.row, mappedData: p.mapped, status: "error", errorReason: why ? `Not saved: ${why}` : "Database insert failed" });
               errorRows++;
             }
           }
