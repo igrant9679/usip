@@ -173,9 +173,17 @@ describe("every sender gates on the shared counter", () => {
   it("the raw SMTP send paths write the log row the counter reads", () => {
     // Without this the bulk blast — the primary outbound sales path — is
     // account-attributed, uncapped, and invisible everywhere.
-    expect((smtp.match(/logEmailSend\(/g) ?? []).length).toBe(2);
-    expect((smtp.match(/recordEmailsSent\(/g) ?? []).length).toBe(2);
-    expect((smtp.match(/sendingAccountId: draft\.sendingAccountId/g) ?? []).length).toBe(2);
+    // 2026-11-06 (audit O47): ONE raw path is left (sendDraft). "Send approved"
+    // sends through deliverEmailDraft, whose adapter writes the log row and
+    // records the send itself (createEmailAdapter), so it must not do either
+    // here as well: that would count each of its sends twice.
+    expect((smtp.match(/logEmailSend\(/g) ?? []).length).toBe(1);
+    expect((smtp.match(/recordEmailsSent\(/g) ?? []).length).toBe(1);
+    expect((smtp.match(/sendingAccountId: draft\.sendingAccountId/g) ?? []).length).toBe(1);
+    const bulk = smtp.slice(smtp.indexOf("sendBulkApproved: adminWsProcedure"), smtp.indexOf("getTrackingStats: workspaceProcedure"));
+    expect(bulk).toContain("deliverEmailDraft(");
+    expect(bulk).not.toContain("logEmailSend(");
+    expect(bulk).not.toContain("recordEmailsSent(");
   });
 
   it("the stats table stays a report, and nothing gates on it", () => {

@@ -117,37 +117,27 @@ describe("the defaults are applied where every account send passes", () => {
 });
 
 describe("the older sequence-blast path honours the inbox too", () => {
-  // It predates the adapter and sends through the workspace SMTP transporter,
-  // so createEmailAdapter's wrapper never sees it. The drafts still carry the
-  // mailbox that owns them, which is enough.
+  // 2026-11-06 (audit O47): "Send approved" no longer has a send path of its
+  // own. It predated the adapter and sent through the workspace SMTP
+  // transporter, so it re-applied the inbox's signature and opt-out by hand
+  // (what this block used to pin). It now sends each draft through
+  // deliverEmailDraft, the row Send's path, which builds the mailbox's adapter
+  // — and createEmailAdapter's wrapper applies the inbox defaults to it, as
+  // pinned above. What is protected is the same: the inbox's settings reach
+  // every message "Send approved" sends.
   const blast = readFileSync("server/routers/smtpConfig.ts", "utf8");
+  const seq = readFileSync("server/routers/sequences.ts", "utf8");
 
-  it("loads the sending account behind each draft", () => {
-    expect(blast).toContain("draft.sendingAccountId ? acctById.get(draft.sendingAccountId)");
+  it("sends each draft through deliverEmailDraft, not a transporter of its own", () => {
+    const bulk = blast.slice(blast.indexOf("sendBulkApproved: adminWsProcedure"), blast.indexOf("getTrackingStats: workspaceProcedure"));
+    expect(bulk).toContain("await deliverEmailDraft({");
+    expect(bulk).not.toContain("transporter.sendMail(");
   });
 
-  it("applies the inbox signature", () => {
-    expect(blast).toContain("applyAccountSendDefaults(");
-    expect(blast).toContain("{ signature: acct.signature }");
-  });
-
-  it("the inbox's opt-out message wins, but keeps the tokenised link", () => {
-    // The setting governs the wording; the mechanism stays this path's
-    // one-click /api/track/unsubscribe URL, which beats the adapter's mailto.
-    expect(blast).toContain("const inboxOptOut = acct?.optOutEnabled === true");
-    expect(blast).toContain("inboxOptOut || optOutEnabled");
-    expect(blast).toContain("renderSequenceOptOut(effectiveOptOutMessage");
-    // 2026-10-26 (audit O15): the URL is named once, above, because the
-    // standard footer used when no wording is configured carries it too.
-    const call = blast.slice(blast.indexOf("renderSequenceOptOut(effectiveOptOutMessage"));
-    expect(call.slice(0, 220)).toContain("{ unsubscribeUrl }");
-    expect(blast).toContain("const unsubscribeUrl = `${appBaseUrl}/api/track/unsubscribe/${encodeURIComponent(token)}`");
-  });
-
-  it("an inbox with nothing configured leaves the workspace behaviour alone", () => {
-    // effectiveOptOutEnabled falls back to the workspace flag, not to false.
-    expect(blast).toContain("const effectiveOptOutEnabled = inboxOptOut || optOutEnabled;");
-    expect(blast).toContain("const effectiveOptOutMessage = inboxOptOut ? acct!.optOutMessage! : optOutMessage;");
+  it("which sends through the mailbox's adapter, where the inbox defaults are applied", () => {
+    const send = seq.slice(seq.indexOf("async function sendClaimedDraft("), seq.indexOf("export async function autoSendForAllWorkspaces"));
+    expect(send).toContain("const adapter = createEmailAdapter(fromAccount);");
+    expect(send).toContain("await adapter.sendEmail({");
   });
 });
 
