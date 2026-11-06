@@ -13,6 +13,7 @@
 import { useParams, Link, useLocation } from "wouter";
 import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { invalidateDealReads } from "@/lib/crmCache";
 import { CustomFieldsPanel } from "@/components/usip/CustomFieldsPanel";
 import { Shell, EmptyState } from "@/components/usip/Shell";
 import { DetailHeader, DetailSection, DetailBody } from "@/components/usip/DetailShell";
@@ -44,17 +45,19 @@ const roleLabel = (r: string) => r.replace(/_/g, " ");
 
 /** Line items: the product, quantity × price less any discount, and the stored line total. */
 export function DealLineItems({ opportunityId, items, onChanged }: { opportunityId: number; items: any[]; onChanged: () => void }) {
+  const utils = trpc.useUtils();
   const { data: products } = trpc.products.list.useQuery();
   const [productId, setProductId] = useState("");
   const [quantity, setQuantity] = useState("1");
   const [unitPrice, setUnitPrice] = useState("");
   const [discountPct, setDiscountPct] = useState("0");
   const add = trpc.opportunities.addLineItem.useMutation({
-    onSuccess: () => { setProductId(""); setQuantity("1"); setUnitPrice(""); setDiscountPct("0"); onChanged(); toast.success("Line item added"); },
+    // A line changes the deal amount, so every read of the deal (R31).
+    onSuccess: () => { setProductId(""); setQuantity("1"); setUnitPrice(""); setDiscountPct("0"); onChanged(); invalidateDealReads(utils); toast.success("Line item added"); },
     onError: (e) => toast.error(e.message),
   });
   const remove = trpc.opportunities.removeLineItem.useMutation({
-    onSuccess: () => { onChanged(); toast.success("Line item removed"); },
+    onSuccess: () => { onChanged(); invalidateDealReads(utils); toast.success("Line item removed"); },
     onError: (e) => toast.error(e.message),
   });
   const active = (products ?? []).filter((p: any) => p.active !== false);
@@ -114,16 +117,17 @@ export function DealLineItems({ opportunityId, items, onChanged }: { opportunity
 export function DealContactRoles({ opportunityId, accountId, accountName, roles, onChanged }: {
   opportunityId: number; accountId: number | null; accountName: string | null; roles: any[]; onChanged: () => void;
 }) {
+  const utils = trpc.useUtils();
   const { data: acct } = trpc.accounts.getWithContacts.useQuery({ id: accountId ?? 0 }, { enabled: !!accountId });
   const [contactId, setContactId] = useState("");
   const [role, setRole] = useState<(typeof ROLE_OPTIONS)[number]>("champion");
   const [isPrimary, setIsPrimary] = useState(false);
   const add = trpc.opportunities.addRole.useMutation({
-    onSuccess: () => { setContactId(""); setIsPrimary(false); onChanged(); toast.success("Contact role added"); },
+    onSuccess: () => { setContactId(""); setIsPrimary(false); onChanged(); invalidateDealReads(utils); toast.success("Contact role added"); },
     onError: (e) => toast.error(e.message),
   });
   const remove = trpc.opportunities.removeRole.useMutation({
-    onSuccess: () => { onChanged(); toast.success("Contact role removed"); },
+    onSuccess: () => { onChanged(); invalidateDealReads(utils); toast.success("Contact role removed"); },
     onError: (e) => toast.error(e.message),
   });
   const people = acct?.contacts ?? [];
@@ -189,7 +193,7 @@ export default function OpportunityDetail() {
   const { data: members } = trpc.team.list.useQuery();
 
   const update = trpc.opportunities.update.useMutation({
-    onSuccess: () => { utils.opportunities.getWithRelated.invalidate({ id }); toast.success("Saved"); },
+    onSuccess: () => { invalidateDealReads(utils); toast.success("Saved"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -198,8 +202,7 @@ export default function OpportunityDetail() {
   const del = trpc.opportunities.delete.useMutation({
     onSuccess: () => {
       toast.success("Opportunity deleted");
-      utils.opportunities.board.invalidate();
-      utils.opportunities.list.invalidate();
+      invalidateDealReads(utils);
       setLocation("/pipeline");
     },
     onError: (e) => toast.error(`Failed to delete: ${e.message}`),

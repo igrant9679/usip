@@ -9,11 +9,13 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { forbiddenMessage } from "@/lib/forbidden";
+import { formatAmount } from "@shared/money";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { ColorAvatar } from "@/components/usip/ColorAvatar";
 import { trpc } from "@/lib/trpc";
+import { invalidateDealReads } from "@/lib/crmCache";
 import { buildStageIndex } from "@shared/stageSemantics";
 import { NewOpportunityDialog } from "@/components/usip/NewOpportunityDialog";
 import { cn } from "@/lib/utils";
@@ -104,11 +106,9 @@ export function analyzeToast(r: { analyzed: number; tasksCreated: number }): str
   return `AI analyzed ${r.analyzed} deal${r.analyzed === 1 ? "" : "s"}: ${drafts} to review in Tasks. Your deals are unchanged.`;
 }
 
+// The shared compact format (R98): this had no millions, so $1.5M read "$1500k".
 function money(v: number | string | null | undefined): string {
-  const n = Number(v ?? 0);
-  if (!Number.isFinite(n)) return "$0";
-  if (n >= 1000) return "$" + (n / 1000).toFixed(n >= 100000 ? 0 : 1) + "k";
-  return "$" + n.toFixed(0);
+  return formatAmount(v, { compact: true });
 }
 
 export default function DealsV2() {
@@ -171,8 +171,8 @@ export default function DealsV2() {
   const [celebrate, setCelebrate] = useState(0);
   const setStage = trpc.opportunities.setStage.useMutation({
     onSuccess: (_d, vars) => {
-      utils.opportunities.board.invalidate();
-      utils.opportunities.summary.invalidate();
+      // Every read a stage move changes, not just board and summary (R31).
+      invalidateDealReads(utils);
       if (stageIdx.isWon(vars.stage)) {
         setCelebrate(Date.now());
         toast.success("Deal won! 🎉");

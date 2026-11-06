@@ -32,3 +32,10 @@ export function describeWriteError(e: unknown): string | null {
   }
   return null;
 }
+
+/** A unique index refused the write — and nothing else (audit 2026-10-20, R75). */
+export function isDuplicateKeyError(e: unknown): boolean {
+  const err = e as { code?: unknown; errno?: unknown; cause?: unknown } | null;
+  const cause = (err?.cause ?? err) as { code?: unknown; errno?: unknown; sqlMessage?: unknown; message?: unknown } | null;
+  return cause?.code === "ER_DUP_ENTRY" || err?.code === "ER_DUP_ENTRY" || cause?.errno === 1062 || err?.errno === 1062;
+}

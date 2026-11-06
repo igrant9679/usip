@@ -226,9 +226,11 @@ export const TOOLS: Tool[] = [
   // (audit 2026-09-02): hidden from the registry, routes kept, until the
   // Broadcasts product exists to use them.
 
-  /* ── Proposals — price it, propose it, sign it ───────────────────────── */
+  /* ── Proposals — price it, propose it, get a yes ─────────────────────── */
+  // There is no electronic signing (audit 2026-10-20, R79): the client
+  // accepts from their portal link.
   { href: "/proposals", label: "Proposals", icon: ClipboardList, group: "Proposals", primary: true,
-    description: "Client-facing proposals with e-sign and portal links." },
+    description: "Client-facing proposals with portal links the client accepts from." },
   { href: "/quotes", label: "Quotes", icon: DollarSign, group: "Proposals",
     description: "Priced quotes attached to deals." },
   { href: "/products", label: "Products", icon: Package, group: "Proposals",

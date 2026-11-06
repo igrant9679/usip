@@ -55,11 +55,17 @@ export default function Territories() {
                     <div className="font-medium">{t.name}</div>
                     <div className="text-xs text-muted-foreground mt-0.5">{routingCount(t.id)}</div>
                   </div>
-                  <ConfirmButton ariaLabel={`Delete territory ${t.name}`} title={`Delete territory "${t.name}"?`}
-                    description="Routing rules that assign it keep their owner and stop assigning a territory. Accounts in it are left with no territory and keep their owner."
-                    confirmLabel="Delete" disabled={del.isPending} onConfirm={() => del.mutate({ id: t.id })}>
-                    <Trash2 className="size-3.5" />
-                  </ConfirmButton>
+                  {/* Asks first, with what points at it (R76); deleting unlinks those rules and the accounts in it (R42). */}
+                  {(() => {
+                    const ruleCount = (rules ?? []).filter((r: any) => r.territoryId === t.id).length;
+                    return (
+                      <ConfirmButton ariaLabel="Delete territory" title={`Delete territory "${t.name}"?`}
+                        description={`${ruleCount ? `${ruleCount} routing rule${ruleCount === 1 ? " assigns" : "s assign"} it: ${ruleCount === 1 ? "it keeps its owner and stops" : "they keep their owner and stop"} assigning a territory. ` : ""}Accounts in it are left with no territory and keep their owner.`}
+                        confirmLabel="Delete" disabled={del.isPending} onConfirm={() => del.mutate({ id: t.id })}>
+                        <Trash2 className="size-3.5" />
+                      </ConfirmButton>
+                    );
+                  })()}
                 </li>
               ))}
             </ul>
@@ -88,7 +94,7 @@ export default function Territories() {
                     <div className="text-xs text-muted-foreground text-right">
                       → {terr?.name ?? "(no territory)"} / {(owner as any)?.name ?? "(no owner)"}
                     </div>
-                    <ConfirmButton ariaLabel={`Delete rule ${r.name}`} title={`Delete rule "${r.name}"?`}
+                    <ConfirmButton ariaLabel="Delete rule" title={`Delete rule "${r.name}"?`}
                       description="New accounts it would have matched go to the next rule that matches, or stay with whoever creates them."
                       confirmLabel="Delete" disabled={delRule.isPending} onConfirm={() => delRule.mutate({ id: r.id })}>
                       <Trash2 className="size-3.5" />
