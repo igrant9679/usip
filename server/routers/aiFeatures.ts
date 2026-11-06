@@ -46,6 +46,7 @@ import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { invokeLLM, contentText } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
+import { CHURN_ESTIMATE_PREFIX } from "@shared/customerHealth";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -118,7 +119,8 @@ churnRiskScore: 0=no risk, 100=certain churn. Be calibrated — a healthy custom
       } catch {
         // Use heuristic fallback
         score = cust.healthScore < 35 ? 75 : cust.healthScore < 55 ? 45 : 15;
-        rationale = `Heuristic: health score ${cust.healthScore}/100 (${cust.healthTier}).`;
+        // The prefix is how the board knows to call this an estimate (R74).
+        rationale = `${CHURN_ESTIMATE_PREFIX} health score ${cust.healthScore}/100 (${cust.healthTier}).`;
       }
 
       const label = churnLabelFromScore(score);
