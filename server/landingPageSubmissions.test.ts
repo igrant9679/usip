@@ -218,7 +218,10 @@ describe("landingPages.submit — the submission row", () => {
    */
   it("records a submission carrying neither email nor name", async () => {
     const r = rec();
-    h.db = makeDb({ selects: [[page()]], rec: r });
+    // 2026-11-06 (audit G41): a submission is read against the page's own
+    // fields, and the default fields require a name and an email. A page that
+    // asks for neither still records its submissions, which is what this pins.
+    h.db = makeDb({ selects: [[page({ formFields: [{ key: "message", label: "Message" }, { key: "company", label: "Company" }] })]], rec: r });
     await submit({ message: "call me about pricing", company: "Acme" });
 
     expect(r.inserts.some((i) => i.table === leads)).toBe(false);
@@ -246,7 +249,13 @@ describe("landingPages.submit — the submission row", () => {
 
   it("keeps the full payload, including fields with no column of their own", async () => {
     const r = rec();
-    h.db = makeDb({ selects: [[page()]], rec: r });
+    // 2026-11-06 (audit G41): only fields the page declares are kept, so the
+    // custom ones are declared here; an undeclared key is dropped (pinned in
+    // s1bPublicCapture.test.ts). A declared field with no column still survives.
+    h.db = makeDb({
+      selects: [[page({ formFields: [{ key: "name", label: "Name" }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" }, { key: "budget", label: "Budget" }] })]],
+      rec: r,
+    });
     await submit({ name: "Ada", email: "ada@example.com", phone: "+44 7700 900000", budget: "50k" });
 
     const data = submissionOf(r)?.values.data as any;

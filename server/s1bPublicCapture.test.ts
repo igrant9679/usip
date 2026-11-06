@@ -290,3 +290,134 @@ describe("G17: a public booking is not an invite relay", () => {
     });
   });
 });
+
+/* ─── G41 ──────────────────────────────────────────────────────────────── */
+
+describe("G41: a public submission is read against the form's own fields", () => {
+  beforeEach(() => {
+    rows("forms").push({
+      id: 80, workspaceId: WS, publicId: "pub80", title: "Contact", status: "active", redirectUrl: null, autoCreateLead: true,
+      autoRoute: false, autoEnrollSequenceId: null, createdByUserId: 20, submitCount: 0,
+      fields: [{ key: "name", label: "Full name", required: true }, { key: "email", label: "Work email", required: true }, { key: "message", label: "Message" }],
+    });
+    rows("landing_pages").push({
+      id: 81, workspaceId: WS, slug: "spring", status: "published", autoCreateLead: true, autoRoute: false, autoEnrollSequenceId: null,
+      createdByUserId: 20, viewCount: 0, submitCount: 0, redirectUrl: null, formFields: null,
+    });
+  });
+
+  it("undeclared keys are dropped, so a POST can't add lead fields the form never asked for", async () => {
+    await anon().forms.submit({ publicId: "pub80", data: { name: "Vee Visitor", email: "vee@visitor.example", company: "Injected Inc", title: "CEO", admin: true } });
+    expect(rows("form_submissions")[0].data).toEqual({ name: "Vee Visitor", email: "vee@visitor.example" });
+    expect(rows("leads")[0]).toMatchObject({ email: "vee@visitor.example", company: null, title: null });
+    // The landing page reads against its default fields (name, email, company).
+    await anon().landingPages.submit({ slug: "spring", data: { name: "Bo", email: "bo@visitor.example", company: "Bo Co", phone: "555" } });
+    expect(rows("landing_page_submissions")[0].data).toEqual({ name: "Bo", email: "bo@visitor.example", company: "Bo Co" });
+  });
+
+  it("required fields must be filled and an email must be one", async () => {
+    expect((await refusal(anon().forms.submit({ publicId: "pub80", data: { email: "vee@visitor.example" } }))).message).toBe("Please fill in Full name.");
+    expect((await refusal(anon().forms.submit({ publicId: "pub80", data: { name: "V", email: "not an email" } }))).message).toBe("Please enter a valid email address.");
+    expect(rows("leads")).toHaveLength(0);
+    expect(rows("form_submissions")).toHaveLength(0);
+  });
+
+  it("values are flat and capped: no objects, no megabyte strings, no hundred keys", async () => {
+    const tooMany = Object.fromEntries(Array.from({ length: 41 }, (_, i) => [`k${i}`, "v"]));
+    for (const data of [{ name: { $gt: "" } }, { name: "x".repeat(5001) }, tooMany] as any[]) {
+      expect((await refusal(anon().forms.submit({ publicId: "pub80", data }))).code).toBe("BAD_REQUEST");
+    }
+    expect(rows("form_submissions")).toHaveLength(0);
+  });
+
+  it("a filled honeypot is answered as a success and nothing is kept", async () => {
+    const out = await anon().forms.submit({ publicId: "pub80", data: { name: "Bot", email: "bot@spam.example", hp_website: "http://spam.example" } });
+    expect(out.ok).toBe(true);
+    await anon().landingPages.submit({ slug: "spring", data: { name: "Bot", email: "bot@spam.example", hp_website: "x" } });
+    expect(rows("leads")).toHaveLength(0);
+    expect(rows("form_submissions")).toHaveLength(0);
+    expect(rows("landing_page_submissions")).toHaveLength(0);
+    expect(rows("forms")[0].submitCount).toBe(0);
+  });
+
+  it("both public pages render the honeypot", () => {
+    for (const f of ["client/src/pages/PublicForm.tsx", "client/src/pages/LandingPage.tsx"]) {
+      expect(read(f), f).toContain("<HoneypotField value={values[HONEYPOT_FIELD] ?? \"\"}");
+    }
+    const hp = read("client/src/components/usip/HoneypotField.tsx");
+    expect(hp).toContain('aria-hidden="true"');
+    expect(hp).toContain("tabIndex={-1}");
+  });
+
+  it("public routes are read under a small body limit, before the app's 50 MB parser", async () => {
+    const { isPublicBodyPath, publicBodyLimit } = await import("./_core/publicBodyLimit");
+    for (const p of ["/api/trpc/forms.submit", "/api/trpc/landingPages.submit", "/api/trpc/chatAgents.send", "/api/trpc/bookingLinks.book", "/api/track", "/api/auth/password-login"]) {
+      expect(isPublicBodyPath(p), p).toBe(true);
+    }
+    for (const p of ["/api/trpc/leads.create", "/api/trpc/imports.upload", "/api/tracker", "/api/storage/x"]) expect(isPublicBodyPath(p), p).toBe(false);
+
+    const express = (await import("express")).default;
+    const app = express();
+    app.use(publicBodyLimit);
+    app.use(express.json({ limit: "50mb" }));
+    app.post("/api/trpc/:proc", (req, res) => { res.json({ size: JSON.stringify(req.body).length }); });
+    const server = app.listen(0);
+    await new Promise((r) => server.once("listening", r));
+    try {
+      const base = `http://127.0.0.1:${(server.address() as any).port}`;
+      const big = JSON.stringify({ data: "x".repeat(100_000) });
+      const send = (proc: string) => fetch(`${base}/api/trpc/${proc}`, { method: "POST", headers: { "content-type": "application/json" }, body: big });
+      expect((await send("forms.submit")).status).toBe(413);
+      expect((await send("leads.create")).status, "signed-in routes keep the large limit").toBe(200);
+    } finally {
+      server.close();
+    }
+    const index = read("server/_core/index.ts");
+    const at = index.indexOf("app.use(publicBodyLimit);");
+    const bigParser = index.indexOf('app.use(express.json({ limit: "50mb"');
+    expect(at).toBeGreaterThan(-1);
+    expect(bigParser).toBeGreaterThan(-1);
+    expect(index.slice(at, bigParser)).not.toContain("app.use(express");
+    expect(at).toBeLessThan(bigParser);
+  });
+});
+
+/* ─── L12 ──────────────────────────────────────────────────────────────── */
+
+describe("L12: a landing page counts a visitor once a day, from the page, not from the lookup", () => {
+  beforeEach(() => {
+    rows("landing_pages").push({
+      id: 81, workspaceId: WS, slug: "spring", status: "published", headline: "Hi", autoCreateLead: false, viewCount: 0, submitCount: 0,
+      showBookingCta: false, sections: [], formFields: null,
+    });
+  });
+  const views = () => rows("landing_pages")[0].viewCount;
+
+  it("loading the page (a refresh, a crawler, a link preview) counts nothing", async () => {
+    for (let i = 0; i < 3; i++) await anon().landingPages.getBySlug({ slug: "spring" });
+    expect(views()).toBe(0);
+  });
+
+  it("the page's beacon counts once per visitor per day", async () => {
+    await anon().landingPages.recordView({ slug: "spring", visitor: "v-1" });
+    await anon().landingPages.recordView({ slug: "spring", visitor: "v-1" });
+    await anon().landingPages.recordView({ slug: "spring", visitor: "v-2" });
+    expect(views()).toBe(2);
+  });
+
+  it("the next day counts again; an unpublished page counts nothing", async () => {
+    const { firstViewToday } = await import("./routers/landingPages");
+    expect(firstViewToday(999, "v", new Date("2026-11-06T10:00:00Z"))).toBe(true);
+    expect(firstViewToday(999, "v", new Date("2026-11-06T23:00:00Z"))).toBe(false);
+    expect(firstViewToday(999, "v", new Date("2026-11-07T00:01:00Z"))).toBe(true);
+    rows("landing_pages")[0].status = "draft";
+    expect(await anon().landingPages.recordView({ slug: "spring", visitor: "v-9" })).toEqual({ counted: false });
+    expect(views()).toBe(0);
+  });
+
+  it("the beacon is under the public write ceiling, and the page calls it", () => {
+    expect(isPublicWritePath("/landingPages.recordView")).toBe(true);
+    const page = read("client/src/pages/LandingPage.tsx");
+    expect(page).toContain("recordView.mutate({ slug, visitor: visitor || undefined });");
+  });
+});

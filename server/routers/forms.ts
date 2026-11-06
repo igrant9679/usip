@@ -20,6 +20,7 @@ import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { notifyLeadRouted } from "../services/policyNotify";
 import { assertRowInWorkspace, sequenceInWorkspace } from "../services/foreignIds";
+import { cleanSubmission, submissionData } from "../services/publicSubmission";
 import { isAllowedRedirect, REDIRECT_URL_ERROR, safeRedirectUrl } from "@shared/safeRedirect";
 
 const FIELD = z.object({ key: z.string(), label: z.string(), required: z.boolean().optional() });
@@ -155,7 +156,7 @@ export const formsRouter = router({
    * records the submission.
    */
   submit: publicProcedure
-    .input(z.object({ publicId: z.string(), data: z.record(z.string(), z.any()) }))
+    .input(z.object({ publicId: z.string().max(64), data: submissionData }))
     .mutation(async ({ input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -163,7 +164,11 @@ export const formsRouter = router({
       if (!form || form.status !== "active") throw new TRPCError({ code: "NOT_FOUND", message: "Form not available" });
       if (!(await isWorkspaceLive(form.workspaceId))) throw new TRPCError({ code: "NOT_FOUND", message: "Form not available" });
 
-      const data = input.data ?? {};
+      // Only the form's own fields, as text, required ones filled (G41).
+      const cleaned = cleanSubmission(form.fields, input.data ?? {});
+      // A filled honeypot is a bot: it is told it worked, and nothing is kept.
+      if (cleaned.bot) return { ok: true, redirectUrl: safeRedirectUrl(form.redirectUrl) };
+      const data = cleaned.data;
       const email = str(data.email, 320);
       const rawName = str(data.name, 200);
       const firstName = str(data.firstName, 80) ?? (rawName ? rawName.split(" ")[0] : null);

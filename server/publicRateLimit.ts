@@ -71,6 +71,8 @@ const PUBLIC_WRITE_PROCEDURES = [
   "proposals.requestExtension",
   // The link sent to a new sign-in email (G32): token-gated, but public.
   "profile.confirmEmailChange",
+  // The landing page's view beacon (L12): a counter a script could spin.
+  "landingPages.recordView",
 ];
 
 /**
