@@ -260,10 +260,10 @@ export default function WorkflowsV2() {
   const toggleRule = trpc.workflows.toggle.useMutation({ onSuccess: () => utils.workflows.list.invalidate(), onError: (e) => toast.error(e.message) });
   const suggestions = trpc.workflowsAi.listSuggestions.useQuery(undefined as any, { retry: false });
   const genSuggestions = trpc.workflowsAi.generateSuggestions.useMutation({ onSuccess: () => { utils.workflowsAi.listSuggestions.invalidate(); toast.success("AI generated new workflow ideas"); }, onError: (e) => toast.error(e.message) });
-  const applySuggestion = trpc.workflowsAi.applySuggestion.useMutation({ onSuccess: () => { utils.workflowsAi.listSuggestions.invalidate(); utils.workflows.list.invalidate(); toast.success("Workflow created"); }, onError: (e) => toast.error(e.message) });
+  const applySuggestion = trpc.workflowsAi.applySuggestion.useMutation({ onSuccess: () => { utils.workflowsAi.listSuggestions.invalidate(); utils.workflows.list.invalidate(); toast.success("Workflow created, switched off — turn it on below when it's ready"); }, onError: (e) => toast.error(e.message) });
   const dismissSuggestion = trpc.workflowsAi.dismissSuggestion.useMutation({ onSuccess: () => utils.workflowsAi.listSuggestions.invalidate(), onError: (e) => toast.error(e.message) });
   const applyAllSuggestions = trpc.workflowsAi.applyAllSuggestions.useMutation({
-    onSuccess: (r) => { utils.workflowsAi.listSuggestions.invalidate(); utils.workflows.list.invalidate(); toast[r.failed.length ? "warning" : "success"](`${r.applied} workflow${r.applied === 1 ? "" : "s"} created${r.failed.length ? `, ${r.failed.length} failed` : ""}`); },
+    onSuccess: (r) => { utils.workflowsAi.listSuggestions.invalidate(); utils.workflows.list.invalidate(); toast[r.failed.length ? "warning" : "success"](`${r.applied} workflow${r.applied === 1 ? "" : "s"} created, switched off${r.failed.length ? `, ${r.failed.length} failed` : ""}`); },
     onError: (e) => toast.error(forbiddenMessage(e, "Only admins can add workflow rules")),
   });
 

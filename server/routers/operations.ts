@@ -80,6 +80,42 @@ export { evalConditions };
 
 /* ----- Standalone async helpers (exported for nightly batch) ----- */
 
+/**
+ * The deals this deal_stuck rule has already fired for since they entered their
+ * current stage. Both checks re-ran every action for every stuck deal on every
+ * pass, so a "create a task" rule added another task per stuck deal each night
+ * (G61). A deal now fires once per stay in a stage; moved on and stuck again,
+ * it fires again. Without stageEnteredAt, the stay is read off daysInStage.
+ */
+export async function dealsAlreadyFiredThisStage(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  ruleId: number,
+  deals: { id: number; daysInStage: number | null; stageEnteredAt: Date | string | null }[],
+  now = Date.now(),
+): Promise<Set<number>> {
+  const out = new Set<number>();
+  if (deals.length === 0) return out;
+  const runs = await db.select({ relatedId: workflowRuns.relatedId, runAt: workflowRuns.runAt }).from(workflowRuns)
+    .where(and(
+      eq(workflowRuns.ruleId, ruleId),
+      eq(workflowRuns.relatedType, "opportunity"),
+      inArray(workflowRuns.relatedId, deals.map((d) => d.id)),
+    ));
+  const lastRun = new Map<number, number>();
+  for (const r of runs) {
+    if (r.relatedId == null) continue;
+    const t = new Date(r.runAt).getTime();
+    if (t > (lastRun.get(r.relatedId) ?? -Infinity)) lastRun.set(r.relatedId, t);
+  }
+  for (const d of deals) {
+    const last = lastRun.get(d.id);
+    if (last === undefined) continue;
+    const entered = d.stageEnteredAt ? new Date(d.stageEnteredAt).getTime() : now - (d.daysInStage ?? 0) * 86_400_000;
+    if (last >= entered) out.add(d.id);
+  }
+  return out;
+}
+
 export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMatched: number; actionsTriggered: number }> {
   const db = await getDb();
   if (!db) return { rulesChecked: 0, dealsMatched: 0, actionsTriggered: 0 };
@@ -122,6 +158,7 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
       // evalConditions in below would evaluate every such rule FALSE forever.
       value: opportunities.value,
       winProb: opportunities.winProb,
+      stageEnteredAt: opportunities.stageEnteredAt,
     }).from(opportunities)
       .where(and(
         eq(opportunities.workspaceId, rule.workspaceId),
@@ -130,8 +167,10 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
         ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
       ));
 
+    const alreadyFired = await dealsAlreadyFiredThisStage(db, rule.id, stuckDeals);
     let firedForRule = 0;
     for (const deal of stuckDeals) {
+      if (alreadyFired.has(deal.id)) continue;
       /**
        * Runs through the SHARED dispatcher rather than a local copy. The local
        * one handled four action types — post_slack, notify_teams, and two names
@@ -181,6 +220,9 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
       actionsTriggered += Array.isArray(rule.actions) ? (rule.actions as unknown[]).length : 0;
       await db.insert(workflowRuns).values({
         workspaceId: rule.workspaceId, ruleId: rule.id, triggeredBy: "deal_stuck_nightly",
+        // Read back by dealsAlreadyFiredThisStage against stageEnteredAt, which
+        // the app writes; the same clock on both sides.
+        runAt: new Date(),
         // workflowRuns.status enum is success|failed|skipped — "error" fails the
         // INSERT, so the one run that had something to report was the one that
         // could not be logged. Same fix already applied to testFire below.
@@ -243,7 +285,9 @@ export const workflowsRouter = router({
     .input(z.object({
       name: z.string().min(1),
       description: z.string().optional(),
-      enabled: z.boolean().default(true),
+      // Off unless the caller says otherwise (G61): a rule fires as soon as it is
+      // enabled, so a new one waits until someone has finished it.
+      enabled: z.boolean().default(false),
       // Only triggers that actually fire at runtime (shared/workflowTriggers).
       // The inline list used to include nps_submitted / field_equals /
       // schedule — nothing dispatches those, so the API accepted rules that
@@ -379,6 +423,7 @@ export const workflowsRouter = router({
           // Same reason as the cron twin above: the conditions gate needs them.
           value: opportunities.value,
           winProb: opportunities.winProb,
+          stageEnteredAt: opportunities.stageEnteredAt,
         }).from(opportunities)
           .where(and(
             eq(opportunities.workspaceId, ctx.workspace.id),
@@ -387,8 +432,11 @@ export const workflowsRouter = router({
             ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
           ));
 
+        // Once per stay in a stage, as the nightly check (G61).
+        const alreadyFired = await dealsAlreadyFiredThisStage(db, rule.id, stuckDeals);
         let firedForRule = 0;
         for (const deal of stuckDeals) {
+          if (alreadyFired.has(deal.id)) continue;
           // Shared dispatcher — see checkDealAging above for why the local copy
           // that used to live here was wrong (six of the eight builder actions
           // did nothing, and the run was still logged "success").
@@ -416,6 +464,7 @@ export const workflowsRouter = router({
           // Log the workflow run
           await db.insert(workflowRuns).values({
             workspaceId: ctx.workspace.id, ruleId: rule.id, triggeredBy: "deal_stuck_check",
+            runAt: new Date(),
             // enum is success|failed|skipped — see checkDealAging above.
             status: errors.length === 0 ? "success" : "failed",
             actionsRun: rule.actions,

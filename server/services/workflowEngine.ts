@@ -86,10 +86,26 @@ export function evalConditions(
   spec: { all?: Array<{ field: string; op: string; value: any }>; any?: Array<{ field: string; op: string; value: any }> },
   payload: Record<string, any>,
 ): boolean {
+  /**
+   * The editor stores every condition value as the string the user typed, and
+   * payloads carry numbers and booleans, so a strict === meant "value equals
+   * 50000" never matched a deal worth 50000 (G61). A number or boolean on
+   * either side is compared as one; strings stay exact.
+   */
+  const same = (a: any, b: any): boolean => {
+    if (a === b) return true;
+    if (a == null || b == null) return false;
+    if (typeof a === "number" || typeof b === "number") {
+      const sa = String(a).trim(), sb = String(b).trim();
+      return sa !== "" && sb !== "" && Number(sa) === Number(sb);
+    }
+    if (typeof a === "boolean" || typeof b === "boolean") return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+    return false;
+  };
   const cmp = (op: string, a: any, b: any) => {
     switch (op) {
-      case "eq": return a === b;
-      case "neq": return a !== b;
+      case "eq": return same(a, b);
+      case "neq": return !same(a, b);
       case "gt": return Number(a) > Number(b);
       case "gte": return Number(a) >= Number(b);
       case "lt": return Number(a) < Number(b);
