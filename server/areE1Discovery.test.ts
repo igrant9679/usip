@@ -155,7 +155,7 @@ describe("the screen pass's writes (A34)", () => {
     for (const [id, score] of [[1, 80], [2, 90], [3, 50], [4, 50], [5, 20]] as const) {
       rows("prospect_queue").push({ id, workspaceId: WS, campaignId: 7, email: `p${id}@example.com`, title: "Clerk", sequenceStatus: "pending", enrichmentStatus: "complete", icpMatchScore: score });
     }
-    // A person approves prospect 4 by hand while the pass is running: it stands.
+    // While the pass is running a person approves prospect 4 and rejects 2: both stand.
     let writes = 0;
     const real = h.db.update;
     h.db.update = (t: any) => {
@@ -172,13 +172,21 @@ describe("the screen pass's writes (A34)", () => {
       const b = realSelect(p);
       if (!primed && !p) {
         const then = b.then;
-        b.then = (res: any, rej: any) => then.call(b, (v: any) => { if (Array.isArray(v) && v.some((r: any) => r.id === 4 && r.enrichmentStatus === "complete")) { primed = true; rows("prospect_queue").find((r) => r.id === 4).sequenceStatus = "approved"; } res(v); }, rej);
+        b.then = (res: any, rej: any) => then.call(b, (v: any) => {
+          if (Array.isArray(v) && v.some((r: any) => r.id === 4 && r.enrichmentStatus === "complete")) {
+            primed = true;
+            rows("prospect_queue").find((r) => r.id === 4).sequenceStatus = "approved";
+            Object.assign(rows("prospect_queue").find((r) => r.id === 2), { sequenceStatus: "skipped", rejectionReason: "Rejected by hand" });
+          }
+          res(v);
+        }, rej);
       }
       return b;
     };
     await runAreEngine({ workspaceId: WS });
     const status = (id: number) => rows("prospect_queue").find((r) => r.id === id);
-    expect([1, 2].map((id) => status(id).sequenceStatus)).toEqual(["approved", "approved"]);
+    expect(status(1).sequenceStatus).toBe("approved");
+    expect(status(2)).toMatchObject({ sequenceStatus: "skipped", rejectionReason: "Rejected by hand" });
     expect(status(3)).toMatchObject({ sequenceStatus: "skipped", rejectionReason: "Auto-screened: ICP match 50/100 below approve threshold 70" });
     expect(status(4).sequenceStatus).toBe("approved");
     expect(status(5)).toMatchObject({ sequenceStatus: "skipped", rejectionReason: "Auto-screened: ICP match 20/100 below approve threshold 70" });

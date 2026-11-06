@@ -131,6 +131,18 @@ describe("Re-evaluate All (A11)", () => {
     expect(rows("bulk_jobs")).toHaveLength(1);
   });
 
+  it("reads only its own kind of job", async () => {
+    rows("bulk_jobs").push({ id: 90, workspaceId: WS, kind: "are.bulk", status: "running", total: 3, done: 1, failed: 0, payload: {} });
+    expect(await caller(ADMIN).are.prospects.getReevalJob({ jobId: 90 })).toBeNull();
+  });
+
+  it("the screen follows the job, and says which rejections it re-scores", () => {
+    const page = read("client/src/pages/usip/ARECampaignDetail.tsx");
+    expect(page).toContain("trpc.are.prospects.getReevalJob.useQuery(");
+    expect(page).toContain("refetchInterval: reEvalJob ? 2000 : false");
+    expect(page).toContain("Rejections a\n                person made, and rejections for any other reason, are left as they are.");
+  });
+
   it("another workspace's job is not readable from here", async () => {
     const r = await caller(ADMIN).are.prospects.reEvaluateAll({ campaignId: 7 });
     rows("bulk_jobs")[0].workspaceId = 4;

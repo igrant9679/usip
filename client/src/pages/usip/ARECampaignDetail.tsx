@@ -2180,7 +2180,14 @@ export default function ARECampaignDetail() {
     { enabled: !!reEvalJob, refetchInterval: reEvalJob ? 2000 : false },
   );
   useEffect(() => {
-    if (!reEvalJob || !reEvalJobState) return;
+    if (!reEvalJob || reEvalJobState === undefined) return;
+    if (reEvalJobState === null) {
+      // The job is gone (or not this workspace's): stop polling rather than spin.
+      setReEvalProgress(null);
+      setReEvalJob(null);
+      if (reEvalToastId.current !== undefined) toast.dismiss(reEvalToastId.current);
+      return;
+    }
     const j = reEvalJobState;
     const done = j.done + j.failed;
     if (j.status === "queued" || j.status === "running") {
