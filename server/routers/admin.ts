@@ -37,7 +37,7 @@ import { checkPermission, getDb, resolvePermissionMap } from "../db";
 import { assertAccountEditableHere } from "../_core/accountScope";
 import { revokeAllSessions } from "../_core/sessionRevocation";
 import { settingsForMember } from "../_core/safeProjections";
-import { adminWsProcedure, isAdminRole, roleRank, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, assertOutranks, isAdminRole, leavesNoActiveSuperAdmin, roleRank, workspaceProcedure } from "../_core/workspace";
 import { invalidateSecurityPolicyCache } from "../_core/securityPolicy";
 import { getRequestClientIp } from "../_core/requestContext";
 import { publicProcedure, protectedProcedure, router } from "../_core/trpc";
@@ -61,6 +61,8 @@ import { formatSendDays } from "@shared/sendWindow";
 import { invalidateSendWindowCache } from "../services/sendWindow";
 import { dayRangeBounds } from "../services/calendarDeadline";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { escapeHtml } from "@shared/escapeHtml";
+import { isValidTimezone } from "@shared/availability";
 
 /**
  * `status IN (…)` over the LIVE-work set, as bound parameters.
@@ -287,7 +289,9 @@ export const settingsRouter = router({
   save: adminWsProcedure
     .input(
       z.object({
-        timezone: z.string().max(64).optional(),
+        // A real IANA zone (audit 2026-10-20, G68): free text was stored as
+        // typed, and every reader then fell back to UTC without a word.
+        timezone: z.string().max(64).refine(isValidTimezone, "Choose a time zone such as America/New_York or Europe/London").optional(),
         brandPrimary: z.string().regex(/^#([0-9A-Fa-f]{3,8})$/).optional(),
         brandAccent: z.string().regex(/^#([0-9A-Fa-f]{3,8})$/).optional(),
         emailFromName: z.string().max(120).nullable().optional(),
@@ -489,12 +493,23 @@ export const usageRouter = router({
       month,
       llmTokens: Number(row?.llmTokens ?? 0),
       emailsSent: Number(row?.emailsSent ?? 0),
-      seatsUsed: (await db.select({ c: count() }).from(workspaceMembers).where(eq(workspaceMembers.workspaceId, ctx.workspace.id)))[0]?.c ?? 0,
+      // Deactivated members hold no seat (audit 2026-10-20, G68).
+      seatsUsed: (await db.select({ c: count() }).from(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), isNull(workspaceMembers.deactivatedAt))))[0]?.c ?? 0,
     };
   }),
 });
 
 /* ─── Team ─────────────────────────────────────────────────────────────── */
+
+/** The member a team procedure acts on, in this workspace, or NOT_FOUND. */
+async function teamTarget(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, memberId: number) {
+  const [target] = await db
+    .select({ userId: workspaceMembers.userId, role: workspaceMembers.role })
+    .from(workspaceMembers)
+    .where(and(eq(workspaceMembers.id, memberId), eq(workspaceMembers.workspaceId, workspaceId)));
+  if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+  return target;
+}
 
 export const teamRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
@@ -667,18 +682,26 @@ export const teamRouter = router({
 
       // Send invitation email via workspace SMTP (Email Delivery settings),
       // unless the admin opted to only generate a shareable link.
+      //
+      // `emailSent` is what happened, not what was asked for (audit 2026-10-20,
+      // G47): sendSystemEmail reports a failure in its result rather than
+      // throwing, and the response used to echo input.sendEmail, so the Team
+      // page said "Invitation email sent" when nothing went out.
+      let emailSent = false;
+      let emailError: string | null = null;
       if (input.sendEmail) {
        try {
         const { sendSystemEmail } = await import("../emailDelivery");
-        const recipientName = input.name ?? input.email.split("@")[0];
-        await sendSystemEmail(ctx.workspace.id, {
+        // Names are escaped (audit 2026-10-20, G68): both are typed by people.
+        const recipientName = escapeHtml(input.name ?? input.email.split("@")[0]);
+        const sent = await sendSystemEmail(ctx.workspace.id, {
           to: input.email,
           subject: `You've been invited to join ${ctx.workspace.name}`,
           html: `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px">
   <h2 style="margin-bottom:8px">You're invited!</h2>
   <p>Hi ${recipientName},</p>
-  <p><strong>${ctx.workspace.name}</strong> has invited you to join their workspace on USIP as a <strong>${input.role}</strong>.</p>
+  <p><strong>${escapeHtml(ctx.workspace.name)}</strong> has invited you to join their workspace on USIP as a <strong>${input.role}</strong>.</p>
   <p style="margin:24px 0">
     <a href="${inviteUrl}" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600">Accept invitation</a>
   </p>
@@ -687,15 +710,19 @@ export const teamRouter = router({
   <p style="color:#9ca3af;font-size:12px">If you did not expect this invitation, you can safely ignore this email.</p>
 </div>`,
         });
-       } catch (_e) {
+        emailSent = sent.ok;
+        if (!sent.ok) emailError = sent.reason ?? "The email could not be sent.";
+       } catch (e) {
         // Non-fatal: invitation email failure should not block the invite
+        emailError = e instanceof Error ? e.message : String(e);
        }
       }
       return {
         ok: true,
         userId,
         reInvited: reIssueMemberId !== null,
-        emailSent: input.sendEmail,
+        emailSent,
+        emailError,
         // Only handed back when explicitly requested, so the response isn't a
         // token leak by default.
         inviteUrl: input.returnLink ? inviteUrl : null,
@@ -718,23 +745,12 @@ export const teamRouter = router({
       if (roleRank(input.role) > roleRank(ctx.member.role)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Cannot assign a role higher than your own" });
       }
-      if (
-        ctx.member.role !== "super_admin" &&
-        roleRank(target.role) >= roleRank(ctx.member.role) &&
-        target.userId !== ctx.user.id
-      ) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot change role of a peer or higher" });
-      }
+      assertOutranks(ctx, target, "Cannot change role of a peer or higher", { allowSelf: true });
 
-      // Prevent demoting the sole super_admin
-      if (target.role === "super_admin" && input.role !== "super_admin") {
-        const [{ c }] = await db
-          .select({ c: count() })
-          .from(workspaceMembers)
-          .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.role, "super_admin")));
-        if (Number(c) <= 1) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot demote the sole super_admin" });
-        }
+      // Prevent demoting the last ACTIVE super_admin — a deactivated one
+      // can't sign in to fix anything (audit 2026-10-20, G13).
+      if (input.role !== "super_admin" && await leavesNoActiveSuperAdmin(db, ctx.workspace.id, [target])) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot demote the sole super_admin" });
       }
 
       await db
@@ -757,10 +773,20 @@ export const teamRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const target = await teamTarget(db, ctx.workspace.id, input.memberId);
+      assertOutranks(ctx, target, "Cannot change the quota of a peer or higher", { allowSelf: true });
       await db
         .update(workspaceMembers)
         .set({ quota: input.quota === null ? null : String(input.quota) })
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_member",
+        entityId: target.userId,
+        after: { quota: input.quota },
+      });
       return { ok: true };
     }),
 
@@ -769,10 +795,20 @@ export const teamRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const target = await teamTarget(db, ctx.workspace.id, input.memberId);
+      assertOutranks(ctx, target, "Cannot change the title of a peer or higher", { allowSelf: true });
       await db
         .update(workspaceMembers)
         .set({ title: input.title })
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_member",
+        entityId: target.userId,
+        after: { title: input.title },
+      });
       return { ok: true };
     }),
 
@@ -792,20 +828,22 @@ export const teamRouter = router({
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       if (!target) throw new TRPCError({ code: "NOT_FOUND" });
       if (target.userId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot deactivate yourself" });
-      if (
-        ctx.member.role !== "super_admin" &&
-        roleRank(target.role) >= roleRank(ctx.member.role)
-      ) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot deactivate a peer or higher" });
-      }
+      assertOutranks(ctx, target, "Cannot deactivate a peer or higher");
 
-      // Sole super_admin guard
-      if (target.role === "super_admin") {
-        const [{ c }] = await db
-          .select({ c: count() })
-          .from(workspaceMembers)
-          .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.role, "super_admin")));
-        if (Number(c) <= 1) throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot deactivate the sole super_admin" });
+      // Sole ACTIVE super_admin guard (audit 2026-10-20, G13).
+      if (await leavesNoActiveSuperAdmin(db, ctx.workspace.id, [target])) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot deactivate the sole super_admin" });
+      }
+      /**
+       * Nor the workspace's owner, as team.delete already refuses (audit
+       * 2026-10-20, G13): the owner is who the engines report to with nobody
+       * present, and transferOwnership is the deliberate way to change that.
+       */
+      if (ctx.workspace.ownerUserId != null && ctx.workspace.ownerUserId === target.userId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This member owns the workspace. Transfer ownership to someone else before deactivating them.",
+        });
       }
 
       // Verify reassign target is an active member
@@ -840,10 +878,22 @@ export const teamRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Reactivating gives back sign-in and the role they held, so it takes
+      // the same rank as deactivating did (audit 2026-10-20, G46).
+      const target = await teamTarget(db, ctx.workspace.id, input.memberId);
+      assertOutranks(ctx, target, "Cannot reactivate a peer or higher");
       await db
         .update(workspaceMembers)
         .set({ deactivatedAt: null })
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
+      await recordAudit({
+        workspaceId: ctx.workspace.id,
+        actorUserId: ctx.user.id,
+        action: "update",
+        entityType: "workspace_member",
+        entityId: target.userId,
+        after: { reactivated: true },
+      });
       return { ok: true };
     }),
 
@@ -873,19 +923,10 @@ export const teamRouter = router({
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       if (!target) throw new TRPCError({ code: "NOT_FOUND" });
       if (target.userId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot delete yourself" });
-      if (
-        ctx.member.role !== "super_admin" &&
-        roleRank(target.role) >= roleRank(ctx.member.role)
-      ) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot delete a peer or higher" });
-      }
-      // Sole super_admin guard
-      if (target.role === "super_admin") {
-        const [{ c }] = await db
-          .select({ c: count() })
-          .from(workspaceMembers)
-          .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), eq(workspaceMembers.role, "super_admin")));
-        if (Number(c) <= 1) throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot delete the sole super_admin" });
+      assertOutranks(ctx, target, "Cannot delete a peer or higher");
+      // Sole ACTIVE super_admin guard (audit 2026-10-20, G13).
+      if (await leavesNoActiveSuperAdmin(db, ctx.workspace.id, [target])) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot delete the sole super_admin" });
       }
       /**
        * 🔴 THE SOLE-SUPER_ADMIN GUARD ABOVE PROTECTS THE ROLE, NOT THE OWNER
@@ -1073,28 +1114,16 @@ export const teamRouter = router({
        */
       const ids = Array.from(new Set(input.memberIds));
       const targets = await db
-        .select({ id: workspaceMembers.id, userId: workspaceMembers.userId, role: workspaceMembers.role })
+        .select({
+          id: workspaceMembers.id, userId: workspaceMembers.userId, role: workspaceMembers.role,
+          deactivatedAt: workspaceMembers.deactivatedAt, inviteToken: workspaceMembers.inviteToken,
+        })
         .from(workspaceMembers)
         .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), inArray(workspaceMembers.id, ids)));
       if (targets.length !== ids.length) throw new TRPCError({ code: "NOT_FOUND", message: "Some of those members were not found" });
-      for (const t of targets) {
-        if (ctx.member.role !== "super_admin" && roleRank(t.role) >= roleRank(ctx.member.role) && t.userId !== ctx.user.id) {
-          throw new TRPCError({ code: "FORBIDDEN", message: "Cannot change role of a peer or higher" });
-        }
-      }
-      const demotedSupers = input.role === "super_admin" ? 0 : targets.filter((t) => t.role === "super_admin").length;
-      if (demotedSupers > 0) {
-        const [{ c }] = await db
-          .select({ c: count() })
-          .from(workspaceMembers)
-          .where(and(
-            eq(workspaceMembers.workspaceId, ctx.workspace.id),
-            eq(workspaceMembers.role, "super_admin"),
-            isNull(workspaceMembers.deactivatedAt),
-          ));
-        if (Number(c) - demotedSupers < 1) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot demote the sole super_admin" });
-        }
+      for (const t of targets) assertOutranks(ctx, t, "Cannot change role of a peer or higher", { allowSelf: true });
+      if (input.role !== "super_admin" && await leavesNoActiveSuperAdmin(db, ctx.workspace.id, targets)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot demote the sole super_admin" });
       }
       await db
         .update(workspaceMembers)
@@ -1147,6 +1176,8 @@ export const teamRouter = router({
         if (target.userId === ctx.user.id) { skipped++; continue; }
         if (target.deactivatedAt) { skipped++; continue; }
         if (ctx.member.role !== "super_admin" && roleRank(target.role) >= roleRank(ctx.member.role)) { skipped++; continue; }
+        // The workspace owner, as single deactivate refuses (audit 2026-10-20, G13).
+        if (ctx.workspace.ownerUserId != null && target.userId === ctx.workspace.ownerUserId) { skipped++; continue; }
 
         // Reassign owned work — same definition as the single-member paths.
         await reassignOwnedWork(db, ctx.workspace.id, target.userId, input.reassignToUserId);
@@ -1337,19 +1368,21 @@ export const teamRouter = router({
         await db.update(users).set({ loginMethod: "invite" }).where(eq(users.id, row.userId));
       }
       // Resend invitation email via workspace SMTP (Email Delivery settings)
+      let emailSent = false;
+      let emailError: string | null = null;
       try {
         const { sendSystemEmail } = await import("../emailDelivery");
         const appOrigin = input.origin ?? publicAppOrigin();
         const resendUrl = `${appOrigin}/invite/accept?token=${newToken}`;
-        const recipientName = row.name ?? row.email?.split("@")[0];
-        await sendSystemEmail(ctx.workspace.id, {
+        const recipientName = escapeHtml(row.name ?? row.email?.split("@")[0]);
+        const sent = await sendSystemEmail(ctx.workspace.id, {
           to: row.email!,
           subject: `Reminder: You've been invited to join ${ctx.workspace.name}`,
           html: `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px">
   <h2 style="margin-bottom:8px">Invitation reminder</h2>
   <p>Hi ${recipientName},</p>
-  <p>This is a reminder that you have been invited to join <strong>${ctx.workspace.name}</strong> on USIP as a <strong>${row.role}</strong>.</p>
+  <p>This is a reminder that you have been invited to join <strong>${escapeHtml(ctx.workspace.name)}</strong> on USIP as a <strong>${row.role}</strong>.</p>
   <p style="margin:24px 0">
     <a href="${resendUrl}" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600">Accept invitation</a>
   </p>
@@ -1358,16 +1391,19 @@ export const teamRouter = router({
   <p style="color:#9ca3af;font-size:12px">If you did not expect this invitation, you can safely ignore this email.</p>
 </div>`,
         });
-      } catch (_e) { /* Non-fatal */ }
+        emailSent = sent.ok;
+        if (!sent.ok) emailError = sent.reason ?? "The email could not be sent.";
+      } catch (e) { emailError = e instanceof Error ? e.message : String(e); }
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,
         action: "update",
         entityType: "workspace_member",
         entityId: row.userId,
-        after: { action: "invitation_resent", email: row.email },
+        after: { action: "invitation_resent", email: row.email, emailSent },
       });
-      return { ok: true };
+      // What happened, not what was attempted (G47, as team.invite).
+      return { ok: true, emailSent, emailError };
     }),
 
   /**
@@ -1481,19 +1517,21 @@ export const teamRouter = router({
         .set({ inviteToken: newToken, inviteExpiresAt: newExpiresAt3 })
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       // Send password-setup email
+      let emailSent = false;
+      let emailError: string | null = null;
       try {
         const { sendSystemEmail } = await import("../emailDelivery");
         const appOrigin = input.origin ?? publicAppOrigin();
         const setupUrl = `${appOrigin}/invite/accept?token=${newToken}`;
-        const recipientName = row.name ?? row.email?.split("@")[0];
-        await sendSystemEmail(ctx.workspace.id, {
+        const recipientName = escapeHtml(row.name ?? row.email?.split("@")[0]);
+        const sent = await sendSystemEmail(ctx.workspace.id, {
           to: row.email!,
           subject: `Action required: Set your password for ${ctx.workspace.name}`,
           html: `
 <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px">
   <h2 style="margin-bottom:8px">Set your password</h2>
   <p>Hi ${recipientName},</p>
-  <p>You joined <strong>${ctx.workspace.name}</strong> on USIP but haven't set a local password yet.</p>
+  <p>You joined <strong>${escapeHtml(ctx.workspace.name)}</strong> on USIP but haven't set a local password yet.</p>
   <p>Setting a password lets you sign in directly at <em>usipsales-8xkycm4e.manus.space/login</em> without needing to go through the Manus sign-in portal every time.</p>
   <p style="margin:24px 0">
     <a href="${setupUrl}" style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600">Set my password</a>
@@ -1503,16 +1541,18 @@ export const teamRouter = router({
   <p style="color:#9ca3af;font-size:12px">If you did not expect this email, you can safely ignore it.</p>
 </div>`,
         });
-      } catch (_e) { /* Non-fatal */ }
+        emailSent = sent.ok;
+        if (!sent.ok) emailError = sent.reason ?? "The email could not be sent.";
+      } catch (e) { emailError = e instanceof Error ? e.message : String(e); }
       await recordAudit({
         workspaceId: ctx.workspace.id,
         actorUserId: ctx.user.id,
         action: "update",
         entityType: "workspace_member",
         entityId: row.userId,
-        after: { action: "password_setup_email_sent", email: row.email },
+        after: { action: "password_setup_email_sent", email: row.email, emailSent },
       });
-      return { ok: true };
+      return { ok: true, emailSent, emailError };
     }),
 
   /**
@@ -1739,8 +1779,11 @@ export const teamRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       await getOrSeedSettings(ctx.workspace.id);
+      // 0 is stored as 0, which every reader treats as "never". It used to be
+      // stored as null, which every reader turned into 7 days (audit
+      // 2026-10-20, G47).
       await db.update(workspaceSettings)
-        .set({ inviteExpiryDays: input.days === 0 ? null : input.days })
+        .set({ inviteExpiryDays: input.days })
         .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
       await recordAudit({
         workspaceId: ctx.workspace.id,
@@ -2078,9 +2121,7 @@ export const teamRouter = router({
       if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
 
       // Role-rank guard: cannot edit a member at or above your own rank
-      if (ctx.member.role !== "super_admin" && roleRank(member.role) >= roleRank(ctx.member.role)) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot edit a member at or above your role" });
-      }
+      assertOutranks(ctx, member, "Cannot edit a member at or above your role");
 
       // If promoting to a role above the caller's rank, block it
       if (input.role && ctx.member.role !== "super_admin" && roleRank(input.role) >= roleRank(ctx.member.role)) {
@@ -2190,10 +2231,13 @@ export const teamRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
       const [member] = await db
-        .select({ userId: workspaceMembers.userId })
+        .select({ userId: workspaceMembers.userId, role: workspaceMembers.role })
         .from(workspaceMembers)
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
+      // An admin could grant or deny a fellow admin's (or their own) rights
+      // (audit 2026-10-20, G46).
+      assertOutranks(ctx, member, "Cannot change the permissions of a member at or above your role");
 
       /**
        * Reject unknown keys rather than storing them. The schema accepted any
@@ -2283,10 +2327,17 @@ export const dangerZoneRouter = router({
    *
    * Safety: admin-only, read-only, and every table name is validated against
    * /^[a-z0-9_]+$/ before it can reach the COUNT(*) — no injection surface.
+   *
+   * The row counts are of the WHOLE table, every workspace's rows, so they go
+   * to the platform owner only (`users.role = "admin"`); a workspace admin
+   * still learns whether the table exists, which is what verifying a migration
+   * needs (audit 2026-10-20, G68: any workspace's admin read platform-wide
+   * counts).
    */
   tableStatus: adminWsProcedure
     .input(z.object({ tables: z.array(z.string().regex(/^[a-z0-9_]+$/)).min(1).max(25) }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      const platformOwner = ctx.user.role === "admin";
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const out: Array<{ table: string; exists: boolean; rows: number | null }> = [];
@@ -2299,7 +2350,7 @@ export const dangerZoneRouter = router({
         )) as unknown as [Array<{ n: number }>];
         const exists = Number(existsRows?.[0]?.n ?? 0) > 0;
         let rows: number | null = null;
-        if (exists) {
+        if (exists && platformOwner) {
           const [cnt] = (await db.execute(
             sql.raw(`SELECT COUNT(*) AS n FROM \`${t}\``),
           )) as unknown as [Array<{ n: number }>];
@@ -2461,9 +2512,10 @@ export const dangerZoneRouter = router({
   }),
 
   /**
-   * Export workspace data as a JSON summary.
-   * Returns counts and a sample of each entity type.
-   * Full export (CSV per entity) would require streaming — this returns a JSON blob.
+   * A JSON summary of the workspace: how many of each record type it holds.
+   * Counts only, no records — the Danger zone card says so (audit 2026-10-20,
+   * G48: it was labelled "Export all workspace data"). A full export would
+   * need streaming per entity.
    */
   exportData: adminWsProcedure.mutation(async ({ ctx }) => {
     const db = await getDb();

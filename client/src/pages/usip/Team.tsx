@@ -37,6 +37,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { isAdminRole, rankOf, ROLES, type Role } from "@shared/roleRank";
 import { tablistProps, tabProps } from "@/lib/tabs";
+import { inviteResult, roleLabel } from "@/lib/teamMessages";
 
 
 function roleTone(r: Role) {
@@ -200,10 +201,11 @@ export default function Team() {
   }, [data, filter, roleFilter, showInactive]);
 
   const invite = trpc.team.invite.useMutation({
-    onSuccess: (res: any) => {
+    onSuccess: (res) => {
       utils.team.list.invalidate();
       setInviteOpen(false);
-      toast.success(res?.reInvited ? "Invitation re-sent" : "Invitation email sent");
+      const shown = inviteResult(res);
+      toast[shown.tone](shown.text);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -424,13 +426,18 @@ export default function Team() {
     onError: (e) => toast.error(e.message),
   });
 
+  // What happened, not what was asked for (audit 2026-10-20, G47).
   const resendInvitation = trpc.team.resendInvitation.useMutation({
-    onSuccess: () => toast.success("Invitation re-sent"),
+    onSuccess: (res) => res.emailSent
+      ? toast.success("Invitation re-sent")
+      : toast.warning(`The invitation was renewed but the email didn't send: ${res.emailError ?? "unknown error"}. Use Copy link to share it.`),
     onError: (e) => toast.error(e.message),
   });
 
   const resendPasswordSetup = trpc.team.resendPasswordSetup.useMutation({
-    onSuccess: () => toast.success("Password setup email sent"),
+    onSuccess: (res) => res.emailSent
+      ? toast.success("Password setup email sent")
+      : toast.warning(`The password setup email didn't send: ${res.emailError ?? "unknown error"}.`),
     onError: (e) => toast.error(e.message),
   });
 
@@ -679,7 +686,19 @@ export default function Team() {
                               <select aria-label="Role"
                                 className="text-xs border rounded px-1.5 py-1 bg-background"
                                 value={m.role}
-                                onChange={(e) => changeRole.mutate({ memberId: m.memberId, role: e.target.value as Role })}
+                                onChange={(e) => {
+                                  // Confirmed first (audit 2026-10-20, G13/G47): a role is
+                                  // what someone may see and do, and this changed it on
+                                  // the first click. The select shows the stored role
+                                  // until the change is confirmed and saved.
+                                  const role = e.target.value as Role;
+                                  confirmAction({
+                                    title: `Make ${m.name ?? m.email ?? "this member"} ${roleLabel(role)}?`,
+                                    description: `They are ${roleLabel(m.role)} now. The change applies at once, to everything they can see and do.`,
+                                    confirmLabel: "Change role",
+                                    destructive: false,
+                                  }, () => changeRole.mutate({ memberId: m.memberId, role }));
+                                }}
                               >
                                 {ROLES.filter((r) => rankOf(r) <= rankOf(myRole) || r === m.role).map((r) => (
                                   <option key={r} value={r}>
@@ -1106,7 +1125,7 @@ export default function Team() {
                   />
                   <p className="text-xs text-muted-foreground">
                     Current: {wsSettings && (wsSettings as any).inviteExpiryDays != null
-                      ? `${(wsSettings as any).inviteExpiryDays} days`
+                      ? (Number((wsSettings as any).inviteExpiryDays) === 0 ? "never expire" : `${(wsSettings as any).inviteExpiryDays} days`)
                       : "7 days (default)"}
                   </p>
                 </div>

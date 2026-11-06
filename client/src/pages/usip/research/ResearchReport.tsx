@@ -16,7 +16,7 @@ import { ChevronDown, Pencil, Telescope } from "lucide-react";
 import { Crumbs, Section, StatusBadge } from "@/components/usip/research/ResearchFields";
 import { MarketExtras } from "@/components/usip/research/MarketExtras";
 import { RunStatusBadge } from "@/components/usip/research/ResearchRuns";
-import { ExtLink, ReportTable, ScoreDots, StatTile, Td } from "@/components/usip/research/ReportBits";
+import { ExtLink, ReportTable, ScoreDots, SourceRef, StatTile, Td } from "@/components/usip/research/ReportBits";
 import { SECTOR_SCORE_KEYS, SECTOR_SCORE_LABEL } from "@shared/researchShape";
 import {
   DEFAULT_WEIGHTS, WEIGHT_CHOICES, cleanWeights, competitorsByCategory, headlineFigure, intermediaries,
@@ -117,7 +117,7 @@ function countsOf(r: Report): Partial<Record<SectionKey, number>> {
     competitors: r.market.content.competitors.length,
     glossary: r.market.content.glossary.length,
     questions: openQuestions(r.market, r.sectors).length,
-    briefs: r.runs.filter((x) => x.brief).length,
+    briefs: r.runs.filter((x) => x.hasBrief).length,
   };
 }
 
@@ -364,7 +364,7 @@ function Glossary({ r }: { r: Report }) {
           {terms.map((g, i) => (
             <div key={i} className="p-3 grid gap-1 md:grid-cols-[14rem_1fr] text-sm">
               <dt className="font-medium">{g.term}</dt>
-              <dd className="text-muted-foreground">{g.definition}{g.source ? <> · <ExtLink url={g.source}>source</ExtLink></> : null}</dd>
+              <dd className="text-muted-foreground">{g.definition}{g.source ? <> · <SourceRef value={g.source} /></> : null}</dd>
             </div>
           ))}
         </dl>
@@ -453,7 +453,7 @@ function Questions({ r }: { r: Report }) {
 /* ── Research briefs ────────────────────────────────────────────────────── */
 
 function Briefs({ r }: { r: Report }) {
-  const runs = r.runs.filter((x) => x.brief);
+  const runs = r.runs.filter((x) => x.hasBrief);
   const [open, setOpen] = useState<number | null>(runs[0]?.id ?? null);
   return (
     <Section title="Research briefs" description="What each AI research run found, in its own words, with the source of every figure. Removed runs are included.">
@@ -471,7 +471,7 @@ function Briefs({ r }: { r: Report }) {
               </button>
               {open === x.id && (
                 <div className="px-3 pb-4 space-y-2">
-                  <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">{x.brief}</div>
+                  <RunBrief id={x.id} />
                   <Link href={`/research/runs/${x.id}`} className="text-xs underline">Open the run</Link>
                 </div>
               )}
@@ -481,6 +481,14 @@ function Briefs({ r }: { r: Report }) {
       )}
     </Section>
   );
+}
+
+/** One run's brief, read when it is opened (P107: the report carried them all). */
+function RunBrief({ id }: { id: number }) {
+  const q = trpc.research.runs.brief.useQuery({ id });
+  if (q.error) return <QueryError message={q.error.message} onRetry={() => q.refetch()} />;
+  if (!q.data) return <TableSkeleton rows={3} />;
+  return <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">{q.data.brief}</div>;
 }
 
 /* ── Results ────────────────────────────────────────────────────────────── */

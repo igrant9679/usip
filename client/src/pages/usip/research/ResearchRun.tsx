@@ -16,7 +16,8 @@ import { toast } from "sonner";
 import { ChevronDown, ExternalLink, Sparkles, Square } from "lucide-react";
 import { Crumbs, Section, readableText, useResearchRoles } from "@/components/usip/research/ResearchFields";
 import { RunStatusBadge } from "@/components/usip/research/ResearchRuns";
-import { MARKET_RUN_PARTS, RUN_PART_LABEL, SECTOR_RUN_PARTS } from "@shared/researchShape";
+import { MARKET_RUN_PARTS, RESEARCH_SOURCES_MAX, RUN_PART_LABEL, SECTOR_RUN_PARTS } from "@shared/researchShape";
+import { confirmAction } from "@/components/usip/Common";
 import { RESEARCH_MODELS, formatUsd, researchModelOf } from "@shared/researchModels";
 
 /** The fields a part covers, for showing it. */
@@ -41,7 +42,7 @@ export default function ResearchRun() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
   const [, navigate] = useLocation();
-  const { canEdit } = useResearchRoles();
+  const { canEdit, canDelete: isAdmin } = useResearchRoles();
   const q = trpc.research.runs.get.useQuery({ id }, {
     enabled: Number.isFinite(id) && id > 0,
     refetchInterval: (query) => {
@@ -68,11 +69,18 @@ export default function ResearchRun() {
 
   const cancel = trpc.research.runs.cancel.useMutation({ onError: (e) => toast.error(e.message), onSuccess: () => q.refetch() });
   const redraft = trpc.research.runs.redraft.useMutation({ onError: (e) => toast.error(e.message), onSuccess: () => { toast.success("Drafting again"); q.refetch(); } });
-  const discard = trpc.research.runs.discard.useMutation({ onError: (e) => toast.error(e.message), onSuccess: () => { toast.success("Draft discarded"); q.refetch(); } });
+  const discard = trpc.research.runs.discard.useMutation({ onError: (e) => toast.error(e.message), onSuccess: async () => { toast.success("Draft discarded"); await utils.research.runs.invalidate(); } });
   const accept = trpc.research.runs.accept.useMutation({
-    onError: (e) => toast.error(e.message),
+    onError: (e) => {
+      toast.error(e.message);
+      // Someone saved the market or sector since: show what it is now, so the
+      // review is against it (audit 2026-10-20, P26).
+      if (e.data?.code === "CONFLICT" || e.data?.code === "PRECONDITION_FAILED") q.refetch();
+    },
     onSuccess: async (r) => {
       toast.success("Saved");
+      // Sources past the cap were not added (P102: they were cut silently).
+      if (r.sourcesNotAdded > 0) toast.warning(`${r.sourcesNotAdded} of the run's sources were not added: a ${r.resultType} keeps at most ${RESEARCH_SOURCES_MAX}. Remove some on its page to make room.`);
       await utils.research.invalidate();
       navigate(r.resultType === "market" ? `/research/markets/${r.resultId}` : `/research/sectors/${r.resultId}`);
     },
@@ -101,6 +109,13 @@ export default function ResearchRun() {
   if (run.kind === "sector" && run.sectorId != null) crumbs.push({ href: `/research/sectors/${run.sectorId}`, label: run.subject });
   const reviewable = run.status === "done" && !run.outcome && draft;
   const nothingPicked = (picked?.size ?? 0) === 0 && (pickedPersonas?.size ?? 0) === 0;
+  // Stop, Discard and Draft again: a manager who started the run, or an
+  // admin, as the server checks (audit 2026-10-20, P98).
+  const ownsRun = canEdit && (run.mine || isAdmin);
+  const confirmDiscard = () => confirmAction(
+    { title: "Discard this draft?", description: "Nothing from it is saved, and it can't be saved later. What the run cost still counts; its brief and sources stay on this page.", confirmLabel: "Discard draft" },
+    () => discard.mutate({ id }),
+  );
 
   return (
     <Shell title={`Research: ${run.subject}`}>
@@ -108,10 +123,10 @@ export default function ResearchRun() {
       <PageHeader
         icon={<Sparkles className="size-5" />}
         title={`AI research: ${run.subject}`}
-        description={`${refresh ? "Refresh of this" : "A new"} ${target}${run.focus ? `. Focus: ${run.focus}` : ""}`}
+        description={`${run.targetGone ? `The ${target} this run was for was deleted` : `${refresh ? "Refresh of this" : "A new"} ${target}`}${run.focus ? `. Focus: ${run.focus}` : ""}`}
       >
         <RunStatusBadge status={run.status} outcome={run.outcome} />
-        {working && (run.mine || canEdit) && (
+        {working && ownsRun && (
           <Button variant="outline" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate({ id })}>
             <Square className="size-3.5 mr-1" /> Stop
           </Button>
@@ -137,7 +152,7 @@ export default function ResearchRun() {
         {run.status === "failed" && (
           <Card><CardContent className="pt-5 text-sm space-y-3">
             <div className="text-destructive">{run.error ?? "The run failed."}</div>
-            {run.brief && canEdit && !run.removedAt && (
+            {run.brief && ownsRun && !run.removedAt && (
               <div className="flex items-center gap-2 flex-wrap">
                 <Button size="sm" disabled={redraft.isPending} onClick={() => redraft.mutate({ id })}>Draft again from this research</Button>
                 <span className="text-xs text-muted-foreground">The research is saved, so only the drafting step runs again.</span>
@@ -168,12 +183,19 @@ export default function ResearchRun() {
           </CardContent></Card>
         )}
 
-        {reviewable && (
+        {reviewable && run.targetGone && (
+          <Card><CardContent className="pt-5 text-sm space-y-3">
+            <div>{run.targetGone}</div>
+            {ownsRun && <Button size="sm" variant="outline" disabled={discard.isPending} onClick={confirmDiscard}>Discard draft</Button>}
+          </CardContent></Card>
+        )}
+
+        {reviewable && !run.targetGone && (
           <>
             <Section
               title="Review the draft"
               description={refresh
-                ? "Tick what to take. A ticked part replaces what you have (sources are added to yours). Saving makes a new version, so you can restore the old one."
+                ? `Tick what to take. A ticked part replaces what you have (sources are added to yours, up to ${RESEARCH_SOURCES_MAX}). Saving makes a new version, so you can restore the old one.`
                 : `Tick what to keep. Saving creates the ${target} as a Draft; you mark it Researched once you have checked it.`}
             >
               {run.dropped.length > 0 && (
@@ -245,7 +267,7 @@ export default function ResearchRun() {
                   >
                     Save selected
                   </Button>
-                  <Button variant="outline" disabled={discard.isPending} onClick={() => discard.mutate({ id })}>Discard draft</Button>
+                  {ownsRun && <Button variant="outline" disabled={discard.isPending} onClick={confirmDiscard}>Discard draft</Button>}
                 </div>
               ) : <p className="text-xs text-muted-foreground">Managers and admins save research.</p>}
             </Section>

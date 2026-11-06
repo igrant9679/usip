@@ -25,6 +25,7 @@ import { router, publicProcedure } from "../_core/trpc";
 import { adminWsProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, isActiveMember } from "../_core/activeMembers";
 import { getDb } from "../db";
+import { isWorkspaceLive } from "../_core/workspaceArchive";
 import {
   activities, bookingLinks, chatAgentKnowledge, chatAgents, chatSessions, enrollments, leads, notifications, tasks, workspaces,
 } from "../../drizzle/schema";
@@ -404,7 +405,7 @@ export const chatAgentsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [a] = await db.select().from(chatAgents).where(eq(chatAgents.slug, input.slug));
-    if (!a || a.status !== "published" || a.mode === "off") {
+    if (!a || a.status !== "published" || a.mode === "off" || !(await isWorkspaceLive(a.workspaceId))) {
       throw new TRPCError({ code: "NOT_FOUND", message: "This chat is not available." });
     }
     return {
@@ -436,7 +437,8 @@ export const chatAgentsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [agent] = await db.select().from(chatAgents).where(eq(chatAgents.slug, input.slug));
-      if (!agent || agent.status !== "published" || agent.mode === "off") {
+      // Archived workspaces don't chat (audit 2026-10-20, G36).
+      if (!agent || agent.status !== "published" || agent.mode === "off" || !(await isWorkspaceLive(agent.workspaceId))) {
         throw new TRPCError({ code: "NOT_FOUND", message: "This chat is not available." });
       }
 

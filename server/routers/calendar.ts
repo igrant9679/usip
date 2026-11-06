@@ -125,8 +125,9 @@ export const calendarRouter = router({
         provider: "outlook_oauth",
         label: input.label ?? "Outlook Calendar",
         email: input.email,
-        oauthAccessToken: input.oauthAccessToken,
-        oauthRefreshToken: input.oauthRefreshToken,
+        // Encrypted at rest, as mailbox secrets are (audit 2026-10-20, C4).
+        oauthAccessToken: encryptField(input.oauthAccessToken),
+        oauthRefreshToken: encryptField(input.oauthRefreshToken),
         oauthTokenExpiry: input.oauthTokenExpiry,
         oauthScope: "Calendars.ReadWrite offline_access",
         calendarId: input.calendarId,

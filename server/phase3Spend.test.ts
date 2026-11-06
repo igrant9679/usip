@@ -293,7 +293,8 @@ describe("background model calls name their workspace", () => {
   const REQUEST_SCOPED = "Inside a workspace procedure: the request context supplies the workspace.";
   const ALLOWED: Record<string, string> = {
     "server/llmStreamRoute.ts::/api/llm/stream": "Passes the route's workspaceId inside params.",
-    "server/routers/researchPipeline.ts::llmJson": "Called only from researchPipeline.start, a workspace procedure.",
+    // 2026-11-06 (audit P144): researchPipeline's llmJson left this list. Its
+    // stages now run after the response, so it names the workspace itself.
   };
   for (const k of [
     "accountBriefs.ts::generate", "aiFeatures.ts::scoreChurnRisk", "aiFeatures.ts::bulkScoreChurnRisk", "aiFeatures.ts::suggestNextAction",
