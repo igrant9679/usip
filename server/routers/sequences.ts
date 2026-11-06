@@ -2433,6 +2433,13 @@ export const emailDraftsRouter = router({
       toContactId: z.number().optional(),
       toLeadId: z.number().optional(),
       tone: z.enum(["concise", "warm", "formal", "punchy"]).default("concise"),
+      /**
+       * Write the copy and save nothing (audit 2026-10-20, R50). The "Use AI"
+       * buttons beside a send form fill that form; each click also left a
+       * pending_review draft in the queue, with no recipient when several
+       * leads were selected.
+       */
+      previewOnly: z.boolean().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -2530,6 +2537,7 @@ ${HUMAN_COPY_RULES}${brandBlock ? `\n\n${brandBlock}` : ""}`,
         body = `Hi {{firstName}},\n\n${input.prompt}\n\nWould a 15-min call next week be useful?\n\nBest,\n{{senderName}}`;
       }
 
+      if (input.previewOnly) return { id: null, subject, body };
       const r = await db.insert(emailDrafts).values({
         workspaceId: ctx.workspace.id,
         subject, body,
@@ -2541,7 +2549,7 @@ ${HUMAN_COPY_RULES}${brandBlock ? `\n\n${brandBlock}` : ""}`,
         aiPrompt: input.prompt,
         createdByUserId: ctx.user.id,
       });
-      return { id: Number((r as any)[0]?.insertId ?? 0), subject, body };
+      return { id: Number((r as any)[0]?.insertId ?? 0) as number | null, subject, body };
     }),
 
   /**

@@ -20,7 +20,8 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { proposeMeetingForProspect, regenerateMeetingProposal, regenerateProposalsNotSince, regenerateStaleProposals, runMeetingAutopilotForWorkspace, sendMeetingInvite, startsInProposalWindow } from "../services/meetingScheduler";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
-import { assertOutboundNotPaused, isOutboundPaused } from "../services/outboundPause";
+import { assertOutboundNotPaused, assertOutboundNotPausedFor, isOutboundPaused } from "../services/outboundPause";
+import { deleteMeetingEvent, hasCalendarEvent, moveMeetingEvent, type CalendarOutcome } from "../services/meetingCalendarEvent";
 import { cancelSentInvites } from "../services/cancelInvites";
 import { MEETING_STATUSES, remindableMeetingStatuses } from "@shared/meetingStatus";
 
@@ -433,6 +434,31 @@ export const meetingsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [m] = await db.select().from(meetings)
+        .where(and(eq(meetings.id, input.id), eq(meetings.workspaceId, ctx.workspace.id)));
+      if (!m) throw new TRPCError({ code: "NOT_FOUND" });
+      const newStart = new Date(input.scheduledAt);
+      if (!Number.isFinite(newStart.getTime())) throw new TRPCError({ code: "BAD_REQUEST", message: "That is not a valid time." });
+      /**
+       * The invite moves with the meeting (audit 2026-10-20, O28). The row
+       * used to move alone: the attendee's calendar kept the old time while
+       * the reminder named the new one. Moving the provider event sends the
+       * attendee an update, which is a calendar event to an outside attendee,
+       * so it is held while outbound is paused (the help text lists those);
+       * a meeting with no event on a calendar sends nothing and moves as
+       * before. A calendar that refuses leaves the meeting where it was.
+       */
+      let calendar: CalendarOutcome = { kind: "none" };
+      if (await hasCalendarEvent(db, ctx.workspace.id, m)) {
+        await assertOutboundNotPausedFor(ctx.workspace.id, [m.contactEmail]);
+        calendar = await moveMeetingEvent(db, ctx.workspace.id, m, newStart);
+        if (calendar.kind === "failed") {
+          throw new TRPCError({
+            code: "BAD_GATEWAY",
+            message: `The calendar refused to move the invite, so the meeting was not moved: ${calendar.detail}`,
+          });
+        }
+      }
       /**
        * `reminderSentAt` is cleared, because it records "we have reminded them
        * about THIS meeting" and the meeting has just moved. Left stamped, the
@@ -445,9 +471,11 @@ export const meetingsRouter = router({
         status: "rescheduled",
         scheduledAt: new Date(input.scheduledAt),
         reminderSentAt: null,
+        // Removed from the calendar by hand: there is no event left to point at.
+        ...(calendar.kind === "gone" ? { calendarEventId: null } : {}),
       } as never)
         .where(and(eq(meetings.id, input.id), eq(meetings.workspaceId, ctx.workspace.id)));
-      return { ok: true };
+      return { ok: true, calendar: calendar.kind };
     }),
 
   complete: repProcedure
@@ -474,7 +502,27 @@ export const meetingsRouter = router({
     const [m] = await db.select().from(meetings)
       .where(and(eq(meetings.id, input.id), eq(meetings.workspaceId, ctx.workspace.id)));
     if (!m) throw new TRPCError({ code: "NOT_FOUND" });
-    await db.update(meetings).set({ status: "cancelled" } as never)
+
+    /**
+     * The invite is cancelled with the meeting (audit 2026-10-20, O28). This
+     * used to set a status and leave the event on the owner's calendar, so
+     * the attendee was never told and turned up to a meeting nobody else
+     * expected. Deleting the event is what sends them the cancellation, as
+     * cancelInvites.ts does. Not held by the outbound pause: cancelling a
+     * meeting is one of the things the pause allows. A calendar that refuses
+     * leaves the meeting as it was, so it can be tried again.
+     */
+    const calendar = await deleteMeetingEvent(db, ctx.workspace.id, m);
+    if (calendar.kind === "failed") {
+      throw new TRPCError({
+        code: "BAD_GATEWAY",
+        message: `The calendar refused to cancel the invite, so the meeting is unchanged: ${calendar.detail}`,
+      });
+    }
+    await db.update(meetings).set({
+      status: "cancelled",
+      ...(calendar.kind === "none" ? {} : { calendarEventId: null }),
+    } as never)
       .where(and(eq(meetings.id, input.id), eq(meetings.workspaceId, ctx.workspace.id)));
 
     // A cancelled meeting used to be three lines that set a status and nothing
@@ -483,7 +531,7 @@ export const meetingsRouter = router({
     // actively cancelled (often meaning "not this time", i.e. still
     // interested) just vanished. Same rebound treatment now.
     const reboundTaskId = await createMeetingReboundTask(db, ctx.workspace.id, m, "cancelled");
-    return { ok: true, reboundTaskId };
+    return { ok: true, reboundTaskId, calendar: calendar.kind };
   }),
 
   /**

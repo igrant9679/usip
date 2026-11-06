@@ -428,6 +428,15 @@ export async function saveScrapeJobAndQueue(
   sourceType: ScrapeSourceType,
   query: string,
   prospects: Array<Record<string, unknown>>,
+  opts: {
+    /**
+     * The caller already filtered these rows against the workspace's whole
+     * queue and claimed them within its own run (runDiscovery does, once per
+     * run). Reading the whole queue again for every source it saves was the
+     * engine's N+1 (audit 2026-10-20, A34). Every other caller leaves it unset.
+     */
+    identityChecked?: boolean;
+  } = {},
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -437,11 +446,18 @@ export async function saveScrapeJobAndQueue(
   // campaign (one campaign per prospect) and not for the same one (dedup).
   // The engine pre-filters its own discovery; this is the choke point that
   // covers every other caller, so a new ingest path cannot skip the rule.
-  if (campaignId && prospects.length > 0) {
-    const { workspaceQueueIdentityIndex, existingClaim } = await import("../../services/are/queueIdentity");
+  if (campaignId && prospects.length > 0 && !opts.identityChecked) {
+    const { workspaceQueueIdentityIndex, existingClaim, queueIdentityKeys } = await import("../../services/are/queueIdentity");
     const index = await workspaceQueueIdentityIndex(workspaceId);
     const before = prospects.length;
-    prospects = prospects.filter((p) => !existingClaim(index, p));
+    // Claimed as each row is kept (audit A12): the same person twice in one
+    // batch — two spellings of a profile URL, an address in two cases — both
+    // passed a check against the index read before the batch, and both queued.
+    prospects = prospects.filter((p) => {
+      if (existingClaim(index, p)) return false;
+      for (const k of queueIdentityKeys(p)) index.set(k, { rowId: 0, campaignId });
+      return true;
+    });
     const dropped = before - prospects.length;
     if (dropped > 0) {
       console.log(`[scraper] ws=${workspaceId} campaign=${campaignId}: ${dropped} prospect(s) dropped — identity already claimed in this workspace's queue`);
@@ -718,7 +734,7 @@ export const scraperRouter = router({
       return { count: prospects.length, prospects, disabled: DISABLED_SCRAPE_SOURCES.industry_events ?? null };
     }),
 
-  /** Run all scrapers in parallel for a campaign */
+  /** Run all scrapers for a campaign: they search in parallel and save in turn (A12). */
   runFullScrape: workspaceProcedure
     .input(
       z.object({
@@ -740,56 +756,38 @@ export const scraperRouter = router({
       // searched and found nobody. Keyed by the same name as `breakdown`, so a
       // caller reading one finds the other.
       const disabled: Record<string, string> = {};
-      const tasks: Promise<void>[] = [];
-
-      if (input.queries.googleBusiness) {
-        tasks.push(
-          scrapeGoogleBusiness(ctx.workspace.id, input.campaignId, input.queries.googleBusiness, input.icpContext)
-            .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "google_business", input.queries.googleBusiness!, p)
-              .then(() => { results.googleBusiness = p.length; })),
-        );
-      }
-      if (input.queries.linkedinCompany) {
-        tasks.push(
-          realLinkedInSearch(ctx, input.queries.linkedinCompany, 25)
-            .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "linkedin_company", input.queries.linkedinCompany!, p)
-              .then(() => { results.linkedinCompany = p.length; })),
-        );
-      }
-      if (input.queries.linkedinPeople) {
-        tasks.push(
-          realLinkedInSearch(ctx, input.queries.linkedinPeople, 25)
-            .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "linkedin_people", input.queries.linkedinPeople!, p)
-              .then(() => { results.linkedinPeople = p.length; })),
-        );
-      }
-      if (input.queries.news) {
-        tasks.push(
-          scrapeNews(ctx.workspace.id, input.campaignId, input.queries.news, input.icpContext)
-            .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "news", input.queries.news!, p)
-              .then(() => { results.news = p.length; })),
-        );
-      }
-      if (input.queries.industryEvents) {
+      const jobs: Array<{ key: string; sourceType: ScrapeSourceType; query: string; scrape: () => Promise<Array<Record<string, unknown>>> }> = [];
+      const q = input.queries;
+      if (q.googleBusiness) jobs.push({ key: "googleBusiness", sourceType: "google_business", query: q.googleBusiness, scrape: () => scrapeGoogleBusiness(ctx.workspace.id, input.campaignId, q.googleBusiness!, input.icpContext) });
+      if (q.linkedinCompany) jobs.push({ key: "linkedinCompany", sourceType: "linkedin_company", query: q.linkedinCompany, scrape: () => realLinkedInSearch(ctx, q.linkedinCompany!, 25) });
+      if (q.linkedinPeople) jobs.push({ key: "linkedinPeople", sourceType: "linkedin_people", query: q.linkedinPeople, scrape: () => realLinkedInSearch(ctx, q.linkedinPeople!, 25) });
+      if (q.news) jobs.push({ key: "news", sourceType: "news", query: q.news, scrape: () => scrapeNews(ctx.workspace.id, input.campaignId, q.news!, input.icpContext) });
+      if (q.industryEvents) {
         const why = DISABLED_SCRAPE_SOURCES.industry_events;
         if (why) disabled.industryEvents = why;
         // Still recorded, so the attempt keeps its place in the audit trail —
         // with its real reason in errorMessage, not the generic one.
-        tasks.push(
-          scrapeIndustryEvents(ctx.workspace.id, input.campaignId, input.queries.industryEvents, input.icpContext)
-            .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "industry_events", input.queries.industryEvents!, p)
-              .then(() => { results.industryEvents = p.length; })),
-        );
+        jobs.push({ key: "industryEvents", sourceType: "industry_events", query: q.industryEvents, scrape: () => scrapeIndustryEvents(ctx.workspace.id, input.campaignId, q.industryEvents!, input.icpContext) });
       }
-      if (input.queries.web) {
-        tasks.push(
-          scrapeWeb(ctx.workspace.id, input.campaignId, input.queries.web, input.icpContext)
-            .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "web_scrape", input.queries.web!, p)
-              .then(() => { results.web = p.length; })),
-        );
-      }
+      if (q.web) jobs.push({ key: "web", sourceType: "web_scrape", query: q.web, scrape: () => scrapeWeb(ctx.workspace.id, input.campaignId, q.web!, input.icpContext) });
 
-      await Promise.allSettled(tasks);
+      /**
+       * Scraped in parallel, SAVED ONE AT A TIME (audit 2026-10-20, A12). Saved
+       * in parallel, every save read the queue before any of them wrote, so a
+       * person two sources both found was queued twice. In turn, each save
+       * sees what the one before it queued.
+       */
+      const scraped = await Promise.allSettled(jobs.map((j) => j.scrape()));
+      for (let i = 0; i < jobs.length; i++) {
+        const got = scraped[i];
+        if (got.status !== "fulfilled") continue;
+        try {
+          await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, jobs[i].sourceType, jobs[i].query, got.value);
+          results[jobs[i].key] = got.value.length;
+        } catch (e) {
+          console.error(`[runFullScrape] saving ${jobs[i].sourceType} failed:`, (e as Error)?.message ?? e);
+        }
+      }
       const total = Object.values(results).reduce((a, b) => a + b, 0);
       return { total, breakdown: results, disabled };
     }),

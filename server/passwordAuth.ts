@@ -94,6 +94,16 @@ const passwordLoginLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: rateLimitKey,
+  /**
+   * Only failures count (tracker 2026-11-06, item 16). Every request counted,
+   * so a 2FA sign-in spent two of the ten (the password step that asks for
+   * the code, then the code) and successful sign-ins spent them too; a few
+   * people behind one office address were locked out for 15 minutes having
+   * done nothing wrong. A wrong password and a wrong or spent code still
+   * count, which is what the limit is for.
+   */
+  skipSuccessfulRequests: true,
+  requestWasSuccessful: (_req: Request, res: Response) => res.statusCode < 400 || res.locals.mfaCodePrompt === true,
   handler: (_req: Request, res: Response) => {
     res.status(429).json({
       error: "Too many login attempts from this IP address. Please wait 15 minutes and try again.",
@@ -469,13 +479,16 @@ export function registerPasswordAuthRoutes(app: Express) {
       if (user.mfaTotpEnabledAt && user.mfaTotpSecret) {
         const totpCode = typeof (req.body ?? {}).totpCode === "string" ? (req.body.totpCode as string) : "";
         if (!totpCode) {
+          // The right password, asking for the code: not a failed attempt, so
+          // the limiter doesn't count it (see passwordLoginLimiter).
+          res.locals.mfaCodePrompt = true;
           res.status(401).json({ error: "Enter the 6-digit code from your authenticator app.", mfaRequired: true });
           return;
         }
         // A code works ONCE (audit 2026-10-20): its time-step is spent on
         // success, so the same six digits cannot be replayed for the rest of
         // their ~90-second window.
-        const { matchTotpStep } = await import("./services/totp");
+        const { matchTotpStep, totpRefusal } = await import("./services/totp");
         const step = matchTotpStep(user.mfaTotpSecret, totpCode);
         if (step === null || !(await useTotpStep(db, user.id, step))) {
           try {
@@ -492,7 +505,8 @@ export function registerPasswordAuthRoutes(app: Express) {
               outcome: "failed",
             });
           } catch (_) { /* non-fatal */ }
-          res.status(401).json({ error: "That authentication code didn't match — try again.", mfaRequired: true });
+          // A spent step and a wrong code are different answers (item 16).
+          res.status(401).json({ error: totpRefusal(step), mfaRequired: true });
           return;
         }
       }

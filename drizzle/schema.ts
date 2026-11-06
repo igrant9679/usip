@@ -310,6 +310,8 @@ export const leads = mysqlTable(
     score: int("score").default(0).notNull(), // 0-100
     grade: varchar("grade", { length: 4 }), // A/B/C/D
     scoreReasons: json("scoreReasons"),
+    // When the score was last worked out; null = never (migration 0280, audit P12).
+    scoredAt: timestamp("scoredAt"),
     tags: json("tags"),
     convertedContactId: int("convertedContactId"),
     convertedAccountId: int("convertedAccountId"),
@@ -326,6 +328,7 @@ export const leads = mysqlTable(
   (t) => ({
     byWs: index("ix_lead_ws").on(t.workspaceId),
     byScore: index("ix_lead_score").on(t.workspaceId, t.score),
+    byScoredAt: index("ix_lead_scored").on(t.workspaceId, t.scoredAt),
   }),
 );
 export type Lead = typeof leads.$inferSelect;
@@ -1047,6 +1050,8 @@ export const prospectSourceBudgetLedger = mysqlTable(
     /** null = uncapped / unknown. */
     unitsLimit: int("unitsLimit"),
     resetsAt: timestamp("resetsAt"),
+    /** When the current unbroken hold began; null with nothing reserved (migration 0247, audit A72). */
+    heldAt: timestamp("heldAt"),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   (t) => ({ uq: uniqueIndex("uq_psbl_period").on(t.workspaceId, t.sourceSlug, t.bucket, t.granularity, t.periodKey) }),
@@ -1095,6 +1100,9 @@ export const prospectSearchResults = mysqlTable(
     wasCharged: boolean("wasCharged").default(false).notNull(),
     emailIsMasked: boolean("emailIsMasked").default(false).notNull(),
     promotedProspectId: int("promotedProspectId"),
+    /** The promotion holding this row, and since when (migration 0246, audit A59). */
+    promoteClaim: varchar("promoteClaim", { length: 64 }),
+    promoteClaimedAt: timestamp("promoteClaimedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({ byRun: index("ix_psres_run").on(t.runId, t.isNetNew) }),
@@ -4117,6 +4125,12 @@ export const prospectQueue = mysqlTable(
     enrichmentStatus: mysqlEnum("enrichmentStatus", ["pending", "enriching", "complete", "failed"]).default("pending").notNull(),
     enrichmentError: text("enrichmentError"),
     enrichedAt: timestamp("enrichedAt"),
+    /** Failed enrichment attempts since the last success, and when the next may start (migration 0245, audit A7/A27). */
+    enrichAttempts: int("enrichAttempts").default(0).notNull(),
+    enrichRetryAt: timestamp("enrichRetryAt"),
+    /** Failed sequence generations since the last success, and when the engine may try again (migration 0245, audit A28). */
+    sequenceAttempts: int("sequenceAttempts").default(0).notNull(),
+    sequenceRetryAt: timestamp("sequenceRetryAt"),
     // 'sourcing' (migration 0180, owner rule 2026-09-16): staged — discovered
     // without a usable email, invisible to the campaign queue and its counters
     // while the enrich phase hunts an address. The engine ADMIT step promotes

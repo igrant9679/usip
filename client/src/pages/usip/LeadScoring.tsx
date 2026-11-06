@@ -1,9 +1,15 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PageHeader, QueryError, Shell } from "@/components/usip/Shell";
+import { PageHeader, QueryError, Shell, SubNav } from "@/components/usip/Shell";
 import { confirmAction } from "@/components/usip/Common";
 import { trpc } from "@/lib/trpc";
+import { LEAD_ASSIGNMENT_NAV } from "@/lib/leadAssignmentNav";
+import { readableErrorMessage } from "@/lib/trpcErrorMessage";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { componentMaxes, tierBands as bandsFor, tierThresholdProblem } from "@shared/leadScoreModel";
+import { leadTierLabel, type LeadTier } from "@shared/leadTier";
+import { savedScoreLine, type SavedScore } from "@/lib/leadScoreText";
 import { Loader2, RefreshCw, Save, Sparkles, Target, Gauge } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -36,6 +42,17 @@ const DEFAULTS: Cfg = {
   tierWarmMin: 31, tierHotMin: 61, tierSalesReadyMin: 81, notifyOnSalesReady: true,
 };
 
+/** Field names as the form labels them, for a refused save (P121). */
+const FIELD_LABELS: Record<string, string> = {
+  firmoOrgTypeWeight: "Org type weight", firmoTitleWeight: "Title seniority weight", firmoCompletenessWeight: "Profile completeness weight",
+  behavOpenPoints: "Points per open", behavOpenMax: "Open cap", behavClickPoints: "Points per click", behavClickMax: "Click cap",
+  behavReplyPoints: "Reply points", behavStepPoints: "Points per step", behavBouncePenalty: "Bounce penalty", behavUnsubPenalty: "Unsub penalty",
+  behavDecayPctPer30d: "Decay %/30d", aiFitMax: "AI Fit max points",
+  tierWarmMin: "Warm threshold", tierHotMin: "Hot threshold", tierSalesReadyMin: "Sales-Ready threshold",
+};
+
+const BAND_COLOR: Record<string, string> = { Cold: "#64748b", Warm: "#eab308", Hot: "#ea580c", "Sales Ready": "#16a34a" };
+
 export default function LeadScoring() {
   const { data: serverCfg, isLoading, error: cfgError, refetch: refetchCfg } = trpc.leadScoring.getConfig.useQuery();
   const [cfg, setCfg] = useState<Cfg>(DEFAULTS);
@@ -67,7 +84,8 @@ export default function LeadScoring() {
 
   const save = trpc.leadScoring.saveConfig.useMutation({
     onSuccess: () => { toast.success("Scoring rules saved"); utils.leadScoring.getConfig.invalidate(); },
-    onError: (e) => toast.error(e.message),
+    // A refused value reads as a sentence, not zod's issue list (P121).
+    onError: (e) => toast.error(readableErrorMessage(e, FIELD_LABELS)),
   });
   // "Recompute all" is a background job (audit P11): asked with the count and
   // what it costs, shown while it runs, and one at a time per workspace.
@@ -97,25 +115,31 @@ export default function LeadScoring() {
     }, () => recomputeAll.mutate());
   };
 
-  const firmoMax = cfg.firmoOrgTypeWeight + cfg.firmoTitleWeight + cfg.firmoCompletenessWeight;
-  const totalMax = firmoMax + (cfg.behavOpenMax + cfg.behavClickMax + cfg.behavReplyPoints + cfg.behavStepPoints * 5) + cfg.aiFitMax;
-  const tierBands = useMemo(() => ([
-    { name: "Cold", min: 0, max: cfg.tierWarmMin - 1, color: "#64748b" },
-    { name: "Warm", min: cfg.tierWarmMin, max: cfg.tierHotMin - 1, color: "#eab308" },
-    { name: "Hot", min: cfg.tierHotMin, max: cfg.tierSalesReadyMin - 1, color: "#ea580c" },
-    { name: "Sales Ready", min: cfg.tierSalesReadyMin, max: 100, color: "#16a34a" },
-  ]), [cfg]);
+  // The server's own maximums (P22): behaviour can reach 75 with the default
+  // weights, so the old forty-thirty-thirty line was not the model.
+  const max = componentMaxes(cfg);
+  const firmoMax = max.firmographic;
+  const tierBands = useMemo(() => bandsFor(cfg).map((b) => ({ ...b, color: BAND_COLOR[b.name] })), [cfg]);
+  // Out-of-order thresholds can't be saved (P116); say why next to Save.
+  const tierProblem = tierThresholdProblem(cfg);
 
   return (
     <Shell title="Lead Scoring">
-      <PageHeader title="Lead Scoring Engine" pageKey="lead-scoring" description={`Three-component model. Current configuration max-possible = ${totalMax} pts (capped at 100). Default 40 + 30 + 30 = 100.`}
+      <PageHeader title="Lead Scoring Engine" pageKey="lead-scoring" description={`Three components, added up and capped at 100: firmographic up to ${max.firmographic}, behavioral up to ${max.behavioral}, AI fit up to ${max.aiFit} (${max.sum} pts in all).`}
         icon={<Gauge className="size-5" />}
       >
         <Button variant="outline" className="bg-card" onClick={askRecompute} disabled={recomputeAll.isPending || jobActive}>
           <RefreshCw className={`size-4 ${recomputeAll.isPending || jobActive ? "animate-spin" : ""}`} /> Recompute all
         </Button>
-        <Button onClick={() => save.mutate(cfg)} disabled={save.isPending}><Save className="size-4" /> Save</Button>
+        {/* Live only once the saved weights are loaded (P35): before that, or
+            after a failed load, cfg is the defaults and Save would write them
+            over the real ones. */}
+        <Button onClick={() => save.mutate(cfg)} disabled={save.isPending || !serverCfg || !!tierProblem} title={tierProblem ?? undefined}><Save className="size-4" /> Save</Button>
       </PageHeader>
+      <SubNav items={LEAD_ASSIGNMENT_NAV} />
+      {serverCfg && tierProblem && (
+        <div role="alert" className="px-4 md:px-5 pt-3 text-[13px] text-rose-600">{tierProblem}</div>
+      )}
 
       {job && (jobActive || job.finishedAt) && (
         <div className="px-4 md:px-5 pt-3 text-[13px] text-muted-foreground flex items-center gap-2 flex-wrap">
@@ -147,13 +171,14 @@ export default function LeadScoring() {
           </Card>
 
           {/* Behavioral */}
-          <Card title="Behavioral" subtitle="Email + sequence engagement">
+          <Card title="Behavioral" subtitle={`Email + sequence engagement · Max ${max.behavioral} pts`}>
             <div className="grid grid-cols-2 gap-3">
               <NumField label="Pts/open" value={cfg.behavOpenPoints} onChange={(v) => setCfg({ ...cfg, behavOpenPoints: v })} />
               <NumField label="Open cap" value={cfg.behavOpenMax} onChange={(v) => setCfg({ ...cfg, behavOpenMax: v })} />
               <NumField label="Pts/click" value={cfg.behavClickPoints} onChange={(v) => setCfg({ ...cfg, behavClickPoints: v })} />
               <NumField label="Click cap" value={cfg.behavClickMax} onChange={(v) => setCfg({ ...cfg, behavClickMax: v })} />
-              <NumField label="Pts/reply" value={cfg.behavReplyPoints} onChange={(v) => setCfg({ ...cfg, behavReplyPoints: v })} />
+              {/* Given once for replying, however many replies (P119). */}
+              <NumField label="Pts for replying (once)" value={cfg.behavReplyPoints} onChange={(v) => setCfg({ ...cfg, behavReplyPoints: v })} />
               <NumField label="Pts/step" value={cfg.behavStepPoints} onChange={(v) => setCfg({ ...cfg, behavStepPoints: v })} />
               <NumField label="Bounce penalty" value={cfg.behavBouncePenalty} onChange={(v) => setCfg({ ...cfg, behavBouncePenalty: v })} />
               <NumField label="Unsub penalty" value={cfg.behavUnsubPenalty} onChange={(v) => setCfg({ ...cfg, behavUnsubPenalty: v })} />
@@ -162,7 +187,7 @@ export default function LeadScoring() {
           </Card>
 
           {/* AI Fit + Tiers */}
-          <Card title="AI Fit + Tiers" subtitle="LLM evaluation + segmentation thresholds">
+          <Card title="AI Fit + Tiers" subtitle={`LLM evaluation (max ${max.aiFit} pts) + segmentation thresholds`}>
             <NumField label="AI Fit max points" value={cfg.aiFitMax} onChange={(v) => setCfg({ ...cfg, aiFitMax: v })} />
             <div className="my-2 border-t" />
             <NumField label="Warm threshold" value={cfg.tierWarmMin} onChange={(v) => setCfg({ ...cfg, tierWarmMin: v })} />
@@ -179,7 +204,7 @@ export default function LeadScoring() {
             <div className="text-sm font-medium mb-2 flex items-center gap-2"><Target className="size-4" /> Tier bands (0-100)</div>
             <div className="flex h-8 rounded overflow-hidden border">
               {tierBands.map((b) => (
-                <div key={b.name} title={`${b.name}: ${b.min}-${b.max}`} style={{ background: b.color, width: `${b.max - b.min + 1}%` }} className="text-[10px] text-white flex items-center justify-center font-medium">
+                <div key={b.name} title={`${b.name}: ${b.min}-${b.max}`} style={{ background: b.color, width: `${b.widthPct}%` }} className="text-[10px] text-white flex items-center justify-center font-medium">
                   {b.name}
                 </div>
               ))}
@@ -189,7 +214,7 @@ export default function LeadScoring() {
             </div>
           </div>
 
-          <BreakdownPreview />
+          <BreakdownPreview cfg={cfg} unsaved={Object.keys(FIELD_LABELS).some((k) => (cfg as Record<string, unknown>)[k] !== (serverCfg as Record<string, unknown>)[k])} />
         </div>
       )}
     </Shell>
@@ -217,15 +242,29 @@ function NumField({ label, value, onChange }: { label: string; value: number; on
   );
 }
 
-function BreakdownPreview() {
-  const { data: leads } = trpc.leads.list.useQuery({});
+/** Leads the preview's picker shows for a search (P44). */
+const PICKER_LIMIT = 20;
+
+function BreakdownPreview({ cfg, unsaved }: { cfg: Cfg; unsaved: boolean }) {
+  // A search box and the first matches, not 500 whole lead rows in a select
+  // (audit 2026-10-20, P44).
+  const [search, setSearch] = useState("");
+  const query = useDebouncedValue(search.trim());
+  const { data: leads } = trpc.leads.list.useQuery({ search: query || undefined, limit: PICKER_LIMIT });
   const [selected, setSelected] = useState<number | null>(null);
   useEffect(() => {
     if (!selected && leads && leads.length) setSelected(leads[0].id);
   }, [leads, selected]);
+  // Scored with the weights on screen while they are unsaved (P118), once
+  // typing pauses; the preview had always shown the saved weights.
+  const weights = useMemo(() => {
+    const { notifyOnSalesReady: _n, ...w } = cfg;
+    return w;
+  }, [cfg]);
+  const previewCfg = useDebouncedValue(weights);
   const { data: bd, isFetching, error: bdError, refetch: refetchBd } = trpc.leadScoring.breakdown.useQuery(
-    { leadId: selected ?? 0 },
-    { enabled: !!selected },
+    { leadId: selected ?? 0, cfg: unsaved ? previewCfg : undefined },
+    { enabled: !!selected, placeholderData: (prev) => prev },
   );
   const utils = trpc.useUtils();
   const recompute = trpc.leadScoring.recompute.useMutation({
@@ -235,14 +274,15 @@ function BreakdownPreview() {
 
   return (
     <div className="lg:col-span-3 rounded-lg border bg-card p-4">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
         <div>
-          <div className="text-sm font-semibold">Live breakdown preview</div>
-          <div className="text-xs text-muted-foreground">Pick a lead to inspect each component &amp; recent score history.</div>
+          <div className="text-sm font-semibold flex items-center gap-2">Live breakdown preview {isFetching && bd && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}</div>
+          <div className="text-xs text-muted-foreground">Pick a lead to see each component with the weights above, saved or not, and its recent score history.</div>
         </div>
-        <div className="flex items-center gap-2">
-          <select aria-label="Lead" className="h-9 rounded border bg-background px-2 text-sm" value={selected ?? ""} onChange={(e) => setSelected(Number(e.target.value))}>
-            <option value="">Select a lead…</option>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Input aria-label="Search leads" placeholder="Search leads…" className="h-9 w-44" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <select aria-label="Lead" className="h-9 rounded border bg-background px-2 text-sm max-w-[16rem]" value={selected ?? ""} onChange={(e) => setSelected(Number(e.target.value) || null)}>
+            <option value="">{leads && leads.length === 0 ? "No leads match" : "Select a lead…"}</option>
             {(leads ?? []).map((l) => <option key={l.id} value={l.id}>{l.firstName} {l.lastName} — {l.company ?? ""}</option>)}
           </select>
           <Button size="sm" disabled={!selected || recompute.isPending} onClick={() => selected && recompute.mutate({ leadId: selected })}>
@@ -254,14 +294,21 @@ function BreakdownPreview() {
       {!selected ? (
         <div className="text-xs text-muted-foreground py-6 text-center">Select a lead to view breakdown.</div>
       ) : bdError && !isFetching ? (
-        <QueryError compact what="this lead's breakdown" message={bdError.message} onRetry={() => refetchBd()} />
-      ) : isFetching || !bd ? (
+        <QueryError compact what="this lead's breakdown" message={readableErrorMessage(bdError, FIELD_LABELS)} onRetry={() => refetchBd()} />
+      ) : !bd ? (
         <div className="text-xs text-muted-foreground py-6 text-center"><Loader2 className="size-4 animate-spin inline" /> Loading…</div>
       ) : (
         <div className="grid gap-4 md:grid-cols-3">
+          {/* The three add up to the total (P34), behaviour below zero included (P33). */}
           <Bar label="Firmographic" value={bd.firmographic.value} max={bd.firmographic.max} reasons={bd.firmographic.reasons} />
-          <Bar label="Behavioral" value={Math.max(0, bd.behavioral.value)} max={bd.behavioral.max} reasons={bd.behavioral.reasons} />
-          <Bar label="AI Fit" value={bd.aiFit.value} max={bd.aiFit.max} reasons={[`Tier: ${bd.tier}`, `Total ${bd.total}/100 (Grade ${bd.grade ?? "—"})`]} />
+          <Bar label="Behavioral" value={bd.behavioral.value} max={bd.behavioral.max} reasons={bd.behavioral.reasons} />
+          <Bar label="AI Fit" value={bd.aiFit.value} max={bd.aiFit.max} reasons={bd.aiFit.reasons} />
+          <div className="md:col-span-3 text-xs space-y-0.5">
+            <div className="font-medium">
+              Total {bd.total}/100 · {leadTierLabel(bd.tier as LeadTier)} (Grade {bd.grade}) — the three added up, capped at 0-100
+            </div>
+            <div className="text-muted-foreground">{savedScoreLine(bd.saved as SavedScore, bd.total, { unsavedWeights: unsaved })}</div>
+          </div>
           <div className="md:col-span-3">
             <div className="text-xs font-medium mb-1">90-day history</div>
             <Sparkline values={(bd.history ?? []).map((h) => h.total)} />

@@ -200,10 +200,13 @@ function OneDrivePicker({
 /* ── Files section for a record ─────────────────────────────────────────── */
 
 export function RecordFiles({
-  relatedType, relatedId,
+  relatedType, relatedId, onlyWhenConnected = false,
 }: {
   relatedType: "contact" | "lead" | "account" | "opportunity";
   relatedId: number;
+  /** Render nothing until Microsoft 365 is connected — where it sits under
+   *  the record's own files, a second "connect" box reads as a second list. */
+  onlyWhenConnected?: boolean;
 }) {
   const utils = trpc.useUtils();
   const status = trpc.graph.status.useQuery();
@@ -243,6 +246,7 @@ export function RecordFiles({
   };
 
   const connected = status.data?.connected;
+  if (onlyWhenConnected && !connected) return null;
 
   return (
     <div className="rounded-lg border bg-card p-3 space-y-2.5">

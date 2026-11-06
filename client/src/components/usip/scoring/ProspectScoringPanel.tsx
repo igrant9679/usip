@@ -8,8 +8,7 @@
  * last-calculated time, and a Recalculate button (manager+).
  */
 import { trpc } from "@/lib/trpc";
-import { isAdminRole, rankOf, ROLE_RANK } from "@shared/roleRank";
-import { useAuth } from "@/_core/hooks/useAuth";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { ScoreBadge, type Rating, type ObjectType } from "./ScoreBadge";
@@ -29,8 +28,8 @@ function Bar({ label, value, weight }: { label: string; value: number | null; we
 }
 
 export function ProspectScoringPanel({ objectType, objectId }: { objectType: ObjectType; objectId: number }) {
-  const auth = useAuth();
-  const canRecalc = rankOf((auth.user as any)?.role ?? "rep") >= ROLE_RANK.manager;
+  // The workspace role, as scoring.calculate checks it (R10).
+  const canRecalc = useWorkspaceRole().isManager;
   const utils = trpc.useUtils();
 
   const result = trpc.scoring.getResult.useQuery({ objectType, objectId }, { staleTime: 30_000 });

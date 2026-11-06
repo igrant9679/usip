@@ -57,6 +57,7 @@ const filters = z.object({
   hasContacts: z.boolean().optional(),
   minRating: z.enum(["fair", "good", "excellent"]).optional(),
   includeArchived: z.boolean().optional(),
+  archivedOnly: z.boolean().optional(),
   /** Research (2026-10-16): companies sourced by Research, or in any research sector. */
   research: z.enum(["sourced", "in_sector"]).optional(),
   researchSectorIds: z.array(z.number().int().positive()).max(200).optional(),
@@ -202,6 +203,23 @@ export const companiesRouter = router({
       requireRole(ctx.member.role, "admin");
       const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       await db.update(accounts).set({ archivedAt: new Date() } as never).where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, input.accountId)));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "company_archive", entityId: input.accountId, after: { archived: true } });
+      return { ok: true as const };
+    }),
+  /**
+   * Bring an archived company back. The archive confirm has always said "You
+   * can restore it later", and nothing could (audit 2026-10-20, R64).
+   */
+  restore: workspaceProcedure
+    .input(z.object({ accountId: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "admin");
+      const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db.select({ id: accounts.id }).from(accounts)
+        .where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, input.accountId))).limit(1);
+      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+      await db.update(accounts).set({ archivedAt: null } as never).where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, input.accountId)));
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "company_archive", entityId: input.accountId, after: { archived: false } });
       return { ok: true as const };
     }),
 

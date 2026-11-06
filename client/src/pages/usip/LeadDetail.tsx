@@ -15,9 +15,10 @@ import { DetailHeader, DetailSection, DetailFact, DetailBody } from "@/component
 import { EntityDetailTabs } from "@/components/usip/EntityDetail";
 import { RelatedTasks } from "@/pages/usip/Tasks";
 import { AddToMenu } from "@/components/usip/AddToMenu";
+import { EditLeadDialog } from "@/components/usip/EditLeadDialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Target, Mail, Phone, Briefcase, Zap, Building2 } from "lucide-react";
+import { Target, Mail, Phone, Briefcase, Zap, Building2, Pencil } from "lucide-react";
 
 export default function LeadDetail() {
   const { id: idStr } = useParams<{ id: string }>();
@@ -27,6 +28,8 @@ export default function LeadDetail() {
   const { data: lead, isLoading } = trpc.leads.get.useQuery({ id }, { enabled: !Number.isNaN(id) });
   // Converting asks what the lead becomes first (R8) — see ConvertLeadDialog.
   const [converting, setConverting] = useState(false);
+  // The lead's own page can edit it (R81); it was read-only.
+  const [editing, setEditing] = useState(false);
   const afterConvert = ({ accountId, contactId, opportunityId }: { accountId: number; contactId: number; opportunityId: number | null }) => {
     utils.leads.get.invalidate({ id });
     if (opportunityId) setLocation(`/opportunities/${opportunityId}`);
@@ -99,8 +102,12 @@ export default function LeadDetail() {
             {lead.company && <span className="inline-flex items-center gap-1"><Building2 className="size-3.5" />{lead.company}</span>}
             {lead.email && <a href={`mailto:${lead.email}`} className="inline-flex items-center gap-1 text-blue-600 hover:underline"><Mail className="size-3.5" />{lead.email}</a>}
           </>}
-          actions={<AddToMenu leadIds={[lead.id]} />}
+          actions={<>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setEditing(true)}><Pencil className="size-3.5" /> Edit</Button>
+            <AddToMenu leadIds={[lead.id]} />
+          </>}
         />
+        <EditLeadDialog lead={lead} open={editing} onOpenChange={setEditing} />
         <DetailBody>
           <EntityDetailTabs entityType="lead" entityId={lead.id} overview={overview} />
         </DetailBody>

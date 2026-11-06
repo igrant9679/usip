@@ -37,7 +37,8 @@ export const SEGMENT_OPERATORS: Record<SegmentFieldKind, string[]> = {
   date: ["gt", "lt", "is_empty", "is_not_empty"],
 };
 
-export const EMAIL_STATUS_VALUES = ["valid", "accept_all", "risky", "invalid"];
+/** What verification writes (services/reoon.ts); "unknown" is a result too (audit 2026-10-20, P140). */
+export const EMAIL_STATUS_VALUES = ["valid", "accept_all", "risky", "invalid", "unknown"];
 
 export type SegmentRule = { field: string; operator: string; value: string };
 

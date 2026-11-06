@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Field, FormDialog, Section, SelectField, TextareaField } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
+import { LEAD_ASSIGNMENT_NAV } from "@/lib/leadAssignmentNav";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
 import { Map, Plus, Trash2, Zap } from "lucide-react";
@@ -30,6 +31,7 @@ export default function Territories() {
         <Button variant="outline" onClick={() => setRuleOpen(true)}><Zap className="size-4" /> New routing rule</Button>
         <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New territory</Button>
       </PageHeader>
+      <SubNav items={LEAD_ASSIGNMENT_NAV} />
       <div className="p-4 md:p-5 space-y-6">
         <Section title={`Territories (${data?.length ?? 0})`}>
           {(data ?? []).length === 0 ? <EmptyState icon={Map} title="None yet" /> : (

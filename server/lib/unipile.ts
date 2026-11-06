@@ -507,15 +507,18 @@ export async function searchLinkedIn(
  */
 export async function searchLinkedInPeople(
   accountId: string,
-  params: { keywords: string; limit?: number },
-): Promise<{ items: UnipileLinkedInSearchHit[] }> {
-  const { items } = await searchLinkedIn(accountId, {
+  params: { keywords: string; limit?: number; cursor?: string },
+): Promise<{ items: UnipileLinkedInSearchHit[]; cursor?: string }> {
+  // `cursor` is the one Unipile handed back with the page before; the engine's
+  // discovery walks a title page by page with it (audit A77).
+  const { items, cursor } = await searchLinkedIn(accountId, {
     api: "classic",
     category: "people",
     keywords: params.keywords,
     limit: params.limit,
+    ...(params.cursor ? { cursor: params.cursor } : {}),
   });
-  return { items };
+  return { items, cursor };
 }
 
 /** One resolved Sales-Navigator filter value (text → LinkedIn entity ID). */
