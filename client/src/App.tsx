@@ -91,6 +91,7 @@ const BookingPage = lazyChunk(() => import("@/pages/BookingPage"));
 const MeetingPickPage = lazyChunk(() => import("@/pages/MeetingPickPage"));
 const LandingPage = lazyChunk(() => import("@/pages/LandingPage"));
 const ResetPassword = lazyChunk(() => import("@/pages/ResetPassword"));
+const ConfirmEmail = lazyChunk(() => import("@/pages/ConfirmEmail"));
 const LandingPages = lazyChunk(() => import("@/pages/usip/LandingPages"));
 const ChatPage = lazyChunk(() => import("@/pages/ChatPage"));
 const ChatAgents = lazyChunk(() => import("@/pages/usip/ChatAgents"));
@@ -596,6 +597,8 @@ function Router() {
       {/* PUBLIC by necessity — the visitor cannot sign in, that is why they
           are here. No AuthGate. */}
       <Route path="/reset-password"><ResetPassword /></Route>
+      {/* PUBLIC too: the link to a new sign-in email may open in a browser that is not signed in (G32). */}
+      <Route path="/confirm-email"><ConfirmEmail /></Route>
       <Route path="/c/:slug"><ChatPage /></Route>
       <Route path="/v2/landing-pages"><AuthGate><LandingPages /></AuthGate></Route>
       <Route path="/v2/chat"><AuthGate><ChatAgents /></AuthGate></Route>

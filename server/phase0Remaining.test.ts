@@ -138,7 +138,9 @@ describe("a form or landing page cannot redirect a visitor to script or another 
     const form: any = await appRouter.createCaller({ user: null, req: { headers: {} }, res: {} } as any).forms.getByPublicId({ publicId: "p8" });
     expect(form.redirectUrl).toBeNull();
     const src = strip(read("server/routers/forms.ts")) + strip(read("server/routers/landingPages.ts"));
-    expect(src.match(/redirectUrl: safeRedirectUrl\((form|page)\.redirectUrl\)/g)).toHaveLength(2);
+    // 2026-11-06 (audit G41): 4, not 2. The honeypot answer on each submit
+    // returns the same sanitised redirect a real submission does.
+    expect(src.match(/redirectUrl: safeRedirectUrl\((form|page)\.redirectUrl\)/g)).toHaveLength(4);
   });
 
   it("both public pages follow only what safeRedirectUrl allows", () => {

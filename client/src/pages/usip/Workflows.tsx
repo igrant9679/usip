@@ -79,7 +79,16 @@ export default function Workflows() {
   const create = trpc.workflows.create.useMutation({ onSuccess: () => { utils.workflows.list.invalidate(); setOpenNew(false); toast.success("Rule created, switched off — set its conditions and actions, then turn it on"); }, onError: (e) => toast.error(e.message) });
   const update = trpc.workflows.update.useMutation({ onSuccess: () => { utils.workflows.list.invalidate(); toast.success("Rule saved"); }, onError: (e) => toast.error(e.message) });
   const toggle = trpc.workflows.toggle.useMutation({ onSuccess: () => utils.workflows.list.invalidate(), onError: (e) => toast.error(e.message) });
-  const test = trpc.workflows.testFire.useMutation({ onSuccess: () => { utils.workflows.runs.invalidate(); utils.workflows.list.invalidate(); toast.success("Rule fired (1 simulated run)"); }, onError: (e) => toast.error(e.message) });
+  // A test runs nothing (audit G19): it says what the rule would do.
+  const test = trpc.workflows.testFire.useMutation({
+    onSuccess: (r) => {
+      utils.workflows.runs.invalidate();
+      const lines = [...r.plan, ...r.errors];
+      if (r.errors.length) toast.error("Test: this rule can't run as set up. Nothing was sent or changed.", { description: lines.join(" · ") });
+      else toast.success("Test only: nothing was sent or changed.", { description: lines.join(" · ") });
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const removeRule = trpc.workflows.delete.useMutation({
     onSuccess: (_d, vars) => {
       utils.workflows.list.invalidate();
@@ -254,7 +263,7 @@ function RuleEditor({ rule, onSave, onTest, isSaving }: { rule: any; onSave: (pa
       description={rule.description ?? "Edit when this rule fires and what it does, then save."}
       right={
         <div className="flex gap-2">
-          <Button size="sm" variant="ghost" onClick={onTest}><Play className="size-3.5" /> Test fire</Button>
+          <Button size="sm" variant="ghost" onClick={onTest}><Play className="size-3.5" /> Test (sends nothing)</Button>
           <Button size="sm" disabled={!dirty || isSaving} onClick={() => onSave({ triggerType: trigger, triggerConfig, conditions: conds, actions: acts })}>
             <Save className="size-3.5" /> {isSaving ? "Saving…" : "Save"}
           </Button>

@@ -28,6 +28,7 @@ import { sessionLifetimeMs } from "./_core/securityPolicy";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { clientIpOf, rateLimitKey } from "./_core/clientIp";
 import { useTotpStep } from "./_core/sessionRevocation";
+import { clearFailures, isLockedOut, noteFailure, SIGN_IN_LOCKED, signInKey } from "./services/accountLockout";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { escapeHtml } from "@shared/escapeHtml";
 import { safeReturnPath } from "@shared/returnPath";
@@ -38,6 +39,16 @@ import {
   newResetToken,
   resetTokenExpiry,
 } from "./services/passwordReset";
+
+/**
+ * What an unknown email is compared against, so its answer takes as long as a
+ * wrong password does (audit 2026-10-20, G31). A real cost-12 bcrypt hash, the
+ * cost every stored hash here is made with, of random bytes nobody kept: it
+ * matches no password. The string it replaced was 64 characters with no valid
+ * salt, which bcrypt rejects without doing the work, so "no such account"
+ * answered in a fraction of the time a wrong password took.
+ */
+export const DUMMY_PASSWORD_HASH = "$2b$12$Fe74OEbZCKeL4mea8lXK6ODOx.pZt/OtfzE62kxYceNAcguf.ccZW";
 
 /**
  * The caller's address, from `req.ip` and the trusted hop count — NOT the
@@ -343,8 +354,13 @@ export function registerPasswordAuthRoutes(app: Express) {
         .from(users)
         .where(eq(users.email, normalizedEmail));
       if (!user) return ok();
-      await emailPasswordReset(db, user.id);
-      return ok();
+      // Answer first, send after (audit 2026-10-20, G31): awaiting the mail
+      // made a real account's answer take a mail send longer than an unknown
+      // one's, which told the caller which addresses have accounts.
+      ok();
+      void emailPasswordReset(db, user.id).catch((e) =>
+        console.error("[ForgotPassword] send failed:", e instanceof Error ? e.message : e));
+      return;
     } catch (e) {
       // A failure here must not become an oracle either.
       console.error("[ForgotPassword] failed:", e instanceof Error ? e.message : e);
@@ -380,6 +396,7 @@ export function registerPasswordAuthRoutes(app: Express) {
     const [user] = await db
       .select({
         id: users.id,
+        email: users.email,
         passwordResetExpiresAt: users.passwordResetExpiresAt,
       })
       .from(users)
@@ -405,6 +422,8 @@ export function registerPasswordAuthRoutes(app: Express) {
         passwordResetExpiresAt: null,
       })
       .where(eq(users.id, user.id));
+    // The way out of a sign-in lock (G9): the reset proved the mailbox.
+    if (user.email) clearFailures(signInKey(user.email));
 
     res.json({ ok: true });
   });
@@ -422,6 +441,16 @@ export function registerPasswordAuthRoutes(app: Express) {
       }
 
       const normalizedEmail = email.trim().toLowerCase();
+      /**
+       * Per-account lock (audit 2026-10-20, G9), ahead of any lookup or hash,
+       * so a locked known account and a locked unknown address answer alike
+       * and alike fast. Failed passwords and failed codes both count.
+       */
+      const lockKey = signInKey(normalizedEmail);
+      if (isLockedOut(lockKey)) {
+        res.status(429).json({ error: SIGN_IN_LOCKED });
+        return;
+      }
       const db = await getDb();
       if (!db) {
         res.status(500).json({ error: "Database unavailable" });
@@ -446,14 +475,16 @@ export function registerPasswordAuthRoutes(app: Express) {
       const GENERIC_ERROR = "Invalid email or password.";
 
       if (!user || !user.passwordHash) {
-        // Constant-time dummy compare to prevent timing attacks
-        await bcrypt.compare(password, "$2b$12$invalidhashpadding000000000000000000000000000000000000000");
+        // The same bcrypt work as a wrong password (G31), and the same count.
+        await bcrypt.compare(password, DUMMY_PASSWORD_HASH);
+        noteFailure(lockKey);
         res.status(401).json({ error: GENERIC_ERROR });
         return;
       }
 
       const valid = await bcrypt.compare(password, user.passwordHash);
       if (!valid) {
+        noteFailure(lockKey);
         try {
           const [member] = await db
             .select({ workspaceId: workspaceMembers.workspaceId })
@@ -491,6 +522,10 @@ export function registerPasswordAuthRoutes(app: Express) {
         const { matchTotpStep, totpRefusal } = await import("./services/totp");
         const step = matchTotpStep(user.mfaTotpSecret, totpCode);
         if (step === null || !(await useTotpStep(db, user.id, step))) {
+          // A wrong or spent code is a failure against the account too (G9):
+          // whoever holds the password gets ten guesses at the code, not ten
+          // per address.
+          noteFailure(lockKey);
           try {
             const [member] = await db
               .select({ workspaceId: workspaceMembers.workspaceId })
@@ -511,6 +546,7 @@ export function registerPasswordAuthRoutes(app: Express) {
         }
       }
 
+      clearFailures(lockKey);
       try {
         await db.update(users).set({ lastSignedIn: new Date() }).where(eq(users.id, user.id));
       } catch (_) { /* non-fatal */ }

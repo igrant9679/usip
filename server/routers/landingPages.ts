@@ -17,12 +17,14 @@ import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers
 import { notifyLeadRouted } from "../services/policyNotify";
 import { getDb } from "../db";
 import { isWorkspaceLive } from "../_core/workspaceArchive";
+import { clientIpOf } from "../_core/clientIp";
 import { landingPages, landingPageSubmissions, leads, enrollments } from "../../drizzle/schema";
 import { resolveBookingUrl } from "../mergeVars";
 import { hostedPageChatSlug } from "../services/hostedChat";
 import { slugify } from "@shared/slugify";
 import { isAllowedRedirect, REDIRECT_URL_ERROR, safeRedirectUrl } from "@shared/safeRedirect";
-import { assertRowInWorkspace } from "../services/foreignIds";
+import { assertRowInWorkspace, sequenceInWorkspace } from "../services/foreignIds";
+import { cleanSubmission, submissionData } from "../services/publicSubmission";
 
 type FormField = { key: string; label: string; required?: boolean };
 const DEFAULT_FIELDS: FormField[] = [
@@ -33,6 +35,25 @@ const DEFAULT_FIELDS: FormField[] = [
 
 const sectionSchema = z.object({ heading: z.string().max(200), body: z.string().max(4000) });
 const fieldSchema = z.object({ key: z.string().max(40), label: z.string().max(120), required: z.boolean().optional() });
+
+/**
+ * Who has been counted today, per page (L12). In memory: a restart can count a
+ * returning visitor twice on that one day, which is a far smaller error than
+ * counting every refresh. Bounded, and yesterday's keys are dropped first.
+ */
+const viewsSeen = new Map<string, string>();
+const MAX_VIEW_KEYS = 100_000;
+export function firstViewToday(pageId: number, visitor: string, now = new Date()): boolean {
+  const day = now.toISOString().slice(0, 10);
+  const key = `${pageId}|${visitor}`;
+  if (viewsSeen.get(key) === day) return false;
+  if (viewsSeen.size >= MAX_VIEW_KEYS) {
+    viewsSeen.forEach((d, k) => { if (d !== day) viewsSeen.delete(k); });
+    if (viewsSeen.size >= MAX_VIEW_KEYS) viewsSeen.clear();
+  }
+  viewsSeen.set(key, day);
+  return true;
+}
 
 // slugify comes from @shared/slugify — one rule for every public URL.
 function str(v: unknown, max: number): string | null {
@@ -179,16 +200,15 @@ export const landingPagesRouter = router({
 
   /* ──────────────────────────── Public surface ────────────────────────── */
 
-  /** PUBLIC: render payload for a PUBLISHED page (counts a view). */
+  /** PUBLIC: render payload for a PUBLISHED page. Views are counted by recordView. */
   getBySlug: publicProcedure.input(z.object({ slug: z.string().min(1).max(80) })).query(async ({ input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [p] = await db.select().from(landingPages).where(eq(landingPages.slug, input.slug));
     if (!p || p.status !== "published") throw new TRPCError({ code: "NOT_FOUND", message: "Page not available" });
     if (!(await isWorkspaceLive(p.workspaceId))) throw new TRPCError({ code: "NOT_FOUND", message: "Page not available" });
-    // Best-effort view count — never block rendering.
-    db.update(landingPages).set({ viewCount: sql`${landingPages.viewCount} + 1` } as never)
-      .where(eq(landingPages.id, p.id)).catch(() => {});
+    // No view is counted here any more (audit L12): every refresh, crawler and
+    // link preview fetched this and added one. recordView below counts.
     /**
      * Optional "Book a meeting" CTA → the page creator's self-serve booking page.
      *
@@ -239,9 +259,32 @@ export const landingPagesRouter = router({
     };
   }),
 
+  /**
+   * PUBLIC: count a view, once per visitor per page per UTC day (audit
+   * 2026-10-20, L12). The page calls this after it has rendered, so crawlers
+   * and link previews, which fetch without running the page, count nothing;
+   * a refresh is the same visitor on the same day. `visitor` is a random id
+   * the browser keeps; without one the caller's address stands in. Under the
+   * public write ceiling, so a script can't spin the counter either.
+   */
+  recordView: publicProcedure
+    .input(z.object({ slug: z.string().min(1).max(80), visitor: z.string().max(64).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return { counted: false };
+      const [p] = await db.select({ id: landingPages.id, status: landingPages.status, workspaceId: landingPages.workspaceId })
+        .from(landingPages).where(eq(landingPages.slug, input.slug));
+      if (!p || p.status !== "published" || !(await isWorkspaceLive(p.workspaceId))) return { counted: false };
+      const who = input.visitor?.trim() || `ip:${clientIpOf(ctx.req as never)}`;
+      if (!firstViewToday(p.id, who)) return { counted: false };
+      await db.update(landingPages).set({ viewCount: sql`${landingPages.viewCount} + 1` } as never)
+        .where(eq(landingPages.id, p.id)).catch(() => {});
+      return { counted: true };
+    }),
+
   /** PUBLIC: handle a submission — autonomously create + route + enroll a lead. */
   submit: publicProcedure
-    .input(z.object({ slug: z.string().min(1).max(80), data: z.record(z.string(), z.any()) }))
+    .input(z.object({ slug: z.string().min(1).max(80), data: submissionData }))
     .mutation(async ({ input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -249,7 +292,11 @@ export const landingPagesRouter = router({
       if (!page || page.status !== "published") throw new TRPCError({ code: "NOT_FOUND", message: "Page not available" });
       if (!(await isWorkspaceLive(page.workspaceId))) throw new TRPCError({ code: "NOT_FOUND", message: "Page not available" });
 
-      const data = input.data ?? {};
+      // The fields the page renders (getBySlug's own fallback), nothing else (G41).
+      const fields = Array.isArray(page.formFields) && page.formFields.length ? page.formFields : DEFAULT_FIELDS;
+      const cleaned = cleanSubmission(fields, input.data ?? {});
+      if (cleaned.bot) return { ok: true, redirectUrl: safeRedirectUrl(page.redirectUrl) };
+      const data = cleaned.data;
       const email = str(data.email, 320);
       const rawName = str(data.name, 200);
       const firstName = str(data.firstName, 80) ?? (rawName ? rawName.split(" ")[0] : null);
@@ -321,20 +368,25 @@ export const landingPagesRouter = router({
 
         if (leadId && page.autoEnrollSequenceId) {
           try {
-            // New lead per submit (above), so dedupe on email — a repeat
-            // submitter would otherwise get the whole sequence twice.
-            const { hasActiveEnrollmentForEmail } = await import("../services/enrollmentDedupe");
-            if (await hasActiveEnrollmentForEmail(db, page.workspaceId, page.autoEnrollSequenceId, email)) {
-              console.log(`[landingPages.submit] ${email} already active in sequence ${page.autoEnrollSequenceId} — not re-enrolling`);
+            // The page's own workspace's sequence, or nobody is enrolled (G4).
+            if (!(await sequenceInWorkspace(db, page.workspaceId, page.autoEnrollSequenceId))) {
+              console.warn(`[landingPages.submit] page ${page.id} names sequence ${page.autoEnrollSequenceId}, which is not in its workspace — not enrolling`);
             } else {
-              await db.insert(enrollments).values({
-                workspaceId: page.workspaceId,
-                sequenceId: page.autoEnrollSequenceId,
-                leadId,
-                status: "active",
-                currentStep: 0,
-                nextActionAt: new Date(),
-              } as never);
+              // New lead per submit (above), so dedupe on email — a repeat
+              // submitter would otherwise get the whole sequence twice.
+              const { hasActiveEnrollmentForEmail } = await import("../services/enrollmentDedupe");
+              if (await hasActiveEnrollmentForEmail(db, page.workspaceId, page.autoEnrollSequenceId, email)) {
+                console.log(`[landingPages.submit] ${email} already active in sequence ${page.autoEnrollSequenceId} — not re-enrolling`);
+              } else {
+                await db.insert(enrollments).values({
+                  workspaceId: page.workspaceId,
+                  sequenceId: page.autoEnrollSequenceId,
+                  leadId,
+                  status: "active",
+                  currentStep: 0,
+                  nextActionAt: new Date(),
+                } as never);
+              }
             }
           } catch (e) { console.error("[landingPages.submit] enroll failed:", e); }
         }

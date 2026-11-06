@@ -564,7 +564,9 @@ Make the 3 suggestions distinct from existing rules and target real meeting-book
 });
 
 /**
- * One suggestion → one enabled workflow rule, suggestion marked applied.
+ * One suggestion → one workflow rule, switched OFF (G61, and G19: a
+ * suggestion's actions can name a webhook URL nobody chose), suggestion
+ * marked applied.
  * Shared by applySuggestion and applyAllSuggestions so the two can never
  * drift (the live-trigger fallback below is the kind of rule that drifts).
  */

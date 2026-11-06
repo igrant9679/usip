@@ -5,7 +5,9 @@
  * form that posts to the public landingPages.submit mutation, which autonomously
  * creates + routes + enrolls a lead. No Shell, no auth — standalone page.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { HONEYPOT_FIELD } from "@shared/publicForm";
+import { HoneypotField } from "@/components/usip/HoneypotField";
 import { useRoute } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { safeRedirectUrl } from "@shared/safeRedirect";
@@ -27,6 +29,29 @@ export default function LandingPage() {
   const submit = trpc.landingPages.submit.useMutation();
   const [values, setValues] = useState<Record<string, string>>({});
   const [done, setDone] = useState(false);
+  // A counter, not a message: a failed count shows the visitor nothing.
+  const recordView = trpc.landingPages.recordView.useMutation({ meta: { silentError: true } });
+
+  /**
+   * Count this view once the page has rendered (audit L12), once a day per
+   * page from this browser. Crawlers and link previews never run this. The
+   * server keeps its own once-a-day check, so blocked storage still counts once.
+   */
+  useEffect(() => {
+    if (!page.data || !slug) return;
+    const day = new Date().toISOString().slice(0, 10);
+    let visitor = "";
+    try {
+      if (localStorage.getItem(`lp-viewed:${slug}`) === day) return;
+      visitor = localStorage.getItem("lp-visitor") || "";
+      if (!visitor) {
+        visitor = Math.random().toString(36).slice(2) + Date.now().toString(36);
+        localStorage.setItem("lp-visitor", visitor);
+      }
+      localStorage.setItem(`lp-viewed:${slug}`, day);
+    } catch { /* storage blocked: the server-side check still holds */ }
+    recordView.mutate({ slug, visitor: visitor || undefined });
+  }, [page.data, slug]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const accent = page.data?.themeColor || "#14B89A";
   usePageTitle(page.data?.headline);
@@ -128,6 +153,7 @@ export default function LandingPage() {
                     )}
                   </div>
                 ))}
+                <HoneypotField value={values[HONEYPOT_FIELD] ?? ""} onChange={(v) => setValues((s) => ({ ...s, [HONEYPOT_FIELD]: v }))} />
                 {submit.error && <p className="text-xs text-rose-600">{submit.error.message}</p>}
                 <Button type="submit" className="w-full text-white" style={{ backgroundColor: accent }} disabled={submit.isPending}>
                   {submit.isPending ? <><Loader2 className="size-4 animate-spin mr-1.5" /> Submitting…</> : page.data.ctaButtonLabel}

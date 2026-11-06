@@ -41,7 +41,7 @@ import { runAreEngine, __resetEngineLogRepeatsForTests } from "./areEngine";
 import { resolveStreamAuth } from "./_core/streamHelpers";
 import { registerStorageProxy } from "./_core/storageProxy";
 import { invalidateSecurityPolicyCache } from "./_core/securityPolicy";
-import { registerWebsiteTrackingRoutes, MAX_INTENT_TASKS_PER_DAY } from "./websiteTracking";
+import { registerWebsiteTrackingRoutes, MAX_INTENT_TASKS_PER_DAY, signVisitorId } from "./websiteTracking";
 
 
 const LSI = 2, FOREIGN = 9;
@@ -534,15 +534,20 @@ describe("the public beacon (P5)", () => {
   beforeEach(() => {
     for (let id = 1; id <= 3; id++) rows("leads").push({ id, workspaceId: LSI, firstName: `L${id}`, lastName: "X", ownerUserId: null });
   });
+  // 2026-11-06 (S1b, P5): only a SIGNED link id files a task now, so these
+  // cases name the record with one. What they pin (the daily ceiling, counted
+  // per workspace and per day) is unchanged; an unsigned id filing nothing is
+  // pinned in s1bPortalAndTracking.test.ts.
+  const vid = (id: number) => signVisitorId(LSI, "l", id);
 
   it("a known person on a high-intent page still files a task", async () => {
-    await beacon({ slug: "lsi", visitorId: "v", path: "/pricing", vid: "l1" });
+    await beacon({ slug: "lsi", visitorId: "v", path: "/pricing", vid: vid(1) });
     expect(intentTasks()).toHaveLength(1);
   });
 
   it("walking ids hits a ceiling: visits still count, tasks stop", async () => {
     for (let i = 0; i < MAX_INTENT_TASKS_PER_DAY; i++) rows("tasks").push({ id: 1000 + i, workspaceId: LSI, title: "High-intent website visit: someone", createdAt: new Date(), source: "ai", status: "open" });
-    await beacon({ slug: "lsi", visitorId: "v", path: "/pricing", vid: "l2" });
+    await beacon({ slug: "lsi", visitorId: "v", path: "/pricing", vid: vid(2) });
     expect(intentTasks()).toHaveLength(MAX_INTENT_TASKS_PER_DAY);
     expect(rows("website_visits").map((v) => v.leadId)).toEqual([2]);
   });
@@ -552,7 +557,7 @@ describe("the public beacon (P5)", () => {
       rows("tasks").push({ id: 2000 + i, workspaceId: FOREIGN, title: "High-intent website visit: someone", createdAt: new Date(), source: "ai", status: "open" });
       rows("tasks").push({ id: 3000 + i, workspaceId: LSI, title: "High-intent website visit: someone", createdAt: new Date(Date.now() - 2 * 86_400_000), source: "ai", status: "open" });
     }
-    await beacon({ slug: "lsi", visitorId: "v", path: "/pricing", vid: "l3" });
+    await beacon({ slug: "lsi", visitorId: "v", path: "/pricing", vid: vid(3) });
     expect(rows("website_visits").map((v) => v.leadId)).toEqual([3]);
     expect(intentTasks().filter((t) => t.relatedId === 3)).toHaveLength(1);
   });

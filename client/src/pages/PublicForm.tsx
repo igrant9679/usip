@@ -6,6 +6,8 @@
  * routes + enrolls a lead. No Shell, no auth — standalone page.
  */
 import { useMemo, useState } from "react";
+import { HONEYPOT_FIELD } from "@shared/publicForm";
+import { HoneypotField } from "@/components/usip/HoneypotField";
 import { useRoute } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { safeRedirectUrl } from "@shared/safeRedirect";
@@ -84,6 +86,7 @@ export default function PublicForm() {
                 </div>
               ))}
             </div>
+            <HoneypotField value={values[HONEYPOT_FIELD] ?? ""} onChange={(v) => setValues((s) => ({ ...s, [HONEYPOT_FIELD]: v }))} />
             {submit.error && <p className="text-xs text-rose-600">{submit.error.message}</p>}
             <Button type="submit" className="w-full" disabled={submit.isPending}>
               {submit.isPending ? <><Loader2 className="size-4 animate-spin mr-1.5" /> Submitting…</> : "Submit"}

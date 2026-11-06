@@ -21,6 +21,27 @@ import { usePageTitle } from "@/lib/usePageTitle";
 
 type Msg = { role: "visitor" | "agent"; text: string };
 
+/**
+ * The chat's token is kept in this browser (audit G44), so a reload reopens
+ * the same conversation instead of starting a new session and a new lead.
+ * Kept for a week; the server also refuses a token idle longer than that.
+ */
+const KEEP_MS = 7 * 86_400_000;
+const keptKey = (slug: string) => `velocity-chat:${slug}`;
+function readKeptToken(slug: string): string | undefined {
+  try {
+    const o = JSON.parse(localStorage.getItem(keptKey(slug)) ?? "null");
+    if (o && typeof o.t === "string" && Date.now() - Number(o.at) < KEEP_MS) return o.t;
+  } catch { /* storage blocked or malformed: a fresh chat */ }
+  return undefined;
+}
+function keepToken(slug: string, token: string) {
+  try { localStorage.setItem(keptKey(slug), JSON.stringify({ t: token, at: Date.now() })); } catch { /* storage blocked */ }
+}
+function forgetToken(slug: string) {
+  try { localStorage.removeItem(keptKey(slug)); } catch { /* storage blocked */ }
+}
+
 const isEmbedded = () => {
   try { return window.self !== window.top; } catch { return true; }
 };
@@ -38,6 +59,8 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [draft, setDraft] = useState("");
   const [token, setToken] = useState<string | undefined>(undefined);
+  const [kept] = useState(() => (slug ? readKeptToken(slug) : undefined));
+  const resume = trpc.chatAgents.resume.useQuery({ slug, token: kept ?? "" }, { enabled: !!slug && !!kept, retry: false });
   const [slots, setSlots] = useState<string[]>([]);
   const [durationMin, setDurationMin] = useState(30);
   const [picked, setPicked] = useState<string | null>(null);
@@ -72,12 +95,25 @@ export default function ChatPage() {
     };
   }, [embedded]);
 
-  // Seed the transcript with the configured greeting once the agent loads.
+  // Reopen the kept conversation; a token the server no longer honours is dropped.
   useEffect(() => {
-    if (agent.data && messages.length === 0) {
+    if (!kept || !resume.isFetched) return;
+    if (resume.data && resume.data.messages.length) {
+      setToken(kept);
+      setMessages(resume.data.messages.map((m) => ({ role: m.role === "visitor" ? "visitor" : "agent", text: m.text })));
+    } else {
+      forgetToken(slug);
+    }
+  }, [resume.isFetched]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Seed the transcript with the configured greeting once the agent loads,
+  // unless a kept conversation is being (or has been) reopened.
+  const resuming = !!kept && (!resume.isFetched || !!resume.data?.messages.length);
+  useEffect(() => {
+    if (agent.data && messages.length === 0 && !resuming) {
       setMessages([{ role: "agent", text: agent.data.greeting }]);
     }
-  }, [agent.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [agent.data, resuming]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -93,6 +129,7 @@ export default function ChatPage() {
     send.mutate({ slug, token, message: text, ...(token ? {} : pageCtx) }, {
       onSuccess: (r: any) => {
         setToken(r.token);
+        if (r.token) keepToken(slug, r.token);
         setMessages((m) => [...m, { role: "agent", text: r.reply }]);
         setSlots(Array.isArray(r.slots) ? r.slots : []);
         if (r.durationMin) setDurationMin(r.durationMin);

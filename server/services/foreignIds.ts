@@ -66,6 +66,28 @@ export async function assertRowInWorkspace(
 }
 
 /**
+ * The read-time half of `assertRowInWorkspace`, for the public submit paths
+ * (audit 2026-10-20, G4). Forms, landing pages and chat agents store an
+ * auto-enrol sequence id, checked when it is saved; a row saved before that
+ * check existed can still name another workspace's sequence, and a public
+ * submission must not enrol anyone into it. False on any doubt, a failed read
+ * included: an enrolment that does not happen is the safe miss here.
+ */
+export async function sequenceInWorkspace(db: Db, workspaceId: number, sequenceId: number | null | undefined): Promise<boolean> {
+  if (sequenceId == null) return false;
+  try {
+    const [row] = await db
+      .select({ id: sequences.id })
+      .from(sequences)
+      .where(and(eq(sequences.id, sequenceId), eq(sequences.workspaceId, workspaceId)))
+      .limit(1);
+    return !!row;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * An owner must be someone who works HERE now — not another workspace's user
  * and not a leaver, or the record is filed under a person who will never see
  * it. No-op for null/undefined.

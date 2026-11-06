@@ -49,6 +49,7 @@ import { assertRowInWorkspace } from "../services/foreignIds";
 import { storagePut } from "../storage";
 import { buildTransporter, decrypt } from "./smtpConfig";
 import { evalConditions, executeRuleActions, normalizeConditions } from "../services/workflowEngine";
+import { describeRuleActions } from "../services/workflowDryRun";
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 // One arithmetic rule for quote money, shared with the client's preview so the
 // number the user approves is the number stored. See shared/quoteTotals.ts.
@@ -357,35 +358,35 @@ export const workflowsRouter = router({
     return rows;
   }),
 
-  /** Manually fire a rule for demo / testing — executes ALL real actions. */
-  testFire: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  /**
+   * Test a rule: say what it would do, and do none of it (audit 2026-10-20,
+   * G19). This "simulated run" used to execute every real action, open to
+   * any member: webhooks, Slack and Teams posts, tasks, enrolments, field
+   * writes. Managers only, like create and update, and it is not counted as
+   * a fire. The history row says it was a test.
+   */
+  testFire: managerProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [rule] = await db.select().from(workflowRules).where(and(eq(workflowRules.id, input.id), eq(workflowRules.workspaceId, ctx.workspace.id)));
     if (!rule) throw new TRPCError({ code: "NOT_FOUND" });
-    // Shared executor — runs the same actions the runtime dispatcher does
-    // (webhook/slack/teams + create_task/notify), so a Test reflects reality.
-    // notify targets the tester; no CRM record is linked on a manual test.
-    const errors = await executeRuleActions(ctx.workspace.id, rule, {
-      payload: {}, relatedType: undefined, relatedId: null, ownerUserId: ctx.user.id,
-    });
+    const [wsSettings] = await db
+      .select({ slackWebhookUrl: workspaceSettings.slackWebhookUrl, teamsWebhookUrl: workspaceSettings.teamsWebhookUrl })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+    const { plan, problems } = describeRuleActions(rule.actions, wsSettings);
     await db.insert(workflowRuns).values({
-      workspaceId: ctx.workspace.id, ruleId: rule.id, triggeredBy: "manual_test",
+      workspaceId: ctx.workspace.id, ruleId: rule.id, triggeredBy: "test (nothing was run)",
       // workflowRuns.status enum is success|failed|skipped — "error" fails the INSERT.
-      status: errors.length === 0 ? "success" : "failed",
+      status: problems.length === 0 ? "skipped" : "failed",
       actionsRun: rule.actions,
-      errorMessage: errors.length > 0 ? errors.join("; ") : null,
+      errorMessage: problems.length > 0 ? problems.join("; ") : null,
       // Explicitly null: a manual test links to no CRM record, and every other
       // run-history writer names the record that set it off.
       relatedType: null,
       relatedId: null,
     });
-    await db.update(workflowRules).set({ fireCount: rule.fireCount + 1, lastFiredAt: new Date() }).where(eq(workflowRules.id, rule.id));
-    await db.insert(notifications).values({
-      workspaceId: ctx.workspace.id, userId: ctx.user.id, kind: "workflow_fired",
-      title: `Rule fired: ${rule.name}`, body: errors.length === 0 ? "Manual test run completed." : `Completed with errors: ${errors.join("; ")}`,
-    });
-    return { ok: true, errors };
+    return { ok: true, dryRun: true as const, plan, errors: problems };
   }),
 
   /**

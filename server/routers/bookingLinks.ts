@@ -17,7 +17,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { and, eq, gte, lte, sql } from "drizzle-orm";
+import { and, eq, gte, lte, ne, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { isActiveMember } from "../_core/activeMembers";
@@ -178,6 +178,48 @@ export interface BookSlotOpts {
 }
 
 /**
+ * How often a public booking may land (audit 2026-10-20, G17). Each booking
+ * mails a calendar invite from the rep's own calendar to an address the caller
+ * typed, so without a cap the link is a relay pointed at a stranger's inbox and
+ * a way to fill a rep's week with junk. The per-address limit stops the first,
+ * the per-link limit bounds the second; the per-IP limiter in
+ * publicRateLimit.ts sits in front of both. Counted over the last 24 hours,
+ * cancelled meetings excluded, so a booker who cancels can book again.
+ */
+export const MAX_BOOKINGS_PER_EMAIL_PER_DAY = 2;
+export const MAX_BOOKINGS_PER_LINK_PER_DAY = 20;
+export const BOOKING_CAP_EMAIL = "You already have meetings booked with this team. Check your email for the invite, or reply to it to change the time.";
+export const BOOKING_CAP_LINK = "This calendar is not taking more bookings today. Please try again tomorrow.";
+
+async function assertBookingCaps(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, link: BookingLink, email: string): Promise<void> {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  // Public bookings only: a meeting a rep or the scheduler proposed to this
+  // person today must not use up their own right to book.
+  const recent = and(
+    eq(meetings.workspaceId, link.workspaceId),
+    gte(meetings.createdAt, since),
+    ne(meetings.status, "cancelled"),
+    eq(meetings.source, "inbound"),
+  );
+  const [byEmail] = await db.select({ n: sql<number>`count(*)` }).from(meetings)
+    .where(and(recent, sql`lower(${meetings.contactEmail}) = ${email.trim().toLowerCase()}`));
+  if (Number(byEmail?.n ?? 0) >= MAX_BOOKINGS_PER_EMAIL_PER_DAY) {
+    throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: BOOKING_CAP_EMAIL });
+  }
+  const [byLink] = await db.select({ n: sql<number>`count(*)` }).from(meetings)
+    .where(and(recent, eq(meetings.ownerUserId, link.userId)));
+  if (Number(byLink?.n ?? 0) >= MAX_BOOKINGS_PER_LINK_PER_DAY) {
+    throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: BOOKING_CAP_LINK });
+  }
+}
+
+/** The booker's note as the meeting card's internal line, capped. Null when there is none. */
+export function bookerNoteLine(notes: string | null | undefined): string | null {
+  const t = String(notes ?? "").trim();
+  return t ? `Note from the booker: ${t}`.slice(0, 1000) : null;
+}
+
+/**
  * Book one slot on a booking link: revalidate availability, ensure a lead,
  * create the meeting, push it to the real calendar, bump the counter, and tell
  * the rep. Exported so the chat agent books through EXACTLY this path — a
@@ -220,6 +262,8 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
   if (!(await isActiveMember(link.workspaceId, link.userId))) {
     throw new TRPCError({ code: "NOT_FOUND", message: BOOKING_UNAVAILABLE });
   }
+
+  await assertBookingCaps(db, link, opts.email);
 
   // Inbound lead for the booker (routed to the link owner), unless the caller
   // already has one for this person.
@@ -267,7 +311,15 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
     proposedTimes: [start.toISOString()],
     scheduledAt: start,
     durationMin: link.durationMin,
-    inviteMessage: opts.notes ? opts.notes.slice(0, 1500) : null,
+    /**
+     * The booker's note is NOT the invite text (audit 2026-10-20, G17).
+     * `inviteMessage` becomes the description of the calendar event the rep's
+     * own calendar sends to `opts.email`, an address the caller chose: a
+     * stranger's text, mailed from the rep, to anyone. It goes on the card's
+     * internal line instead, which only the workspace sees.
+     */
+    inviteMessage: null,
+    aiReasoning: bookerNoteLine(opts.notes),
     source: opts.meetingSource ?? "inbound",
   } as never);
   const meetingId = Number((ins as any)[0]?.insertId ?? 0) || 0;

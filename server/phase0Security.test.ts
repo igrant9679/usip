@@ -240,6 +240,10 @@ describe("C1: a reset link travels only through a workspace the person belongs t
 
   it("forgot-password for the invited victim goes out through their own workspace, with the link kept out of the log", async () => {
     await post("/api/auth/forgot-password", { email: "victim@cf.example" });
+    // 2026-11-06 (audit G31): forgot-password answers before it sends, so the
+    // send lands just after the response. Waited for, not assumed; what this
+    // pins (which workspace, link withheld) is unchanged.
+    for (let i = 0; i < 100 && h.sent.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
     expect(h.sent).toHaveLength(1);
     expect((h.sent[0] as any).logPreview).toMatch(/link withheld/);
   });
