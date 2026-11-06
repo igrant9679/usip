@@ -256,7 +256,11 @@ describe("segment rules compile to SQL that agrees with the evaluator (P52)", ()
     await caller().segments.create({ name: "VPs", matchType: "all", rules: [{ id: "a", field: "title", operator: "contains", value: "vp" }] });
     const seg = T(audienceSegments).find((s: any) => s.name === "VPs");
     expect(seg.contactCount).toBe(32);
-    expect(await caller().segments.getContacts({ id: seg.id, limit: 10 })).toHaveLength(10);
+    // 2026-11-06 (audit P20): getContacts is the segment page's members, a page
+    // at a time with the total, not a bare array cut at `limit`. Still bounded.
+    const page = await caller().segments.getContacts({ id: seg.id, perPage: 10 });
+    expect(page.rows).toHaveLength(10);
+    expect(page.total).toBe(32);
     for (const f of ["server/routers/segments.ts", "server/routers/segmentRules.ts"]) {
       expect(read(f), f).not.toMatch(/allContacts/);
     }

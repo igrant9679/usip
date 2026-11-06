@@ -2,8 +2,8 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { z } from "zod";
 import { getDb } from "../db";
-import { audienceSegments, contacts } from "../../drizzle/schema";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { audienceSegments, campaigns, contacts, segmentSequenceRules } from "../../drizzle/schema";
+import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { segmentProblem } from "@shared/segmentRules";
 import { countSegment, segmentWhere } from "../services/segmentSql";
@@ -107,17 +107,54 @@ export const segmentsRouter = router({
       return { count };
     }),
 
+  /**
+   * Deleting a segment left its auto-enrol rules and broadcasts pointing at
+   * nothing (audit 2026-10-20, P54). A segment a rule uses is refused until
+   * the rule is deleted, on Segment Auto-Enroll where rules live. Broadcasts
+   * (the retired /campaigns) have no screen left to unlink one from, so their
+   * link is cleared with the segment.
+   */
   delete: workspaceProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
-      await db
-        .delete(audienceSegments)
+      const [seg] = await db
+        .select({ id: audienceSegments.id })
+        .from(audienceSegments)
         .where(and(
           eq(audienceSegments.id, input.id),
           eq(audienceSegments.workspaceId, ctx.workspace.id),
         ));
+      if (!seg) throw new TRPCError({ code: "NOT_FOUND", message: "That segment is not in this workspace." });
+      const rules = await db
+        .select({ id: segmentSequenceRules.id })
+        .from(segmentSequenceRules)
+        .where(and(
+          eq(segmentSequenceRules.segmentId, input.id),
+          eq(segmentSequenceRules.workspaceId, ctx.workspace.id),
+        ));
+      if (rules.length > 0) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `${rules.length} auto-enroll rule${rules.length === 1 ? " uses" : "s use"} this segment. Delete ${rules.length === 1 ? "it" : "them"} on Segment Auto-Enroll first.`,
+        });
+      }
+      await db.transaction(async (tx) => {
+        await tx
+          .update(campaigns)
+          .set({ audienceSegmentId: null })
+          .where(and(
+            eq(campaigns.audienceSegmentId, input.id),
+            eq(campaigns.workspaceId, ctx.workspace.id),
+          ));
+        await tx
+          .delete(audienceSegments)
+          .where(and(
+            eq(audienceSegments.id, input.id),
+            eq(audienceSegments.workspaceId, ctx.workspace.id),
+          ));
+      });
       return { ok: true };
     }),
 
@@ -217,12 +254,22 @@ export const segmentsRouter = router({
       return { added: newRules.length, total: count };
     }),
 
-  /** The segment's contacts, newest first, at most `limit` (P52). */
+  /**
+   * One page of the segment's contacts, newest first, and how many there are
+   * now (P52). Nothing called this, so a segment's members could not be seen
+   * (audit 2026-10-20, P20); the segment's own page reads it. The columns the
+   * page shows only, and each contact's People record when it has one, since
+   * segments read the contacts table and not People (P21).
+   */
   getContacts: workspaceProcedure
-    .input(z.object({ id: z.number(), limit: z.number().int().min(1).max(1000).default(200) }))
+    .input(z.object({
+      id: z.number(),
+      page: z.number().int().min(1).default(1),
+      perPage: z.number().int().min(10).max(200).default(50),
+    }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
-      if (!db) return [];
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [seg] = await db
         .select()
         .from(audienceSegments)
@@ -230,9 +277,18 @@ export const segmentsRouter = router({
           eq(audienceSegments.id, input.id),
           eq(audienceSegments.workspaceId, ctx.workspace.id),
         ));
-      if (!seg) return [];
+      if (!seg) throw new TRPCError({ code: "NOT_FOUND", message: "That segment is not in this workspace." });
+      const page = { page: input.page, perPage: input.perPage };
       const where = segmentWhere(ctx.workspace.id, (seg.rules as Rule[]) ?? [], (seg.matchType ?? "all") as "all" | "any", await getWorkspaceTimezone(ctx.workspace.id));
-      if (!where) return [];
-      return db.select().from(contacts).where(where).orderBy(desc(contacts.id)).limit(input.limit);
+      if (!where) return { ...page, rows: [], total: 0 };
+      const [rows, [{ total }]] = await Promise.all([
+        db.select({
+          id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName, email: contacts.email,
+          title: contacts.title, companyName: contacts.companyName, emailVerificationStatus: contacts.emailVerificationStatus,
+          personProspectId: contacts.personProspectId, createdAt: contacts.createdAt,
+        }).from(contacts).where(where).orderBy(desc(contacts.id)).limit(input.perPage).offset((input.page - 1) * input.perPage),
+        db.select({ total: sql<number>`count(*)` }).from(contacts).where(where),
+      ]);
+      return { ...page, rows, total: Number(total) };
     }),
 });
