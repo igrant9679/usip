@@ -32,7 +32,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ConfirmButton } from "@/components/usip/Common";
+import { ConfirmButton, confirmAction } from "@/components/usip/Common";
 import {
   CalendarClock, CalendarCheck, CalendarX, Sparkles, Bot, Zap, Check, X, Clock, Video, Send,
   MoreHorizontal, Plus, AlertTriangle, Link2, Building2, MailWarning, Copy, ExternalLink, UserRound,
@@ -191,7 +191,19 @@ export default function MeetingsV2() {
     onError: (e) => toast.error(e.message),
   });
   const complete = trpc.meetings.complete.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
-  const cancel = trpc.meetings.cancel.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
+  // Says what happened to the invite (audit O28): cancelling now deletes the
+  // calendar event, which is what tells the attendee.
+  const cancel = trpc.meetings.cancel.useMutation({
+    onSuccess: (r) => {
+      invalidateAll();
+      toast.success(
+        r.calendar === "done" ? "Meeting cancelled — the invite was removed from the calendar and the attendee was sent a cancellation"
+        : r.calendar === "gone" ? "Meeting cancelled — the invite had already been removed from the calendar"
+        : "Meeting cancelled — it was not on a calendar, so nothing was sent to the attendee",
+      );
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const create = trpc.meetings.create.useMutation({
     onSuccess: () => { invalidateAll(); toast.success("Meeting created"); setNewOpen(false); },
     onError: (e) => toast.error(e.message),
@@ -526,7 +538,18 @@ export default function MeetingsV2() {
                         {m.scheduledAt && <DropdownMenuItem onClick={() => complete.mutate({ id: m.id })}><Check className="size-3.5 mr-2" /> Mark completed</DropdownMenuItem>}
                         {m.scheduledAt && <DropdownMenuItem onClick={() => complete.mutate({ id: m.id, disposition: "no_show" })}>Mark no-show</DropdownMenuItem>}
                         {m.scheduledAt && <DropdownMenuSeparator />}
-                        <DropdownMenuItem onClick={() => cancel.mutate({ id: m.id })} className="text-rose-600"><X className="size-3.5 mr-2" /> Cancel</DropdownMenuItem>
+                        <DropdownMenuItem
+                          // Asks first (audit O28): one stray click used to cancel a real meeting.
+                          onClick={() => confirmAction({
+                            title: "Cancel this meeting?",
+                            description: m.inviteSent
+                              ? `The invite is removed from the calendar, which sends ${m.contactName || m.contactEmail || "the attendee"} a cancellation.`
+                              : "It was never sent to a calendar, so only Velocity's record changes.",
+                            confirmLabel: "Cancel meeting",
+                            cancelLabel: "Keep it",
+                          }, () => cancel.mutate({ id: m.id }))}
+                          className="text-rose-600"
+                        ><X className="size-3.5 mr-2" /> Cancel</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
