@@ -24,7 +24,8 @@ vi.mock("./db", async (a) => ({ ...(await a<typeof import("./db")>()), getDb: as
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { appRouter } from "./routers";
 import { checkDealAging } from "./routers/operations";
-import { evalConditions } from "./services/workflowEngine";
+import { evalConditions, executeRuleActions } from "./services/workflowEngine";
+import { invalidateSendWindowCache } from "./services/sendWindow";
 import { invalidateStageIndex } from "./_core/stageSemantics";
 import { conditionFieldsFor, LIVE_TRIGGER_IDS, TRIGGER_FIELDS } from "@shared/workflowTriggers";
 
@@ -167,5 +168,27 @@ describe("a new rule starts switched off (G61)", () => {
     const ai = read("server/routers/aiFeatures.ts");
     const apply = ai.slice(ai.indexOf("db.insert(workflowRules).values({"), ai.indexOf("}).$returningId();", ai.indexOf("db.insert(workflowRules).values({")));
     expect(apply).toContain("enabled: false,");
+  });
+});
+
+describe("a rule enrols nobody while outbound is paused (2026-11-06)", () => {
+  const enrolRule = { id: 9, name: "Enrol", actions: [{ type: "enroll_sequence", params: { sequenceId: 5 } }] };
+  const ctx = { relatedType: "contact", relatedId: 7 } as never;
+  beforeEach(() => {
+    invalidateSendWindowCache();
+    rows("sequences").push({ id: 5, workspaceId: WS, name: "S", status: "active" });
+  });
+
+  it("a paused workspace gets no enrolment, and the run says why", async () => {
+    rows("workspace_settings").push({ workspaceId: WS, timezone: "UTC", outboundPausedAt: new Date() });
+    const errors = await executeRuleActions(WS, enrolRule, ctx);
+    expect(rows("enrollments")).toHaveLength(0);
+    expect(errors).toEqual(["enroll_sequence: skipped, outbound is paused for this workspace"]);
+  });
+
+  it("a live workspace still enrols", async () => {
+    rows("workspace_settings").push({ workspaceId: WS, timezone: "UTC", outboundPausedAt: null });
+    expect(await executeRuleActions(WS, enrolRule, ctx)).toEqual([]);
+    expect(rows("enrollments").map((e) => [e.sequenceId, e.contactId, e.status])).toEqual([[5, 7, "active"]]);
   });
 });

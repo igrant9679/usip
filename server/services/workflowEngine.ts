@@ -67,6 +67,7 @@ import { getDb } from "../db";
 import { safeFetch } from "./scraper/ssrfGuard";
 import { archivedWorkspaceIds, isWorkspaceArchived } from "../_core/workspaceArchive";
 import { notifyIfEnabled } from "./policyNotify";
+import { isOutboundPaused } from "./outboundPause";
 import {
   contacts, emailDrafts, enrollments, leads, notifications, opportunities,
   sequences, tasks, workflowRules, workflowRuns, workspaceSettings,
@@ -251,6 +252,11 @@ async function runAction(
         const [seq] = await db.select({ id: sequences.id }).from(sequences)
           .where(and(eq(sequences.id, sequenceId), eq(sequences.workspaceId, ws))).limit(1);
         if (!seq) return `enroll_sequence: sequence ${sequenceId} not found in this workspace`;
+        // No enrolment while the workspace's outbound is paused (2026-11-06):
+        // with "equals" now matching numbers (G61), rules that never fired can
+        // start to, and an enrolment made now would queue sends for the moment
+        // the pause lifts. The run records why.
+        if (await isOutboundPaused(ws)) return "enroll_sequence: skipped, outbound is paused for this workspace";
 
         const col = target === "contact" ? enrollments.contactId
           : target === "lead" ? enrollments.leadId : enrollments.prospectId;
