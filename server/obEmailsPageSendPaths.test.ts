@@ -162,6 +162,29 @@ describe("O47: one delivery path for the row's Send and Send approved", () => {
   });
 });
 
+describe("the workspace's tracking switches decide whether a send is tracked (2026-11-06)", () => {
+  // The old bulk Send approved honoured emailOpenTracking / emailClickTracking;
+  // once it went through deliverEmailDraft (O47), that path must honour them too.
+  it("both switches off: neither button asks the mailbox to track", async () => {
+    rows("workspace_settings").push({ workspaceId: LSI, emailSignature: null, emailOpenTracking: false, emailClickTracking: false });
+    draft(11, { toContactId: 101, toEmail: "ann@acme.example" });
+    draft(12, { toContactId: 102, toEmail: "ann2@acme.example" });
+    await caller(ADMIN).emailDrafts.send({ id: 11 });
+    await caller(ADMIN).smtpConfig.sendBulkApproved({ draftIds: [12] });
+    expect(h.emails.map((m) => m.track)).toEqual([false, false]);
+  }, 20_000);
+
+  it("left on, or never set: tracked, as before", async () => {
+    rows("workspace_settings").push({ workspaceId: LSI, emailSignature: null, emailOpenTracking: true, emailClickTracking: false });
+    draft(13, { toContactId: 101, toEmail: "ann@acme.example" });
+    await caller(ADMIN).emailDrafts.send({ id: 13 });
+    rows("workspace_settings").length = 0;
+    draft(14, { toContactId: 102, toEmail: "ann2@acme.example" });
+    await caller(ADMIN).emailDrafts.send({ id: 14 });
+    expect(h.emails.map((m) => m.track)).toEqual([true, true]);
+  }, 20_000);
+});
+
 describe("O25: the Emails page says what auto-send and approving do", () => {
   const page = read("client/src/pages/usip/EmailsV2.tsx");
   const seq = read("server/routers/sequences.ts");

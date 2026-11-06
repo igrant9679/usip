@@ -1968,7 +1968,7 @@ async function sendClaimedDraft(
   const senderName = senderRow?.name ?? fromAccount.fromName ?? fromAccount.name ?? "";
   const senderEmail = senderRow?.email ?? fromAccount.fromEmail ?? "";
   const [wsSettings] = await db
-    .select({ emailSignature: workspaceSettings.emailSignature })
+    .select({ emailSignature: workspaceSettings.emailSignature, emailOpenTracking: workspaceSettings.emailOpenTracking, emailClickTracking: workspaceSettings.emailClickTracking })
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
@@ -2079,7 +2079,9 @@ async function sendClaimedDraft(
       subject: renderedSubject,
       bodyHtml: fullBodyHtml,
       bodyText: fullBodyText,
-      track: true,
+      // The workspace's tracking switches (Settings, migration 0117), as the old
+      // bulk Send approved honoured them: with both off, nothing is tracked (2026-11-06).
+      track: wsSettings?.emailOpenTracking !== false || wsSettings?.emailClickTracking !== false,
       // Sitewide email log (migration 0163). The draft exists before the send
       // on this path, so the log row can point straight at it — which is what
       // lets the Emails page show this row's live opens and clicks.
