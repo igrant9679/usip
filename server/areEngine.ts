@@ -52,7 +52,8 @@ import {
   users,
   workspaceSettings,
 } from "../drizzle/schema";
-import { runEnrichAgent, runSequenceAgent } from "./routers/are/prospects";
+import { generateCampaignTemplate, runEnrichAgent, runSequenceAgent } from "./routers/are/prospects";
+import { ENRICH_MAX_ATTEMPTS, retryAt } from "./services/are/retryBackoff";
 import {
   saveScrapeJobAndQueue,
   scrapeGoogleBusiness,
@@ -62,14 +63,14 @@ import { searchLinkedInPeople, type UnipileLinkedInSearchHit } from "./lib/unipi
 import { listUsableAccounts } from "./services/linkedinLookup";
 import { pickAccountForAction, recordLinkedInAction } from "./services/linkedin/activityGate";
 import { randomUUID } from "node:crypto";
-import { sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
+import { SEND_STATE_UNKNOWN, sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
 import { dispatchLinkedInStep, HEALABLE_NO_LINKEDIN } from "./services/are/linkedinStep";
 import { injectTracking, isDeferredSenderToken, renderSequenceOptOut, resolveSenderTokens, scrubForSend } from "./mergeVars";
 import { resolveBookingUrl } from "./mergeVars";
 import { campaignSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 // One rule for a step's index + variant key, shared with the A/B metadata
 // upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
-import { normalizeSequence } from "@shared/areSequenceSteps";
+import { campaignChannelOn, normalizeSequence } from "@shared/areSequenceSteps";
 import { effectiveStepGapDays, dayOffsetForPosition, planHealRevival, sanitizeDayOffsets } from "@shared/areStepCadence";
 import {
   APOLLO_PAGE_SIZE,
@@ -110,7 +111,7 @@ import {
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
 import { makeUnsubscribeUrl, unsubscribeFooter, unsubscribeHeaders } from "./unsubscribe";
 import { describeSuppression, findSuppression } from "./services/suppression";
-import { HELD_PAUSED, HELD_REPLIED, claimStepForDispatch, releaseProspectSteps, respaced } from "./services/are/stepHold";
+import { DISPATCH_INTERRUPTED, HELD_PAUSED, HELD_REPLIED, claimStepForDispatch, releaseProspectSteps, respaced } from "./services/are/stepHold";
 import { getWorkspaceTimezone, startOfLocalDay } from "./services/workspaceTimezone";
 import { escapeHtml } from "@shared/escapeHtml";
 import { icpLabels } from "@shared/icpShape";
@@ -158,6 +159,10 @@ const OTHER_CHANNEL_PER_TICK = 50;
 const LINKEDIN_HELD_MS = 60 * 60_000;
 /** A LinkedIn step waiting for its connection request to be accepted. */
 const LINKEDIN_WAIT_MS = 6 * 60 * 60_000;
+/** A due step whose copy is held for an avoid rule: looked at again in an hour (A13/A40). */
+const COPY_HELD_MS = 60 * 60_000;
+/** Sends between fresh reads of the campaign and workspace pause (A29): every one. */
+export const DISPATCH_RECHECK_EVERY = 1;
 // Final checks can spend Reoon credits and seconds — bound them per tick so
 // the 3-minute engine cadence never stalls. Unchecked rows still enroll.
 const FINAL_CHECKS_PER_TICK = 5;
@@ -624,6 +629,71 @@ async function applyHealRevival(
   return { revived, superseded, pushed, revivedProspectIds };
 }
 
+/**
+ * A prospect's steps that went out, or may have, for enrolment to resume past.
+ *
+ * A step whose send state is unknown counts as sent (audit 2026-10-20, A70):
+ * it was claimed and handed to the mailbox, and whether it left is not known —
+ * the claim's own reason, or the pool's when the provider's answer was lost.
+ * Re-enrolment counted `sent` alone and minted those steps again, which is how
+ * a prospect gets the same email twice.
+ */
+export async function stepsAlreadySent(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  wsId: number,
+  prospectQueueId: number,
+): Promise<Array<{ stepIndex: number; executedAt: Date | null }>> {
+  return db
+    .select({ stepIndex: areExecutionQueue.stepIndex, executedAt: areExecutionQueue.executedAt })
+    .from(areExecutionQueue)
+    .where(and(
+      eq(areExecutionQueue.workspaceId, wsId),
+      eq(areExecutionQueue.prospectQueueId, prospectQueueId),
+      or(
+        eq(areExecutionQueue.status, "sent"),
+        and(
+          eq(areExecutionQueue.status, "failed"),
+          or(
+            eq(areExecutionQueue.failureReason, DISPATCH_INTERRUPTED),
+            like(areExecutionQueue.failureReason, `${SEND_STATE_UNKNOWN}%`),
+          ),
+        ),
+      ),
+    ));
+}
+
+/**
+ * Why a dispatch loop already running must stop now, or null to go on (A29).
+ * Read fresh, not through the send window's one-minute cache, and FAILS
+ * CLOSED: a read that throws stops the loop, because sending while unsure
+ * whether someone paused is the one outcome a pause exists to prevent.
+ */
+async function dispatchStopReason(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  wsId: number,
+  campId: number,
+): Promise<string | null> {
+  try {
+    const [c] = await db
+      .select({ status: areCampaigns.status })
+      .from(areCampaigns)
+      .where(and(eq(areCampaigns.id, campId), eq(areCampaigns.workspaceId, wsId)))
+      .limit(1);
+    if (!c) return "the campaign could not be found";
+    if (c.status !== "active") return `the campaign was set to ${c.status}`;
+    const [ws] = await db
+      .select({ pausedAt: workspaceSettings.outboundPausedAt })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, wsId))
+      .limit(1);
+    if (ws?.pausedAt) return "outbound was paused for this workspace";
+    if (!(await inSendWindow(wsId))) return "the send window closed";
+    return null;
+  } catch (e) {
+    return `the pause switches could not be read (${String((e as Error)?.message ?? e).slice(0, 200)})`;
+  }
+}
+
 /* ─── Per-campaign tick ─────────────────────────────────────────────────── */
 /**
  * Phase 3 — ENROLL, as a callable. Turns each approved prospect's
@@ -960,13 +1030,7 @@ async function enrollApprovedForCampaignUnlocked(
        * day 3 of the conversation the prospect is actually having. Nothing
        * sent yet → identical to before (anchor = now, all steps).
        */
-      const priorSends = await db
-        .select({ stepIndex: areExecutionQueue.stepIndex, executedAt: areExecutionQueue.executedAt })
-        .from(areExecutionQueue)
-        .where(and(
-          eq(areExecutionQueue.prospectQueueId, row.id),
-          eq(areExecutionQueue.status, "sent"),
-        ));
+      const priorSends = await stepsAlreadySent(db, wsId, row.id);
       const sentIdx = new Set(priorSends.map((r) => r.stepIndex));
       const firstSendMs = priorSends
         .map((r) => (r.executedAt ? new Date(r.executedAt).getTime() : NaN))
@@ -1319,8 +1383,9 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
     // The page holds only rows generation can actually act on: INNER join —
     // a dossier must exist (2a re-queues the ones that lack it). Ordered, so
     // the page is deterministic rather than whatever MySQL felt like.
+    const now2 = new Date();
     const needSequence = await db
-      .select({ id: prospectQueue.id })
+      .select({ id: prospectQueue.id, attempts: prospectQueue.sequenceAttempts })
       .from(prospectQueue)
       .innerJoin(
         prospectIntelligence,
@@ -1332,18 +1397,60 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
           eq(prospectQueue.workspaceId, wsId),
           eq(prospectQueue.sequenceStatus, "approved"),
           sql`${prospectIntelligence.generatedSequence} IS NULL`,
+          // A row whose generation keeps failing waits its turn (A28): it was
+          // re-selected first on every tick and starved the rows behind it.
+          or(isNull(prospectQueue.sequenceRetryAt), lte(prospectQueue.sequenceRetryAt, now2)),
         ),
       )
       .orderBy(prospectQueue.id)
       .limit(SEQUENCE_PER_CAMPAIGN_TICK);
     if (needSequence.length > 0) {
-      const settled = await Promise.allSettled(
-        needSequence.map((p) => runSequenceAgent(p.id, wsId, campId)),
-      );
-      const ok = settled.filter((s) => s.status === "fulfilled").length;
-      result.sequencesGenerated += ok;
-      await emitLog(wsId, campId, "sequence", "info",
-        `Generated ${ok}/${needSequence.length} sequences`);
+      /**
+       * The campaign's skeleton ONCE, before the prospects (A28). The three
+       * runs below go in parallel, and each found no cached template on a
+       * campaign's first tick, so each paid for its own and the last write won.
+       * A fixed-copy campaign has no skeleton; a failure here is the
+       * campaign's, not the prospects', so nobody's attempts are counted.
+       */
+      let skeletonReady = true;
+      if ((campaign as { copyMode?: string }).copyMode !== "fixed") {
+        try {
+          const skeleton = await generateCampaignTemplate(campaign, false);
+          if (skeleton.steps.length === 0) {
+            skeletonReady = false;
+            await emitLog(wsId, campId, "sequence", "error",
+              "Campaign template came back with no steps, so no sequences were generated this tick — check the campaign's sequence prompt and the AI provider");
+          }
+        } catch (e) {
+          skeletonReady = false;
+          await emitLog(wsId, campId, "sequence", "error",
+            `Campaign template could not be written, so no sequences were generated this tick: ${String((e as Error)?.message ?? e).slice(0, 300)}`);
+        }
+      }
+      if (skeletonReady) {
+        const settled = await Promise.allSettled(
+          needSequence.map((p) => runSequenceAgent(p.id, wsId, campId)),
+        );
+        let ok = 0;
+        for (let i = 0; i < needSequence.length; i++) {
+          const p = needSequence[i];
+          if (settled[i].status === "fulfilled") {
+            ok++;
+            if (Number(p.attempts ?? 0) > 0) {
+              await db.update(prospectQueue).set({ sequenceAttempts: 0, sequenceRetryAt: null })
+                .where(and(eq(prospectQueue.id, p.id), eq(prospectQueue.workspaceId, wsId)));
+            }
+          } else {
+            await db.update(prospectQueue)
+              .set({ sequenceAttempts: sql`${prospectQueue.sequenceAttempts} + 1`, sequenceRetryAt: retryAt(Number(p.attempts ?? 0) + 1) })
+              .where(and(eq(prospectQueue.id, p.id), eq(prospectQueue.workspaceId, wsId)));
+          }
+        }
+        result.sequencesGenerated += ok;
+        await emitLog(wsId, campId, "sequence", "info",
+          `Generated ${ok}/${needSequence.length} sequences` +
+          (ok < needSequence.length ? ` — the ${needSequence.length - ok} that failed wait before they are tried again` : ""));
+      }
     }
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} sequence phase failed:`, e);
@@ -1360,8 +1467,13 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
   // reports its own (A68).
   const sentBeforeThisCampaign = result.sent;
   try {
-    const channels = (campaign.channelsEnabled ?? {}) as Record<string, boolean>;
-    const emailEnabled = channels.email !== false; // null/undefined ⇒ enabled
+    // The one reading of the switches (A71), shared with the template writer:
+    // email unless switched off, LinkedIn only when ticked.
+    const channels = {
+      email: campaignChannelOn(campaign.channelsEnabled, "email"),
+      linkedin: campaignChannelOn(campaign.channelsEnabled, "linkedin"),
+    };
+    const emailEnabled = channels.email;
 
     // Respect dailySendCap — count sends already made today for this campaign.
     //
@@ -1558,8 +1670,51 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
       const stepsThisTick = new Set<number>();
       const gapMs = effectiveStepGapDays((campaign as { stepGapDays?: number | null }).stepGapDays) * 86_400_000;
 
+      /**
+       * Copy held for a research avoid rule is never sent (audit A13/A40).
+       * Enrolment already waits while a prospect's copy is held; this catches a
+       * hold that arrived AFTER enrolment, when the steps were already on the
+       * calendar. The step stays scheduled, an hour on, so it does not head the
+       * page while it waits for someone to release or regenerate it.
+       */
+      const heldCopy = new Set<number>();
+      const dueProspectIds = Array.from(new Set(due.map((s) => s.prospectQueueId)));
+      if (dueProspectIds.length > 0) {
+        const held = await db
+          .select({ id: prospectIntelligence.prospectQueueId })
+          .from(prospectIntelligence)
+          .where(and(
+            eq(prospectIntelligence.workspaceId, wsId),
+            inArray(prospectIntelligence.prospectQueueId, dueProspectIds),
+            isNotNull(prospectIntelligence.copyHoldReason),
+          ));
+        for (const r of held) heldCopy.add(r.id);
+      }
+      let copyHeldSteps = 0;
+
+      /**
+       * A tick that is already sending stops when someone pauses (audit A29).
+       * The switches were read once, before the loop, and a long tick kept
+       * sending after the campaign or the workspace was paused. After every
+       * DISPATCH_RECHECK_EVERY sends they are read again, fresh, and any doubt
+       * — a failed read included — stops the loop. What is left stays scheduled.
+       */
+      let sendsSinceCheck = 0;
+      let stoppedMidTick: string | null = null;
+
       for (const step of due) {
         if (budget <= 0) break;
+        if (sendsSinceCheck >= DISPATCH_RECHECK_EVERY) {
+          stoppedMidTick = await dispatchStopReason(db, wsId, campId);
+          if (stoppedMidTick) break;
+          sendsSinceCheck = 0;
+        }
+        if (heldCopy.has(step.prospectQueueId)) {
+          await db.update(areExecutionQueue).set({ scheduledAt: new Date(Date.now() + COPY_HELD_MS) })
+            .where(and(eq(areExecutionQueue.id, step.id), eq(areExecutionQueue.status, "scheduled")));
+          copyHeldSteps++;
+          continue;
+        }
         /**
          * ONE STEP PER PROSPECT PER TICK (audit A2). A second step due for
          * someone who already had one this tick moves a campaign gap later,
@@ -1691,6 +1846,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
           if (outcome.kind === "sent") {
             result.sent++;
             budget--;
+            sendsSinceCheck++;
             await emitLog(wsId, campId, "dispatch", "info",
               `LinkedIn ${outcome.via} sent to ${lp.firstName ?? ""} ${lp.lastName ?? ""}`.trim());
           }
@@ -1916,6 +2072,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
             .where(eq(areExecutionQueue.id, step.id));
           result.sent++;
           budget--;
+          sendsSinceCheck++;
         } else if (sendRes.blocked) {
           /**
            * A CAP IS NOT A FAILURE. Nothing was transmitted: the pool refuses
@@ -1945,6 +2102,14 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
             })
             .where(eq(areExecutionQueue.id, step.id));
         }
+      }
+      if (stoppedMidTick) {
+        await emitLog(wsId, campId, "dispatch", "warn",
+          `Dispatch stopped part-way: ${stoppedMidTick}. The steps not yet sent stay scheduled.`);
+      }
+      if (copyHeldSteps > 0) {
+        await emitLog(wsId, campId, "dispatch", "warn",
+          `${copyHeldSteps} due step${copyHeldSteps === 1 ? " was" : "s were"} not sent: the prospect's copy breaks an avoid rule from your research — open the prospect to release or regenerate it.`);
       }
     }
     await emitLog(wsId, campId, "dispatch", "info",

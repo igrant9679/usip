@@ -75,7 +75,7 @@ import { areKnowledgeQuery } from "../../services/knowledgeQueries";
 import { DEFAULT_STEP_GAP_DAYS, defaultDayForStep, stepIndexOf } from "@shared/areSequenceSteps";
 // Separate line on purpose: areStepCadence.test.ts pins the import above
 // verbatim, and the sendable-channel vocabulary is a different concern anyway.
-import { ARE_SENDABLE_CHANNELS, isSendableChannel } from "@shared/areSequenceSteps";
+import { ARE_SENDABLE_CHANNELS, campaignChannelOn, isSendableChannel } from "@shared/areSequenceSteps";
 import { cleanScrapedField } from "@shared/fieldHygiene";
 import { icpPromptList, icpWeighted } from "@shared/icpShape";
 import { MAX_TIMELINE_DAY_OFFSET, MAX_TIMELINE_STEPS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
@@ -165,6 +165,10 @@ import { parseTargetPlaces, placeFit, placeStringOf } from "../../services/place
 
 /** How the Rejections tab names a rejection with no reason recorded. */
 const NO_REASON = "No reason given";
+
+/** Why Regenerate is refused for a sequence already on the calendar (A40). */
+export const REGENERATE_SCHEDULED_MESSAGE =
+  "This sequence is already scheduled, and regenerating it would not change the emails waiting to go. Edit a step to change what sends, or cancel the sequence, regenerate, and approve again.";
 
 /* ─── Enrich Agent ───────────────────────────────────────────────────────── */
 
@@ -635,8 +639,9 @@ export async function generateCampaignTemplate(
   // so it dutifully wrote steps on channels that have no provider behind them.
   // Only the sendable subset is offered now; an empty selection still says
   // email rather than leaving the architect to guess.
-  const enabledMap = (campaign.channelsEnabled ?? null) as Record<string, boolean> | null;
-  const sendableChannels = ARE_SENDABLE_CHANNELS.filter((c) => enabledMap?.[c] !== false);
+  // Read the way dispatch reads it (A71): a channel the dispatcher would skip
+  // must not be written into the skeleton.
+  const sendableChannels = ARE_SENDABLE_CHANNELS.filter((c) => campaignChannelOn(campaign.channelsEnabled, c));
 
   const systemContent =
     `You are an elite B2B sales sequence architect. Design a reusable ${stepCount}-step outreach skeleton for a single campaign. The skeleton will be filled in per-prospect later, so do NOT write subject lines or bodies — write the STRUCTURE (archetype, cadence, what each step should accomplish, the CTA pattern) so that any prospect's data can be slotted in.` +
@@ -987,6 +992,8 @@ export interface SequenceAgentResult {
   qualityScore: number;
   durationMs: number;
   prospectId: number;
+  /** With `onlyIfClean`: the new copy broke an avoid rule and was NOT saved; the reason. */
+  held?: string;
 }
 
 /** Persist a log row tied to the campaign. Best-effort: never throws,
@@ -1030,7 +1037,17 @@ export async function runSequenceAgent(
   prospectId: number,
   workspaceId: number,
   campaignId: number,
-  options: { force?: boolean; allowWithoutIntel?: boolean } = {},
+  options: {
+    force?: boolean;
+    allowWithoutIntel?: boolean;
+    /**
+     * Draft, and save only copy that breaks no avoid rule (audit A13). For a
+     * caller that will copy the result straight into scheduled sends: held
+     * copy is then not saved at all, the prospect keeps what it had, and the
+     * result says why in `held`.
+     */
+    onlyIfClean?: boolean;
+  } = {},
 ): Promise<SequenceAgentResult> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
@@ -1174,6 +1191,10 @@ export async function runSequenceAgent(
     if (brief.error) {
       await emitSeqLog(db, workspaceId, campaignId, "warn", "sequence.avoid",
         `Could not check ${prospect.firstName} ${prospect.lastName}'s copy against your research's avoid rules: ${brief.error.slice(0, 200)}`, { prospectId });
+    } else if (copyHoldReason && options.onlyIfClean) {
+      await emitSeqLog(db, workspaceId, campaignId, "warn", "sequence.avoid",
+        `Did not use the new copy for ${prospect.firstName} ${prospect.lastName}: ${copyHoldReason}. Their current sequence is unchanged.`, { prospectId, violations: brief.violations });
+      return { ok: false, reused: false, steps: steps.length, qualityScore: quality.score, durationMs: Date.now() - startedAt, prospectId, held: copyHoldReason };
     } else if (copyHoldReason) {
       await emitSeqLog(db, workspaceId, campaignId, "warn", "sequence.avoid",
         `Held ${prospect.firstName} ${prospect.lastName}'s sequence for review. ${copyHoldReason}`, { prospectId, violations: brief.violations });
@@ -1568,6 +1589,26 @@ export const prospectsRouter = router({
       allowWithoutEnrichment: z.boolean().default(true),
     }))
     .mutation(async ({ ctx, input }) => {
+      /**
+       * Regenerating a sequence that is already on the calendar is refused
+       * (audit 2026-10-20, A40). Enrolment copies each step into its scheduled
+       * send, so a new sequence changed the dossier and nothing that went out —
+       * while saying "Sequence created". Steps still to go (scheduled, or held)
+       * are what makes it enrolled; once none are left it can be regenerated.
+       */
+      if (input.force) {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [live] = await db
+          .select({ n: sql<number>`count(*)` })
+          .from(areExecutionQueue)
+          .where(and(
+            eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+            eq(areExecutionQueue.prospectQueueId, input.prospectId),
+            inArray(areExecutionQueue.status, ["scheduled", "paused"]),
+          ));
+        if (Number(live?.n ?? 0) > 0) throw new TRPCError({ code: "PRECONDITION_FAILED", message: REGENERATE_SCHEDULED_MESSAGE });
+      }
       try {
         return await runSequenceAgent(input.prospectId, ctx.workspace.id, input.campaignId, {
           force: input.force,
