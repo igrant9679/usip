@@ -98,7 +98,9 @@ describe("Find Prospects — the picker is the fan-out", () => {
     expect(count(finder, "sources: runSources")).toBe(2);
     expect(finder).toContain('toast.error("Pick at least one source")');
     // A disabled source is shown locked, not hidden — the user sees why.
-    expect(finder).toContain("Disabled in Settings → Revenue Engine");
+    // 2026-11-06 (audit P152): the reason moved from a hover title onto the
+    // page, in these words; still shown, now without hovering.
+    expect(finder).toContain("(off in Settings → Revenue Engine)");
   });
 
   it("the router accepts a selection and the service narrows AFTER the mask", () => {

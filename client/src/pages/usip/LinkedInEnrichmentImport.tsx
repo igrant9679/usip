@@ -213,6 +213,10 @@ function ReviewPanel() {
     try {
       await resolve.mutateAsync({ itemId: item.id, resolution: "skipped" });
       toast.info("Skipped");
+    } catch (e: any) {
+      // A failed skip said nothing and the item simply stayed (audit
+      // 2026-10-20, P155).
+      toast.error(e?.message ?? "Could not skip this item");
     } finally {
       setBusyId(null);
     }
