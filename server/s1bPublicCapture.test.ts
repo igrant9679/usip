@@ -194,8 +194,10 @@ describe("G17: a public booking is not an invite relay", () => {
     expect(rows("meetings")).toHaveLength(MAX_BOOKINGS_PER_EMAIL_PER_DAY);
   });
 
-  it("control: a cancelled booking, or one older than a day, doesn't count", async () => {
+  it("control: a cancelled booking, one older than a day, or a meeting the team proposed doesn't count", async () => {
     rows("meetings").push(
+      { id: 903, workspaceId: WS, ownerUserId: 22, contactEmail: "pat@x.example", status: "proposed", source: "ai", createdAt: new Date(), title: "t" },
+      { id: 904, workspaceId: WS, ownerUserId: 22, contactEmail: "pat@x.example", status: "scheduled", source: "manual", createdAt: new Date(), title: "t" },
       { id: 900, workspaceId: WS, ownerUserId: 22, contactEmail: "pat@x.example", status: "cancelled", source: "inbound", createdAt: new Date(), title: "t" },
       { id: 901, workspaceId: WS, ownerUserId: 22, contactEmail: "pat@x.example", status: "scheduled", source: "inbound", createdAt: new Date(Date.now() - 25 * 3600_000), title: "t" },
       { id: 902, workspaceId: WS, ownerUserId: 22, contactEmail: "pat@x.example", status: "scheduled", source: "inbound", createdAt: new Date(Date.now() - 26 * 3600_000), title: "t" },

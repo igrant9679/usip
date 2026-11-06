@@ -193,10 +193,13 @@ export const BOOKING_CAP_LINK = "This calendar is not taking more bookings today
 
 async function assertBookingCaps(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, link: BookingLink, email: string): Promise<void> {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  // Public bookings only: a meeting a rep or the scheduler proposed to this
+  // person today must not use up their own right to book.
   const recent = and(
     eq(meetings.workspaceId, link.workspaceId),
     gte(meetings.createdAt, since),
     ne(meetings.status, "cancelled"),
+    eq(meetings.source, "inbound"),
   );
   const [byEmail] = await db.select({ n: sql<number>`count(*)` }).from(meetings)
     .where(and(recent, sql`lower(${meetings.contactEmail}) = ${email.trim().toLowerCase()}`));
@@ -204,7 +207,7 @@ async function assertBookingCaps(db: NonNullable<Awaited<ReturnType<typeof getDb
     throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: BOOKING_CAP_EMAIL });
   }
   const [byLink] = await db.select({ n: sql<number>`count(*)` }).from(meetings)
-    .where(and(recent, eq(meetings.ownerUserId, link.userId), eq(meetings.source, "inbound")));
+    .where(and(recent, eq(meetings.ownerUserId, link.userId)));
   if (Number(byLink?.n ?? 0) >= MAX_BOOKINGS_PER_LINK_PER_DAY) {
     throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: BOOKING_CAP_LINK });
   }
