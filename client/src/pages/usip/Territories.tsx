@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Field, FormDialog, Section, SelectField, TextareaField } from "@/components/usip/Common";
+import { ConfirmButton, Field, FormDialog, Section, SelectField, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
@@ -24,7 +24,7 @@ export default function Territories() {
 
   return (
     <Shell title="Territories">
-      <PageHeader title="Territories" description="Define geographic or account-based territories and assign reps accordingly. Territory rules automatically route new leads and accounts to the correct owner on creation." pageKey="territories"
+      <PageHeader title="Territories" description="Define geographic or account-based territories and the rules that fill them. A routing rule assigns a territory and an owner to each company you create on its own; leads follow lead routing rules instead, and imported or converted companies are not routed." pageKey="territories"
         icon={<Map className="size-5" />}
       >
         <Button variant="outline" onClick={() => setRuleOpen(true)}><Zap className="size-4" /> New routing rule</Button>
@@ -40,7 +40,17 @@ export default function Territories() {
                     <div className="font-medium">{t.name}</div>
                     <div className="text-xs text-muted-foreground mt-0.5">Rules: {JSON.stringify(t.rules ?? {})}</div>
                   </div>
-                  <Button aria-label="Delete territory" size="sm" variant="ghost" onClick={() => del.mutate({ id: t.id })}><Trash2 className="size-3.5" /></Button>
+                  {/* Asks first, with what points at it (R76). */}
+                  {(() => {
+                    const ruleCount = (rules ?? []).filter((r: any) => r.territoryId === t.id).length;
+                    return (
+                      <ConfirmButton ariaLabel="Delete territory" size="sm" variant="ghost" title={`Delete the territory "${t.name}"?`}
+                        description={ruleCount
+                          ? `${ruleCount} routing rule${ruleCount === 1 ? " points" : "s point"} at it and will keep sending new companies to a territory that no longer exists — change or delete ${ruleCount === 1 ? "that rule" : "those rules"} too. This can't be undone.`
+                          : "No routing rule assigns accounts to it. This can't be undone."}
+                        confirmLabel="Delete" onConfirm={() => del.mutate({ id: t.id })}><Trash2 className="size-3.5" /></ConfirmButton>
+                    );
+                  })()}
                 </li>
               ))}
             </ul>
@@ -69,7 +79,9 @@ export default function Territories() {
                     <div className="text-xs text-muted-foreground text-right">
                       → {terr?.name ?? "(no territory)"} / {(owner as any)?.name ?? "(no owner)"}
                     </div>
-                    <Button aria-label="Delete rule" size="sm" variant="ghost" onClick={() => delRule.mutate({ id: r.id })}><Trash2 className="size-3.5" /></Button>
+                    <ConfirmButton ariaLabel="Delete rule" size="sm" variant="ghost" title={`Delete the rule "${r.name}"?`}
+                      description="New accounts stop being assigned by it. Accounts it already assigned keep their territory and owner."
+                      confirmLabel="Delete" onConfirm={() => delRule.mutate({ id: r.id })}><Trash2 className="size-3.5" /></ConfirmButton>
                   </li>
                 );
               })}

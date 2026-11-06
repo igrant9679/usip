@@ -192,7 +192,8 @@ export default function Quotes() {
                     updLi(i, { productId: pid, name: p?.name ?? li.name, unitPrice: p ? Number(p.listPrice) : li.unitPrice });
                   }}>
                   <option value="">— Custom —</option>
-                  {(products.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {/* Archived products are off new quotes (R75). */}
+                  {(products.data ?? []).filter((p) => p.active || p.id === li.productId).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
                 <input aria-label={`Line ${i + 1} item name`} className="col-span-3 text-sm border rounded h-9 px-2" placeholder="Item name" value={li.name} onChange={(e) => updLi(i, { name: e.target.value })} />
                 <input aria-label={`Line ${i + 1} quantity`} type="number" className="col-span-1 text-sm border rounded h-9 px-2" value={li.quantity} onChange={(e) => updLi(i, { quantity: Number(e.target.value) })} />

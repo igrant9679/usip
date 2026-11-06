@@ -61,6 +61,7 @@ import {
   monthKey, openTotals, zonedYmd, type Range,
 } from "../services/dealMetrics";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { describeWriteError, isDuplicateKeyError } from "../services/dbWriteError";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 // One arithmetic rule for line-item money, shared with quotes. See
 // shared/quoteTotals.ts — a deal line and a quote line do the same sum.
@@ -2597,7 +2598,7 @@ export const productsRouter = router({
       try {
         await db.insert(products).values({ ...input, listPrice: String(input.listPrice), cost: String(input.cost), workspaceId: ctx.workspace.id, active: true });
       } catch (e) {
-        throw new TRPCError({ code: "CONFLICT", message: "SKU already exists" });
+        throw productWriteError(e);
       }
       return { ok: true };
     }),
@@ -2609,17 +2610,53 @@ export const productsRouter = router({
     if (patch.listPrice !== undefined) patch.listPrice = String(patch.listPrice);
     if (patch.cost !== undefined) patch.cost = String(patch.cost);
     if (Object.keys(patch).length === 0) return { ok: true };
-    await db.update(products).set(patch).where(and(eq(products.id, input.id), eq(products.workspaceId, ctx.workspace.id)));
+    try {
+      await db.update(products).set(patch).where(and(eq(products.id, input.id), eq(products.workspaceId, ctx.workspace.id)));
+    } catch (e) {
+      throw productWriteError(e);
+    }
     return { ok: true };
   }),
 
+  /**
+   * Remove a product nothing uses (audit 2026-10-20, R75). A hard delete of a
+   * product on a deal or a quote left those lines pointing at nothing, so
+   * this refuses while any line names it, and says to archive it instead
+   * (update `active: false`), which hides it from new quotes and keeps every
+   * line that already uses it.
+   */
   delete: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [dealLines, quoteLines] = await Promise.all([
+      db.select({ id: dealLineItems.id }).from(dealLineItems)
+        .where(and(eq(dealLineItems.productId, input.id), eq(dealLineItems.workspaceId, ctx.workspace.id))),
+      db.select({ id: quoteLineItems.id }).from(quoteLineItems)
+        .where(and(eq(quoteLineItems.productId, input.id), eq(quoteLineItems.workspaceId, ctx.workspace.id))),
+    ]);
+    if (dealLines.length + quoteLines.length > 0) {
+      const used = [
+        dealLines.length ? `${dealLines.length} deal line${dealLines.length === 1 ? "" : "s"}` : null,
+        quoteLines.length ? `${quoteLines.length} quote line${quoteLines.length === 1 ? "" : "s"}` : null,
+      ].filter(Boolean).join(" and ");
+      throw new TRPCError({ code: "CONFLICT", message: `This product is on ${used}, so it can't be deleted. Archive it instead: it leaves new quotes and stays on those lines.` });
+    }
     await db.delete(products).where(and(eq(products.id, input.id), eq(products.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 });
+
+/**
+ * A failed product write, said as what it was (R75): every error read "SKU
+ * already exists", a lost connection included.
+ */
+function productWriteError(e: unknown): TRPCError {
+  if (isDuplicateKeyError(e)) return new TRPCError({ code: "CONFLICT", message: "A product with this SKU already exists." });
+  const why = describeWriteError(e);
+  if (why) return new TRPCError({ code: "BAD_REQUEST", message: `Couldn't save the product: ${why}.` });
+  console.error("[products] write failed:", e);
+  return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't save the product. Try again." });
+}
 
 /* ──────────────────────────────────────────────────────────────────────── */
 /* Territory routing rules — auto-assign accounts/leads to a territory/owner */

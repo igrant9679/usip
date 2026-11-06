@@ -11,6 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Progress } from "@/components/ui/progress";
 import { Pencil, Plus, Trash2, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
+import { ConfirmButton } from "@/components/usip/Common";
+import { quotaPeriodLabel } from "@shared/quotaPeriod";
 
 function fmt$(n: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
@@ -83,6 +85,8 @@ export default function Quota() {
       revenueTarget: Number(form.revenueTarget) || 0,
       dealsTarget: Number(form.dealsTarget) || 0,
       activitiesTarget: Number(form.activitiesTarget) || 0,
+      // Add refuses to overwrite an existing target (R102); Edit replaces it.
+      onlyIfNew: editTarget ? undefined : true,
     });
   }
 
@@ -109,7 +113,7 @@ export default function Quota() {
             </SelectTrigger>
             <SelectContent>
               {periodOptions.map((p) => (
-                <SelectItem key={p} value={p}>{p}</SelectItem>
+                <SelectItem key={p} value={p}>{quotaPeriodLabel(p)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -125,7 +129,7 @@ export default function Quota() {
           <Card className="flex items-center justify-center h-48">
             <div className="text-center text-muted-foreground">
               <TrendingUp className="h-10 w-10 mx-auto mb-3 opacity-30" />
-              <p className="text-sm">No quota targets set for {period}</p>
+              <p className="text-sm">No quota targets set for {quotaPeriodLabel(period)}</p>
               <Button variant="outline" size="sm" className="mt-3" onClick={openAdd}>Set first target</Button>
             </div>
           </Card>
@@ -222,7 +226,11 @@ function QuotaCard({ target, name, workspaceId, period, onEdit, onRemove }: any)
           <CardTitle className="text-base truncate">{name}</CardTitle>
           <div className="flex gap-1 shrink-0">
             <Button aria-label="Edit quota" variant="ghost" size="icon" className="h-7 w-7" onClick={onEdit}><Pencil className="h-3.5 w-3.5" /></Button>
-            <Button aria-label="Delete quota" variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:text-red-600" onClick={onRemove}><Trash2 className="h-3.5 w-3.5" /></Button>
+            {/* Asks first (R76, R102): one click removed the target. */}
+            <ConfirmButton ariaLabel="Delete quota" variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:text-red-600"
+              title={`Delete ${name}'s ${target.periodType} target?`}
+              description={`The ${quotaPeriodLabel(target.period)} target is removed and its attainment stops showing here. Deals and activities are not touched.`}
+              confirmLabel="Delete" onConfirm={onRemove}><Trash2 className="h-3.5 w-3.5" /></ConfirmButton>
           </div>
         </div>
         <div className="flex items-center gap-2">
