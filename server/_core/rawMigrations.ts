@@ -4958,6 +4958,17 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // ── 0250: The ICP fields a person set by hand (audit 2026-10-20, A20) ───
+  // The daily re-inference wrote a fresh version over every manual override.
+  // The fields a person edited, and their values, are kept on each version
+  // and applied again over the next inferred one. NULL: nothing edited.
+  {
+    name: "0250_icp_manual_overrides.sql",
+    statements: [
+      "ALTER TABLE `icp_profiles` ADD COLUMN `manualOverrides` json NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
