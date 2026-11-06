@@ -305,8 +305,17 @@ export default function EmailsV2() {
   const approveAllSource = source === "ai_draft" ? "ai_draft" : source === "sequence" ? "sequence" : "all";
   const send = trpc.emailDrafts.send.useMutation({ onSuccess: () => { invalidate(); toast.success("Email sent"); }, onError: (e) => toast.error(e.message) });
   // "Send All Approved" from the retired drafts pages — workspace-wide.
+  // One run sends at most 25, oldest first (audit O16): say what is left rather than imply it all went.
   const sendBulkApproved = trpc.smtpConfig.sendBulkApproved.useMutation({
-    onSuccess: (r) => { invalidate(); toast.success(`Sent ${r.sent} email${r.sent === 1 ? "" : "s"}${r.failed ? `, ${r.failed} failed` : ""}`); },
+    onSuccess: (r) => {
+      invalidate();
+      toast.success(`Sent ${r.sent} email${r.sent === 1 ? "" : "s"}${r.failed ? `, ${r.failed} failed` : ""}`, {
+        description: [
+          r.remaining ? `${r.remaining} still approved — press Send approved again to send the next ones.` : "",
+          r.inProgress ? `${r.inProgress} already being sent.` : "",
+        ].filter(Boolean).join(" ") || undefined,
+      });
+    },
     onError: (e) => toast.error(e.message.includes("No active SMTP") ? "SMTP not configured — set up in Settings → Email delivery" : e.message),
   });
   const updateSettings = trpc.emailAutoSend.updateAutoSendSettings.useMutation({
@@ -374,8 +383,8 @@ export default function EmailsV2() {
           </Button>
           <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5 text-xs"
             disabled={sendBulkApproved.isPending}
-            title="Send every approved draft now?"
-            description="All approved drafts in this workspace are sent immediately through your configured email delivery — not only the rows on this page."
+            title="Send approved drafts now?"
+            description="Up to 25 approved drafts in this workspace, oldest first, are sent immediately through your configured email delivery — not only the rows on this page. Press it again for the rest."
             confirmLabel="Send approved"
             onConfirm={() => sendBulkApproved.mutate({})}>
             <Send className="size-3.5" /> Send approved

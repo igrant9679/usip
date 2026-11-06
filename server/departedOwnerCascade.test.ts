@@ -201,11 +201,15 @@ const SURFACES: Array<{
     gate: /const ownerId = await workspaceNotifyUserId\(wsId\);/,
   },
   {
+    // 2026-11-06 (audit O13): re-anchored. The worker no longer falls back to
+    // the workspace owner when a draft's author has left — that fallback is
+    // how every rep's sequence sent as the owner. A departed sender now HOLDS
+    // the draft, which keeps what this pins: no departed actor ever sends.
     what: "the unattended auto-send worker picks a present actor",
     file: "server/routers/sequences.ts",
-    start: "let actorUserId = ",
-    end: "no actor user for draft",
-    gate: /let actorUserId = await activeOwnerOrNull\(ws\.workspaceId, draft\.createdByUserId\);\s*if \(!actorUserId\) \{\s*actorUserId = await workspaceNotifyUserId\(ws\.workspaceId\);/,
+    start: "export async function sequenceDraftSender(",
+    end: "return { userId };",
+    gate: /if \(\(await activeOwnerOrNull\(workspaceId, userId\)\) == null\) \{\s*return \{ hold:/,
   },
   {
     what: "the company-backfill cron neither runs nor reports for a workspace with no active owner",

@@ -794,8 +794,8 @@ export const assistantRouter = router({
           break;
         }
         case "send_approved_drafts": {
-          const r = (await caller.smtpConfig.sendBulkApproved({ draftIds: args.draftIds } as never)) as { sent?: number; failed?: number };
-          summary = `Sent ${r.sent ?? 0} email${(r.sent ?? 0) === 1 ? "" : "s"}${r.failed ? `, ${r.failed} failed` : ""}`;
+          const r = (await caller.smtpConfig.sendBulkApproved({ draftIds: args.draftIds } as never)) as { sent?: number; failed?: number; remaining?: number };
+          summary = `Sent ${r.sent ?? 0} email${(r.sent ?? 0) === 1 ? "" : "s"}${r.failed ? `, ${r.failed} failed` : ""}${r.remaining ? `; ${r.remaining} still approved for the next run` : ""}`;
           break;
         }
         case "approve_and_send_meetings": {
