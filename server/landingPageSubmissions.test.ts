@@ -40,6 +40,11 @@ vi.mock("./services/policyNotify", async (importActual) => ({
 vi.mock("./routers/leadScoring", async (importActual) => ({
   ...(await importActual<typeof import("./routers/leadScoring")>()),
   routeLeadOwner: async () => h.routeTo,
+  // 2026-11-06 (audit P12, P13): submit now scores the lead before routing and
+  // after the insert. Scoring is not this file's subject, and its reads would
+  // take rows from the scripted select queue meant for the submit.
+  createTimeScore: async () => ({ total: 0 }),
+  rescoreLead: async () => {},
 }));
 
 /**

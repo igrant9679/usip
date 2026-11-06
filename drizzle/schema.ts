@@ -310,6 +310,8 @@ export const leads = mysqlTable(
     score: int("score").default(0).notNull(), // 0-100
     grade: varchar("grade", { length: 4 }), // A/B/C/D
     scoreReasons: json("scoreReasons"),
+    // When the score was last worked out; null = never (migration 0280, audit P12).
+    scoredAt: timestamp("scoredAt"),
     tags: json("tags"),
     convertedContactId: int("convertedContactId"),
     convertedAccountId: int("convertedAccountId"),
@@ -326,6 +328,7 @@ export const leads = mysqlTable(
   (t) => ({
     byWs: index("ix_lead_ws").on(t.workspaceId),
     byScore: index("ix_lead_score").on(t.workspaceId, t.score),
+    byScoredAt: index("ix_lead_scored").on(t.workspaceId, t.scoredAt),
   }),
 );
 export type Lead = typeof leads.$inferSelect;

@@ -295,7 +295,9 @@ describe("trigger coverage (the inventory)", () => {
 
   it("the lead-conversion path announces all three records", () => {
     const src = read("server/routers/crm.ts");
-    const slice = src.slice(src.indexOf("convert: repProcedure"), src.indexOf("rescore: repProcedure"));
+    // Ends at the procedure after convert: rescore until 2026-11-06, when it
+    // was deleted (audit P39, R84); sendAdHocEmail since.
+    const slice = src.slice(src.indexOf("convert: repProcedure"), src.indexOf("sendAdHocEmail: repProcedure", src.indexOf("convert: repProcedure")));
     expect(slice.length, "convert mutation not found").toBeGreaterThan(0);
     // The contact and the opportunity it creates, plus the lead going
     // `converted` — the "when a lead converts" rule people actually want.

@@ -55,7 +55,7 @@ const EXCLUDED: Record<string, string> = {
   "server/routers/are/scraper.ts::scrapeNews": INTERNAL,
   "server/routers/calendar.ts::summarizeMeeting": INTERNAL,
   "server/routers/crm.ts::enrich": INTERNAL,
-  "server/routers/crm.ts::rescore": INTERNAL,
+  // crm.ts::rescore left 2026-11-06 with the procedure (audit P39, R84).
   "server/services/company/nameVerification.ts::extractOfficialName": INTERNAL,
   "server/services/firmographicInference.ts::inferOne": INTERNAL,
   "server/services/dealAutopilot.ts::runDealAutopilotForWorkspace": INTERNAL,
