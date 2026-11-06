@@ -363,6 +363,9 @@ export const opportunities = mysqlTable(
     nextStep: text("nextStep"),
     lostReason: varchar("lostReason", { length: 120 }),
     winReason: varchar("winReason", { length: 120 }),
+    // A rep's forecast call — @shared/forecastCategory (migration 0301, R41).
+    // NULL: counted by win %, as before.
+    forecastCategory: varchar("forecastCategory", { length: 16 }),
     lastActivityAt: timestamp("lastActivityAt"),
     pipelineId: int("pipelineId"),
     campaignId: int("campaignId"),
@@ -3145,6 +3148,8 @@ export const pipelineAlerts = mysqlTable(
       "closing_soon_regression",
       "amount_change",
       "no_champion",
+      // A close date that has passed (migration 0300, audit R38).
+      "past_close_date",
     ]).notNull(),
     details: json("details"), // {daysSinceActivity, closeDate, previousAmount, currentAmount, etc.}
     dismissedAt: timestamp("dismissedAt"),

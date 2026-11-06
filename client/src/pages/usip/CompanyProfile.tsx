@@ -59,8 +59,10 @@ export default function CompanyProfile() {
 
   const { data: c, isLoading } = trpc.companies.get.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   const { data: contacts } = trpc.companies.contacts.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
-  const { data: allOpps } = trpc.opportunities.list.useQuery(undefined, { enabled: Number.isFinite(id) });
-  const opps = useMemo(() => ((allOpps ?? []) as any[]).filter((o) => o.accountId === id), [allOpps, id]);
+  // This company's deals, asked of the server; it loaded every deal in the
+  // workspace and filtered here (audit 2026-10-20, R66).
+  const { data: companyOpps } = trpc.opportunities.list.useQuery({ accountId: id }, { enabled: Number.isFinite(id) && id > 0 });
+  const opps = (companyOpps ?? []) as any[];
   const { data: history } = trpc.companies.enrichmentHistory.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   const { data: activity } = trpc.companies.activity.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
 
