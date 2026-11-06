@@ -206,7 +206,11 @@ describe("every sender that goes out on its own waits for the window", () => {
   const read = (p: string) => readFileSync(p, "utf8");
   it("Revenue Engine dispatch", () => {
     const s = read("server/areEngine.ts");
-    expect(s).toContain("const windowOpen = await inSendWindow(wsId);");
+    // 2026-11-06 (audit A29): asked through dispatchStopReason, which reads the
+    // pause fresh and fails closed, and still asks inSendWindow for the hours.
+    expect(s).toContain("const stopBefore = await dispatchStopReason(db, wsId, campId);\n      const windowOpen = !stopBefore;");
+    const reader = s.slice(s.indexOf("async function dispatchStopReason"), s.indexOf("/* ─── Per-campaign tick"));
+    expect(reader).toContain('if (!(await inSendWindow(wsId))) return "the send window closed";');
     // Two pages since 2026-10-26 (audit A5), both behind the window.
     expect(s).toContain("const due = !windowOpen ? [] : [");
   });

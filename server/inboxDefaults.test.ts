@@ -129,7 +129,11 @@ describe("the older sequence-blast path honours the inbox too", () => {
   const seq = readFileSync("server/routers/sequences.ts", "utf8");
 
   it("sends each draft through deliverEmailDraft, not a transporter of its own", () => {
-    const bulk = blast.slice(blast.indexOf("sendBulkApproved: adminWsProcedure"), blast.indexOf("getTrackingStats: workspaceProcedure"));
+    // 2026-11-06 (O16 with O47): the procedure runs sendApprovedBatch, whose
+    // loop sends each draft; the guard follows the loop there.
+    const proc = blast.slice(blast.indexOf("sendBulkApproved: adminWsProcedure"), blast.indexOf("getTrackingStats: workspaceProcedure"));
+    expect(proc).toContain("sendApprovedBatch(");
+    const bulk = blast.slice(blast.indexOf("async function sendApprovedBatch("), blast.indexOf("export const smtpConfigRouter"));
     expect(bulk).toContain("await deliverEmailDraft({");
     expect(bulk).not.toContain("transporter.sendMail(");
   });

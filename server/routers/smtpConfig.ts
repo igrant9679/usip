@@ -6,10 +6,10 @@
  *   - smtpConfig.save           — upsert SMTP config (password AES-256-GCM encrypted)
  *   - smtpConfig.test           — send a test email to the calling user's email
  *   - smtpConfig.sendDraft      — send a single approved draft via Nodemailer
- *   - smtpConfig.sendBulkApproved — send all approved drafts through deliverEmailDraft (1/sec, max 200)
+ *   - smtpConfig.sendBulkApproved — send approved drafts through deliverEmailDraft, oldest first (1/sec, 25 a request)
  */
 import { TRPCError } from "@trpc/server";
-import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "crypto";
 import { and, asc, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import nodemailer from "nodemailer";
 import { z } from "zod";
@@ -37,6 +37,21 @@ import { makeUnsubscribeUrl, unsubscribeFooter, unsubscribeHeaders } from "../un
 import { assertSendAllowed } from "../sendLimits";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { seriesSince, trackingSeries } from "../services/email/trackingSeries";
+
+/**
+ * "Send approved" sends at most this many drafts a request, oldest first, one
+ * a second (audit 2026-10-20, O16). It took 200, so one request ran for over
+ * three minutes: long enough for a proxy to time it out while it kept
+ * sending, and for the admin to press it again.
+ */
+export const BULK_SEND_MAX = 25;
+/**
+ * Workspaces with a "Send approved" run in progress in this process. A second
+ * press, a retried request or a second admin is refused while one runs; the
+ * per-draft claim still stops a double send across processes.
+ */
+const bulkSendRuns = new Set<number>();
+
 
 /* ─── AES-256-GCM helpers ─────────────────────────────────────────────── */
 export function getEncKey(): Buffer {
@@ -81,6 +96,82 @@ export function buildTransporter(cfg: {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /* ─── Router ──────────────────────────────────────────────────────────── */
+/**
+ * One "Send approved" run: up to BULK_SEND_MAX approved drafts, each claimed
+ * (approved → sending) right before its own send, with pause and the daily
+ * caps asked again before every one (audit 2026-10-20, O16).
+ */
+async function sendApprovedBatch(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  ctx: { workspace: { id: number }; user: { id: number } },
+  input: { draftIds?: number[] },
+) {
+  /**
+   * What a run leaves: drafts still approved, for the next press, and drafts
+   * already claimed by a sender. A retry that arrives after a run was cut off
+   * finds that run's draft claimed and reports it instead of sending it again.
+   */
+  const leftOver = async () => {
+    const scope = input.draftIds?.length ? inArray(emailDrafts.id, input.draftIds) : undefined;
+    const [[approved], [sending]] = await Promise.all([
+      db.select({ n: count() }).from(emailDrafts).where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "approved"), scope)),
+      db.select({ n: count() }).from(emailDrafts).where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "sending"), scope)),
+    ]);
+    return { remaining: Number(approved?.n ?? 0), inProgress: Number(sending?.n ?? 0) };
+  };
+
+  // Approved drafts, oldest first, BULK_SEND_MAX a run.
+  const whereClause = input.draftIds?.length
+    ? and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "approved"), inArray(emailDrafts.id, input.draftIds))
+    : and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "approved"));
+  const drafts = await db
+    .select({ id: emailDrafts.id, sendingAccountId: emailDrafts.sendingAccountId })
+    .from(emailDrafts)
+    .where(whereClause)
+    .orderBy(asc(emailDrafts.id))
+    .limit(BULK_SEND_MAX);
+  if (!drafts.length) return { ok: true, sent: 0, failed: 0, skipped: 0, ...(await leftOver()) };
+
+  // Imported here, not at the top: sequences.ts reaches emailDelivery,
+  // which imports this file.
+  const { deliverEmailDraft } = await import("./sequences");
+  let sent = 0, failed = 0, skipped = 0;
+  for (const draft of drafts) {
+    // Pause and the daily caps are asked again before EVERY draft (O16):
+    // either one ends the run, and what is left stays approved for later.
+    // deliverEmailDraft checks the cap of the mailbox it picks as well.
+    if (await isOutboundPaused(ctx.workspace.id)) { skipped += drafts.length - (sent + failed + skipped); break; }
+    try {
+      await assertSendAllowed(ctx.workspace.id, draft.sendingAccountId ?? null);
+    } catch {
+      skipped += drafts.length - (sent + failed + skipped);
+      break;
+    }
+
+    try {
+      // Claimed from 'approved' only, so a second admin, a retried request
+      // or the row's own Send cannot send the same draft again.
+      const r = await deliverEmailDraft({ workspaceId: ctx.workspace.id, userId: ctx.user.id, draftId: draft.id, claimFrom: ["approved"] });
+      if (r.alreadySent) skipped++;
+      else sent++;
+    } catch (err) {
+      const code = err instanceof TRPCError ? err.code : null;
+      const [now] = code === "CONFLICT"
+        ? []
+        : await db.select({ status: emailDrafts.status }).from(emailDrafts).where(eq(emailDrafts.id, draft.id)).limit(1).catch(() => []);
+      if (code === "CONFLICT") skipped++; // another sender has it
+      else if (now?.status === "sent") sent++; // sent; only the bookkeeping after it failed
+      else if (code === "INTERNAL_SERVER_ERROR") failed++; // the mail server refused or failed it
+      else skipped++; // held, suppressed, no address, no mailbox or a cap: nothing was sent
+    }
+
+    // Rate limit: 1 email per second
+    await sleep(1000);
+  }
+
+  return { ok: true, sent, failed, skipped, ...(await leftOver()) };
+}
+
 export const smtpConfigRouter = router({
   /** Return the current SMTP config (password masked) */
   get: workspaceProcedure.query(async ({ ctx }) => {
@@ -362,16 +453,18 @@ export const smtpConfigRouter = router({
     }),
 
   /**
-   * Send every approved draft (or the given ones) for the workspace: one a
-   * second, at most 200.
+   * Send approved drafts for the workspace (or the given ones), oldest first:
+   * one a second, BULK_SEND_MAX a request, one run per workspace at a time
+   * (audit 2026-10-20, O16).
    *
    * ONE delivery path with the row's Send (audit 2026-10-20, O47). Each draft
    * goes through deliverEmailDraft, as emailDrafts.send does: the same mailbox
-   * choice, signature, footer, unsubscribe headers, daily caps, claim and
-   * hold. This used to build its own message and send everything through the
-   * workspace SMTP config, so the same draft left from a different mailbox
-   * with a different footer depending on which button was pressed. It sends
-   * the same drafts as before: approved ones, nothing still awaiting review.
+   * choice, signature, footer, unsubscribe headers, tracking switches, daily
+   * caps, claim and hold. This used to build its own message and send
+   * everything through the workspace SMTP config, so the same draft left from
+   * a different mailbox with a different footer depending on which button was
+   * pressed. It sends the same drafts as before: approved ones, nothing still
+   * awaiting review.
    */
   sendBulkApproved: adminWsProcedure
     .input(z.object({ draftIds: z.array(z.number().int()).max(200).optional() }))
@@ -381,59 +474,17 @@ export const smtpConfigRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      const whereClause = input.draftIds?.length
-        ? and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "approved"), inArray(emailDrafts.id, input.draftIds))
-        : and(eq(emailDrafts.workspaceId, ctx.workspace.id), eq(emailDrafts.status, "approved"));
-      const drafts = await db
-        .select({ id: emailDrafts.id, sendingAccountId: emailDrafts.sendingAccountId })
-        .from(emailDrafts)
-        .where(whereClause)
-        .orderBy(asc(emailDrafts.id))
-        .limit(200);
-      if (!drafts.length) return { ok: true, sent: 0, failed: 0, skipped: 0 };
-
-      // Imported here, not at the top: sequences.ts reaches emailDelivery,
-      // which imports this file.
-      const { deliverEmailDraft } = await import("./sequences");
-      let sent = 0, failed = 0, skipped = 0;
-      for (const draft of drafts) {
-        /**
-         * Asked again for EVERY draft (audit 2026-10-20, O16): this loop runs
-         * for up to 200 seconds, and pause and the daily caps were checked
-         * once, before the first send. Either one ends the run; what is left
-         * stays approved for later. deliverEmailDraft checks the cap of the
-         * mailbox it picks as well.
-         */
-        if (await isOutboundPaused(ctx.workspace.id)) { skipped += drafts.length - (sent + failed + skipped); break; }
-        try {
-          await assertSendAllowed(ctx.workspace.id, draft.sendingAccountId ?? null);
-        } catch {
-          skipped += drafts.length - (sent + failed + skipped);
-          break;
-        }
-
-        try {
-          // Claimed from 'approved' only, so a second admin, a retried request
-          // or the row's own Send cannot send the same draft again.
-          const r = await deliverEmailDraft({ workspaceId: ctx.workspace.id, userId: ctx.user.id, draftId: draft.id, claimFrom: ["approved"] });
-          if (r.alreadySent) skipped++;
-          else sent++;
-        } catch (err) {
-          const code = err instanceof TRPCError ? err.code : null;
-          const [now] = code === "CONFLICT"
-            ? []
-            : await db.select({ status: emailDrafts.status }).from(emailDrafts).where(eq(emailDrafts.id, draft.id)).limit(1).catch(() => []);
-          if (code === "CONFLICT") skipped++; // another sender has it
-          else if (now?.status === "sent") sent++; // sent; only the bookkeeping after it failed
-          else if (code === "INTERNAL_SERVER_ERROR") failed++; // the mail server refused or failed it
-          else skipped++; // held, suppressed, no address, no mailbox or a cap: nothing was sent
-        }
-
-        // Rate limit: 1 email per second
-        await sleep(1000);
+      // One run per workspace at a time (O16). Checked and taken with no await
+      // in between, so two presses cannot both get past it.
+      if (bulkSendRuns.has(ctx.workspace.id)) {
+        throw new TRPCError({ code: "CONFLICT", message: "Send approved is already running in this workspace. Wait for it to finish, then press it again for what is left." });
       }
-
-      return { ok: true, sent, failed, skipped };
+      bulkSendRuns.add(ctx.workspace.id);
+      try {
+        return await sendApprovedBatch(db, ctx, input);
+      } finally {
+        bulkSendRuns.delete(ctx.workspace.id);
+      }
     }),
 
   /** Get tracking stats (open/click counts + recent events) for a sent draft */

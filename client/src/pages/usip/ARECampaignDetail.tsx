@@ -67,6 +67,7 @@ import { AreMessageDialog } from "@/components/usip/are/AreMessageDialog";
 import { IntelligenceDossier } from "@/components/usip/are/IntelligenceDossier";
 import { CampaignResearchCard } from "@/components/usip/are/CampaignResearchCard";
 import { CampaignStallPanel } from "@/components/usip/are/CampaignStallPanel";
+import { askLaunchOnUtc } from "@/components/usip/are/launchTimezone";
 import { CampaignSourceHealth } from "@/components/usip/are/CampaignSourceHealth";
 import { PlaceVerdictBadge } from "@/components/usip/are/PlaceVerdictBadge";
 import { CampaignTargetingCard } from "@/components/usip/are/CampaignTargetingCard";
@@ -2186,35 +2187,66 @@ export default function ARECampaignDetail() {
   });
   const [reEvalProgress, setReEvalProgress] = useState<{ done: number; total: number } | null>(null);
   const reEvalToastId = useRef<string | number | undefined>(undefined);
+  /**
+   * Re-evaluate All runs as a background job (audit A11): the request returns
+   * with the job and its size, and the bar follows the job's own count. It ran
+   * inside the request, and the bar sat at 0 / N until the end.
+   */
+  const [reEvalJob, setReEvalJob] = useState<{ jobId: number; threshold: number } | null>(null);
   const reEvaluateAll = trpc.are.prospects.reEvaluateAll.useMutation({
-    onMutate: () => {
-      const total = rejectionStats?.total ?? 0;
-      setReEvalProgress({ done: 0, total });
-      reEvalToastId.current = toast.loading(
-        total > 0
-          ? `Re-evaluating 0 / ${total} prospects…`
-          : "Re-evaluating prospects…",
-        { duration: Infinity }
-      );
-    },
     onSuccess: (d) => {
-      setReEvalProgress(null);
-      if (reEvalToastId.current !== undefined) toast.dismiss(reEvalToastId.current);
-      toast.success(
-        d.requalified > 0
-          ? `Re-evaluated ${d.processed} prospects — ${d.requalified} re-qualified (threshold: ${d.threshold})!`
-          : `Re-evaluated ${d.processed} prospects — none met the threshold (${d.threshold}).`
+      if (!d.jobId) {
+        toast.info("Nothing to re-evaluate: only rejections the engine made on the ICP score are re-scored, and this campaign has none.");
+        return;
+      }
+      setReEvalProgress({ done: 0, total: d.total });
+      setReEvalJob({ jobId: d.jobId, threshold: d.threshold });
+      reEvalToastId.current = toast.loading(
+        d.alreadyRunning ? `Re-evaluation already running — ${d.total} prospects…` : `Re-evaluating 0 / ${d.total} prospects…`,
+        { duration: Infinity },
       );
-      if (d.processed > 0 && d.requalified === 0) setShowIcpSuggestion(true);
-      utils.are.prospects.getRejectionStats.invalidate({ campaignId });
-      utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
     },
     onError: (e) => {
       setReEvalProgress(null);
+      setReEvalJob(null);
       if (reEvalToastId.current !== undefined) toast.dismiss(reEvalToastId.current);
       toast.error(e.message);
     },
   });
+  const { data: reEvalJobState } = trpc.are.prospects.getReevalJob.useQuery(
+    { jobId: reEvalJob?.jobId ?? 0 },
+    { enabled: !!reEvalJob, refetchInterval: reEvalJob ? 2000 : false },
+  );
+  useEffect(() => {
+    if (!reEvalJob || reEvalJobState === undefined) return;
+    if (reEvalJobState === null) {
+      // The job is gone (or not this workspace's): stop polling rather than spin.
+      setReEvalProgress(null);
+      setReEvalJob(null);
+      if (reEvalToastId.current !== undefined) toast.dismiss(reEvalToastId.current);
+      return;
+    }
+    const j = reEvalJobState;
+    const done = j.done + j.failed;
+    if (j.status === "queued" || j.status === "running") {
+      setReEvalProgress({ done, total: j.total });
+      reEvalToastId.current = toast.loading(`Re-evaluating ${done} / ${j.total} prospects…`, { id: reEvalToastId.current, duration: Infinity });
+      return;
+    }
+    setReEvalProgress(null);
+    setReEvalJob(null);
+    if (reEvalToastId.current !== undefined) toast.dismiss(reEvalToastId.current);
+    if (j.status !== "done") toast.error(`Re-evaluation ${j.status} after ${done} of ${j.total}${j.message ? ` (${j.message})` : ""}`);
+    else toast.success(
+      j.requalified > 0
+        ? `Re-evaluated ${done} prospects — ${j.requalified} re-qualified (threshold: ${reEvalJob.threshold})!`
+        : `Re-evaluated ${done} prospects — none met the threshold (${reEvalJob.threshold}).`,
+    );
+    if (j.status === "done" && done > 0 && j.requalified === 0) setShowIcpSuggestion(true);
+    utils.are.prospects.getRejectionStats.invalidate({ campaignId });
+    utils.are.prospects.getReevalHistory.invalidate({ campaignId });
+    utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
+  }, [reEvalJobState]); // eslint-disable-line react-hooks/exhaustive-deps
   // Hiding the button is UX; the boundary is the gate on the query itself.
   // This CSV is rendered SERVER-side (are.prospects.exportRejections), so
   // unlike the Leads/Contacts/Pipeline exports it can be — and since
@@ -2339,10 +2371,16 @@ export default function ARECampaignDetail() {
     onError: (e) => toast.error(e.message),
   });
 
+  // A first launch on the UTC default asks first (A31); a yes sends it again with confirmTimezone.
+  const retrySetStatus = useRef<((v: any) => void) | null>(null);
   const setStatus = trpc.are.campaigns.setStatus.useMutation({
     onSuccess: () => utils.are.campaigns.get.invalidate({ id: campaignId }),
-    onError: (e) => toast.error(e.message),
+    onError: (e, vars) => {
+      if (askLaunchOnUtc(e.message, () => retrySetStatus.current?.({ ...vars, confirmTimezone: true }))) return;
+      toast.error(e.message);
+    },
   });
+  retrySetStatus.current = setStatus.mutate;
 
   const enrichBatch = trpc.are.prospects.enrichBatch.useMutation({
     onSuccess: (d) => {
@@ -3625,9 +3663,9 @@ export default function ARECampaignDetail() {
                         setReEvaluateAllConfirmOpen(true);
                         setShowIcpSuggestion(false);
                       }}
-                      disabled={reEvaluateAll.isPending}
+                      disabled={reEvaluateAll.isPending || !!reEvalJob}
                     >
-                      {reEvaluateAll.isPending ? (
+                      {reEvaluateAll.isPending || reEvalJob ? (
                         <Loader2 className="size-3 animate-spin" />
                       ) : (
                         <RefreshCcw className="size-3" />
@@ -3965,9 +4003,9 @@ export default function ARECampaignDetail() {
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
               <span className="block">
-                This will re-score all{" "}
-                <strong>{rejectionStats?.total ?? 0} rejected prospect{(rejectionStats?.total ?? 0) !== 1 ? "s" : ""}</strong>{" "}
-                against the current active ICP profile using the LLM scoring agent.
+                This re-scores the prospects the engine rejected for their ICP score against the current active
+                ICP profile, using the LLM scoring agent, up to 500 at a time, in the background. Rejections a
+                person made, and rejections for any other reason, are left as they are.
               </span>
               <span className="block">
                 Auto-approve threshold for this campaign:{" "}

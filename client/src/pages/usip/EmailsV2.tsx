@@ -309,9 +309,18 @@ export default function EmailsV2() {
   const approveAllSource = source === "ai_draft" ? "ai_draft" : source === "sequence" ? "sequence" : "all";
   const send = trpc.emailDrafts.send.useMutation({ onSuccess: () => { invalidate(); toast.success("Email sent"); }, onError: (e) => toast.error(e.message) });
   // "Send All Approved" from the retired drafts pages — workspace-wide. Each
-  // draft goes the way its own Send would (deliverEmailDraft, O47).
+  // draft goes the way its own Send would (deliverEmailDraft, O47), at most 25
+  // a run, oldest first (O16): say what is left rather than imply it all went.
   const sendBulkApproved = trpc.smtpConfig.sendBulkApproved.useMutation({
-    onSuccess: (r) => { invalidate(); toast.success(`Sent ${r.sent} email${r.sent === 1 ? "" : "s"}${r.failed ? `, ${r.failed} failed` : ""}${r.skipped ? `, ${r.skipped} not sent (held, suppressed, taken or over a limit)` : ""}`); },
+    onSuccess: (r) => {
+      invalidate();
+      toast.success(`Sent ${r.sent} email${r.sent === 1 ? "" : "s"}${r.failed ? `, ${r.failed} failed` : ""}${r.skipped ? `, ${r.skipped} not sent (held, suppressed, taken or over a limit)` : ""}`, {
+        description: [
+          r.remaining ? `${r.remaining} still approved — press Send approved again to send the next ones.` : "",
+          r.inProgress ? `${r.inProgress} already being sent.` : "",
+        ].filter(Boolean).join(" ") || undefined,
+      });
+    },
     onError: (e) => toast.error(e.message),
   });
   const updateSettings = trpc.emailAutoSend.updateAutoSendSettings.useMutation({
@@ -380,8 +389,8 @@ export default function EmailsV2() {
           {isAdmin && (
             <ConfirmButton size="sm" variant="outline" destructive={false} className="h-7 gap-1.5 text-xs"
               disabled={sendBulkApproved.isPending}
-              title="Send every approved draft now?"
-              description="Every approved draft in this workspace is sent now, up to 200, one a second — not only the rows on this page. Each goes exactly as its own Send button would send it: the same mailbox, footer and daily limits. Drafts still awaiting review are not sent."
+              title="Send approved drafts now?"
+              description="Up to 25 approved drafts in this workspace, oldest first, are sent now, one a second — not only the rows on this page. Each goes exactly as its own Send button would send it: the same mailbox, footer and daily limits. Press it again for the rest. Drafts still awaiting review are not sent."
               confirmLabel="Send approved"
               onConfirm={() => sendBulkApproved.mutate({})}>
               <Send className="size-3.5" /> Send approved

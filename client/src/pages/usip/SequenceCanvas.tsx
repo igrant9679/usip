@@ -4,10 +4,11 @@
  * building multi-step, branching email sequences.
  *
  * Node types: start | email | wait | condition | action | goal
+ * (the engine does not run condition or goal yet, and the canvas says so: O21)
  * Features:
  *   - Click any node to open NodeEditPanel (inline edit all fields)
  *   - Email nodes: three-tab mode selector (Typed / Template / AI-dynamic)
- *   - Settings button opens SequenceSettingsPanel (name, exit conditions, send window)
+ *   - Settings button opens SequenceSettingsPanel (name, send window, reply detection)
  *   - Palette sidebar, undo/redo (50 steps), 30-s autosave, lifecycle guard
  */
 import "@xyflow/react/dist/style.css";
@@ -53,9 +54,9 @@ import { NodeEditPanel, type NodeData } from "@/components/usip/canvas/NodeEditP
 import { PhoneRailButton, ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import {
   SequenceSettingsPanel,
-  type ExitCondition,
   type SequenceSettings,
 } from "@/components/usip/canvas/SequenceSettingsPanel";
+import { NOT_RUN_NODE_TYPES, canvasNotRunNotes } from "@/lib/canvasSupport";
 
 /* ─── Node type colours ─────────────────────────────────────────────────── */
 const NODE_COLORS: Record<string, string> = {
@@ -86,6 +87,7 @@ function CanvasNode({ data, type, selected }: NodeProps) {
   const Icon = NODE_ICONS[type ?? "email"] ?? Mail;
   const isCondition = type === "condition";
   const isStart = type === "start";
+  const notRun = (NOT_RUN_NODE_TYPES as readonly string[]).includes(type ?? "");
 
   // Show email mode badge on email nodes
   const emailMode = (data as NodeData).emailMode;
@@ -120,6 +122,11 @@ function CanvasNode({ data, type, selected }: NodeProps) {
             style={{ backgroundColor: modeBadge.color + "22", color: modeBadge.color }}
           >
             {modeBadge.label}
+          </span>
+        )}
+        {notRun && (
+          <span className="ml-auto text-[9px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900" title="Not available yet: the engine skips this node">
+            NOT RUN
           </span>
         )}
       </div>
@@ -177,15 +184,21 @@ const nodeTypes = {
 };
 
 /* ─── Palette entry ─────────────────────────────────────────────────────── */
-const PALETTE_ITEMS = [
-  { type: "email", label: "Email step", description: "Send an email to the prospect" },
+/**
+ * Condition and Goal are offered but not available (audit 2026-10-20, O21):
+ * the engine skips both, and follows only a condition's TRUE path. They stay
+ * in the palette, disabled and saying so, so nobody builds on them. An Action
+ * only ever creates a task, so it is offered as what it is.
+ */
+const PALETTE_ITEMS: ReadonlyArray<{ type: string; label: string; description: string; notYet?: boolean }> = [
+  { type: "email", label: "Email step", description: "Writes an email draft to review (or auto-send)" },
   { type: "wait", label: "Wait", description: "Delay before next step" },
-  { type: "condition", label: "Condition", description: "Branch on engagement signal" },
-  { type: "action", label: "Action", description: "Update status, assign, tag, task" },
-  { type: "goal", label: "Goal", description: "Exit condition / conversion event" },
+  { type: "condition", label: "Condition", description: "Not available yet: the engine can't branch", notYet: true },
+  { type: "action", label: "Task", description: "Create a task for the rep" },
+  { type: "goal", label: "Goal", description: "Not available yet: nothing watches for goals", notYet: true },
   { type: "linkedin_dm", label: "LinkedIn DM", description: "Send a LinkedIn direct message" },
   { type: "linkedin_invite", label: "LinkedIn Invite", description: "Send a LinkedIn connection request" },
-] as const;
+];
 
 /* ─── Undo/redo stack ───────────────────────────────────────────────────── */
 type HistoryEntry = { nodes: Node[]; edges: Edge[] };
@@ -223,14 +236,12 @@ function CanvasInner({
   seqStatus,
   seqName,
   seqDescription,
-  seqExitConditions,
   seqSettings,
 }: {
   sequenceId: number;
   seqStatus: string;
   seqName: string;
   seqDescription?: string | null;
-  seqExitConditions: ExitCondition[];
   seqSettings: SequenceSettings;
 }) {
   // Sequence is editable in `draft` and `paused` states — paused is when
@@ -457,21 +468,21 @@ function CanvasInner({
   const handleSettingsSave = (patch: {
     name: string;
     description: string;
-    exitConditions: ExitCondition[];
     settings: SequenceSettings;
   }) => {
     const { timezone, sendWindowStart, sendWindowEnd, skipWeekends, replyDetection } = patch.settings;
+    // No exit conditions: the panel no longer offers toggles nothing read (O27).
     updateSequence.mutate({
       id: sequenceId,
       name: patch.name,
       description: patch.description,
-      exitConditions: patch.exitConditions,
       // null clears it back to the workspace's zone.
       settings: { timezone: timezone || null, sendWindowStart, sendWindowEnd, skipWeekends, replyDetection },
     });
   };
 
   const anyPanelOpen = selectedNode !== null || settingsOpen;
+  const notRunNotes = canvasNotRunNotes(nodes, edges);
 
   return (
     <div className="flex h-full">
@@ -490,7 +501,8 @@ function CanvasInner({
             return (
               <button
                 key={item.type}
-                disabled={readOnly}
+                disabled={readOnly || item.notYet}
+                title={item.notYet ? "Not available yet" : undefined}
                 onClick={() => addNodeFromPalette(item.type, item.label, item.description)}
                 className="flex items-start gap-2 rounded-md border p-2 text-left text-sm hover:bg-secondary transition disabled:opacity-40"
                 style={{ borderColor: color + "66" }}
@@ -503,6 +515,10 @@ function CanvasInner({
               </button>
             );
           })}
+
+          <p className="mt-2 text-[10px] text-muted-foreground">
+            Email steps write drafts: nothing is sent until someone reviews and sends them, or auto-send (if it's on) does.
+          </p>
 
           {readOnly && (
             <div className="mt-4 rounded-md bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800 flex items-start gap-1.5">
@@ -560,6 +576,14 @@ function CanvasInner({
           </Panel>
         </ReactFlow>
 
+        {/* What on this canvas will not run as drawn (O21) — said, not hidden. */}
+        {notRunNotes.length > 0 && (
+          <div role="note" className="absolute left-3 right-3 bottom-3 md:right-auto md:max-w-md z-[5] rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 shadow-sm dark:border-amber-900/50 dark:bg-amber-950/60 dark:text-amber-200">
+            <div className="font-semibold flex items-center gap-1.5"><AlertTriangle className="size-3.5" /> Not everything here runs yet</div>
+            <ul className="mt-1 list-disc pl-4 space-y-0.5">{notRunNotes.map((n) => <li key={n}>{n}</li>)}</ul>
+          </div>
+        )}
+
         {/* Node edit panel — overlaid on right edge of canvas */}
         <NodeEditPanel
           node={selectedNode}
@@ -574,7 +598,6 @@ function CanvasInner({
           readOnly={readOnly}
           name={seqName}
           description={seqDescription}
-          exitConditions={seqExitConditions}
           settings={seqSettings}
           onClose={() => setSettingsOpen(false)}
           onSave={handleSettingsSave}
@@ -657,7 +680,6 @@ export default function SequenceCanvas() {
               seqStatus={seq.status}
               seqName={seq.name}
               seqDescription={seq.description}
-              seqExitConditions={(seq.exitConditions as ExitCondition[] | null) ?? []}
               seqSettings={(seq.settings as SequenceSettings | null) ?? {}}
             />
           </ReactFlowProvider>

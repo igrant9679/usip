@@ -102,9 +102,13 @@ describe("routing conditions are typed (P42)", () => {
     expect(routingConditionsMatch({ all: [{ field: "score", op: "neq", value: "75" }] }, lead)).toBe(false);
     // A missing score matches no comparison, not even "not equal".
     expect(routingConditionsMatch({ all: [{ field: "score", op: "neq", value: 10 }] }, { source: "x" })).toBe(false);
-    // The workflow evaluator, which routing used, got all three wrong.
+    // The workflow evaluator, which routing used, got all three wrong. Its
+    // strings stay exact, so the case-insensitive match is still routing's own.
     expect(evalConditions({ all: [{ field: "source", op: "eq", value: "Webform" }] }, lead)).toBe(false);
-    expect(evalConditions({ all: [{ field: "score", op: "eq", value: "75" }] }, lead)).toBe(false);
+    // 2026-11-06 (audit G61): the workflow evaluator now compares a typed number
+    // with a numeric field as numbers too, so this line flipped. Routing keeps
+    // its own typed evaluator above, which is what this test protects.
+    expect(evalConditions({ all: [{ field: "score", op: "eq", value: "75" }] }, lead)).toBe(true);
   });
 
   it("a blank value can't be saved; one saved before is left out instead of matching every lead", async () => {

@@ -36,7 +36,7 @@
  * Per-campaign and per-phase try/catch so one failure never blocks the rest.
  */
 import { createHash } from "node:crypto";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, notExists, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notExists, notInArray, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   areCampaigns,
@@ -45,14 +45,18 @@ import {
   areExecutionQueue,
   areSuppressionList,
   contacts,
+  customers,
   icpProfiles,
   leads,
+  opportunities,
+  opportunityContactRoles,
   prospectIntelligence,
   prospectQueue,
   users,
   workspaceSettings,
 } from "../drizzle/schema";
-import { runEnrichAgent, runSequenceAgent } from "./routers/are/prospects";
+import { generateCampaignTemplate, runEnrichAgent, runSequenceAgent } from "./routers/are/prospects";
+import { ENRICH_MAX_ATTEMPTS, retryAt } from "./services/are/retryBackoff";
 import {
   saveScrapeJobAndQueue,
   scrapeGoogleBusiness,
@@ -62,14 +66,14 @@ import { searchLinkedInPeople, type UnipileLinkedInSearchHit } from "./lib/unipi
 import { listUsableAccounts } from "./services/linkedinLookup";
 import { pickAccountForAction, recordLinkedInAction } from "./services/linkedin/activityGate";
 import { randomUUID } from "node:crypto";
-import { sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
+import { SEND_STATE_UNKNOWN, sendWorkspaceEmail, sendCampaignEmailViaPool } from "./emailDelivery";
 import { dispatchLinkedInStep, HEALABLE_NO_LINKEDIN } from "./services/are/linkedinStep";
 import { injectTracking, isDeferredSenderToken, renderSequenceOptOut, resolveSenderTokens, scrubForSend } from "./mergeVars";
 import { resolveBookingUrl } from "./mergeVars";
 import { campaignSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 // One rule for a step's index + variant key, shared with the A/B metadata
 // upsert in routers/are/prospects.ts — see shared/areSequenceSteps.ts.
-import { normalizeSequence } from "@shared/areSequenceSteps";
+import { campaignChannelOn, normalizeSequence } from "@shared/areSequenceSteps";
 import { effectiveStepGapDays, dayOffsetForPosition, planHealRevival, sanitizeDayOffsets } from "@shared/areStepCadence";
 import {
   APOLLO_PAGE_SIZE,
@@ -83,6 +87,7 @@ import {
   type ApolloPageState,
 } from "./services/apollo";
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
+import { stageIndexFor } from "./_core/stageSemantics";
 import { mergeOwnRequestContext } from "./_core/requestContext";
 import { queueIdentityKeys } from "./services/are/queueIdentity";
 import { promoteApprovedProspects } from "./services/are/approvePromotion";
@@ -110,7 +115,7 @@ import {
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
 import { makeUnsubscribeUrl, unsubscribeFooter, unsubscribeHeaders } from "./unsubscribe";
 import { describeSuppression, findSuppression } from "./services/suppression";
-import { HELD_PAUSED, HELD_REPLIED, claimStepForDispatch, releaseProspectSteps, respaced } from "./services/are/stepHold";
+import { DISPATCH_INTERRUPTED, HELD_PAUSED, HELD_REPLIED, claimStepForDispatch, releaseProspectSteps, respaced } from "./services/are/stepHold";
 import { getWorkspaceTimezone, startOfLocalDay } from "./services/workspaceTimezone";
 import { escapeHtml } from "@shared/escapeHtml";
 import { icpLabels } from "@shared/icpShape";
@@ -137,6 +142,8 @@ const SWEEP_CHUNK = 500;
  *  drains steadily over multiple ticks instead of stalling dispatch for other
  *  work. */
 const ENRICH_PER_TICK = 5;
+/** Rows the selector reads so the five can be shared between workspaces (A7). */
+const ENRICH_CANDIDATES = ENRICH_PER_TICK * 10;
 /**
  * ⚠️ These two are PER CAMPAIGN, not per tick — they are applied inside
  * tickCampaign(), which runs once for every ACTIVE campaign. Only
@@ -159,6 +166,10 @@ const OTHER_CHANNEL_PER_TICK = 50;
 const LINKEDIN_HELD_MS = 60 * 60_000;
 /** A LinkedIn step waiting for its connection request to be accepted. */
 const LINKEDIN_WAIT_MS = 6 * 60 * 60_000;
+/** A due step whose copy is held for an avoid rule: looked at again in an hour (A13/A40). */
+const COPY_HELD_MS = 60 * 60_000;
+/** Sends between fresh reads of the campaign and workspace pause (A29): every one. */
+export const DISPATCH_RECHECK_EVERY = 1;
 // Final checks can spend Reoon credits and seconds — bound them per tick so
 // the 3-minute engine cadence never stalls. Unchecked rows still enroll.
 const FINAL_CHECKS_PER_TICK = 5;
@@ -496,7 +507,13 @@ async function enrichPendingGlobally(result: AreEngineResult, onlyWorkspaceId?: 
   // approved/pending, invisible to this selector, while phase 2 waited on
   // dossiers that could never come. The approval decision outranks the score
   // — override supremacy, same as everywhere else the owner has spoken.
-  const pending = await db
+  // Archived workspaces are frozen (2026-08-12), and left out IN SQL (audit
+  // A7): they were skipped only after the page was chosen, so their rows could
+  // take every slot and enrich nobody.
+  const archivedWs = await archivedWorkspaceIds();
+  const archivedList = Array.from(archivedWs);
+  const now = new Date();
+  const candidates = await db
     .select({
       id: prospectQueue.id,
       workspaceId: prospectQueue.workspaceId,
@@ -508,7 +525,17 @@ async function enrichPendingGlobally(result: AreEngineResult, onlyWorkspaceId?: 
       and(
         eq(areCampaigns.status, "active"),
         onlyWorkspaceId != null ? eq(prospectQueue.workspaceId, onlyWorkspaceId) : undefined,
-        inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
+        archivedList.length > 0 ? notInArray(prospectQueue.workspaceId, archivedList) : undefined,
+        or(
+          inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
+          // A failed enrichment is tried again (A27), up to the limit; then
+          // the screen pass rejects the prospect with the reason. Only one
+          // that failed under the retry scheme — see enrichmentRetryable.
+          enrichmentRetryable(now),
+        ),
+        // A row that keeps failing waits its turn (A7) instead of taking a
+        // slot at the head of the page on every tick.
+        or(isNull(prospectQueue.enrichRetryAt), lte(prospectQueue.enrichRetryAt, now)),
         // A row a human (or the screen) rejected or canceled is a decision,
         // not a backlog: enriching it spends LLM + verification credits on
         // someone who will never be contacted. Found 2026-09-16 — a rejected
@@ -528,22 +555,26 @@ async function enrichPendingGlobally(result: AreEngineResult, onlyWorkspaceId?: 
       desc(sql`CASE WHEN ${prospectQueue.sequenceStatus} = 'approved' THEN 2 WHEN ${prospectQueue.icpMatchScore} = 0 THEN 1 ELSE 0 END`),
       desc(prospectQueue.icpMatchScore),
     )
-    .limit(ENRICH_PER_TICK);
+    .limit(ENRICH_CANDIDATES);
+  // Shared between workspaces (A7): the top five across the whole engine all
+  // came from whichever workspace had the best scores, every tick.
+  const pending = roundRobinByWorkspace(candidates, ENRICH_PER_TICK);
 
   if (pending.length === 0) return;
 
   // One enrichment at a time. A single prospect failing must not abort the rest.
-  const archivedWs = await archivedWorkspaceIds();
   const perCampaign = new Map<number, { ws: number; ok: number; total: number }>();
   for (const p of pending) {
-    if (archivedWs.has(p.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
+    if (archivedWs.has(p.workspaceId)) continue; // belt to the SQL above
     const bucket = perCampaign.get(p.campaignId) ?? { ws: p.workspaceId, ok: 0, total: 0 };
-    bucket.total++;
     try {
-      await runEnrichAgent(p.id, p.workspaceId);
+      // False: another enrichment holds the row (A35) — not this pass's to count.
+      if (!(await runEnrichAgent(p.id, p.workspaceId))) continue;
+      bucket.total++;
       bucket.ok++;
       result.enriched++;
     } catch (e) {
+      bucket.total++;
       console.error(`[AreEngine] enrich prospect ${p.id} (campaign ${p.campaignId}) failed:`, e);
     }
     perCampaign.set(p.campaignId, bucket);
@@ -551,9 +582,87 @@ async function enrichPendingGlobally(result: AreEngineResult, onlyWorkspaceId?: 
 
   // One summary log per campaign so each campaign's Logs tab shows its activity.
   for (const [campId, b] of perCampaign) {
+    if (b.total === 0) continue;
     await emitLog(b.ws, campId, "enrich", "info",
       `Enriched ${b.ok}/${b.total} prospects (serial, global pass)`);
   }
+}
+
+/**
+ * A failed enrichment the engine may try again (audit A27): one that failed
+ * under the retry scheme — every new failure stamps `enrichRetryAt` — with
+ * tries left and its wait over. Rows that were already `failed` before the
+ * scheme have no stamp and 0 attempts, and are NOT picked up: retrying that
+ * backlog would be AI spend nobody asked for (coordinator review 2026-11-06).
+ * They stay as they were; only a person's Enrich touches them.
+ */
+export function enrichmentRetryable(now: Date) {
+  return and(
+    eq(prospectQueue.enrichmentStatus, "failed"),
+    lt(prospectQueue.enrichAttempts, ENRICH_MAX_ATTEMPTS),
+    isNotNull(prospectQueue.enrichRetryAt),
+    lte(prospectQueue.enrichRetryAt, now),
+  );
+}
+
+/**
+ * Up to `n` rows, one workspace at a time in turn (audit A7). `rows` is the
+ * selector's page, best first; each workspace keeps that order among its own,
+ * and the workspace with the best row goes first.
+ */
+export function roundRobinByWorkspace<T extends { workspaceId: number }>(rows: T[], n: number): T[] {
+  const queues = new Map<number, T[]>();
+  for (const r of rows) {
+    const q = queues.get(r.workspaceId);
+    if (q) q.push(r); else queues.set(r.workspaceId, [r]);
+  }
+  const out: T[] = [];
+  while (out.length < n) {
+    let took = false;
+    for (const q of Array.from(queues.values())) {
+      const r = q.shift();
+      if (!r) continue;
+      out.push(r);
+      took = true;
+      if (out.length >= n) break;
+    }
+    if (!took) break;
+  }
+  return out;
+}
+
+/**
+ * Reject the campaign's still-pending prospects whose enrichment failed on
+ * its last allowed attempt, with the reason (audit A27). They held a queue
+ * slot for ever: never retried, never screened, counted as working. Approved
+ * rows are a person's decision and are left; staged ones leave through the
+ * no-email door's give-up. Returns how many.
+ */
+export async function rejectExhaustedEnrichment(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  wsId: number,
+  campId: number,
+): Promise<number> {
+  const exhausted = await db
+    .select({ id: prospectQueue.id, attempts: prospectQueue.enrichAttempts, error: prospectQueue.enrichmentError })
+    .from(prospectQueue)
+    .where(and(
+      eq(prospectQueue.campaignId, campId),
+      eq(prospectQueue.workspaceId, wsId),
+      eq(prospectQueue.sequenceStatus, "pending"),
+      eq(prospectQueue.enrichmentStatus, "failed"),
+      gte(prospectQueue.enrichAttempts, ENRICH_MAX_ATTEMPTS),
+    ))
+    .limit(SCREEN_BATCH);
+  let n = 0;
+  for (const r of exhausted) {
+    const why = String(r.error ?? "").trim().slice(0, 300) || "no reason recorded";
+    await db.update(prospectQueue)
+      .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionReason: `Enrichment failed ${r.attempts} times: ${why}` })
+      .where(and(eq(prospectQueue.id, r.id), eq(prospectQueue.workspaceId, wsId), eq(prospectQueue.sequenceStatus, "pending")));
+    n++;
+  }
+  return n;
 }
 
 /**
@@ -623,6 +732,107 @@ async function applyHealRevival(
     if (plan.revive.length > 0) revivedProspectIds.push(pid);
   }
   return { revived, superseded, pushed, revivedProspectIds };
+}
+
+/**
+ * A prospect's steps that went out, or may have, for enrolment to resume past.
+ *
+ * A step whose send state is unknown counts as sent (audit 2026-10-20, A70):
+ * it was claimed and handed to the mailbox, and whether it left is not known —
+ * the claim's own reason, or the pool's when the provider's answer was lost.
+ * Re-enrolment counted `sent` alone and minted those steps again, which is how
+ * a prospect gets the same email twice.
+ */
+export async function stepsAlreadySent(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  wsId: number,
+  prospectQueueId: number,
+): Promise<Array<{ stepIndex: number; executedAt: Date | null }>> {
+  return db
+    .select({ stepIndex: areExecutionQueue.stepIndex, executedAt: areExecutionQueue.executedAt })
+    .from(areExecutionQueue)
+    .where(and(
+      eq(areExecutionQueue.workspaceId, wsId),
+      eq(areExecutionQueue.prospectQueueId, prospectQueueId),
+      or(
+        eq(areExecutionQueue.status, "sent"),
+        and(
+          eq(areExecutionQueue.status, "failed"),
+          or(
+            eq(areExecutionQueue.failureReason, DISPATCH_INTERRUPTED),
+            like(areExecutionQueue.failureReason, `${SEND_STATE_UNKNOWN}%`),
+          ),
+        ),
+      ),
+    ));
+}
+
+/**
+ * Another of this workspace's prospect rows for the same person that is in a
+ * sequence (enrolled, paused, replied or done), or null (audit A12). The
+ * discovery claim, the scraper's choke point and campaign exclusivity keep the
+ * same person out of the queue twice — but a race between two saves, a
+ * duplicate from before exclusivity, or two spellings of one profile can still
+ * leave a second row, and enrolling it mails the person again. Matched on the
+ * address (the column is indexed; MySQL's collation ignores case) and on the
+ * exact profile URL.
+ */
+export async function enrolledElsewhere(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  wsId: number,
+  row: { id: number; email?: string | null; linkedinUrl?: string | null },
+): Promise<number | null> {
+  const email = String(row.email ?? "").trim();
+  const url = String(row.linkedinUrl ?? "").trim();
+  if (!email && !url) return null;
+  const same = [
+    email ? eq(prospectQueue.email, email) : undefined,
+    url ? eq(prospectQueue.linkedinUrl, url) : undefined,
+  ].filter(Boolean) as ReturnType<typeof eq>[];
+  const [twin] = await db
+    .select({ id: prospectQueue.id, email: prospectQueue.email, linkedinUrl: prospectQueue.linkedinUrl })
+    .from(prospectQueue)
+    .where(and(
+      eq(prospectQueue.workspaceId, wsId),
+      ne(prospectQueue.id, row.id),
+      inArray(prospectQueue.sequenceStatus, ["enrolled", "paused", "replied", "completed"]),
+      same.length === 1 ? same[0] : or(...same),
+    ))
+    .orderBy(prospectQueue.id)
+    .limit(1);
+  return twin?.id ?? null;
+}
+
+/**
+ * Why a dispatch loop already running must stop now, or null to go on (A29).
+ * Read fresh, not through the send window's one-minute cache, and FAILS
+ * CLOSED: a read that throws stops the loop, because sending while unsure
+ * whether someone paused is the one outcome a pause exists to prevent.
+ */
+async function dispatchStopReason(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  wsId: number,
+  campId: number,
+): Promise<string | null> {
+  try {
+    const [c] = await db
+      .select({ status: areCampaigns.status })
+      .from(areCampaigns)
+      .where(and(eq(areCampaigns.id, campId), eq(areCampaigns.workspaceId, wsId)))
+      .limit(1);
+    if (!c) return "the campaign could not be found";
+    if (c.status !== "active") return `the campaign was set to ${c.status}`;
+    const [ws] = await db
+      .select({ pausedAt: workspaceSettings.outboundPausedAt })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, wsId))
+      .limit(1);
+    if (ws?.pausedAt) return "outbound was paused for this workspace";
+    if (!(await inSendWindow(wsId))) return "the send window closed";
+    return null;
+  } catch (e) {
+    return `the pause switches could not be read (${String((e as Error)?.message ?? e).slice(0, 200)})`;
+  }
 }
 
 /* ─── Per-campaign tick ─────────────────────────────────────────────────── */
@@ -923,6 +1133,21 @@ async function enrollApprovedForCampaignUnlocked(
         continue;
       }
 
+      // The same person already in a sequence (A12): not enrolled twice.
+      const twin = await enrolledElsewhere(db, wsId, row);
+      if (twin != null) {
+        await db
+          .update(prospectQueue)
+          .set({
+            sequenceStatus: "skipped",
+            rejectedAt: new Date(),
+            rejectionReason: `Already in a sequence as prospect #${twin} (same email or LinkedIn profile) — not enrolled twice`,
+          })
+          .where(and(eq(prospectQueue.id, row.id), eq(prospectQueue.workspaceId, wsId)));
+        await emitLog(wsId, campId, "enroll", "warn", `Prospect ${row.id} not enrolled: the same person is already in a sequence as prospect ${twin}`);
+        continue;
+      }
+
       const steps = normalizeSequence(row.sequence);
       if (steps.length === 0) {
         // Unreachable: the WHERE above excludes these. Kept, and no longer a
@@ -961,13 +1186,7 @@ async function enrollApprovedForCampaignUnlocked(
        * day 3 of the conversation the prospect is actually having. Nothing
        * sent yet → identical to before (anchor = now, all steps).
        */
-      const priorSends = await db
-        .select({ stepIndex: areExecutionQueue.stepIndex, executedAt: areExecutionQueue.executedAt })
-        .from(areExecutionQueue)
-        .where(and(
-          eq(areExecutionQueue.prospectQueueId, row.id),
-          eq(areExecutionQueue.status, "sent"),
-        ));
+      const priorSends = await stepsAlreadySent(db, wsId, row.id);
       const sentIdx = new Set(priorSends.map((r) => r.stepIndex));
       const firstSendMs = priorSends
         .map((r) => (r.executedAt ? new Date(r.executedAt).getTime() : NaN))
@@ -1118,6 +1337,9 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
       await emitLog(wsId, campId, "screen", "info",
         `${admitted} prospect${admitted === 1 ? "" : "s"} admitted to the queue — an email address was found.`);
     }
+    // A failed row under the retry scheme (A27) is given up after its last
+    // try; one that failed before the scheme (no enrichRetryAt) is never
+    // retried, so it is given up now, as it always was.
     const [giveUp] = await db.execute(sql`
       UPDATE \`prospect_queue\`
       SET \`sequenceStatus\` = 'skipped',
@@ -1127,12 +1349,21 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         AND \`workspaceId\` = ${wsId}
         AND \`sequenceStatus\` = 'sourcing'
         AND (\`email\` IS NULL OR \`email\` = '')
-        AND \`enrichmentStatus\` IN ('complete', 'failed')`);
+        AND \`enrichmentStatus\` IN ('complete', 'failed')
+        AND (\`enrichmentStatus\` = 'complete' OR \`enrichAttempts\` >= ${ENRICH_MAX_ATTEMPTS} OR \`enrichRetryAt\` IS NULL)`);
     const gaveUp = (giveUp as { affectedRows?: number })?.affectedRows ?? 0;
     if (gaveUp > 0) {
       result.rejected += gaveUp;
       await emitLog(wsId, campId, "screen", "info",
         `${gaveUp} candidate${gaveUp === 1 ? "" : "s"} rejected — no verifiable email address could be found, so they never entered the queue.`);
+    }
+
+    // A failed enrichment's last try used: rejected with its reason (A27).
+    const exhausted = await rejectExhaustedEnrichment(db, wsId, campId);
+    if (exhausted > 0) {
+      result.rejected += exhausted;
+      await emitLog(wsId, campId, "screen", "info",
+        `${exhausted} prospect${exhausted === 1 ? "" : "s"} rejected — enrichment failed ${ENRICH_MAX_ATTEMPTS} times; the reason is on the Rejections tab.`);
     }
 
     // A batch per tick, oldest first (audit 2026-10-20, A34): every enriched
@@ -1167,9 +1398,28 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
     // financial distress as "do not contact now". Only a link whose seller
     // layer is this company's stores that flag, so only then is it looked up.
     const sellerLinked = await hasSellerDownstreamLink(wsId);
+    /**
+     * Once per company in the batch, and the score verdicts written in groups
+     * after the loop (audit A34): the pass looked Downstream up and wrote one
+     * UPDATE per prospect. Each group's UPDATE is scoped to the workspace and
+     * to rows still pending, so a person's decision made meanwhile stands.
+     */
+    const dsMemo = new Map<string, ReturnType<typeof downstreamAccountFor>>();
+    const downstreamFor = (p: Prospect) => {
+      const key = `${String(p.companyDomain ?? "").toLowerCase()}|${String(p.companyName ?? "").toLowerCase()}`;
+      let hit = dsMemo.get(key);
+      if (!hit) { hit = downstreamAccountFor(wsId, { companyDomain: p.companyDomain, companyName: p.companyName }); dsMemo.set(key, hit); }
+      return hit;
+    };
+    const approveIds: number[] = [];
+    const rejectIds = new Map<string, number[]>();
+    const rejectFor = (id: number, reason: string) => {
+      const ids = rejectIds.get(reason);
+      if (ids) ids.push(id); else rejectIds.set(reason, [id]);
+    };
     for (const p of enriched) {
       if (sellerLinked) {
-        const ds = await downstreamAccountFor(wsId, { companyDomain: p.companyDomain, companyName: p.companyName });
+        const ds = await downstreamFor(p);
         if (ds?.fit?.flags?.includes("financial-distress")) {
           await db
             .update(prospectQueue)
@@ -1192,37 +1442,11 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
       const score = p.icpMatchScore ?? 0;
       if (mode === "full") {
         // Fully autonomous — the threshold IS the approve/reject line.
-        if (score >= threshold) {
-          await db
-            .update(prospectQueue)
-            .set({ sequenceStatus: "approved", approvedAt: new Date() })
-            .where(eq(prospectQueue.id, p.id));
-          result.approved++;
-          autoApprovedThisTick++;
-        } else {
-          await db
-            .update(prospectQueue)
-            .set({
-              sequenceStatus: "skipped",
-              rejectedAt: new Date(),
-              rejectionReason: `Auto-screened: ICP match ${score}/100 below approve threshold ${threshold}`,
-            })
-            .where(eq(prospectQueue.id, p.id));
-          result.rejected++;
-        }
+        if (score >= threshold) approveIds.push(p.id);
+        else rejectFor(p.id, `Auto-screened: ICP match ${score}/100 below approve threshold ${threshold}`);
       } else if (mode === "batch_approval") {
         // Engine screens out obvious junk; humans approve the rest in batches.
-        if (score < AUTO_REJECT_FLOOR) {
-          await db
-            .update(prospectQueue)
-            .set({
-              sequenceStatus: "skipped",
-              rejectedAt: new Date(),
-              rejectionReason: `Auto-screened: ICP match ${score}/100 below floor ${AUTO_REJECT_FLOOR}`,
-            })
-            .where(eq(prospectQueue.id, p.id));
-          result.rejected++;
-        }
+        if (score < AUTO_REJECT_FLOOR) rejectFor(p.id, `Auto-screened: ICP match ${score}/100 below floor ${AUTO_REJECT_FLOOR}`);
         // else: leave 'pending' for human batch approval
       } else {
         // "review_release" was described everywhere as "holds every email
@@ -1231,18 +1455,25 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         // floor (audit 2026-09-02). It is no longer offered anywhere in the
         // UI; rows that still carry the value get batch_approval's screening
         // explicitly rather than a silent no-op.
-        if (score < AUTO_REJECT_FLOOR) {
-          await db
-            .update(prospectQueue)
-            .set({
-              sequenceStatus: "skipped",
-              rejectedAt: new Date(),
-              rejectionReason: `Auto-screened: ICP match ${score}/100 below floor ${AUTO_REJECT_FLOOR}`,
-            })
-            .where(eq(prospectQueue.id, p.id));
-          result.rejected++;
-        }
+        if (score < AUTO_REJECT_FLOOR) rejectFor(p.id, `Auto-screened: ICP match ${score}/100 below floor ${AUTO_REJECT_FLOOR}`);
       }
+    }
+    const affected = (res: unknown) => Number((res as { affectedRows?: number } | undefined)?.affectedRows ?? 0);
+    if (approveIds.length > 0) {
+      const [res] = await db
+        .update(prospectQueue)
+        .set({ sequenceStatus: "approved", approvedAt: new Date() })
+        .where(and(inArray(prospectQueue.id, approveIds), eq(prospectQueue.workspaceId, wsId), eq(prospectQueue.sequenceStatus, "pending")));
+      const n = affected(res);
+      result.approved += n;
+      autoApprovedThisTick += n;
+    }
+    for (const [reason, ids] of Array.from(rejectIds.entries())) {
+      const [res] = await db
+        .update(prospectQueue)
+        .set({ sequenceStatus: "skipped", rejectedAt: new Date(), rejectionReason: reason })
+        .where(and(inArray(prospectQueue.id, ids), eq(prospectQueue.workspaceId, wsId), eq(prospectQueue.sequenceStatus, "pending")));
+      result.rejected += affected(res);
     }
     if (enriched.length > 0) {
       await emitLog(wsId, campId, "screen", "info",
@@ -1320,8 +1551,9 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
     // The page holds only rows generation can actually act on: INNER join —
     // a dossier must exist (2a re-queues the ones that lack it). Ordered, so
     // the page is deterministic rather than whatever MySQL felt like.
+    const now2 = new Date();
     const needSequence = await db
-      .select({ id: prospectQueue.id })
+      .select({ id: prospectQueue.id, attempts: prospectQueue.sequenceAttempts })
       .from(prospectQueue)
       .innerJoin(
         prospectIntelligence,
@@ -1333,18 +1565,60 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
           eq(prospectQueue.workspaceId, wsId),
           eq(prospectQueue.sequenceStatus, "approved"),
           sql`${prospectIntelligence.generatedSequence} IS NULL`,
+          // A row whose generation keeps failing waits its turn (A28): it was
+          // re-selected first on every tick and starved the rows behind it.
+          or(isNull(prospectQueue.sequenceRetryAt), lte(prospectQueue.sequenceRetryAt, now2)),
         ),
       )
       .orderBy(prospectQueue.id)
       .limit(SEQUENCE_PER_CAMPAIGN_TICK);
     if (needSequence.length > 0) {
-      const settled = await Promise.allSettled(
-        needSequence.map((p) => runSequenceAgent(p.id, wsId, campId)),
-      );
-      const ok = settled.filter((s) => s.status === "fulfilled").length;
-      result.sequencesGenerated += ok;
-      await emitLog(wsId, campId, "sequence", "info",
-        `Generated ${ok}/${needSequence.length} sequences`);
+      /**
+       * The campaign's skeleton ONCE, before the prospects (A28). The three
+       * runs below go in parallel, and each found no cached template on a
+       * campaign's first tick, so each paid for its own and the last write won.
+       * A fixed-copy campaign has no skeleton; a failure here is the
+       * campaign's, not the prospects', so nobody's attempts are counted.
+       */
+      let skeletonReady = true;
+      if ((campaign as { copyMode?: string }).copyMode !== "fixed") {
+        try {
+          const skeleton = await generateCampaignTemplate(campaign, false);
+          if (skeleton.steps.length === 0) {
+            skeletonReady = false;
+            await emitLog(wsId, campId, "sequence", "error",
+              "Campaign template came back with no steps, so no sequences were generated this tick — check the campaign's sequence prompt and the AI provider");
+          }
+        } catch (e) {
+          skeletonReady = false;
+          await emitLog(wsId, campId, "sequence", "error",
+            `Campaign template could not be written, so no sequences were generated this tick: ${String((e as Error)?.message ?? e).slice(0, 300)}`);
+        }
+      }
+      if (skeletonReady) {
+        const settled = await Promise.allSettled(
+          needSequence.map((p) => runSequenceAgent(p.id, wsId, campId)),
+        );
+        let ok = 0;
+        for (let i = 0; i < needSequence.length; i++) {
+          const p = needSequence[i];
+          if (settled[i].status === "fulfilled") {
+            ok++;
+            if (Number(p.attempts ?? 0) > 0) {
+              await db.update(prospectQueue).set({ sequenceAttempts: 0, sequenceRetryAt: null })
+                .where(and(eq(prospectQueue.id, p.id), eq(prospectQueue.workspaceId, wsId)));
+            }
+          } else {
+            await db.update(prospectQueue)
+              .set({ sequenceAttempts: sql`${prospectQueue.sequenceAttempts} + 1`, sequenceRetryAt: retryAt(Number(p.attempts ?? 0) + 1) })
+              .where(and(eq(prospectQueue.id, p.id), eq(prospectQueue.workspaceId, wsId)));
+          }
+        }
+        result.sequencesGenerated += ok;
+        await emitLog(wsId, campId, "sequence", "info",
+          `Generated ${ok}/${needSequence.length} sequences` +
+          (ok < needSequence.length ? ` — the ${needSequence.length - ok} that failed wait before they are tried again` : ""));
+      }
     }
   } catch (e) {
     console.error(`[AreEngine] campaign ${campId} sequence phase failed:`, e);
@@ -1361,8 +1635,13 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
   // reports its own (A68).
   const sentBeforeThisCampaign = result.sent;
   try {
-    const channels = (campaign.channelsEnabled ?? {}) as Record<string, boolean>;
-    const emailEnabled = channels.email !== false; // null/undefined ⇒ enabled
+    // The one reading of the switches (A71), shared with the template writer:
+    // email unless switched off, LinkedIn only when ticked.
+    const channels = {
+      email: campaignChannelOn(campaign.channelsEnabled, "email"),
+      linkedin: campaignChannelOn(campaign.channelsEnabled, "linkedin"),
+    };
+    const emailEnabled = channels.email;
 
     // Respect dailySendCap — count sends already made today for this campaign.
     //
@@ -1510,7 +1789,13 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
 
       // The workspace send window (owner ask 2026-09-25, see @shared/sendWindow): outside it nothing is dispatched.
       // Due rows stay `scheduled` and go at the first tick inside it.
-      const windowOpen = await inSendWindow(wsId);
+      //
+      // Read fresh and failing closed (audit A29): the pause through the window's
+      // one-minute cache, which a read error turned into "not paused", let a
+      // tick start sending for up to a minute after the pause was saved
+      // elsewhere. The same reader the loop asks between sends.
+      const stopBefore = await dispatchStopReason(db, wsId, campId);
+      const windowOpen = !stopBefore;
       /**
        * Email and the other channels read SEPARATE pages (audit A5). One page,
        * limited to the email budget and ordered by due time, let LinkedIn steps
@@ -1559,8 +1844,51 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
       const stepsThisTick = new Set<number>();
       const gapMs = effectiveStepGapDays((campaign as { stepGapDays?: number | null }).stepGapDays) * 86_400_000;
 
+      /**
+       * Copy held for a research avoid rule is never sent (audit A13/A40).
+       * Enrolment already waits while a prospect's copy is held; this catches a
+       * hold that arrived AFTER enrolment, when the steps were already on the
+       * calendar. The step stays scheduled, an hour on, so it does not head the
+       * page while it waits for someone to release or regenerate it.
+       */
+      const heldCopy = new Set<number>();
+      const dueProspectIds = Array.from(new Set(due.map((s) => s.prospectQueueId)));
+      if (dueProspectIds.length > 0) {
+        const held = await db
+          .select({ id: prospectIntelligence.prospectQueueId })
+          .from(prospectIntelligence)
+          .where(and(
+            eq(prospectIntelligence.workspaceId, wsId),
+            inArray(prospectIntelligence.prospectQueueId, dueProspectIds),
+            isNotNull(prospectIntelligence.copyHoldReason),
+          ));
+        for (const r of held) heldCopy.add(r.id);
+      }
+      let copyHeldSteps = 0;
+
+      /**
+       * A tick that is already sending stops when someone pauses (audit A29).
+       * The switches were read once, before the loop, and a long tick kept
+       * sending after the campaign or the workspace was paused. After every
+       * DISPATCH_RECHECK_EVERY sends they are read again, fresh, and any doubt
+       * — a failed read included — stops the loop. What is left stays scheduled.
+       */
+      let sendsSinceCheck = 0;
+      let stoppedMidTick: string | null = null;
+
       for (const step of due) {
         if (budget <= 0) break;
+        if (sendsSinceCheck >= DISPATCH_RECHECK_EVERY) {
+          stoppedMidTick = await dispatchStopReason(db, wsId, campId);
+          if (stoppedMidTick) break;
+          sendsSinceCheck = 0;
+        }
+        if (heldCopy.has(step.prospectQueueId)) {
+          await db.update(areExecutionQueue).set({ scheduledAt: new Date(Date.now() + COPY_HELD_MS) })
+            .where(and(eq(areExecutionQueue.id, step.id), eq(areExecutionQueue.status, "scheduled")));
+          copyHeldSteps++;
+          continue;
+        }
         /**
          * ONE STEP PER PROSPECT PER TICK (audit A2). A second step due for
          * someone who already had one this tick moves a campaign gap later,
@@ -1692,6 +2020,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
           if (outcome.kind === "sent") {
             result.sent++;
             budget--;
+            sendsSinceCheck++;
             await emitLog(wsId, campId, "dispatch", "info",
               `LinkedIn ${outcome.via} sent to ${lp.firstName ?? ""} ${lp.lastName ?? ""}`.trim());
           }
@@ -1917,6 +2246,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
             .where(eq(areExecutionQueue.id, step.id));
           result.sent++;
           budget--;
+          sendsSinceCheck++;
         } else if (sendRes.blocked) {
           /**
            * A CAP IS NOT A FAILURE. Nothing was transmitted: the pool refuses
@@ -1946,6 +2276,14 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
             })
             .where(eq(areExecutionQueue.id, step.id));
         }
+      }
+      if (stoppedMidTick) {
+        await emitLog(wsId, campId, "dispatch", "warn",
+          `Dispatch stopped part-way: ${stoppedMidTick}. The steps not yet sent stay scheduled.`);
+      }
+      if (copyHeldSteps > 0) {
+        await emitLog(wsId, campId, "dispatch", "warn",
+          `${copyHeldSteps} due step${copyHeldSteps === 1 ? " was" : "s were"} not sent: the prospect's copy breaks an avoid rule from your research — open the prospect to release or regenerate it.`);
       }
     }
     await emitLog(wsId, campId, "dispatch", "info",
@@ -2054,11 +2392,14 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         // campaigns.
         working: sql<number>`sum(case when ${prospectQueue.sequenceStatus} <> 'skipped' then 1 else 0 end)`,
         rejected: sql<number>`sum(case when ${prospectQueue.sequenceStatus} = 'skipped' then 1 else 0 end)`,
+        // Staged rows count as working but the Prospects list hides them (A26).
+        staged: sql<number>`sum(case when ${prospectQueue.sequenceStatus} = 'sourcing' then 1 else 0 end)`,
       })
       .from(prospectQueue)
       .where(and(eq(prospectQueue.campaignId, campId), eq(prospectQueue.workspaceId, wsId)));
     const working = Number(counts?.working ?? 0);
     const rejectedCount = Number(counts?.rejected ?? 0);
+    const stagedCount = Number(counts?.staged ?? 0);
     // Continuous discovery: run every tick while we're below target. The
     // scraper sources are bounded per call and the engine itself is bounded
     // per tick, so this can't blow up cost. Earlier we gated on
@@ -2070,6 +2411,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
     } else {
       await emitLog(wsId, campId, "discovery", "info",
         `Discovery skipped — queue full (${working}/${campaign.targetProspectCount} working` +
+        (stagedCount > 0 ? `, ${stagedCount} of them staged while an email address is found, so not on the Prospects list` : "") +
         (rejectedCount > 0 ? `; ${rejectedCount} rejected row${rejectedCount === 1 ? "" : "s"} excluded` : "") + `)`);
     }
   } catch (e) {
@@ -2096,6 +2438,8 @@ type DiscoveryState = {
   qe?: QuickenrichPageState | null;
   ap?: ApolloPageState | null;
   ws?: string | null;
+  /** LinkedIn's place: the title it is walking and the page to ask for next (A77). */
+  li?: LinkedInPageState | null;
   updatedAt?: number;
   /** When discovery last ran, and how many new people it found (A25). */
   lastRunAt?: number;
@@ -2332,6 +2676,8 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   let apolloNextPage: ApolloPageState | null = null;
   // undefined = WarmySender did not search this tick (skipped or failed).
   let warmysenderNextCursor: string | null | undefined;
+  // undefined = LinkedIn did not search this tick.
+  let linkedinNextPage: LinkedInPageState | null | undefined;
   // Each factory receives the slots still open when its turn comes — the
   // registry-backed sources size their (billable) acquisition to it; the
   // scraper sources ignore it and stay bounded per call as before.
@@ -2371,11 +2717,14 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
         };
       }),
     linkedin: () =>
-      discoverViaLinkedIn(campaign, query).then((raw) => ({
-        sourceType: "linkedin_people" as const,
-        query,
-        raw,
-      })),
+      discoverViaLinkedIn(campaign, titles, query, persistedState.li ?? null).then(({ raw, next }) => {
+        linkedinNextPage = next;
+        return {
+          sourceType: "linkedin_people" as const,
+          query,
+          raw,
+        };
+      }),
     apollo: (remaining) =>
       discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size }, persistedState.ap ?? null, remaining).then(({ raw, nextAp }) => {
         apolloNextPage = nextAp;
@@ -2538,7 +2887,9 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
       })
       .sort((a, b) => (b.icpMatchScore as number) - (a.icpMatchScore as number));
     try {
-      await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, q, scored);
+      // Already filtered against this run's read of the whole queue, and
+      // claimed in it (A34): the save does not read the queue again.
+      await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, q, scored, { identityChecked: true });
       totalNew += scored.length;
       perSource[sourceType] = { raw: raw.length, new: scored.length };
     } catch (e) {
@@ -2593,6 +2944,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     ap: apolloNextPage ?? persistedState.ap ?? null,
     // null is an answer here (the walk wrapped): only "did not search" keeps the old one.
     ws: warmysenderNextCursor !== undefined ? warmysenderNextCursor : (persistedState.ws ?? null),
+    li: linkedinNextPage !== undefined ? linkedinNextPage : (persistedState.li ?? null),
   };
   try {
     await db.update(areCampaigns).set({ discoveryQueryState: newState as any })
@@ -3187,6 +3539,36 @@ async function discoverViaInternalCrm(
 
   const out: Array<Record<string, unknown>> = [];
 
+  /**
+   * Customers, and people in a deal still open, are not prospects (audit
+   * 2026-10-20, A77): the CRM source handed them to a cold sequence. Their
+   * accounts — a customer record, or an opportunity on a stage that is not
+   * won or lost (the workspace's own pipeline flags) — and every contact
+   * named on an open deal are left out in SQL, so the page is not spent on them.
+   */
+  let excludedAccounts: number[] = [];
+  let excludedContacts: number[] = [];
+  try {
+    const closed = (await stageIndexFor(db, campaign.workspaceId)).closedKeys();
+    const openDeal = and(
+      eq(opportunities.workspaceId, campaign.workspaceId),
+      closed.length > 0 ? notInArray(opportunities.stage, closed) : undefined,
+    );
+    const [custRows, dealRows, roleRows] = await Promise.all([
+      db.select({ id: customers.accountId }).from(customers).where(eq(customers.workspaceId, campaign.workspaceId)),
+      db.select({ id: opportunities.accountId }).from(opportunities).where(openDeal),
+      db.select({ id: opportunityContactRoles.contactId }).from(opportunityContactRoles)
+        .innerJoin(opportunities, eq(opportunities.id, opportunityContactRoles.opportunityId))
+        .where(and(eq(opportunityContactRoles.workspaceId, campaign.workspaceId), openDeal)),
+    ]);
+    excludedAccounts = Array.from(new Set([...custRows, ...dealRows].map((r) => Number(r.id)).filter((n) => Number.isFinite(n))));
+    excludedContacts = Array.from(new Set(roleRows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n))));
+  } catch (e) {
+    // Not knowing who the customers are is not a reason to mail them: no CRM rows this run.
+    console.error(`[AreEngine] internal CRM exclusions for campaign ${campaign.id} could not be read:`, e);
+    return [];
+  }
+
   try {
     const contactRows = await db
       .select({
@@ -3205,6 +3587,8 @@ async function discoverViaInternalCrm(
         and(
           eq(contacts.workspaceId, campaign.workspaceId),
           or(...wanted.map((t) => like(contacts.title, `%${t}%`))),
+          excludedAccounts.length > 0 ? or(isNull(contacts.accountId), notInArray(contacts.accountId, excludedAccounts)) : undefined,
+          excludedContacts.length > 0 ? notInArray(contacts.id, excludedContacts) : undefined,
           // Both discards below used to happen AFTER this LIMIT, which is how
           // this source could return its full 50 and contribute nothing —
           // every tick, forever, with thousands of usable contacts behind the
@@ -3326,10 +3710,38 @@ async function discoverViaInternalCrm(
  * (same shape the LLM scrapers return so saveScrapeJobAndQueue handles both).
  * Returns [] on any error so the engine can fall through to the next source.
  */
+/** Where LinkedIn discovery is: the title it walks, and the next page's cursor (null: start the next title). */
+type LinkedInPageState = { title: string; cursor: string | null };
+
+/**
+ * Which title to search and from where (audit 2026-10-20, A77). The search got
+ * the whole slice — title, industry, place and size — folded into keywords,
+ * which LinkedIn matches word by word across a profile, and asked for page 1
+ * every time. Now it searches one target title, walks it page by page with
+ * the cursor Unipile returns, then moves to the next title. The place and
+ * the industry are still judged, after, by the territory check and the score.
+ * With no target titles it searches the slice, as before.
+ */
+export function nextLinkedInSearch(titles: string[], sliceQuery: string, state: LinkedInPageState | null): { keywords: string; cursor?: string; title: string | null } {
+  const list = titles.map((t) => t.trim()).filter(Boolean);
+  if (list.length === 0) return { keywords: sliceQuery, title: null };
+  if (state?.cursor && list.includes(state.title)) return { keywords: state.title, cursor: state.cursor, title: state.title };
+  const at = state ? list.indexOf(state.title) : -1;
+  const title = list[(at + 1) % list.length];
+  return { keywords: title, title };
+}
+
 async function discoverViaLinkedIn(
   campaign: Campaign,
-  keywords: string,
-): Promise<Array<Record<string, unknown>>> {
+  titles: string[],
+  sliceQuery: string,
+  state: LinkedInPageState | null,
+): Promise<{ raw: Array<Record<string, unknown>>; next: LinkedInPageState | null | undefined }> {
+  const ask = nextLinkedInSearch(titles, sliceQuery, state);
+  const keywords = ask.keywords;
+  // Asked for a title and failed: forget the cursor, so a page that failed is
+  // not asked for again; the next run moves on.
+  const failedState = ask.title ? { title: ask.title, cursor: null } : undefined;
   try {
     const accounts = await listUsableAccounts({
       workspaceId: campaign.workspaceId,
@@ -3342,7 +3754,7 @@ async function discoverViaLinkedIn(
       );
       await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
         "LinkedIn source skipped — no bridged LinkedIn account in this workspace. Connect one in Settings › Social accounts or disable the LinkedIn source on this campaign.");
-      return [];
+      return { raw: [], next: undefined };
     }
     /**
      * The account policy every invite, message and lookup obeys (migration
@@ -3361,17 +3773,19 @@ async function discoverViaLinkedIn(
       // Pacing is a retry-next-tick condition; anything else earns a warning.
       await emitLog(campaign.workspaceId, campaign.id, "discovery", pick.verdict?.reason === "spacing" ? "info" : "warn",
         `LinkedIn source skipped — ${pick.verdict?.message ?? "held by LinkedIn limits."} Adjust under Settings › LinkedIn limits.`);
-      return [];
+      return { raw: [], next: undefined };
     }
     const acct = pick.unipileAccountId;
     // 25 is the Unipile wrapper's per-call max (searchLinkedInPeople clamps
-    // there). True cursor-based multi-page paging needs Unipile's paging
-    // contract confirmed against a live account before we spend daily-cap
-    // credits on it — tracked as a follow-up.
-    const { items } = await searchLinkedInPeople(acct, {
+    // there). ONE call per run, as before: paging asks for the next page of
+    // the same title instead of page 1 again, so it spends no more of the
+    // daily search budget than the one search it replaces (A77).
+    const { items, cursor } = await searchLinkedInPeople(acct, {
       keywords,
       limit: 25,
+      ...(ask.cursor ? { cursor: ask.cursor } : {}),
     });
+    const next: LinkedInPageState | undefined = ask.title ? { title: ask.title, cursor: cursor || null } : undefined;
     // Recorded AFTER the vendor call: a refused or failed search is not
     // activity LinkedIn saw.
     await recordLinkedInAction({
@@ -3381,7 +3795,7 @@ async function discoverViaLinkedIn(
       source: "are_engine",
       targetIdentifier: keywords,
     });
-    return items
+    const raw = items
       .map((h: UnipileLinkedInSearchHit) => {
         // LinkedIn display names routinely carry credential suffixes
         // ("Rachele Thomas, BSN, RN, CDAL"). Strip BEFORE splitting,
@@ -3417,8 +3831,9 @@ async function discoverViaLinkedIn(
         } as Record<string, unknown>;
       })
       .filter((p) => String(p.firstName).length > 0);
+    return { raw, next };
   } catch (e) {
     console.error(`[AreEngine] LinkedIn discovery for campaign ${campaign.id} failed:`, e);
-    return [];
+    return { raw: [], next: failedState };
   }
 }

@@ -9,7 +9,6 @@ import { z } from "zod";
 import { getDb } from "../db";
 import {
   activities,
-  leads,
   unipileAccounts,
   unipileInvites,
   unipileMessages,
@@ -82,6 +81,42 @@ const ALL_PROVIDERS = [
   "MICROSOFT",
   "IMAP",
 ];
+
+/** A search with keywords, or with at least one filter that holds a value (P149). */
+export function linkedInSearchHasTerms(keywords: string | undefined, filters: Record<string, unknown> | undefined): boolean {
+  if (keywords?.trim()) return true;
+  const holds = (v: unknown): boolean =>
+    Array.isArray(v) ? v.some(holds) : v && typeof v === "object" ? Object.values(v).some(holds)
+      : typeof v === "number" ? Number.isFinite(v) : typeof v === "string" ? v.trim() !== "" : v === true;
+  return Object.values(filters ?? {}).some(holds);
+}
+
+/**
+ * One LinkedIn search hit as the vendor sent it → the fields an import uses,
+ * or null when it is not a hit at all (P75). Tolerant per field: null is
+ * absent, a number is text, `company` may be `{ name }`, and an over-long
+ * value is cut, so one odd field never fails the rest.
+ */
+export function searchHitFields(raw: unknown): {
+  name?: string; first_name?: string; last_name?: string; title?: string; headline?: string;
+  occupation?: string; company?: string; location?: string; url?: string;
+} | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const h = raw as Record<string, unknown>;
+  const text = (v: unknown, max = 300): string | undefined => {
+    const s = typeof v === "string" ? v : typeof v === "number" && Number.isFinite(v) ? String(v) : "";
+    return s.trim().slice(0, max) || undefined;
+  };
+  const company = text(h.company, 200)
+    ?? (h.company && typeof h.company === "object" ? text((h.company as Record<string, unknown>).name, 200) : undefined);
+  // Only a LinkedIn address is a profile URL.
+  const url = [text(h.public_profile_url, 500), text(h.profile_url, 500)].find((u) => !!u && /(^|\.|\/\/)linkedin\.com\//i.test(u));
+  return {
+    name: text(h.name), first_name: text(h.first_name, 80), last_name: text(h.last_name, 80),
+    title: text(h.title, 200), headline: text(h.headline, 200), occupation: text(h.occupation, 200),
+    company, location: text(h.location, 200), url,
+  };
+}
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
@@ -927,7 +962,7 @@ export const unipileRouter = router({
     }),
 
   // ─── LinkedIn / Sales Navigator search (per-user) ───────────────────────
-  // Widens the top of the autonomous funnel: search → import as leads →
+  // Widens the top of the autonomous funnel: search → import to People →
   // sequences send invites → accepts fire the Social Autopilot opener → meeting.
   searchLinkedIn: workspaceProcedure
     .input(z.object({
@@ -939,6 +974,12 @@ export const unipileRouter = router({
       unipileAccountId: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      // A search with nothing in it is not an audience, and it still counts
+      // against the account's daily search cap (audit 2026-10-20, P149: Sales
+      // Navigator sent one when every field was blank).
+      if (!linkedInSearchHasTerms(input.keywords, input.filters)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Enter keywords, or add a location, industry or tenure filter." });
+      }
       const db = await getDb();
       if (!db) return { items: [] as UnipileLinkedInSearchHit[] };
       const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
@@ -979,67 +1020,46 @@ export const unipileRouter = router({
     }),
 
   /**
-   * Import LinkedIn search hits as leads (autonomous-pipeline entry point).
-   * Dedupes against existing leads by linkedinUrl or first+last name so
-   * re-running a search doesn't create duplicates. Returns the count created.
+   * Save LinkedIn search hits to People, the table the rest of Find prospects
+   * writes (audit 2026-10-20, P76: these became CRM Leads, which nothing else
+   * on the tab makes). They go through the discovery save, so the same
+   * identity match (P64), suppression and free-mail rules (P74), provenance
+   * and company linking apply, and the import shows as a run in Recent runs.
+   *
+   * Each hit is checked on its own (P75): the page sends the vendor's rows as
+   * they came, and one null or object-valued field used to reject the whole
+   * import. A hit with nothing usable is counted as skipped.
    */
-  importSearchHitsAsLeads: workspaceProcedure
-    .input(z.object({
-      hits: z.array(z.object({
-        name: z.string().optional(),
-        first_name: z.string().optional(),
-        last_name: z.string().optional(),
-        title: z.string().optional(),
-        headline: z.string().optional(),
-        occupation: z.string().optional(),
-        company: z.string().optional(),
-        location: z.string().optional(),
-        public_profile_url: z.string().optional(),
-        profile_url: z.string().optional(),
-      })).min(1).max(25),
-    }))
+  importSearchHitsToPeople: workspaceProcedure
+    .input(z.object({ hits: z.array(z.unknown()).min(1).max(25) }))
     .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      let created = 0;
-      let skipped = 0;
-      // NO record_created fire in this loop, deliberately: it is a bulk path
-      // (up to 25 LinkedIn hits per call, saved in one gesture), and a rule
-      // with a webhook action would POST once per hit. See the do-not-fire
-      // list in services/workflowEngine.ts.
-      for (const h of input.hits) {
+      let invalid = 0;
+      const finds: Array<Record<string, unknown>> = [];
+      // NO record_created fire, deliberately: a bulk path (up to 25 hits in
+      // one gesture), and a rule with a webhook action would POST once per
+      // hit. See the do-not-fire list in services/workflowEngine.ts.
+      for (const raw of input.hits) {
+        const h = searchHitFields(raw);
+        if (!h) { invalid++; continue; }
         // Credentials come off BEFORE the space split — "Jane Doe, MBA" must
         // not land as lastName "Doe, MBA" (owner rule: no LinkedIn suffixes).
         const cleanName = stripNameCredentials(h.name) ?? "";
         const first = (stripNameCredentials(h.first_name) || cleanName.split(/\s+/)[0] || "").slice(0, 80).trim();
         const last = (stripNameCredentials(h.last_name) || cleanName.split(/\s+/).slice(1).join(" ") || "").slice(0, 80).trim();
-        if (!first && !last) { skipped++; continue; }
-        const url = h.public_profile_url || h.profile_url || null;
-        // Dedupe: same name already a lead in this workspace.
-        const existing = await db
-          .select({ id: leads.id })
-          .from(leads)
-          .where(and(
-            eq(leads.workspaceId, ctx.workspace.id),
-            eq(leads.firstName, first || "-"),
-            eq(leads.lastName, last || "-"),
-          ))
-          .limit(1);
-        if (existing.length) { skipped++; continue; }
-        await db.insert(leads).values({
-          workspaceId: ctx.workspace.id,
-          firstName: first || "-",
-          lastName: last || "-",
-          title: (h.title || h.headline || h.occupation || null)?.slice(0, 120) ?? null,
-          company: (typeof h.company === "string" ? h.company : null)?.slice(0, 200) ?? null,
-          source: "linkedin_search",
-          status: "new",
-          ownerUserId: ctx.user.id,
-          customFields: url ? { linkedinUrl: url, location: h.location ?? null } : null,
-        } as never);
-        created++;
+        if (!first || !last) { invalid++; continue; }
+        finds.push({
+          firstName: first, lastName: last,
+          title: h.title || h.headline || h.occupation || null,
+          companyName: h.company ?? null,
+          linkedinUrl: h.url ?? null,
+          sourceUrl: h.url ?? null,
+          geography: h.location ?? null,
+        });
       }
-      return { created, skipped };
+      if (finds.length === 0) return { created: 0, updated: 0, skipped: invalid, runId: null as number | null };
+      const { saveFindsAsPeople } = await import("../services/discovery");
+      const r = await saveFindsAsPeople(ctx.workspace.id, ctx.user.id, "linkedin_search", finds, { fromLinkedInSearch: true, hits: finds.length });
+      return { created: r.prospectsCreated, updated: r.prospectsUpdated, skipped: invalid + r.prospectsSkipped, runId: r.runId };
     }),
 
   // ─── LinkedIn post engagement (per-user, social warming) ────────────────

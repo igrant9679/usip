@@ -79,8 +79,10 @@ const SURFACES: Array<{ file: string; start: string; occurrence?: number; guard?
   { file: "routers/mailbox.ts", start: "  sendNew: workspaceProcedure", guard: "await assertOutboundNotPausedFor(ctx.workspace.id, [input.to, input.cc, input.bcc]);", before: "adapter.sendEmail(", what: "mailbox new message" },
   { file: "routers/mailbox.ts", start: "  sendReply: workspaceProcedure", guard: "await assertOutboundNotPausedFor(ctx.workspace.id, [input.to, input.cc]);", before: "adapter.sendEmail(", what: "mailbox reply and forward" },
   { file: "routers/smtpConfig.ts", start: "  sendDraft: workspaceProcedure", before: "transporter.sendMail(", what: "an approved draft by SMTP" },
-  // 2026-11-06 (audit O47): "Send approved" sends each draft through deliverEmailDraft, the row Send's path.
-  { file: "routers/smtpConfig.ts", start: "  sendBulkApproved: adminWsProcedure", before: "deliverEmailDraft(", what: "every approved draft" },
+  // 2026-11-06 (audit O16, O47): the run moved into sendApprovedBatch so it can
+  // be single-flight, and each draft inside goes through deliverEmailDraft; the
+  // pause is asked before the run starts, and again per draft inside.
+  { file: "routers/smtpConfig.ts", start: "  sendBulkApproved: adminWsProcedure", before: "sendApprovedBatch(", what: "every approved draft" },
   { file: "routers/sequences.ts", start: "  send: repProcedure.input(z.object({ id: z.number() }))", before: "deliverEmailDraft(", what: "an approved email draft" },
   { file: "routers/proposals.ts", start: "  sendToClient: repProcedure", before: "const db = await getDb();", what: "a proposal to its client" },
   { file: "routers/proposals.ts", start: "  approveExtension: workspaceProcedure", before: ".update(proposals)", what: "an extension approval mailed to the client" },

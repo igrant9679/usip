@@ -62,10 +62,15 @@ describe("the Autonomy Center's engine dial is real", () => {
   it("the dial and both bulk setters go through it", () => {
     expect(page).toContain("trpc.are.campaigns.setAllAutonomy.useMutation");
     expect(page).toContain('onValueChange={(v) => setAllEngineAutonomy.mutate({ mode: v as "full" | "batch_approval" })}');
+    // 2026-11-06 (audit G62): both bulk setters now go through runBulk, which
+    // awaits each change; "Turn on full autonomy" is setAll("approval"). The
+    // engine is still set to batch approval on every bulk change.
+    const bulk = page.slice(page.indexOf("const runBulk = "), page.indexOf("const setAll = "));
+    expect(bulk).toContain('setAllEngineAutonomy.mutateAsync({ mode: "batch_approval" })');
     const setAll = page.slice(page.indexOf("const setAll = "), page.indexOf("const turnOnFullAutonomy"));
-    expect(setAll).toContain('setAllEngineAutonomy.mutate({ mode: "batch_approval" })');
+    expect(setAll).toContain("runBulk(mode, successMessage)");
     const full = page.slice(page.indexOf("const turnOnFullAutonomy"), page.indexOf("const areSettings = "));
-    expect(full).toContain('setAllEngineAutonomy.mutate({ mode: "batch_approval" })');
+    expect(full).toContain('setAll("approval"');
   });
 
   it("review & release is offered nowhere and handled explicitly in the engine", () => {

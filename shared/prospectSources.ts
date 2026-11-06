@@ -207,6 +207,17 @@ export function activeFilters(c: SearchCriteria): FilterType[] {
 }
 
 /**
+ * The filters that say WHO to look for (audit 2026-10-20, P68). "Has email"
+ * and "Has phone" only thin out whatever the others match: Source search
+ * starts with "Has email" ticked, and counting it let a search with nothing
+ * else filled in run against a vendor's whole database. Whether a search is
+ * filtered at all is asked of these.
+ */
+export function narrowingFilters(c: SearchCriteria): FilterType[] {
+  return activeFilters(c).filter((f) => f !== "hasEmail" && f !== "hasPhone");
+}
+
+/**
  * The per-source verdict for one query. `full` = every active filter is
  * native; `approximate` = every active filter is at least approximated, and
  * `approximated` names the loose ones; `cannot` = at least one active filter
@@ -214,7 +225,7 @@ export function activeFilters(c: SearchCriteria): FilterType[] {
  *
  * A query with NO active filters is "cannot" for every source: searching a
  * vendor's entire database is never an audience, and several vendors 422 or
- * bill for it.
+ * bill for it. Nor is one with only "Has email" / "Has phone" (P68).
  */
 export interface CapabilityMatch {
   verdict: "full" | "approximate" | "cannot";
@@ -224,7 +235,8 @@ export interface CapabilityMatch {
 
 export function matchCapabilities(caps: SourceCapabilities, criteria: SearchCriteria): CapabilityMatch {
   const active = activeFilters(criteria);
-  if (active.length === 0) return { verdict: "cannot", approximated: [], missing: [] };
+  // Presence flags alone are no audience either (P68).
+  if (narrowingFilters(criteria).length === 0) return { verdict: "cannot", approximated: [], missing: [] };
   const supported = new Set<FilterType>(caps.supportedFilters);
   const approx = new Set<FilterType>(caps.approximatedFilters);
   const approximated: FilterType[] = [];

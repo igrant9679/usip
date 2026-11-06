@@ -130,6 +130,18 @@ export async function deriveLifecycle(
 }
 
 /**
+ * The People list's email-status filter. "unknown" includes people never
+ * verified at all (NULL): Data Health counts them as not verified, and its
+ * "Verify Now" opens this filter, which listed only the literal 'unknown'
+ * rows (audit 2026-10-20, P81).
+ */
+export function emailStatusCondition(status: string): SQL {
+  return status === "unknown"
+    ? or(isNull(prospects.emailStatus), eq(prospects.emailStatus, "unknown"))!
+    : eq(prospects.emailStatus, status);
+}
+
+/**
  * ORDER BY for the People list: the chosen column, then the id the same way
  * (audit 2026-10-20, R61). Most sorts tie — blank titles, a shared company,
  * one import's createdAt — and rows that tie came back in a different order
@@ -624,6 +636,38 @@ export const prospectsRouter = router({
       return { ok: true };
     }),
 
+  /**
+   * The Needs Review queue's decision, for one person or a page of them:
+   * approve (verified) or archive (rejected), as a human (audit 2026-10-20,
+   * P17: the queue had no actions and the person page offered only Archive).
+   * Only rows still awaiting review move: one decided elsewhere since the
+   * list loaded is counted as skipped, not overwritten.
+   */
+  review: workspaceProcedure
+    .input(z.object({
+      ids: z.array(z.number().int().positive()).min(1).max(200),
+      decision: z.enum(["verified", "rejected"]),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const ids = Array.from(new Set(input.ids));
+      const waiting = await db.select({ id: prospects.id }).from(prospects)
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, ids), eq(prospects.verificationStatus, "needs_review")));
+      const moved = waiting.map((r) => r.id);
+      if (moved.length > 0) {
+        await db.update(prospects)
+          .set({ verificationStatus: input.decision, verificationSetBy: "human", verificationSetByUserId: ctx.user.id, verificationSetAt: new Date() } as never)
+          .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, moved), eq(prospects.verificationStatus, "needs_review")));
+        await recordAudit({
+          workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update",
+          entityType: "prospect_review", entityId: 0,
+          after: { decision: input.decision, ids: moved },
+        });
+      }
+      return { updated: moved.length, skipped: ids.length - moved.length };
+    }),
+
   /** Re-run discovery scoped to one prospect — uses their stored
    *  name+company to launch a focused person-mode search. The pipeline's
    *  merge-on-dedup logic updates this prospect's row in place rather
@@ -763,7 +807,7 @@ export const prospectsRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
       const conditions = [eq(prospects.workspaceId, ctx.workspace.id)];
-      if (input.emailStatus) conditions.push(eq(prospects.emailStatus, input.emailStatus));
+      if (input.emailStatus) conditions.push(emailStatusCondition(input.emailStatus));
       // '' counts as missing on BOTH sides: imports write empty strings, and
       // a "has email" filter that returns unmailable rows (or a "missing
       // email" view that hides them) sends the user chasing ghosts.

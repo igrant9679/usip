@@ -76,11 +76,9 @@ export function validateLinkedInUrl(raw: string): UrlValidation {
   const input = (raw ?? "").trim();
   if (!input) return { valid: false, normalizedUrl: null, identifier: null, error: "URL is empty" };
 
-  // A bare http:// link is rejected — we require https for compliance.
-  if (/^http:\/\//i.test(input)) {
-    return { valid: false, normalizedUrl: null, identifier: null, error: "URL must be HTTPS" };
-  }
-
+  // An http:// link names the same profile, and the canonical form below is
+  // https whatever was typed; rejecting it failed rows from older exports for
+  // nothing (audit 2026-10-20, P91). Nothing is ever fetched from this URL.
   const identifier = extractLinkedInIdentifier(input);
   if (!identifier) {
     return {

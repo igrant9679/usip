@@ -5,8 +5,8 @@
  * that produced, so a missing `workspaceId = ?` is a row that leaks, not a
  * condition object that merely looks right. It understands only what the
  * routers under test write: ANDs (and one level of OR) of =, <>, <, >, <=, >=,
- * IS NULL, IN and NOT IN, LIKE and NOT LIKE ('%' wildcards, case-insensitive), column-to-column equality in (inner and left) joins, ORDER BY a column,
- * LIMIT, GROUP BY with count(*) or SUM(col), `col + n`, `col + ?` or `COALESCE(col, NOW() | ?)` in an UPDATE or an
+ * IS NULL, IN and NOT IN, exists()/notExists() around one of its own selects, LIKE and NOT LIKE ('%' wildcards, case-insensitive), column-to-column equality in (inner and left) joins, ORDER BY a column,
+ * LIMIT, GROUP BY with count(*) or SUM(col), a counted `sum(case when col = 'x' then 1 else 0 end)` (also <> and IN), `col + n`, `col + ?` or `COALESCE(col, NOW() | ?)` in an UPDATE or an
  * insert's onDuplicateKeyUpdate against the table's unique indexes, `lower(col) = ?` and `<> ?`, `DATE(col) = ?`, and
  * db.transaction(fn) — which rolls every table back if fn throws. Anything else
  * throws, naming the clause, so a test never passes on SQL it did not read.
@@ -116,6 +116,16 @@ export function makeSqlFakeDb(opts: {
       let all = true;
       for (const p of ands) if (!evalClause(p, ctx, params, pi)) all = false;
       return all;
+    }
+    // exists(db.select()…) / notExists(…): the subquery is one of this fake's
+    // builders, which renders as a single parameter. Its WHERE is read against
+    // each of its table's rows beside the outer row (a correlated subquery).
+    if ((m = clause.match(/^(not )?exists \?$/i))) {
+      const sub = params[pi.i++] as { __fakeSelect?: { table: any; where?: unknown } } | undefined;
+      if (!sub?.__fakeSelect) throw new Error(`fake db: unsupported clause "${clause}"`);
+      const { table, where } = sub.__fakeSelect;
+      const found = rowsOf(getTableName(table)).some((r) => matches(where, { ...ctx, ...qualify(table, r) }));
+      return m[1] ? !found : found;
     }
     if ((m = clause.match(new RegExp(`^${REF} = \\?$`)))) return same(lookup(ctx, m[1]), params[pi.i++]);
     // DATE(col) = 'YYYY-MM-DD': the UTC calendar day of the stored value.
@@ -229,9 +239,22 @@ export function makeSqlFakeDb(opts: {
         }
         return undefined;
       };
-      // An aggregate over rows: SUM(col) adds the column; anything else counts.
+      // An aggregate over rows: SUM(col) adds the column; a counted CASE on one
+      // column against literals (`= 'x'`, `<> 'x'`, `in ('x','y')`) counts the
+      // rows it matches; anything else counts every row.
       const aggregate = (qs: Row[], v: unknown): number => {
-        const s = render(v as SQL).sql.match(/sum\((`\w+`\.`\w+`)\)/i);
+        const text = render(v as SQL).sql;
+        const c = text.match(/^sum\(case when (`\w+`\.`\w+`) (=|<>|in) (\('[^)]*'\)|'[^']*') then 1 else 0 end\)$/i);
+        if (c) {
+          const lits = (c[3].match(/'([^']*)'/g) ?? []).map((x) => x.slice(1, -1));
+          return qs.filter((q) => {
+            const val = lookup(q, c[1]);
+            if (val == null) return false;
+            const hit = lits.includes(String(val));
+            return c[2] === "<>" ? !hit : hit;
+          }).length;
+        }
+        const s = text.match(/sum\((`\w+`\.`\w+`)\)/i);
         return s ? qs.reduce((a, q) => a + Number(lookup(q, s[1]) ?? 0), 0) : qs.length;
       };
       let out: Row[];
@@ -265,6 +288,8 @@ export function makeSqlFakeDb(opts: {
       return st.limit != null ? out.slice(from, from + st.limit) : out.slice(from);
     };
     const b: any = {
+      /** What an exists()/notExists() around this builder reads (see evalClause). */
+      get __fakeSelect() { return { table: st.table, where: st.where }; },
       from(t: unknown) { st.table = t; return b; },
       innerJoin(t: unknown, on: unknown) { st.joins.push({ table: t, on }); return b; },
       leftJoin(t: unknown, on: unknown) { st.joins.push({ table: t, on, left: true }); return b; },
@@ -315,7 +340,8 @@ export function makeSqlFakeDb(opts: {
         return chain;
       },
       $returningId() { return Promise.resolve(inserted.map((r) => ({ id: r.id }))); },
-      then(res: (v: unknown) => void) { res([{ affectedRows: inserted.length, insertId: inserted[0]?.id }]); },
+      // mysql2's own shape, [ResultSetHeader, FieldPacket[]] (audit N6).
+      then(res: (v: unknown) => void) { res([{ affectedRows: inserted.length, insertId: inserted[0]?.id }, []]); },
     };
     return chain;
   };

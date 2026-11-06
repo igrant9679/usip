@@ -32,8 +32,23 @@ import { COUNTRY_CODES, regionCountry } from "./prospectSources/bridge";
 import { stripNameCredentials } from "./enrichment/personName";
 import { utcDayStart } from "@shared/timeWindows";
 import { canonicalText } from "@shared/canonicalText";
+import { isConsumerDomain } from "./company/normalize";
 
 export const QUICKENRICH_BASE = "https://app.quickenrich.io";
+
+/**
+ * The employer's domain on one of their records, or null. A free-mail domain
+ * names nobody's employer, and `email_domain` is often exactly that: gmail.com
+ * there became the person's company domain (audit 2026-10-20, P85).
+ */
+function employerDomainOf(rec: Record<string, unknown>): string | null {
+  for (const key of ["company_url", "company_domain", "company_website", "email_domain"]) {
+    const v = rec[key];
+    const d = typeof v === "string" && v.trim() ? normalizeDomain(v.trim()) : null;
+    if (d && !isConsumerDomain(d)) return d;
+  }
+  return null;
+}
 
 /**
  * Workspace key first; then the deployment's env key ONLY if the platform
@@ -496,7 +511,7 @@ export async function quickenrichContactFinder(
         title: str(r.title) ?? str(r.job_title),
         linkedinUrl,
         companyName: str(r.company_name) ?? str(r.company),
-        companyDomain: normalizeDomain(str(r.company_url) ?? str(r.company_domain) ?? str(r.company_website) ?? str(r.email_domain)),
+        companyDomain: employerDomainOf(r),
         hasEmail: r.has_email === true,
         locality: str(r.locality),
         city: str(r.city),
@@ -642,13 +657,17 @@ async function quickenrichLookupOnce(
       if (!c || typeof c !== "object") continue;
       const rec = c as Record<string, unknown>;
       if (!companyName) companyName = str(rec.company_name) ?? str(rec.company);
-      if (!companyDomain) companyDomain = normalizeDomain(str(rec.company_url) ?? str(rec.company_domain) ?? str(rec.company_website) ?? str(rec.email_domain));
+      if (!companyDomain) companyDomain = employerDomainOf(rec);
     }
     for (const c of candidates) {
       if (!c || typeof c !== "object") continue;
       const rec = c as Record<string, unknown>;
-      const email = [rec.email, rec.work_email, rec.professional_email]
-        .find((v): v is string => typeof v === "string" && v.includes("@"));
+      // The work address first, and any address on an employer's domain
+      // before a free-mail one (audit 2026-10-20, P85): the generic `email`
+      // field is often the personal address, and it was taken first.
+      const addresses = [rec.work_email, rec.professional_email, rec.email]
+        .filter((v): v is string => typeof v === "string" && v.includes("@"));
+      const email = addresses.find((a) => !isConsumerDomain(a.split("@").pop())) ?? addresses[0];
       if (email) return { email: email.trim().toLowerCase(), reason: "found", companyName, companyDomain };
     }
     // A 200 with no recognisable address is a miss ("has no email for this

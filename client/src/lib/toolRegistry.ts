@@ -115,6 +115,9 @@ export const TOOLS: Tool[] = [
   // still find "Import Contacts" by name and land on its tab.
   { href: "/v2/data-enrichment?tab=import-contacts", label: "Import Contacts", icon: Upload, group: "Prospecting",
     description: "Bring in a CSV of people or prospects.", keywords: ["csv", "upload"] },
+  // Was reachable only from a People menu (audit 2026-10-20, P96).
+  { href: "/v2/data-enrichment/linkedin", label: "LinkedIn Enrichment Import", icon: Linkedin, group: "Prospecting",
+    description: "Paste or upload LinkedIn profile URLs to enrich and match to People.", keywords: ["linkedin", "csv", "urls", "unipile", "enrich"] },
   // Folded into Data Enrichment (phase 4, 2026-09-02): the standalone page
   // read the same query as the Data-health tab. The route stays for the
   // scheduled-jobs builder the tab links out to.
@@ -223,9 +226,11 @@ export const TOOLS: Tool[] = [
   // (audit 2026-09-02): hidden from the registry, routes kept, until the
   // Broadcasts product exists to use them.
 
-  /* ── Proposals — price it, propose it, sign it ───────────────────────── */
+  /* ── Proposals — price it, propose it, get a yes ─────────────────────── */
+  // There is no electronic signing (audit 2026-10-20, R79): the client
+  // accepts from their portal link.
   { href: "/proposals", label: "Proposals", icon: ClipboardList, group: "Proposals", primary: true,
-    description: "Client-facing proposals with e-sign and portal links." },
+    description: "Client-facing proposals with portal links the client accepts from." },
   { href: "/quotes", label: "Quotes", icon: DollarSign, group: "Proposals",
     description: "Priced quotes attached to deals." },
   { href: "/products", label: "Products", icon: Package, group: "Proposals",

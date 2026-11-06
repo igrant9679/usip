@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, isNull, isNotNull, like, lt, lte, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, isNotNull, like, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { invokeLLM } from "../_core/llm";
 import {
@@ -44,11 +44,13 @@ import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { linkEmailLogToDraft } from "../services/email/logSend";
+import { insertIdOf } from "../_core/insertId";
 import { router } from "../_core/trpc";
-import { repProcedure, workspaceProcedure } from "../_core/workspace";
+import { rankOf, repProcedure, ROLE_RANK, workspaceProcedure } from "../_core/workspace";
+import { FORECAST_CATEGORIES } from "@shared/forecastCategory";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { assertOwnerInWorkspace, assertRowInWorkspace } from "../services/foreignIds";
-import { defaultPipelineId, invalidateStageIndex, resolvedStageFor, stageIndexFor, stageResolver } from "../_core/stageSemantics";
+import { closedStageKeys, defaultPipelineId, invalidateStageIndex, resolvedStageFor, stageIndexFor, stageResolver } from "../_core/stageSemantics";
 import { isSuppressed, makeUnsubscribeUrl, unsubscribeHeaders } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
 import {
@@ -61,6 +63,7 @@ import {
   monthKey, openTotals, zonedYmd, type Range,
 } from "../services/dealMetrics";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { describeWriteError, isDuplicateKeyError } from "../services/dbWriteError";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 // One arithmetic rule for line-item money, shared with quotes. See
 // shared/quoteTotals.ts — a deal line and a quote line do the same sum.
@@ -71,6 +74,7 @@ import { renderMergeFields, resolveBookingUrl, scrubForSend } from "../mergeVars
 import { businessDomainFromEmail, normalizedAccountFields } from "../services/company/normalize";
 import { accountMatchesForLead, findContactByEmail } from "../services/crmMatching";
 import { ACTIVE_ENROLLMENT_STATUSES } from "../services/crossEngineEnrollment";
+import { noteAmountChange } from "./pipelineAlerts";
 import { assertOutboundNotPaused } from "../services/outboundPause";
 import { LEAD_LIST_COLUMNS, LEAD_ORDER, leadWhere, searchLeads } from "../services/leadSearch";
 
@@ -193,21 +197,7 @@ async function cascadeDeleteAccountDependents(
     .where(and(eq(opportunities.workspaceId, workspaceId), inArray(opportunities.accountId, accountIds)));
   const oppIds = oppRows.map((o) => o.id);
   if (oppIds.length > 0) {
-    const quoteRows = await db
-      .select({ id: quotes.id })
-      .from(quotes)
-      .where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.opportunityId, oppIds)));
-    const quoteIds = quoteRows.map((q) => q.id);
-    if (quoteIds.length > 0) {
-      await db.delete(quoteLineItems).where(inArray(quoteLineItems.quoteId, quoteIds));
-      await db.delete(quotes).where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.id, quoteIds)));
-    }
-    await db.delete(dealLineItems).where(inArray(dealLineItems.opportunityId, oppIds));
-    await db.delete(opportunityContactRoles).where(inArray(opportunityContactRoles.opportunityId, oppIds));
-    await db.delete(opportunityStageHistory).where(inArray(opportunityStageHistory.opportunityId, oppIds));
-    await db.delete(opportunityIntelligence).where(inArray(opportunityIntelligence.opportunityId, oppIds));
-    await db.delete(stageApprovals).where(inArray(stageApprovals.opportunityId, oppIds));
-    await db.delete(pipelineAlerts).where(inArray(pipelineAlerts.opportunityId, oppIds));
+    await cascadeDeleteOpportunityDependents(db, workspaceId, oppIds);
     await db.delete(opportunities).where(and(eq(opportunities.workspaceId, workspaceId), inArray(opportunities.id, oppIds)));
   }
 
@@ -222,6 +212,36 @@ async function cascadeDeleteAccountDependents(
     // (Clodura execution tables removed 2026-08-11 — nothing to cascade.)
     await db.delete(contacts).where(and(eq(contacts.workspaceId, workspaceId), inArray(contacts.id, contactIds)));
   }
+}
+
+/**
+ * The rows that belong to the given deals and mean nothing without them:
+ * quotes (+ their lines), line items, contact roles, stage history, AI
+ * intelligence, stage approvals and pipeline alerts. `oppIds` must already be
+ * this workspace's; every delete is also scoped by workspace where the table
+ * has the column. Proposals, tasks and activities are soft links and stay.
+ */
+async function cascadeDeleteOpportunityDependents(
+  db: Pick<NonNullable<Awaited<ReturnType<typeof getDb>>>, "select" | "delete">,
+  workspaceId: number,
+  oppIds: number[],
+): Promise<void> {
+  if (oppIds.length === 0) return;
+  const quoteRows = await db
+    .select({ id: quotes.id })
+    .from(quotes)
+    .where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.opportunityId, oppIds)));
+  const quoteIds = quoteRows.map((q) => q.id);
+  if (quoteIds.length > 0) {
+    await db.delete(quoteLineItems).where(inArray(quoteLineItems.quoteId, quoteIds));
+    await db.delete(quotes).where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.id, quoteIds)));
+  }
+  await db.delete(dealLineItems).where(and(eq(dealLineItems.workspaceId, workspaceId), inArray(dealLineItems.opportunityId, oppIds)));
+  await db.delete(opportunityContactRoles).where(and(eq(opportunityContactRoles.workspaceId, workspaceId), inArray(opportunityContactRoles.opportunityId, oppIds)));
+  await db.delete(opportunityStageHistory).where(and(eq(opportunityStageHistory.workspaceId, workspaceId), inArray(opportunityStageHistory.opportunityId, oppIds)));
+  await db.delete(opportunityIntelligence).where(and(eq(opportunityIntelligence.workspaceId, workspaceId), inArray(opportunityIntelligence.opportunityId, oppIds)));
+  await db.delete(stageApprovals).where(and(eq(stageApprovals.workspaceId, workspaceId), inArray(stageApprovals.opportunityId, oppIds)));
+  await db.delete(pipelineAlerts).where(and(eq(pipelineAlerts.workspaceId, workspaceId), inArray(pipelineAlerts.opportunityId, oppIds)));
 }
 
 /* ──────────────────────────────────────────────────────────────────────── */
@@ -318,6 +338,8 @@ export const OPPORTUNITY_PATCH = z.object({
   pipelineId: optId,
   accountId: z.number().int().positive().optional(),
   ownerUserId: z.number().int().positive().optional(),
+  // A rep's forecast call (R41); null returns the deal to "by win %".
+  forecastCategory: z.enum(FORECAST_CATEGORIES).nullable().optional(),
 }).strict();
 
 export const TERRITORY_PATCH = z.object({
@@ -1062,7 +1084,7 @@ export const contactsRouter = router({
           });
           // Join the log row to the draft that owns this send's open/click
           // counters, so the Emails page can show them (migration 0163).
-          const draftId = Number((inserted as unknown as { insertId?: number })?.insertId ?? 0);
+          const draftId = insertIdOf(inserted);
           if (draftId) await linkEmailLogToDraft(ctx.workspace.id, sentMessageId, draftId);
           await db.insert(activities).values({
             workspaceId: ctx.workspace.id,
@@ -1437,6 +1459,12 @@ export const leadsRouter = router({
 
       const convName = lead.company ?? `${lead.firstName} ${lead.lastName}`;
       const domain = businessDomainFromEmail(lead.email) || null;
+      // An account this creates is routed by the territory rules, as one
+      // created on its own is (R42): a lead carries only its company, so the
+      // rules that can match are "company contains" and those with no
+      // condition. A routed owner who has left is skipped for the converter.
+      const territory = await applyTerritoryRules(db, ws, { company: convName });
+      const territoryOwner = await activeOwnerOrNull(ws, territory?.ownerUserId);
       // The deal's stage: the default pipeline's first OPEN stage, by flags.
       let deal: { pipelineId: number | null; key: string; winProb: number; meta: { isWon: boolean; isLost: boolean } } | null = null;
       if (input.createOpportunity) {
@@ -1461,7 +1489,8 @@ export const leadsRouter = router({
         const accountCreated = accountId == null;
         if (accountCreated) {
           const accR = await tx.insert(accounts).values({
-            workspaceId: ws, name: convName, domain: domain ?? undefined, ...normalizedAccountFields(convName, domain), ownerUserId: ctx.user.id,
+            workspaceId: ws, name: convName, domain: domain ?? undefined, ...normalizedAccountFields(convName, domain),
+            ownerUserId: territoryOwner ?? ctx.user.id, territoryId: territory?.territoryId ?? undefined,
           });
           accountId = Number((accR as any)[0]?.insertId ?? 0);
         }
@@ -1829,7 +1858,7 @@ export const leadsRouter = router({
         });
         // Join the log row to the draft that owns this send's open/click
         // counters, so the Emails page can show them (migration 0163).
-        const draftId = Number((inserted as unknown as { insertId?: number })?.insertId ?? 0);
+        const draftId = insertIdOf(inserted);
         if (draftId) await linkEmailLogToDraft(ctx.workspace.id, sentMessageId, draftId);
         await db.insert(activities).values({
           workspaceId: ctx.workspace.id,
@@ -1877,29 +1906,84 @@ export const leadsRouter = router({
 
 /* ──────────────────────────────────────────────────────────────────────── */
 
+/** What a board shows: one pipeline, optionally one owner. */
+const BOARD_SCOPE = z.object({ ownerUserId: z.number().optional(), pipelineId: z.number().optional() }).optional();
+type BoardScope = z.infer<typeof BOARD_SCOPE>;
+
+/**
+ * The deals on a board, as a WHERE: the pipeline's own (and, for the default
+ * pipeline, those with no pipeline), optionally one owner's. Null when the
+ * pipeline is not this workspace's.
+ */
+export async function boardScopeWhere(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, scope: BoardScope) {
+  const owner = scope?.ownerUserId ? eq(opportunities.ownerUserId, scope.ownerUserId) : undefined;
+  if (!scope?.pipelineId) return and(eq(opportunities.workspaceId, workspaceId), owner);
+  const [pipeline] = await db.select({ id: crmPipelines.id, isDefault: crmPipelines.isDefault }).from(crmPipelines)
+    .where(and(eq(crmPipelines.id, scope.pipelineId), eq(crmPipelines.workspaceId, workspaceId)));
+  if (!pipeline) return null;
+  return and(boardDealsWhere(workspaceId, pipeline), owner);
+}
+
+/** Deal metrics for what a board shows (R39): the same pipeline and owner rule as boardScopeWhere. */
+async function scopedMetricDeals(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, scope: BoardScope) {
+  const deals = await loadMetricDeals(db, workspaceId, { ownerUserId: scope?.ownerUserId ?? null });
+  if (!scope?.pipelineId) return deals;
+  const [pipeline] = await db.select({ id: crmPipelines.id, isDefault: crmPipelines.isDefault }).from(crmPipelines)
+    .where(and(eq(crmPipelines.id, scope.pipelineId), eq(crmPipelines.workspaceId, workspaceId)));
+  if (!pipeline) return [];
+  return deals.filter((d) => d.pipelineId === pipeline.id || (d.pipelineId == null && !!pipeline.isDefault));
+}
+
 export const opportunitiesRouter = router({
+  /**
+   * Deals, newest first. Every filter runs in SQL (audit 2026-10-20, R66):
+   * this read every deal in the workspace and filtered in JS, and the company
+   * page loaded all of them to show one account's. `accountId`, `openOnly`
+   * and `limit` let a page ask for what it shows.
+   */
   list: workspaceProcedure
-    .input(z.object({ stage: z.string().optional(), ownerOnly: z.boolean().optional() }).optional())
+    .input(z.object({
+      stage: z.string().optional(),
+      ownerOnly: z.boolean().optional(),
+      accountId: z.number().int().positive().optional(),
+      openOnly: z.boolean().optional(),
+      limit: z.number().int().min(1).max(1000).optional(),
+    }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
-      let rows = await db.select().from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id)).orderBy(desc(opportunities.updatedAt));
-      if (input?.stage) rows = rows.filter((o) => o.stage === input.stage);
-      if (input?.ownerOnly) rows = rows.filter((o) => o.ownerUserId === ctx.user.id);
-      return rows;
+      const closed = input?.openOnly ? await closedStageKeys(db, ctx.workspace.id) : [];
+      const q = db.select().from(opportunities)
+        .where(and(
+          eq(opportunities.workspaceId, ctx.workspace.id),
+          input?.stage ? eq(opportunities.stage, input.stage) : undefined,
+          input?.ownerOnly ? eq(opportunities.ownerUserId, ctx.user.id) : undefined,
+          input?.accountId ? eq(opportunities.accountId, input.accountId) : undefined,
+          closed.length > 0 ? notInArray(opportunities.stage, closed) : undefined,
+        ))
+        .orderBy(desc(opportunities.updatedAt), desc(opportunities.id));
+      return input?.limit ? q.limit(input.limit) : q;
     }),
 
-  /** Kanban board grouped by stage. */
-  board: workspaceProcedure.input(z.object({ ownerUserId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
+  /**
+   * Kanban board grouped by stage — one pipeline's deals when `pipelineId` is
+   * given (its own, plus those with no pipeline on the default board), the
+   * same rule the board columns use. Every deal in the workspace was read and
+   * the browser threw the other pipelines' away (audit 2026-10-20, L7, R66).
+   */
+  board: workspaceProcedure.input(BOARD_SCOPE).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
-    const where = input?.ownerUserId
-      ? and(eq(opportunities.workspaceId, ctx.workspace.id), eq(opportunities.ownerUserId, input.ownerUserId))
-      : eq(opportunities.workspaceId, ctx.workspace.id);
+    const where = await boardScopeWhere(db, ctx.workspace.id, input);
+    if (!where) return [];
     const rows = await db.select().from(opportunities).where(where);
     // Names only: every account's every column (inline logos included) made
     // this 2 s for a board with a handful of deals (audit 2026-10-20, L7).
-    const acctRows = await db.select({ id: accounts.id, name: accounts.name }).from(accounts).where(eq(accounts.workspaceId, ctx.workspace.id));
+    // And only the board's accounts, not the workspace's.
+    const accountIds = Array.from(new Set(rows.map((r) => r.accountId)));
+    const acctRows = accountIds.length > 0
+      ? await db.select({ id: accounts.id, name: accounts.name }).from(accounts).where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, accountIds)))
+      : [];
     const accMap = new Map(acctRows.map((a) => [a.id, a.name]));
     return rows.map((r) => ({ ...r, accountName: accMap.get(r.accountId) ?? "?" }));
   }),
@@ -1919,7 +2003,8 @@ export const opportunitiesRouter = router({
         value: z.number().min(0).default(0),
         stage: z.string().min(1).max(60).default("discovery"),
         pipelineId: z.number().optional(),
-        winProb: z.number().min(0).max(100).default(20),
+        // Absent: the stage's default win %, not 0 (R36).
+        winProb: z.number().min(0).max(100).optional(),
         closeDate: z.string().optional(),
       }),
     )
@@ -1937,19 +2022,20 @@ export const opportunitiesRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: `"${input.stage}" is not a stage in this pipeline. Pick one of its own stages.` });
       }
       const meta = stages.resolve(input.pipelineId ?? null, input.stage);
+      const winProb = input.winProb ?? meta.defaultWinProb ?? 20;
       const r = await db.insert(opportunities).values({
         workspaceId: ctx.workspace.id, accountId: input.accountId, name: input.name,
-        value: String(input.value), stage: input.stage, winProb: input.winProb,
+        value: String(input.value), stage: input.stage, winProb,
         pipelineId: input.pipelineId ?? null,
         // A calendar date, kept on the day picked (R16/R29).
         closeDate: normalizeCalendarDate(input.closeDate), ownerUserId: ctx.user.id,
         ...stageDatesForNewDeal(meta),
       } as never);
       const id = Number((r as any)[0]?.insertId ?? 0);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "opportunity", entityId: id, after: input });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "opportunity", entityId: id, after: { ...input, winProb } });
       void import("../services/workflowEngine")
         .then((m) => m.fireRecordCreated(ctx.workspace.id, "opportunity", id, {
-          name: input.name, stage: input.stage, value: input.value, winProb: input.winProb, accountId: input.accountId,
+          name: input.name, stage: input.stage, value: input.value, winProb, accountId: input.accountId,
         }, ctx.user.id))
         .catch(() => { /* workflow firing is best-effort */ });
       return { id };
@@ -2000,6 +2086,8 @@ export const opportunitiesRouter = router({
     if (patch.closeDate !== undefined) patch.closeDate = normalizeCalendarDate(patch.closeDate);
     if (Object.keys(patch).length === 0) return { ok: true };
     await db.update(opportunities).set(patch).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+    // R38: a large change of amount is an alert (it was named, never raised).
+    if (patch.value != null) await noteAmountChange(db, ctx.workspace.id, before, Number(before.value ?? 0), Number(patch.value));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id, before, after: input.patch });
     // Stage is refused above, so this can never double with stage_changed.
     void import("../services/workflowEngine")
@@ -2008,11 +2096,20 @@ export const opportunitiesRouter = router({
     return { ok: true };
   }),
 
+  /**
+   * The deal and what the confirmation says goes with it (audit 2026-10-20,
+   * R32): line items, contact roles, quotes, stage history and alerts were
+   * left behind. One transaction, so a failure part-way leaves the deal whole.
+   */
   delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(opportunities).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
-    await db.delete(opportunities).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+    if (!before) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+    await db.transaction(async (tx) => {
+      await cascadeDeleteOpportunityDependents(tx, ctx.workspace.id, [before.id]);
+      await tx.delete(opportunities).where(and(eq(opportunities.id, before.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+    });
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "opportunity", entityId: input.id, before });
     return { ok: true };
   }),
@@ -2033,6 +2130,11 @@ export const opportunitiesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Both ids are caller-controlled; the deal page now sends them (R35).
+      const [opp] = await db.select({ id: opportunities.id }).from(opportunities)
+        .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+      if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+      await assertRowInWorkspace(db, "contact", input.contactId, ctx.workspace.id);
       try {
         await db.insert(opportunityContactRoles).values({ ...input, workspaceId: ctx.workspace.id });
       } catch (e) {
@@ -2066,9 +2168,13 @@ export const opportunitiesRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       // opportunityId is caller-controlled — verify it belongs to this
       // workspace before attaching items or rewriting its value.
-      const [opp] = await db.select({ id: opportunities.id }).from(opportunities)
+      const [opp] = await db.select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value }).from(opportunities)
         .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
       if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+      // The product too: another workspace's would list as a line with no name.
+      const [product] = await db.select({ id: products.id }).from(products)
+        .where(and(eq(products.id, input.productId), eq(products.workspaceId, ctx.workspace.id)));
+      if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "Product not found" });
       // Same arithmetic rule as a quote line — @shared/quoteTotals, in integer
       // cents. This was a fourth copy of the formula: it stored `unitPrice`
       // rounded by the DECIMAL(14,2) column while computing `lineTotal` from the
@@ -2089,18 +2195,23 @@ export const opportunitiesRouter = router({
       const items = await db.select().from(dealLineItems).where(and(eq(dealLineItems.opportunityId, input.opportunityId), eq(dealLineItems.workspaceId, ctx.workspace.id)));
       const totalCents = items.reduce((s, i) => s + toCents(Number(i.lineTotal)), 0);
       await db.update(opportunities).set({ value: centsToDecimal(totalCents) }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+      await noteAmountChange(db, ctx.workspace.id, opp, Number(opp.value ?? 0), totalCents / 100);
       return { ok: true };
     }),
 
   removeLineItem: repProcedure.input(z.object({ id: z.number(), opportunityId: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.delete(dealLineItems).where(and(eq(dealLineItems.id, input.id), eq(dealLineItems.workspaceId, ctx.workspace.id)));
+    const [opp] = await db.select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value }).from(opportunities)
+      .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+    if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+    await db.delete(dealLineItems).where(and(eq(dealLineItems.id, input.id), eq(dealLineItems.opportunityId, input.opportunityId), eq(dealLineItems.workspaceId, ctx.workspace.id)));
     const items = await db.select().from(dealLineItems).where(and(eq(dealLineItems.opportunityId, input.opportunityId), eq(dealLineItems.workspaceId, ctx.workspace.id)));
     const totalCents = items.reduce((s, i) => s + toCents(Number(i.lineTotal)), 0);
     // Workspace-scoped: opportunityId is caller-controlled, so an unscoped
     // update could rewrite another tenant's opportunity value.
     await db.update(opportunities).set({ value: centsToDecimal(totalCents) }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+    await noteAmountChange(db, ctx.workspace.id, opp, Number(opp.value ?? 0), totalCents / 100);
     return { ok: true };
   }),
 
@@ -2112,11 +2223,13 @@ export const opportunitiesRouter = router({
    * classification the Dashboard, Deals, Forecast and Quota read (R39).
    */
   forecast: workspaceProcedure
-    .input(z.object({ stages: z.array(z.string()).optional() }).optional())
+    .input(z.object({ stages: z.array(z.string()).optional(), pipelineId: z.number().optional(), ownerUserId: z.number().optional() }).optional())
     .query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const open = (await loadMetricDeals(db, ctx.workspace.id)).filter((d) => d.status === "open");
+    // The board's scope — its pipeline and owner filter — so the Forecast tab
+    // counts the deals the board beside it shows (R39).
+    const open = (await scopedMetricDeals(db, ctx.workspace.id, input)).filter((d) => d.status === "open");
     const keys = open.map((d) => d.stage);
     const availableStages = keys.filter((k, i) => keys.indexOf(k) === i).sort();
     const filterStages = input?.stages && input.stages.length > 0 ? input.stages : null;
@@ -2153,10 +2266,12 @@ export const opportunitiesRouter = router({
    * (the Deals header computed its own from the board rows, R39).
    */
   summary: workspaceProcedure
-    .query(async ({ ctx }) => {
+    .input(BOARD_SCOPE)
+    .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const deals = await loadMetricDeals(db, ctx.workspace.id);
+      // Scoped like the board it heads (R39); unscoped, the workspace.
+      const deals = await scopedMetricDeals(db, ctx.workspace.id, input);
       const tz = await getWorkspaceTimezone(ctx.workspace.id);
       const r = currentRanges(tz);
       return {
@@ -2374,14 +2489,18 @@ export const opportunitiesRouter = router({
     }),
 
   /**
-   * Per-rep forecast rollup: total open, weighted (value × winProb),
-   * commit (≥90% prob), best-case (≥50% prob), won this quarter.
+   * Per-rep forecast rollup: total open, weighted (value × winProb), commit,
+   * best case (@shared/forecastCategory), won this calendar quarter.
    * Powers the /forecast page.
+   *
+   * A rep sees their own row; managers and above see every rep's (audit
+   * 2026-10-20, R41) — the rule Quota already keeps for the same numbers.
    */
   forecastByRep: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
-    const deals = await loadMetricDeals(db, ctx.workspace.id);
+    const seesTeam = rankOf(ctx.member.role) >= ROLE_RANK.manager;
+    const deals = await loadMetricDeals(db, ctx.workspace.id, seesTeam ? {} : { ownerUserId: ctx.user.id });
     const quarter = currentRanges(await getWorkspaceTimezone(ctx.workspace.id)).quarter;
     // Grouped first, then totalled by the same functions every page uses — so
     // the per-rep rows add up to the Pipeline and Deals totals exactly.
@@ -2514,10 +2633,20 @@ export const territoriesRouter = router({
     return { ok: true };
   }),
 
+  /**
+   * Rules and accounts that named it are detached, as the confirmation says
+   * (R42): a rule kept handing new accounts a territory that no longer existed.
+   */
   delete: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.delete(territories).where(and(eq(territories.id, input.id), eq(territories.workspaceId, ctx.workspace.id)));
+    await db.transaction(async (tx) => {
+      await tx.update(crmTerritoryRules).set({ territoryId: null })
+        .where(and(eq(crmTerritoryRules.workspaceId, ctx.workspace.id), eq(crmTerritoryRules.territoryId, input.id)));
+      await tx.update(accounts).set({ territoryId: null })
+        .where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.territoryId, input.id)));
+      await tx.delete(territories).where(and(eq(territories.id, input.id), eq(territories.workspaceId, ctx.workspace.id)));
+    });
     return { ok: true };
   }),
 });
@@ -2547,7 +2676,7 @@ export const productsRouter = router({
       try {
         await db.insert(products).values({ ...input, listPrice: String(input.listPrice), cost: String(input.cost), workspaceId: ctx.workspace.id, active: true });
       } catch (e) {
-        throw new TRPCError({ code: "CONFLICT", message: "SKU already exists" });
+        throw productWriteError(e);
       }
       return { ok: true };
     }),
@@ -2559,17 +2688,53 @@ export const productsRouter = router({
     if (patch.listPrice !== undefined) patch.listPrice = String(patch.listPrice);
     if (patch.cost !== undefined) patch.cost = String(patch.cost);
     if (Object.keys(patch).length === 0) return { ok: true };
-    await db.update(products).set(patch).where(and(eq(products.id, input.id), eq(products.workspaceId, ctx.workspace.id)));
+    try {
+      await db.update(products).set(patch).where(and(eq(products.id, input.id), eq(products.workspaceId, ctx.workspace.id)));
+    } catch (e) {
+      throw productWriteError(e);
+    }
     return { ok: true };
   }),
 
+  /**
+   * Remove a product nothing uses (audit 2026-10-20, R75). A hard delete of a
+   * product on a deal or a quote left those lines pointing at nothing, so
+   * this refuses while any line names it, and says to archive it instead
+   * (update `active: false`), which hides it from new quotes and keeps every
+   * line that already uses it.
+   */
   delete: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [dealLines, quoteLines] = await Promise.all([
+      db.select({ id: dealLineItems.id }).from(dealLineItems)
+        .where(and(eq(dealLineItems.productId, input.id), eq(dealLineItems.workspaceId, ctx.workspace.id))),
+      db.select({ id: quoteLineItems.id }).from(quoteLineItems)
+        .where(and(eq(quoteLineItems.productId, input.id), eq(quoteLineItems.workspaceId, ctx.workspace.id))),
+    ]);
+    if (dealLines.length + quoteLines.length > 0) {
+      const used = [
+        dealLines.length ? `${dealLines.length} deal line${dealLines.length === 1 ? "" : "s"}` : null,
+        quoteLines.length ? `${quoteLines.length} quote line${quoteLines.length === 1 ? "" : "s"}` : null,
+      ].filter(Boolean).join(" and ");
+      throw new TRPCError({ code: "CONFLICT", message: `This product is on ${used}, so it can't be deleted. Archive it instead: it leaves new quotes and stays on those lines.` });
+    }
     await db.delete(products).where(and(eq(products.id, input.id), eq(products.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 });
+
+/**
+ * A failed product write, said as what it was (R75): every error read "SKU
+ * already exists", a lost connection included.
+ */
+function productWriteError(e: unknown): TRPCError {
+  if (isDuplicateKeyError(e)) return new TRPCError({ code: "CONFLICT", message: "A product with this SKU already exists." });
+  const why = describeWriteError(e);
+  if (why) return new TRPCError({ code: "BAD_REQUEST", message: `Couldn't save the product: ${why}.` });
+  console.error("[products] write failed:", e);
+  return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't save the product. Try again." });
+}
 
 /* ──────────────────────────────────────────────────────────────────────── */
 /* Territory routing rules — auto-assign accounts/leads to a territory/owner */
@@ -2579,21 +2744,26 @@ export const productsRouter = router({
  * Apply territory rules to a candidate account/lead payload. Returns the
  * matched rule's territoryId + ownerUserId or nulls if no rule matched.
  * First-match-wins by priority (lower priority value = higher precedence).
+ *
+ * Matching ignores case and surrounding spaces (audit 2026-10-20, R42): it
+ * was `===`, so a rule for "Software" never matched an account in
+ * "software". The same rule Lead Routing applies to these rules.
  */
 export async function applyTerritoryRules(
-  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  db: Pick<NonNullable<Awaited<ReturnType<typeof getDb>>>, "select">,
   workspaceId: number,
   payload: { industry?: string | null; country?: string | null; state?: string | null; company?: string | null },
 ): Promise<{ territoryId: number | null; ownerUserId: number | null } | null> {
   const rules = await db.select().from(crmTerritoryRules)
     .where(and(eq(crmTerritoryRules.workspaceId, workspaceId), eq(crmTerritoryRules.active, true)))
     .orderBy(crmTerritoryRules.priority, crmTerritoryRules.id);
-  const company = (payload.company ?? "").toLowerCase();
+  const norm = (v: string | null | undefined) => (v ?? "").trim().toLowerCase();
+  const company = norm(payload.company);
   for (const r of rules) {
-    if (r.industry && r.industry !== payload.industry) continue;
-    if (r.country && r.country !== payload.country) continue;
-    if (r.state && r.state !== payload.state) continue;
-    if (r.companyContains && !company.includes(r.companyContains.toLowerCase())) continue;
+    if (norm(r.industry) && norm(r.industry) !== norm(payload.industry)) continue;
+    if (norm(r.country) && norm(r.country) !== norm(payload.country)) continue;
+    if (norm(r.state) && norm(r.state) !== norm(payload.state)) continue;
+    if (norm(r.companyContains) && !company.includes(norm(r.companyContains))) continue;
     return { territoryId: r.territoryId ?? null, ownerUserId: r.ownerUserId ?? null };
   }
   return null;

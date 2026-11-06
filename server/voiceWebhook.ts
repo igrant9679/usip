@@ -178,7 +178,10 @@ export function registerVoiceWebhookRoutes(app: Express): void {
         startedAt: new Date(),
         ...(admission.ok ? {} : { endedAt: new Date(), durationSec: 0 }),
       });
-      const callRowId = Number((insert as unknown as { insertId?: number })?.insertId ?? 0);
+      // [ResultSetHeader, fields] from mysql2: the id is on the first element.
+      // Read off the array it was 0, so the bridge and the notification pointed
+      // at no call row (found beside audit N4, 2026-11-06).
+      const callRowId = Number((insert as unknown as { insertId?: number }[])[0]?.insertId ?? 0);
 
       if (admission.ok) {
         // Answer the call: fire-and-forget so this handler ACKs xAI fast.

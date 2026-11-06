@@ -31,7 +31,9 @@
  */
 import { csvCell } from "@shared/csvCell";
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, like, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, like, lt, ne, or, sql, type SQL } from "drizzle-orm";
+import { enqueueJob, findActiveJob, getJob, registerJobKind } from "../../services/jobs/runner";
+import { retryAt } from "../../services/are/retryBackoff";
 import { HELD_PAUSED, holdProspectSteps, releaseProspectSteps, stopProspectSteps } from "../../services/are/stepHold";
 import { z } from "zod";
 import {
@@ -39,6 +41,7 @@ import {
   areCampaigns,
   areEngineLogs,
   areExecutionQueue,
+  bulkJobs,
   icpProfiles,
   notifications,
   prospectIntelligence,
@@ -67,6 +70,7 @@ import { notifyIfEnabled } from "../../services/policyNotify";
 import { promoteApprovedProspects } from "../../services/are/approvePromotion";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../../services/humanCopy";
 import { resolveVerifiedEmail } from "../../services/scraper";
+import { suppressionBlockingNewEmail } from "../../services/suppression";
 import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "../../services/quickenrich";
 import { getReoonKey, reoonStatusToUsip, reoonVerifySingle } from "../../services/reoon";
 import { buildBrandContext } from "../../services/brandContext";
@@ -76,7 +80,7 @@ import { areKnowledgeQuery } from "../../services/knowledgeQueries";
 import { DEFAULT_STEP_GAP_DAYS, defaultDayForStep, stepIndexOf } from "@shared/areSequenceSteps";
 // Separate line on purpose: areStepCadence.test.ts pins the import above
 // verbatim, and the sendable-channel vocabulary is a different concern anyway.
-import { ARE_SENDABLE_CHANNELS, isSendableChannel } from "@shared/areSequenceSteps";
+import { ARE_SENDABLE_CHANNELS, campaignChannelOn, isSendableChannel } from "@shared/areSequenceSteps";
 import { cleanScrapedField } from "@shared/fieldHygiene";
 import { ENRICHMENT_STATES, PROSPECT_VIEWS, PROSPECT_VIEW_KEYS, bulkActionNeedsManager, searchWords, type ProspectView } from "@shared/areProspectViews";
 import { icpPromptList, icpWeighted } from "@shared/icpShape";
@@ -85,6 +89,19 @@ import { sequenceMaxTokens, stepCountForTemplate } from "@shared/areSequenceTemp
 import { DEFAULT_VARIANT_KEY, normalizeVariantKey } from "@shared/variantKeys";
 
 /* ─── ICP Match Scorer ───────────────────────────────────────────────────── */
+
+/**
+ * The model answered without a usable ICP score (audit 2026-10-20, A67). It
+ * used to come back as a score of 0, which was stored, and Full Auto then
+ * rejected the prospect for a fit nobody measured. Thrown instead, and treated
+ * like a rate limit: the row waits and is enriched again.
+ */
+export class IcpScoreUnavailable extends Error {
+  constructor() {
+    super("The AI returned no ICP score");
+    this.name = "IcpScoreUnavailable";
+  }
+}
 
 async function scoreIcpMatch(
   prospect: typeof prospectQueue.$inferSelect,
@@ -146,10 +163,12 @@ Score each dimension 0-20 and provide a total score 0-100.
   });
 
   const content = result.choices[0]?.message?.content;
-  if (!content) return { score: 0, breakdown: {} };
+  if (!content) throw new IcpScoreUnavailable();
   const parsed = parseLlmJson(content, "scoreIcpMatch");
+  const total = Number(parsed?.total);
+  if (typeof parsed?.total !== "number" || !Number.isFinite(total)) throw new IcpScoreUnavailable();
   return {
-    score: Math.min(100, Math.max(0, Math.round(parsed.total))),
+    score: Math.min(100, Math.max(0, Math.round(total))),
     breakdown: {
       industry: parsed.industry,
       title: parsed.title,
@@ -168,25 +187,62 @@ import { parseTargetPlaces, placeFit, placeStringOf } from "../../services/place
 /** How the Rejections tab names a rejection with no reason recorded. */
 const NO_REASON = "No reason given";
 
+/** Why Regenerate is refused for a sequence already on the calendar (A40). */
+/** The approve line when a campaign has none, as the engine's (areEngine DEFAULT_APPROVE_THRESHOLD). */
+const DEFAULT_REEVAL_THRESHOLD = 70;
+/** How every engine score rejection's reason begins (the screen pass and the enrichment gate). */
+export const AUTO_SCORE_REJECTION = "Auto-screened: ICP match";
+/** Rejections one Re-evaluate All run re-scores, each one model call (A11). */
+export const REEVAL_ALL_MAX = 500;
+export const REEVAL_ALL_JOB = "are.reevaluateRejections";
+type ReevalAllPayload = { campaignId: number; prospectIds: number[]; threshold: number; runId: number };
+
+export const REGENERATE_SCHEDULED_MESSAGE =
+  "This sequence is already scheduled, and regenerating it would not change the emails waiting to go. Edit a step to change what sends, or cancel the sequence, regenerate, and approve again.";
+
 /* ─── Enrich Agent ───────────────────────────────────────────────────────── */
 
+/**
+ * How long an 'enriching' row stays claimed by the run that marked it. Older
+ * than this, that run died (a deploy, a crash) and another may take the row.
+ */
+export const ENRICH_STALE_MS = 15 * 60_000;
+
+/**
+ * Enrich one prospect. Resolves false when another enrichment holds the row
+ * (or it is not this workspace's), so nothing was done; true when this run did
+ * the work. Throws what the work threw.
+ */
 export async function runEnrichAgent(
   prospectId: number,
   workspaceId: number,
-): Promise<void> {
+): Promise<boolean> {
   const db = await getDb();
-  if (!db) return;
+  if (!db) return false;
 
   const [prospect] = await db
     .select()
     .from(prospectQueue)
     .where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, workspaceId)))
     .limit(1);
-  if (!prospect) return;
+  if (!prospect) return false;
 
-  // Mark as enriching — also clear any prior enrichmentError so the UI
-  // doesn't keep showing a stale failure reason during a retry.
-  await db.update(prospectQueue).set({ enrichmentStatus: "enriching", enrichmentError: null }).where(eq(prospectQueue.id, prospectId));
+  /**
+   * CLAIM the row (audit 2026-10-20, A35): marked enriching ONLY if no other
+   * enrichment holds it. Unconditional, a double click — or a manual enrich
+   * overlapping the engine's pass — ran two at once: paid twice, wrote two
+   * dossiers, and the slower one could leave the row failed. A claim older
+   * than ENRICH_STALE_MS is a dead run's, and may be taken. Also clears any
+   * prior enrichmentError so the UI doesn't show a stale reason during a retry.
+   */
+  const claim = await db.update(prospectQueue)
+    .set({ enrichmentStatus: "enriching", enrichmentError: null, updatedAt: new Date() })
+    .where(and(
+      eq(prospectQueue.id, prospectId),
+      eq(prospectQueue.workspaceId, workspaceId),
+      or(ne(prospectQueue.enrichmentStatus, "enriching"), lt(prospectQueue.updatedAt, new Date(Date.now() - ENRICH_STALE_MS))),
+    ));
+  if (Number((claim as any)?.[0]?.affectedRows ?? (claim as any)?.affectedRows ?? 0) !== 1) return false;
 
   try {
     // Get active ICP
@@ -434,7 +490,14 @@ Produce:
     let resolvedEmail: string | null = null;
     let resolvedStatus: string | null = null;
     let qeFilledDomain = false;
-    if (!prospect.email) {
+    // A suppressed person gets no new address (audit 2026-10-20, P86). If the
+    // lists can't be read, none is looked for: a wrong "no" here is a send.
+    const emailBlocked = prospect.email
+      ? null
+      : await suppressionBlockingNewEmail(workspaceId, {
+          linkedinUrl: prospect.linkedinUrl, companyDomain: prospect.companyDomain, personProspectId: prospect.personProspectId,
+        }).catch(() => "unchecked");
+    if (!prospect.email && !emailBlocked) {
       try {
         // No Apollo in the waterfall (owner decision 2026-08-12, reaffirmed
         // 2026-08-24: CF runs without an Apollo key — QuickEnrich/LinkedIn
@@ -494,6 +557,9 @@ Produce:
       icpMatchBreakdown,
       enrichmentStatus: "complete",
       enrichedAt: new Date(),
+      // A success clears the failure count and the wait (A27).
+      enrichAttempts: 0,
+      enrichRetryAt: null,
       ...(resolvedEmail ? { email: resolvedEmail } : {}),
       ...(effCompanyName && !prospect.companyName ? { companyName: effCompanyName.slice(0, 200) } : {}),
       ...(qeFilledDomain && effCompanyDomain ? { companyDomain: effCompanyDomain.slice(0, 200) } : {}),
@@ -531,23 +597,40 @@ Produce:
     // cut that lands on whitespace, so what is stored is a reason and never
     // half a word.
     const reason = clipAtWordBoundary(enrichmentReasonFrom(err), 800);
-    if (isRetryableLLMError(err)) {
-      // Provider rate limit / overload — a fact about the moment, not about
-      // this prospect. Back to 'pending' so the engine's next tick retries
-      // it, instead of stranding a red 'failed' chip with raw 429 JSON the
-      // user has to retry by hand.
+    // Every failure counts, and the next try waits longer each time (audit
+    // A7/A27): a row that kept failing was retried at the head of the page on
+    // every tick. A 'failed' row is retried by the engine up to
+    // ENRICH_MAX_ATTEMPTS, then rejected with this reason.
+    const backoff = {
+      enrichAttempts: sql`${prospectQueue.enrichAttempts} + 1`,
+      enrichRetryAt: retryAt(Number(prospect.enrichAttempts ?? 0) + 1),
+    };
+    if (err instanceof IcpScoreUnavailable) {
       await db.update(prospectQueue).set({
         enrichmentStatus: "pending",
-        enrichmentError: `AI provider is rate-limited — enrichment will retry automatically on the next engine pass. (${clipAtWordBoundary(reason, 300)})`,
-      }).where(eq(prospectQueue.id, prospectId));
+        enrichmentError: "The AI returned no ICP score — enrichment will retry automatically.",
+        ...backoff,
+      }).where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, workspaceId)));
+    } else if (isRetryableLLMError(err)) {
+      // Provider rate limit / overload — a fact about the moment, not about
+      // this prospect. Back to 'pending' so the engine retries it, instead of
+      // stranding a red 'failed' chip with raw 429 JSON the user has to retry
+      // by hand.
+      await db.update(prospectQueue).set({
+        enrichmentStatus: "pending",
+        enrichmentError: `AI provider is rate-limited — enrichment will retry automatically. (${clipAtWordBoundary(reason, 300)})`,
+        ...backoff,
+      }).where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, workspaceId)));
     } else {
       await db.update(prospectQueue).set({
         enrichmentStatus: "failed",
         enrichmentError: reason || "Unknown error",
-      }).where(eq(prospectQueue.id, prospectId));
+        ...backoff,
+      }).where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, workspaceId)));
     }
     throw err;
   }
+  return true;
 }
 
 /* ─── Sequence Agent ─────────────────────────────────────────────────────
@@ -637,8 +720,9 @@ export async function generateCampaignTemplate(
   // so it dutifully wrote steps on channels that have no provider behind them.
   // Only the sendable subset is offered now; an empty selection still says
   // email rather than leaving the architect to guess.
-  const enabledMap = (campaign.channelsEnabled ?? null) as Record<string, boolean> | null;
-  const sendableChannels = ARE_SENDABLE_CHANNELS.filter((c) => enabledMap?.[c] !== false);
+  // Read the way dispatch reads it (A71): a channel the dispatcher would skip
+  // must not be written into the skeleton.
+  const sendableChannels = ARE_SENDABLE_CHANNELS.filter((c) => campaignChannelOn(campaign.channelsEnabled, c));
 
   const systemContent =
     `You are an elite B2B sales sequence architect. Design a reusable ${stepCount}-step outreach skeleton for a single campaign. The skeleton will be filled in per-prospect later, so do NOT write subject lines or bodies — write the STRUCTURE (archetype, cadence, what each step should accomplish, the CTA pattern) so that any prospect's data can be slotted in.` +
@@ -989,6 +1073,8 @@ export interface SequenceAgentResult {
   qualityScore: number;
   durationMs: number;
   prospectId: number;
+  /** With `onlyIfClean`: the new copy broke an avoid rule and was NOT saved; the reason. */
+  held?: string;
 }
 
 /** Persist a log row tied to the campaign. Best-effort: never throws,
@@ -1032,7 +1118,17 @@ export async function runSequenceAgent(
   prospectId: number,
   workspaceId: number,
   campaignId: number,
-  options: { force?: boolean; allowWithoutIntel?: boolean } = {},
+  options: {
+    force?: boolean;
+    allowWithoutIntel?: boolean;
+    /**
+     * Draft, and save only copy that breaks no avoid rule (audit A13). For a
+     * caller that will copy the result straight into scheduled sends: held
+     * copy is then not saved at all, the prospect keeps what it had, and the
+     * result says why in `held`.
+     */
+    onlyIfClean?: boolean;
+  } = {},
 ): Promise<SequenceAgentResult> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
@@ -1176,6 +1272,10 @@ export async function runSequenceAgent(
     if (brief.error) {
       await emitSeqLog(db, workspaceId, campaignId, "warn", "sequence.avoid",
         `Could not check ${prospect.firstName} ${prospect.lastName}'s copy against your research's avoid rules: ${brief.error.slice(0, 200)}`, { prospectId });
+    } else if (copyHoldReason && options.onlyIfClean) {
+      await emitSeqLog(db, workspaceId, campaignId, "warn", "sequence.avoid",
+        `Did not use the new copy for ${prospect.firstName} ${prospect.lastName}: ${copyHoldReason}. Their current sequence is unchanged.`, { prospectId, violations: brief.violations });
+      return { ok: false, reused: false, steps: steps.length, qualityScore: quality.score, durationMs: Date.now() - startedAt, prospectId, held: copyHoldReason };
     } else if (copyHoldReason) {
       await emitSeqLog(db, workspaceId, campaignId, "warn", "sequence.avoid",
         `Held ${prospect.firstName} ${prospect.lastName}'s sequence for review. ${copyHoldReason}`, { prospectId, violations: brief.violations });
@@ -1239,6 +1339,71 @@ export async function runSequenceAgent(
     throw err;
   }
 }
+
+/* ─── Re-evaluate All, in the background (audit A11) ──────────────────────── */
+
+/**
+ * One rejection re-scored. Only while it is still the engine's score
+ * rejection: a person may have restored or rejected it since the run began.
+ * One that now clears the line goes back to pending, and its rejection reason
+ * and date stay as the record of why it had been out. Returns whether it
+ * re-qualified.
+ */
+async function reEvaluateOneRejection(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  prospectId: number,
+  threshold: number,
+): Promise<boolean> {
+  const [p] = await db.select().from(prospectQueue)
+    .where(and(eq(prospectQueue.id, prospectId), eq(prospectQueue.workspaceId, workspaceId))).limit(1);
+  if (!p || p.sequenceStatus !== "skipped" || p.rejectedByUserId != null || !String(p.rejectionReason ?? "").startsWith(AUTO_SCORE_REJECTION)) return false;
+  const [icp] = await db.select().from(icpProfiles)
+    .where(and(eq(icpProfiles.workspaceId, workspaceId), eq(icpProfiles.isActive, true))).limit(1);
+  const [camp] = await db.select({ icpOverrides: areCampaigns.icpOverrides }).from(areCampaigns)
+    .where(and(eq(areCampaigns.id, p.campaignId), eq(areCampaigns.workspaceId, workspaceId))).limit(1);
+  const effectiveIcp = buildEffectiveIcp(icp, camp?.icpOverrides);
+  if (!effectiveIcp) throw new Error("No active ICP profile or campaign targeting");
+  const match = await scoreIcpMatch(p, effectiveIcp, workspaceId);
+  const requalifies = match.score >= threshold;
+  await db.update(prospectQueue).set({
+    icpMatchScore: match.score,
+    icpMatchBreakdown: JSON.stringify(match.breakdown),
+    ...(requalifies ? { sequenceStatus: "pending" as const } : {}),
+  }).where(and(
+    eq(prospectQueue.id, prospectId),
+    eq(prospectQueue.workspaceId, workspaceId),
+    eq(prospectQueue.sequenceStatus, "skipped"),
+    isNull(prospectQueue.rejectedByUserId),
+  ));
+  return requalifies;
+}
+
+registerJobKind<ReevalAllPayload>(REEVAL_ALL_JOB, {
+  async step(job, payload, budgetMs) {
+    const db = await getDb();
+    if (!db) throw new Error("Database unavailable");
+    const until = Date.now() + budgetMs;
+    const ids = payload.prospectIds ?? [];
+    let i = job.resumeFrom;
+    let done = 0;
+    const failures: Array<{ id: number; error: string }> = [];
+    while (i < ids.length && Date.now() < until) {
+      let requalified = false;
+      try {
+        requalified = await reEvaluateOneRejection(db, job.workspaceId, ids[i], payload.threshold);
+        done++;
+      } catch (e) {
+        failures.push({ id: ids[i], error: ((e as Error)?.message ?? String(e)).slice(0, 200) });
+      }
+      await db.update(reevalRuns)
+        .set({ processed: sql`${reevalRuns.processed} + 1`, ...(requalified ? { requalified: sql`${reevalRuns.requalified} + 1` } : {}) })
+        .where(and(eq(reevalRuns.id, payload.runId), eq(reevalRuns.workspaceId, job.workspaceId)));
+      i++;
+    }
+    return { cursor: i, done, failures, finished: i >= ids.length, message: `Re-evaluated ${i} of ${ids.length}` };
+  },
+});
 
 /* ─── Prospects-tab filters ─────────────────────────────────────────────── */
 
@@ -1682,6 +1847,26 @@ export const prospectsRouter = router({
       allowWithoutEnrichment: z.boolean().default(true),
     }))
     .mutation(async ({ ctx, input }) => {
+      /**
+       * Regenerating a sequence that is already on the calendar is refused
+       * (audit 2026-10-20, A40). Enrolment copies each step into its scheduled
+       * send, so a new sequence changed the dossier and nothing that went out —
+       * while saying "Sequence created". Steps still to go (scheduled, or held)
+       * are what makes it enrolled; once none are left it can be regenerated.
+       */
+      if (input.force) {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [live] = await db
+          .select({ n: sql<number>`count(*)` })
+          .from(areExecutionQueue)
+          .where(and(
+            eq(areExecutionQueue.workspaceId, ctx.workspace.id),
+            eq(areExecutionQueue.prospectQueueId, input.prospectId),
+            inArray(areExecutionQueue.status, ["scheduled", "paused"]),
+          ));
+        if (Number(live?.n ?? 0) > 0) throw new TRPCError({ code: "PRECONDITION_FAILED", message: REGENERATE_SCHEDULED_MESSAGE });
+      }
       try {
         return await runSequenceAgent(input.prospectId, ctx.workspace.id, input.campaignId, {
           force: input.force,
@@ -2819,7 +3004,10 @@ export const prospectsRouter = router({
         .where(and(eq(prospectNotes.id, input.noteId), eq(prospectNotes.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!note) throw new TRPCError({ code: "NOT_FOUND" });
-      if (note.userId !== ctx.user.id && ctx.user.role !== "admin") {
+      // The WORKSPACE role (audit A75): `ctx.user.role` is the platform's, so a
+      // workspace admin could not delete a note while any platform admin could,
+      // in every workspace they belonged to.
+      if (note.userId !== ctx.user.id && !isAdminRole(ctx.member.role)) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Only the note author or an admin can delete notes." });
       }
       await db.delete(prospectNotes).where(and(
@@ -2972,14 +3160,16 @@ export const prospectsRouter = router({
         .where(and(eq(icpProfiles.workspaceId, ctx.workspace.id), eq(icpProfiles.isActive, true)))
         .limit(1);
       const [reCamp] = await db
-        .select({ icpOverrides: areCampaigns.icpOverrides })
+        .select({ icpOverrides: areCampaigns.icpOverrides, autoApproveThreshold: areCampaigns.autoApproveThreshold })
         .from(areCampaigns)
         .where(and(eq(areCampaigns.id, prospect.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)))
         .limit(1);
       const effectiveIcp = buildEffectiveIcp(icp, reCamp?.icpOverrides);
       if (!effectiveIcp) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No active ICP profile or campaign targeting" });
       const match = await scoreIcpMatch(prospect, effectiveIcp, ctx.workspace.id);
-      const autoApproveThreshold = 70; // fallback default
+      // The campaign's own approve line (audit A75); 70 only when it has none,
+      // as in Re-evaluate All and the engine.
+      const autoApproveThreshold = reCamp?.autoApproveThreshold ?? DEFAULT_REEVAL_THRESHOLD;
       // Re-grading moves only a prospect that is not in a sequence (audit
       // 2026-10-20, A2): sending one who had replied, completed or was
       // enrolled back to "pending" was the first half of re-enrolling them.
@@ -3034,49 +3224,63 @@ export const prospectsRouter = router({
         .limit(1);
       const effectiveIcp = buildEffectiveIcp(icp, campaign.icpOverrides);
       if (!effectiveIcp) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "No active ICP profile or campaign targeting" });
-      // Fetch all rejected (skipped) prospects for this campaign
+      // Use override threshold if provided (from quick-edit in dialog), else campaign's actual threshold, else 70
+      const autoApproveThreshold = input.overrideThreshold ?? campaign.autoApproveThreshold ?? DEFAULT_REEVAL_THRESHOLD;
+      // One run per campaign at a time: a second click gets the running one back.
+      const running = await findActiveJob<ReevalAllPayload>(ctx.workspace.id, REEVAL_ALL_JOB, (p) => p.campaignId === input.campaignId);
+      if (running) return { jobId: running.id, total: running.total, threshold: autoApproveThreshold, alreadyRunning: true };
+      /**
+       * Only the engine's own SCORE rejections (audit 2026-10-20, A11). This
+       * re-scored every rejected row — a person's rejection, a suppression, a
+       * territory or never-target verdict — and put any that scored well back
+       * in the queue with its reason erased. A person's decision has their id
+       * on it (rejectedByUserId); the engine's score verdicts all begin
+       * AUTO_SCORE_REJECTION. Bounded, and run as a background job so the
+       * request returns at once and the progress is real.
+       */
       const rejected = await db
-        .select()
+        .select({ id: prospectQueue.id })
         .from(prospectQueue)
         .where(and(
           eq(prospectQueue.campaignId, input.campaignId),
           eq(prospectQueue.workspaceId, ctx.workspace.id),
           eq(prospectQueue.sequenceStatus, "skipped"),
-        ));
-      if (rejected.length === 0) return { processed: 0, requalified: 0, threshold: campaign.autoApproveThreshold ?? 70 };
-      // Use override threshold if provided (from quick-edit in dialog), else campaign's actual threshold, else 70
-      const autoApproveThreshold = input.overrideThreshold ?? campaign.autoApproveThreshold ?? 70;
-      let requalified = 0;
-      for (const prospect of rejected) {
-        try {
-          const match = await scoreIcpMatch(prospect, effectiveIcp, ctx.workspace.id);
-          const newStatus = match.score >= autoApproveThreshold ? "pending" : "skipped";
-          if (newStatus === "pending") requalified++;
-          await db.update(prospectQueue).set({
-            icpMatchScore: match.score,
-            icpMatchBreakdown: JSON.stringify(match.breakdown),
-            sequenceStatus: newStatus,
-            rejectedAt: newStatus === "pending" ? null : prospect.rejectedAt,
-            rejectionReason: newStatus === "pending" ? null : prospect.rejectionReason,
-          }).where(eq(prospectQueue.id, prospect.id));
-        } catch (e) {
-          console.error("[reEvaluateAll] Failed for prospect", prospect.id, e);
-        }
-      }
-      // Log the run to reeval_runs for history tracking
-      try {
-        await db.insert(reevalRuns).values({
-          workspaceId: ctx.workspace.id,
-          campaignId: input.campaignId,
-          createdByUserId: ctx.user.id,
-          thresholdUsed: autoApproveThreshold,
-          processed: rejected.length,
-          requalified,
-        });
-      } catch (e) {
-        console.error("[reEvaluateAll] Failed to log run history", e);
-      }
-      return { processed: rejected.length, requalified, threshold: autoApproveThreshold };
+          isNull(prospectQueue.rejectedByUserId),
+          like(prospectQueue.rejectionReason, `${AUTO_SCORE_REJECTION}%`),
+        ))
+        .orderBy(prospectQueue.id)
+        .limit(REEVAL_ALL_MAX);
+      if (rejected.length === 0) return { jobId: null, total: 0, threshold: autoApproveThreshold, alreadyRunning: false };
+      // The run's history row is written first and counted up as it goes.
+      const [run] = await db.insert(reevalRuns).values({
+        workspaceId: ctx.workspace.id,
+        campaignId: input.campaignId,
+        createdByUserId: ctx.user.id,
+        thresholdUsed: autoApproveThreshold,
+        processed: 0,
+        requalified: 0,
+      }).$returningId();
+      const payload: ReevalAllPayload = { campaignId: input.campaignId, prospectIds: rejected.map((r) => r.id), threshold: autoApproveThreshold, runId: run.id };
+      const { job } = await enqueueJob({ workspaceId: ctx.workspace.id, userId: ctx.user.id, kind: REEVAL_ALL_JOB, payload, total: rejected.length });
+      return { jobId: job.id, total: rejected.length, threshold: autoApproveThreshold, alreadyRunning: false };
+    }),
+
+  /** Progress of a Re-evaluate All run (A11): how far it has got, and how many re-qualified. */
+  getReevalJob: workspaceProcedure
+    .input(z.object({ jobId: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const job = await getJob(ctx.workspace.id, input.jobId);
+      if (!job || job.kind !== REEVAL_ALL_JOB) return null;
+      const db = await getDb();
+      if (!db) return null;
+      const [row] = await db.select({ payload: bulkJobs.payload }).from(bulkJobs)
+        .where(and(eq(bulkJobs.id, input.jobId), eq(bulkJobs.workspaceId, ctx.workspace.id))).limit(1);
+      const runId = (row?.payload as ReevalAllPayload | null)?.runId;
+      const [run] = runId
+        ? await db.select({ requalified: reevalRuns.requalified }).from(reevalRuns)
+          .where(and(eq(reevalRuns.id, runId), eq(reevalRuns.workspaceId, ctx.workspace.id))).limit(1)
+        : [];
+      return { status: job.status, total: job.total, done: job.done, failed: job.failed, requalified: Number(run?.requalified ?? 0), message: job.message };
     }),
 
   getReevalHistory: workspaceProcedure

@@ -180,7 +180,9 @@ describe("every sender gates on the shared counter", () => {
     expect((smtp.match(/logEmailSend\(/g) ?? []).length).toBe(1);
     expect((smtp.match(/recordEmailsSent\(/g) ?? []).length).toBe(1);
     expect((smtp.match(/sendingAccountId: draft\.sendingAccountId/g) ?? []).length).toBe(1);
-    const bulk = smtp.slice(smtp.indexOf("sendBulkApproved: adminWsProcedure"), smtp.indexOf("getTrackingStats: workspaceProcedure"));
+    // 2026-11-06 (O16 with O47): the loop lives in sendApprovedBatch, which the procedure runs.
+    expect(smtp.slice(smtp.indexOf("sendBulkApproved: adminWsProcedure"), smtp.indexOf("getTrackingStats: workspaceProcedure"))).toContain("sendApprovedBatch(");
+    const bulk = smtp.slice(smtp.indexOf("async function sendApprovedBatch("), smtp.indexOf("export const smtpConfigRouter"));
     expect(bulk).toContain("deliverEmailDraft(");
     expect(bulk).not.toContain("logEmailSend(");
     expect(bulk).not.toContain("recordEmailsSent(");

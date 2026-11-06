@@ -6,7 +6,8 @@
  * besides the admin-defined Custom Fields feature, application code parks
  * control data in the same blob:
  *
- *   unipile.ts               writes { linkedinUrl, location } onto a lead
+ *   unipile.ts               wrote { linkedinUrl, location } onto a lead (until
+ *                            2026-11-06; LinkedIn search now saves to People)
  *   socialAutopilot.ts       reads $.linkedinUrl to pick LinkedIn invite targets
  *   opportunityIntelligence  read/writes coOwners (a list of user ids)
  *   imports.ts               writes importTag / importSource / importId
@@ -159,7 +160,12 @@ describe("no unreserved engine key is written into the blob", () => {
 
   it("finds the known writers (floor — a scan that finds nothing must fail)", () => {
     const files = new Set(written.map((w) => w.file));
-    expect(files).toContain("server/routers/unipile.ts");
+    // 2026-11-06 (audit P76): unipile.ts no longer writes the blob — the
+    // LinkedIn search card saves to People, whose linkedinUrl is a column — so
+    // the floor names another literal writer instead. linkedinUrl stays
+    // reserved: socialAutopilot still reads it off older leads.
+    expect(files).not.toContain("server/routers/unipile.ts");
+    expect(files).toContain("server/services/referralHandler.ts");
     expect(files).toContain("server/routers/imports.ts");
     expect(extracted.map((e) => e.key)).toContain("linkedinUrl");
   });

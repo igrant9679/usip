@@ -15,7 +15,7 @@
 
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { inSendWindow } from "./services/sendWindow";
-import { and, asc, eq, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import {
   accounts,
   activities,
@@ -23,6 +23,7 @@ import {
   emailDrafts,
   enrollments,
   leads,
+  prospectLinkedinEnrichments,
   prospects,
   sequences,
   sequenceAbVariants,
@@ -41,8 +42,8 @@ import { researchUseFor } from "./services/research/recipient";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "./services/humanCopy";
 import { describeSuppression, findSuppression, linkedinUrlVariants } from "./services/suppression";
 import { affected } from "./services/draftSend";
-import { getWorkspaceTimezone } from "./services/workspaceTimezone";
-import { pickLinkedInAccount, toInviteNote } from "./services/are/linkedinStep";
+import { getWorkspaceTimezone, startOfLocalDay } from "./services/workspaceTimezone";
+import { isFirstDegree, pickLinkedInAccount, toInviteNote } from "./services/are/linkedinStep";
 import { renderMergeFields, resolveBookingUrl, scrubForSend } from "./mergeVars";
 import { extractLinkedInIdentifier } from "./services/linkedinLookup";
 import { checkLinkedInAction, recordLinkedInAction } from "./services/linkedin/activityGate";
@@ -311,17 +312,45 @@ function nextWindowOpen(cfg: ResolvedSendSettings, from: Date): Date {
   return new Date(from.getTime() + HOLD_RECHECK_MS);
 }
 
-// ─── Daily email cap tracking (in-memory, resets at midnight) ─────────────────
+// ─── Daily email caps, counted from the database ─────────────────────────────
 
-const dailyEmailCounts: Map<string, number> = new Map();
+/** The most sequence email one workspace may have going out in a day. */
 const WORKSPACE_DAILY_CAP = 100;
 
-function getDailyKey(workspaceId: number): string {
-  // Workspace-wide cap stays on the UTC day: there is no workspace-level
-  // timezone setting, and a single boundary beats per-sequence drift here.
-  // Per-SEQUENCE caps + send windows use the sequence's own timezone below.
-  const today = new Date().toISOString().slice(0, 10);
-  return `${workspaceId}:${today}`;
+/** Drafts still on their way out: each one is an email that will go unless someone stops it. */
+const OUTSTANDING_DRAFT_STATUSES = ["pending_review", "ai_pending_review", "approved", "sending"] as const;
+
+/**
+ * How much of a daily cap is used (audit 2026-10-20, O44): the emails that
+ * really went out since `dayStart` (or whose send was attempted then and may
+ * have gone), plus every draft still waiting to go out, whenever it was
+ * written. The caps lived in an in-memory Map, so a restart reset them, they
+ * counted drafts as they were written rather than sends, and the workspace
+ * day was UTC's.
+ *
+ * A waiting draft counts because a cap that saw only sends would let the
+ * engine write a whole backlog in one day for review or auto-send to push
+ * out at once; a rejected one does not, because it never goes.
+ */
+async function sequenceEmailUsage(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  dayStart: Date,
+  sequenceId: number | null,
+): Promise<number> {
+  const scope = and(
+    eq(emailDrafts.workspaceId, workspaceId),
+    sequenceId == null ? isNotNull(emailDrafts.sequenceId) : eq(emailDrafts.sequenceId, sequenceId),
+  );
+  const [[sent], [tried], [waiting]] = await Promise.all([
+    db.select({ n: sql<number>`count(*)` }).from(emailDrafts)
+      .where(and(scope, eq(emailDrafts.status, "sent"), gte(emailDrafts.sentAt, dayStart))),
+    db.select({ n: sql<number>`count(*)` }).from(emailDrafts)
+      .where(and(scope, eq(emailDrafts.status, "failed"), gte(emailDrafts.sendClaimedAt, dayStart))),
+    db.select({ n: sql<number>`count(*)` }).from(emailDrafts)
+      .where(and(scope, inArray(emailDrafts.status, [...OUTSTANDING_DRAFT_STATUSES]))),
+  ]);
+  return Number(sent?.n ?? 0) + Number(tried?.n ?? 0) + Number(waiting?.n ?? 0);
 }
 
 // ─── LinkedIn copy ────────────────────────────────────────────────────────────
@@ -359,6 +388,46 @@ async function linkedinMergeVars(
     senderCompany: ws?.name ?? "",
     bookingLink: senderUserId ? await resolveBookingUrl(workspaceId, senderUserId) : "",
   };
+}
+
+/**
+ * Whether this person is already a 1st-degree connection of the sending
+ * account, from what Velocity has on record (audit 2026-10-20, O12): a DM
+ * this account sent them (LinkedIn only lets you message a connection), or
+ * a profile read through this account that said 1st degree. Asked before an
+ * invite, which LinkedIn refuses for a connection and counts against the
+ * account all the same. No call to LinkedIn: a profile view is an action too.
+ */
+async function alreadyConnected(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  unipileAccountId: string,
+  identifier: string,
+  prospectId: number | null,
+): Promise<boolean> {
+  const [messaged] = await db
+    .select({ id: unipileMessages.id })
+    .from(unipileMessages)
+    .where(and(
+      eq(unipileMessages.workspaceId, workspaceId),
+      eq(unipileMessages.unipileAccountId, unipileAccountId),
+      eq(unipileMessages.direction, "outbound"),
+      eq(unipileMessages.recipientProviderId, identifier),
+    ))
+    .limit(1);
+  if (messaged) return true;
+  const profiles = await db
+    .select({ degree: prospectLinkedinEnrichments.linkedinConnectionDegree })
+    .from(prospectLinkedinEnrichments)
+    .where(and(
+      eq(prospectLinkedinEnrichments.workspaceId, workspaceId),
+      eq(prospectLinkedinEnrichments.linkedinSourceAccountId, unipileAccountId),
+      prospectId != null
+        ? or(eq(prospectLinkedinEnrichments.prospectId, prospectId), eq(prospectLinkedinEnrichments.linkedinProfileIdentifier, identifier))
+        : eq(prospectLinkedinEnrichments.linkedinProfileIdentifier, identifier),
+    ))
+    .limit(5);
+  return profiles.some((p) => isFirstDegree(p.degree));
 }
 
 // ─── Core processor ───────────────────────────────────────────────────────────
@@ -440,6 +509,9 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
   const people = new Set<string>();
   const sendSettings = new Map<number, ResolvedSendSettings>();
   const linkedinVerdicts = new Map<string, Awaited<ReturnType<typeof checkLinkedInAction>>>();
+  /** How much of each daily cap is used, by sequence id and by workspace id (O44). */
+  const seqUsage = new Map<number, number>();
+  const wsUsage = new Map<number, number>();
 
   for (const { enrollment, seq } of due) {
     try {
@@ -546,11 +618,20 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           continue;
         }
 
-        // Daily caps (per-sequence key rolls at the sequence's local midnight).
-        const seqKey = `seq:${seq.id}:${nowInTz(cfg.timezone, now).dateKey}`;
-        const seqCount = dailyEmailCounts.get(seqKey) ?? 0;
-        const wsKey = getDailyKey(enrollment.workspaceId);
-        const wsCount = dailyEmailCounts.get(wsKey) ?? 0;
+        // Daily caps, read once a tick and kept up to date as this tick writes
+        // drafts: the sequence's on its own day, the workspace's on the
+        // workspace's (O44).
+        let seqCount = seqUsage.get(seq.id);
+        if (seqCount === undefined) {
+          seqCount = await sequenceEmailUsage(db, enrollment.workspaceId, startOfLocalDay(cfg.timezone, now), seq.id);
+          seqUsage.set(seq.id, seqCount);
+        }
+        let wsCount = wsUsage.get(enrollment.workspaceId);
+        if (wsCount === undefined) {
+          const wsDay = startOfLocalDay(await getWorkspaceTimezone(enrollment.workspaceId), now);
+          wsCount = await sequenceEmailUsage(db, enrollment.workspaceId, wsDay, null);
+          wsUsage.set(enrollment.workspaceId, wsCount);
+        }
         if (seqCount >= (seq.dailyCap ?? Infinity) || wsCount >= WORKSPACE_DAILY_CAP) {
           await hold(new Date(now.getTime() + CAP_RECHECK_MS));
           continue;
@@ -616,8 +697,6 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           );
           continue;
         }
-        dailyEmailCounts.set(seqKey, seqCount + 1);
-        dailyEmailCounts.set(wsKey, wsCount + 1);
 
         // A/B variant assignment: pick a variant for this step if any exist
         let draftSubject = step.subject ?? "Follow-up";
@@ -701,7 +780,13 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           abVariantId: chosenVariantId,
           status: "pending_review",
           aiGenerated: false,
+          // Who it goes out as (audit 2026-10-20, O13): the rep the sequence
+          // is assigned to, else its owner. Unstamped, auto-send sent every
+          // rep's sequence as the workspace owner — mailbox, signature, name.
+          createdByUserId: seq.assignedToUserId ?? seq.ownerUserId ?? null,
         } as never);
+        seqUsage.set(seq.id, seqCount + 1);
+        wsUsage.set(enrollment.workspaceId, wsCount + 1);
         /**
          * No sentCount bump. sequence_ab_variants' counters are dead columns —
          * variant performance is DERIVED from email_drafts by
@@ -738,17 +823,21 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
         let person: PersonFields = {};
         let relatedType: "contact" | "lead" | "prospect" = "contact";
         let relatedId: number | undefined;
+        /** The People row behind the record, where the LinkedIn enrichment lives. */
+        let personProspectId: number | null = enrollment.prospectId ?? null;
         if (enrollment.contactId) {
           const [contact] = await db
             .select({
               linkedinUrl: contacts.linkedinUrl, email: contacts.email, companyDomain: contacts.companyDomain,
               firstName: contacts.firstName, lastName: contacts.lastName, title: contacts.title, accountId: contacts.accountId,
+              personProspectId: contacts.personProspectId,
             })
             .from(contacts)
             .where(and(eq(contacts.id, enrollment.contactId), eq(contacts.workspaceId, enrollment.workspaceId)));
           linkedinUrl = contact?.linkedinUrl;
           email = contact?.email;
           companyDomain = contact?.companyDomain;
+          personProspectId = contact?.personProspectId ?? null;
           const [acct] = contact?.accountId
             ? await db.select({ name: accounts.name }).from(accounts)
                 .where(and(eq(accounts.id, contact.accountId), eq(accounts.workspaceId, enrollment.workspaceId))).limit(1)
@@ -790,10 +879,12 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
         }
         const identifier = linkedinUrl ? extractLinkedInIdentifier(linkedinUrl) : null;
 
-        // The SEQUENCE OWNER's account, as ARE does (audit 2026-10-20, O12):
-        // this used to take whichever LinkedIn account the database returned
-        // first, so a rep's sequence could invite people as a colleague.
-        const account = await pickLinkedInAccount(enrollment.workspaceId, seq.assignedToUserId ?? seq.ownerUserId ?? null);
+        // The SEQUENCE OWNER's account and nobody else's (audit 2026-10-20,
+        // O12): this used to take whichever LinkedIn account the database
+        // returned first, and then fell back to one when the owner had none,
+        // so a rep's sequence could invite people as a colleague.
+        const senderUserId = seq.assignedToUserId ?? seq.ownerUserId ?? null;
+        const account = await pickLinkedInAccount(enrollment.workspaceId, senderUserId, { ownerOnly: true });
         const isInvite = step.type === "linkedin_invite";
         /**
          * The step's text is a TEMPLATE (audit 2026-10-20, O10): it went out
@@ -812,7 +903,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
         const text = isInvite ? toInviteNote(rendered, LINKEDIN_NOTE_MAX) : rendered;
 
         let skip: string | null = null;
-        if (!account) skip = "no Unipile LinkedIn account";
+        if (!account) skip = senderUserId ? "the sequence's sender has no LinkedIn account connected" : "the sequence has no owner to send as";
         else if (!identifier) skip = "no LinkedIn profile on the record";
         else if (!isInvite && !text.trim()) skip = "the step has no message";
         else {
@@ -827,6 +918,9 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
             .where(and(eq(unipileInvites.workspaceId, enrollment.workspaceId), eq(unipileInvites.recipientProviderId, identifier!)))
             .limit(1);
           if (prior) skip = "already invited";
+          else if (await alreadyConnected(db, enrollment.workspaceId, account!.unipileAccountId, identifier!, personProspectId)) {
+            skip = "already a 1st-degree connection";
+          }
         }
         if (skip) {
           console.warn(`[SequenceEngine] Skipping LinkedIn step for enrollment ${enrollment.id}: ${skip}`);
@@ -1051,15 +1145,17 @@ export async function pauseOnReply(
   await db
     .update(enrollments)
     .set({ status: "paused", resumeAt: null })
-    .where(eq(enrollments.id, enrollmentId));
+    .where(and(eq(enrollments.id, enrollmentId), eq(enrollments.workspaceId, workspaceId)));
 
-  // Create review task
+  // Create review task, on the record the enrolment is for. A prospect
+  // enrolment's task was filed as a lead with no id, so it belonged to
+  // nobody (audit 2026-10-20, O52).
   await db.insert(tasks).values({
     workspaceId,
     title: "Reply detected — review sequence enrollment",
     dueAt: new Date(Date.now() + 86400000), // due tomorrow
-    relatedType: enrollment.contactId ? "contact" : "lead",
-    relatedId: (enrollment.contactId ?? enrollment.leadId) as number,
+    relatedType: enrollment.contactId ? "contact" : enrollment.leadId ? "lead" : "prospect",
+    relatedId: (enrollment.contactId ?? enrollment.leadId ?? enrollment.prospectId) as number,
     status: "open",
     priority: "high" as const,
   });

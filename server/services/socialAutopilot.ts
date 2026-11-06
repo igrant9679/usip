@@ -22,12 +22,14 @@
  * (the one that received the acceptance), never a shared/system identity.
  */
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
-import { and, desc, eq, gte, inArray, like, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, like, ne, or, sql } from "drizzle-orm";
 import { activeTaskStatuses } from "@shared/taskStatus";
 import {
   activities,
+  areEngineLogs,
   contacts,
   leads,
+  prospectQueue,
   tasks,
   unipileAccounts,
   unipileInvites,
@@ -110,6 +112,32 @@ ${HUMAN_COPY_RULES}`;
 }
 
 /**
+ * The workspace's Revenue Engine prospect with this LinkedIn profile slug
+ * whose sequence is running (enrolled) or held (paused), if any. The slug
+ * must end the /in/ path, so "dana" does not match "dana-reyes".
+ */
+async function activeAreEnrolment(workspaceId: number, slug: string): Promise<{ id: number; campaignId: number } | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const s = slug.trim();
+  if (!s) return null;
+  const [row] = await db
+    .select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId })
+    .from(prospectQueue)
+    .where(and(
+      eq(prospectQueue.workspaceId, workspaceId),
+      inArray(prospectQueue.sequenceStatus, ["enrolled", "paused"]),
+      or(
+        like(prospectQueue.linkedinUrl, `%/in/${s}`),
+        like(prospectQueue.linkedinUrl, `%/in/${s}/%`),
+        like(prospectQueue.linkedinUrl, `%/in/${s}?%`),
+      ),
+    ))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
  * Handle a single `new_relation` (invitation-accepted) event. Idempotent per
  * (account, provider_id): if we already have an outbound message to this
  * connection we skip, so Unipile's up-to-8h polling re-delivery can't double-send.
@@ -140,12 +168,18 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
 
   // Record the acceptance against the original sent invite (best-effort) so the
   // social funnel can report accept rates — independent of autopilot mode.
+  //
+  // By either id (audit 2026-10-20, A6): the engine's LinkedIn step and the
+  // hourly invites store the invite under the profile SLUG, and this event's
+  // user_provider_id is the member URN, so matching the URN alone never found
+  // them. The step waiting on the accept then sat until its 21-day timeout.
+  const inviteKeys = publicId && publicId !== providerId ? [providerId, publicId] : [providerId];
   try {
     await db.update(unipileInvites)
       .set({ status: "accepted", acceptedAt: new Date() } as never)
       .where(and(
         eq(unipileInvites.workspaceId, workspaceId),
-        eq(unipileInvites.recipientProviderId, providerId),
+        inArray(unipileInvites.recipientProviderId, inviteKeys),
         ne(unipileInvites.status, "accepted"),
       ));
   } catch (err) {
@@ -162,6 +196,34 @@ export async function handleNewRelation(payload: NewRelationPayload): Promise<st
     .limit(1);
   const mode = ws?.mode ?? "off";
   if (mode === "off") return "off";
+
+  /**
+   * Someone in a Revenue Engine sequence gets the campaign's follow-up only
+   * (2026-11-06, with audit A6). Now that the accept finds the engine's
+   * invite, the campaign's next LinkedIn step goes out on it — and this
+   * handler, on Auto, sent its own opener too: two messages to one person
+   * within minutes. On Approve it drafted a task that would do the same by
+   * hand. Matched by the profile slug the engine stores (prospect_queue
+   * linkedinUrl), enrolled or paused, in this workspace; the skip is written
+   * to that campaign's log so the Logs tab says why no opener went.
+   */
+  const areRow = publicId ? await activeAreEnrolment(workspaceId, publicId) : null;
+  if (areRow) {
+    try {
+      await db.insert(areEngineLogs).values({
+        workspaceId,
+        campaignId: areRow.campaignId,
+        phase: "dispatch",
+        level: "info",
+        message: `Social Autopilot sent no opener to ${name} on their accepted connection request: they are in this campaign's sequence (prospect ${areRow.id}), so the follow-up is the campaign's.`,
+        details: { prospectQueueId: areRow.id, unipileAccountId: accountId, mode },
+      } as never);
+    } catch (err) {
+      console.debug?.("[SocialAutopilot] ARE skip log not written:", (err as Error)?.message);
+    }
+    console.log(`[SocialAutopilot] opener skipped for ${name}: in ARE campaign ${areRow.campaignId} (prospect ${areRow.id})`);
+    return "are_enrolled";
+  }
 
   // Dedupe: have we already messaged this connection from this account?
   const [existing] = await db

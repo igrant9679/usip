@@ -42,6 +42,7 @@ import {
   type RecordedStep,
 } from "@/lib/tourRecorder";
 import { pressable } from "@/lib/pressable";
+import { defaultStep, stepDraftsFrom, tourFormFrom, tourSavePayload, type StepDraft } from "@/lib/tourDraft";
 
 /* ─── Record Mode ────────────────────────────────────────────────────────── */
 
@@ -122,32 +123,6 @@ function RecorderPanel() {
 }
 
 /* ─── Step Editor ────────────────────────────────────────────────────────── */
-
-type StepDraft = {
-  sortOrder: number;
-  targetDataTourId: string;
-  targetSelector: string;
-  title: string;
-  bodyMarkdown: string;
-  visualTreatment: string;
-  advanceCondition: string;
-  skipAllowed: boolean;
-  backAllowed: boolean;
-};
-
-function defaultStep(sortOrder: number): StepDraft {
-  return {
-    sortOrder,
-    targetDataTourId: "",
-    targetSelector: "",
-    title: "",
-    bodyMarkdown: "",
-    visualTreatment: "spotlight",
-    advanceCondition: "next_button",
-    skipAllowed: true,
-    backAllowed: true,
-  };
-}
 
 function StepCard({
   step,
@@ -316,32 +291,10 @@ function TourForm({
   onSave: (data: any) => void;
   onCancel: () => void;
 }) {
-  const [form, setForm] = useState({
-    name: initial?.name ?? "",
-    description: initial?.description ?? "",
-    type: initial?.type ?? "feature",
-    triggerPageKey: initial?.triggerPageKey ?? "",
-    estimatedMinutes: initial?.estimatedMinutes?.toString() ?? "",
-    status: initial?.status ?? "draft",
-    achievementBadge: initial?.achievementBadge ?? "",
-    showProactiveNudge: initial?.showProactiveNudge ?? true,
-  });
+  // Saved steps keep their id and the page key is `pageKey` (G20; see @/lib/tourDraft).
+  const [form, setForm] = useState(() => tourFormFrom(initial));
 
-  const [steps, setSteps] = useState<StepDraft[]>(
-    initial?.steps?.length
-      ? initial.steps.map((s: any) => ({
-          sortOrder: s.sortOrder,
-          targetDataTourId: s.targetDataTourId ?? "",
-          targetSelector: s.targetSelector ?? "",
-          title: s.title ?? "",
-          bodyMarkdown: s.bodyMarkdown ?? "",
-          visualTreatment: s.visualTreatment ?? "spotlight",
-          advanceCondition: s.advanceCondition ?? "next_button",
-          skipAllowed: s.skipAllowed ?? true,
-          backAllowed: s.backAllowed ?? true,
-        }))
-      : [defaultStep(0)],
-  );
+  const [steps, setSteps] = useState<StepDraft[]>(() => stepDraftsFrom(initial));
 
   function addStep() {
     setSteps((prev) => [...prev, defaultStep(prev.length)]);
@@ -403,7 +356,7 @@ function TourForm({
         <div className="grid grid-cols-3 gap-4">
           <div>
             <Label>Trigger Page Key</Label>
-            <Input aria-label="Trigger Page Key" value={form.triggerPageKey} onChange={(e) => setForm({ ...form, triggerPageKey: e.target.value })} placeholder="e.g. sequences" />
+            <Input aria-label="Trigger Page Key" value={form.pageKey} onChange={(e) => setForm({ ...form, pageKey: e.target.value })} placeholder="e.g. sequences" />
           </div>
           <div>
             <Label>Est. Minutes</Label>
@@ -411,33 +364,20 @@ function TourForm({
           </div>
           <div>
             <Label>Status</Label>
-            <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
+            {/* Draft or published only: the tours table has no archived state, so
+                "Archived" was offered and always refused (G20). Unpublish = Draft. */}
+            <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v === "published" ? "published" : "draft" })}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="draft">Draft</SelectItem>
                 <SelectItem value="published">Published</SelectItem>
-                <SelectItem value="archived">Archived</SelectItem>
               </SelectContent>
             </Select>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <Label>Achievement Badge (emoji + text)</Label>
-            <Input aria-label="Achievement Badge (emoji + text)" value={form.achievementBadge} onChange={(e) => setForm({ ...form, achievementBadge: e.target.value })} placeholder="🎓 Sequences Master" />
-          </div>
-          <div className="flex items-end pb-1">
-            <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
-              <input
-                type="checkbox"
-                checked={form.showProactiveNudge}
-                onChange={(e) => setForm({ ...form, showProactiveNudge: e.target.checked })}
-                className="rounded"
-              />
-              Show proactive nudge on trigger page
-            </label>
-          </div>
-        </div>
+        {/* The Achievement Badge and "Show proactive nudge" inputs were removed:
+            no column holds either, so the server dropped both on every save and
+            the badge always came from the tour type (G20, 2026-11-06). */}
       </div>
 
       {/* Steps */}
@@ -467,13 +407,7 @@ function TourForm({
         <Button variant="outline" onClick={onCancel}>Cancel</Button>
         <Button
           className="bg-violet-600 hover:bg-violet-700 text-white"
-          onClick={() =>
-            onSave({
-              ...form,
-              estimatedMinutes: form.estimatedMinutes ? parseInt(form.estimatedMinutes) : undefined,
-              steps,
-            })
-          }
+          onClick={() => onSave(tourSavePayload(form, steps))}
         >
           <Save className="h-4 w-4 mr-1" />
           Save Tour
