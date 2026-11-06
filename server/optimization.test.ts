@@ -437,7 +437,11 @@ describe("ICP autonomous loop", () => {
   it("the ARE Settings schedule card promises no wall clock and defaults with the server", async () => {
     const src = await import("node:fs").then((fs) => fs.readFileSync("client/src/pages/usip/ARESettings.tsx", "utf8"));
     expect(src).not.toContain("02:00 UTC");
-    expect(src).toContain('areIcpRegenSchedule ?? "daily"');
+    // 2026-11-06 (audit A60): the page reads its form through areSettingsModel,
+    // so the "daily" default for an unset schedule lives there now.
+    const model = await import("node:fs").then((fs) => fs.readFileSync("client/src/pages/usip/areSettingsModel.ts", "utf8"));
+    expect(model).toContain('areIcpRegenSchedule ?? "daily"');
+    expect(src).toContain("areSettingsDraft(settings as Record<string, any>)");
   });
 });
 
