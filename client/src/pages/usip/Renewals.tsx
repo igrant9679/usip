@@ -1,6 +1,7 @@
 import { fmt$, fmtDate, StatusPill } from "@/components/usip/Common";
 import { PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { invalidateCustomerReads } from "@/lib/crmCache";
 import { RENEWAL_STAGES, RENEWAL_STAGE_LABELS, type RenewalStage } from "@shared/renewalStage";
 import { RefreshCw, RotateCw, Sparkles, AlertTriangle } from "lucide-react";
 import { HEALTH_TIER_TONE, isChurnEstimate, type HealthTier } from "@shared/customerHealth";
@@ -45,7 +46,7 @@ export default function Renewals() {
   const utils = trpc.useUtils();
   const { data, isLoading, error, refetch } = trpc.cs.renewalsBoard.useQuery();
   const scoreChurn = trpc.csAi.scoreChurnRisk.useMutation({
-    onSuccess: () => utils.cs.renewalsBoard.invalidate(),
+    onSuccess: () => invalidateCustomerReads(utils),
     onError: (e: any) => toast.error(e.message),
   });
   const grouped = useMemo(() => {

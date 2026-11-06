@@ -642,7 +642,7 @@ export default function Proposals() {
   return (
     <Shell title="Proposals">
     <div data-tour-id="proposals-list" className="flex flex-col h-full">
-      <PageHeader title="Proposals" description="Create, send, and track client proposals with full version history, e-signature support, and engagement analytics. Know exactly when a prospect opens, reads, and forwards your proposal." pageKey="proposals"
+      <PageHeader title="Proposals" description="Create, send, and track client proposals with full version history. See when the client opens your email and clicks through to the proposal; they accept it from their link, or you record it here." pageKey="proposals"
         icon={<ClipboardList className="size-5" />}
       >
         <div className="flex items-center gap-2">

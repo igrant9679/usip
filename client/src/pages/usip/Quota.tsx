@@ -13,9 +13,11 @@ import { Pencil, Plus, Trash2, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmButton } from "@/components/usip/Common";
 import { quotaPeriodLabel } from "@shared/quotaPeriod";
+import { formatAmount } from "@shared/money";
 
+// The shared money format (R98).
 function fmt$(n: number) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+  return formatAmount(n);
 }
 
 function AttainmentBar({ label, pct }: { label: string; pct: number | null }) {
@@ -46,15 +48,17 @@ export default function Quota() {
   const [form, setForm] = useState({ userId: "", periodType: "monthly", revenueTarget: "", dealsTarget: "", activitiesTarget: "" });
 
   const { data: members = [] } = trpc.team.list.useQuery(undefined);
-  const { data: targets = [], refetch } = trpc.quota.list.useQuery({ period });
+  const { data: targets = [] } = trpc.quota.list.useQuery({ period });
   const utils = trpc.useUtils();
 
+  // Every quota read, not just this list (R31): the cards' attainment and
+  // other pages showing a target kept the old one for 30 seconds.
   const setQuota = trpc.quota.set.useMutation({
-    onSuccess: () => { refetch(); setDialogOpen(false); toast.success("Quota saved"); },
+    onSuccess: () => { utils.quota.invalidate(); setDialogOpen(false); toast.success("Quota saved"); },
     onError: (e) => toast.error(e.message),
   });
   const removeQuota = trpc.quota.remove.useMutation({
-    onSuccess: () => { refetch(); toast.success("Quota removed"); },
+    onSuccess: () => { utils.quota.invalidate(); toast.success("Quota removed"); },
     onError: (e) => toast.error(e.message),
   });
 

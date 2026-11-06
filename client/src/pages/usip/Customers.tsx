@@ -5,6 +5,7 @@ import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { isAdminRole, rankOf } from "@shared/roleRank";
 import { trpc } from "@/lib/trpc";
+import { invalidateCustomerReads } from "@/lib/crmCache";
 import { AlertTriangle, FolderOpen, Heart, TrendingUp, HeartHandshake, Trash2, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -23,8 +24,8 @@ export default function Customers() {
   const { data: kpis } = trpc.cs.kpis.useQuery();
   const detail = trpc.cs.get.useQuery({ id: selected! }, { enabled: !!selected });
   const amendments = trpc.cs.listAmendments.useQuery({ customerId: selected! }, { enabled: !!selected });
-  const submitNps = trpc.cs.submitNps.useMutation({ onSuccess: () => { utils.cs.list.invalidate(); utils.cs.get.invalidate({ id: selected! }); toast.success("NPS recorded"); }, onError: (e) => toast.error(e.message) });
-  const updateHealth = trpc.cs.updateHealthComponents.useMutation({ onSuccess: () => { utils.cs.list.invalidate(); utils.cs.get.invalidate({ id: selected! }); }, onError: (e) => toast.error(e.message) });
+  const submitNps = trpc.cs.submitNps.useMutation({ onSuccess: () => { invalidateCustomerReads(utils); toast.success("NPS recorded"); }, onError: (e) => toast.error(e.message) });
+  const updateHealth = trpc.cs.updateHealthComponents.useMutation({ onSuccess: () => { invalidateCustomerReads(utils); }, onError: (e) => toast.error(e.message) });
   const [amendOpen, setAmendOpen] = useState(false);
   const [drawer, setDrawer] = useState<{ id: number; name: string } | null>(null);
 
@@ -35,12 +36,11 @@ export default function Customers() {
     const tier = churnRiskFor(healthTier);
     return { tier, tone: tier === "high" ? "danger" : tier === "medium" ? "warning" : "success" };
   };
-  const addAmendment = trpc.cs.addAmendment.useMutation({ onSuccess: () => { utils.cs.listAmendments.invalidate({ customerId: selected! }); utils.cs.list.invalidate(); setAmendOpen(false); toast.success("Amendment added"); }, onError: (e) => toast.error(e.message) });
+  const addAmendment = trpc.cs.addAmendment.useMutation({ onSuccess: () => { invalidateCustomerReads(utils); setAmendOpen(false); toast.success("Amendment added"); }, onError: (e) => toast.error(e.message) });
   const { current } = useWorkspace();
   const removeCustomer = trpc.cs.delete.useMutation({
     onSuccess: (_d, vars) => {
-      utils.cs.list.invalidate();
-      utils.cs.kpis.invalidate();
+      invalidateCustomerReads(utils);
       if (selected === vars.id) setSelected(null);
       toast.success("Customer deleted");
     },
@@ -48,8 +48,7 @@ export default function Customers() {
   });
   const resetCs = trpc.cs.clearAll.useMutation({
     onSuccess: (data) => {
-      utils.cs.list.invalidate();
-      utils.cs.kpis.invalidate();
+      invalidateCustomerReads(utils);
       setSelected(null);
       toast.success(`Reset — cleared ${data.deletedCustomers} customer record${data.deletedCustomers === 1 ? "" : "s"}`);
     },

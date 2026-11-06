@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { invalidateDealReads } from "@/lib/crmCache";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -121,8 +122,10 @@ function MoveStageDialog({
     { enabled: open },
   );
   const stages = pipelineQ.data?.stages ?? [];
+  const utils = trpc.useUtils();
   const moveStage = trpc.pipelineAlerts.moveDealStage.useMutation({
-    onSuccess: () => { toast.success(`Deal moved to ${newStage}`); setNewStage(""); onSuccess(); onClose(); },
+    // The deal's own pages and numbers too, not just this list (R31).
+    onSuccess: () => { toast.success(`Deal moved to ${newStage}`); setNewStage(""); invalidateDealReads(utils); onSuccess(); onClose(); },
     onError: (e) => toast.error(e.message),
   });
   return (

@@ -66,13 +66,11 @@ import {
 } from "lucide-react";
 import { QueryError } from "@/components/usip/Shell";
 import { NotFoundState, isNotFoundError } from "@/components/usip/QueryState";
+import { formatAmount } from "@shared/money";
 
+// The shared compact format (R98); a dash for no amount.
 function fmtMoney(n: number) {
-  if (!n) return "—";
-  if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
-  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `$${(n / 1e3).toFixed(1)}k`;
-  return `$${Math.round(n)}`;
+  return n ? formatAmount(n, { compact: true }) : "—";
 }
 function toNum(v: unknown) { const n = typeof v === "number" ? v : parseFloat(String(v ?? "0")); return Number.isFinite(n) ? n : 0; }
 

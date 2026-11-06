@@ -7,6 +7,7 @@ import { Field, fmt$, FormDialog, SelectField } from "@/components/usip/Common";
 import { PageHeader, Shell } from "@/components/usip/Shell";
 import { RecordDrawer } from "@/components/usip/RecordDrawer";
 import { trpc } from "@/lib/trpc";
+import { invalidateDealReads } from "@/lib/crmCache";
 import { usePermissions } from "@/hooks/usePermissions";
 import { ArrowRight, Brain, Download, Loader2, Plus, TrendingUp, Zap, Filter, X, User, KanbanSquare, Sparkles, ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -511,7 +512,8 @@ export default function Pipeline() {
       return { prev };
     },
     onError: (_e, _v, ctx) => { if (ctx?.prev) utils.opportunities.board.setData(undefined, ctx.prev); toast.error("Move failed"); },
-    onSuccess: (res) => { if (res?.customerCreated) { toast.success("Closed won 🎉 — customer created"); utils.cs?.list?.invalidate?.(); } },
+    // Every read a stage move changes, not just this board (R31).
+    onSuccess: (res) => { if (res?.customerCreated) toast.success("Closed won 🎉 — customer created"); invalidateDealReads(utils); },
     onSettled: () => utils.opportunities.board.invalidate(),
   });
 
@@ -519,7 +521,7 @@ export default function Pipeline() {
   const [drawer, setDrawer] = useState<{ id: number; name: string; subtitle: string } | null>(null);
 
   const create = trpc.opportunities.create.useMutation({
-    onSuccess: () => { utils.opportunities.board.invalidate(); setAddOpen(false); toast.success("Opportunity created"); },
+    onSuccess: () => { invalidateDealReads(utils); setAddOpen(false); toast.success("Opportunity created"); },
     onError: (e) => toast.error(e.message),
   });
 

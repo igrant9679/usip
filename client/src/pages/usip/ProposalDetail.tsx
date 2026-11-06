@@ -5,6 +5,7 @@ import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
 import { zonedDayKey } from "@shared/availability";
 import { storedToCalendarDate } from "@shared/calendarDate";
 import { trpc } from "@/lib/trpc";
+import { invalidateDealReads } from "@/lib/crmCache";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -141,8 +142,10 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
     description: proposal.description ?? "",
   });
 
+  const utils = trpc.useUtils();
+  // The budget is copied onto the linked deal, so deal reads go stale too (R31).
   const updateMutation = trpc.proposals.update.useMutation({
-    onSuccess: () => { toast.success("Proposal updated"); setEditing(false); onRefetch(); },
+    onSuccess: () => { toast.success("Proposal updated"); setEditing(false); onRefetch(); invalidateDealReads(utils); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -153,7 +156,8 @@ function OverviewTab({ proposal, onRefetch }: { proposal: any; onRefetch: () => 
   // "Accepted" is acceptance, not a label (audit 2026-10-20, R26): it closes
   // the linked deal and raises the follow-up, so it goes through acceptProposal.
   const acceptMutation = trpc.proposals.acceptProposal.useMutation({
-    onSuccess: (r) => { toast.success(r.alreadyAccepted ? "Already accepted" : "Proposal accepted"); onRefetch(); },
+    // Accepting closes the linked deal (R25), so every deal read refreshes (R31).
+    onSuccess: (r) => { toast.success(r.alreadyAccepted ? "Already accepted" : "Proposal accepted"); onRefetch(); invalidateDealReads(utils); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -1587,7 +1591,8 @@ function PipelinePanel({ proposal, onRefetch }: { proposal: any; onRefetch: () =
   const createAndLink = trpc.proposals.createOpportunity.useMutation({
     onSuccess: (data) => {
       toast.success(`Pipeline opportunity created and linked (#${data.opportunityId})`);
-      utils.proposals.get.invalidate({ id: proposal.id });
+      // A new deal: the board, Deals and the numbers have it too (R31).
+      invalidateDealReads(utils);
       onRefetch();
     },
     onError: (e) => toast.error(e.message),

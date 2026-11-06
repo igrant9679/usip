@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Field, fmtDate, FormDialog, Section, SelectField, StatusPill, TextareaField } from "@/components/usip/Common";
 import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
+import { invalidateCustomerReads } from "@/lib/crmCache";
 import { CalendarCheck2, Plus, Sparkles, Presentation } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -13,11 +14,11 @@ export default function QBRs() {
   const cMap = new Map((customers ?? []).map((c: any) => [c.id, c]));
   const [open, setOpen] = useState(false);
   const [completeFor, setCompleteFor] = useState<number | null>(null);
-  const schedule = trpc.cs.scheduleQbr.useMutation({ onSuccess: () => { utils.cs.listQbrs.invalidate(); setOpen(false); toast.success("QBR scheduled"); }, onError: (e) => toast.error(e.message) });
+  const schedule = trpc.cs.scheduleQbr.useMutation({ onSuccess: () => { invalidateCustomerReads(utils); setOpen(false); toast.success("QBR scheduled"); }, onError: (e) => toast.error(e.message) });
   // Success now means the model wrote it: a failure saves nothing and the
   // server says so, instead of saving canned text under "AI prep" (R74).
-  const genPrep = trpc.cs.generateQbrPrep.useMutation({ onSuccess: () => { utils.cs.listQbrs.invalidate(); toast.success("AI prep generated"); }, onError: (e) => toast.error(e.message) });
-  const complete = trpc.cs.completeQbr.useMutation({ onSuccess: () => { utils.cs.listQbrs.invalidate(); setCompleteFor(null); toast.success("QBR completed"); }, onError: (e) => toast.error(e.message) });
+  const genPrep = trpc.cs.generateQbrPrep.useMutation({ onSuccess: () => { invalidateCustomerReads(utils); toast.success("AI prep generated"); }, onError: (e) => toast.error(e.message) });
+  const complete = trpc.cs.completeQbr.useMutation({ onSuccess: () => { invalidateCustomerReads(utils); setCompleteFor(null); toast.success("QBR completed"); }, onError: (e) => toast.error(e.message) });
 
   return (
     <Shell title="QBRs">

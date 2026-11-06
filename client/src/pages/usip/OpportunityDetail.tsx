@@ -8,6 +8,7 @@
 import { useParams, Link, useLocation } from "wouter";
 import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { invalidateDealReads } from "@/lib/crmCache";
 import { CustomFieldsPanel } from "@/components/usip/CustomFieldsPanel";
 import { Shell, EmptyState } from "@/components/usip/Shell";
 import { DetailHeader, DetailSection, DetailBody } from "@/components/usip/DetailShell";
@@ -40,7 +41,7 @@ export default function OpportunityDetail() {
   const { data: members } = trpc.team.list.useQuery();
 
   const update = trpc.opportunities.update.useMutation({
-    onSuccess: () => { utils.opportunities.getWithRelated.invalidate({ id }); toast.success("Saved"); },
+    onSuccess: () => { invalidateDealReads(utils); toast.success("Saved"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -49,8 +50,7 @@ export default function OpportunityDetail() {
   const del = trpc.opportunities.delete.useMutation({
     onSuccess: () => {
       toast.success("Opportunity deleted");
-      utils.opportunities.board.invalidate();
-      utils.opportunities.list.invalidate();
+      invalidateDealReads(utils);
       setLocation("/pipeline");
     },
     onError: (e) => toast.error(`Failed to delete: ${e.message}`),
