@@ -151,32 +151,39 @@ export default function EmailAnalytics() {
     <Shell title="Email Analytics">
       <PageHeader
         title="Email Analytics" pageKey="email-analytics"
-        description="Track open rates, click-through rates, reply rates, and deliverability across all campaigns and sequences. Identify top-performing subject lines and sending windows with AI-powered insights."
+        description="Open rates, click rates and deliverability for the mail this workspace sends: sequence, CRM and AI-draft email, and Revenue Engine campaign email, counted on the workspace's days."
       
         icon={<BarChart2 className="size-5" />}
       />
 
       {/* KPI Cards */}
       <div className="px-6 pt-2 grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard label="Emails Sent" value={summary?.totalSent ?? "—"} icon={Send} />
+        {/* Draft-path and Revenue Engine mail are counted apart, each rate over
+            the sends that can produce it (audit 2026-10-20, O42). */}
+        <KpiCard
+          label="Emails Sent"
+          value={summary?.totalSent ?? "—"}
+          sub={summary ? `${summary.draftSent} sequence & CRM · ${summary.campaignSent} Revenue Engine` : undefined}
+          icon={Send}
+        />
         <KpiCard
           label="Open Rate"
           value={summary ? `${summary.openRate}%` : "—"}
-          sub={`${summary?.uniqueOpened ?? 0} unique opens`}
+          sub={summary ? `${summary.uniqueOpened} opened · sequence & CRM ${summary.draftOpenRate}%, Revenue Engine ${summary.campaignOpenRate}%` : undefined}
           icon={Mail}
           accent="bg-blue-500/10"
         />
         <KpiCard
           label="Click Rate"
           value={summary ? `${summary.clickRate}%` : "—"}
-          sub={`${summary?.uniqueClicked ?? 0} unique clicks`}
+          sub={summary ? `${summary.uniqueClicked} of ${summary.draftSent} sequence & CRM emails; Revenue Engine sends record no clicks here` : undefined}
           icon={MousePointer}
           accent="bg-green-500/10"
         />
         <KpiCard
           label="Total Events"
           value={summary ? summary.totalOpens + summary.totalClicks : "—"}
-          sub={`${summary?.totalOpens ?? 0} opens · ${summary?.totalClicks ?? 0} clicks`}
+          sub={`${summary?.totalOpens ?? 0} opens · ${summary?.totalClicks ?? 0} clicks, sequence & CRM email`}
           icon={TrendingUp}
           accent="bg-purple-500/10"
         />

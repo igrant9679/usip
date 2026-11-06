@@ -10,7 +10,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import nodemailer from "nodemailer";
 import { z } from "zod";
 import {
@@ -35,6 +35,8 @@ import { describeSuppression, findSuppression } from "../services/suppression";
 import { claimDraftForSend, draftHoldReason, isDefinitelyNotSent, markDraftFailed, releaseDraftClaim } from "../services/draftSend";
 import { makeUnsubscribeUrl, unsubscribeFooter, unsubscribeHeaders } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { seriesSince, trackingSeries } from "../services/email/trackingSeries";
 
 /* ─── AES-256-GCM helpers ─────────────────────────────────────────────── */
 export function getEncKey(): Buffer {
@@ -549,49 +551,26 @@ export const smtpConfigRouter = router({
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const since = Date.now() - input.days * 24 * 60 * 60 * 1000;
+      // The workspace's days, and only the rows that can land in them (audit
+      // 2026-10-20, O42): UTC days, over every event the workspace ever had.
+      const nowMs = Date.now();
+      const tz = await getWorkspaceTimezone(ctx.workspace.id, nowMs);
+      const since = seriesSince(input.days, nowMs);
 
       // Opens + clicks from tracking events
       const events = await db
         .select({ type: emailTrackingEvents.type, createdAt: emailTrackingEvents.createdAt })
         .from(emailTrackingEvents)
-        .where(eq(emailTrackingEvents.workspaceId, ctx.workspace.id));
-      const dailyMap: Record<string, { date: string; opens: number; clicks: number; bounces: number }> = {};
-      for (const ev of events) {
-        const ts = typeof ev.createdAt === "number" ? ev.createdAt : Number(ev.createdAt);
-        if (ts < since) continue;
-        const day = new Date(ts).toISOString().slice(0, 10);
-        if (!dailyMap[day]) dailyMap[day] = { date: day, opens: 0, clicks: 0, bounces: 0 };
-        if (ev.type === "open") dailyMap[day].opens++;
-        else if (ev.type === "click") dailyMap[day].clicks++;
-      }
+        .where(and(eq(emailTrackingEvents.workspaceId, ctx.workspace.id), gte(emailTrackingEvents.createdAt, since)));
 
       // Daily bounces from emailDrafts.bouncedAt (Feature 59)
       const bouncedDrafts = await db
         .select({ bouncedAt: emailDrafts.bouncedAt })
         .from(emailDrafts)
-        .where(
-          and(
-            eq(emailDrafts.workspaceId, ctx.workspace.id),
-            sql`${emailDrafts.bouncedAt} IS NOT NULL`,
-          ),
-        );
-      for (const d of bouncedDrafts) {
-        if (!d.bouncedAt) continue;
-        const ts = d.bouncedAt instanceof Date ? d.bouncedAt.getTime() : Number(d.bouncedAt);
-        if (ts < since) continue;
-        const day = new Date(ts).toISOString().slice(0, 10);
-        if (!dailyMap[day]) dailyMap[day] = { date: day, opens: 0, clicks: 0, bounces: 0 };
-        dailyMap[day].bounces++;
-      }
+        .where(and(eq(emailDrafts.workspaceId, ctx.workspace.id), gte(emailDrafts.bouncedAt, since)));
 
-      // Fill missing days with zeros for a continuous x-axis
-      const result: { date: string; opens: number; clicks: number; bounces: number }[] = [];
-      for (let i = input.days - 1; i >= 0; i--) {
-        const day = new Date(Date.now() - i * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-        result.push(dailyMap[day] ?? { date: day, opens: 0, clicks: 0, bounces: 0 });
-      }
-      return result;
+      // Zero-filled for a continuous x-axis.
+      return trackingSeries(events, bouncedDrafts, input.days, tz, nowMs);
     }),
 
   /** Aggregate analytics summary for the workspace */
@@ -626,36 +605,47 @@ export const smtpConfigRouter = router({
     const areSent = Number(areEng?.sent ?? 0);
     const areOpened = Number(areEng?.opened ?? 0);
 
-    const totalSent = allSent.length + areSent;
-    // The ARE records first-open only (no per-message open counter), so its
-    // contribution to "total opens" is one per opened message.
-    const totalOpens = allSent.reduce((s, d) => s + (d.openCount ?? 0), 0) + areOpened;
-    const totalClicks = allSent.reduce((s, d) => s + (d.clickCount ?? 0), 0);
-    const uniqueOpened = allSent.filter((d) => (d.openCount ?? 0) > 0).length + areOpened;
+    /**
+     * Draft-path mail (sequence, CRM, AI drafts) and Revenue Engine mail are
+     * counted SEPARATELY, and each rate is over the sends that can produce it
+     * (audit 2026-10-20, O42). The click rate divided draft clicks by draft
+     * AND campaign sends, though a campaign send records no click of its own,
+     * so every campaign email pulled it down; and campaign opens were added
+     * to the draft open COUNTER as if they were counts. "Opened" is the same
+     * on both paths (opened at least once), so the open rate is still over
+     * all sends, as the Emails page computes it.
+     */
+    const draftSent = allSent.length;
+    const totalSent = draftSent + areSent;
+    const draftOpened = allSent.filter((d) => (d.openCount ?? 0) > 0).length;
     const uniqueClicked = allSent.filter((d) => (d.clickCount ?? 0) > 0).length;
-    const openRate = totalSent > 0 ? Math.round((uniqueOpened / totalSent) * 100) : 0;
-    const clickRate = totalSent > 0 ? Math.round((uniqueClicked / totalSent) * 100) : 0;
+    const uniqueOpened = draftOpened + areOpened;
+    const rate = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) : 0);
+    // Opens and clicks counted per event: draft-path mail only, the one path with counters.
+    const totalOpens = allSent.reduce((s, d) => s + (d.openCount ?? 0), 0);
+    const totalClicks = allSent.reduce((s, d) => s + (d.clickCount ?? 0), 0);
 
-    // Daily breakdown for last 30 days
-    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    // Daily breakdown for the last 30 workspace days, read for those days only.
+    const nowMs = Date.now();
+    const tz = await getWorkspaceTimezone(ctx.workspace.id, nowMs);
     const recentEvents = await db
       .select({ type: emailTrackingEvents.type, createdAt: emailTrackingEvents.createdAt })
       .from(emailTrackingEvents)
-      .where(eq(emailTrackingEvents.workspaceId, ctx.workspace.id));
+      .where(and(eq(emailTrackingEvents.workspaceId, ctx.workspace.id), gte(emailTrackingEvents.createdAt, seriesSince(30, nowMs))));
+    // Days with activity only, as before.
+    const dailyBreakdown = trackingSeries(recentEvents, [], 30, tz, nowMs)
+      .filter((p) => p.opens > 0 || p.clicks > 0)
+      .map(({ date, opens, clicks }) => ({ date, opens, clicks }));
 
-    // Build daily buckets
-    const dailyMap: Record<string, { date: string; opens: number; clicks: number }> = {};
-    for (const ev of recentEvents) {
-      const ts = typeof ev.createdAt === "number" ? ev.createdAt : Number(ev.createdAt);
-      if (ts < thirtyDaysAgo) continue;
-      const day = new Date(ts).toISOString().slice(0, 10);
-      if (!dailyMap[day]) dailyMap[day] = { date: day, opens: 0, clicks: 0 };
-      if (ev.type === "open") dailyMap[day].opens++;
-      else if (ev.type === "click") dailyMap[day].clicks++;
-    }
-    const dailyBreakdown = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
-
-    return { totalSent, totalOpens, totalClicks, uniqueOpened, uniqueClicked, openRate, clickRate, dailyBreakdown };
+    return {
+      totalSent, draftSent, campaignSent: areSent,
+      uniqueOpened, draftOpened, campaignOpened: areOpened,
+      openRate: rate(uniqueOpened, totalSent),
+      draftOpenRate: rate(draftOpened, draftSent),
+      campaignOpenRate: rate(areOpened, areSent),
+      uniqueClicked, clickRate: rate(uniqueClicked, draftSent),
+      totalOpens, totalClicks, dailyBreakdown,
+    };
   }),
 
   /** Bounce health stats for the workspace (Feature 55) */

@@ -195,7 +195,10 @@ describe("numbers that used to omit the engine", () => {
   it("Email Analytics counts campaign sends", () => {
     const smtp = read("routers", "smtpConfig.ts");
     expect(smtp).toContain("from(areExecutionQueue)");
-    expect(smtp).toContain("const totalSent = allSent.length + areSent;");
+    // 2026-11-06 (audit O42): the draft-path count is named, and campaign
+    // sends are still in the total (and reported on their own as well).
+    expect(smtp).toContain("const draftSent = allSent.length;");
+    expect(smtp).toContain("const totalSent = draftSent + areSent;");
   });
 
   it("Dashboards' two stage ratios are named as stage ratios", () => {
