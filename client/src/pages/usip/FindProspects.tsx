@@ -572,7 +572,7 @@ export function FindProspectsPanel() {
                     : `Fans out to ${runSources.length} of ${modeSources.length} sources. Typical run: 5–15 s.`}
                 </div>
               </div>
-              <Button onClick={runSearch} disabled={search.isPending || noLinkedIn} className="gap-1.5">
+              <Button onClick={runSearch} disabled={search.isPending} className="gap-1.5">
                 {search.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
                 {search.isPending ? "Searching…" : "Run discovery"}
               </Button>

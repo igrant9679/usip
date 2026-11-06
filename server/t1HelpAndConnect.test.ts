@@ -113,6 +113,10 @@ describe("LinkedIn search with no LinkedIn account says where to connect one (tr
     expect(card).toContain("{noLinkedIn && <NoLinkedInConnected />}");
     expect(card).toContain("disabled={search.isPending || noLinkedIn}");
     expect(card).not.toContain("Settings → Channels");
+    // The discovery panel below needs no LinkedIn account, and has no
+    // `noLinkedIn` in scope: an edit that spread the gate there broke it.
+    const panel = src.slice(src.indexOf("/* ─── Main panel"));
+    expect(panel).not.toContain("noLinkedIn");
   });
 
   it("the server's refusal names the place too", () => {
