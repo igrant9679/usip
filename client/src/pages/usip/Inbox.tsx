@@ -126,11 +126,14 @@ export default function Inbox() {
                 ? parseMentionBody(n.body)
                 : { deepLink: null, displayBody: n.body ?? "" };
 
-              // Deep-link for ARE event notifications with relatedType=are_campaign
+              // Deep-link for ARE event notifications: the campaign, or the
+              // person the notice is about (A57).
               const areDeepLink =
                 isAreEvent && n.relatedType === "are_campaign" && n.relatedId
                   ? `/are/campaigns/${n.relatedId}`
-                  : null;
+                  : isAreEvent && n.relatedType === "prospect_queue" && n.relatedId
+                    ? `/are/prospects/${n.relatedId}`
+                    : null;
 
               return (
                 <li key={n.id} className={cn("p-3 flex items-start gap-3 transition-colors", isUnread && "bg-primary/5")}>
@@ -164,7 +167,7 @@ export default function Inbox() {
                       )}
                       {isAreEvent && areDeepLink && (
                         <Link href={areDeepLink} className="text-[11px] text-violet-600 hover:underline flex items-center gap-1">
-                          <Sparkles className="size-3" /> View Campaign
+                          <Sparkles className="size-3" /> {n.relatedType === "prospect_queue" ? "View prospect" : "View Campaign"}
                         </Link>
                       )}
                       {isVoiceCall && (

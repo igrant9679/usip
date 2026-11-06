@@ -3995,6 +3995,9 @@ export const icpProfiles = mysqlTable(
     aiRationale: text("aiRationale"),  // markdown narrative
     isActive: boolean("isActive").default(true).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
+    // Migration 0250 (audit A20): { field: stored value } for each field a
+    // person set by hand; re-applied over the next inferred version.
+    manualOverrides: json("manualOverrides"),
   },
   (t) => ({
     byWs: index("ix_icp_ws").on(t.workspaceId),

@@ -42,12 +42,13 @@
  *     the denominator would understate the rate forever. `opensTracked` is
  *     false for those cells, so the UI can say "not tracked" rather than "0%".
  */
-import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { and, desc, eq, exists, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { genuineReplyScope } from "./replyScope";
 import { getDb } from "../db";
 import { stageIndexFor } from "../_core/stageSemantics";
 import {
   areAbVariants,
+  areCampaigns,
   areExecutionQueue,
   areSignalLog,
   chatSessions,
@@ -108,12 +109,15 @@ export async function getSequenceStepStats(
   ];
   if (opts.sequenceId !== undefined) sentWhere.push(eq(emailDrafts.sequenceId, opts.sequenceId));
 
+  // Opens are DISTINCT MESSAGES opened, as the module header says (audit
+  // 2026-10-20, A63): summing openCount summed pixel hits, so one message
+  // opened five times made the open rate pass 100%.
   const sentRows = await db
     .select({
       sequenceId: emailDrafts.sequenceId,
       stepIndex: emailDrafts.stepIndex,
       sent: sql<number>`count(*)`,
-      opens: sql<number>`coalesce(sum(${emailDrafts.openCount}), 0)`,
+      opens: sql<number>`coalesce(sum(case when ${emailDrafts.openCount} > 0 then 1 else 0 end), 0)`,
       clicks: sql<number>`coalesce(sum(${emailDrafts.clickCount}), 0)`,
     })
     .from(emailDrafts)
@@ -121,11 +125,14 @@ export async function getSequenceStepStats(
     .groupBy(emailDrafts.sequenceId, emailDrafts.stepIndex);
 
   // Replies are attributed through the draft that produced them, so a reply
-  // always lands on the exact step that earned it.
+  // always lands on the exact step that earned it. Counted per MESSAGE
+  // answered, and only for sent ones (A63): two replies to one email counted
+  // twice, so a step's reply rate could pass 100%.
   const replyWhere = [
     eq(emailDrafts.workspaceId, workspaceId),
     isNotNull(emailDrafts.sequenceId),
     isNotNull(emailDrafts.stepIndex),
+    eq(emailDrafts.status, "sent" as never),
   ];
   if (opts.sequenceId !== undefined) replyWhere.push(eq(emailDrafts.sequenceId, opts.sequenceId));
 
@@ -133,9 +140,9 @@ export async function getSequenceStepStats(
     .select({
       sequenceId: emailDrafts.sequenceId,
       stepIndex: emailDrafts.stepIndex,
-      replies: sql<number>`count(*)`,
-      positiveReplies: sql<number>`sum(case when ${emailReplies.replyClass} = 'willing_to_meet' then 1 else 0 end)`,
-      meetings: sql<number>`sum(case when ${emailReplies.meetingId} is not null then 1 else 0 end)`,
+      replies: sql<number>`count(distinct ${emailReplies.draftId})`,
+      positiveReplies: sql<number>`count(distinct case when ${emailReplies.replyClass} = 'willing_to_meet' then ${emailReplies.draftId} end)`,
+      meetings: sql<number>`count(distinct case when ${emailReplies.meetingId} is not null then ${emailReplies.draftId} end)`,
     })
     .from(emailReplies)
     .innerJoin(emailDrafts, eq(emailReplies.draftId, emailDrafts.id))
@@ -234,6 +241,9 @@ export async function getSourceYieldStats(workspaceId: number): Promise<SourceYi
     ))
     .groupBy(prospectQueue.sourceType);
 
+  // Replied and met count only people this engine contacted (audit
+  // 2026-10-20, A63): the same population as the step table and the reply
+  // mix, and never more than `contacted`, so the rates stay at or under 100%.
   const outcomes = await db
     .select({
       sourceType: prospectQueue.sourceType,
@@ -242,7 +252,14 @@ export async function getSourceYieldStats(workspaceId: number): Promise<SourceYi
     })
     .from(areSignalLog)
     .innerJoin(prospectQueue, eq(areSignalLog.prospectQueueId, prospectQueue.id))
-    .where(eq(areSignalLog.workspaceId, workspaceId))
+    .where(and(
+      eq(areSignalLog.workspaceId, workspaceId),
+      exists(db.select({ one: sql`1` }).from(areExecutionQueue).where(and(
+        eq(areExecutionQueue.prospectQueueId, prospectQueue.id),
+        eq(areExecutionQueue.workspaceId, workspaceId),
+        eq(areExecutionQueue.status, "sent" as never),
+      ))),
+    ))
     .groupBy(prospectQueue.sourceType, areSignalLog.signalType);
 
   const contactedMap = new Map(contacted.map((r) => [String(r.sourceType), Number(r.n ?? 0)]));
@@ -316,30 +333,196 @@ export async function getReplyMix(workspaceId: number): Promise<ReplyMix> {
   const db = await getDb();
   if (!db) return { classes: [], attributed: 0, unattributedInbound: 0 };
 
-  const rows = await db
-    .select({
-      replyClass: emailReplies.replyClass,
-      n: sql<number>`count(*)`,
-    })
-    .from(emailReplies)
-    // Attributed = the shared genuine-reply scope (draft- OR campaign-matched).
-    .where(and(eq(emailReplies.workspaceId, workspaceId), genuineReplyScope()))
-    .groupBy(emailReplies.replyClass);
+  /**
+   * ONE reply population for What's Working (audit 2026-10-20, A63): the
+   * people the Revenue Engine contacted who replied, each once, classified by
+   * their latest reply. This counted every genuine reply row — CRM Sequence
+   * replies included, and each of a person's replies again — while the step
+   * table counted CRM drafts and the source table counted engine prospects:
+   * three populations under one word.
+   */
+  const repliers = await areRepliers(db, workspaceId);
+  const latestClass = new Map<number, string | null>();
+  if (repliers.size > 0) {
+    const replyRows = await db
+      .select({ id: emailReplies.id, prospectQueueId: emailReplies.prospectQueueId, replyClass: emailReplies.replyClass })
+      .from(emailReplies)
+      .where(and(
+        eq(emailReplies.workspaceId, workspaceId),
+        genuineReplyScope(),
+        isNotNull(emailReplies.campaignId),
+        inArray(emailReplies.prospectQueueId, Array.from(repliers)),
+      ))
+      .orderBy(emailReplies.id);
+    for (const r of replyRows) latestClass.set(Number(r.prospectQueueId), r.replyClass ?? null);
+  }
 
   const [unmatched] = await db
     .select({ n: sql<number>`count(*)` })
     .from(emailReplies)
     .where(and(eq(emailReplies.workspaceId, workspaceId), isNull(emailReplies.draftId), isNull(emailReplies.campaignId)));
 
-  const attributed = rows.reduce((n, r) => n + Number(r.n ?? 0), 0);
-  const classes = rows.map((r) => ({
-    // A matched reply the classifier hasn't processed is still a real reply.
-    replyClass: r.replyClass ? String(r.replyClass) : "unclassified",
-    count: Number(r.n ?? 0),
-    share: rate(Number(r.n ?? 0), attributed),
-  }));
+  const counts = new Map<string, number>();
+  repliers.forEach((pid) => {
+    // A replier the classifier hasn't processed is still a real reply.
+    const cls = latestClass.get(pid) || "unclassified";
+    counts.set(cls, (counts.get(cls) ?? 0) + 1);
+  });
+  const attributed = repliers.size;
+  const classes = Array.from(counts.entries()).map(([replyClass, count]) => ({ replyClass, count, share: rate(count, attributed) }));
   classes.sort((a, b) => b.count - a.count);
   return { classes, attributed, unattributedInbound: Number(unmatched?.n ?? 0) };
+}
+
+/**
+ * The Revenue Engine prospects who replied by email and were sent at least
+ * one step: What's Working's one reply population (A63). Signals for someone
+ * never sent anything (a hand-posted signal, a reply to another product's
+ * mail) have nothing to attribute to, so they are left out everywhere.
+ */
+async function areRepliers(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number): Promise<Set<number>> {
+  const signalled = await db
+    .select({ prospectQueueId: areSignalLog.prospectQueueId })
+    .from(areSignalLog)
+    .where(and(eq(areSignalLog.workspaceId, workspaceId), eq(areSignalLog.signalType, "email_reply")));
+  const ids = Array.from(new Set(signalled.map((s) => Number(s.prospectQueueId))));
+  if (ids.length === 0) return new Set();
+  const sent = await db
+    .select({ prospectQueueId: areExecutionQueue.prospectQueueId })
+    .from(areExecutionQueue)
+    .where(and(
+      eq(areExecutionQueue.workspaceId, workspaceId),
+      eq(areExecutionQueue.status, "sent" as never),
+      inArray(areExecutionQueue.prospectQueueId, ids),
+    ));
+  return new Set(sent.map((s) => Number(s.prospectQueueId)));
+}
+
+/* ─── Revenue Engine step performance ───────────────────────────────────── */
+
+export interface AreStepStats {
+  campaignId: number;
+  campaignName: string | null;
+  stepIndex: number;
+  sent: number;
+  /** Distinct messages opened, among those carrying a tracking pixel. */
+  opens: number;
+  /** Sends with a pixel: the open rate's denominator. */
+  trackable: number;
+  openRate: number;
+  opensTracked: boolean;
+  /** People whose last send before replying was this step, each once. */
+  replies: number;
+  meetings: number;
+  replyRate: number;
+  meetingRate: number;
+}
+
+export interface AreStepSendRow {
+  campaignId: number;
+  prospectQueueId: number;
+  stepIndex: number;
+  executedAt: Date | string | null;
+  openedAt?: Date | string | null;
+  trackingToken?: string | null;
+}
+
+export interface AreStepCell { campaignId: number; stepIndex: number; sent: number; trackable: number; opens: number; replies: number; meetings: number }
+
+/**
+ * Fold the engine's sends and signals into per-(campaign, step) counts (audit
+ * 2026-10-20, A22, A63). Pure, so the rules are tested without a database:
+ *   - an open counts once per message, and only on a send with a pixel, so
+ *     opens never exceed the sends that could report one
+ *   - a reply or a meeting counts once per PERSON, on their most recent send
+ *     (last touch; ties go to the later step), so a step's replies never
+ *     exceed the people whose last message it was, and so never its sends
+ */
+export function computeAreStepCells(sends: AreStepSendRow[], signals: VariantSignalRow[]): Map<string, AreStepCell> {
+  const cells = new Map<string, AreStepCell>();
+  const cellOf = (campaignId: number, stepIndex: number) => {
+    const k = `${campaignId}:${stepIndex}`;
+    let c = cells.get(k);
+    if (!c) { c = { campaignId, stepIndex, sent: 0, trackable: 0, opens: 0, replies: 0, meetings: 0 }; cells.set(k, c); }
+    return c;
+  };
+  const last = new Map<number, { campaignId: number; stepIndex: number; at: number }>();
+  for (const s of sends) {
+    const campaignId = Number(s.campaignId), stepIndex = Number(s.stepIndex ?? 0);
+    const c = cellOf(campaignId, stepIndex);
+    c.sent++;
+    if (s.trackingToken) {
+      c.trackable++;
+      if (s.openedAt) c.opens++;
+    }
+    const pid = Number(s.prospectQueueId);
+    const at = s.executedAt ? new Date(s.executedAt).getTime() : 0;
+    const prev = last.get(pid);
+    if (!prev || at > prev.at || (at === prev.at && stepIndex >= prev.stepIndex)) last.set(pid, { campaignId, stepIndex, at });
+  }
+  const replied = new Set<number>(), met = new Set<number>();
+  for (const sig of signals) {
+    const pid = Number(sig.prospectQueueId);
+    if (sig.signalType === "email_reply") replied.add(pid);
+    else if (sig.signalType === "meeting_booked") met.add(pid);
+  }
+  replied.forEach((pid) => { const l = last.get(pid); if (l) cellOf(l.campaignId, l.stepIndex).replies++; });
+  met.forEach((pid) => { const l = last.get(pid); if (l) cellOf(l.campaignId, l.stepIndex).meetings++; });
+  return cells;
+}
+
+/**
+ * What's Working's step table, from the Revenue Engine's own sends (audit
+ * 2026-10-20, A22). It read CRM Sequence drafts (email_drafts), a different
+ * product, under the engine's name; that table is still on the page, labelled.
+ */
+export async function getAreStepStats(workspaceId: number): Promise<AreStepStats[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const sends = await db
+    .select({
+      campaignId: areExecutionQueue.campaignId,
+      prospectQueueId: areExecutionQueue.prospectQueueId,
+      stepIndex: areExecutionQueue.stepIndex,
+      executedAt: areExecutionQueue.executedAt,
+      openedAt: areExecutionQueue.openedAt,
+      trackingToken: areExecutionQueue.trackingToken,
+    })
+    .from(areExecutionQueue)
+    .where(and(eq(areExecutionQueue.workspaceId, workspaceId), eq(areExecutionQueue.status, "sent" as never)));
+  if (sends.length === 0) return [];
+  const signals = await db
+    .select({ prospectQueueId: areSignalLog.prospectQueueId, signalType: areSignalLog.signalType })
+    .from(areSignalLog)
+    .where(and(eq(areSignalLog.workspaceId, workspaceId), inArray(areSignalLog.signalType, ["email_reply", "meeting_booked"])));
+  const names = await db
+    .select({ id: areCampaigns.id, name: areCampaigns.name })
+    .from(areCampaigns)
+    .where(eq(areCampaigns.workspaceId, workspaceId));
+  const nameOf = new Map(names.map((n) => [Number(n.id), n.name]));
+  const cells = computeAreStepCells(
+    sends.map((s) => ({
+      campaignId: Number(s.campaignId), prospectQueueId: Number(s.prospectQueueId), stepIndex: Number(s.stepIndex ?? 0),
+      executedAt: (s.executedAt as Date | null) ?? null, openedAt: (s.openedAt as Date | null) ?? null, trackingToken: (s.trackingToken as string | null) ?? null,
+    })),
+    signals.map((s) => ({ prospectQueueId: Number(s.prospectQueueId), signalType: String(s.signalType) })),
+  );
+  const out: AreStepStats[] = Array.from(cells.values()).map((c) => ({
+    campaignId: c.campaignId,
+    campaignName: nameOf.get(c.campaignId) ?? null,
+    stepIndex: c.stepIndex,
+    sent: c.sent,
+    opens: c.opens,
+    trackable: c.trackable,
+    openRate: rate(c.opens, c.trackable),
+    opensTracked: c.trackable > 0,
+    replies: c.replies,
+    meetings: c.meetings,
+    replyRate: rate(c.replies, c.sent),
+    meetingRate: rate(c.meetings, c.sent),
+  }));
+  out.sort((a, b) => a.campaignId - b.campaignId || a.stepIndex - b.stepIndex);
+  return out;
 }
 
 /* ─── Segment performance (feeds ICP learning) ──────────────────────────── */
