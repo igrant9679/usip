@@ -830,8 +830,12 @@ async function startServer() {
   setInterval(runBulkJobs, 15_000);
 
   // Engine and discovery logs older than 30 days (audit A24: they were kept
-  // forever, thousands of rows per campaign per day).
+  // forever, thousands of rows per campaign per day), and website visits older
+  // than 180 days (audit P87: kept forever too).
   const runLogRetention = () => {
+    import("../websiteTracking")
+      .then((m) => m.purgeOldWebsiteVisits())
+      .catch((e) => console.error("[WebsiteTracking] visit retention failed:", e));
     import("../areEngine")
       .then((m) => m.purgeOldEngineLogs())
       .catch((e) => console.error("[AreEngine] log retention failed:", e));
