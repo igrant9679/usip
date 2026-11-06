@@ -123,9 +123,28 @@ async function applyToPeople(workspaceId: number, ids: number[], inf: Inference,
   return filled;
 }
 
+/** Workspaces with a pass running in this process (P156). */
+const passesRunning = new Set<number>();
+
+/**
+ * Start a pass unless one is already running for the workspace (audit
+ * 2026-10-20, P156: a second click started a second pass over the same
+ * companies, paying the model twice). Returns null when one is running.
+ */
+export function startFirmographicInference(workspaceId: number, opts: { limit?: number }): Promise<InferenceTally> | null {
+  if (passesRunning.has(workspaceId)) return null;
+  passesRunning.add(workspaceId);
+  return runFirmographicInference(workspaceId, opts).finally(() => { passesRunning.delete(workspaceId); });
+}
+
 /**
  * The pass. Serial and bounded; intended to be started fire-and-forget from
  * a procedure and observed through firmographicStatus.
+ *
+ * A dry run calls no model (P156: it ran one inference per company, up to
+ * 20, to "preview"): it counts the companies and company groups a real pass
+ * would send to the model — companiesTried / unlinkedGroupsTried — and fills
+ * nothing, so companiesFilled and peopleFilled stay 0.
  */
 export async function runFirmographicInference(workspaceId: number, opts: { limit?: number; dryRun?: boolean; onProgress?: (t: InferenceTally) => void } = {}): Promise<InferenceTally> {
   const tally: InferenceTally = { companiesTried: 0, companiesFilled: 0, peopleFilled: 0, unlinkedGroupsTried: 0, unlinkedPeopleFilled: 0, unknown: 0, failed: 0 };
@@ -144,6 +163,7 @@ export async function runFirmographicInference(workspaceId: number, opts: { limi
 
   for (const acct of candidates) {
     tally.companiesTried++;
+    if (opts.dryRun) continue;
     try {
       const people = await db.select({ id: prospects.id, title: prospects.title }).from(prospects)
         .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.accountId, acct.id))).limit(25);
@@ -156,21 +176,19 @@ export async function runFirmographicInference(workspaceId: number, opts: { limi
       const fieldsUpdated: string[] = [];
       if (!acct.industry && inf.industry) { patch.industry = inf.industry; fieldsUpdated.push("industry"); }
       if (!acct.hqCountry && inf.country) { patch.hqCountry = inf.country; fieldsUpdated.push("hqCountry"); }
-      if (!opts.dryRun) {
-        if (fieldsUpdated.length > 0) {
-          await db.update(accounts).set(patch as never).where(and(eq(accounts.id, acct.id), eq(accounts.workspaceId, workspaceId)));
-          tally.companiesFilled++;
-          tally.peopleFilled += await applyToPeople(workspaceId, people.map((p) => p.id), inf, now);
-        } else {
-          tally.unknown++;
-        }
-        await db.insert(organizationEnrichmentEvents).values({
-          workspaceId, accountId: acct.id, globalOrganizationId: acct.globalOrganizationId ?? null,
-          sourceVendor: AI_INFERENCE_VENDOR, sourceType: "model_inference",
-          status: fieldsUpdated.length > 0 ? "enriched" : "no_result",
-          fieldsUpdated: fieldsUpdated.length ? fieldsUpdated : null, enrichedByUserId: null,
-        } as never);
-      } else if (fieldsUpdated.length > 0) tally.companiesFilled++; else tally.unknown++;
+      if (fieldsUpdated.length > 0) {
+        await db.update(accounts).set(patch as never).where(and(eq(accounts.id, acct.id), eq(accounts.workspaceId, workspaceId)));
+        tally.companiesFilled++;
+        tally.peopleFilled += await applyToPeople(workspaceId, people.map((p) => p.id), inf, now);
+      } else {
+        tally.unknown++;
+      }
+      await db.insert(organizationEnrichmentEvents).values({
+        workspaceId, accountId: acct.id, globalOrganizationId: acct.globalOrganizationId ?? null,
+        sourceVendor: AI_INFERENCE_VENDOR, sourceType: "model_inference",
+        status: fieldsUpdated.length > 0 ? "enriched" : "no_result",
+        fieldsUpdated: fieldsUpdated.length ? fieldsUpdated : null, enrichedByUserId: null,
+      } as never);
     } catch (e) {
       tally.failed++;
       console.error(`[FirmographicInference] account ${acct.id} failed:`, (e as Error).message);
@@ -194,6 +212,7 @@ export async function runFirmographicInference(workspaceId: number, opts: { limi
   for (const [, members] of Array.from(groups.entries())) {
     if (groupBudget-- <= 0) break;
     tally.unlinkedGroupsTried++;
+    if (opts.dryRun) continue;
     try {
       const sample = members[0];
       const inf = await inferOne(workspaceId, {
@@ -201,7 +220,7 @@ export async function runFirmographicInference(workspaceId: number, opts: { limi
         titles: members.map((m) => m.title).filter((t): t is string => !!t),
       });
       if (!inf.industry && !inf.country) { tally.unknown++; continue; }
-      if (!opts.dryRun) tally.unlinkedPeopleFilled += await applyToPeople(workspaceId, members.map((m) => m.id), inf, new Date().toISOString());
+      tally.unlinkedPeopleFilled += await applyToPeople(workspaceId, members.map((m) => m.id), inf, new Date().toISOString());
     } catch (e) {
       tally.failed++;
       console.error(`[FirmographicInference] group failed:`, (e as Error).message);
