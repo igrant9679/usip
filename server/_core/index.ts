@@ -864,7 +864,7 @@ async function startServer() {
     import("../routers/leadScoring")
       .then((m) => m.runLeadRescoreTick())
       .then((r) => {
-        if (r.engaged || r.swept || r.failed) console.log(`[LeadRescore] engaged=${r.engaged} swept=${r.swept} failed=${r.failed}`);
+        if (r.engaged || r.swept || r.failed) console.log(`[LeadRescore] engaged=${r.engaged} swept=${r.swept} failed=${r.failed} pausedSkips=${r.pausedSkips}`);
       }),
   );
   setTimeout(runLeadRescore, 29 * 60 * 1000); // stagger: 29 minutes after boot

@@ -21,7 +21,7 @@ const h = vi.hoisted(() => {
   if (!process.env.ENCRYPTION_KEY && !process.env.JWT_SECRET) process.env.ENCRYPTION_KEY = "d".repeat(64);
   return {
     db: null as any, calls: 0, prompts: [] as string[], fail: false, fit: 0.5,
-    notified: [] as any[], enrolled: [] as any[],
+    notified: [] as any[], enrolled: [] as any[], realEnrol: false,
   };
 });
 
@@ -54,10 +54,15 @@ vi.mock("./services/policyNotify", async (a) => ({
   ...(await a<typeof import("./services/policyNotify")>()),
   notifyIfEnabled: async (n: any) => { h.notified.push(n); },
 }));
-vi.mock("./sequenceEngine", async (a) => ({
-  ...(await a<typeof import("./sequenceEngine")>()),
-  autoEnrollByTriggers: async (e: any) => { h.enrolled.push(e); },
-}));
+// Records each enrolment check; with `realEnrol`, the real one runs too,
+// against the fake's sequences and enrollments tables.
+vi.mock("./sequenceEngine", async (a) => {
+  const actual = await a<typeof import("./sequenceEngine")>();
+  return {
+    ...actual,
+    autoEnrollByTriggers: async (e: any) => { h.enrolled.push(e); if (h.realEnrol) await actual.autoEnrollByTriggers(e); },
+  };
+});
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -65,6 +70,7 @@ import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { appRouter } from "./routers";
 import { __resetLlmBurstForTests } from "./_core/llm";
 import { invalidateArchivedWorkspaceCache } from "./_core/workspaceArchive";
+import { invalidateSendWindowCache } from "./services/sendWindow";
 import {
   composeScore, DEFAULT_SCORE_CONFIG, scoreAiFit, scoreBehavioral, scoreFirmographic, titleHeuristicFit, titleSeniority,
 } from "./leadScoring";
@@ -98,7 +104,7 @@ function seed() {
     inviteToken: null, inviteExpiresAt: null, createdAt: new Date(),
   });
   rows("workspace_members").push(member(1, ADMIN, "admin"), member(2, REP, "rep"));
-  rows("workspace_settings").push({ workspaceId: WS, llmMonthlyTokenCap: null });
+  rows("workspace_settings").push({ workspaceId: WS, llmMonthlyTokenCap: null, outboundPausedAt: null, timezone: "UTC" });
 }
 
 function caller(userId: number) {
@@ -145,10 +151,11 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(T0));
   h.db = makeSqlFakeDb({ realMembers: true });
-  Object.assign(h, { calls: 0, prompts: [], fail: false, fit: 0.5, notified: [], enrolled: [] });
+  Object.assign(h, { calls: 0, prompts: [], fail: false, fit: 0.5, notified: [], enrolled: [], realEnrol: false });
   __resetLlmBurstForTests();
   __resetLeadRescoreQueueForTests();
   invalidateArchivedWorkspaceCache();
+  invalidateSendWindowCache();
   seed();
 });
 afterEach(() => {
@@ -163,7 +170,7 @@ describe("scores update on their own, with no model call (P12)", () => {
     assessed(1, 1);
     lead(2);
     const r = await runLeadRescoreTick();
-    expect(r).toEqual({ engaged: 0, swept: 2, failed: 0 });
+    expect(r).toEqual({ engaged: 0, swept: 2, failed: 0, pausedSkips: 0 });
     expect(h.calls).toBe(0);
     const l1 = rows("leads").find((l) => l.id === 1);
     expect(l1.scoredAt).toEqual(new Date(T0));
@@ -195,21 +202,10 @@ describe("scores update on their own, with no model call (P12)", () => {
     lead(1, { scoredAt: new Date(T0 - 3600_000) });
     sentDraft(1, 1, { openCount: 2, lastOpenedAt: new Date(T0 - 60_000) });
     noteLeadEngagement(WS, 1);
-    expect(await runLeadRescoreTick()).toEqual({ engaged: 1, swept: 0, failed: 0 });
+    expect(await runLeadRescoreTick()).toEqual({ engaged: 1, swept: 0, failed: 0, pausedSkips: 0 });
     expect(rows("leads").find((l) => l.id === 1).scoreReasons).toContain("2 opens (+10)");
   });
 
-  it("a lead the tick takes over Sales Ready notifies its owner and reaches score-threshold sequences", async () => {
-    lead(1, { title: "Chief Revenue Officer", phone: "555 0100", score: 40 });
-    assessed(1, 1);
-    rows("email_replies").push({ id: 1, workspaceId: WS, leadId: 1, draftId: 9, campaignId: null, receivedAt: new Date(T0 - DAY) });
-    sentDraft(9, 1, { openCount: 3, clickCount: 2, lastOpenedAt: new Date(T0 - DAY) });
-    await runLeadRescoreTick();
-    const l = rows("leads").find((x) => x.id === 1);
-    expect(l.score).toBeGreaterThanOrEqual(81);
-    expect(h.notified).toEqual([expect.objectContaining({ event: "salesReadyCrossed", relatedId: 1 })]);
-    expect(h.enrolled).toEqual([expect.objectContaining({ kind: "score_threshold", leadId: 1, score: l.score })]);
-  });
 
   it("a re-score that changes nothing adds no history row; Recompute always does", async () => {
     lead(1);
@@ -244,6 +240,103 @@ describe("scores update on their own, with no model call (P12)", () => {
     expect(boot).toMatch(/guardOverlap\("LeadRescore", \(\) =>\s*import\("\.\.\/routers\/leadScoring"\)\s*\.then\(\(m\) => m\.runLeadRescoreTick\(\)\)/);
     expect(boot).toContain("setInterval(runLeadRescore, 60 * 60 * 1000);");
     expect(read("server/_core/rawMigrations.ts")).toContain("ALTER TABLE `leads` ADD COLUMN `scoredAt` timestamp NULL");
+  });
+});
+
+/* ── P12, review 2026-11-06: what the tick may set off ──────────────────── */
+
+describe("the tick sets off nothing on deploy, and only real crossings after (P12 review)", () => {
+  /** A lead whose score works out to 100: C-suite, full profile, opened, clicked, replied, AI fit 1. */
+  function hotLead(id: number, over: Record<string, unknown> = {}) {
+    lead(id, { title: "Chief Revenue Officer", phone: "555 0100", ...over });
+    assessed(id, 1);
+    rows("email_replies").push({ id, workspaceId: WS, leadId: id, draftId: 100 + id, campaignId: null, receivedAt: new Date(T0 - DAY) });
+    sentDraft(100 + id, id, { openCount: 3, clickCount: 2, lastOpenedAt: new Date(T0 - DAY) });
+  }
+  /** An active sequence that starts at a score of 60, run by the real sequence engine. */
+  function scoreSequence() {
+    h.realEnrol = true;
+    rows("sequences").push({ id: 1, workspaceId: WS, name: "Score 60", status: "active", enrollmentTrigger: [{ type: "score_threshold", value: "60" }] });
+  }
+  const pause = () => { rows("workspace_settings")[0].outboundPausedAt = new Date(T0 - DAY); invalidateSendWindowCache(); };
+  const SCORED = new Date(T0 - 2 * DAY);
+
+  it("1. a lead the tick scores for the first time is stored, with no alert and no enrolment", async () => {
+    scoreSequence();
+    hotLead(1); // scoredAt null, stored score 0: the backfill
+    await runLeadRescoreTick();
+    const l = rows("leads").find((x) => x.id === 1);
+    expect(l.score).toBe(100);
+    expect(l.scoredAt).toEqual(new Date(T0));
+    expect(h.notified).toEqual([]);
+    expect(h.enrolled).toEqual([]);
+    expect(rows("enrollments")).toEqual([]);
+  });
+
+  it("2. after that, an upward crossing alerts and enrols", async () => {
+    scoreSequence();
+    hotLead(1, { scoredAt: SCORED, score: 40 });
+    await runLeadRescoreTick();
+    expect(h.notified).toEqual([expect.objectContaining({ event: "salesReadyCrossed", relatedId: 1 })]);
+    expect(h.enrolled).toEqual([expect.objectContaining({ kind: "score_threshold", leadId: 1, score: 100, previousScore: 40 })]);
+    expect(rows("enrollments")).toEqual([expect.objectContaining({ sequenceId: 1, leadId: 1, status: "active" })]);
+  });
+
+  it("2. a lead already above a threshold, or whose score fell, sets off nothing", async () => {
+    scoreSequence();
+    hotLead(1, { scoredAt: SCORED, score: 85 }); // above 60 and 81 already; rises to 100
+    lead(2, { scoredAt: SCORED, score: 90 }); // falls to its profile points
+    await runLeadRescoreTick();
+    expect(rows("leads").find((x) => x.id === 1).score).toBe(100);
+    expect(h.notified).toEqual([]);
+    // Asked only for the rise, with the previous score, and the engine finds no crossing.
+    expect(h.enrolled).toEqual([expect.objectContaining({ leadId: 1, previousScore: 85 })]);
+    expect(rows("enrollments")).toEqual([]);
+  });
+
+  it("3. while outbound is paused the tick enrols no one, queues nothing, and says so in the log", async () => {
+    scoreSequence();
+    pause();
+    hotLead(1, { scoredAt: SCORED, score: 40 });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const r = await runLeadRescoreTick();
+      expect(r.pausedSkips).toBe(1);
+      expect(log.mock.calls.map((c) => String(c[0]))).toContain(`[LeadRescore] workspace ${WS}: outbound is paused, so 1 score-threshold enrolment check was skipped`);
+    } finally {
+      log.mockRestore();
+    }
+    expect(h.enrolled).toEqual([]);
+    expect(rows("enrollments")).toEqual([]);
+    expect(rows("leads").find((x) => x.id === 1).score).toBe(100);
+  });
+
+  it("5. a lead created while outbound is paused is scored but checked for no enrolment; unpaused, it is checked as before", async () => {
+    pause();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    let first: number;
+    try {
+      first = (await caller(REP).leads.create({ firstName: "Testa", lastName: "Paused", title: "CEO", company: "County Works", email: "p@county.example" })).id;
+      expect(log.mock.calls.map((c) => String(c[0]))).toContain(`[LeadScoring] lead ${first}: outbound is paused in workspace ${WS}, so no score-threshold enrolment`);
+    } finally {
+      log.mockRestore();
+    }
+    expect(rows("leads").find((x) => x.id === first!).scoredAt).toEqual(new Date(T0));
+    expect(h.enrolled).toEqual([]);
+    rows("workspace_settings")[0].outboundPausedAt = null;
+    invalidateSendWindowCache();
+    const second = (await caller(REP).leads.create({ firstName: "Testa", lastName: "Live", title: "CEO", company: "County Works", email: "l@county.example" })).id;
+    expect(h.enrolled).toEqual([expect.objectContaining({ leadId: second })]);
+    expect(h.enrolled[0].previousScore).toBeUndefined();
+  });
+
+  it("4. Recompute keeps its behaviour: paused or not, first score or not", async () => {
+    pause();
+    hotLead(1); // never scored
+    await caller(REP).leadScoring.recompute({ leadId: 1 });
+    expect(h.notified).toEqual([expect.objectContaining({ event: "salesReadyCrossed", relatedId: 1 })]);
+    expect(h.enrolled).toEqual([expect.objectContaining({ leadId: 1, score: 100 })]);
+    expect(h.enrolled[0].previousScore).toBeUndefined();
   });
 });
 

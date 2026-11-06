@@ -41,6 +41,7 @@ import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/wor
 import { activeMemberIds } from "../_core/activeMembers";
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { notifyIfEnabled } from "../services/policyNotify";
+import { isOutboundPaused } from "../services/outboundPause";
 import { gradeForTier } from "@shared/leadTier";
 import { componentMaxes, tierThresholdProblem } from "@shared/leadScoreModel";
 import { normalizeRoutingConditions, routingConditionsMatch, routingConditionsProblem } from "@shared/leadRouting";
@@ -268,8 +269,23 @@ async function latestScore(workspaceId: number, leadId: number) {
  * profile and engagement are scored again and the fit is the last assessment,
  * so no schedule ever calls a model. A lead never assessed has no fit points
  * until someone presses Recompute.
+ *
+ * `trigger` says who asked, which decides what a score may set off:
+ *  - "person" (Recompute, Recompute all): the Sales-Ready alert on a crossing
+ *    and score-threshold enrolment at or above a threshold, as always.
+ *  - "create" (a lead just made by leads.create, a form, a landing page or
+ *    chat): the same, except no enrolment while the workspace's outbound is
+ *    paused.
+ *  - "schedule" (the hourly re-score): a lead's first score is the backfill
+ *    and sets off nothing; after that only an upward crossing alerts or
+ *    enrols (previous stored score below the threshold, new at or above),
+ *    and never an enrolment while outbound is paused. Without this, the first
+ *    sweeps after deploy would enrol every lead already above a trigger and
+ *    alert on every lead past Sales Ready (review of P12, 2026-11-06).
  */
-async function recomputeOne(workspaceId: number, leadId: number, opts: { ai: boolean } = { ai: true }) {
+type ScoreTrigger = "person" | "create" | "schedule";
+
+async function recomputeOne(workspaceId: number, leadId: number, opts: { ai: boolean; trigger: ScoreTrigger } = { ai: true, trigger: "person" }) {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
   const [lead] = await db.select().from(leads).where(and(eq(leads.id, leadId), eq(leads.workspaceId, workspaceId)));
@@ -288,6 +304,8 @@ async function recomputeOne(workspaceId: number, leadId: number, opts: { ai: boo
   const grade = gradeForTier(breakdown.tier);
 
   const previousTotal = lead.score ?? 0;
+  // The schedule's first score of a lead is the backfill: stored, nothing fired.
+  const backfill = opts.trigger === "schedule" && lead.scoredAt == null;
   await db.update(leads).set({ score: breakdown.total, grade, scoreReasons: breakdown.reasons, scoredAt: new Date() }).where(eq(leads.id, leadId));
   // A scheduled re-score that changed nothing adds no history row, so the
   // 90-day history shows changes, not the schedule.
@@ -323,7 +341,7 @@ async function recomputeOne(workspaceId: number, leadId: number, opts: { ai: boo
    */
   const [cfgRow] = await db.select().from(leadScoreConfig).where(eq(leadScoreConfig.workspaceId, workspaceId));
   const crossed = previousTotal < cfg.tierSalesReadyMin && breakdown.total >= cfg.tierSalesReadyMin;
-  if (crossed) {
+  if (crossed && !backfill) {
     await notifyIfEnabled({
       workspaceId,
       userId: lead.ownerUserId,
@@ -349,29 +367,48 @@ async function recomputeOne(workspaceId: number, leadId: number, opts: { ai: boo
   // (it checks for an existing enrolment first), so re-scoring the same lead
   // never double-enrols. Awaited since scores re-run on a schedule (P12), so
   // a sweep's enrolments run one lead at a time rather than piling up.
-  try {
-    const m = await import("../sequenceEngine");
-    await m.autoEnrollByTriggers({
-      kind: "score_threshold",
-      workspaceId,
-      leadId,
-      score: breakdown.total,
-    });
-  } catch (e) {
-    console.error(`[LeadScoring] auto-enroll failed for lead ${leadId}:`, e);
+  //
+  // The schedule asks only when the score rose, since only a rise can cross a
+  // threshold upward, and passes the previous score so a sequence matches only
+  // on that crossing. Neither the schedule nor a new lead enrols anyone while
+  // the workspace's outbound is paused: nothing is queued, and the skip is
+  // logged (by the tick, once per workspace, for the schedule).
+  let enrolment: "checked" | "skipped_paused" | "not_asked" = "not_asked";
+  const askEnrol = opts.trigger !== "schedule" || (!backfill && breakdown.total > previousTotal);
+  if (askEnrol) {
+    if (opts.trigger !== "person" && (await isOutboundPaused(workspaceId))) {
+      enrolment = "skipped_paused";
+      if (opts.trigger === "create") {
+        console.log(`[LeadScoring] lead ${leadId}: outbound is paused in workspace ${workspaceId}, so no score-threshold enrolment`);
+      }
+    } else {
+      enrolment = "checked";
+      try {
+        const m = await import("../sequenceEngine");
+        await m.autoEnrollByTriggers({
+          kind: "score_threshold",
+          workspaceId,
+          leadId,
+          score: breakdown.total,
+          ...(opts.trigger === "schedule" ? { previousScore: previousTotal } : {}),
+        });
+      } catch (e) {
+        console.error(`[LeadScoring] auto-enroll failed for lead ${leadId}:`, e);
+      }
+    }
   }
 
-  return { ...breakdown, grade, aiFit: aiFitJson };
+  return { ...breakdown, grade, aiFit: aiFitJson, enrolment };
 }
 
 /**
- * Re-score a lead without a model call (P12): after it is created, after it
- * engages, and in the daily sweep. Never throws; a score is not worth failing
- * the thing that asked for it.
+ * Score a lead just created, without a model call (P12): leads.create, forms,
+ * landing pages and chat. Never throws; a score is not worth failing the
+ * thing that asked for it. No enrolment while outbound is paused.
  */
 export async function rescoreLead(workspaceId: number, leadId: number): Promise<void> {
   try {
-    await recomputeOne(workspaceId, leadId, { ai: false });
+    await recomputeOne(workspaceId, leadId, { ai: false, trigger: "create" });
   } catch (e) {
     console.error(`[LeadScoring] re-score failed for lead ${leadId}:`, (e as Error)?.message ?? e);
   }
@@ -414,22 +451,36 @@ export const RESCORE_TICK_BUDGET_MS = 10 * 60 * 1000;
  *     RESCORE_STALE_PER_WORKSPACE in each workspace.
  *
  * No model calls (`ai: false`), archived workspaces skipped, and a time budget,
- * so one tick is bounded however many leads there are. A crossing into Sales
- * Ready notifies and score-threshold sequences enrol, as a Recompute does.
+ * so one tick is bounded however many leads there are. What a score sets off
+ * is `trigger: "schedule"` (see recomputeOne): a lead's first score is the
+ * backfill and sets off nothing; after that only an upward crossing alerts or
+ * enrols, and nothing enrols while the workspace's outbound is paused.
  */
-export async function runLeadRescoreTick(): Promise<{ engaged: number; swept: number; failed: number }> {
-  const out = { engaged: 0, swept: 0, failed: 0 };
+export async function runLeadRescoreTick(): Promise<{ engaged: number; swept: number; failed: number; pausedSkips: number }> {
+  const out = { engaged: 0, swept: 0, failed: 0, pausedSkips: 0 };
   const db = await getDb();
   if (!db) return out;
   const until = Date.now() + RESCORE_TICK_BUDGET_MS;
   const archived = await archivedWorkspaceIds();
+  const pausedByWs = new Map<number, number>();
   const one = async (workspaceId: number, leadId: number) => {
-    try { await recomputeOne(workspaceId, leadId, { ai: false }); return true; }
-    catch (e) {
+    try {
+      const r = await recomputeOne(workspaceId, leadId, { ai: false, trigger: "schedule" });
+      if (r.enrolment === "skipped_paused") pausedByWs.set(workspaceId, (pausedByWs.get(workspaceId) ?? 0) + 1);
+      return true;
+    } catch (e) {
       out.failed++;
       console.error(`[LeadRescore] lead ${leadId} failed:`, (e as Error)?.message ?? e);
       return false;
     }
+  };
+  // The run log says when a paused workspace held back enrolments.
+  const done = () => {
+    pausedByWs.forEach((n, ws) => {
+      out.pausedSkips += n;
+      console.log(`[LeadRescore] workspace ${ws}: outbound is paused, so ${n} score-threshold enrolment check${n === 1 ? " was" : "s were"} skipped`);
+    });
+    return out;
   };
 
   const engaged = takeEngagedLeads(RESCORE_ENGAGED_PER_TICK);
@@ -438,7 +489,7 @@ export async function runLeadRescoreTick(): Promise<{ engaged: number; swept: nu
     if (Date.now() >= until) {
       // Out of time: the rest wait for the next tick.
       for (const rest of engaged.slice(i)) noteLeadEngagement(rest.workspaceId, rest.leadId);
-      return out;
+      return done();
     }
     if (archived.has(workspaceId)) continue;
     if (await one(workspaceId, leadId)) out.engaged++;
@@ -453,11 +504,11 @@ export async function runLeadRescoreTick(): Promise<{ engaged: number; swept: nu
       .orderBy(asc(leads.scoredAt), asc(leads.id))
       .limit(RESCORE_STALE_PER_WORKSPACE);
     for (const { id } of due) {
-      if (Date.now() >= until) return out;
+      if (Date.now() >= until) return done();
       if (await one(workspaceId, id)) out.swept++;
     }
   }
-  return out;
+  return done();
 }
 
 /* ───────── "Recompute all" as a background job (audit P11) ───────── */
