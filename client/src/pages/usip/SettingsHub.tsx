@@ -975,7 +975,8 @@ function ChangeEmailDialog({ open, onClose, hasPassword, currentEmail }: { open:
   const [password, setPassword] = useState("");
   const change = trpc.profile.changeMyEmail.useMutation({
     onSuccess: (r: any) => {
-      toast.success(`Login email changed to ${r.email}`);
+      // Nothing has changed yet (audit G32): the new address must confirm.
+      toast.success(`We sent a confirmation link to ${r.email}. Your login email changes when you open it.`);
       utils.profile.getMe.invalidate();
       setNext(""); setPassword("");
       onClose();
@@ -990,7 +991,7 @@ function ChangeEmailDialog({ open, onClose, hasPassword, currentEmail }: { open:
           <DialogTitle>Change login email</DialogTitle>
           <DialogDescription>
             {hasPassword
-              ? `Currently ${currentEmail}. Confirm with your password — you'll use the new email at your next sign-in.`
+              ? `Currently ${currentEmail}. Confirm with your password. We'll email a link to the new address, and tell ${currentEmail}; the change happens when the link is opened.`
               : "Your sign-in is managed by your identity provider, so the login email can't be changed here."}
           </DialogDescription>
         </DialogHeader>
