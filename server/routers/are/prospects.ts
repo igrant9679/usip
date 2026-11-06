@@ -2825,6 +2825,25 @@ export const prospectsRouter = router({
       return rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
     }),
 
+  /**
+   * Which campaign a prospect is in, so a notice about a person can link to
+   * them (audit 2026-10-20, A57): /are/prospects/:id resolves through here to
+   * the campaign page with that prospect's dossier open.
+   */
+  locate: workspaceProcedure
+    .input(z.object({ prospectId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select({ campaignId: prospectQueue.campaignId })
+        .from(prospectQueue)
+        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found" });
+      return { campaignId: row.campaignId };
+    }),
+
   /** Mass actions on this campaign's prospects — see prospectsBulk.ts. */
   bulk: workspaceProcedure
     .input(BULK_INPUT)
@@ -2885,10 +2904,19 @@ export const prospectsRouter = router({
       campaignId: z.number().optional(),
       body: z.string().min(1).max(4000),
       category: z.enum(["general", "qualification", "objection", "follow_up", "intel"]).optional().default("general"),
+      /** The teammates picked from the @ list, by id (audit 2026-10-20, A49). */
+      mentionUserIds: z.array(z.number().int()).max(20).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // The prospect must be this workspace's; its campaign is the deep link's.
+      const [prospect] = await db
+        .select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId })
+        .from(prospectQueue)
+        .where(and(eq(prospectQueue.id, input.prospectId), eq(prospectQueue.workspaceId, ctx.workspace.id)))
+        .limit(1);
+      if (!prospect) throw new TRPCError({ code: "NOT_FOUND", message: "Prospect not found" });
       const [row] = await db.insert(prospectNotes).values({
         workspaceId: ctx.workspace.id,
         prospectQueueId: input.prospectId,
@@ -2897,33 +2925,21 @@ export const prospectsRouter = router({
         category: input.category ?? "general",
         isPinned: false,
       }).$returningId();
-      // Parse @mentions and fire in-app mention notifications
-      const mentionRegex = /@([\w.\- ]+)/g;
-      const mentionedNames: string[] = [];
-      let mm: RegExpExecArray | null;
-      while ((mm = mentionRegex.exec(input.body)) !== null) {
-        mentionedNames.push(mm[1].trim().toLowerCase());
-      }
-      if (mentionedNames.length > 0) {
+      /**
+       * Mentions are the people picked from the @ list, by id (A49). They were
+       * matched by name substring, so "@Al" notified Alice and Alan, and a
+       * mention of "Sam Lee" reached a "Sam". Only this workspace's members.
+       */
+      const picked = Array.from(new Set(input.mentionUserIds ?? [])).filter((uid) => uid !== ctx.user.id);
+      if (picked.length > 0) {
         const members = await db
-          .select({ userId: users.id, name: users.name })
+          .select({ userId: workspaceMembers.userId })
           .from(workspaceMembers)
-          .innerJoin(users, eq(workspaceMembers.userId, users.id))
-          .where(eq(workspaceMembers.workspaceId, ctx.workspace.id));
-        const mentionedUserIds = members
-          .filter((mem) =>
-            mentionedNames.some((mn) =>
-              (mem.name ?? "").toLowerCase().includes(mn) ||
-              mn.includes((mem.name ?? "").toLowerCase())
-            )
-          )
-          .map((mem) => mem.userId)
-          .filter((uid) => uid !== ctx.user.id);
+          .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), inArray(workspaceMembers.userId, picked)));
+        const mentionedUserIds = members.map((m) => m.userId);
         if (mentionedUserIds.length > 0) {
           // Encode campaignId + prospectId in the body as a JSON prefix so the Inbox can deep-link
-          const deepLinkMeta = input.campaignId
-            ? `{"campaignId":${input.campaignId},"prospectId":${input.prospectId}}\n`
-            : "";
+          const deepLinkMeta = `{"campaignId":${prospect.campaignId},"prospectId":${prospect.id}}\n`;
           /**
            * One at a time through the shared gate rather than a bulk insert.
            * Two things it fixes: the "Someone @mentions me" switch was never

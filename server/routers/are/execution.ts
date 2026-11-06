@@ -48,7 +48,7 @@ import { router } from "../../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../../_core/activeMembers";
 import { notifyOwner } from "../../_core/notification";
-import { areNotify } from "./notify";
+import { areNotify, notifyPersonLabel } from "./notify";
 import { isSendableChannel, unsendableReason } from "@shared/areSequenceSteps";
 import { markAreProspectReplied } from "../../services/are/stepHold";
 import { normaliseAreSuppression } from "../../services/suppression";
@@ -331,7 +331,7 @@ export async function processSignal(
    * derive both ids from a row they already scoped, so for them this is one
    * cheap read that always passes.
    */
-  const [owned] = await db.select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId })
+  const [owned] = await db.select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId, firstName: prospectQueue.firstName, lastName: prospectQueue.lastName, companyName: prospectQueue.companyName })
     .from(prospectQueue)
     .where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)))
     .limit(1);
@@ -339,6 +339,9 @@ export async function processSignal(
     console.warn(`[ARE] processSignal: prospect ${prospectQueueId} is not in campaign ${campaignId} of workspace ${workspaceId} — signal dropped`);
     return;
   }
+  // Every notice below names the person and links to them, and goes to the
+  // campaign's owner (audit 2026-10-20, A57).
+  const person = notifyPersonLabel(owned);
 
   // Determine sentiment via LLM for reply-type signals
   let sentiment: "positive" | "neutral" | "negative" | "objection" | null = null;
@@ -431,11 +434,12 @@ export async function processSignal(
             await areNotify({
               workspaceId,
               eventType: "signal_classified",
-              title: "ARE: Positive reply — prospect added to CRM",
-              body: `A prospect replied positively. Sentiment: ${sentData.sentiment}. Reason: ${sentData.reason}.` +
+              title: `ARE: Positive reply from ${person}`,
+              body: `${person} replied positively. Sentiment: ${sentData.sentiment}. Reason: ${sentData.reason}.` +
                 (promoted ? " They've been added to Contacts and Companies." : ""),
-              relatedId: campaignId,
-              relatedType: "are_campaign",
+              relatedId: prospectQueueId,
+              relatedType: "prospect_queue",
+              campaignId,
             });
             break;
           }
@@ -519,8 +523,9 @@ export async function processSignal(
         + (promoted?.opportunityId
           ? " An opportunity was created in the pipeline."
           : promoted ? " They have been added to your CRM." : ""),
-      relatedId: campaignId,
-      relatedType: "are_campaign",
+      relatedId: prospectQueueId,
+      relatedType: "prospect_queue",
+      campaignId,
     });
   }
 
@@ -554,9 +559,10 @@ export async function processSignal(
         workspaceId,
         eventType: "signal_classified",
         title: "ARE: Engagement signal received",
-        body: `${p.firstName ?? ""} ${p.lastName ?? ""} at ${p.companyName ?? "unknown"} ${label}.`,
-        relatedId: campaignId,
-        relatedType: "are_campaign",
+        body: `${notifyPersonLabel(p)} ${label}.`,
+        relatedId: prospectQueueId,
+        relatedType: "prospect_queue",
+        campaignId,
       });
     }
   }

@@ -156,7 +156,17 @@ const SURFACES: Array<{
     file: "server/routers/are/notify.ts",
     start: "export async function areNotify(",
     end: "db.insert(notifications)",
-    gate: /const recipient = await workspaceNotifyUserId\(opts\.workspaceId\);\s*if \(!recipient\) return;/,
+    // 2026-11-06 (audit A57): a campaign's notice goes to the campaign's
+    // owner. areNotifyRecipient checks they are an active member and falls
+    // back to workspaceNotifyUserId; the next entry pins that.
+    gate: /const recipient = await areNotifyRecipient\([\s\S]{0,200}?\);\s*if \(!recipient\) return;/,
+  },
+  {
+    what: "an ARE campaign's notice reaches its owner only while they are an active member",
+    file: "server/routers/are/notify.ts",
+    start: "export async function areNotifyRecipient(",
+    end: "export function notifyPersonLabel(",
+    gate: /if \(c\?\.ownerUserId && \(await isActiveMember\(workspaceId, c\.ownerUserId\)\)\) return c\.ownerUserId;[\s\S]*return workspaceNotifyUserId\(workspaceId\);/,
   },
   {
     what: "a campaign the engine proposes is owned by the acceptor or the active workspace owner — never created ownerless",
@@ -406,7 +416,9 @@ describe("every session-less path that names a member gates on active membership
     // Plivo number is filed under its member (plivoWebhook).
     // 2026-10-24: 37, with services/foreignIds.ts — the owner check behind the
     // explicit CRM patch schemas (audit C7).
-    expect(SURFACES.length).toBe(37);
+    // 2026-11-06: 38, with areNotifyRecipient — an ARE notice goes to the
+    // campaign's owner, while they are an active member (audit A57).
+    expect(SURFACES.length).toBe(38);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 

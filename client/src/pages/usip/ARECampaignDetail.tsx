@@ -675,11 +675,14 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
   const [mentionQuery, setMentionQuery] = useState("");
   const [showMentionPicker, setShowMentionPicker] = useState(false);
   const [mentionAnchor, setMentionAnchor] = useState<number>(-1);
+  // Teammates picked from the @ list, by id (A49): only these are notified,
+  // and only while their @name is still in the note.
+  const [mentioned, setMentioned] = useState<Map<number, string>>(new Map());
 
   const invalidate = () => utils.are.prospects.listNotes.invalidate({ prospectId });
 
   const addNote = trpc.are.prospects.addNote.useMutation({
-    onSuccess: () => { setDraft(""); invalidate(); },
+    onSuccess: () => { setDraft(""); setMentioned(new Map()); invalidate(); },
     onError: (e) => toast.error(e.message),
   });
   // campaignId is passed through to addNote for deep-link generation in mention notifications
@@ -799,6 +802,7 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
                       const before = draft.slice(0, mentionAnchor);
                       const after = draft.slice(mentionAnchor + mentionQuery.length + 1);
                       setDraft(before + "@" + m.name + " " + after);
+                      setMentioned((prev) => new Map(prev).set(m.userId, String(m.name ?? "")));
                       setShowMentionPicker(false);
                       setMentionQuery("");
                     }}
@@ -817,7 +821,10 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
           <span className="text-[10px] text-muted-foreground">{draft.length}/4000</span>
           <Button
             size="sm" className="gap-1.5 text-xs"
-            onClick={() => addNote.mutate({ prospectId, campaignId, body: draft, category: draftCategory })}
+            onClick={() => addNote.mutate({
+              prospectId, campaignId, body: draft, category: draftCategory,
+              mentionUserIds: Array.from(mentioned.entries()).filter(([, name]) => name && draft.includes(`@${name}`)).map(([uid]) => uid),
+            })}
             disabled={!draft.trim() || addNote.isPending}
           >
             {addNote.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <StickyNote className="size-3.5" />}
@@ -892,7 +899,10 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
                     </button>
                     <button
                       className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                      onClick={() => deleteNote.mutate({ noteId: note.id })}
+                      onClick={() => confirmAction(
+                        { title: "Delete this note?", description: "The note is removed for everyone in the workspace. This cannot be undone.", confirmLabel: "Delete" },
+                        () => deleteNote.mutate({ noteId: note.id }),
+                      )}
                       title="Delete"
                     >
                       <Trash2 className="size-3" />
@@ -2279,8 +2289,21 @@ function ARECampaignDetailPage() {
     toast.success(`Exported ${result.data.count} rejections`);
   };
 
-  const [selectedProspectId, setSelectedProspectId] = useState<number | null>(null);
-  const [dossierOpen, setDossierOpen] = useState(false);
+  // ?prospect=<id> opens that prospect's dossier (audit 2026-10-20, A49):
+  // mention notices and /are/prospects/:id link here, and nothing read it.
+  const linkedProspectId = (() => {
+    const v = Number(new URLSearchParams(typeof window !== "undefined" ? window.location.search : "").get("prospect"));
+    return Number.isInteger(v) && v > 0 ? v : null;
+  })();
+  const [selectedProspectId, setSelectedProspectId] = useState<number | null>(linkedProspectId);
+  const [dossierOpen, setDossierOpen] = useState(linkedProspectId !== null);
+  // A prospect who is not on the loaded page (a link, the funnel, Rejections)
+  // is read by id, so the dossier opens on them instead of "No prospect selected".
+  const selectedOnPage = (prospects ?? []).some((p) => p.id === selectedProspectId);
+  const selectedById = trpc.are.prospects.byIds.useQuery(
+    { campaignId, prospectIds: [selectedProspectId ?? 1] },
+    { enabled: validId && selectedProspectId !== null && !selectedOnPage },
+  );
   // Controlled tab state so empty-state CTAs (e.g. "Go to Scraper") can switch tabs.
   const [tab, setTab] = useState("prospects");
   const [scrapeQuery, setScrapeQuery] = useState("");
@@ -2487,7 +2510,8 @@ function ARECampaignDetailPage() {
     );
   }
 
-  const selectedProspect = prospects?.find((p) => p.id === selectedProspectId);
+  const selectedProspect: any = prospects?.find((p) => p.id === selectedProspectId)
+    ?? (selectedById.data ?? []).find((p) => p.id === selectedProspectId);
   const pendingEnrich = queueCounts?.pendingEnrich ?? 0;
   const awaitingApproval = queueCounts?.awaitingApproval ?? 0;
   const autoThreshold = thresholdDraft !== undefined ? thresholdDraft : (campaign?.autoApproveThreshold ?? null);

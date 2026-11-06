@@ -30,10 +30,10 @@
  * never touch workspace_settings.
  */
 
-import { notifications, workspaceSettings } from "../../../drizzle/schema";
-import { eq } from "drizzle-orm";
+import { areCampaigns, notifications, workspaceSettings } from "../../../drizzle/schema";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "../../db";
-import { workspaceNotifyUserId } from "../../_core/activeMembers";
+import { isActiveMember, workspaceNotifyUserId } from "../../_core/activeMembers";
 
 export type AreEventType =
   | "meeting_booked"
@@ -69,11 +69,41 @@ export interface AreNotifyOptions {
   title: string;
   body: string;
   relatedId?: number;   // campaignId or prospectQueueId
-  relatedType?: string; // "are_campaign" | "prospect"
+  relatedType?: string; // "are_campaign" | "prospect_queue"
+  /** The campaign it is about: its owner is told, not the workspace's (A57). */
+  campaignId?: number;
 }
 
 /**
- * Writes an in-app notification for the workspace owner.
+ * Who hears about a campaign's event (audit 2026-10-20, A57): the campaign's
+ * owner while they are an active member here, else the workspace's standing
+ * recipient. Every notice went to the workspace owner, so a rep's campaign
+ * told the rep nothing about their own prospects.
+ */
+export async function areNotifyRecipient(workspaceId: number, campaignId?: number): Promise<number | null> {
+  if (campaignId) {
+    const db = await getDb();
+    if (db) {
+      const [c] = await db
+        .select({ ownerUserId: areCampaigns.ownerUserId })
+        .from(areCampaigns)
+        .where(and(eq(areCampaigns.id, campaignId), eq(areCampaigns.workspaceId, workspaceId)))
+        .limit(1);
+      if (c?.ownerUserId && (await isActiveMember(workspaceId, c.ownerUserId))) return c.ownerUserId;
+    }
+  }
+  return workspaceNotifyUserId(workspaceId);
+}
+
+/** How a notice names the person it is about: "Pat Lee at Acme", or "A prospect". */
+export function notifyPersonLabel(p: { firstName?: string | null; lastName?: string | null; companyName?: string | null } | null | undefined): string {
+  const name = `${p?.firstName ?? ""} ${p?.lastName ?? ""}`.trim() || "A prospect";
+  return p?.companyName ? `${name} at ${p.companyName}` : name;
+}
+
+/**
+ * Writes an in-app notification for the campaign's owner (or the workspace's
+ * standing recipient when there is no campaign or its owner has left).
  * Non-fatal — errors are swallowed so they never block the calling flow.
  */
 export async function areNotify(opts: AreNotifyOptions): Promise<void> {
@@ -101,7 +131,10 @@ export async function areNotify(opts: AreNotifyOptions): Promise<void> {
      * written into a void. Null means the workspace has no active members, so
      * there is nobody to tell.
      */
-    const recipient = await workspaceNotifyUserId(opts.workspaceId);
+    const recipient = await areNotifyRecipient(
+      opts.workspaceId,
+      opts.campaignId ?? (opts.relatedType === "are_campaign" || opts.relatedType === undefined ? opts.relatedId : undefined),
+    );
     if (!recipient) return;
     await db.insert(notifications).values({
       workspaceId: opts.workspaceId,
