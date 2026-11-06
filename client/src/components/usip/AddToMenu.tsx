@@ -17,6 +17,7 @@ import { Link } from "wouter";
 import { Activity, Bot, ChevronDown, ChevronRight, Loader2, ListChecks, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { invalidateEnrollmentReads } from "@/lib/enrollmentCache";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
@@ -77,7 +78,7 @@ export function AddToMenu({ prospectIds = [], contactIds = [], leadIds = [], tri
       // A paused or draft sequence holds new enrolments (audit 2026-10-20, O1).
       if (r.enrolled > 0 && r.heldUntilActive) toast.info(`"${name}" is not active — nothing is sent until it is activated`);
       if (r.enrolled === 0 && notes.length === 0) toast.info("No one enrolled");
-      utils.sequences.getEnrollmentStats.invalidate({ sequenceId: vars.sequenceId });
+      invalidateEnrollmentReads(utils, vars.sequenceId);
       invalidatePeople();
       close();
     },

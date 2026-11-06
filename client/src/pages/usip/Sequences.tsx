@@ -11,6 +11,7 @@ import { RichTextEditor } from "@/components/usip/RichTextEditor";
 import { EmailClientPreview } from "@/components/usip/EmailClientPreview";
 import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { trpc } from "@/lib/trpc";
+import { invalidateEnrollmentReads } from "@/lib/enrollmentCache";
 import { usePermissions } from "@/hooks/usePermissions";
 import {
   Activity, GitBranch, Pause, Play, Plus, Power, CheckCircle2, XCircle,
@@ -402,16 +403,19 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
   const { data: stepStats = [] } = trpc.sequences.getEnrollmentStepStats.useQuery({ sequenceId });
   const { data: enrollmentList = [], isLoading: listLoading } = trpc.sequences.listEnrollments.useQuery({ sequenceId });
 
+  // `refetch` alone re-read this panel's own stats query and left every
+  // other reader — the v2 Contacts tab included — on the old numbers.
+  const refreshed = () => invalidateEnrollmentReads(utils, sequenceId);
   const resume = trpc.sequences.resumeEnrollment.useMutation({
-    onSuccess: () => { refetch(); toast.success("Enrollment resumed"); },
+    onSuccess: () => { refreshed(); toast.success("Enrollment resumed"); },
     onError: (e) => toast.error(e.message),
   });
   const exit = trpc.sequences.exitEnrollment.useMutation({
-    onSuccess: () => { refetch(); toast.success("Enrollment exited"); },
+    onSuccess: () => { refreshed(); toast.success("Enrollment exited"); },
     onError: (e) => toast.error(e.message),
   });
   const pauseOnReply = trpc.sequences.pauseOnReply.useMutation({
-    onSuccess: () => { refetch(); toast.success("Enrollment paused (reply detected)"); },
+    onSuccess: () => { refreshed(); toast.success("Enrollment paused (reply detected)"); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -529,12 +533,9 @@ function EnrollmentStatsPanel({ sequenceId, steps }: { sequenceId: number; steps
         open={enrollOpen}
         onClose={() => setEnrollOpen(false)}
         onEnrolled={() => {
-          // Refresh the stats + enrollment list so the new rows appear
-          // immediately. invalidate is cheap; refetch() already wired
-          // for the stats block keeps the existing UX.
-          utils.sequences.getEnrollmentStats.invalidate({ sequenceId });
-          utils.sequences.getEnrollmentStepStats.invalidate({ sequenceId });
-          utils.sequences.listEnrollments.invalidate({ sequenceId });
+          // Every enrolment-derived read, not the three this panel happens to
+          // show: the same enrol can be visible in a v2 tab next door.
+          invalidateEnrollmentReads(utils, sequenceId);
           refetch();
         }}
       />
