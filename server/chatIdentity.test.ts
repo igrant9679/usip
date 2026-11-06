@@ -138,19 +138,31 @@ describe("matching an email to a person", () => {
 describe("what the agent is told", () => {
   const session = { visitorEmail: "dana@acme.com", verifiedEmail: null, verifyCodeHash: null, verifyCodeExpiresAt: null, verifyCodesSent: 0, verifyCodeSentAt: null };
 
-  it("unmatched: nothing", async () => {
-    expect(await resolveChatIdentity(4, session, "x@y.com", NOW)).toEqual({ status: "unknown" });
+  /**
+   * 2026-11-06 (audit G44): an unproven visitor is told the same whether or
+   * not the CRM knows the address. The matched case used to hand the agent
+   * the person's company and role and tell it to skip those questions, and
+   * only a matched address was offered a code, so what the agent asked or
+   * offered said who was a customer. These two cases pin the new shape;
+   * what they protected (no history before a code, a firm "reveal nothing")
+   * is kept and asserted.
+   */
+  it("no email yet: nothing", async () => {
+    expect(await resolveChatIdentity(4, session, null, NOW)).toEqual({ status: "unknown" });
   });
 
-  it("matched but unproven: company and role only; history is never even fetched", async () => {
+  it("an email, known or not: the same unproven view, and history is never even fetched", async () => {
+    const unknown = await resolveChatIdentity(4, session, "x@y.com", NOW);
+    expect(unknown).toEqual({ status: "unproven", matched: false, codePending: false, canSendCode: true });
     data.set(prospects, [{ id: 9, company: "Acme University", title: "Director of Scholarships" }]);
     const id = await resolveChatIdentity(4, session, "dana@acme.com", NOW);
-    expect(id).toEqual({ status: "matched", company: "Acme University", title: "Director of Scholarships", codePending: false, canSendCode: true });
+    expect(id).toEqual({ status: "unproven", matched: true, codePending: false, canSendCode: true });
     expect(buildPersonHistory).not.toHaveBeenCalled();
     const g = identityGuidance(id as any, null);
-    expect(g).toContain("(Director of Scholarships at Acme University)");
-    expect(g).toContain("They have NOT proven who they are");
-    expect(g).toContain("do not reveal, confirm or hint at anything else about them");
+    expect(g, "the agent is told the same either way").toBe(identityGuidance(unknown as any, null));
+    expect(g).not.toMatch(/Acme|Director|in our records \(/);
+    expect(g).toContain("have NOT proven it is theirs");
+    expect(g).toContain("Do not say, confirm or hint whether we know them");
     expect(g).toContain("set sendCode to true");
     expect(g).not.toContain("HISTORY");
   });
@@ -166,8 +178,8 @@ describe("what the agent is told", () => {
   });
 
   it("a code on its way, or no more codes allowed, is said plainly", () => {
-    expect(identityGuidance({ status: "matched", company: null, title: null, codePending: true, canSendCode: false }, null)).toContain("ask them to type it here");
-    expect(identityGuidance({ status: "matched", company: null, title: null, codePending: false, canSendCode: false }, "wrong"))
+    expect(identityGuidance({ status: "unproven", matched: true, codePending: true, canSendCode: false }, null)).toContain("ask them to type it here");
+    expect(identityGuidance({ status: "unproven", matched: false, codePending: false, canSendCode: false }, "wrong"))
       .toMatch(/code they typed is not right[\s\S]*team will follow up by email/);
     expect(identityGuidance({ status: "unknown" }, null)).toBe("");
   });
@@ -196,11 +208,17 @@ describe("sending the code", () => {
     for (const u of updates) for (const v of Object.values(u)) expect(v).not.toBe(code);
   });
 
-  it("a send that fails leaves no code outstanding", async () => {
+  // 2026-11-06 (audit G44): it used to clear the code, which an unknown
+  // address's decoy never does, so a failed send told the two apart. The
+  // code that went nowhere is replaced with one nobody holds: still nothing
+  // anyone can type.
+  it("a send that fails leaves only a code nobody holds", async () => {
     sendWorkspaceEmail.mockResolvedValueOnce({ ok: false, reason: "No SMTP config found for workspace" } as any);
     const r = await sendCode(4, { id: 1, token: "tok-A", verifyCodesSent: 0 }, "dana@acme.com", { companyName: "X", agentName: "Ava" }, NOW);
     expect(r.ok).toBe(false);
-    expect(updates.at(-1)).toMatchObject({ verifyCodeHash: null });
+    const code = /(\d{6})/.exec((sendWorkspaceEmail.mock.calls[0] as any[])[1].subject)![1];
+    expect(updates.at(-1)!.verifyCodeHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(updates.at(-1)!.verifyCodeHash).not.toBe(codeHash("tok-A", code));
   });
 });
 
@@ -213,9 +231,13 @@ describe("the chat router, in order", () => {
     expect(send).toContain("const identity = await resolveChatIdentity(agent.workspaceId, session, typedEmail)");
     expect(send).toMatch(/identity,\s*codeResult: check\.result,/);
   });
-  it("sends a code only to a matched, unproven address within the limits, and never leaves them waiting", () => {
-    expect(send).toContain('if (turn.sendCode && identity.status === "matched" && visitor.email) {');
-    expect(send).toContain("if (identity.canSendCode) {");
-    expect(send).toContain("if (!sent) reply = `${reply}\\n\\n${CODE_NOT_SENT}`;");
+  // 2026-11-06 (audit G44): a real code only to a known address, a decoy to
+  // an unknown one, and the same words for both once the limits are reached.
+  it("sends a code only to a known, unproven address within the limits; a decoy otherwise", () => {
+    expect(send).toContain('if (turn.sendCode && identity.status === "unproven" && visitor.email) {');
+    const block = send.slice(send.indexOf('if (turn.sendCode && identity.status === "unproven"'), send.indexOf("const qualified = turn.score"));
+    expect(block).toContain("if (!identity.canSendCode) {\n          reply = `${reply}\\n\\n${CODE_NOT_SENT}`;");
+    expect(block).toContain("} else if (identity.matched) {");
+    expect(block).toContain("await issueDecoyCode(session);");
   });
 });

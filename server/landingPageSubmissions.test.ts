@@ -69,6 +69,7 @@ vi.mock("./_core/activeMembers", async (importActual) => ({
 }));
 
 import { appRouter } from "./routers";
+import { invalidateArchivedWorkspaceCache } from "./_core/workspaceArchive";
 
 interface Recorded {
   inserts: { table: unknown; values: Record<string, unknown> }[];
@@ -217,7 +218,10 @@ describe("landingPages.submit — the submission row", () => {
    */
   it("records a submission carrying neither email nor name", async () => {
     const r = rec();
-    h.db = makeDb({ selects: [[page()]], rec: r });
+    // 2026-11-06 (audit G41): a submission is read against the page's own
+    // fields, and the default fields require a name and an email. A page that
+    // asks for neither still records its submissions, which is what this pins.
+    h.db = makeDb({ selects: [[page({ formFields: [{ key: "message", label: "Message" }, { key: "company", label: "Company" }] })]], rec: r });
     await submit({ message: "call me about pricing", company: "Acme" });
 
     expect(r.inserts.some((i) => i.table === leads)).toBe(false);
@@ -245,7 +249,13 @@ describe("landingPages.submit — the submission row", () => {
 
   it("keeps the full payload, including fields with no column of their own", async () => {
     const r = rec();
-    h.db = makeDb({ selects: [[page()]], rec: r });
+    // 2026-11-06 (audit G41): only fields the page declares are kept, so the
+    // custom ones are declared here; an undeclared key is dropped (pinned in
+    // s1bPublicCapture.test.ts). A declared field with no column still survives.
+    h.db = makeDb({
+      selects: [[page({ formFields: [{ key: "name", label: "Name" }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" }, { key: "budget", label: "Budget" }] })]],
+      rec: r,
+    });
     await submit({ name: "Ada", email: "ada@example.com", phone: "+44 7700 900000", budget: "50k" });
 
     const data = submissionOf(r)?.values.data as any;
@@ -321,10 +331,19 @@ describe("landingPages.submit — the submission row", () => {
   });
 
   it("still enrols into the configured sequence — the row is additive, not a replacement", async () => {
+    invalidateArchivedWorkspaceCache();
     const r = rec();
     h.db = makeDb({
       selects: [
         [page({ autoEnrollSequenceId: 9 })],
+        // 2026-11-06 (audit G4): the submit now reads the sequence back in the
+        // page's workspace before enrolling, so this script answers that read
+        // too, and the archived-workspace read (S1a) ahead of it, which used
+        // to take the dedupe's `[]` and leave the dedupe failing open on an
+        // exhausted queue. What it pins is unchanged: a configured sequence
+        // still enrols.
+        [], // archivedWorkspaceIds: nothing archived (cache cleared below)
+        [{ id: 9 }], // the sequence is in this page's workspace
         [], // enrollmentDedupe: no active enrollment for this email
       ],
       rec: r,

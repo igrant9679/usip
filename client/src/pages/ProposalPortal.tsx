@@ -97,6 +97,9 @@ export default function ProposalPortal() {
   });
   const [acceptDialogOpen, setAcceptDialogOpen] = useState(false);
   const [accepted, setAccepted] = useState(false);
+  // Who is accepting, for the acceptance record (audit G18).
+  const [signerName, setSignerName] = useState("");
+  const [signerEmail, setSignerEmail] = useState("");
   const [extensionDialogOpen, setExtensionDialogOpen] = useState(false);
   const [extensionReason, setExtensionReason] = useState("");
   const [extensionSubmitted, setExtensionSubmitted] = useState(false);
@@ -148,7 +151,9 @@ export default function ProposalPortal() {
           <ClipboardList className="size-14 text-gray-300 mx-auto mb-4" />
           <h1 className="text-xl font-semibold text-gray-800 mb-2">Proposal Not Found</h1>
           <p className="text-gray-500 text-sm">
-            This proposal link is invalid or has expired. Please contact the sender for a new link.
+            {error?.data?.code === "NOT_FOUND" && error.message
+              ? error.message
+              : "This proposal link is invalid or has expired. Please contact the sender for a new link."}
           </p>
         </div>
       </div>
@@ -387,6 +392,7 @@ export default function ProposalPortal() {
                       onChange={(e) => setFeedbackForm(f => ({ ...f, name: e.target.value }))}
                       placeholder="Jane Smith"
                       className="mt-1"
+                      maxLength={200}
                     />
                   </div>
                   <div>
@@ -406,6 +412,7 @@ export default function ProposalPortal() {
                       onChange={(e) => setFeedbackForm(f => ({ ...f, message: e.target.value }))}
                       placeholder="Your questions or comments about this proposal..."
                       className="mt-1 min-h-[120px]"
+                      maxLength={5000}
                     />
                   </div>
                   <Button
@@ -520,6 +527,14 @@ export default function ProposalPortal() {
               By accepting, you confirm that <strong>{proposal.clientName}</strong> agrees to move forward with{" "}
               <strong>{proposal.title}</strong>.
             </p>
+            <div>
+              <Label htmlFor="signer-name" className="text-gray-700">Your full name *</Label>
+              <Input id="signer-name" value={signerName} onChange={(e) => setSignerName(e.target.value)} placeholder="Jane Smith" className="mt-1" maxLength={200} autoComplete="name" />
+            </div>
+            <div>
+              <Label htmlFor="signer-email" className="text-gray-700">Your email (optional)</Label>
+              <Input id="signer-email" type="email" value={signerEmail} onChange={(e) => setSignerEmail(e.target.value)} placeholder="jane@company.com" className="mt-1" maxLength={320} autoComplete="email" />
+            </div>
             <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-emerald-800 text-xs">
               <p className="font-medium mb-1">What happens next:</p>
               <ul className="space-y-0.5">
@@ -534,8 +549,13 @@ export default function ProposalPortal() {
               Cancel
             </Button>
             <Button
-              onClick={() => acceptMutation.mutate({ token })}
-              disabled={acceptMutation.isPending}
+              onClick={() => acceptMutation.mutate({
+                token,
+                signerName: signerName.trim(),
+                signerEmail: signerEmail.trim() || undefined,
+                timeZone: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return undefined; } })(),
+              })}
+              disabled={acceptMutation.isPending || !signerName.trim()}
               className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
             >
               <ThumbsUp className="size-4" />

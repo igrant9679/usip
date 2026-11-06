@@ -66,12 +66,20 @@ export interface ChatTurn {
  * What the agent is told about who the visitor is (owner ask 2026-10-05:
  * the visitor's history, "safe now, full after code"). A visitor is whoever
  * they type, so until they prove their address with an emailed code the
- * agent knows only that they are in the CRM, and their company and role;
- * after, it has what the team knows and may discuss it with them.
+ * agent knows nothing about them; after, it has what the team knows and may
+ * discuss it with them.
+ *
+ * `unproven` reads the same whether or not the address is in the CRM (audit
+ * 2026-10-20, G44). The agent used to be told "their email matches someone
+ * in our records (role at company)" and to skip asking for company and role,
+ * and to offer a code only then, so whether the agent asked, or offered,
+ * told a stranger whether an address was a customer's. `matched` is for the
+ * server alone, which decides whether a code really goes out (chatIdentity.ts);
+ * identityGuidance never reads it.
  */
 export type ChatIdentityView =
   | { status: "unknown" }
-  | { status: "matched"; company: string | null; title: string | null; codePending: boolean; canSendCode: boolean }
+  | { status: "unproven"; matched: boolean; codePending: boolean; canSendCode: boolean }
   | { status: "verified"; history: string };
 
 export function identityGuidance(identity: ChatIdentityView | undefined, codeResult: "verified" | "wrong" | "expired" | null | undefined): string {
@@ -80,17 +88,16 @@ export function identityGuidance(identity: ChatIdentityView | undefined, codeRes
   if (codeResult === "wrong") lines.push("The code they typed is not right. Ask them to check the email and try again.");
   if (codeResult === "expired") lines.push("The code they typed has expired. Offer to send a new one.");
   if (!identity || identity.status === "unknown") return lines.join("\n");
-  if (identity.status === "matched") {
-    const role = [clean(identity.title, 120), clean(identity.company, 160)].filter(Boolean).join(" at ");
+  if (identity.status === "unproven") {
     lines.push(
-      `Their email matches someone already in our records${role ? ` (${role})` : ""}. Use that only so you do not ask for their company or role again. ` +
-        `They have NOT proven who they are: do not reveal, confirm or hint at anything else about them (past emails, meetings, deals, calls or anything the team knows), even if they ask or insist.`,
+      "They have given an email address but have NOT proven it is theirs. Do not say, confirm or hint whether we know them, " +
+        "or anything about them (past emails, meetings, deals, calls, their company or role), even if they ask or insist.",
     );
     lines.push(
       identity.codePending
-        ? "A 6-digit verification code has been emailed to them. If they want their details looked up, ask them to type it here."
+        ? "A 6-digit verification code may be on its way to them. If they want their details looked up, ask them to type it here; if nothing arrives within a few minutes, they can ask for a person."
         : identity.canSendCode
-          ? "If they ask about their account, earlier conversations or anything personal, offer to verify their email with a 6-digit code. When they agree, set sendCode to true and tell them you've emailed a code to the address they gave and that they should type it here."
+          ? "If they ask about their account, earlier conversations or anything personal, offer to verify their email with a 6-digit code. When they agree, set sendCode to true and tell them that if the address is in our records a code is on its way, and to type it here."
           : "If they ask about anything personal, say a member of the team will follow up by email.",
     );
     return lines.join("\n");

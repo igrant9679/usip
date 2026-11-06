@@ -25,6 +25,7 @@ import { contacts, accounts, leads, prospects, bookingLinks, users } from "../dr
 import { escapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody } from "@shared/emailBody";
 import { slugify } from "@shared/slugify";
+import { clickSignature } from "./services/trackedLinks";
 import { buildMergeLookup, isEmptyLinkToken, normalizeMergeKey, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
 
 export type MergeContext = {
@@ -316,7 +317,8 @@ export function injectTracking(
         (_match, before: string, url: string, after: string) => {
           // Don't double-wrap already-tracked links
           if (url.includes("/api/track/click/")) return _match;
-          const trackUrl = `${baseUrl}/api/track/click/${encodeURIComponent(token)}?url=${encodeURIComponent(url)}`;
+          // Signed, so the redirect only follows links we wrote (G43).
+          const trackUrl = `${baseUrl}/api/track/click/${encodeURIComponent(token)}?url=${encodeURIComponent(url)}&sig=${clickSignature(token, url)}`;
           return `<a ${before}href="${trackUrl}"${after}>`;
         },
       )

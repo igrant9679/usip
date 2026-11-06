@@ -91,6 +91,7 @@ import { runRawMigrations } from "./rawMigrations";
 import { configureTrustProxy } from "./clientIp";
 import { crossSiteCookieWriteGuard, trpcCsrfGuard } from "./csrf";
 import { securityHeaders } from "./securityHeaders";
+import { publicBodyLimit } from "./publicBodyLimit";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -120,6 +121,9 @@ async function startServer() {
   app.disable("x-powered-by");
   app.use(securityHeaders);
   const server = createServer(app);
+  // The public routes are read first, under a small limit (G41); the 50 MB
+  // parsers below then skip them.
+  app.use(publicBodyLimit);
   // Configure body parser with larger size limit for file uploads.
   // `verify` stashes the raw bytes so webhook signature checks (xAI voice)
   // can HMAC the exact payload — JSON.stringify(req.body) is not byte-stable.

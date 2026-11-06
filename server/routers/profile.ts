@@ -12,10 +12,28 @@ import bcrypt from "bcryptjs";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
 import { users, workspaceMembers } from "../../drizzle/schema";
-import { router } from "../_core/trpc";
+import { publicProcedure, router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { revokeAllSessions, useTotpStep } from "../_core/sessionRevocation";
 import { reissueSessionCookie } from "../passwordAuth";
+import { escapeHtml } from "@shared/escapeHtml";
+import { isLockedOut, noteFailure, profileKey } from "../services/accountLockout";
+import { makeEmailChangeToken, readEmailChangeToken } from "../services/emailChangeToken";
+
+/** Email-change requests per user per lock window; each sends two emails (G32). */
+const MAX_EMAIL_CHANGE_REQUESTS = 5;
+const emailChangeKey = (userId: number) => `emailchange:${userId}`;
+
+/**
+ * The signed-in user's own credential checks (current password, 2FA code)
+ * share one per-account lock (audit 2026-10-20, G32), the sign-in lock's
+ * sibling in services/accountLockout.ts.
+ */
+function assertNotLocked(userId: number): void {
+  if (isLockedOut(profileKey(userId))) {
+    throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Too many incorrect attempts. Wait 15 minutes and try again." });
+  }
+}
 
 export const profileRouter = router({
   /**
@@ -91,6 +109,11 @@ export const profileRouter = router({
   /**
    * Change the signed-in user's login email. Password-verified; OAuth-only
    * accounts are refused (their email identity lives at the provider).
+   *
+   * Nothing changes here (audit 2026-10-20, G32): a link goes to the NEW
+   * address and the change happens when it is opened (confirmEmailChange),
+   * and the OLD address is told. Wrong passwords count toward the account's
+   * lock, and requests are capped, since each one sends two emails.
    */
   changeMyEmail: workspaceProcedure
     .input(z.object({
@@ -100,9 +123,15 @@ export const profileRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      assertNotLocked(ctx.user.id);
+      const requests = emailChangeKey(ctx.user.id);
+      if (isLockedOut(requests, Date.now(), MAX_EMAIL_CHANGE_REQUESTS)) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "You've asked to change your email several times in a short while. Wait 15 minutes and try again." });
+      }
+      noteFailure(requests);
       const email = input.newEmail.trim().toLowerCase();
       const [u] = await db
-        .select({ passwordHash: users.passwordHash })
+        .select({ passwordHash: users.passwordHash, email: users.email, name: users.name })
         .from(users)
         .where(eq(users.id, ctx.user.id))
         .limit(1);
@@ -113,13 +142,71 @@ export const profileRouter = router({
         });
       }
       const ok = await bcrypt.compare(input.currentPassword, u.passwordHash);
-      if (!ok) throw new TRPCError({ code: "FORBIDDEN", message: "Current password is incorrect." });
+      if (!ok) {
+        noteFailure(profileKey(ctx.user.id));
+        throw new TRPCError({ code: "FORBIDDEN", message: "Current password is incorrect." });
+      }
+      const oldEmail = (u.email ?? "").trim().toLowerCase();
+      if (email === oldEmail) throw new TRPCError({ code: "BAD_REQUEST", message: "That is already your login email." });
       const [taken] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
       if (taken && taken.id !== ctx.user.id) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "That email is already in use." });
       }
-      await db.update(users).set({ email }).where(eq(users.id, ctx.user.id));
-      return { ok: true, email };
+      const { sendSystemEmail } = await import("../emailDelivery");
+      const { appUrl } = await import("../appUrl");
+      const token = makeEmailChangeToken({ userId: ctx.user.id, oldEmail, newEmail: email });
+      const link = appUrl(`/confirm-email?token=${encodeURIComponent(token)}`);
+      const who = escapeHtml(u.name?.trim() || oldEmail.split("@")[0] || "there");
+      const sent = await sendSystemEmail(ctx.workspace.id, {
+        to: email,
+        subject: "Confirm your new Velocity sign-in email",
+        logPreview: `Email-change confirmation sent to ${email} (link withheld from the log).`,
+        html: `
+<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#0f172a">
+  <h2 style="margin:0 0 8px;font-size:18px">Confirm your new sign-in email</h2>
+  <p style="margin:0 0 16px;color:#475569;font-size:14px">Hi ${who}, you asked to sign in to Velocity with ${escapeHtml(email)} from now on.</p>
+  <p style="margin:24px 0"><a href="${link}" style="display:inline-block;background:#0f766e;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">Confirm this email →</a></p>
+  <p style="margin:0;color:#64748b;font-size:12px">The link works once and expires in 24 hours. If you didn't ask for this, ignore this email: nothing changes.</p>
+</div>`,
+      });
+      if (!sent.ok) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "We couldn't send the confirmation email, so your login email has not changed. Ask an admin to check the workspace's email delivery settings." });
+      }
+      if (oldEmail) {
+        await sendSystemEmail(ctx.workspace.id, {
+          to: oldEmail,
+          subject: "Your Velocity sign-in email is being changed",
+          html: `
+<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#0f172a">
+  <h2 style="margin:0 0 8px;font-size:18px">Your sign-in email is being changed</h2>
+  <p style="margin:0 0 16px;color:#475569;font-size:14px">Hi ${who}, someone signed in to your Velocity account asked to change its sign-in email to ${escapeHtml(email)}. It changes only when that address confirms.</p>
+  <p style="margin:0;color:#64748b;font-size:12px"><strong>If this wasn't you</strong>, change your password now and tell your workspace admin.</p>
+</div>`,
+        }).catch((e) => console.error("[profile.changeMyEmail] notice to the old address failed:", (e as Error).message));
+      }
+      return { ok: true, pending: true as const, email };
+    }),
+
+  /**
+   * PUBLIC: open the link sent to the new address. The signed token is the
+   * credential: it names the account and both addresses, and is honoured only
+   * while the account still has the old one, so it works once.
+   */
+  confirmEmailChange: publicProcedure
+    .input(z.object({ token: z.string().min(10).max(2000) }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const claim = readEmailChangeToken(input.token);
+      if (!claim) throw new TRPCError({ code: "BAD_REQUEST", message: "This link is invalid or has expired. Ask for the change again from Settings → Profile." });
+      const [u] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.id, claim.userId)).limit(1);
+      if (!u || (u.email ?? "").trim().toLowerCase() !== claim.oldEmail) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This link has already been used, or the account's email has changed since it was sent." });
+      }
+      const [taken] = await db.select({ id: users.id }).from(users).where(eq(users.email, claim.newEmail)).limit(1);
+      if (taken && taken.id !== u.id) throw new TRPCError({ code: "BAD_REQUEST", message: "That email is already in use." });
+      await db.update(users).set({ email: claim.newEmail }).where(and(eq(users.id, u.id), eq(users.email, u.email!)));
+      return { ok: true as const, email: claim.newEmail };
     }),
 
   /* ── Multi-factor authentication (TOTP) ─────────────────────────────────
@@ -221,11 +308,14 @@ export const profileRouter = router({
         await db.update(users).set({ mfaTotpSecret: null, mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
         return { ok: true };
       }
+      // Turning 2FA off is a credential check like the others (G32).
+      assertNotLocked(ctx.user.id);
       const { matchTotpStep } = await import("../services/totp");
       const step = input.code ? matchTotpStep(u.secret, input.code) : null;
       const codeOk = step !== null && (await useTotpStep(db, ctx.user.id, step));
       const pwOk = !!input.currentPassword && !!u.passwordHash && (await bcrypt.compare(input.currentPassword, u.passwordHash));
       if (!codeOk && !pwOk) {
+        noteFailure(profileKey(ctx.user.id));
         throw new TRPCError({ code: "FORBIDDEN", message: "Confirm with a current authenticator code or your password." });
       }
       await db.update(users).set({ mfaTotpSecret: null, mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
@@ -256,8 +346,13 @@ export const profileRouter = router({
         if (!input.currentPassword) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Enter your current password." });
         }
+        // A stolen session must not be a free password-guessing oracle (G32).
+        assertNotLocked(ctx.user.id);
         const ok = await bcrypt.compare(input.currentPassword, u.passwordHash);
-        if (!ok) throw new TRPCError({ code: "FORBIDDEN", message: "Current password is incorrect." });
+        if (!ok) {
+          noteFailure(profileKey(ctx.user.id));
+          throw new TRPCError({ code: "FORBIDDEN", message: "Current password is incorrect." });
+        }
       }
       const hash = await bcrypt.hash(input.newPassword, 12);
       await db.update(users).set({ passwordHash: hash }).where(eq(users.id, ctx.user.id));
