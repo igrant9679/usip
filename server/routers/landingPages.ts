@@ -22,7 +22,7 @@ import { resolveBookingUrl } from "../mergeVars";
 import { hostedPageChatSlug } from "../services/hostedChat";
 import { slugify } from "@shared/slugify";
 import { isAllowedRedirect, REDIRECT_URL_ERROR, safeRedirectUrl } from "@shared/safeRedirect";
-import { assertRowInWorkspace } from "../services/foreignIds";
+import { assertRowInWorkspace, sequenceInWorkspace } from "../services/foreignIds";
 
 type FormField = { key: string; label: string; required?: boolean };
 const DEFAULT_FIELDS: FormField[] = [
@@ -321,20 +321,25 @@ export const landingPagesRouter = router({
 
         if (leadId && page.autoEnrollSequenceId) {
           try {
-            // New lead per submit (above), so dedupe on email — a repeat
-            // submitter would otherwise get the whole sequence twice.
-            const { hasActiveEnrollmentForEmail } = await import("../services/enrollmentDedupe");
-            if (await hasActiveEnrollmentForEmail(db, page.workspaceId, page.autoEnrollSequenceId, email)) {
-              console.log(`[landingPages.submit] ${email} already active in sequence ${page.autoEnrollSequenceId} — not re-enrolling`);
+            // The page's own workspace's sequence, or nobody is enrolled (G4).
+            if (!(await sequenceInWorkspace(db, page.workspaceId, page.autoEnrollSequenceId))) {
+              console.warn(`[landingPages.submit] page ${page.id} names sequence ${page.autoEnrollSequenceId}, which is not in its workspace — not enrolling`);
             } else {
-              await db.insert(enrollments).values({
-                workspaceId: page.workspaceId,
-                sequenceId: page.autoEnrollSequenceId,
-                leadId,
-                status: "active",
-                currentStep: 0,
-                nextActionAt: new Date(),
-              } as never);
+              // New lead per submit (above), so dedupe on email — a repeat
+              // submitter would otherwise get the whole sequence twice.
+              const { hasActiveEnrollmentForEmail } = await import("../services/enrollmentDedupe");
+              if (await hasActiveEnrollmentForEmail(db, page.workspaceId, page.autoEnrollSequenceId, email)) {
+                console.log(`[landingPages.submit] ${email} already active in sequence ${page.autoEnrollSequenceId} — not re-enrolling`);
+              } else {
+                await db.insert(enrollments).values({
+                  workspaceId: page.workspaceId,
+                  sequenceId: page.autoEnrollSequenceId,
+                  leadId,
+                  status: "active",
+                  currentStep: 0,
+                  nextActionAt: new Date(),
+                } as never);
+              }
             }
           } catch (e) { console.error("[landingPages.submit] enroll failed:", e); }
         }

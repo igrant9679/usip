@@ -31,7 +31,7 @@ import {
 } from "../../drizzle/schema";
 import { bookSlotForLink, openSlotsForLink } from "./bookingLinks";
 import {
-  decideOffer, emailAskCount, emailInText, handoffLine, handoffReasonFor, mergeVisitor, runChatTurn, wantsHuman,
+  decideOffer, emailAskCount, emailInText, handoffLine, handoffReasonFor, MEETING_REQUEST_FLOOR, mergeVisitor, runChatTurn, wantsHuman,
   type ChatMessage, type HandoffReason, type VisitorFacts,
 } from "../services/chatAgent";
 import { formatKnowledge, selectKnowledge } from "../services/chatKnowledge";
@@ -40,6 +40,7 @@ import { appUrl } from "../appUrl";
 import { describePageContext } from "../services/chatPageContext";
 import { getChatFunnelStats } from "../services/performanceMetrics";
 import { slugify } from "@shared/slugify";
+import { assertOwnerInWorkspace, assertRowInWorkspace, sequenceInWorkspace } from "../services/foreignIds";
 
 /** When a verification code cannot go out (limits, or no mailbox): never leave them waiting for it. */
 export const CODE_NOT_SENT = "I wasn't able to send a verification code just now, so I can't look up your details here. Someone from the team will follow up with you by email.";
@@ -148,6 +149,10 @@ export const chatAgentsRouter = router({
   create: adminWsProcedure.input(contentInput).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // Both ids are caller input and both are acted on by a PUBLIC widget: the
+    // sequence it enrols visitors into, and whose calendar it books (G4).
+    await assertRowInWorkspace(db, "sequence", input.autoEnrollSequenceId, ctx.workspace.id);
+    await assertOwnerInWorkspace(ctx.workspace.id, input.bookingUserId);
     const name = input.name ?? "Website chat";
     const slug = `${slugify(name) || "chat"}-${Date.now().toString(36).slice(-4)}`.slice(0, 80);
     const r = await db.insert(chatAgents).values({
@@ -180,6 +185,9 @@ export const chatAgentsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const { id, ...rest } = input;
+    // Same checks as create (G4).
+    await assertRowInWorkspace(db, "sequence", rest.autoEnrollSequenceId, ctx.workspace.id);
+    await assertOwnerInWorkspace(ctx.workspace.id, rest.bookingUserId);
     const set: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(rest)) if (v !== undefined) set[k] = v;
     if (Object.keys(set).length === 0) return { ok: true as const };
@@ -704,6 +712,16 @@ export const chatAgentsRouter = router({
       if (!agent || agent.status !== "published" || agent.mode !== "auto") {
         throw new TRPCError({ code: "FORBIDDEN", message: "Booking is not available on this chat." });
       }
+      /**
+       * Only a chat that has earned the slots may book them (audit 2026-10-20,
+       * G17). `send` offers times on one of decideOffer's two routes, a score
+       * at the threshold or a visitor who asked above the floor; this was
+       * reachable with the token from a one-word chat, which made the widget a
+       * way to put any address on the rep's calendar.
+       */
+      if (!session.qualified && Number(session.score ?? 0) < MEETING_REQUEST_FLOOR) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Tell me a little more about what you need first, and I'll offer some times." });
+      }
       const link = await linkForAgent(agent);
       if (!link) throw new TRPCError({ code: "NOT_FOUND", message: "No availability is published for this team." });
 
@@ -827,21 +845,27 @@ async function createLeadForSession(
 
   if (leadId && agent.autoEnrollSequenceId) {
     try {
-      // A returning visitor starts a NEW session and this function inserts a new
-      // lead, so dedupe on the email rather than the lead id — otherwise someone
-      // who chats twice receives the whole sequence twice.
-      const { hasActiveEnrollmentForEmail } = await import("../services/enrollmentDedupe");
-      if (await hasActiveEnrollmentForEmail(db, agent.workspaceId, agent.autoEnrollSequenceId, visitor.email)) {
-        console.log(`[chatAgents] ${visitor.email} already active in sequence ${agent.autoEnrollSequenceId} — not re-enrolling`);
+      // The agent's own workspace's sequence, or nobody is enrolled (G4): an
+      // agent saved before create/update checked it can still name another's.
+      if (!(await sequenceInWorkspace(db, agent.workspaceId, agent.autoEnrollSequenceId))) {
+        console.warn(`[chatAgents] agent ${agent.id} names sequence ${agent.autoEnrollSequenceId}, which is not in its workspace — not enrolling`);
       } else {
-        await db.insert(enrollments).values({
-          workspaceId: agent.workspaceId,
-          sequenceId: agent.autoEnrollSequenceId,
-          leadId,
-          status: "active",
-          currentStep: 0,
-          nextActionAt: new Date(),
-        } as never);
+        // A returning visitor starts a NEW session and this function inserts a new
+        // lead, so dedupe on the email rather than the lead id — otherwise someone
+        // who chats twice receives the whole sequence twice.
+        const { hasActiveEnrollmentForEmail } = await import("../services/enrollmentDedupe");
+        if (await hasActiveEnrollmentForEmail(db, agent.workspaceId, agent.autoEnrollSequenceId, visitor.email)) {
+          console.log(`[chatAgents] ${visitor.email} already active in sequence ${agent.autoEnrollSequenceId} — not re-enrolling`);
+        } else {
+          await db.insert(enrollments).values({
+            workspaceId: agent.workspaceId,
+            sequenceId: agent.autoEnrollSequenceId,
+            leadId,
+            status: "active",
+            currentStep: 0,
+            nextActionAt: new Date(),
+          } as never);
+        }
       }
     } catch (e) {
       console.error("[chatAgents] enroll failed:", (e as Error).message);

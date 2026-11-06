@@ -69,6 +69,7 @@ vi.mock("./_core/activeMembers", async (importActual) => ({
 }));
 
 import { appRouter } from "./routers";
+import { invalidateArchivedWorkspaceCache } from "./_core/workspaceArchive";
 
 interface Recorded {
   inserts: { table: unknown; values: Record<string, unknown> }[];
@@ -321,10 +322,19 @@ describe("landingPages.submit — the submission row", () => {
   });
 
   it("still enrols into the configured sequence — the row is additive, not a replacement", async () => {
+    invalidateArchivedWorkspaceCache();
     const r = rec();
     h.db = makeDb({
       selects: [
         [page({ autoEnrollSequenceId: 9 })],
+        // 2026-11-06 (audit G4): the submit now reads the sequence back in the
+        // page's workspace before enrolling, so this script answers that read
+        // too, and the archived-workspace read (S1a) ahead of it, which used
+        // to take the dedupe's `[]` and leave the dedupe failing open on an
+        // exhausted queue. What it pins is unchanged: a configured sequence
+        // still enrols.
+        [], // archivedWorkspaceIds: nothing archived (cache cleared below)
+        [{ id: 9 }], // the sequence is in this page's workspace
         [], // enrollmentDedupe: no active enrollment for this email
       ],
       rec: r,

@@ -61,7 +61,24 @@ const PUBLIC_WRITE_PROCEDURES = [
   "bookingLinks.book",
   "forms.submit",
   "landingPages.submit",
+  // The chat widget books through the same path as /b/:slug (audit
+  // 2026-10-20, G17), and was the one public write with no ceiling at all.
+  "chatAgents.book",
+  // The proposal portal's writes (audit 2026-10-20, R92): each files a task
+  // and a notification for the team, and accept closes a deal.
+  "proposals.acceptByToken",
+  "proposals.submitFeedback",
+  "proposals.requestExtension",
 ];
+
+/**
+ * The two public procedures that put a meeting on a rep's calendar and mail an
+ * invite to a caller-typed address (G17). They get a second, hourly ceiling on
+ * top of the per-minute one: ten a minute still let one address book a rep's
+ * whole fortnight in an afternoon. A person books once; five an hour is far
+ * past that. The per-address and per-link caps are in bookingLinks.ts.
+ */
+const PUBLIC_BOOKING_PROCEDURES = ["bookingLinks.book", "chatAgents.book"];
 
 export const publicLlmLimiter = rateLimit({
   windowMs: 60_000,
@@ -92,6 +109,20 @@ export const publicWriteLimiter = rateLimit({
   skip: () => process.env.NODE_ENV === "test",
 });
 
+export const publicBookingLimiter = rateLimit({
+  windowMs: 60 * 60_000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: ipKey,
+  handler: (_req: Request, res: Response) => {
+    res.status(429).json({
+      error: { message: "Too many bookings from this address. Please try again later.", code: -32029 },
+    });
+  },
+  skip: () => process.env.NODE_ENV === "test",
+});
+
 /**
  * The website visitor beacon (`/api/track`). Public by nature, and one page view
  * is one call, so a whole office behind one address stays well under this.
@@ -116,6 +147,35 @@ export function isMeteredPublicPath(path: string): boolean {
 /** True when this tRPC request targets a public procedure that WRITES. */
 export function isPublicWritePath(path: string): boolean {
   return PUBLIC_WRITE_PROCEDURES.some((p) => path.includes(p));
+}
+
+/** True when this tRPC request books a meeting from a public page. */
+export function isPublicBookingPath(path: string): boolean {
+  return PUBLIC_BOOKING_PROCEDURES.some((p) => path.includes(p));
+}
+
+type Limiter = (req: Request, res: Response, next: NextFunction) => unknown;
+
+/**
+ * Every limiter a tRPC path passes through, in order. Model spend is its own
+ * ceiling; a booking passes the hourly booking ceiling AND the write one.
+ */
+export function publicTrpcLimiters(path: string): Limiter[] {
+  if (isMeteredPublicPath(path)) return [publicLlmLimiter];
+  const out: Limiter[] = [];
+  if (isPublicBookingPath(path)) out.push(publicBookingLimiter);
+  if (isPublicWritePath(path)) out.push(publicWriteLimiter);
+  return out;
+}
+
+/** Run limiters one after another; the first to answer (429) ends the chain. */
+export function runLimiters(limiters: Limiter[], req: Request, res: Response, next: NextFunction): void {
+  const step = (i: number) => (err?: unknown) => {
+    if (err) return next(err);
+    if (i >= limiters.length) return next();
+    limiters[i](req, res, step(i + 1) as NextFunction);
+  };
+  step(0)();
 }
 
 /**
@@ -183,10 +243,8 @@ export function registerPublicRateLimits(app: Express): void {
     voiceWebhookLimiter(req, res, next),
   );
   app.use("/api/trpc", (req: Request, res: Response, next: NextFunction) => {
-    const path = req.path ?? "";
-    // Model spend first: it is the tighter concern and the higher ceiling.
-    if (isMeteredPublicPath(path)) return publicLlmLimiter(req, res, next);
-    if (isPublicWritePath(path)) return publicWriteLimiter(req, res, next);
-    return next();
+    // Model spend first (publicTrpcLimiters): it is the tighter concern and
+    // the higher ceiling.
+    runLimiters(publicTrpcLimiters(req.path ?? ""), req, res, next);
   });
 }
