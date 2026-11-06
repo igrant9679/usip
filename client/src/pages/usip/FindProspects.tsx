@@ -41,6 +41,7 @@ import {
   ChevronRight,
   Sparkles,
   RefreshCw,
+  Archive,
 } from "lucide-react";
 import { QueryError } from "@/components/usip/Shell";
 
@@ -701,17 +702,112 @@ function RecentRuns({ activeRunId, onOpen }: { activeRunId: number | null; onOpe
 }
 
 /* ─── Saved prospect queue ───────────────────────────────────────────── */
+/** How many people a queue page shows; the rest are a page away, not unreachable. */
+const QUEUE_PAGE_SIZE = 50;
+
+/**
+ * The Needs Review and Verified queues (audit 2026-10-20, P17). Needs Review
+ * had no way to decide anything — the person page offered only Archive — and
+ * both queues stopped at the first 50 while showing a larger total. Now each
+ * row and any selection can be approved or archived through
+ * `prospects.review`, and the queue pages through everything it counts.
+ */
 function ProspectQueue({ status, emptyText }: { status: "verified" | "needs_review"; emptyText: string }) {
-  const { data, isLoading, error, refetch } = trpc.prospects.list.useQuery({ verificationStatus: status, perPage: 50, page: 1 });
+  const utils = trpc.useUtils();
+  const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const { data, isLoading, error, refetch } = trpc.prospects.list.useQuery({ verificationStatus: status, perPage: QUEUE_PAGE_SIZE, page });
+  const review = trpc.prospects.review.useMutation({
+    onSuccess: (r, v) => {
+      const did = v.decision === "verified" ? "Approved" : "Archived";
+      toast.success(`${did} ${r.updated}${r.skipped ? ` · ${r.skipped} already decided elsewhere` : ""}`);
+      setSelected(new Set());
+      // Both queues and the tab's waiting count read this list.
+      utils.prospects.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  // A last page emptied by decisions steps back to one that has people.
+  useEffect(() => {
+    if (data && page > 1 && data.data.length === 0 && data.total > 0) setPage(Math.ceil(data.total / QUEUE_PAGE_SIZE));
+  }, [data, page]);
+
   if (isLoading) return <div className="text-sm text-muted-foreground p-6 text-center">Loading…</div>;
   if (error && !data) return <QueryError what="these prospects" message={error.message} onRetry={() => refetch()} />;
   if (!data || data.data.length === 0) {
     return <div className="text-sm text-muted-foreground p-6 text-center border rounded-lg border-dashed">{emptyText}</div>;
   }
+  const reviewing = status === "needs_review";
+  const pageIds = data.data.map((p: any) => p.id as number);
+  const allOnPage = pageIds.length > 0 && pageIds.every((id: number) => selected.has(id));
+  const pages = Math.max(1, Math.ceil(data.total / QUEUE_PAGE_SIZE));
+  const first = (page - 1) * QUEUE_PAGE_SIZE + 1;
+  const last = Math.min(page * QUEUE_PAGE_SIZE, data.total);
+  const toggle = (id: number) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const decide = (ids: number[], decision: "verified" | "rejected") => review.mutate({ ids, decision });
+  const chosen = Array.from(selected);
+
   return (
     <div className="space-y-2">
-      <div className="text-[11px] text-muted-foreground">{data.total} prospect{data.total === 1 ? "" : "s"}</div>
-      {data.data.map((p: any) => <ProspectRow key={p.id} p={p} />)}
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+        {reviewing && (
+          <Checkbox
+            aria-label={allOnPage ? "Clear the selection on this page" : "Select everyone on this page"}
+            className="size-3.5"
+            checked={allOnPage}
+            onCheckedChange={() => setSelected(allOnPage ? new Set() : new Set(pageIds))}
+          />
+        )}
+        <span>{data.total > QUEUE_PAGE_SIZE ? `${first}–${last} of ${data.total}` : `${data.total}`} prospect{data.total === 1 ? "" : "s"}</span>
+        {reviewing && chosen.length > 0 && (
+          <span className="inline-flex items-center gap-1.5">
+            <span>· {chosen.length} selected</span>
+            <Button size="sm" variant="outline" className="h-6 text-[11px] gap-1" disabled={review.isPending} onClick={() => decide(chosen, "verified")}>
+              <CheckCircle2 className="size-3" /> Approve
+            </Button>
+            <Button size="sm" variant="outline" className="h-6 text-[11px] gap-1 text-destructive" disabled={review.isPending}
+              onClick={() => confirmAction({
+                title: `Archive ${chosen.length} prospect${chosen.length === 1 ? "" : "s"}?`,
+                description: "They leave this queue and are kept as archived. Nothing is deleted.",
+                confirmLabel: "Archive",
+              }, () => decide(chosen, "rejected"))}>
+              <Archive className="size-3" /> Archive
+            </Button>
+          </span>
+        )}
+      </div>
+      {data.data.map((p: any) => (
+        <div key={p.id} className="flex items-start gap-2">
+          {reviewing && (
+            <Checkbox
+              aria-label={`Select ${p.firstName} ${p.lastName}`}
+              className="size-3.5 mt-4 shrink-0"
+              checked={selected.has(p.id)}
+              onCheckedChange={() => toggle(p.id)}
+            />
+          )}
+          <div className="flex-1 min-w-0"><ProspectRow p={p} /></div>
+          {reviewing && (
+            <div className="flex flex-col gap-1 shrink-0 pt-2">
+              <Button size="sm" variant="outline" className="h-7 text-xs gap-1" disabled={review.isPending}
+                aria-label={`Approve ${p.firstName} ${p.lastName}`} onClick={() => decide([p.id], "verified")}>
+                <CheckCircle2 className="size-3" /> Approve
+              </Button>
+              <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 text-destructive" disabled={review.isPending}
+                aria-label={`Archive ${p.firstName} ${p.lastName}`} onClick={() => decide([p.id], "rejected")}>
+                <Archive className="size-3" /> Archive
+              </Button>
+            </div>
+          )}
+        </div>
+      ))}
+      {pages > 1 && (
+        <div className="flex items-center justify-center gap-2 pt-1 text-xs">
+          <Button size="sm" variant="outline" className="h-7" disabled={page <= 1} onClick={() => { setPage(page - 1); setSelected(new Set()); }}>Previous</Button>
+          <span className="text-muted-foreground tabular-nums">Page {page} of {pages}</span>
+          <Button size="sm" variant="outline" className="h-7" disabled={page >= pages} onClick={() => { setPage(page + 1); setSelected(new Set()); }}>Next</Button>
+        </div>
+      )}
     </div>
   );
 }

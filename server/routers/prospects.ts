@@ -538,6 +538,38 @@ export const prospectsRouter = router({
       return { ok: true };
     }),
 
+  /**
+   * The Needs Review queue's decision, for one person or a page of them:
+   * approve (verified) or archive (rejected), as a human (audit 2026-10-20,
+   * P17: the queue had no actions and the person page offered only Archive).
+   * Only rows still awaiting review move: one decided elsewhere since the
+   * list loaded is counted as skipped, not overwritten.
+   */
+  review: workspaceProcedure
+    .input(z.object({
+      ids: z.array(z.number().int().positive()).min(1).max(200),
+      decision: z.enum(["verified", "rejected"]),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const ids = Array.from(new Set(input.ids));
+      const waiting = await db.select({ id: prospects.id }).from(prospects)
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, ids), eq(prospects.verificationStatus, "needs_review")));
+      const moved = waiting.map((r) => r.id);
+      if (moved.length > 0) {
+        await db.update(prospects)
+          .set({ verificationStatus: input.decision, verificationSetBy: "human", verificationSetByUserId: ctx.user.id, verificationSetAt: new Date() } as never)
+          .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, moved), eq(prospects.verificationStatus, "needs_review")));
+        await recordAudit({
+          workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update",
+          entityType: "prospect_review", entityId: 0,
+          after: { decision: input.decision, ids: moved },
+        });
+      }
+      return { updated: moved.length, skipped: ids.length - moved.length };
+    }),
+
   /** Re-run discovery scoped to one prospect — uses their stored
    *  name+company to launch a focused person-mode search. The pipeline's
    *  merge-on-dedup logic updates this prospect's row in place rather

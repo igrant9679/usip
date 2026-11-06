@@ -92,6 +92,14 @@ export default function ProspectDetail() {
     onSuccess: () => { toast.success("Archived"); utils.prospects.get.invalidate({ id }); },
     onError: (e) => toast.error(e.message),
   });
+  const approve = trpc.prospects.review.useMutation({
+    onSuccess: (r) => {
+      toast.success(r.updated ? "Approved" : "Already decided elsewhere");
+      utils.prospects.get.invalidate({ id });
+      utils.prospects.list.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const reEnrich = trpc.prospects.reEnrich.useMutation({
     onSuccess: (r) => {
       toast.success(`Re-enriched — ${r.rawFindCount} new raw finds, score now ${r.highConfidenceCount} high / ${r.mediumConfidenceCount} medium / ${r.lowConfidenceCount} low`);
@@ -173,6 +181,12 @@ export default function ProspectDetail() {
             Re-enrich
           </Button>
           <Button variant="outline" size="sm" onClick={startEdit} className="gap-1.5"><Pencil className="size-3.5" /> Edit</Button>
+          {/* Awaiting review, the page can approve as well as archive (audit 2026-10-20, P17). */}
+          {p.verificationStatus === "needs_review" && (
+            <Button variant="outline" size="sm" onClick={() => approve.mutate({ ids: [id], decision: "verified" })} disabled={approve.isPending} className="gap-1.5">
+              <CheckCircle2 className="size-3.5" /> Approve
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={() => archive.mutate({ id })} disabled={archive.isPending} className="gap-1.5 text-destructive">
             <Archive className="size-3.5" /> Archive
           </Button>
