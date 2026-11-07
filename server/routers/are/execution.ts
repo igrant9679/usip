@@ -50,7 +50,7 @@ import { activeOwnerOrNull, workspaceNotifyUserId } from "../../_core/activeMemb
 import { areNotify, notifyPersonLabel } from "./notify";
 import { isSendableChannel, unsendableReason } from "@shared/areSequenceSteps";
 import { markAreProspectReplied } from "../../services/are/stepHold";
-import { normaliseAreSuppression } from "../../services/suppression";
+import { normaliseAreSuppression, suppressionPersonId } from "../../services/suppression";
 
 /* ─── Prospect → CRM promotion ──────────────────────────────────────────── */
 
@@ -451,6 +451,8 @@ export async function processSignal(
                 linkedinUrl: prospect.linkedinUrl ?? undefined,
                 reason: "unsubscribe" as const,
                 addedAt: new Date(),
+                // The person, not only this address (F7).
+                prospectId: prospect.personProspectId ?? null,
               }) as never);
               await db.update(prospectQueue).set({ sequenceStatus: "skipped" }).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
               actionTaken = "added_suppression";
@@ -528,6 +530,8 @@ export async function processSignal(
         email: prospect.email ?? undefined,
         reason: signalType === "email_bounce" ? "bounce" as const : "unsubscribe" as const,
         addedAt: new Date(),
+        // An unsubscribe is the person's; a bounce is only the address's (F7).
+        prospectId: signalType === "email_bounce" ? null : prospect.personProspectId ?? null,
       }) as never);
       await db.update(prospectQueue).set({ sequenceStatus: "skipped" }).where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)));
       actionTaken = "added_suppression";
@@ -1235,6 +1239,8 @@ export const executionRouter = router({
       linkedinUrl: z.string().optional(),
       companyDomain: z.string().optional(),
       reason: z.enum(["unsubscribe", "bounce", "competitor", "existing_customer", "manual", "do_not_contact"]),
+      /** The People row, when the caller knows it (F7). */
+      personId: z.number().int().positive().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -1246,6 +1252,10 @@ export const executionRouter = router({
         companyDomain: input.companyDomain,
         reason: input.reason,
         addedByUserId: ctx.user.id,
+        // By person where it can be told (F7); a whole-domain entry is about no one.
+        prospectId: input.email || input.personId
+          ? await suppressionPersonId(ctx.workspace.id, { reason: input.reason, prospectId: input.personId ?? null, email: input.email ?? null })
+          : null,
       }) as never);
       return { success: true };
     }),

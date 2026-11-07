@@ -181,19 +181,17 @@ describe("emailsSent", () => {
       why: "sendScheduleNow — a dashboard report mailed to recipients.",
       sends: 1,
     },
-    "server/routers/smtpConfig.ts": {
-      // The count matters: asserting only that the FILE records lets a send
-      // path be deleted while another keeps the test green — the whole-file
-      // `toContain` weakness, caught here by a mutation that removed the
-      // sendDraft increment. 2026-11-06 (audit O47): ONE now. sendBulkApproved
-      // sends through deliverEmailDraft, the metered adapter path the row's
-      // Send uses, and no longer calls the transporter itself.
-      why: "sendDraft — an approved draft through the workspace SMTP config.",
-      sends: 1,
-    },
+    // 2026-11-07 (audit F24): smtpConfig.ts left this list. Its last draft
+    // path, sendDraft, sends through deliverEmailDraft — the metered adapter
+    // path the row's Send uses — as sendBulkApproved has since O47. The raw
+    // send left in the file is the connection test, listed below.
   };
 
   const NOT_COUNTED_RAW: Record<string, string> = {
+    "server/routers/smtpConfig.ts":
+      "smtpConfig.test only: the Settings connection check, one message to the admin's own address. " +
+      "Every draft send in this file goes through deliverEmailDraft and the metered adapter (F24), " +
+      "so a raw send here that is not the test is a new path and must be counted.",
     "server/services/warmupEngine.ts":
       "Warmup traffic: the workspace mailing its OWN mailboxes to build sender reputation. " +
       "Counting it would make the Billing tile mostly self-sends and tell the owner nothing " +

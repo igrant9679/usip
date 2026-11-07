@@ -7,21 +7,24 @@
  * IP→company de-anonymization needs a paid IP-intelligence provider and is
  * not included.
  *
- * "Known prospect" matching is NOT offered (audit 2026-10-20, P88). A visit
- * names a record only when its link carries `?vid=<id>`; nothing in Velocity
- * adds that to outbound links, and the id is not signed, so anyone who has the
- * public snippet can claim any record. The page says so, and shows such
- * visits as claims, not as identified prospects. Signing the id, then adding
- * it to links, is the work left.
+ * Known-visitor matching (audit 2026-10-20, P5, P88, F40). Velocity adds a
+ * SIGNED visitor id to every link to the workspace's own site in its emails
+ * (sequence, campaign and record sends; services/visitorLinks.ts), while click
+ * tracking is on. A visit through such a link is that person's, and shows as
+ * verified. An unsigned id is still a claim anyone with the snippet could make,
+ * and shows as one.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
-import { Globe, Copy, Check, Eye, Building2, Flame, Users } from "lucide-react";
+import { Globe, Copy, Check, Eye, Flame, Users, ShieldCheck } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { toast } from "sonner";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { QueryError } from "@/components/usip/Shell";
 
 const INTENT_TONE: Record<string, string> = {
@@ -44,6 +47,16 @@ export default function WebsiteVisitors() {
 
   const stats = trpc.websiteVisitors.stats.useQuery(undefined as any, { retry: false });
   const known = trpc.websiteVisitors.listKnown.useQuery({ limit: 100 } as any, { retry: false });
+  // Where outreach adds a signed visitor id (F40), and the switch that allows it.
+  const sites = trpc.websiteVisitors.trackedSites.useQuery(undefined as any, { retry: false });
+  const { isAdmin } = useWorkspaceRole();
+  const utils = trpc.useUtils();
+  const [extraSites, setExtraSites] = useState("");
+  useEffect(() => { setExtraSites(sites.data?.listed ?? ""); }, [sites.data?.listed]);
+  const saveSites = trpc.websiteVisitors.setTrackedSites.useMutation({
+    onSuccess: () => { utils.websiteVisitors.trackedSites.invalidate(); toast.success("Tracked sites saved"); },
+    onError: (e) => toast.error(e.message),
+  });
 
   const slug = current?.slug ?? "YOUR_WORKSPACE_KEY";
   const snippet = `<!-- Velocity website-visitor tracking -->\n<script async src="https://getvelocityai.app/v/track.js"\n  data-workspace="${slug}"></script>`;
@@ -60,7 +73,7 @@ export default function WebsiteVisitors() {
     } catch { /* clipboard may be blocked; ignore */ }
   };
 
-  const s = stats.data ?? { visits30d: 0, uniqueVisitors: 0, knownVisitors: 0, highIntent: 0 };
+  const s = stats.data ?? { visits30d: 0, uniqueVisitors: 0, knownVisitors: 0, verifiedVisitors: 0, highIntent: 0 };
   const rows = (known.data ?? []) as any[];
 
   const stat = (icon: any, label: string, value: string | number) => {
@@ -99,8 +112,8 @@ export default function WebsiteVisitors() {
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               {stat(Eye, "Visits (30d)", s.visits30d)}
               {stat(Users, "Unique visitors", s.uniqueVisitors)}
-              {/* Visits whose link named a record — an unverified claim (P88). */}
-              {stat(Building2, "Records named (unverified)", s.knownVisitors)}
+              {/* People a signed link id identified (F40); unsigned ids stay claims (P88). */}
+              {stat(ShieldCheck, "People identified", (s as { verifiedVisitors?: number }).verifiedVisitors ?? 0)}
               {stat(Flame, "High-intent visits", s.highIntent)}
             </div>
           )}
@@ -127,19 +140,44 @@ export default function WebsiteVisitors() {
             </div>
           </div>
 
+          {/* signed visitor links (F40) */}
+          <div className="rounded-xl border bg-card p-5 shadow-sm space-y-2">
+            <h2 className="text-base font-semibold flex items-center gap-2"><ShieldCheck className="size-4" style={{ color: accent }} /> Knowing who visited</h2>
+            <p className="text-sm text-muted-foreground">
+              Links to your own site in Velocity's emails (sequences, campaigns and emails from a record) carry a signed id
+              for the person they went to, so a visit through one is known to be theirs. Links to other sites are left alone.
+            </p>
+            {sites.data && (
+              <p className="text-xs text-muted-foreground">
+                {sites.data.clickTracking
+                  ? sites.data.hosts.length
+                    ? <>Added to links to: <span className="font-medium text-foreground">{sites.data.hosts.join(", ")}</span>.</>
+                    : <>No site to add it to yet: set your company website in Settings → Branding, or list your sites below.</>
+                  : <>Off: click tracking is switched off in Settings → Email, and this follows it.</>}
+              </p>
+            )}
+            {isAdmin && (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <Input aria-label="More of your own sites" value={extraSites} onChange={(e) => setExtraSites(e.target.value)} placeholder="Other sites of yours, e.g. shop.example.com, example.co.uk" className="max-w-md h-8 text-sm" />
+                <Button size="sm" variant="outline" disabled={saveSites.isPending} onClick={() => saveSites.mutate({ domains: extraSites })}>
+                  {saveSites.isPending ? "Saving…" : "Save sites"}
+                </Button>
+              </div>
+            )}
+          </div>
+
           {/* known-visitor intent */}
           <section>
-            <h2 className="text-sm font-semibold mb-1 flex items-center gap-2"><Flame className="size-4" style={{ color: accent }} /> Visits that name a record</h2>
+            <h2 className="text-sm font-semibold mb-1 flex items-center gap-2"><Flame className="size-4" style={{ color: accent }} /> Visits that name a person</h2>
             <p className="text-xs text-muted-foreground mb-2 max-w-3xl">
-              Matching a visit to a prospect isn't available yet. A visit names a record only when its link carries a
-              record id, nothing in Velocity adds one to your emails, and the id isn't signed, so anyone with your
-              snippet can name any record. Treat these as claims, not as identified prospects.
+              Verified visits came through a link Velocity signed for that person. An unverified one carried an id that
+              wasn't signed, which anyone with your snippet could type, so treat it as a claim; it files no follow-up task.
             </p>
             <div className="rounded-xl border bg-card overflow-x-auto shadow-sm">
               <table className="w-full text-sm">
                 <thead className="border-b bg-muted/30 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                   <tr>
-                    <th className="px-3 py-2 font-medium">Record named</th>
+                    <th className="px-3 py-2 font-medium">Person</th>
                     <th className="px-3 py-2 font-medium">Page</th>
                     <th className="px-3 py-2 font-medium">Intent</th>
                     <th className="px-3 py-2 font-medium">When</th>
@@ -159,12 +197,15 @@ export default function WebsiteVisitors() {
                       </div>
                     </td></tr>
                   ) : rows.map((r) => {
-                    const href = r.recordType === "contact" ? `/contacts/${r.recordId}` : `/leads/${r.recordId}`;
+                    const href = r.recordType === "contact" ? `/contacts/${r.recordId}` : r.recordType === "prospect" ? `/prospects/${r.recordId}` : `/leads/${r.recordId}`;
                     return (
                       <tr key={r.id} className="border-b border-border/60 last:border-0 hover:bg-muted/30">
                         <td className="px-3 py-2">
                           <Link href={href} className="font-medium hover:underline">{r.name || "Unknown"}</Link>
                           {r.company && <span className="text-xs text-muted-foreground"> · {r.company}</span>}
+                          {r.verified
+                            ? <span className="ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Verified</span>
+                            : <span className="ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-medium bg-secondary text-muted-foreground">Unverified claim</span>}
                         </td>
                         {/* Wraps instead of cutting the path off (audit 2026-10-20, P160). */}
                         <td className="px-3 py-2 text-muted-foreground max-w-[280px] break-all">{r.path}</td>

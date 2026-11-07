@@ -3,9 +3,9 @@ import { inSendWindow } from "../services/sendWindow";
 import { TRPCError } from "@trpc/server";
 import { assertOwnerInWorkspace } from "../services/foreignIds";
 import { createHash } from "crypto";
-import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { accounts, activities, campaigns, chatAgents, contacts, emailDrafts, emailReplies, enrollments, forms, landingPages, leads, prospects, segmentSequenceRules, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaceMembers, workspaces, workspaceSettings } from "../../drizzle/schema";
+import { accounts, activities, campaigns, chatAgents, contacts, emailDrafts, emailReplies, enrollments, forms, landingPages, leads, priorityScoreResults, prospects, segmentSequenceRules, senderPoolMembers, sendingAccounts, sequenceAbVariants, sequenceEdges, sequenceNodes, sequences, unipileAccounts, users, workspaceMembers, workspaces, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { checkPermission, getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
@@ -49,6 +49,11 @@ import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../services/humanCopy";
 import { renderMergeFields, resolveBookingUrl, scrubForSend } from "../mergeVars";
 import { assertOutboundNotPaused } from "../services/outboundPause";
+import { autoSendGroups, sequenceAutoSend } from "@shared/sequenceAutoSend";
+import { nextSendAt } from "@shared/recipientTime";
+import { enrollmentRecipientZones, sequenceUsesRecipientTime } from "../services/recipientZone";
+import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { addVisitorIdsToEmail } from "../services/visitorLinks";
 
 /** One escaper for the whole codebase — @shared/escapeHtml. The comment here
  *  used to read "duplicated from crm.ts — separate router", and duplication is
@@ -906,6 +911,16 @@ export const sequencesRouter = router({
       sendWindowEnd: z.string().regex(/^\d{2}:\d{2}$/).optional(),
       skipWeekends: z.boolean().optional(),
       replyDetection: z.boolean().optional(),
+      /**
+       * Review or auto-send for this sequence (audit 2026-10-20, F22): null or
+       * "workspace" follows the workspace switch; a threshold or unscored
+       * choice of null falls back to the workspace's.
+       */
+      autoSend: z.enum(["workspace", "review", "auto"]).nullable().optional(),
+      autoSendScoreMin: z.number().int().min(0).max(100).nullable().optional(),
+      autoSendAllowUnscored: z.boolean().nullable().optional(),
+      /** Each step in the recipient's own time zone (F18). Off unless set. */
+      recipientTime: z.boolean().nullable().optional(),
     }).optional(),
   })).mutation(async ({ ctx, input }) => {
     await checkPermission(ctx, "manage_sequences");
@@ -1268,8 +1283,36 @@ export const sequencesRouter = router({
     for (const l of lRows as any[]) lMap[l.id] = `${l.firstName ?? ""} ${l.lastName ?? ""}`.trim();
     const pMap: Record<number, string> = {};
     for (const p of pRows as any[]) pMap[p.id] = `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim();
+    /**
+     * "Next send at" per person (audit 2026-10-20, F18): when the next step
+     * is due, moved into the sequence's send window, in the zone it runs in:
+     * the person's own when the sequence sends in each person's time zone,
+     * else the sequence's (or the workspace's). Only for one sequence's list,
+     * where the window is known.
+     */
+    const timing = new Map<number, { nextSendAt: number | null; sendZone: string; zoneSource: string }>();
+    if (input?.sequenceId) {
+      const [seqRow] = await db.select({ settings: sequences.settings }).from(sequences)
+        .where(and(eq(sequences.id, input.sequenceId), eq(sequences.workspaceId, ctx.workspace.id))).limit(1);
+      if (seqRow) {
+        const st = (seqRow.settings ?? {}) as { timezone?: string; sendWindowStart?: string; sendWindowEnd?: string; skipWeekends?: boolean };
+        const seqZone = st.timezone || (await getWorkspaceTimezone(ctx.workspace.id));
+        const window = { sendWindowStart: st.sendWindowStart || "08:00", sendWindowEnd: st.sendWindowEnd || "18:00", skipWeekends: st.skipWeekends !== false };
+        const running = scoped.filter((r) => r.status === "active");
+        const zones = sequenceUsesRecipientTime(seqRow.settings) && running.length
+          ? await enrollmentRecipientZones(db, ctx.workspace.id, running, seqZone)
+          : null;
+        for (const r of running) {
+          const z = zones?.get(r.id) ?? { zone: seqZone, source: "sequence" as const };
+          timing.set(r.id, { nextSendAt: nextSendAt(r, z.zone, window), sendZone: z.zone, zoneSource: z.source });
+        }
+      }
+    }
     return scoped.map((r) => ({
       ...r,
+      nextSendAt: timing.get(r.id)?.nextSendAt ?? null,
+      sendZone: timing.get(r.id)?.sendZone ?? null,
+      zoneSource: timing.get(r.id)?.zoneSource ?? null,
       personName: r.contactId ? (cMap[r.contactId]?.name ?? null)
         : r.leadId ? (lMap[r.leadId] ?? null)
         : r.prospectId ? (pMap[r.prospectId] ?? null)
@@ -1731,13 +1774,16 @@ export async function resolveDraftRecipient(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
   workspaceId: number,
   draft: { toEmail?: string | null; toContactId?: number | null; toLeadId?: number | null; toProspectId?: number | null },
-): Promise<{ toEmail: string | null; firstName: string | null; lastName: string | null; title: string | null; company: string | null }> {
+): Promise<{ toEmail: string | null; firstName: string | null; lastName: string | null; title: string | null; company: string | null; personId: number | null }> {
   const out = {
     toEmail: draft.toEmail ?? null,
     firstName: null as string | null,
     lastName: null as string | null,
     title: null as string | null,
     company: null as string | null,
+    // The People row, so the suppression check asks by person too (audit
+    // 2026-10-20, F7): a prospect draft's own id, a contact's People link.
+    personId: (draft.toProspectId ?? null) as number | null,
   };
   if (draft.toContactId) {
     const [c] = await db
@@ -1747,6 +1793,7 @@ export async function resolveDraftRecipient(
         lastName: contacts.lastName,
         title: contacts.title,
         accountName: accounts.name,
+        personProspectId: contacts.personProspectId,
       })
       .from(contacts)
       .leftJoin(accounts, eq(accounts.id, contacts.accountId))
@@ -1758,6 +1805,7 @@ export async function resolveDraftRecipient(
       out.lastName = c.lastName ?? null;
       out.title = c.title ?? null;
       out.company = c.accountName ?? null;
+      out.personId = c.personProspectId ?? null;
     }
   } else if (draft.toLeadId) {
     const [l] = await db
@@ -1891,7 +1939,7 @@ async function sendClaimedDraft(
   // the email suppression list and the do-not-contact list, by address and
   // by company domain. Mark the draft rejected so it falls out of the
   // pending queue and surfaces the reason in audit.
-  const suppression = await findSuppression(workspaceId, { email: toEmail }, "email");
+  const suppression = await findSuppression(workspaceId, { email: toEmail, personId: recipient.personId }, "email");
   if (suppression) {
     await db
       .update(emailDrafts)
@@ -2012,7 +2060,7 @@ async function sendClaimedDraft(
   const senderName = senderRow?.name ?? fromAccount.fromName ?? fromAccount.name ?? "";
   const senderEmail = senderRow?.email ?? fromAccount.fromEmail ?? "";
   const [wsSettings] = await db
-    .select({ emailSignature: workspaceSettings.emailSignature, emailOpenTracking: workspaceSettings.emailOpenTracking, emailClickTracking: workspaceSettings.emailClickTracking })
+    .select({ emailSignature: workspaceSettings.emailSignature, emailOpenTracking: workspaceSettings.emailOpenTracking, emailClickTracking: workspaceSettings.emailClickTracking, companyWebsite: workspaceSettings.companyWebsite, trackedSiteDomains: workspaceSettings.trackedSiteDomains })
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
@@ -2103,6 +2151,16 @@ async function sendClaimedDraft(
   const unsubFooterHtml = unsubscribeFooterHtml(unsubscribeUrl);
   const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock + unsubFooterHtml;
   const fullBodyText = renderedBodyText + unsubscribeFooterText(unsubscribeUrl);
+  // A signed visitor id on every link to the workspace's own site (audit
+  // 2026-10-20, P5/P88/F40), so a visit from this email is known to be this
+  // person's. Only while click tracking is on; never on a third-party link
+  // or our own (unsubscribe). The stored draft keeps the text as written.
+  const withVisitorIds = await addVisitorIdsToEmail(
+    workspaceId,
+    { prospectId: draft.toProspectId ?? null, contactId: draft.toContactId ?? null, leadId: draft.toLeadId ?? null },
+    { html: fullBodyHtml, text: fullBodyText },
+    { emailClickTracking: wsSettings?.emailClickTracking ?? null, companyWebsite: wsSettings?.companyWebsite ?? null, trackedSiteDomains: wsSettings?.trackedSiteDomains ?? null },
+  );
 
   // Daily-cap gate — throws TOO_MANY_REQUESTS if either the
   // workspace-wide or per-account cap would be breached. Lives BEFORE
@@ -2112,6 +2170,9 @@ async function sendClaimedDraft(
 
   // ── Deliver ──────────────────────────────────────────────────────
   let sentMessageId: string | undefined;
+  // The RFC Message-ID header the email went out with, where the adapter
+  // knows it (audit 2026-10-20, F5); replies are matched on it.
+  let sentRfcMessageId: string | undefined;
   let deliveryError: string | undefined;
   let deliveryErr: unknown;
   claim.transportCalled = true;
@@ -2121,8 +2182,8 @@ async function sendClaimedDraft(
       fromName: fromAccount.fromName ?? fromAccount.name,
       to: toEmail,
       subject: renderedSubject,
-      bodyHtml: fullBodyHtml,
-      bodyText: fullBodyText,
+      bodyHtml: withVisitorIds.html,
+      bodyText: withVisitorIds.text,
       // The workspace's tracking switches (Settings, migration 0117), as the old
       // bulk Send approved honoured them: with both off, nothing is tracked (2026-11-06).
       track: wsSettings?.emailOpenTracking !== false || wsSettings?.emailClickTracking !== false,
@@ -2140,6 +2201,7 @@ async function sendClaimedDraft(
       headers: unsubscribeHeaders(getAppBaseUrl(), workspaceId, toEmail),
     });
     sentMessageId = sendRes.messageId;
+    sentRfcMessageId = sendRes.rfcMessageId || undefined;
   } catch (err) {
     deliveryErr = err;
     deliveryError = err instanceof Error ? err.message : String(err);
@@ -2158,6 +2220,9 @@ async function sendClaimedDraft(
         sentAt: new Date(),
         reviewedByUserId: userId,
         trackingToken: sentMessageId.slice(0, 64),
+        // In full, so a reply's In-Reply-To finds this draft (F5). Unipile
+        // reports no header here; its mail_sent webhook fills it in.
+        messageId: sentRfcMessageId ? sentRfcMessageId.slice(0, 500) : null,
         toEmail,
         sendingAccountId: fromAccount.id,
         sendError: null,
@@ -2298,22 +2363,54 @@ export async function autoSendForAllWorkspaces(): Promise<{
   heldForSender: number;
   failed: number;
 }> {
+  const none = { workspacesProcessed: 0, dispatched: 0, skipped: 0, skippedNullScore: 0, skippedLowScore: 0, heldForSender: 0, failed: 0 };
   const db = await getDb();
-  if (!db) return { workspacesProcessed: 0, dispatched: 0, skipped: 0, skippedNullScore: 0, skippedLowScore: 0, heldForSender: 0, failed: 0 };
+  if (!db) return none;
 
+  /**
+   * Who auto-sends, and which drafts (audit 2026-10-20, F22). Every workspace
+   * with the auto-send switch on, as before, plus any workspace where a
+   * sequence chose "auto" for itself; a sequence set to "review" is left out
+   * even where the switch is on. Each workspace's drafts come in groups, each
+   * with its own score gate (@shared/sequenceAutoSend): the sequences that
+   * follow the workspace, at the workspace threshold, then each "auto"
+   * sequence at its own. A sequence that says nothing follows the workspace,
+   * so nothing changes until someone sets one. The pause still wins:
+   * inSendWindow stays shut while outbound is paused.
+   */
+  const settingsCols = {
+    workspaceId: workspaceSettings.workspaceId,
+    aiAutoSendEnabled: workspaceSettings.aiAutoSendEnabled,
+    aiAutoSendScoreMin: workspaceSettings.aiAutoSendScoreMin,
+    aiAutoSendConfidenceMin: workspaceSettings.aiAutoSendConfidenceMin,
+    aiAutoSendAllowUnscored: workspaceSettings.aiAutoSendAllowUnscored,
+  };
   const enabledWs = await db
-    .select({
-      workspaceId: workspaceSettings.workspaceId,
-      aiAutoSendScoreMin: workspaceSettings.aiAutoSendScoreMin,
-      aiAutoSendConfidenceMin: workspaceSettings.aiAutoSendConfidenceMin,
-      aiAutoSendAllowUnscored: workspaceSettings.aiAutoSendAllowUnscored,
-    })
+    .select(settingsCols)
     .from(workspaceSettings)
     .where(eq(workspaceSettings.aiAutoSendEnabled, true));
-
-  if (enabledWs.length === 0) {
-    return { workspacesProcessed: 0, dispatched: 0, skipped: 0, skippedNullScore: 0, skippedLowScore: 0, heldForSender: 0, failed: 0 };
+  const activeSeqs = await db
+    .select({ id: sequences.id, workspaceId: sequences.workspaceId, settings: sequences.settings })
+    .from(sequences)
+    .where(eq(sequences.status, "active"));
+  const seqsByWs = new Map<number, Array<{ id: number; settings: unknown }>>();
+  for (const s of activeSeqs) {
+    const list = seqsByWs.get(s.workspaceId) ?? [];
+    list.push({ id: s.id, settings: s.settings });
+    seqsByWs.set(s.workspaceId, list);
   }
+  const enabledIds = new Set(enabledWs.map((w) => w.workspaceId));
+  const perSequenceWsIds = Array.from(seqsByWs.entries())
+    .filter(([wsId, list]) => !enabledIds.has(wsId) && list.some((s) => sequenceAutoSend(s.settings).mode === "auto"))
+    .map(([wsId]) => wsId);
+  const perSequenceWs = perSequenceWsIds.length
+    ? await db.select(settingsCols).from(workspaceSettings).where(inArray(workspaceSettings.workspaceId, perSequenceWsIds))
+    : [];
+  const targets = [...enabledWs, ...perSequenceWs]
+    .map((ws) => ({ ws, groups: autoSendGroups(ws, seqsByWs.get(ws.workspaceId) ?? []) }))
+    .filter((t) => t.groups.length > 0);
+
+  if (targets.length === 0) return none;
 
   let dispatched = 0;
   let skipped = 0;
@@ -2325,103 +2422,11 @@ export async function autoSendForAllWorkspaces(): Promise<{
   // A claim whose sender died mid-send becomes 'failed', never sendable again.
   await sweepStaleSendingDrafts(db).catch((e) => console.error("[autoSend] stale-claim sweep failed:", e));
 
-    const archivedWs = await archivedWorkspaceIds();
-  for (const ws of enabledWs) {
+  const archivedWs = await archivedWorkspaceIds();
+  for (const { ws, groups } of targets) {
     if (archivedWs.has(ws.workspaceId)) continue; // archived workspaces are frozen (2026-08-12)
     // The workspace send window (owner ask 2026-09-25, see @shared/sendWindow): drafts wait, and send inside it.
     if (!(await inSendWindow(ws.workspaceId))) continue;
-    const scoreMin = ws.aiAutoSendScoreMin ?? 70;
-
-    // The recipient's score decides whether a draft can send, so it decides
-    // the SET — it cannot be a post-limit skip.
-    //
-    // This read used to take an arbitrary 50 pending_review drafts (no ORDER
-    // BY) and then apply the score gate in JS. A draft refused by that gate
-    // keeps its pending_review status, so it comes back next tick, and the
-    // tick after that; the comment below already records that unscored
-    // contacts "sat forever pending review". Fifty of those permanently
-    // occupy the page and auto-send stops for every sendable draft behind
-    // them — silently, because a tick that dispatches nothing looks exactly
-    // like a tick with nothing to dispatch.
-    //
-    // Lead first, then contact: mirrors the old `if (toLeadId) … else if
-    // (toContactId)` precedence exactly. A COALESCE would NOT — it would
-    // fall through to the contact's score when a lead-addressed draft has a
-    // null one, which is a different rule.
-    const recipientScoreExpr = sql<number | null>`CASE WHEN ${emailDrafts.toLeadId} IS NOT NULL THEN ${leads.score} ELSE ${contacts.relStrengthScore} END`;
-    const sendableGate = ws.aiAutoSendAllowUnscored
-      ? sql`(${recipientScoreExpr} IS NULL OR ${recipientScoreExpr} >= ${scoreMin})`
-      : sql`(${recipientScoreExpr} IS NOT NULL AND ${recipientScoreExpr} >= ${scoreMin})`;
-
-    // One page of candidates, oldest first, after `afterId`.
-    const candidatesAfter = (afterId: number) => db
-      .select({
-        id: emailDrafts.id,
-        toContactId: emailDrafts.toContactId,
-        toLeadId: emailDrafts.toLeadId,
-        createdByUserId: emailDrafts.createdByUserId,
-        sequenceId: emailDrafts.sequenceId,
-        sendError: emailDrafts.sendError,
-        recipientScore: recipientScoreExpr,
-      })
-      .from(emailDrafts)
-      .leftJoin(leads, eq(leads.id, emailDrafts.toLeadId))
-      .leftJoin(contacts, eq(contacts.id, emailDrafts.toContactId))
-      .leftJoin(enrollments, eq(enrollments.id, emailDrafts.enrollmentId))
-      .innerJoin(sequences, and(eq(sequences.id, emailDrafts.sequenceId), eq(sequences.workspaceId, emailDrafts.workspaceId)))
-      .where(
-        and(
-          eq(emailDrafts.workspaceId, ws.workspaceId),
-          eq(emailDrafts.status, "pending_review"),
-          // sequenceId NOT NULL already scopes this to sequence-engine
-          // automated drafts — ad-hoc human mailbox drafts have no
-          // sequenceId. The old `aiGenerated = true` filter ALSO excluded
-          // every sequence-engine draft (sequenceEngine.ts creates them
-          // with aiGenerated:false), so automated sequence outreach never
-          // auto-sent at all. Dropped it; sequenceId-scoping is correct.
-          isNotNull(emailDrafts.sequenceId),
-          // Held drafts are not candidates (O4): a paused or ended enrolment,
-          // or a sequence that is not active. deliverEmailDraft checks again
-          // at send time; this keeps them from occupying the page.
-          eq(sequences.status, "active"),
-          sql`(${emailDrafts.enrollmentId} IS NULL OR ${enrollments.status} IN ('active', 'finished'))`,
-          sendableGate,
-          gt(emailDrafts.id, afterId),
-        ),
-      )
-      .orderBy(asc(emailDrafts.id)) // oldest first: a queue, not a lottery
-      .limit(50); // bounded per workspace per tick
-
-    // Blocked drafts never reach the loop now, but the reason they are
-    // blocked is the most useful thing this cron knows — the summary exists
-    // to say "you have 12 unscored contacts stopping auto-send". Counting
-    // them here keeps that, and makes it a workspace TOTAL instead of
-    // however many happened to fall inside one arbitrary page.
-    const [blocked] = await db
-      .select({
-        nullScore: sql<number>`SUM(CASE WHEN ${recipientScoreExpr} IS NULL AND ${ws.aiAutoSendAllowUnscored ? sql`FALSE` : sql`TRUE`} THEN 1 ELSE 0 END)`,
-        lowScore: sql<number>`SUM(CASE WHEN ${recipientScoreExpr} IS NOT NULL AND ${recipientScoreExpr} < ${scoreMin} THEN 1 ELSE 0 END)`,
-      })
-      .from(emailDrafts)
-      .leftJoin(leads, eq(leads.id, emailDrafts.toLeadId))
-      .leftJoin(contacts, eq(contacts.id, emailDrafts.toContactId))
-      .where(
-        and(
-          eq(emailDrafts.workspaceId, ws.workspaceId),
-          eq(emailDrafts.status, "pending_review"),
-          isNotNull(emailDrafts.sequenceId),
-        ),
-      );
-    const blockedNull = Number(blocked?.nullScore ?? 0);
-    const blockedLow = Number(blocked?.lowScore ?? 0);
-    skippedNullScore += blockedNull;
-    skippedLowScore += blockedLow;
-    skipped += blockedNull + blockedLow;
-
-    // aiAutoSendConfidenceMin is configurable in Settings but there's
-    // no aiConfidence column on emailDrafts yet, so the threshold is a
-    // no-op. We don't warn on every tick anymore — Settings shows the
-    // explicit "no signal source yet" hint instead. (Critical-8.)
 
     /**
      * Who each draft goes out as (audit 2026-10-20, O13): the sequence's
@@ -2432,7 +2437,8 @@ export async function autoSendForAllWorkspaces(): Promise<{
      * Held drafts keep their place in the oldest-first queue, so the worker
      * reads on past them, a page at a time, until it has tried 50 sends:
      * one fixed page of held drafts would otherwise stop auto-send for
-     * everyone behind them, as unscored ones once did (O23).
+     * everyone behind them, as unscored ones once did (O23). The 50 are per
+     * workspace, across its groups.
      */
     const senders = new Map<string, Awaited<ReturnType<typeof sequenceDraftSender>>>();
     const noMailbox = new Map<number, string>();
@@ -2442,79 +2448,172 @@ export async function autoSendForAllWorkspaces(): Promise<{
       await db.update(emailDrafts).set({ sendError: reason.slice(0, 500) } as never)
         .where(and(eq(emailDrafts.id, draft.id), eq(emailDrafts.workspaceId, ws.workspaceId), eq(emailDrafts.status, "pending_review")));
     };
-    let afterId = 0;
     let attempts = 0;
-    for (let pageNo = 0; pageNo < AUTO_SEND_MAX_PAGES && attempts < AUTO_SEND_PER_TICK; pageNo++) {
-      const candidateDrafts = await candidatesAfter(afterId);
-      if (candidateDrafts.length === 0) break;
-      afterId = candidateDrafts[candidateDrafts.length - 1].id;
 
-      for (const draft of candidateDrafts) {
-        if (attempts >= AUTO_SEND_PER_TICK) break;
-        // Resolved by the query above — the gate that used to live here is now
-        // the WHERE clause that produced this row, so there is nothing left to
-        // re-decide. Kept only for the dispatch log line.
-        const recipientScore: number | null =
-          draft.recipientScore === null || draft.recipientScore === undefined
-            ? null
-            : Number(draft.recipientScore);
-        // The cold-outreach rule the old skip branches encoded is unchanged
-        // and lives in `sendableGate`: a NULL relStrengthScore is eligible only
-        // when the workspace opts into aiAutoSendAllowUnscored, because the
-        // relationship-strength gate protects WARM contacts and is backwards
-        // for a deliberate SDR cold sequence. Default-off either way.
+    for (const group of groups) {
+      if (attempts >= AUTO_SEND_PER_TICK) break;
+      const scoreMin = group.scoreMin;
+      // Which sequences' drafts this group covers (F22): one "auto" sequence,
+      // or every sequence that follows the workspace, minus those that chose.
+      const groupScope = group.kind === "sequence" && group.sequenceId != null
+        ? eq(emailDrafts.sequenceId, group.sequenceId)
+        : group.exceptIds.length ? notInArray(emailDrafts.sequenceId, group.exceptIds) : undefined;
 
-        const key = `${draft.createdByUserId ?? ""}:${draft.sequenceId ?? ""}`;
-        let sender = senders.get(key);
-        if (!sender) {
-          sender = await sequenceDraftSender(db, ws.workspaceId, draft);
-          senders.set(key, sender);
-        }
-        if ("hold" in sender) { await hold(draft, sender.hold); continue; }
-        const mailboxGap = noMailbox.get(sender.userId);
-        if (mailboxGap) { await hold(draft, mailboxGap); continue; }
+      // The recipient's score decides whether a draft can send, so it decides
+      // the SET: it cannot be a post-limit skip. This read used to take an
+      // arbitrary 50 drafts and apply the gate in JS; refused drafts stayed
+      // pending_review, came back every tick, filled the page and stopped
+      // auto-send for every sendable draft behind them, silently.
+      //
+      // Lead first, then contact: the old `if (toLeadId) ... else if
+      // (toContactId)` precedence exactly. A COALESCE would NOT be the same:
+      // it would fall through to the contact's score when a lead-addressed
+      // draft has a null one. A sequence that chose "auto" also scores a
+      // draft to a People row by that person's priority score (F22); the
+      // workspace group keeps the old rule, under which they have no score.
+      const recipientScoreExpr = group.scorePeople
+        ? sql<number | null>`CASE WHEN ${emailDrafts.toLeadId} IS NOT NULL THEN ${leads.score} WHEN ${emailDrafts.toContactId} IS NOT NULL THEN ${contacts.relStrengthScore} ELSE ${priorityScoreResults.priorityScore} END`
+        : sql<number | null>`CASE WHEN ${emailDrafts.toLeadId} IS NOT NULL THEN ${leads.score} ELSE ${contacts.relStrengthScore} END`;
+      const sendableGate = group.allowUnscored
+        ? sql`(${recipientScoreExpr} IS NULL OR ${recipientScoreExpr} >= ${scoreMin})`
+        : sql`(${recipientScoreExpr} IS NOT NULL AND ${recipientScoreExpr} >= ${scoreMin})`;
 
-        // deliverEmailDraft CLAIMS the draft (pending_review → sending) before
-        // the transport, so two overlapping ticks cannot both send it. The
-        // claim used to flip it to 'approved' here instead, and a failed send
-        // then left it 'approved' for good, where auto-send never looks
-        // (audit 2026-10-20, O14).
-        attempts++;
-        try {
-          await deliverEmailDraft({
-            workspaceId: ws.workspaceId,
-            userId: sender.userId,
-            draftId: draft.id,
-            claimFrom: ["pending_review"],
-            ownMailboxOnly: true,
-          });
-          dispatched++;
-          console.log(
-            `[autoSend] ws ${ws.workspaceId} draft ${draft.id} dispatched (score=${recipientScore} ≥ ${scoreMin})`,
-          );
-        } catch (err) {
-          // Lost the claim to another tick or a person: not a failure.
-          if (err instanceof TRPCError && err.code === "CONFLICT") continue;
-          // Held for the sender's mailbox: the claim was put back with the
-          // reason, and the sender's other drafts this tick are held without
-          // being claimed at all.
-          if (err instanceof TRPCError && err.code === "PRECONDITION_FAILED" && err.message.startsWith(NO_OWN_MAILBOX)) {
-            noMailbox.set(sender.userId, err.message);
-            heldForSender++;
-            continue;
+      // One page of candidates, oldest first, after `afterId`.
+      const candidatesAfter = (afterId: number) => db
+        .select({
+          id: emailDrafts.id,
+          toContactId: emailDrafts.toContactId,
+          toLeadId: emailDrafts.toLeadId,
+          createdByUserId: emailDrafts.createdByUserId,
+          sequenceId: emailDrafts.sequenceId,
+          sendError: emailDrafts.sendError,
+          recipientScore: recipientScoreExpr,
+        })
+        .from(emailDrafts)
+        .leftJoin(leads, eq(leads.id, emailDrafts.toLeadId))
+        .leftJoin(contacts, eq(contacts.id, emailDrafts.toContactId))
+        .leftJoin(priorityScoreResults, and(eq(priorityScoreResults.workspaceId, emailDrafts.workspaceId), eq(priorityScoreResults.objectType, "person"), eq(priorityScoreResults.objectId, emailDrafts.toProspectId)))
+        .leftJoin(enrollments, eq(enrollments.id, emailDrafts.enrollmentId))
+        .innerJoin(sequences, and(eq(sequences.id, emailDrafts.sequenceId), eq(sequences.workspaceId, emailDrafts.workspaceId)))
+        .where(
+          and(
+            eq(emailDrafts.workspaceId, ws.workspaceId),
+            eq(emailDrafts.status, "pending_review"),
+            // sequenceId NOT NULL scopes this to sequence-engine automated
+            // drafts; ad-hoc human mailbox drafts have no sequenceId. (An old
+            // `aiGenerated = true` filter excluded every sequence-engine draft,
+            // so automated sequence outreach never auto-sent at all.)
+            isNotNull(emailDrafts.sequenceId),
+            groupScope,
+            // Held drafts are not candidates (O4): a paused or ended enrolment,
+            // or a sequence that is not active. deliverEmailDraft checks again
+            // at send time; this keeps them from occupying the page.
+            eq(sequences.status, "active"),
+            sql`(${emailDrafts.enrollmentId} IS NULL OR ${enrollments.status} IN ('active', 'finished'))`,
+            sendableGate,
+            gt(emailDrafts.id, afterId),
+          ),
+        )
+        .orderBy(asc(emailDrafts.id)) // oldest first: a queue, not a lottery
+        .limit(50); // bounded per workspace per tick
+
+      // Blocked drafts never reach the loop, but the reason they are blocked
+      // is the most useful thing this cron knows: the summary exists to say
+      // "you have 12 unscored contacts stopping auto-send". Counted over the
+      // whole group, not one page.
+      const [blocked] = await db
+        .select({
+          nullScore: sql<number>`SUM(CASE WHEN ${recipientScoreExpr} IS NULL AND ${group.allowUnscored ? sql`FALSE` : sql`TRUE`} THEN 1 ELSE 0 END)`,
+          lowScore: sql<number>`SUM(CASE WHEN ${recipientScoreExpr} IS NOT NULL AND ${recipientScoreExpr} < ${scoreMin} THEN 1 ELSE 0 END)`,
+        })
+        .from(emailDrafts)
+        .leftJoin(leads, eq(leads.id, emailDrafts.toLeadId))
+        .leftJoin(contacts, eq(contacts.id, emailDrafts.toContactId))
+        .leftJoin(priorityScoreResults, and(eq(priorityScoreResults.workspaceId, emailDrafts.workspaceId), eq(priorityScoreResults.objectType, "person"), eq(priorityScoreResults.objectId, emailDrafts.toProspectId)))
+        .where(
+          and(
+            eq(emailDrafts.workspaceId, ws.workspaceId),
+            eq(emailDrafts.status, "pending_review"),
+            isNotNull(emailDrafts.sequenceId),
+            groupScope,
+          ),
+        );
+      const blockedNull = Number(blocked?.nullScore ?? 0);
+      const blockedLow = Number(blocked?.lowScore ?? 0);
+      skippedNullScore += blockedNull;
+      skippedLowScore += blockedLow;
+      skipped += blockedNull + blockedLow;
+
+      // aiAutoSendConfidenceMin is configurable in Settings but there is no
+      // aiConfidence column on emailDrafts yet, so the threshold is a no-op;
+      // Settings shows the explicit "no signal source yet" hint (Critical-8).
+
+      let afterId = 0;
+      for (let pageNo = 0; pageNo < AUTO_SEND_MAX_PAGES && attempts < AUTO_SEND_PER_TICK; pageNo++) {
+        const candidateDrafts = await candidatesAfter(afterId);
+        if (candidateDrafts.length === 0) break;
+        afterId = candidateDrafts[candidateDrafts.length - 1].id;
+
+        for (const draft of candidateDrafts) {
+          if (attempts >= AUTO_SEND_PER_TICK) break;
+          // Resolved by the query above: the gate is the WHERE clause that
+          // produced this row. Kept only for the dispatch log line.
+          const recipientScore: number | null =
+            draft.recipientScore === null || draft.recipientScore === undefined
+              ? null
+              : Number(draft.recipientScore);
+
+          const key = `${draft.createdByUserId ?? ""}:${draft.sequenceId ?? ""}`;
+          let sender = senders.get(key);
+          if (!sender) {
+            sender = await sequenceDraftSender(db, ws.workspaceId, draft);
+            senders.set(key, sender);
           }
-          failed++;
-          console.error(
-            `[autoSend] ws ${ws.workspaceId} draft ${draft.id} failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          if ("hold" in sender) { await hold(draft, sender.hold); continue; }
+          const mailboxGap = noMailbox.get(sender.userId);
+          if (mailboxGap) { await hold(draft, mailboxGap); continue; }
+
+          // deliverEmailDraft CLAIMS the draft (pending_review -> sending)
+          // before the transport, so two overlapping ticks cannot both send
+          // it, and a failed send ends 'failed', never back in a queue
+          // (audit 2026-10-20, O14).
+          attempts++;
+          try {
+            await deliverEmailDraft({
+              workspaceId: ws.workspaceId,
+              userId: sender.userId,
+              draftId: draft.id,
+              claimFrom: ["pending_review"],
+              ownMailboxOnly: true,
+            });
+            dispatched++;
+            console.log(
+              `[autoSend] ws ${ws.workspaceId} draft ${draft.id} dispatched (score=${recipientScore} >= ${scoreMin}, ${group.kind === "sequence" ? `sequence ${group.sequenceId}'s own setting` : "workspace setting"})`,
+            );
+          } catch (err) {
+            // Lost the claim to another tick or a person: not a failure.
+            if (err instanceof TRPCError && err.code === "CONFLICT") continue;
+            // Held for the sender's mailbox: the claim was put back with the
+            // reason, and the sender's other drafts this tick are held without
+            // being claimed at all.
+            if (err instanceof TRPCError && err.code === "PRECONDITION_FAILED" && err.message.startsWith(NO_OWN_MAILBOX)) {
+              noMailbox.set(sender.userId, err.message);
+              heldForSender++;
+              continue;
+            }
+            failed++;
+            console.error(
+              `[autoSend] ws ${ws.workspaceId} draft ${draft.id} failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
         }
+        if (candidateDrafts.length < 50) break;
       }
-      if (candidateDrafts.length < 50) break;
     }
   }
 
   return {
-    workspacesProcessed: enabledWs.length,
+    workspacesProcessed: targets.length,
     dispatched,
     skipped: skipped + heldForSender,
     skippedNullScore,

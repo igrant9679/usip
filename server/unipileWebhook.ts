@@ -32,6 +32,8 @@ import {
   workspaceSettings,
 } from "../drizzle/schema";
 import { processInboundReply } from "./inboundReplyPoller";
+import { recordBridgedSendMessageId } from "./services/email/messageIds";
+import { invalidateMailboxCache } from "./services/mailboxCache";
 import { escapeHtml } from "@shared/escapeHtml";
 import { ensureMicrosoftBridge } from "./services/microsoftBridge";
 import { processBounceEvent } from "./emailTracking";
@@ -772,6 +774,21 @@ export function registerUnipileWebhookRoutes(app: Express) {
               insertErr,
             );
           }
+        }
+
+        // New, sent or moved mail changes this mailbox's lists: drop what My
+        // Mailbox kept for it, so the next read shows it (audit 2026-10-20, L8).
+        invalidateMailboxCache({ unipileAccountId: account_id });
+
+        // ── The sent copy's Message-ID (mail_sent) ────────────────────
+        // Unipile's send answer carries only a tracking id; the sent copy
+        // carries the Message-ID a reply will quote. Recorded on the draft
+        // and log row of that send, so the reply matches it (audit
+        // 2026-10-20, F5). Best effort: a miss leaves the older matching.
+        if (event === "mail_sent" && payload.tracking_id && payload.message_id) {
+          await recordBridgedSendMessageId(db, acct.workspaceId, payload.tracking_id, payload.message_id).catch((e) =>
+            console.warn(`[UnipileMailWebhook] could not record the Message-ID for email_id=${email_id}:`, (e as Error)?.message ?? e),
+          );
         }
 
         // ── Bounce detection (mail_received only) ─────────────────────

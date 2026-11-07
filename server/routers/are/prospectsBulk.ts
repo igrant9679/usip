@@ -351,6 +351,7 @@ export async function runBulkAction(ctx: Ctx, input: BulkInput): Promise<BulkRes
         if (!r.email && !r.linkedinUrl) throw new Error("no email or LinkedIn URL to suppress");
         await caller.are.execution.addSuppression({
           ...(r.email ? { email: r.email } : {}), ...(r.linkedinUrl ? { linkedinUrl: r.linkedinUrl } : {}),
+          ...(r.personProspectId ? { personId: r.personProspectId } : {}),
           reason: areReason,
         } as never);
         if (r.email) {
@@ -358,7 +359,11 @@ export async function runBulkAction(ctx: Ctx, input: BulkInput): Promise<BulkRes
           const [existing] = await db.select({ id: emailSuppressions.id }).from(emailSuppressions)
             .where(and(eq(emailSuppressions.workspaceId, ws), eq(emailSuppressions.email, email))).limit(1);
           if (!existing) {
-            await db.insert(emailSuppressions).values({ workspaceId: ws, email, reason: siteReason, notes: (input.reason ?? `ARE bulk suppress (campaign ${input.campaignId})`).slice(0, 512) } as never);
+            await db.insert(emailSuppressions).values({
+              workspaceId: ws, email, reason: siteReason, notes: (input.reason ?? `ARE bulk suppress (campaign ${input.campaignId})`).slice(0, 512),
+              // The person (F7), never for a bounce.
+              prospectId: siteReason === "bounce" ? null : r.personProspectId ?? null,
+            } as never);
           }
         }
         // And stop anything already scheduled for them in this campaign.

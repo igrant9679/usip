@@ -28,6 +28,7 @@ import { sendWorkspaceEmail } from "../emailDelivery";
 import { resolveBookingUrl } from "../mergeVars";
 import { sendMessage } from "../lib/unipile";
 import { normalizeSuppressionEmail } from "../unsubscribe";
+import { suppressionPersonId } from "./suppression";
 import { resumeAreProspectAfterAutoReply } from "./are/stepHold";
 import { escapeHtml } from "@shared/escapeHtml";
 
@@ -380,6 +381,12 @@ export async function applyReplyAction(workspaceId: number, reply: any, byUser: 
             reason: "unsubscribe",
             draftId: reply.draftId ?? null,
             contactId: reply.contactId ?? null,
+            // The person who asked (F7): the reply's People match, the
+            // contact's People link, else the People row with that address.
+            prospectId: await suppressionPersonId(workspaceId, {
+              reason: "unsubscribe", prospectId: (reply as { prospectId?: number | null }).prospectId ?? null,
+              contactId: reply.contactId ?? null, email: reply.fromEmail,
+            }),
             notes: "Auto-suppressed from inbound reply classification",
           } as never);
         }

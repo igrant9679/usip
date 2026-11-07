@@ -156,8 +156,12 @@ describe("the visitors page", () => {
   it("P88: does not promise known-prospect matching, or tell anyone to hand-tag links", () => {
     expect(page).not.toContain("matched to the exact prospect");
     expect(page).not.toContain("?vid=&lt;leadId&gt;");
-    expect(page).toContain("Matching a visit to a prospect isn't available yet.");
-    expect(page).toContain('"Records named (unverified)"');
+    // 2026-11-07 (audit F40): Velocity now adds a signed id to links to the
+    // workspace's own site, so the page says so; what P88 protects holds: an
+    // unsigned id is still shown, and filed, as a claim, never as the person.
+    expect(page).toContain("carry a signed id");
+    expect(page).toContain(">Unverified claim</span>");
+    expect(page).toContain("treat it as a claim; it files no follow-up task.");
   });
 
   it("P154: a failed stats read is an error, not zeros and Not connected", () => {

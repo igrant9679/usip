@@ -834,7 +834,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
     summary: "Capture inbound interest and route it into the funnel automatically.",
     readingTimeMinutes: 3,
     tags: ["landing-pages", "forms", "inbound", "tracking"],
-    bodyMarkdown: `Three inbound tools feed your funnel without manual entry:\n\n- **Landing pages** (admin) — build simple hosted pages in the Landing Pages builder; each publishes at a public /l/your-slug URL with an optional lead-capture form. Submissions become leads instantly.\n- **Web forms** — embeddable forms whose submissions run **autonomous lead routing**: the lead is created, scored, routed to an owner, and **bridged** into the funnel — a company account is found-or-created from the corporate email domain (free-mail domains never become accounts) and a linked prospect is created, ready for sequences. Review the bridge on Data Enrichment → Form enrichment.\n- **Website visitor tracking** — a first-party snippet logs page views on your site. A visit whose link names a record is attributed to it, marked unverified, since anyone can type an id into a link. A follow-up task for a high-intent visit (pricing, demo pages) is filed only when the link carries an id Velocity signed, and Velocity does not add those to outgoing links yet. Anonymous visitor de-anonymization isn't included — Velocity only claims what it can actually see.`,
+    bodyMarkdown: `Three inbound tools feed your funnel without manual entry:\n\n- **Landing pages** (admin) — build simple hosted pages in the Landing Pages builder; each publishes at a public /l/your-slug URL with an optional lead-capture form. Submissions become leads instantly.\n- **Web forms** — embeddable forms whose submissions run **autonomous lead routing**: the lead is created, scored, routed to an owner, and **bridged** into the funnel — a company account is found-or-created from the corporate email domain (free-mail domains never become accounts) and a linked prospect is created, ready for sequences. Review the bridge on Data Enrichment → Form enrichment.\n- **Website visitor tracking** — a first-party snippet logs page views on your site. Links to your own site in Velocity's emails carry a signed id for the person they went to (while click tracking is on), so a visit through one is attributed to that person and marked verified; a high-intent visit (pricing, demo pages) then files a follow-up task. An id that was not signed is shown as an unverified claim, since anyone can type one into a link, and files nothing. Anonymous visitor de-anonymization isn't included — Velocity only claims what it can actually see.`,
   },
 
   /* ── Reporting ───────────────────────────────────────────────────────────── */
@@ -1638,12 +1638,12 @@ export const TOURS: TourSeed[] = [
     route: "/v2/website-visitors",
     roleTags: ["sdr", "admin"],
     steps: [
-      // Honest scope (audit 2026-10-20, P88): nothing adds a record id to
-      // outbound links and the id is not signed, so a visit is not matched to
-      // a known person. Anonymous visitor→company resolution needs a paid data
-      // provider Velocity doesn't ship with. This tour must not promise either.
+      // Honest scope (audit 2026-10-20, P88, F40): a visit is matched to a
+      // person only through a link Velocity signed and added to its own email.
+      // Anonymous visitor→company resolution needs a paid data provider
+      // Velocity doesn't ship with. This tour must not promise it.
       { title: "Visits and intent", bodyMarkdown: "The snippet counts visits and unique visitors and flags the pages that show buying intent, such as pricing, demo and contact. Visitors whose browser asks not to be tracked are not tracked, and visits are kept for 180 days.", routeTo: "/v2/website-visitors", targetDataTourId: "visitors-list", visualTreatment: "spotlight", advanceCondition: "next_button" },
-      { title: "Not who, yet", bodyMarkdown: "Matching a visit to a prospect isn't available yet. A visit names a record only if its link carries a record id, which nothing adds for you and which isn't verified, so those rows are shown as claims. Pair the page with the chat agent so a visitor can book a call while they are still on your site.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Who, when they came from your email", bodyMarkdown: "Links to your own site in Velocity's emails carry a signed id for the person they went to, so a visit through one is theirs and shows as verified. Anyone else is anonymous, and an id that was not signed is shown as a claim. Pair the page with the chat agent so a visitor can book a call while they are still on your site.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
   {

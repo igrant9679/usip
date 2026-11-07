@@ -149,6 +149,7 @@ describe("only one module classifies a path", () => {
     // again, the drift is back with the same blast radius.
     const src = stripComments(read("server/websiteTracking.ts"));
     expect(src).toMatch(/const intent = pageIntent\(path\)/);
-    expect(src).toMatch(/intent === "high" && \(contactId \|\| leadId\)/);
+    // 2026-11-07 (audit F40): a visit can name a People row too.
+    expect(src).toMatch(/intent === "high" && \(contactId \|\| leadId \|\| prospectId\)/);
   });
 });

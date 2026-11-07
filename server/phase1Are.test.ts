@@ -431,9 +431,10 @@ describe("gate (ARE): one suppression check at discovery, enrolment and both dis
 
   it("enrolment and both dispatch paths ask the one check, on the right channel", () => {
     const enrol = engine.slice(engine.indexOf("async function enrollApprovedForCampaignUnlocked"), engine.indexOf("async function tickCampaign"));
-    expect(enrol).toContain('findSuppression(wsId, { email: row.email, linkedinUrl: row.linkedinUrl, companyDomain: row.companyDomain }, "any")');
-    expect(engine).toContain('findSuppression(wsId, { email: lp.email, linkedinUrl: lp.linkedinUrl, companyDomain: lp.companyDomain }, "linkedin")');
-    expect(engine).toContain('findSuppression(wsId, { email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain }, "email")');
+    // 2026-11-07 (audit F7): each also asks by the campaign row's People link.
+    expect(enrol).toContain('findSuppression(wsId, { email: row.email, linkedinUrl: row.linkedinUrl, companyDomain: row.companyDomain, personId: row.personProspectId ?? null }, "any")');
+    expect(engine).toContain('findSuppression(wsId, { email: lp.email, linkedinUrl: lp.linkedinUrl, companyDomain: lp.companyDomain, personId: lp.personProspectId ?? null }, "linkedin")');
+    expect(engine).toContain('findSuppression(wsId, { email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain, personId: p.personProspectId ?? null }, "email")');
     // The old by-address-only reads are gone.
     expect(engine).not.toMatch(/eq\(areSuppressionList\.email, (row|p)\.email\)/);
     // LinkedIn: checked before the send.
