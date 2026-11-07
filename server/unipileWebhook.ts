@@ -33,6 +33,7 @@ import {
 } from "../drizzle/schema";
 import { processInboundReply } from "./inboundReplyPoller";
 import { recordBridgedSendMessageId } from "./services/email/messageIds";
+import { invalidateMailboxCache } from "./services/mailboxCache";
 import { escapeHtml } from "@shared/escapeHtml";
 import { ensureMicrosoftBridge } from "./services/microsoftBridge";
 import { processBounceEvent } from "./emailTracking";
@@ -774,6 +775,10 @@ export function registerUnipileWebhookRoutes(app: Express) {
             );
           }
         }
+
+        // New, sent or moved mail changes this mailbox's lists: drop what My
+        // Mailbox kept for it, so the next read shows it (audit 2026-10-20, L8).
+        invalidateMailboxCache({ unipileAccountId: account_id });
 
         // ── The sent copy's Message-ID (mail_sent) ────────────────────
         // Unipile's send answer carries only a tracking id; the sent copy

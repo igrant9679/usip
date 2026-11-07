@@ -78,7 +78,8 @@ export interface EmailMessage {
   date: Date;
   bodyText: string;
   bodyHtml: string;
-  attachments: Array<{ filename: string; contentType: string; size: number }>;
+  /** attachmentId: the provider's id (Unipile); IMAP attachments are fetched by position. */
+  attachments: Array<{ filename: string; contentType: string; size: number; attachmentId?: string }>;
   inReplyTo?: string;
   references?: string;
   unread: boolean;

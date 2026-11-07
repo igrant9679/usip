@@ -82,6 +82,57 @@ export function replyAddressing(
   return { to, inReplyTo: parent.messageId || undefined, references: chain || undefined };
 }
 
+/** Bare addresses in "Name <a@b.com>, c@d.com" lists, lower-cased, in order, once each. */
+export function addressList(...lists: Array<string | null | undefined>): string[] {
+  const out: string[] = [];
+  for (const list of lists) {
+    for (const m of String(list ?? "").match(/[^\s<>,;"']+@[^\s<>,;"']+/g) ?? []) {
+      const a = m.toLowerCase();
+      if (!out.includes(a)) out.push(a);
+    }
+  }
+  return out;
+}
+
+/**
+ * Reply all (audit 2026-10-20, F26): To is whoever Reply answers, Cc is
+ * everyone else the answered message went to or was copied to, and never this
+ * mailbox's own address. Threading headers are Reply's. Null when the thread
+ * is empty; `cc` is "" when nobody else was on it, and the page then offers
+ * Reply alone.
+ */
+export function replyAllAddressing(
+  messages: Array<ThreadMessage & { fromEmail: string }>,
+  ownEmail: string | null | undefined,
+): { to: string; cc: string; inReplyTo: string | undefined; references: string | undefined } | null {
+  const reply = replyAddressing(messages, ownEmail);
+  if (!reply) return null;
+  const parent = [...messages].reverse().find((m) => m.messageId === reply.inReplyTo) ?? messages[messages.length - 1];
+  const own = String(ownEmail ?? "").trim().toLowerCase();
+  const to = addressList(reply.to);
+  const cc = addressList(parent.fromEmail, parent.toEmail, parent.ccEmail).filter((a) => a !== own && !to.includes(a));
+  return { ...reply, cc: cc.join(", ") };
+}
+
+/** What a forward asks the server to carry from the original (F26/O35): which message, which files. */
+export type ForwardedAttachments = { messageId: string; attachments: Array<{ attachmentId: string; filename: string }> };
+
+/**
+ * The original's attachments as the server fetches them: by the provider's
+ * attachment id where the mailbox gives one, else by position (IMAP), the
+ * same rule the download button uses.
+ */
+export function forwardedAttachmentRefs(
+  original: { messageId: string; attachments?: Array<{ filename: string; attachmentId?: string }> | null },
+): ForwardedAttachments | undefined {
+  const list = original.attachments ?? [];
+  if (!list.length) return undefined;
+  return {
+    messageId: original.messageId,
+    attachments: list.map((a, i) => ({ attachmentId: a.attachmentId ?? String(i), filename: a.filename })),
+  };
+}
+
 export type ForwardedOriginal = {
   fromName?: string | null;
   fromEmail: string;

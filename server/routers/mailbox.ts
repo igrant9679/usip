@@ -31,6 +31,7 @@ import { HUMAN_COPY_RULES, humanizeAiCopy } from "../services/humanCopy";
 import { assertOutboundNotPausedFor, recipientAddresses } from "../services/outboundPause";
 import { describeSuppression, findSuppression } from "../services/suppression";
 import { attachmentLimitProblem, base64Bytes } from "@shared/mailCompose";
+import { cachedMailboxRead, invalidateMailboxCache } from "../services/mailboxCache";
 
 /**
  * Append the rep's email signature to outbound HTML / text if it isn't
@@ -213,6 +214,45 @@ async function bodyForSend(
 
 const QUOTED = z.object({ html: z.string(), text: z.string() }).optional();
 
+/**
+ * A forward's original attachments, named by message and attachment id (audit
+ * 2026-10-20, F26/O35). The forward used to say its attachments were not
+ * included; the server now fetches each one through the same provider read
+ * the download button uses, from the mailbox the forward is sent from, and
+ * sends it with the forward. Bounded, and counted toward the same 20 MB limit
+ * as files the rep attaches.
+ */
+const FORWARDED = z.object({
+  messageId: z.string().min(1).max(500),
+  attachments: z.array(z.object({ attachmentId: z.string().min(1).max(500), filename: z.string().max(500) })).max(20),
+}).optional();
+
+async function forwardedAttachments(
+  adapter: { getAttachment(messageId: string, attachmentId: string): Promise<{ data: Buffer; contentType: string; filename: string }> },
+  forwarded: z.infer<typeof FORWARDED>,
+): Promise<Array<{ filename: string; contentType: string; content: string }>> {
+  if (!forwarded?.attachments.length) return [];
+  const out: Array<{ filename: string; contentType: string; content: string }> = [];
+  for (const a of forwarded.attachments) {
+    let got: { data: Buffer; contentType: string; filename: string };
+    try {
+      got = await adapter.getAttachment(forwarded.messageId, a.attachmentId);
+    } catch (e) {
+      throw new TRPCError({
+        code: "BAD_GATEWAY",
+        message: `Could not fetch "${a.filename}" from the original to forward it. Nothing was sent. ${e instanceof Error ? e.message.slice(0, 200) : ""}`.trim(),
+      });
+    }
+    if (!got.data?.length) {
+      throw new TRPCError({ code: "BAD_GATEWAY", message: `"${a.filename}" came back empty from the mailbox, so the forward was not sent.` });
+    }
+    // The provider's filename is often "attachment"; the one the page showed is better.
+    const filename = got.filename && got.filename !== "attachment" ? got.filename : a.filename || "attachment";
+    out.push({ filename, contentType: got.contentType || "application/octet-stream", content: got.data.toString("base64") });
+  }
+  return out;
+}
+
 const assertMailboxWriteOwnership = (ctx: Parameters<typeof assertMailboxOwnership>[0], account: Parameters<typeof assertMailboxOwnership>[1]) =>
   assertMailboxOwnership(ctx, account, "You can only send from your own connected mailbox.");
 const assertMailboxReadOwnership = (ctx: Parameters<typeof assertMailboxOwnership>[0], account: Parameters<typeof assertMailboxOwnership>[1]) =>
@@ -310,7 +350,8 @@ export const mailboxRouter = router({
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       await assertMailboxReadOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
-      return adapter.listFolders();
+      // Kept briefly, after the read was authorised (L8).
+      return cachedMailboxRead(acc, "folders", [], () => adapter.listFolders());
     }),
 
   /** List threads in a folder (paginated) */
@@ -332,8 +373,14 @@ export const mailboxRouter = router({
       // them cost a whole debugging round-trip on the owner's mailbox
       // (2026-08-10). The error travels to the UI, which shows it in place
       // of the empty-state.
+      //
+      // Kept for MAILBOX_CACHE_TTL_MS per mailbox, folder and page, after the
+      // read was authorised above, and dropped by every change to the mailbox
+      // (audit 2026-10-20, L8): the provider read took 8.9 s live, on every
+      // open and every refetch. A failed read is never kept.
       try {
-        const res = await adapter.listThreads(input.folder, input.pageToken, input.maxResults);
+        const res = await cachedMailboxRead(acc, "threads", [input.folder, input.pageToken ?? null, input.maxResults],
+          () => adapter.listThreads(input.folder, input.pageToken, input.maxResults));
         return { ...res, error: null as string | null };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -362,7 +409,12 @@ export const mailboxRouter = router({
   sendNew: workspaceProcedure
     .input(z.object({
       accountId: z.number(),
-      to: z.string().email(),
+      // One address, or several separated by commas (a forward goes through
+      // here now, F26, and a forward could always go to more than one).
+      to: z.string().trim().min(3).max(2000).refine(
+        (v) => v.split(/[,;]/).map((x) => x.trim()).filter(Boolean).every((x) => z.string().email().safeParse(x.replace(/^.*<([^<>]+)>$/, "$1").trim()).success),
+        "Enter a valid email address, or several separated by commas",
+      ),
       subject: z.string().min(1),
       bodyHtml: z.string(),
       bodyText: z.string().optional(),
@@ -375,14 +427,22 @@ export const mailboxRouter = router({
       })).optional(),
       /** A forwarded original, quoted under the signature (O35). */
       quoted: QUOTED,
+      /** A forward's original attachments, fetched here and sent with it (F26). */
+      forwardAttachmentsOf: FORWARDED,
     }))
     .mutation(async ({ ctx, input }) => {
       // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything"). Team-only mail still goes.
       await assertOutboundNotPausedFor(ctx.workspace.id, [input.to, input.cc, input.bcc]);
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       await assertMailboxWriteOwnership(ctx, acc);
+      // Refused recipients first, so nothing is fetched for a send that cannot go.
       await assertMailboxCanSend(ctx.workspace.id, acc, [input.to, input.cc, input.bcc], input.attachments);
       const adapter = createEmailAdapter(acc);
+      // The forward's originals (F26), from this same mailbox, then the limit
+      // asked again over everything the email will carry.
+      const carried = await forwardedAttachments(adapter, input.forwardAttachmentsOf);
+      const attachments = [...(input.attachments ?? []), ...carried];
+      if (carried.length) await assertMailboxCanSend(ctx.workspace.id, acc, [input.to, input.cc, input.bcc], attachments);
       // Cap gate before signature so a blocked send produces a clear
       // error instead of doing the (slow) signature build for nothing.
       await assertSendAllowed(ctx.workspace.id, acc.id);
@@ -396,12 +456,12 @@ export const mailboxRouter = router({
         bodyText: withSig.bodyText,
         cc: input.cc,
         bcc: input.bcc,
-        attachments: input.attachments,
+        attachments: attachments.length ? attachments : undefined,
         // Sitewide email log (migration 0163). Inbox composes previously left
         // NO trace anywhere in Velocity — the message existed only in the
         // provider's Sent folder.
-        logMeta: { source: "mailbox", userId: ctx.user.id },
-      });
+        logMeta: { source: "mailbox", sourceLabel: input.forwardAttachmentsOf || input.quoted ? "Forward" : null, userId: ctx.user.id },
+      }).finally(() => invalidateMailboxCache({ accountId: acc.id }));
     }),
 
   /** Reply to an existing thread */
@@ -449,7 +509,7 @@ export const mailboxRouter = router({
         attachments: input.attachments,
         // As sendNew: replies sent from the Inbox were recorded nowhere.
         logMeta: { source: "mailbox", sourceLabel: "Reply", userId: ctx.user.id },
-      });
+      }).finally(() => invalidateMailboxCache({ accountId: acc.id }));
     }),
 
   /**
@@ -495,6 +555,7 @@ export const mailboxRouter = router({
         // Keep the cache in sync so a later cache-served render of this
         // thread reflects the same read state.
         await syncCache().catch(() => {});
+        invalidateMailboxCache({ accountId: acc.id }); // the unread counts changed (L8)
         return { ok: true as const };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -503,6 +564,7 @@ export const mailboxRouter = router({
           // Cache-only / webhook email — nothing to update remotely.
           // Persist read state locally and report success.
           await syncCache().catch(() => {});
+          invalidateMailboxCache({ accountId: acc.id });
           return { ok: true as const, local: true as const };
         }
         // Real failure (auth, 5xx, network) — surface it.
@@ -521,6 +583,7 @@ export const mailboxRouter = router({
       await assertMailboxWriteOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
       await adapter.moveToTrash(input.messageId);
+      invalidateMailboxCache({ accountId: acc.id }); // L8
       return { ok: true };
     }),
 
@@ -537,7 +600,24 @@ export const mailboxRouter = router({
       await assertMailboxWriteOwnership(ctx, acc);
       const adapter = createEmailAdapter(acc);
       await adapter.moveToFolder(input.messageId, input.destFolder, input.currentFolder);
+      invalidateMailboxCache({ accountId: acc.id }); // L8
       return { ok: true };
+    }),
+
+  /**
+   * The page's Refresh button (L8): forget what was kept for these mailboxes,
+   * so the next read goes to the provider. Only for mailboxes the caller may
+   * read.
+   */
+  refresh: workspaceProcedure
+    .input(z.object({ accountIds: z.array(z.number().int()).min(1).max(20) }))
+    .mutation(async ({ ctx, input }) => {
+      for (const id of input.accountIds) {
+        const acc = await getAccount(id, ctx.workspace.id);
+        await assertMailboxReadOwnership(ctx, acc);
+        invalidateMailboxCache({ accountId: acc.id });
+      }
+      return { ok: true as const };
     }),
 
   /** AI-draft a reply to a thread */

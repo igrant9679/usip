@@ -113,7 +113,7 @@ function cacheRowToThread(row: CacheRow): EmailThread {
 
 function cacheRowToMessage(row: CacheRow): EmailMessage {
   const attachments = Array.isArray(row.attachmentsJson)
-    ? (row.attachmentsJson as Array<{ name?: string; mime?: string; size?: number }>)
+    ? (row.attachmentsJson as Array<{ id?: string; name?: string; mime?: string; size?: number }>)
     : [];
   return {
     messageId: row.emailId,
@@ -130,6 +130,9 @@ function cacheRowToMessage(row: CacheRow): EmailMessage {
       filename: a.name ?? "attachment",
       contentType: a.mime ?? "application/octet-stream",
       size: a.size ?? 0,
+      // The id GET /emails/{id}/attachments/{attachmentId} takes (F26):
+      // without it a download or a forward asked for attachment "0".
+      attachmentId: a.id ?? undefined,
     })),
     inReplyTo: undefined,
     references: undefined,
@@ -205,6 +208,7 @@ function unipileEmailToMessage(email: UnipileEmail): EmailMessage {
       filename: a.name,
       contentType: a.mime ?? "application/octet-stream",
       size: a.size ?? 0,
+      attachmentId: (a as { id?: string }).id ?? undefined,
     })),
     inReplyTo: undefined,
     references: undefined,
