@@ -122,7 +122,7 @@ import { icpLabels } from "@shared/icpShape";
 import { dropNeverTarget, neverTargetHit, neverTargetReason } from "@shared/researchTargeting";
 import { campaignNeverTarget } from "./services/research/neverTarget";
 import { downstreamAccountFor, hasSellerDownstreamLink } from "./services/research/downstreamAccounts";
-import { pickFallback, researchTargeting, workspaceIcpFallback } from "./services/research/targetingPrior";
+import { perSectorSliceGroups, pickFallback, researchTargeting, workspaceIcpFallback, type SliceGroup } from "./services/research/targetingPrior";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { inSendWindow } from "./services/sendWindow";
 import { recountCampaignCounters } from "./services/are/campaignCounters";
@@ -2583,7 +2583,22 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // lastSearchedAt and lastNewCount per slice. Every tick the engine
   // picks the STALEST slice (null first, then oldest) so over time it
   // covers the full ICP grid without increasing per-tick API spend.
-  const targetingSlices = buildQuerySlices({ titles, industries, geos, keywords, sizeHint });
+  // F37 (audit 2026-10-20): when blank fields fall back to the researched
+  // sectors, each sector's titles are searched with its own industries and
+  // places, not with every other sector's. Only the rotating queries change;
+  // the vendor searches below still take the combined lists.
+  const sectorGroups = perSectorSliceGroups({
+    mode: fallback,
+    own: {
+      titles: overrides.targetTitles?.length ? icpLabels(overrides.targetTitles, "title") : [],
+      industries: overrides.targetIndustries?.length ? icpLabels(overrides.targetIndustries, "industry") : [],
+      geos: overrides.targetGeographies?.length ? icpLabels(overrides.targetGeographies, "geography") : [],
+      keywords: overrides.keywords?.length ? overrides.keywords : [],
+    },
+    inferred: { titles: icpLabels(icp?.targetTitles, "title"), industries: icpLabels(icp?.targetIndustries, "industry"), geos: icpLabels(icp?.targetGeographies, "geography") },
+    researched,
+  });
+  const targetingSlices = buildQuerySlices({ titles, industries, geos, keywords, sizeHint, groups: sectorGroups });
   if (targetingSlices.length === 0) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
       "Discovery skipped — campaign has no targeting (titles/industries/geos/keywords). Open the campaign and add targets, or apply a Persona.");
@@ -3044,8 +3059,29 @@ export function buildQuerySlices(args: {
   geos: string[];
   keywords: string[];
   sizeHint: string;
+  /**
+   * Build each group's product separately instead of the flat lists' (F37:
+   * one researched sector's titles with only its own industries and places),
+   * then take them in turn, so every group gets its share of the cap.
+   */
+  groups?: SliceGroup[] | null;
 }): Array<{ id: string; q: string }> {
   const MAX_SLICES = 120;
+  if (args.groups && args.groups.length > 0) {
+    const perGroup = args.groups.map((g) => buildQuerySlices({ titles: g.titles, industries: g.industries, geos: g.geos, keywords: g.keywords, sizeHint: args.sizeHint }));
+    const out: Array<{ id: string; q: string }> = [];
+    const seen = new Set<string>();
+    for (let i = 0; out.length < MAX_SLICES && perGroup.some((g) => i < g.length); i++) {
+      for (const g of perGroup) {
+        const s = g[i];
+        if (!s || seen.has(s.id)) continue;
+        seen.add(s.id);
+        out.push(s);
+        if (out.length >= MAX_SLICES) break;
+      }
+    }
+    return out;
+  }
   // Safety ceiling on the raw build so a pathological ICP (e.g. 10×10×10×10)
   // can't blow up memory; we stride-sample down to MAX_SLICES afterwards.
   const BUILD_CEILING = MAX_SLICES * 12;
