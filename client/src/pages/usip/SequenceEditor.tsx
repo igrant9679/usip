@@ -270,7 +270,7 @@ export default function SequenceEditor() {
           {/* EDITOR */}
           {tab === "Editor" && (
             <div className="max-w-2xl mx-auto p-4 md:p-6">
-              <SequenceDraftsNote className="mb-3" />
+              <SequenceDraftsNote className="mb-3" sequenceSettings={seq.settings} />
               <div className="flex items-center gap-2 mb-4">
                 <span className="text-[12px] font-medium px-2 py-1 rounded-md border bg-card inline-flex items-center gap-1.5"><Send className="size-3.5" style={{ color: accent }} /> {steps.length} step{steps.length === 1 ? "" : "s"}</span>
                 {updateSteps.isPending && <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1"><Loader2 className="size-3 animate-spin" /> Saving…</span>}
