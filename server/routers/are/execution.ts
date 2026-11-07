@@ -878,9 +878,9 @@ export const executionRouter = router({
           accountEmail: sendingAccounts.fromEmail,
         })
         .from(areExecutionQueue)
-        .leftJoin(prospectQueue, eq(prospectQueue.id, areExecutionQueue.prospectQueueId))
-        .leftJoin(areCampaigns, eq(areCampaigns.id, areExecutionQueue.campaignId))
-        .leftJoin(sendingAccounts, eq(sendingAccounts.id, areExecutionQueue.sendingAccountId))
+        .leftJoin(prospectQueue, and(eq(prospectQueue.id, areExecutionQueue.prospectQueueId), eq(prospectQueue.workspaceId, areExecutionQueue.workspaceId)))
+        .leftJoin(areCampaigns, and(eq(areCampaigns.id, areExecutionQueue.campaignId), eq(areCampaigns.workspaceId, areExecutionQueue.workspaceId)))
+        .leftJoin(sendingAccounts, and(eq(sendingAccounts.id, areExecutionQueue.sendingAccountId), eq(sendingAccounts.workspaceId, areExecutionQueue.workspaceId)))
         .where(and(
           eq(areExecutionQueue.id, input.executionQueueId),
           eq(areExecutionQueue.workspaceId, ctx.workspace.id),

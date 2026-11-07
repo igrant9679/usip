@@ -270,7 +270,7 @@ async function queueCandidatesFor(workspaceId: number, limit: number, retryFaile
       personProspectId: prospectQueue.personProspectId,
     })
     .from(prospectQueue)
-    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
+    .innerJoin(areCampaigns, and(eq(areCampaigns.id, prospectQueue.campaignId), eq(areCampaigns.workspaceId, prospectQueue.workspaceId)))
     .where(and(...conds))
     .orderBy(prospectQueue.id)
     .limit(limit);
@@ -334,7 +334,7 @@ async function quickenrichCandidatesFor(workspaceId: number, limit: number, retr
       companyName: prospectQueue.companyName,
     })
     .from(prospectQueue)
-    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
+    .innerJoin(areCampaigns, and(eq(areCampaigns.id, prospectQueue.campaignId), eq(areCampaigns.workspaceId, prospectQueue.workspaceId)))
     .where(and(...conds))
     .orderBy(prospectQueue.id)
     .limit(limit);
@@ -431,7 +431,7 @@ export async function backfillQueueCompanies(opts: {
   const rows = await db
     .select({ id: prospectQueue.id, linkedinUrl: prospectQueue.linkedinUrl, campaignName: areCampaigns.name })
     .from(prospectQueue)
-    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
+    .innerJoin(areCampaigns, and(eq(areCampaigns.id, prospectQueue.campaignId), eq(areCampaigns.workspaceId, prospectQueue.workspaceId)))
     .where(and(
       eq(prospectQueue.workspaceId, opts.workspaceId),
       isNotNull(prospectQueue.linkedinUrl),
@@ -547,7 +547,7 @@ export async function queueDiagnostics(workspaceId: number): Promise<{
       campaignName: areCampaigns.name,
     })
     .from(prospectQueue)
-    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
+    .innerJoin(areCampaigns, and(eq(areCampaigns.id, prospectQueue.campaignId), eq(areCampaigns.workspaceId, prospectQueue.workspaceId)))
     .where(and(
       eq(prospectQueue.workspaceId, workspaceId),
       or(isNull(prospectQueue.email), eq(prospectQueue.email, "")),

@@ -18,7 +18,7 @@
  * Filters/aggregates compile through drizzle's own builders — no string SQL
  * ever contains a model-supplied value.
  */
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import type { AnyMySqlColumn, MySqlTable } from "drizzle-orm/mysql-core";
 import { z } from "zod";
 import { getDb } from "../db";
@@ -29,6 +29,7 @@ import {
   meetings, notifications, opportunities, prospectQueue, prospects, recordLists,
   sequences, tasks,
 } from "../../drizzle/schema";
+import { genuineReplyScope } from "./replyScope";
 
 /* ─── The registry: what the assistant may query ─────────────────────────── */
 
@@ -237,11 +238,25 @@ export interface ExplorerViewer { userId: number; role: string }
  * log (an admin's screen), every member's notifications (each person sees
  * their own) and everyone's calendar (a rep sees their own, a manager anyone's,
  * as calendar.listEvents decides).
+ *
+ * Synced mail had no gate at all, so a rep could ask for a teammate's private
+ * inbox. Below a manager it now reads as the screens show it: genuine replies,
+ * which Conversations and the Emails tab show every member, plus the rest of
+ * the rep's own mailbox, as My Mailbox does. A manager reads every mailbox,
+ * as My Mailbox lets them.
  */
-const VIEWER_GATES: Record<string, { minRole?: Role; label: string; ownerCol?: AnyMySqlColumn; managerSeesAll?: boolean }> = {
+const VIEWER_GATES: Record<string, {
+  minRole?: Role; label: string; ownerCol?: AnyMySqlColumn; managerSeesAll?: boolean;
+  /** Below a manager, the rows a member may read; a manager reads them all. */
+  belowManager?: (viewer: ExplorerViewer) => SQL;
+}> = {
   audit_log: { minRole: "admin", label: "The audit log" },
   notifications: { ownerCol: notifications.userId, label: "Notifications" },
   calendar_events: { ownerCol: calendarEvents.userId, managerSeesAll: true, label: "Calendar events" },
+  email_replies: {
+    label: "Synced mail",
+    belowManager: (viewer) => or(genuineReplyScope(), eq(emailReplies.userId, viewer.userId))!,
+  },
 };
 
 /**
@@ -257,6 +272,7 @@ export function viewerScope(entity: string, viewer: ExplorerViewer): SQL | undef
   if (gate.ownerCol && !(gate.managerSeesAll && rankOf(viewer.role) >= ROLE_RANK.manager)) {
     return eq(gate.ownerCol, viewer.userId);
   }
+  if (gate.belowManager && rankOf(viewer.role) < ROLE_RANK.manager) return gate.belowManager(viewer);
   return undefined;
 }
 

@@ -150,11 +150,21 @@ export async function dispatchLinkedInStep(input: {
     return { kind: "failed", reason: HEALABLE_NO_LINKEDIN };
   }
 
-  const account = await pickLinkedInAccount(input.workspaceId, input.campaignOwnerUserId);
+  // The CAMPAIGN OWNER's account and nobody else's, as sequences do (audit
+  // 2026-10-20, O12). This fell back to the workspace's oldest account when
+  // the owner had none, so a rep's campaign invited people as a colleague.
+  const account = await pickLinkedInAccount(input.workspaceId, input.campaignOwnerUserId, { ownerOnly: true });
   if (!account) {
     // A configuration gap, not a fact about this prospect — so the step waits
-    // rather than dying, and every other LinkedIn step this tick would hit it.
-    return { kind: "deferred", reason: "No LinkedIn account connected", stopChannel: true };
+    // rather than dying, and every other LinkedIn step in this campaign would
+    // hit it. The reason reaches the campaign log.
+    return {
+      kind: "deferred",
+      reason: input.campaignOwnerUserId
+        ? "The campaign owner has no LinkedIn account connected"
+        : "The campaign has no owner to send as",
+      stopChannel: true,
+    };
   }
 
   // Where are we with this person? The accept webhook maintains this row.

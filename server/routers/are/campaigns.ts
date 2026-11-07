@@ -370,8 +370,8 @@ export const campaignsRouter = router({
         firstName: prospects.firstName, lastName: prospects.lastName, title: prospects.title, company: prospects.company,
       })
         .from(campaignRoutingSuggestions)
-        .innerJoin(areCampaigns, eq(areCampaigns.id, campaignRoutingSuggestions.campaignId))
-        .innerJoin(prospects, eq(prospects.id, campaignRoutingSuggestions.prospectId))
+        .innerJoin(areCampaigns, and(eq(areCampaigns.id, campaignRoutingSuggestions.campaignId), eq(areCampaigns.workspaceId, campaignRoutingSuggestions.workspaceId)))
+        .innerJoin(prospects, and(eq(prospects.id, campaignRoutingSuggestions.prospectId), eq(prospects.workspaceId, campaignRoutingSuggestions.workspaceId)))
         .where(and(eq(campaignRoutingSuggestions.workspaceId, ctx.workspace.id), eq(campaignRoutingSuggestions.status, "pending")))
         .orderBy(desc(campaignRoutingSuggestions.fit), desc(campaignRoutingSuggestions.id))
         .limit(input?.limit ?? 50);

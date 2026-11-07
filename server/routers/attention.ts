@@ -186,7 +186,7 @@ export const attentionRouter = router({
       // Best-fit campaign suggestions (phase 3) — pending, grouped by campaign.
       db.select({ campaignId: campaignRoutingSuggestions.campaignId, name: areCampaigns.name, n: sql<number>`count(*)` })
         .from(campaignRoutingSuggestions)
-        .innerJoin(areCampaigns, eq(areCampaigns.id, campaignRoutingSuggestions.campaignId))
+        .innerJoin(areCampaigns, and(eq(areCampaigns.id, campaignRoutingSuggestions.campaignId), eq(areCampaigns.workspaceId, campaignRoutingSuggestions.workspaceId)))
         .where(and(eq(campaignRoutingSuggestions.workspaceId, ws), eq(campaignRoutingSuggestions.status, "pending")))
         .groupBy(campaignRoutingSuggestions.campaignId, areCampaigns.name),
     ]);
