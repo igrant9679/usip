@@ -283,11 +283,12 @@ export const segmentsRouter = router({
     }),
 
   /**
-   * One page of the segment's contacts, newest first, and how many there are
+   * One page of the segment's members, newest first, and how many there are
    * now (P52). Nothing called this, so a segment's members could not be seen
    * (audit 2026-10-20, P20); the segment's own page reads it. The columns the
-   * page shows only, and each contact's People record when it has one, since
-   * segments read the contacts table and not People (P21).
+   * page shows only. A People segment (P21, F42) returns People; one still on
+   * contacts returns contacts with each one's People record when it has one.
+   * The name stays getContacts so the page and its pins keep one endpoint.
    */
   getContacts: workspaceProcedure
     .input(z.object({
