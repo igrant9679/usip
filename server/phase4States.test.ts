@@ -162,7 +162,9 @@ describe("the audit's screens each tell a failure from nothing (X1.6)", () => {
     ["P118 breakdown", "client/src/pages/usip/LeadScoring.tsx", /bdError && !isFetching \? \(\s*<QueryError compact what="this lead's breakdown"/],
     ["R62 enrich job", "client/src/components/usip/people/LinkedInEnrichment.tsx", /jobQ\.data\?\.status === "failed" \|\| jobQ\.data\?\.status === "canceled"/],
     ["P113 research runs", "client/src/components/usip/research/ResearchRuns.tsx", /if \(q\.error && !q\.data\) return <Section title="AI research runs"><QueryError/],
-    ["A63 what's working", "client/src/pages/usip/AREPerformance.tsx", /!loading && !metricsError && stepRows\.length === 0/],
+    // 2026-11-06 (A22): the page's first table is the Revenue Engine's steps
+    // (areStepRows); the guarantee is the same — an error is never "nothing yet".
+    ["A63 what's working", "client/src/pages/usip/AREPerformance.tsx", /!loading && !metricsError && areStepRows\.length === 0 && stepRows\.length === 0/],
     // The prospect list is People since 2026-10-27 (phase 5 item 2); R88 is
     // pinned there now. Same three guarantees, one reached differently.
     ["R88 people error", "client/src/pages/usip/People.tsx", /\) : error \? \(/],

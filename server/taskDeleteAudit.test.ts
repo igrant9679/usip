@@ -83,16 +83,20 @@ describe("the entry carries what the delete destroys", () => {
     expect(proc).not.toMatch(/\.select\(\{/);
   });
 
-  it("attachments.delete does the same, and says the stored file is left behind", () => {
+  it("attachments.delete does the same, and erases the stored file before the row", () => {
     const att = router.slice(router.indexOf("Remove an attachment record"));
     expect(att).toContain("const [doomed] = await db");
     expect(att).toContain(".from(attachments)");
     expect(att).toContain('entityType: "attachment"');
     expect(att).toContain("before: doomed,");
-    // The orphaned object is a known limit, written down where the next reader
-    // will be standing rather than left to be discovered.
-    // One line's worth: the sentence wraps in the source comment.
-    expect(att).toContain("stored object behind `fileKey` is left where it is");
+    // 2026-11-06 (audit R100, batch Rc): this pinned the comment recording that
+    // the stored object was LEFT BEHIND, a known limit at the time. The owner's
+    // brief for R100 says to delete the object with the row, so the limit is
+    // gone and the pin follows it: the file is erased first, and a failed
+    // erase deletes nothing. The audit-trail pins above are unchanged.
+    const erase = att.indexOf("await storageErase(doomed.fileKey);");
+    expect(erase, "the erase").toBeGreaterThan(-1);
+    expect(att.slice(0, erase)).not.toContain("await db.delete(attachments)");
   });
 });
 

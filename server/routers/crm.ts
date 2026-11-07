@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, isNull, isNotNull, like, lt, lte, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, isNotNull, like, lt, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { invokeLLM } from "../_core/llm";
 import {
@@ -26,6 +26,7 @@ import {
   territories,
   unipileAccounts,
   users,
+  notifications,
   workspaceMembers,
   workspaceSettings,
   proposals,
@@ -43,11 +44,13 @@ import { recordAudit } from "../audit";
 import { getDb } from "../db";
 import { createEmailAdapter } from "../emailAdapter";
 import { linkEmailLogToDraft } from "../services/email/logSend";
+import { insertIdOf } from "../_core/insertId";
 import { router } from "../_core/trpc";
-import { repProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, managerProcedure, rankOf, repProcedure, ROLE_RANK, workspaceProcedure } from "../_core/workspace";
+import { FORECAST_CATEGORIES } from "@shared/forecastCategory";
 import { activeOwnerOrNull } from "../_core/activeMembers";
 import { assertOwnerInWorkspace, assertRowInWorkspace } from "../services/foreignIds";
-import { defaultPipelineId, invalidateStageIndex, resolvedStageFor, stageIndexFor, stageResolver } from "../_core/stageSemantics";
+import { closedStageKeys, defaultPipelineId, invalidateStageIndex, resolvedStageFor, stageIndexFor, stageResolver } from "../_core/stageSemantics";
 import { isSuppressed, makeUnsubscribeUrl, unsubscribeHeaders } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
 import {
@@ -57,9 +60,10 @@ import {
 import { normalizeCalendarDate } from "@shared/calendarDate";
 import {
   addMonths, closedIn, closeMonthKey, currentRanges, dollars, inRange, instantMonthKey, loadMetricDeals,
-  monthKey, openTotals, zonedYmd, type Range,
+  monthKey, monthToDateRanges, openTotals, zonedYmd, type Range,
 } from "../services/dealMetrics";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { describeWriteError, isDuplicateKeyError } from "../services/dbWriteError";
 import { appBaseUrl as publicAppOrigin } from "../appUrl";
 // One arithmetic rule for line-item money, shared with quotes. See
 // shared/quoteTotals.ts — a deal line and a quote line do the same sum.
@@ -70,6 +74,7 @@ import { renderMergeFields, resolveBookingUrl, scrubForSend } from "../mergeVars
 import { businessDomainFromEmail, normalizedAccountFields } from "../services/company/normalize";
 import { accountMatchesForLead, findContactByEmail } from "../services/crmMatching";
 import { ACTIVE_ENROLLMENT_STATUSES } from "../services/crossEngineEnrollment";
+import { noteAmountChange } from "./pipelineAlerts";
 import { assertOutboundNotPaused } from "../services/outboundPause";
 import { LEAD_LIST_COLUMNS, LEAD_ORDER, leadWhere, searchLeads } from "../services/leadSearch";
 
@@ -192,21 +197,7 @@ async function cascadeDeleteAccountDependents(
     .where(and(eq(opportunities.workspaceId, workspaceId), inArray(opportunities.accountId, accountIds)));
   const oppIds = oppRows.map((o) => o.id);
   if (oppIds.length > 0) {
-    const quoteRows = await db
-      .select({ id: quotes.id })
-      .from(quotes)
-      .where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.opportunityId, oppIds)));
-    const quoteIds = quoteRows.map((q) => q.id);
-    if (quoteIds.length > 0) {
-      await db.delete(quoteLineItems).where(inArray(quoteLineItems.quoteId, quoteIds));
-      await db.delete(quotes).where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.id, quoteIds)));
-    }
-    await db.delete(dealLineItems).where(inArray(dealLineItems.opportunityId, oppIds));
-    await db.delete(opportunityContactRoles).where(inArray(opportunityContactRoles.opportunityId, oppIds));
-    await db.delete(opportunityStageHistory).where(inArray(opportunityStageHistory.opportunityId, oppIds));
-    await db.delete(opportunityIntelligence).where(inArray(opportunityIntelligence.opportunityId, oppIds));
-    await db.delete(stageApprovals).where(inArray(stageApprovals.opportunityId, oppIds));
-    await db.delete(pipelineAlerts).where(inArray(pipelineAlerts.opportunityId, oppIds));
+    await cascadeDeleteOpportunityDependents(db, workspaceId, oppIds);
     await db.delete(opportunities).where(and(eq(opportunities.workspaceId, workspaceId), inArray(opportunities.id, oppIds)));
   }
 
@@ -221,6 +212,36 @@ async function cascadeDeleteAccountDependents(
     // (Clodura execution tables removed 2026-08-11 — nothing to cascade.)
     await db.delete(contacts).where(and(eq(contacts.workspaceId, workspaceId), inArray(contacts.id, contactIds)));
   }
+}
+
+/**
+ * The rows that belong to the given deals and mean nothing without them:
+ * quotes (+ their lines), line items, contact roles, stage history, AI
+ * intelligence, stage approvals and pipeline alerts. `oppIds` must already be
+ * this workspace's; every delete is also scoped by workspace where the table
+ * has the column. Proposals, tasks and activities are soft links and stay.
+ */
+async function cascadeDeleteOpportunityDependents(
+  db: Pick<NonNullable<Awaited<ReturnType<typeof getDb>>>, "select" | "delete">,
+  workspaceId: number,
+  oppIds: number[],
+): Promise<void> {
+  if (oppIds.length === 0) return;
+  const quoteRows = await db
+    .select({ id: quotes.id })
+    .from(quotes)
+    .where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.opportunityId, oppIds)));
+  const quoteIds = quoteRows.map((q) => q.id);
+  if (quoteIds.length > 0) {
+    await db.delete(quoteLineItems).where(inArray(quoteLineItems.quoteId, quoteIds));
+    await db.delete(quotes).where(and(eq(quotes.workspaceId, workspaceId), inArray(quotes.id, quoteIds)));
+  }
+  await db.delete(dealLineItems).where(and(eq(dealLineItems.workspaceId, workspaceId), inArray(dealLineItems.opportunityId, oppIds)));
+  await db.delete(opportunityContactRoles).where(and(eq(opportunityContactRoles.workspaceId, workspaceId), inArray(opportunityContactRoles.opportunityId, oppIds)));
+  await db.delete(opportunityStageHistory).where(and(eq(opportunityStageHistory.workspaceId, workspaceId), inArray(opportunityStageHistory.opportunityId, oppIds)));
+  await db.delete(opportunityIntelligence).where(and(eq(opportunityIntelligence.workspaceId, workspaceId), inArray(opportunityIntelligence.opportunityId, oppIds)));
+  await db.delete(stageApprovals).where(and(eq(stageApprovals.workspaceId, workspaceId), inArray(stageApprovals.opportunityId, oppIds)));
+  await db.delete(pipelineAlerts).where(and(eq(pipelineAlerts.workspaceId, workspaceId), inArray(pipelineAlerts.opportunityId, oppIds)));
 }
 
 /* ──────────────────────────────────────────────────────────────────────── */
@@ -317,6 +338,8 @@ export const OPPORTUNITY_PATCH = z.object({
   pipelineId: optId,
   accountId: z.number().int().positive().optional(),
   ownerUserId: z.number().int().positive().optional(),
+  // A rep's forecast call (R41); null returns the deal to "by win %".
+  forecastCategory: z.enum(FORECAST_CATEGORIES).nullable().optional(),
 }).strict();
 
 export const TERRITORY_PATCH = z.object({
@@ -615,6 +638,11 @@ export const contactsRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(contacts).where(and(eq(contacts.id, input.id), eq(contacts.workspaceId, ctx.workspace.id)));
     await db.delete(contacts).where(and(eq(contacts.id, input.id), eq(contacts.workspaceId, ctx.workspace.id)));
+    // The People row's pointer goes with the contact, as bulkDelete does (R33).
+    if (before) {
+      await db.update(prospects).set({ linkedContactId: null })
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.linkedContactId, input.id)));
+    }
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "contact", entityId: input.id, before });
     return { ok: true };
   }),
@@ -1056,7 +1084,7 @@ export const contactsRouter = router({
           });
           // Join the log row to the draft that owns this send's open/click
           // counters, so the Emails page can show them (migration 0163).
-          const draftId = Number((inserted as unknown as { insertId?: number })?.insertId ?? 0);
+          const draftId = insertIdOf(inserted);
           if (draftId) await linkEmailLogToDraft(ctx.workspace.id, sentMessageId, draftId);
           await db.insert(activities).values({
             workspaceId: ctx.workspace.id,
@@ -1199,6 +1227,9 @@ Return a JSON object with ONLY the fields you can reasonably suggest from this i
 
 /* ──────────────────────────────────────────────────────────────────────── */
 
+/** The most leads one "Send Email" may address (R5). */
+export const LEAD_BULK_SEND_MAX = 50;
+
 export const leadsRouter = router({
   /**
    * Leads for a picker or an export: filtered in SQL, highest score first,
@@ -1233,7 +1264,17 @@ export const leadsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [row] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
-    return row ?? null;
+    if (!row) return null;
+    // A lead has no LinkedIn column. Its profile is the one a LinkedIn import
+    // left in customFields, else the one on the People row it came from, so
+    // the drawer's LinkedIn tab can start with it (R44).
+    let linkedinUrl = String((row.customFields as Record<string, unknown> | null)?.linkedinUrl ?? "").trim() || null;
+    if (!linkedinUrl) {
+      const [person] = await db.select({ linkedinUrl: prospects.linkedinUrl }).from(prospects)
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.linkedLeadId, row.id))).limit(1);
+      linkedinUrl = person?.linkedinUrl?.trim() || null;
+    }
+    return { ...row, linkedinUrl };
   }),
 
   create: repProcedure
@@ -1251,13 +1292,15 @@ export const leadsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      // Apply lead-routing rules first; fall back to creator as owner.
-      const { routeLeadOwner } = await import("./leadScoring");
+      // Apply lead-routing rules first; fall back to creator as owner. Rules on
+      // Score see the score the lead is created with, not 0 (audit P13).
+      const { routeLeadOwner, createTimeScore, rescoreLead } = await import("./leadScoring");
+      const initial = await createTimeScore(ctx.workspace.id, input);
       const routedOwner = await routeLeadOwner(ctx.workspace.id, {
         title: input.title ?? null,
         company: input.company ?? null,
         source: input.source ?? null,
-        score: 0,
+        score: initial.total,
         industry: null,
         country: null,
         state: null,
@@ -1282,6 +1325,8 @@ export const leadsRouter = router({
             email: input.email, status: "new",
           }, ownerUserId))
           .catch(() => { /* workflow firing is best-effort */ });
+        // Scored on creation (audit P12), without a model call.
+        await rescoreLead(ctx.workspace.id, id);
       }
       return { id, ownerUserId, routed: routedOwner != null };
     }),
@@ -1325,6 +1370,12 @@ export const leadsRouter = router({
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
     await db.delete(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
+    // A People row converted to this lead must not keep pointing at it (R33):
+    // promoteToLead and the "Saved" count read linkedLeadId as "has a lead".
+    if (before) {
+      await db.update(prospects).set({ linkedLeadId: null })
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), eq(prospects.linkedLeadId, input.id)));
+    }
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "lead", entityId: input.id, before });
     return { ok: true };
   }),
@@ -1340,6 +1391,8 @@ export const leadsRouter = router({
         .where(and(eq(leads.workspaceId, ctx.workspace.id), inArray(leads.id, input.ids)));
       if (rows.length === 0) return { deleted: 0 };
       await db.delete(leads).where(and(eq(leads.workspaceId, ctx.workspace.id), inArray(leads.id, rows.map((r) => r.id))));
+      await db.update(prospects).set({ linkedLeadId: null })
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.linkedLeadId, rows.map((r) => r.id))));
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "lead_bulk", entityId: 0, after: { ids: rows.map((r) => r.id) } });
       return { deleted: rows.length };
     }),
@@ -1406,6 +1459,12 @@ export const leadsRouter = router({
 
       const convName = lead.company ?? `${lead.firstName} ${lead.lastName}`;
       const domain = businessDomainFromEmail(lead.email) || null;
+      // An account this creates is routed by the territory rules, as one
+      // created on its own is (R42): a lead carries only its company, so the
+      // rules that can match are "company contains" and those with no
+      // condition. A routed owner who has left is skipped for the converter.
+      const territory = await applyTerritoryRules(db, ws, { company: convName });
+      const territoryOwner = await activeOwnerOrNull(ws, territory?.ownerUserId);
       // The deal's stage: the default pipeline's first OPEN stage, by flags.
       let deal: { pipelineId: number | null; key: string; winProb: number; meta: { isWon: boolean; isLost: boolean } } | null = null;
       if (input.createOpportunity) {
@@ -1430,7 +1489,8 @@ export const leadsRouter = router({
         const accountCreated = accountId == null;
         if (accountCreated) {
           const accR = await tx.insert(accounts).values({
-            workspaceId: ws, name: convName, domain: domain ?? undefined, ...normalizedAccountFields(convName, domain), ownerUserId: ctx.user.id,
+            workspaceId: ws, name: convName, domain: domain ?? undefined, ...normalizedAccountFields(convName, domain),
+            ownerUserId: territoryOwner ?? ctx.user.id, territoryId: territory?.territoryId ?? undefined,
           });
           accountId = Number((accR as any)[0]?.insertId ?? 0);
         }
@@ -1541,64 +1601,43 @@ export const leadsRouter = router({
       return { accountId, contactId, opportunityId, accountCreated: done.accountCreated, contactCreated: done.contactCreated };
     }),
 
-  /** AI lead scoring re-run for one lead. Server-side LLM. */
-  rescore: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
-    const db = await getDb();
-    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.id), eq(leads.workspaceId, ctx.workspace.id)));
-    if (!lead) throw new TRPCError({ code: "NOT_FOUND" });
+  // leads.rescore is gone (audit 2026-10-20, P39, R84): an older scorer that
+  // ignored the workspace's tier thresholds, added Math.random() when the
+  // model failed, and was open to the assistant. leadScoring.recompute is the
+  // scorer; no screen called this one.
 
-    const { invokeLLM } = await import("../_core/llm");
-    let score = 50;
-    let grade = "C";
-    let reasons: string[] = ["Default heuristic score"];
-    try {
-      const out = await invokeLLM({
-        messages: [
-          { role: "system", content: "You score B2B sales leads. Output JSON only." },
-          {
-            role: "user",
-            content: `Score this lead 0-100. Title weighting: C-level/VP=high, manager=medium, individual=low. Engagement is unknown. Return JSON {score:int, grade:"A"|"B"|"C"|"D", reasons:[string]}.\n\nName: ${lead.firstName} ${lead.lastName}\nTitle: ${lead.title}\nCompany: ${lead.company}\nSource: ${lead.source}`,
-          },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "lead_score",
-            strict: true,
-            schema: {
-              type: "object",
-              properties: {
-                score: { type: "integer" },
-                grade: { type: "string", enum: ["A", "B", "C", "D"] },
-                reasons: { type: "array", items: { type: "string" } },
-              },
-              required: ["score", "grade", "reasons"],
-              additionalProperties: false,
-            },
-          },
-        },
-      });
-      const content = out.choices?.[0]?.message?.content;
-      const parsed = typeof content === "string" ? JSON.parse(content) : content;
-      score = Math.max(0, Math.min(100, Number(parsed.score)));
-      grade = String(parsed.grade);
-      reasons = Array.isArray(parsed.reasons) ? parsed.reasons.slice(0, 6) : reasons;
-    } catch (e) {
-      console.warn("[lead.rescore] LLM failed; using heuristic", e);
-      const titleLow = (lead.title ?? "").toLowerCase();
-      let s = 40;
-      if (/chief|cxo|cmo|cro|cfo|ceo/.test(titleLow)) s += 35;
-      else if (/vp|vice president|head/.test(titleLow)) s += 25;
-      else if (/director/.test(titleLow)) s += 15;
-      else if (/manager/.test(titleLow)) s += 8;
-      score = Math.min(100, s + Math.floor(Math.random() * 15));
-      grade = score >= 80 ? "A" : score >= 60 ? "B" : score >= 40 ? "C" : "D";
-      reasons = [`Title-based ${score}`, "Engagement unknown — assumed neutral"];
-    }
-    await db.update(leads).set({ score, grade, scoreReasons: reasons }).where(eq(leads.id, lead.id));
-    return { score, grade, reasons };
-  }),
+  /**
+   * Send one email to several leads (audit 2026-10-20, R5): each through
+   * sendAdHocEmail, so every lead gets the same checks and the same delivery,
+   * one result per lead. The Leads page looped the single send from the
+   * browser, so a select-all of hundreds sent hundreds one request at a time
+   * and reported only a count. Capped: a person's ad-hoc send is not a
+   * campaign, and the cap keeps one click inside one request.
+   */
+  sendAdHocEmailBulk: repProcedure
+    .input(z.object({
+      leadIds: z.array(z.number().int().positive()).min(1).max(LEAD_BULK_SEND_MAX, `Send to at most ${LEAD_BULK_SEND_MAX} leads at a time — add more to a sequence instead.`),
+      subject: z.string().min(1),
+      body: z.string().min(1),
+      aiGenerated: z.boolean().default(false),
+      fromAccountId: z.number().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Refused as a whole while paused, before any lead is tried.
+      await assertOutboundNotPaused(ctx.workspace.id);
+      const { appRouter } = await import("../routers");
+      const caller = appRouter.createCaller(ctx as never);
+      const results: Array<{ leadId: number; ok: boolean; error?: string }> = [];
+      for (const leadId of Array.from(new Set(input.leadIds))) {
+        try {
+          await caller.leads.sendAdHocEmail({ leadId, subject: input.subject, body: input.body, aiGenerated: input.aiGenerated, fromAccountId: input.fromAccountId });
+          results.push({ leadId, ok: true });
+        } catch (e) {
+          results.push({ leadId, ok: false, error: ((e as Error)?.message ?? String(e)).slice(0, 300) });
+        }
+      }
+      return { sent: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results };
+    }),
 
   /** Send an ad-hoc email to a lead and log it in the timeline */
   /**
@@ -1819,7 +1858,7 @@ export const leadsRouter = router({
         });
         // Join the log row to the draft that owns this send's open/click
         // counters, so the Emails page can show them (migration 0163).
-        const draftId = Number((inserted as unknown as { insertId?: number })?.insertId ?? 0);
+        const draftId = insertIdOf(inserted);
         if (draftId) await linkEmailLogToDraft(ctx.workspace.id, sentMessageId, draftId);
         await db.insert(activities).values({
           workspaceId: ctx.workspace.id,
@@ -1867,29 +1906,84 @@ export const leadsRouter = router({
 
 /* ──────────────────────────────────────────────────────────────────────── */
 
+/** What a board shows: one pipeline, optionally one owner. */
+const BOARD_SCOPE = z.object({ ownerUserId: z.number().optional(), pipelineId: z.number().optional() }).optional();
+type BoardScope = z.infer<typeof BOARD_SCOPE>;
+
+/**
+ * The deals on a board, as a WHERE: the pipeline's own (and, for the default
+ * pipeline, those with no pipeline), optionally one owner's. Null when the
+ * pipeline is not this workspace's.
+ */
+export async function boardScopeWhere(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, scope: BoardScope) {
+  const owner = scope?.ownerUserId ? eq(opportunities.ownerUserId, scope.ownerUserId) : undefined;
+  if (!scope?.pipelineId) return and(eq(opportunities.workspaceId, workspaceId), owner);
+  const [pipeline] = await db.select({ id: crmPipelines.id, isDefault: crmPipelines.isDefault }).from(crmPipelines)
+    .where(and(eq(crmPipelines.id, scope.pipelineId), eq(crmPipelines.workspaceId, workspaceId)));
+  if (!pipeline) return null;
+  return and(boardDealsWhere(workspaceId, pipeline), owner);
+}
+
+/** Deal metrics for what a board shows (R39): the same pipeline and owner rule as boardScopeWhere. */
+async function scopedMetricDeals(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, scope: BoardScope) {
+  const deals = await loadMetricDeals(db, workspaceId, { ownerUserId: scope?.ownerUserId ?? null });
+  if (!scope?.pipelineId) return deals;
+  const [pipeline] = await db.select({ id: crmPipelines.id, isDefault: crmPipelines.isDefault }).from(crmPipelines)
+    .where(and(eq(crmPipelines.id, scope.pipelineId), eq(crmPipelines.workspaceId, workspaceId)));
+  if (!pipeline) return [];
+  return deals.filter((d) => d.pipelineId === pipeline.id || (d.pipelineId == null && !!pipeline.isDefault));
+}
+
 export const opportunitiesRouter = router({
+  /**
+   * Deals, newest first. Every filter runs in SQL (audit 2026-10-20, R66):
+   * this read every deal in the workspace and filtered in JS, and the company
+   * page loaded all of them to show one account's. `accountId`, `openOnly`
+   * and `limit` let a page ask for what it shows.
+   */
   list: workspaceProcedure
-    .input(z.object({ stage: z.string().optional(), ownerOnly: z.boolean().optional() }).optional())
+    .input(z.object({
+      stage: z.string().optional(),
+      ownerOnly: z.boolean().optional(),
+      accountId: z.number().int().positive().optional(),
+      openOnly: z.boolean().optional(),
+      limit: z.number().int().min(1).max(1000).optional(),
+    }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
-      let rows = await db.select().from(opportunities).where(eq(opportunities.workspaceId, ctx.workspace.id)).orderBy(desc(opportunities.updatedAt));
-      if (input?.stage) rows = rows.filter((o) => o.stage === input.stage);
-      if (input?.ownerOnly) rows = rows.filter((o) => o.ownerUserId === ctx.user.id);
-      return rows;
+      const closed = input?.openOnly ? await closedStageKeys(db, ctx.workspace.id) : [];
+      const q = db.select().from(opportunities)
+        .where(and(
+          eq(opportunities.workspaceId, ctx.workspace.id),
+          input?.stage ? eq(opportunities.stage, input.stage) : undefined,
+          input?.ownerOnly ? eq(opportunities.ownerUserId, ctx.user.id) : undefined,
+          input?.accountId ? eq(opportunities.accountId, input.accountId) : undefined,
+          closed.length > 0 ? notInArray(opportunities.stage, closed) : undefined,
+        ))
+        .orderBy(desc(opportunities.updatedAt), desc(opportunities.id));
+      return input?.limit ? q.limit(input.limit) : q;
     }),
 
-  /** Kanban board grouped by stage. */
-  board: workspaceProcedure.input(z.object({ ownerUserId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
+  /**
+   * Kanban board grouped by stage — one pipeline's deals when `pipelineId` is
+   * given (its own, plus those with no pipeline on the default board), the
+   * same rule the board columns use. Every deal in the workspace was read and
+   * the browser threw the other pipelines' away (audit 2026-10-20, L7, R66).
+   */
+  board: workspaceProcedure.input(BOARD_SCOPE).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
-    const where = input?.ownerUserId
-      ? and(eq(opportunities.workspaceId, ctx.workspace.id), eq(opportunities.ownerUserId, input.ownerUserId))
-      : eq(opportunities.workspaceId, ctx.workspace.id);
+    const where = await boardScopeWhere(db, ctx.workspace.id, input);
+    if (!where) return [];
     const rows = await db.select().from(opportunities).where(where);
     // Names only: every account's every column (inline logos included) made
     // this 2 s for a board with a handful of deals (audit 2026-10-20, L7).
-    const acctRows = await db.select({ id: accounts.id, name: accounts.name }).from(accounts).where(eq(accounts.workspaceId, ctx.workspace.id));
+    // And only the board's accounts, not the workspace's.
+    const accountIds = Array.from(new Set(rows.map((r) => r.accountId)));
+    const acctRows = accountIds.length > 0
+      ? await db.select({ id: accounts.id, name: accounts.name }).from(accounts).where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, accountIds)))
+      : [];
     const accMap = new Map(acctRows.map((a) => [a.id, a.name]));
     return rows.map((r) => ({ ...r, accountName: accMap.get(r.accountId) ?? "?" }));
   }),
@@ -1909,7 +2003,8 @@ export const opportunitiesRouter = router({
         value: z.number().min(0).default(0),
         stage: z.string().min(1).max(60).default("discovery"),
         pipelineId: z.number().optional(),
-        winProb: z.number().min(0).max(100).default(20),
+        // Absent: the stage's default win %, not 0 (R36).
+        winProb: z.number().min(0).max(100).optional(),
         closeDate: z.string().optional(),
       }),
     )
@@ -1927,19 +2022,20 @@ export const opportunitiesRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: `"${input.stage}" is not a stage in this pipeline. Pick one of its own stages.` });
       }
       const meta = stages.resolve(input.pipelineId ?? null, input.stage);
+      const winProb = input.winProb ?? meta.defaultWinProb ?? 20;
       const r = await db.insert(opportunities).values({
         workspaceId: ctx.workspace.id, accountId: input.accountId, name: input.name,
-        value: String(input.value), stage: input.stage, winProb: input.winProb,
+        value: String(input.value), stage: input.stage, winProb,
         pipelineId: input.pipelineId ?? null,
         // A calendar date, kept on the day picked (R16/R29).
         closeDate: normalizeCalendarDate(input.closeDate), ownerUserId: ctx.user.id,
         ...stageDatesForNewDeal(meta),
       } as never);
       const id = Number((r as any)[0]?.insertId ?? 0);
-      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "opportunity", entityId: id, after: input });
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "opportunity", entityId: id, after: { ...input, winProb } });
       void import("../services/workflowEngine")
         .then((m) => m.fireRecordCreated(ctx.workspace.id, "opportunity", id, {
-          name: input.name, stage: input.stage, value: input.value, winProb: input.winProb, accountId: input.accountId,
+          name: input.name, stage: input.stage, value: input.value, winProb, accountId: input.accountId,
         }, ctx.user.id))
         .catch(() => { /* workflow firing is best-effort */ });
       return { id };
@@ -1990,6 +2086,8 @@ export const opportunitiesRouter = router({
     if (patch.closeDate !== undefined) patch.closeDate = normalizeCalendarDate(patch.closeDate);
     if (Object.keys(patch).length === 0) return { ok: true };
     await db.update(opportunities).set(patch).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+    // R38: a large change of amount is an alert (it was named, never raised).
+    if (patch.value != null) await noteAmountChange(db, ctx.workspace.id, before, Number(before.value ?? 0), Number(patch.value));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "opportunity", entityId: input.id, before, after: input.patch });
     // Stage is refused above, so this can never double with stage_changed.
     void import("../services/workflowEngine")
@@ -1998,11 +2096,20 @@ export const opportunitiesRouter = router({
     return { ok: true };
   }),
 
+  /**
+   * The deal and what the confirmation says goes with it (audit 2026-10-20,
+   * R32): line items, contact roles, quotes, stage history and alerts were
+   * left behind. One transaction, so a failure part-way leaves the deal whole.
+   */
   delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [before] = await db.select().from(opportunities).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
-    await db.delete(opportunities).where(and(eq(opportunities.id, input.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+    if (!before) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+    await db.transaction(async (tx) => {
+      await cascadeDeleteOpportunityDependents(tx, ctx.workspace.id, [before.id]);
+      await tx.delete(opportunities).where(and(eq(opportunities.id, before.id), eq(opportunities.workspaceId, ctx.workspace.id)));
+    });
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "opportunity", entityId: input.id, before });
     return { ok: true };
   }),
@@ -2023,6 +2130,11 @@ export const opportunitiesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Both ids are caller-controlled; the deal page now sends them (R35).
+      const [opp] = await db.select({ id: opportunities.id }).from(opportunities)
+        .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+      if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+      await assertRowInWorkspace(db, "contact", input.contactId, ctx.workspace.id);
       try {
         await db.insert(opportunityContactRoles).values({ ...input, workspaceId: ctx.workspace.id });
       } catch (e) {
@@ -2056,9 +2168,13 @@ export const opportunitiesRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       // opportunityId is caller-controlled — verify it belongs to this
       // workspace before attaching items or rewriting its value.
-      const [opp] = await db.select({ id: opportunities.id }).from(opportunities)
+      const [opp] = await db.select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value }).from(opportunities)
         .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
       if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+      // The product too: another workspace's would list as a line with no name.
+      const [product] = await db.select({ id: products.id }).from(products)
+        .where(and(eq(products.id, input.productId), eq(products.workspaceId, ctx.workspace.id)));
+      if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "Product not found" });
       // Same arithmetic rule as a quote line — @shared/quoteTotals, in integer
       // cents. This was a fourth copy of the formula: it stored `unitPrice`
       // rounded by the DECIMAL(14,2) column while computing `lineTotal` from the
@@ -2079,18 +2195,23 @@ export const opportunitiesRouter = router({
       const items = await db.select().from(dealLineItems).where(and(eq(dealLineItems.opportunityId, input.opportunityId), eq(dealLineItems.workspaceId, ctx.workspace.id)));
       const totalCents = items.reduce((s, i) => s + toCents(Number(i.lineTotal)), 0);
       await db.update(opportunities).set({ value: centsToDecimal(totalCents) }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+      await noteAmountChange(db, ctx.workspace.id, opp, Number(opp.value ?? 0), totalCents / 100);
       return { ok: true };
     }),
 
   removeLineItem: repProcedure.input(z.object({ id: z.number(), opportunityId: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.delete(dealLineItems).where(and(eq(dealLineItems.id, input.id), eq(dealLineItems.workspaceId, ctx.workspace.id)));
+    const [opp] = await db.select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value }).from(opportunities)
+      .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+    if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+    await db.delete(dealLineItems).where(and(eq(dealLineItems.id, input.id), eq(dealLineItems.opportunityId, input.opportunityId), eq(dealLineItems.workspaceId, ctx.workspace.id)));
     const items = await db.select().from(dealLineItems).where(and(eq(dealLineItems.opportunityId, input.opportunityId), eq(dealLineItems.workspaceId, ctx.workspace.id)));
     const totalCents = items.reduce((s, i) => s + toCents(Number(i.lineTotal)), 0);
     // Workspace-scoped: opportunityId is caller-controlled, so an unscoped
     // update could rewrite another tenant's opportunity value.
     await db.update(opportunities).set({ value: centsToDecimal(totalCents) }).where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+    await noteAmountChange(db, ctx.workspace.id, opp, Number(opp.value ?? 0), totalCents / 100);
     return { ok: true };
   }),
 
@@ -2102,11 +2223,13 @@ export const opportunitiesRouter = router({
    * classification the Dashboard, Deals, Forecast and Quota read (R39).
    */
   forecast: workspaceProcedure
-    .input(z.object({ stages: z.array(z.string()).optional() }).optional())
+    .input(z.object({ stages: z.array(z.string()).optional(), pipelineId: z.number().optional(), ownerUserId: z.number().optional() }).optional())
     .query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    const open = (await loadMetricDeals(db, ctx.workspace.id)).filter((d) => d.status === "open");
+    // The board's scope — its pipeline and owner filter — so the Forecast tab
+    // counts the deals the board beside it shows (R39).
+    const open = (await scopedMetricDeals(db, ctx.workspace.id, input)).filter((d) => d.status === "open");
     const keys = open.map((d) => d.stage);
     const availableStages = keys.filter((k, i) => keys.indexOf(k) === i).sort();
     const filterStages = input?.stages && input.stages.length > 0 ? input.stages : null;
@@ -2143,10 +2266,12 @@ export const opportunitiesRouter = router({
    * (the Deals header computed its own from the board rows, R39).
    */
   summary: workspaceProcedure
-    .query(async ({ ctx }) => {
+    .input(BOARD_SCOPE)
+    .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const deals = await loadMetricDeals(db, ctx.workspace.id);
+      // Scoped like the board it heads (R39); unscoped, the workspace.
+      const deals = await scopedMetricDeals(db, ctx.workspace.id, input);
       const tz = await getWorkspaceTimezone(ctx.workspace.id);
       const r = currentRanges(tz);
       return {
@@ -2246,7 +2371,9 @@ export const opportunitiesRouter = router({
       const { y, m } = zonedYmd(tz, new Date());
       for (let i = input.months - 1; i >= 0; i--) {
         const b = addMonths(y, m, -i);
-        const label = new Date(Date.UTC(b.y, b.m - 1, 15)).toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+        const month = new Date(Date.UTC(b.y, b.m - 1, 15)).toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+        // Past twelve months a name comes round twice, so the year tells them apart (G25).
+        const label = input.months > 12 ? `${month} '${String(b.y).slice(2)}` : month;
         buckets[monthKey(b.y, b.m)] = { label, revenue: 0, forecast: 0 };
       }
 
@@ -2266,16 +2393,24 @@ export const opportunitiesRouter = router({
       return Object.values(buckets).map((b) => ({ ...b, revenue: dollars(b.revenue), forecast: dollars(b.forecast) }));
     }),
 
-  /** Live stat-card deltas: current vs previous month for pipeline, closed-won, leads, customers. */
+  /**
+   * Live stat-card deltas. A stock (pipeline, customers) is compared with where
+   * it stood when this month began; a flow (wins, new leads) with the same days
+   * of last month, not the whole of it (audit 2026-10-20, G53). Growth from
+   * nothing is null, not +100%. Leads, customers and proposals are counted in
+   * SQL rather than read row by row (G58).
+   */
   dashboardStats: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const wid = ctx.workspace.id;
     const tz = await getWorkspaceTimezone(wid);
     const r = currentRanges(tz);
+    const span = monthToDateRanges(tz);
     const deals = await loadMetricDeals(db, wid);
-    const allLeads = await db.select({ id: leads.id, createdAt: leads.createdAt }).from(leads).where(eq(leads.workspaceId, wid));
-    const allCustomers = await db.select({ id: customers.id, createdAt: customers.createdAt }).from(customers).where(eq(customers.workspaceId, wid));
+    const countOf = async (table: typeof leads | typeof customers | typeof proposals, where: ReturnType<typeof and>) =>
+      Number((await db.select({ n: sql<number>`count(*)` }).from(table).where(where))[0]?.n ?? 0);
+    const createdIn = (range: Range) => and(sql`${leads.createdAt} >= ${range.start}`, lt(leads.createdAt, range.end));
     const open = openTotals(deals);
     // The pipeline as it stood when this month began: deals that existed then
     // and were still open — open now, or closed since. The old figure summed
@@ -2289,50 +2424,43 @@ export const opportunitiesRouter = router({
     const pipelinePrev = dollars(pipelinePrevCents);
     // Won by WHEN it was won (R16/R17): updatedAt moved any edited old win
     // into this month.
-    const closedWonNow = closedIn(deals, "won", r.month).count;
-    const closedWonPrev = closedIn(deals, "won", r.prevMonth).count;
-    const leadsNow = allLeads.filter((l) => inRange(l.createdAt, r.month)).length;
-    const leadsPrev = allLeads.filter((l) => inRange(l.createdAt, r.prevMonth)).length;
-    const custNow = allCustomers.length;
-    const custPrev = allCustomers.filter((c) => c.createdAt != null && c.createdAt < r.month.start).length;
-    const delta = (a: number, b: number) => b === 0 ? (a > 0 ? 100 : 0) : Math.round(((a - b) / b) * 100);
+    const closedWonNow = closedIn(deals, "won", span.current).count;
+    const closedWonPrev = closedIn(deals, "won", span.previous).count;
+    // Active means still being worked: "Active Leads" counted every lead ever
+    // made, the unqualified and the converted too (G53).
+    const activeLeads = await countOf(leads, and(eq(leads.workspaceId, wid), ne(leads.status, "unqualified"), ne(leads.status, "converted")));
+    const leadsNow = await countOf(leads, and(eq(leads.workspaceId, wid), createdIn(span.current)));
+    const leadsPrev = await countOf(leads, and(eq(leads.workspaceId, wid), createdIn(span.previous)));
+    const custNow = await countOf(customers, eq(customers.workspaceId, wid));
+    const custPrev = await countOf(customers, and(eq(customers.workspaceId, wid), isNotNull(customers.createdAt), lt(customers.createdAt, r.month.start)));
+    const delta = (a: number, b: number) => b === 0 ? (a > 0 ? null : 0) : Math.round(((a - b) / b) * 100);
     // Proposal health counts
     const STALE_MS = 48 * 60 * 60 * 1000;
     const EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000;
     const nowTs = Date.now();
-    const allProposals = await db
-      .select({
-        id: proposals.id,
-        status: proposals.status,
-        sentAt: proposals.sentAt,
-        emailOpenedAt: proposals.emailOpenedAt,
-        expiresAt: proposals.expiresAt,
-      })
-      .from(proposals)
-      .where(eq(proposals.workspaceId, wid));
-    const staleProposals = allProposals.filter(
-      (p) =>
-        p.status === "sent" &&
-        p.emailOpenedAt === null &&
-        p.sentAt !== null &&
-        nowTs - new Date(p.sentAt).getTime() > STALE_MS,
-    ).length;
-    const expiringProposals = allProposals.filter(
-      (p) =>
-        p.expiresAt !== null &&
-        new Date(p.expiresAt).getTime() >= nowTs &&
-        new Date(p.expiresAt).getTime() - nowTs <= EXPIRING_SOON_MS &&
-        p.status !== "accepted" &&
-        p.status !== "not_accepted",
-    ).length;
+    const staleProposals = await countOf(proposals, and(
+      eq(proposals.workspaceId, wid),
+      eq(proposals.status, "sent"),
+      isNull(proposals.emailOpenedAt),
+      isNotNull(proposals.sentAt),
+      lt(proposals.sentAt, new Date(nowTs - STALE_MS)),
+    ));
+    const expiringProposals = await countOf(proposals, and(
+      eq(proposals.workspaceId, wid),
+      sql`${proposals.expiresAt} >= ${new Date(nowTs)}`,
+      lte(proposals.expiresAt, new Date(nowTs + EXPIRING_SOON_MS)),
+      ne(proposals.status, "accepted"),
+      ne(proposals.status, "not_accepted"),
+    ));
     return {
       pipelineValue: open.value,
       pipelineDelta: delta(open.value, pipelinePrev),
       weightedPipeline: open.weighted,
-      closedWonCount: closedWonNow,
+      closedWonCount: closedIn(deals, "won", r.month).count,
       closedWonValue: closedIn(deals, "won", r.month).value,
       closedWonDelta: delta(closedWonNow, closedWonPrev),
-      activeLeads: allLeads.length,
+      activeLeads,
+      leadsThisMonth: leadsNow,
       leadsDelta: delta(leadsNow, leadsPrev),
       customerCount: custNow,
       customerDelta: delta(custNow, custPrev),
@@ -2364,14 +2492,18 @@ export const opportunitiesRouter = router({
     }),
 
   /**
-   * Per-rep forecast rollup: total open, weighted (value × winProb),
-   * commit (≥90% prob), best-case (≥50% prob), won this quarter.
+   * Per-rep forecast rollup: total open, weighted (value × winProb), commit,
+   * best case (@shared/forecastCategory), won this calendar quarter.
    * Powers the /forecast page.
+   *
+   * A rep sees their own row; managers and above see every rep's (audit
+   * 2026-10-20, R41) — the rule Quota already keeps for the same numbers.
    */
   forecastByRep: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
-    const deals = await loadMetricDeals(db, ctx.workspace.id);
+    const seesTeam = rankOf(ctx.member.role) >= ROLE_RANK.manager;
+    const deals = await loadMetricDeals(db, ctx.workspace.id, seesTeam ? {} : { ownerUserId: ctx.user.id });
     const quarter = currentRanges(await getWorkspaceTimezone(ctx.workspace.id)).quarter;
     // Grouped first, then totalled by the same functions every page uses — so
     // the per-rep rows add up to the Pipeline and Deals totals exactly.
@@ -2446,7 +2578,11 @@ export const opportunitiesRouter = router({
       .map((s) => ({ stage: labelByKey.get(s) ?? s, count: map[s].count, value: dollars(map[s].value) }));
   }),
 
-  /** Top 5 reps by closed-won value (won this month, fallback to all-time). */
+  /**
+   * Top 5 reps by value won this month. With no win yet this month it fell back
+   * to all time under the same heading, so a quiet month showed old wins as
+   * this month's leaders (audit 2026-10-20, G69).
+   */
   topReps: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
@@ -2458,7 +2594,7 @@ export const opportunitiesRouter = router({
       for (const o of src) { const uid = o.ownerUserId ?? 0; if (!m[uid]) m[uid] = { value: 0, count: 0 }; m[uid].value += o.valueCents; m[uid].count++; }
       return m;
     };
-    const source = Object.keys(buildMap(thisMonth)).length > 0 ? buildMap(thisMonth) : buildMap(won);
+    const source = buildMap(thisMonth);
     const memberRows = await db.select({ userId: workspaceMembers.userId, name: users.name }).from(workspaceMembers).leftJoin(users, eq(users.id, workspaceMembers.userId)).where(eq(workspaceMembers.workspaceId, ctx.workspace.id));
     const nameMap = Object.fromEntries(memberRows.map((m) => [m.userId, m.name ?? "Rep"]));
     return Object.entries(source).map(([uid, v]) => ({ userId: Number(uid), name: nameMap[Number(uid)] ?? "Rep", value: dollars(v.value), count: v.count })).sort((a, b) => b.value - a.value).slice(0, 5);
@@ -2474,10 +2610,51 @@ export const opportunitiesRouter = router({
     const lost = closedIn(deals, "lost", last90);
     return { won: won.count, lost: lost.count, wonValue: won.value, lostValue: lost.value };
   }),
+
+  /**
+   * The newest deals, for the two home pages (audit 2026-10-20, G53/G56/G58).
+   * The Dashboard took six from the whole board in no order, and Home read
+   * every column of every deal and called one open by the default pipeline's
+   * stages. Open means what it means in every deal number: the deal's own
+   * pipeline's flags, as loadMetricDeals reads them.
+   */
+  recent: workspaceProcedure
+    .input(z.object({ openOnly: z.boolean().optional(), limit: z.number().int().min(1).max(20).optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const ws = ctx.workspace.id;
+      const limit = input?.limit ?? 6;
+      const cols = {
+        id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value,
+        accountId: opportunities.accountId, createdAt: opportunities.createdAt,
+      };
+      let rows: Array<{ id: number; name: string; stage: string; value: string | null; accountId: number; createdAt: Date }>;
+      if (input?.openOnly) {
+        const ids = (await loadMetricDeals(db, ws))
+          .filter((d) => d.status === "open")
+          .sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0) || b.id - a.id)
+          .slice(0, limit)
+          .map((d) => d.id);
+        rows = ids.length === 0 ? [] : (await db.select(cols).from(opportunities)
+          .where(and(eq(opportunities.workspaceId, ws), inArray(opportunities.id, ids))))
+          .sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+      } else {
+        rows = await db.select(cols).from(opportunities).where(eq(opportunities.workspaceId, ws))
+          .orderBy(desc(opportunities.createdAt), desc(opportunities.id)).limit(limit);
+      }
+      const accountIds = Array.from(new Set(rows.map((r) => r.accountId)));
+      const names = accountIds.length === 0 ? [] : await db.select({ id: accounts.id, name: accounts.name }).from(accounts)
+        .where(and(eq(accounts.workspaceId, ws), inArray(accounts.id, accountIds)));
+      const nameOf = new Map(names.map((a) => [a.id, a.name]));
+      return rows.map((r) => ({ ...r, value: Number(r.value ?? 0), accountName: nameOf.get(r.accountId) ?? "?" }));
+    }),
 });
 
 /* ──────────────────────────────────────────────────────────────────────── */
 
+// Territories and their routing rules decide who owns new leads and accounts:
+// a manager's (audit 2026-10-20, R37). Any member could change them.
 export const territoriesRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
@@ -2485,7 +2662,7 @@ export const territoriesRouter = router({
     return db.select().from(territories).where(eq(territories.workspaceId, ctx.workspace.id));
   }),
 
-  create: workspaceProcedure
+  create: managerProcedure
     .input(z.object({ name: z.string().min(1), rules: z.record(z.string(), z.any()).optional(), ownerUserId: z.number().optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -2495,7 +2672,7 @@ export const territoriesRouter = router({
       return { ok: true };
     }),
 
-  update: workspaceProcedure.input(z.object({ id: z.number(), patch: TERRITORY_PATCH })).mutation(async ({ ctx, input }) => {
+  update: managerProcedure.input(z.object({ id: z.number(), patch: TERRITORY_PATCH })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await assertOwnerInWorkspace(ctx.workspace.id, input.patch.ownerUserId);
@@ -2504,10 +2681,20 @@ export const territoriesRouter = router({
     return { ok: true };
   }),
 
-  delete: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  /**
+   * Rules and accounts that named it are detached, as the confirmation says
+   * (R42): a rule kept handing new accounts a territory that no longer existed.
+   */
+  delete: managerProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-    await db.delete(territories).where(and(eq(territories.id, input.id), eq(territories.workspaceId, ctx.workspace.id)));
+    await db.transaction(async (tx) => {
+      await tx.update(crmTerritoryRules).set({ territoryId: null })
+        .where(and(eq(crmTerritoryRules.workspaceId, ctx.workspace.id), eq(crmTerritoryRules.territoryId, input.id)));
+      await tx.update(accounts).set({ territoryId: null })
+        .where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.territoryId, input.id)));
+      await tx.delete(territories).where(and(eq(territories.id, input.id), eq(territories.workspaceId, ctx.workspace.id)));
+    });
     return { ok: true };
   }),
 });
@@ -2537,7 +2724,7 @@ export const productsRouter = router({
       try {
         await db.insert(products).values({ ...input, listPrice: String(input.listPrice), cost: String(input.cost), workspaceId: ctx.workspace.id, active: true });
       } catch (e) {
-        throw new TRPCError({ code: "CONFLICT", message: "SKU already exists" });
+        throw productWriteError(e);
       }
       return { ok: true };
     }),
@@ -2549,17 +2736,53 @@ export const productsRouter = router({
     if (patch.listPrice !== undefined) patch.listPrice = String(patch.listPrice);
     if (patch.cost !== undefined) patch.cost = String(patch.cost);
     if (Object.keys(patch).length === 0) return { ok: true };
-    await db.update(products).set(patch).where(and(eq(products.id, input.id), eq(products.workspaceId, ctx.workspace.id)));
+    try {
+      await db.update(products).set(patch).where(and(eq(products.id, input.id), eq(products.workspaceId, ctx.workspace.id)));
+    } catch (e) {
+      throw productWriteError(e);
+    }
     return { ok: true };
   }),
 
+  /**
+   * Remove a product nothing uses (audit 2026-10-20, R75). A hard delete of a
+   * product on a deal or a quote left those lines pointing at nothing, so
+   * this refuses while any line names it, and says to archive it instead
+   * (update `active: false`), which hides it from new quotes and keeps every
+   * line that already uses it.
+   */
   delete: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [dealLines, quoteLines] = await Promise.all([
+      db.select({ id: dealLineItems.id }).from(dealLineItems)
+        .where(and(eq(dealLineItems.productId, input.id), eq(dealLineItems.workspaceId, ctx.workspace.id))),
+      db.select({ id: quoteLineItems.id }).from(quoteLineItems)
+        .where(and(eq(quoteLineItems.productId, input.id), eq(quoteLineItems.workspaceId, ctx.workspace.id))),
+    ]);
+    if (dealLines.length + quoteLines.length > 0) {
+      const used = [
+        dealLines.length ? `${dealLines.length} deal line${dealLines.length === 1 ? "" : "s"}` : null,
+        quoteLines.length ? `${quoteLines.length} quote line${quoteLines.length === 1 ? "" : "s"}` : null,
+      ].filter(Boolean).join(" and ");
+      throw new TRPCError({ code: "CONFLICT", message: `This product is on ${used}, so it can't be deleted. Archive it instead: it leaves new quotes and stays on those lines.` });
+    }
     await db.delete(products).where(and(eq(products.id, input.id), eq(products.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
 });
+
+/**
+ * A failed product write, said as what it was (R75): every error read "SKU
+ * already exists", a lost connection included.
+ */
+function productWriteError(e: unknown): TRPCError {
+  if (isDuplicateKeyError(e)) return new TRPCError({ code: "CONFLICT", message: "A product with this SKU already exists." });
+  const why = describeWriteError(e);
+  if (why) return new TRPCError({ code: "BAD_REQUEST", message: `Couldn't save the product: ${why}.` });
+  console.error("[products] write failed:", e);
+  return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't save the product. Try again." });
+}
 
 /* ──────────────────────────────────────────────────────────────────────── */
 /* Territory routing rules — auto-assign accounts/leads to a territory/owner */
@@ -2569,21 +2792,26 @@ export const productsRouter = router({
  * Apply territory rules to a candidate account/lead payload. Returns the
  * matched rule's territoryId + ownerUserId or nulls if no rule matched.
  * First-match-wins by priority (lower priority value = higher precedence).
+ *
+ * Matching ignores case and surrounding spaces (audit 2026-10-20, R42): it
+ * was `===`, so a rule for "Software" never matched an account in
+ * "software". The same rule Lead Routing applies to these rules.
  */
 export async function applyTerritoryRules(
-  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  db: Pick<NonNullable<Awaited<ReturnType<typeof getDb>>>, "select">,
   workspaceId: number,
   payload: { industry?: string | null; country?: string | null; state?: string | null; company?: string | null },
 ): Promise<{ territoryId: number | null; ownerUserId: number | null } | null> {
   const rules = await db.select().from(crmTerritoryRules)
     .where(and(eq(crmTerritoryRules.workspaceId, workspaceId), eq(crmTerritoryRules.active, true)))
     .orderBy(crmTerritoryRules.priority, crmTerritoryRules.id);
-  const company = (payload.company ?? "").toLowerCase();
+  const norm = (v: string | null | undefined) => (v ?? "").trim().toLowerCase();
+  const company = norm(payload.company);
   for (const r of rules) {
-    if (r.industry && r.industry !== payload.industry) continue;
-    if (r.country && r.country !== payload.country) continue;
-    if (r.state && r.state !== payload.state) continue;
-    if (r.companyContains && !company.includes(r.companyContains.toLowerCase())) continue;
+    if (norm(r.industry) && norm(r.industry) !== norm(payload.industry)) continue;
+    if (norm(r.country) && norm(r.country) !== norm(payload.country)) continue;
+    if (norm(r.state) && norm(r.state) !== norm(payload.state)) continue;
+    if (norm(r.companyContains) && !company.includes(norm(r.companyContains))) continue;
     return { territoryId: r.territoryId ?? null, ownerUserId: r.ownerUserId ?? null };
   }
   return null;
@@ -2598,7 +2826,7 @@ export const crmTerritoryRulesRouter = router({
       .orderBy(crmTerritoryRules.priority, crmTerritoryRules.id);
   }),
 
-  create: repProcedure
+  create: managerProcedure
     .input(z.object({
       name: z.string().min(1).max(120),
       priority: z.number().int().default(100),
@@ -2619,7 +2847,7 @@ export const crmTerritoryRulesRouter = router({
       return { id: Number((r as any)[0]?.insertId ?? 0) };
     }),
 
-  update: repProcedure.input(z.object({ id: z.number(), patch: TERRITORY_RULE_PATCH })).mutation(async ({ ctx, input }) => {
+  update: managerProcedure.input(z.object({ id: z.number(), patch: TERRITORY_RULE_PATCH })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await assertRowInWorkspace(db, "territory", input.patch.territoryId, ctx.workspace.id);
@@ -2629,7 +2857,7 @@ export const crmTerritoryRulesRouter = router({
     return { ok: true };
   }),
 
-  delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  delete: managerProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(crmTerritoryRules).where(and(eq(crmTerritoryRules.id, input.id), eq(crmTerritoryRules.workspaceId, ctx.workspace.id)));
@@ -2677,7 +2905,27 @@ export const crmNotesRouter = router({
         pinned: input.pinned ?? false,
         createdByUserId: ctx.user.id,
       });
-      return { id: Number((r as any)[0]?.insertId ?? 0) };
+      // @[Name](user:ID) notifies the teammate, as the drawer's old note did:
+      // the drawer writes here now, so notes have one store (R45). Members
+      // of this workspace only, and never yourself.
+      const mentioned = Array.from(new Set(Array.from(input.body.matchAll(/@\[[^\]]+\]\(user:(\d+)\)/g), (m) => Number(m[1]))))
+        .filter((uid) => Number.isFinite(uid) && uid !== ctx.user.id);
+      if (mentioned.length) {
+        const members = await db.select({ userId: workspaceMembers.userId }).from(workspaceMembers)
+          .where(and(eq(workspaceMembers.workspaceId, ctx.workspace.id), inArray(workspaceMembers.userId, mentioned)));
+        for (const { userId } of members) {
+          await db.insert(notifications).values({
+            workspaceId: ctx.workspace.id,
+            userId,
+            kind: "mention",
+            title: `${ctx.user.name ?? "Someone"} mentioned you`,
+            body: input.body.slice(0, 240),
+            relatedType: input.entityType,
+            relatedId: input.entityId,
+          });
+        }
+      }
+      return { id: Number((r as any)[0]?.insertId ?? 0), mentioned };
     }),
 
   update: repProcedure
@@ -2765,6 +3013,9 @@ async function assertStageKeyFree(db: NonNullable<Awaited<ReturnType<typeof getD
   if (clash) throw new TRPCError({ code: "CONFLICT", message: `This pipeline already has a stage with the key "${key}".` });
 }
 
+// Pipelines and stages are the workspace's configuration: which stages count as
+// won and lost, and where deals go when one is deleted. An admin's (audit
+// 2026-10-20, R37); any rep could change them.
 export const crmPipelinesRouter = router({
   /** Returns all pipelines for the workspace, seeding the Default one if none exist. */
   list: workspaceProcedure.query(async ({ ctx }) => {
@@ -2798,7 +3049,7 @@ export const crmPipelinesRouter = router({
       return { pipeline, stages, dealCount: onBoard.length };
     }),
 
-  createPipeline: repProcedure
+  createPipeline: adminWsProcedure
     .input(z.object({ name: z.string().min(1).max(120), cloneFromPipelineId: z.number().optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -2824,7 +3075,7 @@ export const crmPipelinesRouter = router({
       return { id: pipelineId };
     }),
 
-  renamePipeline: repProcedure
+  renamePipeline: adminWsProcedure
     .input(z.object({ id: z.number(), name: z.string().min(1).max(120) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -2833,7 +3084,7 @@ export const crmPipelinesRouter = router({
       return { ok: true };
     }),
 
-  setDefault: repProcedure
+  setDefault: adminWsProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -2847,7 +3098,7 @@ export const crmPipelinesRouter = router({
       return { ok: true };
     }),
 
-  deletePipeline: repProcedure
+  deletePipeline: adminWsProcedure
     .input(z.object({ id: z.number(), moveToPipelineId: z.number().int().positive().optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -2878,7 +3129,7 @@ export const crmPipelinesRouter = router({
       return { ok: true, moved };
     }),
 
-  createStage: repProcedure
+  createStage: adminWsProcedure
     .input(z.object({
       pipelineId: z.number(),
       key: z.string().min(1).max(60),
@@ -2900,7 +3151,7 @@ export const crmPipelinesRouter = router({
       return { id: Number((r as any)[0]?.insertId ?? 0) };
     }),
 
-  updateStage: repProcedure
+  updateStage: adminWsProcedure
     .input(z.object({
       id: z.number(),
       patch: z.object({
@@ -2942,7 +3193,7 @@ export const crmPipelinesRouter = router({
    * the same pipeline — a won deal to another Won stage, so past revenue stays
    * revenue — and a pipeline keeps at least one Won stage.
    */
-  deleteStage: repProcedure
+  deleteStage: adminWsProcedure
     .input(z.object({ id: z.number(), moveToKey: z.string().min(1).max(60).optional() }))
     .mutation(async ({ ctx, input }) => {
     const db = await getDb();
@@ -2980,7 +3231,7 @@ export const crmPipelinesRouter = router({
   }),
 
   /** Bulk reorder — pass [{id, sortOrder}]. */
-  reorderStages: repProcedure
+  reorderStages: adminWsProcedure
     .input(z.object({ items: z.array(z.object({ id: z.number(), sortOrder: z.number().int() })).min(1) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();

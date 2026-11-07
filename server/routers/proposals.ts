@@ -24,13 +24,14 @@ import {
   users,
   proposalScoreHistory,
   contacts,
+  accounts,
 } from "../../drizzle/schema";
 import { createEmailAdapter } from "../emailAdapter";
 import { getDb } from "../db";
 import { appUrl } from "../appUrl";
 import { invokeLLM } from "../_core/llm";
 import { researchUseForProposal } from "../services/research/recipient";
-import { workspaceNotifyUserId } from "../_core/activeMembers";
+import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { changeOpportunityStage, stageDatesForNewDeal } from "../services/stageChange";
 import { EXTENSION_SUBJECT, extensionEventOf, openExtensionRequest } from "@shared/proposalExtension";
 import { defaultPipelineId, stageResolver } from "../_core/stageSemantics";
@@ -45,6 +46,8 @@ import {
   workspaceProcedure,
 } from "../_core/workspace";
 import { assertOutboundNotPaused } from "../services/outboundPause";
+import { acceptanceRecord, PORTAL_UNAVAILABLE, portalMilestone, portalSection, portalView, proposalShareEmailHtml, servedOnPortal } from "../services/proposalPortal";
+import { clientIpOf } from "../_core/clientIp";
 
 // ── Section keys ─────────────────────────────────────────────────────────────
 export const SECTION_KEYS = [
@@ -139,6 +142,105 @@ async function logProposalActivity(
   }
 }
 
+type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+/**
+ * The mailboxes a proposal can be sent from, in the order the send picks its
+ * default: this workspace's enabled sending accounts, oldest first (R70). The
+ * Send-from picker lists exactly these, so "Auto" names the one used.
+ */
+function proposalSenders(db: Db, workspaceId: number) {
+  return db
+    .select()
+    .from(sendingAccounts)
+    .where(and(eq(sendingAccounts.workspaceId, workspaceId), eq(sendingAccounts.enabled, true)))
+    .orderBy(asc(sendingAccounts.id));
+}
+
+/**
+ * An accepted proposal's content is what the client agreed to, so it is
+ * locked (audit 2026-10-20, R69): every section stayed editable after
+ * acceptance, and nothing kept what had been accepted.
+ */
+function assertContentEditable(proposal: { status: string }) {
+  if (proposal.status === "accepted") {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "This proposal was accepted, so its content is locked. Duplicate it to work on a new version." });
+  }
+}
+
+/**
+ * Keep the accepted content as one revision per section (R69), so History
+ * shows exactly what the client accepted. Best-effort: the acceptance has
+ * already landed and must not fail on this.
+ */
+async function snapshotAcceptedSections(db: Db, proposalId: number, savedByUserId: number | null) {
+  try {
+    const sections = await getSections(db, proposalId);
+    for (const s of sections) {
+      await db.insert(proposalRevisions).values({
+        proposalId,
+        sectionKey: s.sectionKey,
+        content: s.content ?? "",
+        savedByUserId: savedByUserId ?? undefined,
+        savedByName: "Accepted version",
+      });
+    }
+  } catch (e) {
+    console.warn(`[proposals] accepted-version snapshot failed for proposal ${proposalId}:`, e);
+  }
+}
+
+/**
+ * The linked deal an acceptance should close won, or null when there is
+ * nothing to close. A deal already closed — won or lost — is left alone
+ * (audit 2026-10-20, R25): accepting a proposal does not turn a lost deal
+ * into a win, or move the date a won one closed.
+ */
+async function openLinkedDeal(db: Db, workspaceId: number, opportunityId: number) {
+  const [opp] = await db
+    .select({ pipelineId: opportunities.pipelineId, stage: opportunities.stage })
+    .from(opportunities)
+    .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, workspaceId)));
+  if (!opp) return null;
+  const meta = (await stageResolver(db, workspaceId)).resolve(opp.pipelineId ?? null, opp.stage);
+  return meta.isWon || meta.isLost ? null : opp;
+}
+
+/**
+ * The company, contact and deal a new proposal names, each checked against
+ * this workspace (R25). The wizard sent none of them, so accepting a proposal
+ * made in the UI closed no deal; now it can name all three. The company is
+ * taken from the deal, else the contact, when the caller names none.
+ */
+async function proposalLinks(
+  db: Db,
+  workspaceId: number,
+  input: { accountId?: number; contactId?: number; linkedOpportunityId?: number },
+): Promise<{ accountId: number | null; contactId: number | null; linkedOpportunityId: number | null }> {
+  let accountId = input.accountId ?? null;
+  if (input.linkedOpportunityId != null) {
+    const [opp] = await db.select({ accountId: opportunities.accountId }).from(opportunities)
+      .where(and(eq(opportunities.id, input.linkedOpportunityId), eq(opportunities.workspaceId, workspaceId))).limit(1);
+    if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
+    if (accountId != null && opp.accountId !== accountId) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "That deal belongs to a different company." });
+    }
+    accountId = accountId ?? opp.accountId ?? null;
+  }
+  if (input.contactId != null) {
+    const [c] = await db.select({ accountId: contacts.accountId }).from(contacts)
+      .where(and(eq(contacts.id, input.contactId), eq(contacts.workspaceId, workspaceId))).limit(1);
+    if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
+    accountId = accountId ?? c.accountId ?? null;
+  }
+  if (accountId != null) {
+    const [a] = await db.select({ id: accounts.id }).from(accounts)
+      .where(and(eq(accounts.id, accountId), eq(accounts.workspaceId, workspaceId))).limit(1);
+    if (!a) throw new TRPCError({ code: "NOT_FOUND", message: "Company not found" });
+  }
+  return { accountId, contactId: input.contactId ?? null, linkedOpportunityId: input.linkedOpportunityId ?? null };
+}
+
 /**
  * Compute a 0-100 engagement score for a proposal row.
  * Scoring:
@@ -212,10 +314,14 @@ export const proposalsRouter = router({
         r.emailOpenedAt === null &&
         r.sentAt !== null &&
         now - new Date(r.sentAt).getTime() > STALE_MS,
+      // An accepted proposal is done with its expiry date: it read "Expired"
+      // once the date passed (audit 2026-10-20, R91).
       isExpired:
+        r.status !== "accepted" &&
         r.expiresAt !== null &&
         new Date(r.expiresAt).getTime() < now,
       isExpiringSoon:
+        r.status !== "accepted" &&
         r.expiresAt !== null &&
         new Date(r.expiresAt).getTime() >= now &&
         new Date(r.expiresAt).getTime() - now <= EXPIRING_SOON_MS,
@@ -272,8 +378,10 @@ export const proposalsRouter = router({
         clientEmail: z.string().email().optional().or(z.literal("")),
         clientWebsite: z.string().optional(),
         orgAbbr: z.string().max(32).optional(),
-        contactId: z.number().optional(),
-        accountId: z.number().optional(),
+        contactId: z.number().int().positive().optional(),
+        accountId: z.number().int().positive().optional(),
+        /** The deal acceptance closes won (R25). */
+        linkedOpportunityId: z.number().int().positive().optional(),
         projectType: z.string().optional(),
         rfpDeadline: z.string().optional(),
         completionDate: z.string().optional(),
@@ -287,6 +395,7 @@ export const proposalsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
       const tz = await getWorkspaceTimezone(ctx.workspace.id);
+      const links = await proposalLinks(db, ctx.workspace.id, input);
       const [result] = await db.insert(proposals).values({
         workspaceId: ctx.workspace.id,
         createdBy: ctx.user.id,
@@ -295,8 +404,9 @@ export const proposalsRouter = router({
         clientEmail: input.clientEmail || null,
         clientWebsite: input.clientWebsite || null,
         orgAbbr: input.orgAbbr || null,
-        contactId: input.contactId ?? null,
-        accountId: input.accountId ?? null,
+        contactId: links.contactId,
+        accountId: links.accountId,
+        linkedOpportunityId: links.linkedOpportunityId,
         projectType: input.projectType || null,
         // Days picked as dates (R29): a deadline lasts its whole day in the
         // workspace's zone; a completion date is a day on the calendar.
@@ -425,7 +535,7 @@ export const proposalsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
-      await getProposalOrThrow(db, input.proposalId, ctx.workspace.id);
+      assertContentEditable(await getProposalOrThrow(db, input.proposalId, ctx.workspace.id));
       // Try update first, then insert
       const existing = await db
         .select({ id: proposalSections.id })
@@ -609,8 +719,8 @@ export const proposalsRouter = router({
     .input(
       z.object({
         id: z.number(),
-        /** The frontend origin so the share URL resolves correctly. */
-        origin: z.string().url(),
+        /** Ignored since R92: every link is built from appUrl(). Kept so older clients still validate. */
+        origin: z.string().url().optional(),
         /** Optional personal message to include in the email body. */
         message: z.string().optional(),
         /** Optional sending account ID to use (overrides workspace default). */
@@ -631,6 +741,18 @@ export const proposalsRouter = router({
         });
       }
 
+      // The mailbox it goes from, from the same list, in the same order, as
+      // the Send-from picker (audit 2026-10-20, R70). The picker read another
+      // list, so "Auto (x)" could name a mailbox this never used, and a picked
+      // mailbox that was disabled was swapped silently for the workspace SMTP.
+      const senders = await proposalSenders(db, ctx.workspace.id);
+      const sendingAcc = input.sendingAccountId != null
+        ? senders.find((a) => a.id === input.sendingAccountId)
+        : senders[0];
+      if (input.sendingAccountId != null && !sendingAcc) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "That mailbox is disabled or no longer in this workspace. Pick another under Send from." });
+      }
+
       // Ensure a share token exists
       let token = proposal.shareToken;
       if (!token) {
@@ -638,63 +760,25 @@ export const proposalsRouter = router({
         await db.update(proposals).set({ shareToken: token }).where(and(eq(proposals.id, input.id), eq(proposals.workspaceId, ctx.workspace.id)));
       }
 
-      const shareUrl = `${input.origin}/p/${token}`;
-      const clientName = proposal.clientName;
-      const orgAbbr = proposal.orgAbbr ? ` (${proposal.orgAbbr})` : "";
       const senderName = ctx.user.name ?? ctx.workspace.name;
-      const personalNote = input.message
-        ? `<p style="margin:16px 0;padding:12px 16px;background:#f9fafb;border-left:3px solid #14b8a6;border-radius:4px;font-style:italic;color:#374151">${input.message.replace(/\n/g, "<br>")}</p>`
-        : "";
+      // Links from appUrl(), not the browser's origin, and every value escaped (R92).
+      const { html: emailHtml, shareUrl } = proposalShareEmailHtml({
+        token,
+        workspaceName: ctx.workspace.name,
+        senderName,
+        clientName: proposal.clientName,
+        orgAbbr: proposal.orgAbbr,
+        title: proposal.title,
+        message: input.message,
+      });
 
       // ── Send email via team member's connected sending account (Unipile/SMTP) ──
       // Falls back to workspace SMTP config if no connected account is found.
       let emailOk = false;
       let senderEmail = "";
       const emailSubject = `${senderName} has shared a proposal with you: ${proposal.title}`;
-      const emailHtml = `
-<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#111827">
-  <div style="margin-bottom:24px">
-    <span style="font-size:13px;font-weight:600;letter-spacing:0.05em;color:#14b8a6;text-transform:uppercase">${ctx.workspace.name}</span>
-  </div>
-  <h2 style="margin:0 0 8px;font-size:20px;font-weight:700">You have a new proposal to review</h2>
-  <p style="margin:0 0 16px;color:#6b7280">Hi ${clientName}${orgAbbr},</p>
-  <p style="margin:0 0 16px;color:#374151">
-    <strong>${senderName}</strong> from <strong>${ctx.workspace.name}</strong> has shared a proposal with you:
-    <strong>${proposal.title}</strong>.
-  </p>
-  ${personalNote}
-  <p style="margin:24px 0">
-    <a href="${input.origin}/api/track/proposal-click/${token}?dest=${encodeURIComponent(shareUrl)}" style="display:inline-block;background:#0f766e;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px">
-      View Proposal →
-    </a>
-  </p>
-  <p style="color:#6b7280;font-size:13px">Or copy this link into your browser:</p>
-  <p style="color:#14b8a6;font-size:12px;word-break:break-all"><a href="${shareUrl}" style="color:#14b8a6">${shareUrl}</a></p>
-  <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
-  <p style="color:#9ca3af;font-size:12px">
-    You can view the proposal and leave feedback without creating an account.
-    If you did not expect this email, you can safely ignore it.
-  </p>
-  <!-- Tracking pixel: 1x1 transparent GIF, logs open event server-side -->
-  <img src="${input.origin}/api/track/proposal-open/${token}" width="1" height="1" style="display:block;width:1px;height:1px;border:0;margin:0;padding:0" alt="" />
-</div>`;
       try {
-        // Use specified account if provided, else prefer the first enabled connected account
-        const [sendingAcc] = input.sendingAccountId
-          ? await db
-              .select()
-              .from(sendingAccounts)
-              .where(and(
-                eq(sendingAccounts.id, input.sendingAccountId),
-                eq(sendingAccounts.workspaceId, ctx.workspace.id),
-                eq(sendingAccounts.enabled, true),
-              ))
-              .limit(1)
-          : await db
-              .select()
-              .from(sendingAccounts)
-              .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), eq(sendingAccounts.enabled, true)))
-              .limit(1);
+        // The mailbox resolved above, before anything was written.
         if (sendingAcc) {
           const adapter = createEmailAdapter(sendingAcc);
           await adapter.sendEmail({
@@ -778,6 +862,7 @@ export const proposalsRouter = router({
       if (Number((claim as any)?.[0]?.affectedRows ?? 0) !== 1) {
         return { ok: true, alreadyAccepted: true, opportunityId: proposal.linkedOpportunityId ?? null, taskId: null };
       }
+      await snapshotAcceptedSections(db, input.id, ctx.user.id);
       // Create follow-up task
       const taskTitle = `Follow up: ${proposal.title} — accepted by ${proposal.clientName}`;
       const taskResult = await db.insert(tasks).values({
@@ -808,17 +893,16 @@ export const proposalsRouter = router({
       }
       // ── Auto-create or update Pipeline opportunity ──
       // A LINKED deal is closed won whether or not the proposal carries an
-      // account (audit 2026-10-20, R25): the wizard never sends one, so
-      // accepting a proposal made in the UI left its deal open. The move goes
+      // account (audit 2026-10-20, R25): the wizard sent none, so accepting a
+      // proposal made in the UI left its deal open. It now sends the company,
+      // the contact and the deal the rep picked. The move goes
       // through the one stage-change service (R21), which also makes a
       // repeated accept a no-op for the deal.
       let opportunityId = proposal.linkedOpportunityId ?? null;
       const oppValue = proposal.budget ? String(proposal.budget) : "0";
       if (opportunityId) {
-        const [existingOpp] = await db
-          .select({ pipelineId: opportunities.pipelineId })
-          .from(opportunities)
-          .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
+        // A deal already closed is left as it is, value and all.
+        const existingOpp = await openLinkedDeal(db, ctx.workspace.id, opportunityId);
         if (existingOpp) {
           // The workspace's OWN won stage: the literal "won" parked the deal in
           // a key a custom pipeline has no column for.
@@ -938,7 +1022,7 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
 
   /** Get proposal by share token — public, for client portal. */
   getByShareToken: publicProcedure
-    .input(z.object({ token: z.string() }))
+    .input(z.object({ token: z.string().min(1).max(128) }))
     .query(async ({ input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
@@ -947,34 +1031,37 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         .from(proposals)
         .where(eq(proposals.shareToken, input.token))
         .limit(1);
-      if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+      // A draft is not served, and says what an unknown link says (G40).
+      if (!rows[0] || !servedOnPortal(rows[0].status)) throw new TRPCError({ code: "NOT_FOUND", message: PORTAL_UNAVAILABLE });
       const proposal = rows[0];
       const [sections, milestones] = await Promise.all([
         getSections(db, proposal.id),
         getMilestones(db, proposal.id),
       ]);
-      return { proposal, sections, milestones };
+      // The fields the portal shows, not the internal row (R67).
+      return { proposal: portalView(proposal), sections: sections.map(portalSection), milestones: milestones.map(portalMilestone) };
     }),
 
   /** Submit client feedback — public. */
   submitFeedback: publicProcedure
     .input(
+      // Capped (G40): a public write a stranger can repeat.
       z.object({
-        token: z.string(),
-        authorName: z.string().min(1),
-        authorEmail: z.string().email().optional().or(z.literal("")),
-        message: z.string().min(1),
+        token: z.string().min(1).max(128),
+        authorName: z.string().trim().min(1).max(200),
+        authorEmail: z.string().email().max(320).optional().or(z.literal("")),
+        message: z.string().trim().min(1).max(5000),
       }),
     )
     .mutation(async ({ input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
       const rows = await db
-        .select({ id: proposals.id })
+        .select({ id: proposals.id, status: proposals.status })
         .from(proposals)
         .where(eq(proposals.shareToken, input.token))
         .limit(1);
-      if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+      if (!rows[0] || !servedOnPortal(rows[0].status)) throw new TRPCError({ code: "NOT_FOUND", message: PORTAL_UNAVAILABLE });
       await db.insert(proposalFeedback).values({
         proposalId: rows[0].id,
         authorName: input.authorName,
@@ -999,8 +1086,17 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
    * and sends an in-app notification to the workspace owner.
    */
   acceptByToken: publicProcedure
-    .input(z.object({ token: z.string(), clientName: z.string().optional() }))
-    .mutation(async ({ input }) => {
+    .input(z.object({
+      token: z.string().min(1).max(128),
+      /** Legacy name for signerName, from portals loaded before G18. */
+      clientName: z.string().max(200).optional(),
+      /** The name the person accepting typed (G18). */
+      signerName: z.string().trim().max(200).optional(),
+      signerEmail: z.string().email().max(320).optional().or(z.literal("")),
+      /** Their browser's IANA time zone, for the record. */
+      timeZone: z.string().max(64).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
       const rows = await db
@@ -1033,6 +1129,25 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         }
         throw new TRPCError({ code: "BAD_REQUEST", message: "This proposal is not open for acceptance. Contact the team that sent it." });
       }
+      await snapshotAcceptedSections(db, proposal.id, null);
+      /**
+       * Who accepted (audit 2026-10-20, G18). Written only by the click that
+       * won the claim above, so a double click records one acceptance.
+       */
+      const signer = (input.signerName || input.clientName || "").trim() || null;
+      await logProposalActivity(db, {
+        workspaceId: proposal.workspaceId,
+        proposalId: proposal.id,
+        subject: signer ? `Accepted by ${signer} on the client portal`.slice(0, 240) : "Accepted on the client portal",
+        body: acceptanceRecord({
+          signerName: signer,
+          signerEmail: input.signerEmail || null,
+          ip: ctx.req ? clientIpOf(ctx.req as never) : null,
+          userAgent: String((ctx.req as { headers?: Record<string, unknown> } | undefined)?.headers?.["user-agent"] ?? "") || null,
+          timeZone: input.timeZone ?? null,
+          at: new Date(),
+        }),
+      });
       /**
        * PUBLIC PATH — the client accepts from a share link, with no session.
        * The resulting follow-up task is the only thing that tells the business
@@ -1044,8 +1159,8 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         // Create follow-up task for owner
         await db.insert(tasks).values({
           workspaceId: proposal.workspaceId,
-          title: `Follow up: ${proposal.title} — accepted by ${proposal.clientName}`,
-          description: `Client ${proposal.clientName} accepted the proposal via the client portal. Schedule a kickoff meeting and send the contract.`,
+          title: `Follow up: ${proposal.title} — accepted by ${signer ?? proposal.clientName}`.slice(0, 240),
+          description: `${signer ? `${signer} (${proposal.clientName})` : `Client ${proposal.clientName}`} accepted the proposal via the client portal. Schedule a kickoff meeting and send the contract.`,
           type: "follow_up",
           priority: "high",
           status: "open",
@@ -1071,10 +1186,7 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       let opportunityId = proposal.linkedOpportunityId ?? null;
       const oppValue = proposal.budget ? String(proposal.budget) : "0";
       if (opportunityId) {
-        const [existingOpp] = await db
-          .select({ pipelineId: opportunities.pipelineId })
-          .from(opportunities)
-          .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspaceId, proposal.workspaceId)));
+        const existingOpp = await openLinkedDeal(db, proposal.workspaceId, opportunityId);
         if (existingOpp) {
           const wonStage = await canonicalWonStageKey(db, proposal.workspaceId, existingOpp.pipelineId ?? null);
           await changeOpportunityStage(db, {
@@ -1141,8 +1253,8 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         .where(eq(proposalRevisions.id, input.revisionId))
         .limit(1);
       if (!rev) throw new TRPCError({ code: "NOT_FOUND", message: "Revision not found" });
-      // Verify the proposal belongs to this workspace
-      await getProposalOrThrow(db, rev.proposalId, ctx.workspace.id);
+      // Verify the proposal belongs to this workspace, and is not locked (R69)
+      assertContentEditable(await getProposalOrThrow(db, rev.proposalId, ctx.workspace.id));
       // Upsert the section content (same pattern as updateSection)
       const existing = await db
         .select({ id: proposalSections.id })
@@ -1243,24 +1355,35 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       return { ok: true };
     }),
   /**
+   * A company's OPEN deals, for the new-proposal wizard's "Deal" picker (R25).
+   * Closed ones are left out: accepting never moves them.
+   */
+  dealOptions: workspaceProcedure
+    .input(z.object({ accountId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const rows = await db
+        .select({ id: opportunities.id, name: opportunities.name, stage: opportunities.stage, value: opportunities.value, pipelineId: opportunities.pipelineId })
+        .from(opportunities)
+        .where(and(eq(opportunities.workspaceId, ctx.workspace.id), eq(opportunities.accountId, input.accountId)))
+        .orderBy(desc(opportunities.updatedAt));
+      const stages = await stageResolver(db, ctx.workspace.id);
+      return rows
+        .filter((o) => { const m = stages.resolve(o.pipelineId ?? null, o.stage); return !m.isWon && !m.isLost; })
+        .map(({ pipelineId: _p, ...o }) => o);
+    }),
+
+  /**
    * List enabled sending accounts for the workspace (used by the account picker in Send to Client).
    */
   listSendingAccounts: repProcedure
     .query(async ({ ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
-      const rows = await db
-        .select({
-          id: sendingAccounts.id,
-          name: sendingAccounts.name,
-          fromEmail: sendingAccounts.fromEmail,
-          fromName: sendingAccounts.fromName,
-          provider: sendingAccounts.provider,
-        })
-        .from(sendingAccounts)
-        .where(and(eq(sendingAccounts.workspaceId, ctx.workspace.id), eq(sendingAccounts.enabled, true)))
-        .orderBy(sendingAccounts.name);
-      return rows;
+      // The send's own list and order (R70): the first row is the one "Auto" uses.
+      const rows = await proposalSenders(db, ctx.workspace.id);
+      return rows.map((a) => ({ id: a.id, name: a.name, fromEmail: a.fromEmail, fromName: a.fromName, provider: a.provider }));
     }),
   /**
    * Snapshot the current content of a section into proposal_revisions.
@@ -1380,11 +1503,23 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
             subject: `Engagement score dropped from ${prevScore} to ${score}`,
             body: `The proposal "${proposal.title}" engagement score decreased by ${prevScore - score} points.`,
           });
-          const { notifyOwner } = await import("../_core/notification");
-          await notifyOwner({
-            title: `Proposal engagement dropped: ${proposal.title}`,
-            content: `Score fell from ${prevScore} to ${score}/100. Consider following up with ${proposal.clientName || "the client"}.`,
-          });
+          // To the proposal's author in this workspace, or its owner if they
+          // have left (audit 2026-10-20, R2). notifyOwner POSTs the platform
+          // operator's notification service, so every workspace's client
+          // engagement went to one person outside it.
+          const recipient = (await activeOwnerOrNull(ctx.workspace.id, proposal.createdBy))
+            ?? (await workspaceNotifyUserId(ctx.workspace.id));
+          if (recipient) {
+            await db.insert(notifications).values({
+              workspaceId: ctx.workspace.id,
+              userId: recipient,
+              kind: "system",
+              title: `Proposal engagement dropped: ${proposal.title}`,
+              body: `Score fell from ${prevScore} to ${score}/100. Consider following up with ${proposal.clientName || "the client"}.`,
+              relatedType: "proposal",
+              relatedId: proposal.id,
+            });
+          }
         } catch {
           // non-fatal
         }
@@ -1399,9 +1534,9 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
   requestExtension: publicProcedure
     .input(
       z.object({
-        token: z.string(),
-        reason: z.string().min(1).max(2000),
-        clientName: z.string().optional(),
+        token: z.string().min(1).max(128),
+        reason: z.string().trim().min(1).max(2000),
+        clientName: z.string().max(200).optional(),
       }),
     )
     .mutation(async ({ input }) => {
@@ -1412,7 +1547,7 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
         .from(proposals)
         .where(eq(proposals.shareToken, input.token))
         .limit(1);
-      if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+      if (!rows[0] || !servedOnPortal(rows[0].status)) throw new TRPCError({ code: "NOT_FOUND", message: PORTAL_UNAVAILABLE });
       const proposal = rows[0];
       // PUBLIC PATH — extension request from a share link, same reasoning.
       const ownerUserId = await workspaceNotifyUserId(proposal.workspaceId);
@@ -1681,16 +1816,16 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
    * Filters activities whose subject contains "extension" for the given shareToken.
    */
   getExtensionHistory: publicProcedure
-    .input(z.object({ token: z.string() }))
+    .input(z.object({ token: z.string().min(1).max(128) }))
     .query(async ({ input }) => {
       const db = await getDb();
       if (!db) return [];
       const rows = await db
-        .select({ id: proposals.id })
+        .select({ id: proposals.id, status: proposals.status })
         .from(proposals)
         .where(eq(proposals.shareToken, input.token))
         .limit(1);
-      if (!rows[0]) return [];
+      if (!rows[0] || !servedOnPortal(rows[0].status)) return [];
       const proposalId = rows[0].id;
       const events = await db
         .select({
@@ -1791,16 +1926,16 @@ ${input.reason ? `<p>${input.reason}</p>` : ""}
    * Returns { status: "none"|"pending"|"approved"|"denied", resolvedAt, newExpiresAt, reason }
    */
   getExtensionStatus: publicProcedure
-    .input(z.object({ token: z.string() }))
+    .input(z.object({ token: z.string().min(1).max(128) }))
     .query(async ({ input }) => {
       const db = await getDb();
       if (!db) return { status: "none" as const, resolvedAt: null, newExpiresAt: null, reason: null };
       const [proposal] = await db
-        .select({ id: proposals.id, expiresAt: proposals.expiresAt })
+        .select({ id: proposals.id, expiresAt: proposals.expiresAt, status: proposals.status })
         .from(proposals)
         .where(eq(proposals.shareToken, input.token))
         .limit(1);
-      if (!proposal) return { status: "none" as const, resolvedAt: null, newExpiresAt: null, reason: null };
+      if (!proposal || !servedOnPortal(proposal.status)) return { status: "none" as const, resolvedAt: null, newExpiresAt: null, reason: null };
       // Get all extension-related activities for this proposal, newest first
       const extActs = await db
         .select({ id: activities.id, subject: activities.subject, body: activities.body, occurredAt: activities.occurredAt })

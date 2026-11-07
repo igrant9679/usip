@@ -154,7 +154,9 @@ describe("wiring", () => {
 
   it("the Override takes clean lists and stores the inferred shape", () => {
     const router = read("server/routers/are/icp.ts");
-    const fn = router.slice(router.indexOf("  override: workspaceProcedure"), router.indexOf("  restore: workspaceProcedure"));
+    // 2026-11-06 (audit A36): override and restore are managerProcedure now.
+    const fn = router.slice(router.indexOf("  override: managerProcedure"), router.indexOf("  restore: managerProcedure"));
+    expect(fn.length).toBeGreaterThan(200);
     expect(fn).not.toContain("z.any()");
     for (const [field, kind] of [["targetTitles", "title"], ["targetIndustries", "industry"], ["targetGeographies", "geography"], ["targetTechStack", "technology"], ["antiPatterns", "antiPattern"]]) {
       expect(fn).toContain(`${field}: icpLabelList.optional(),`);

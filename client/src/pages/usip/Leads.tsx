@@ -23,10 +23,14 @@ import { confirmAction } from "@/components/usip/Common";
 import { leadTierLabel, tierForGrade, type LeadTier } from "@shared/leadTier";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
 import { ConvertLeadDialog } from "@/components/usip/ConvertLeadDialog";
+import { EditLeadDialog } from "@/components/usip/EditLeadDialog";
 import { pressable } from "@/lib/pressable";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { csvCell } from "@shared/csvCell";
 
 const NEUTRAL_TONE = "bg-slate-200 text-slate-700";
+/** leads.sendAdHocEmailBulk's cap (server/routers/crm.ts LEAD_BULK_SEND_MAX). */
+const LEAD_BULK_SEND_MAX = 50;
 const PAGE_SIZE = 50;
 const GRADE_TONE: Record<string, string> = { A: "bg-emerald-100 text-emerald-800", B: "bg-blue-100 text-blue-800", C: "bg-amber-100 text-amber-800", D: "bg-rose-100 text-rose-800" };
 const TIER_TONE: Record<LeadTier, string> = {
@@ -60,29 +64,27 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
   const [aiPrompt, setAiPrompt] = useState("");
   const [useAi, setUseAi] = useState(false);
   const [sent, setSent] = useState(false);
+  // Copy only: "Use AI" fills this form and saves no draft (R50).
   const compose = trpc.emailDrafts.compose.useMutation({
     onSuccess: (d) => { setSubject(d.subject ?? ""); setBody(d.body ?? ""); setUseAi(false); },
     onError: (e: any) => toast.error(e.message),
   });
-  // One send per lead: the procedure takes one leadId. Posting { leadIds }
-  // failed validation, so this button never sent anything (found by tsc, X3).
-  const send = trpc.leads.sendAdHocEmail.useMutation({
-    // sendAll catches each failure and says how many sent; nothing to add here.
-    onError: () => {},
+  // One request for every selected lead, capped on the server, one result
+  // per lead (R5). It looped the single send from here, one call a lead.
+  const tooMany = leadIds.length > LEAD_BULK_SEND_MAX;
+  const send = trpc.leads.sendAdHocEmailBulk.useMutation({
+    onSuccess: (r) => {
+      const failed = r.results.filter((x) => !x.ok);
+      if (r.sent === 0) { toast.error(failed[0]?.error ?? "Nothing was sent"); return; }
+      if (failed.length) toast.warning(`Sent to ${r.sent} of ${r.results.length}. ${failed.length} not sent: ${failed[0]?.error ?? "failed"}`);
+      setSent(true);
+      onComplete();
+    },
+    onError: (e: any) => toast.error(e.message),
   });
-  const [sending, setSending] = useState(false);
-  async function sendAll() {
-    setSending(true);
-    const failed: string[] = [];
-    for (const leadId of leadIds) {
-      try { await send.mutateAsync({ leadId, subject, body }); }
-      catch (e: any) { failed.push(e?.message ?? "failed"); }
-    }
-    setSending(false);
-    if (failed.length === leadIds.length) { toast.error(failed[0]); return; }
-    if (failed.length) toast.warning(`Sent to ${leadIds.length - failed.length} of ${leadIds.length}. ${failed[0]}`);
-    setSent(true);
-    onComplete();
+  const sending = send.isPending;
+  function sendAll() {
+    send.mutate({ leadIds, subject, body, aiGenerated: compose.isSuccess });
   }
   function reset() { setSubject(""); setBody(""); setAiPrompt(""); setUseAi(false); setSent(false); }
   return (
@@ -104,7 +106,7 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
               {useAi && (
                 <>
                   <Input aria-label="Describe the email" placeholder="Describe the email…" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} className="flex-1 h-8 text-sm" />
-                  <Button size="sm" onClick={() => compose.mutate({ prompt: aiPrompt, toLeadId: leadIds.length === 1 ? leadIds[0] : undefined })} disabled={!aiPrompt || compose.isPending}>
+                  <Button size="sm" onClick={() => compose.mutate({ prompt: aiPrompt, toLeadId: leadIds.length === 1 ? leadIds[0] : undefined, previewOnly: true })} disabled={!aiPrompt || compose.isPending}>
                     {compose.isPending ? <Loader2 className="size-3.5 animate-spin" /> : "Generate"}
                   </Button>
                 </>
@@ -112,61 +114,18 @@ function SendEmailModal({ open, onOpenChange, leadIds, onComplete }: { open: boo
             </div>
             <Input aria-label="Subject" placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
             <RichTextEditor placeholder="Body…" value={body} onChange={setBody} minHeight="160px" compact aiContext={{ subject, leadId: leadIds.length === 1 ? leadIds[0] : undefined }} />
+            {tooMany && (
+              <p className="text-xs text-amber-700">Send to at most {LEAD_BULK_SEND_MAX} leads at a time — {leadIds.length} are selected. For more, add them to a sequence.</p>
+            )}
             <div className="flex gap-2 justify-end">
               <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-              <Button onClick={sendAll} disabled={!subject || isEmptyEmailBody(body) || sending}>
+              <Button onClick={sendAll} disabled={!subject || isEmptyEmailBody(body) || sending || tooMany}>
                 {sending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Send className="size-4 mr-1" />}
                 Send
               </Button>
             </div>
           </div>
         )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/* ─── Edit Lead Dialog ──────────────────────────────────────────────────── */
-function EditLeadDialog({ lead, open, onOpenChange, onSaved }: { lead: any; open: boolean; onOpenChange: (v: boolean) => void; onSaved: () => void }) {
-  const utils = trpc.useUtils();
-  const updateMut = trpc.leads.update.useMutation({
-    onSuccess: () => { toast.success("Lead updated"); utils.leads.invalidate(); onSaved(); onOpenChange(false); },
-    onError: (e: any) => toast.error(e.message),
-  });
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader><DialogTitle>Edit Lead</DialogTitle></DialogHeader>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const f = new FormData(e.currentTarget);
-            updateMut.mutate({ id: lead.id, patch: {
-              firstName: String(f.get("firstName")),
-              lastName: String(f.get("lastName")),
-              email: String(f.get("email") ?? "") || undefined,
-              company: String(f.get("company") ?? "") || undefined,
-              title: String(f.get("title") ?? "") || undefined,
-              source: String(f.get("source") ?? "") || undefined,
-            }});
-          }}
-          className="space-y-3"
-        >
-          <div className="grid grid-cols-2 gap-3">
-            <Field name="firstName" label="First name" required defaultValue={lead?.firstName} />
-            <Field name="lastName" label="Last name" required defaultValue={lead?.lastName} />
-          </div>
-          <Field name="email" label="Email" type="email" defaultValue={lead?.email} />
-          <div className="grid grid-cols-2 gap-3">
-            <Field name="title" label="Title" defaultValue={lead?.title} />
-            <Field name="company" label="Company" defaultValue={lead?.company} />
-          </div>
-          <Field name="source" label="Source" defaultValue={lead?.source} />
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={updateMut.isPending}>Save</Button>
-          </div>
-        </form>
       </DialogContent>
     </Dialog>
   );
@@ -239,7 +198,7 @@ export default function Leads() {
 
   return (
     <Shell title="Leads">
-      <PageHeader title="Leads" description="Capture, score, and route inbound leads before they enter the CRM pipeline. Leads are automatically enriched, scored A–D, and assigned to reps based on your routing rules." pageKey="leads"
+      <PageHeader title="Leads" description="Capture and qualify inbound leads before they enter the CRM pipeline. A new lead goes to a rep by your lead routing rules. A–D scores are worked out by the hourly re-score as leads engage or go stale, and at once when you click AI score. Leads are not enriched automatically." pageKey="leads"
         icon={<UserPlus className="size-5" />}
       >
         <Input aria-label="Search leads" placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} className="w-56" />
@@ -280,7 +239,8 @@ export default function Leads() {
           const rows = await utils.leads.list.fetch({ search: query || undefined, limit: 5000 }).finally(() => setExporting(false));
           if (!rows.length) return;
           const cols = ["id", "firstName", "lastName", "email", "phone", "company", "title", "source", "score", "status", "createdAt"];
-          const lines = [cols.join(","), ...rows.map((r: any) => cols.map((c) => JSON.stringify(r[c] ?? "")).join(","))];
+          // One CSV cell rule (R63): quotes doubled, formulas neutralised.
+          const lines = [cols.join(","), ...rows.map((r: any) => cols.map((c) => csvCell(r[c])).join(","))];
           const blob = new Blob([lines.join("\n")], { type: "text/csv" });
           const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `leads-${Date.now()}.csv`; a.click();
         }} disabled={!total || exporting}>

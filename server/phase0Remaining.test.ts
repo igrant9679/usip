@@ -138,7 +138,9 @@ describe("a form or landing page cannot redirect a visitor to script or another 
     const form: any = await appRouter.createCaller({ user: null, req: { headers: {} }, res: {} } as any).forms.getByPublicId({ publicId: "p8" });
     expect(form.redirectUrl).toBeNull();
     const src = strip(read("server/routers/forms.ts")) + strip(read("server/routers/landingPages.ts"));
-    expect(src.match(/redirectUrl: safeRedirectUrl\((form|page)\.redirectUrl\)/g)).toHaveLength(2);
+    // 2026-11-06 (audit G41): 4, not 2. The honeypot answer on each submit
+    // returns the same sanitised redirect a real submission does.
+    expect(src.match(/redirectUrl: safeRedirectUrl\((form|page)\.redirectUrl\)/g)).toHaveLength(4);
   });
 
   it("both public pages follow only what safeRedirectUrl allows", () => {
@@ -280,6 +282,26 @@ describe("the Manus runtime and debug collector stay out of production", () => {
     const build = names({ command: "build", mode: "production" });
     expect(build.filter((n) => /manus/i.test(n))).toEqual([]);
     expect(names({ command: "serve", mode: "development" }).filter((n) => /manus/i.test(n)).length).toBe(2);
+  });
+
+  it("nor does the JSX location plugin: no data-loc source paths in production (X2.3)", async () => {
+    const mod: any = await import("../vite.config");
+    const names = (env: { command: string; mode: string }) =>
+      (mod.default(env).plugins as any[]).flat(Infinity).filter(Boolean).map((p: any) => p.name as string);
+    expect(names({ command: "build", mode: "production" })).not.toContain("vite-plugin-jsx-loc");
+    expect(names({ command: "serve", mode: "development" })).toContain("vite-plugin-jsx-loc");
+  });
+
+  it("Streamdown's code highlighting builds Shiki's 56-language web bundle, not all ~300 (X2.5)", async () => {
+    const mod: any = await import("../vite.config");
+    const alias = mod.default({ command: "build", mode: "production" }).resolve.alias as Array<{ find: string | RegExp; replacement: string }>;
+    const shiki = alias.find((a) => a.find instanceof RegExp && a.find.test("shiki"));
+    expect(shiki?.replacement).toBe("shiki/bundle/web");
+    // Only the bare specifier: the engine import Streamdown also makes is left alone.
+    expect((shiki!.find as RegExp).test("shiki/engine/javascript")).toBe(false);
+    // The app's own aliases survived the move to the array form.
+    expect(alias.find((a) => a.find === "@")?.replacement).toMatch(/client[\\/]src$/);
+    expect(alias.find((a) => a.find === "@shared")?.replacement).toMatch(/shared$/);
   });
 
   it("the collector script is no longer in the public folder that every build copies", () => {
@@ -476,8 +498,10 @@ describe("switching workspace in one tab does not retarget the others", () => {
   it("every request reads this tab's workspace, never the shared localStorage value", () => {
     const helper = strip(read("client/src/lib/activeWorkspace.ts"));
     expect(helper).toContain("window.sessionStorage.getItem(KEY)");
+    // 2026-11-06 (audit R47): the account brief's streaming fetch moved out of
+    // RecordDrawer into AccountBriefPanel, so the company profile can host it.
     for (const f of [
-      "client/src/main.tsx", "client/src/components/usip/RecordDrawer.tsx", "client/src/hooks/useStreamLLM.ts",
+      "client/src/main.tsx", "client/src/components/usip/company/AccountBriefPanel.tsx", "client/src/hooks/useStreamLLM.ts",
       "client/src/pages/usip/EmailBuilder.tsx", "client/src/pages/usip/Mailbox.tsx", "client/src/pages/usip/ProposalDetail.tsx",
       "client/src/contexts/WorkspaceContext.tsx",
     ]) {

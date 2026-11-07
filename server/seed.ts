@@ -28,6 +28,7 @@ import {
 } from "../drizzle/schema";
 import { getDb } from "./db";
 import { seedHelpContent } from "./seedHelpContent";
+import { churnRiskFor, healthTierFor } from "@shared/customerHealth";
 
 const COMPANIES = [
   { name: "Avalon Foundation", industry: "Nonprofit", domain: "avalonfnd.org", region: "Northeast" },
@@ -94,10 +95,9 @@ export function computeHealth(input: { productUsage: number; engagement: number;
   return Math.round(productUsage * 0.35 + engagement * 0.25 + supportHealth * 0.2 + ((npsScore + 100) / 2) * 0.2);
 }
 
+// The shared tiers, not a second set of cut-offs (audit 2026-10-20, R58).
 export function churnRiskFromScore(score: number): "low" | "medium" | "high" {
-  if (score < 45) return "high";
-  if (score < 65) return "medium";
-  return "low";
+  return churnRiskFor(healthTierFor(score));
 }
 
 function rand<T>(arr: readonly T[]): T {
@@ -280,7 +280,7 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
     const supp = randInt(40, 95);
     const nps = randInt(-20, 70);
     const score = computeHealth({ productUsage: usage, engagement: eng, supportHealth: supp, npsScore: nps });
-    const tier = score >= 75 ? "healthy" : score >= 55 ? "watch" : score >= 35 ? "at_risk" : "critical";
+    const tier = healthTierFor(score);
     const daysToRenewal = Math.round((end.getTime() - Date.now()) / 86400000);
     // The four time buckets agree with @shared/renewalStage at every boundary,
     // so seeded rows do not jump when the derivation runs over them.
@@ -478,6 +478,29 @@ export async function seedWorkspace(workspaceId: number, ownerUserId: number) {
   ]) {
     await db.insert(dashboardWidgets).values({ workspaceId, dashboardId: dashId, ...w });
   }
+}
+
+/**
+ * Who may be given a workspace of their own just by signing in (audit
+ * 2026-10-20, G10). Decided 2026-11-06, conservatively, from the policy the
+ * code already states (workspace.create: "the agency shape, one workspace per
+ * client, spun up by the operator — not self-serve tenant signup"):
+ *
+ *   · the platform owner (`users.role = "admin"`), and
+ *   · anyone at all on a database with no workspace yet, so a fresh install's
+ *     first sign-in still works.
+ *
+ * Everyone else joins by invitation, an activation link or SCIM. Sign-up still
+ * creates the account; it no longer makes a stranger super_admin of a seeded
+ * workspace running on the platform's AI keys. To open self-serve sign-up
+ * again, return true here.
+ */
+export async function mayBootstrapOwnWorkspace(user: { role?: string | null }): Promise<boolean> {
+  if (user.role === "admin") return true;
+  const db = await getDb();
+  if (!db) return false;
+  const [any] = await db.select({ id: workspaces.id }).from(workspaces).limit(1);
+  return !any;
 }
 
 export async function ensureUserHasWorkspace(userId: number, userName: string | null) {

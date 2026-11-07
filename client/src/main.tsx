@@ -1,13 +1,13 @@
 import { trpc } from "@/lib/trpc";
-import { UNAUTHED_ERR_MSG } from "@shared/const";
+import { UNAUTHED_ERR_MSG, WORKSPACE_UNAVAILABLE_ERR_MSG } from "@shared/const";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink, TRPCClientError } from "@trpc/client";
-import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
+import { WORKSPACE_UNAVAILABLE_EVENT, getActiveWorkspaceId } from "@/lib/activeWorkspace";
 import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
 import { getLoginUrl } from "./const";
-import { MFA_REQUIRED_EVENT, isMfaRequiredError, shouldRedirectToLogin } from "./lib/authRedirect";
+import { MFA_REQUIRED_EVENT, isMfaRequiredError, returnPathFor, shouldRedirectToLogin } from "./lib/authRedirect";
 import { shouldRetryQuery } from "./lib/queryRetry";
 import "./index.css";
 
@@ -19,7 +19,9 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   if (!(error instanceof TRPCClientError)) return;
   if (typeof window === "undefined") return;
   if (error.message !== UNAUTHED_ERR_MSG) return;
-  const loginUrl = getLoginUrl();
+  // Carries the page being left, so signing back in returns to it (G33).
+  const back = returnPathFor(window.location);
+  const loginUrl = getLoginUrl(back === "/" ? undefined : back);
   // Never navigate to the page we are already on. getLoginUrl() is "/", which
   // IS the sign-in page — so without this, a protected query failing on the
   // sign-in page reloaded that page, which re-ran the query, which reloaded
@@ -43,16 +45,30 @@ const flagMfaRequired = (error: unknown) => {
   window.dispatchEvent(new Event(MFA_REQUIRED_EVENT));
 };
 
+/**
+ * The server refused this tab's workspace instead of answering from another
+ * one (audit 2026-10-20, G11). WorkspaceProvider hears the event, reloads the
+ * list and moves the tab to a workspace the person still belongs to.
+ */
+const flagWorkspaceUnavailable = (error: unknown) => {
+  if (!(error instanceof TRPCClientError)) return;
+  if (typeof window === "undefined") return;
+  if (error.message !== WORKSPACE_UNAVAILABLE_ERR_MSG) return;
+  window.dispatchEvent(new Event(WORKSPACE_UNAVAILABLE_EVENT));
+};
+
 queryClient.getQueryCache().subscribe((event) => {
   if (event.type === "updated" && event.action.type === "error") {
     redirectToLoginIfUnauthorized(event.query.state.error);
     flagMfaRequired(event.query.state.error);
+    flagWorkspaceUnavailable(event.query.state.error);
   }
 });
 queryClient.getMutationCache().subscribe((event) => {
   if (event.type === "updated" && event.action.type === "error") {
     redirectToLoginIfUnauthorized(event.mutation.state.error);
     flagMfaRequired(event.mutation.state.error);
+    flagWorkspaceUnavailable(event.mutation.state.error);
   }
 });
 

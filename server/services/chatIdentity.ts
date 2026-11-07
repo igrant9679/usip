@@ -4,9 +4,11 @@
  * Owner ask 2026-10-05: "Give the chat agent the visitor's history too",
  * choosing "safe now, full after code". A visitor is whoever they type, so:
  *
- *   matched   their email matches someone in the CRM. The agent gets only
- *             harmless details (that they are known, their company and role)
- *             so it does not ask again, and is told to reveal nothing else.
+ *   unproven  they gave an email. Since 2026-11-06 (audit G44) the agent is
+ *             told the same thing whether the CRM knows the address or not,
+ *             and may offer a code either way; only a known address is sent
+ *             one (a decoy is recorded for an unknown one), so neither the
+ *             agent's questions nor its answers say who is a customer.
  *   verified  they asked to be looked up, a 6-digit code was emailed to that
  *             address from the workspace's own mailbox, and they typed it
  *             back. The agent gets the same history the phone agent does.
@@ -172,17 +174,41 @@ export async function sendCode(
     logLabel: "Chat verification code",
   });
   if (!res.ok) {
-    await db.update(chatSessions).set({ verifyCodeHash: null, verifyCodeExpiresAt: null } as never).where(eq(chatSessions.id, session.id));
+    // The code that went nowhere is replaced with one nobody holds (G44): a
+    // failed send must look like a sent one to the visitor, or an address
+    // the CRM knows is told apart from one it doesn't. Nothing can match it.
+    await db.update(chatSessions).set({ verifyCodeHash: codeHash(session.token, newCode()) } as never).where(eq(chatSessions.id, session.id));
     return { ok: false, reason: res.reason };
   }
   return { ok: true };
 }
 
+/**
+ * For an address the CRM doesn't know: everything sendCode records, with no
+ * email (audit 2026-10-20, G44). The visitor sees what a known one sees, a
+ * code "on its way" and the same limits, and no code they could type exists.
+ */
+export async function issueDecoyCode(
+  session: { id: number; token: string },
+  nowMs = Date.now(),
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(chatSessions).set({
+    verifyCodeHash: codeHash(session.token, newCode()),
+    verifyCodeExpiresAt: new Date(nowMs + CODE_TTL_MS),
+    verifyCodeSentAt: new Date(nowMs),
+    verifyCodesSent: sql`${chatSessions.verifyCodesSent} + 1`,
+    verifyAttempts: 0,
+  } as never).where(eq(chatSessions.id, session.id));
+}
+
 /* ── what the agent is told ───────────────────────────────────────────── */
 
 /**
- * Who this visitor is, as far as they have proven it: unknown, matched
- * (harmless details only), or verified (their history).
+ * Who this visitor is, as far as they have proven it: unknown (no email yet),
+ * unproven (an email, known to the CRM or not, and the agent can't tell which:
+ * G44), or verified (their history).
  */
 export async function resolveChatIdentity(
   workspaceId: number,
@@ -190,13 +216,12 @@ export async function resolveChatIdentity(
   email: string | null,
   nowMs = Date.now(),
 ): Promise<ChatIdentityView> {
+  if (!norm(email).includes("@")) return { status: "unknown" };
   const personId = await personIdForEmail(workspaceId, email);
-  if (!personId) return { status: "unknown" };
-  if (isVerified(session, email)) return { status: "verified", history: await buildPersonHistory(workspaceId, personId) };
-  const safe = await safeDetails(workspaceId, personId);
+  if (personId && isVerified(session, email)) return { status: "verified", history: await buildPersonHistory(workspaceId, personId) };
   const exp = session.verifyCodeExpiresAt ? new Date(session.verifyCodeExpiresAt).getTime() : 0;
-  const recent = email ? await codesToAddressLastDay(workspaceId, email, nowMs) : MAX_CODES_PER_ADDRESS_PER_DAY;
-  return { status: "matched", ...safe, codePending: !!session.verifyCodeHash && exp > nowMs, canSendCode: mayIssueCode(session, recent, nowMs) };
+  const recent = await codesToAddressLastDay(workspaceId, email!, nowMs);
+  return { status: "unproven", matched: !!personId, codePending: !!session.verifyCodeHash && exp > nowMs, canSendCode: mayIssueCode(session, recent, nowMs) };
 }
 
 /** Company and role on record for a person: the only details a matched, unverified visitor's agent gets. */

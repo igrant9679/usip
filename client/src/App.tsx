@@ -3,6 +3,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
+import { WorkspaceAccessGate } from "@/components/usip/WorkspaceAccessGate";
 import NotFound from "@/pages/NotFound";
 import { TourEngineProvider } from "@/components/usip/TourEngine";
 import { ElsieController } from "@/components/usip/Elsie";
@@ -14,8 +15,10 @@ import { Label } from "@/components/ui/label";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { WorkspaceBrandingSync } from "@/components/usip/WorkspaceBrandingSync";
+import { MfaRequiredGate } from "@/components/usip/MfaRequiredGate";
 import { ConfirmProvider } from "@/components/usip/Common";
 import { safeReturnPath } from "@shared/returnPath";
+import { returnPathFor } from "@/lib/authRedirect";
 import { usePageTitle } from "@/lib/usePageTitle";
 import { lazyChunk } from "@/lib/lazyChunk";
 
@@ -30,6 +33,7 @@ const ContactRedirect = lazyChunk(() => import("@/pages/usip/ContactRedirect"));
 const Customers = lazyChunk(() => import("@/pages/usip/Customers"));
 const Dashboard = lazyChunk(() => import("@/pages/usip/Dashboard"));
 const Dashboards = lazyChunk(() => import("@/pages/usip/Dashboards"));
+const HomeRoute = lazyChunk(() => import("@/pages/usip/HomeRoute"));
 const Reports = lazyChunk(() => import("@/pages/usip/Reports"));
 const EmailAnalytics = lazyChunk(() => import("@/pages/usip/EmailAnalytics"));
 const EmailSuppressions = lazyChunk(() => import("@/pages/usip/EmailSuppressions").then((m) => ({ default: m.EmailSuppressions })));
@@ -87,6 +91,7 @@ const BookingPage = lazyChunk(() => import("@/pages/BookingPage"));
 const MeetingPickPage = lazyChunk(() => import("@/pages/MeetingPickPage"));
 const LandingPage = lazyChunk(() => import("@/pages/LandingPage"));
 const ResetPassword = lazyChunk(() => import("@/pages/ResetPassword"));
+const ConfirmEmail = lazyChunk(() => import("@/pages/ConfirmEmail"));
 const LandingPages = lazyChunk(() => import("@/pages/usip/LandingPages"));
 const ChatPage = lazyChunk(() => import("@/pages/ChatPage"));
 const ChatAgents = lazyChunk(() => import("@/pages/usip/ChatAgents"));
@@ -128,6 +133,7 @@ const AREPerformance = lazyChunk(() => import("@/pages/usip/AREPerformance"));
 const AREIcpAgent = lazyChunk(() => import("@/pages/usip/AREIcpAgent"));
 const ARECampaigns = lazyChunk(() => import("@/pages/usip/ARECampaigns"));
 const ARECampaignDetail = lazyChunk(() => import("@/pages/usip/ARECampaignDetail"));
+const AREProspectRedirect = lazyChunk(() => import("@/pages/usip/AREProspectRedirect"));
 const ARESettings = lazyChunk(() => import("@/pages/usip/ARESettings"));
 const HelpCenter = lazyChunk(() => import("@/pages/usip/HelpCenter"));
 const HelpArticle = lazyChunk(() => import("@/pages/usip/HelpArticle"));
@@ -138,11 +144,12 @@ const MindmapCanvas = lazyChunk(() => import("@/pages/usip/MindmapCanvas"));
 const INVITE_RETURN_KEY = "usip_invite_return";
 
 function Landing() {
-  const params = new URLSearchParams(window.location.search);
   // Sanitised at the READ, not at the use: this value reaches
   // `window.location.href` below as the fallback when the server sends no
   // redirect, and `//evil.com` starts with "/". See @shared/returnPath.
-  const returnPath = safeReturnPath(params.get("returnPath"));
+  // A deep link opened signed-out shows this form AT that link, so with no
+  // ?returnPath= the current page is where to go back to (G33).
+  const returnPath = returnPathFor(window.location);
 
   const [mode, setMode] = useState<"signin" | "signup" | "forgot">("signin");
   usePageTitle(mode === "signup" ? "Create account" : mode === "forgot" ? "Reset password" : "Sign in");
@@ -429,8 +436,11 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   if (loading) return <PageLoading />;
   if (!user) return <Landing />;
   // WorkspaceBrandingSync sits here, not in Shell — the settings hub renders
-  // without Shell, so brand colours would otherwise never reach it.
-  return <WorkspaceProvider><InviteReturnRedirect /><WorkspaceBrandingSync />{children}</WorkspaceProvider>;
+  // without Shell, so brand colours would otherwise never reach it. The access
+  // gate too: someone with no workspace to work in gets a screen that says
+  // why, on every page (audit 2026-10-20, G35). The enforce2fa gate lives here
+  // so it covers every authed page; in Shell it missed the settings hub (G66).
+  return <WorkspaceProvider><InviteReturnRedirect /><WorkspaceBrandingSync /><MfaRequiredGate /><WorkspaceAccessGate>{children}</WorkspaceAccessGate></WorkspaceProvider>;
 }
 
 function PageLoading() {
@@ -445,7 +455,8 @@ function Router() {
     <ErrorBoundary resetKey={path} inline>
     <Suspense fallback={<PageLoading />}>
     <Switch>
-      <Route path="/"><AuthGate><Dashboard /></AuthGate></Route>
+      {/* "/" is the home picked with "Set as home" (G56): the Dashboard unless Home was picked. */}
+      <Route path="/"><AuthGate><HomeRoute /></AuthGate></Route>
       <Route path="/dashboard"><AuthGate><Dashboard /></AuthGate></Route>
       <Route path="/inbox"><AuthGate><Inbox /></AuthGate></Route>
       <Route path="/mailbox"><AuthGate><Mailbox /></AuthGate></Route>
@@ -539,6 +550,7 @@ function Router() {
       <Route path="/are/icp"><AuthGate><AREIcpAgent /></AuthGate></Route>
       <Route path="/are/campaigns"><AuthGate><ARECampaigns /></AuthGate></Route>
       <Route path="/are/campaigns/:id"><AuthGate><ARECampaignDetail /></AuthGate></Route>
+      <Route path="/are/prospects/:id"><AuthGate><AREProspectRedirect /></AuthGate></Route>
       <Route path="/are/settings"><AuthGate><ARESettings /></AuthGate></Route>
       <Route path="/p/:token"><ProposalPortal /></Route>
       <Route path="/invite/accept"><InviteAccept /></Route>
@@ -585,6 +597,8 @@ function Router() {
       {/* PUBLIC by necessity — the visitor cannot sign in, that is why they
           are here. No AuthGate. */}
       <Route path="/reset-password"><ResetPassword /></Route>
+      {/* PUBLIC too: the link to a new sign-in email may open in a browser that is not signed in (G32). */}
+      <Route path="/confirm-email"><ConfirmEmail /></Route>
       <Route path="/c/:slug"><ChatPage /></Route>
       <Route path="/v2/landing-pages"><AuthGate><LandingPages /></AuthGate></Route>
       <Route path="/v2/chat"><AuthGate><ChatAgents /></AuthGate></Route>

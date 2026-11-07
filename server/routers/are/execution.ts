@@ -47,8 +47,7 @@ import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../../_core/activeMembers";
-import { notifyOwner } from "../../_core/notification";
-import { areNotify } from "./notify";
+import { areNotify, notifyPersonLabel } from "./notify";
 import { isSendableChannel, unsendableReason } from "@shared/areSequenceSteps";
 import { markAreProspectReplied } from "../../services/are/stepHold";
 import { normaliseAreSuppression } from "../../services/suppression";
@@ -331,7 +330,7 @@ export async function processSignal(
    * derive both ids from a row they already scoped, so for them this is one
    * cheap read that always passes.
    */
-  const [owned] = await db.select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId })
+  const [owned] = await db.select({ id: prospectQueue.id, campaignId: prospectQueue.campaignId, firstName: prospectQueue.firstName, lastName: prospectQueue.lastName, companyName: prospectQueue.companyName })
     .from(prospectQueue)
     .where(and(eq(prospectQueue.id, prospectQueueId), eq(prospectQueue.workspaceId, workspaceId)))
     .limit(1);
@@ -339,6 +338,9 @@ export async function processSignal(
     console.warn(`[ARE] processSignal: prospect ${prospectQueueId} is not in campaign ${campaignId} of workspace ${workspaceId} — signal dropped`);
     return;
   }
+  // Every notice below names the person and links to them, and goes to the
+  // campaign's owner (audit 2026-10-20, A57).
+  const person = notifyPersonLabel(owned);
 
   // Determine sentiment via LLM for reply-type signals
   let sentiment: "positive" | "neutral" | "negative" | "objection" | null = null;
@@ -431,11 +433,12 @@ export async function processSignal(
             await areNotify({
               workspaceId,
               eventType: "signal_classified",
-              title: "ARE: Positive reply — prospect added to CRM",
-              body: `A prospect replied positively. Sentiment: ${sentData.sentiment}. Reason: ${sentData.reason}.` +
+              title: `ARE: Positive reply from ${person}`,
+              body: `${person} replied positively. Sentiment: ${sentData.sentiment}. Reason: ${sentData.reason}.` +
                 (promoted ? " They've been added to Contacts and Companies." : ""),
-              relatedId: campaignId,
-              relatedType: "are_campaign",
+              relatedId: prospectQueueId,
+              relatedType: "prospect_queue",
+              campaignId,
             });
             break;
           }
@@ -485,20 +488,11 @@ export async function processSignal(
 
     const who = `${prospect?.firstName ?? ""} ${prospect?.lastName ?? ""}`.trim() || "A prospect";
     const where = prospect?.companyName ?? "their company";
-    if (promoted) {
-      if (promoted.opportunityId) {
-        actionTaken = "opportunity_created";
-        await notifyOwner({
-          title: `ARE: Meeting booked → Opportunity created`,
-          content: `Campaign "${campaign?.name ?? ""}" — ${who} at ${where} booked a meeting. They're now in Contacts, and a new opportunity has been created in the pipeline.`,
-        }).catch(() => {/* non-fatal */});
-      } else {
-        await notifyOwner({
-          title: `ARE: Meeting booked`,
-          content: `Campaign "${campaign?.name ?? ""}" — ${who} at ${where} booked a meeting and has been added to your CRM. Turn on "Signal to opportunity" in the campaign's settings to also open a deal automatically.`,
-        }).catch(() => {/* non-fatal */});
-      }
-    }
+    // No notifyOwner here (audit 2026-10-20, R2): it POSTs the platform
+    // operator's notification service, so this workspace's prospect, company
+    // and campaign went to one person outside it. The in-app notice below is
+    // this workspace's own.
+    if (promoted?.opportunityId) actionTaken = "opportunity_created";
 
     // The in-app notice the "Meeting booked via signal" switch on ARE Settings
     // was always supposed to control: until 2026-09-20 the only thing this
@@ -519,8 +513,9 @@ export async function processSignal(
         + (promoted?.opportunityId
           ? " An opportunity was created in the pipeline."
           : promoted ? " They have been added to your CRM." : ""),
-      relatedId: campaignId,
-      relatedType: "are_campaign",
+      relatedId: prospectQueueId,
+      relatedType: "prospect_queue",
+      campaignId,
     });
   }
 
@@ -554,9 +549,10 @@ export async function processSignal(
         workspaceId,
         eventType: "signal_classified",
         title: "ARE: Engagement signal received",
-        body: `${p.firstName ?? ""} ${p.lastName ?? ""} at ${p.companyName ?? "unknown"} ${label}.`,
-        relatedId: campaignId,
-        relatedType: "are_campaign",
+        body: `${notifyPersonLabel(p)} ${label}.`,
+        relatedId: prospectQueueId,
+        relatedType: "prospect_queue",
+        campaignId,
       });
     }
   }
@@ -882,9 +878,9 @@ export const executionRouter = router({
           accountEmail: sendingAccounts.fromEmail,
         })
         .from(areExecutionQueue)
-        .leftJoin(prospectQueue, eq(prospectQueue.id, areExecutionQueue.prospectQueueId))
-        .leftJoin(areCampaigns, eq(areCampaigns.id, areExecutionQueue.campaignId))
-        .leftJoin(sendingAccounts, eq(sendingAccounts.id, areExecutionQueue.sendingAccountId))
+        .leftJoin(prospectQueue, and(eq(prospectQueue.id, areExecutionQueue.prospectQueueId), eq(prospectQueue.workspaceId, areExecutionQueue.workspaceId)))
+        .leftJoin(areCampaigns, and(eq(areCampaigns.id, areExecutionQueue.campaignId), eq(areCampaigns.workspaceId, areExecutionQueue.workspaceId)))
+        .leftJoin(sendingAccounts, and(eq(sendingAccounts.id, areExecutionQueue.sendingAccountId), eq(sendingAccounts.workspaceId, areExecutionQueue.workspaceId)))
         .where(and(
           eq(areExecutionQueue.id, input.executionQueueId),
           eq(areExecutionQueue.workspaceId, ctx.workspace.id),
@@ -1024,6 +1020,30 @@ export const executionRouter = router({
    * "Email open 50" would mean "50 of them fit", which is the same lie the
    * unordered LIMIT told on the Active tab.
    */
+  /**
+   * The hub's signal numbers for the whole workspace (audit 2026-10-20, A61):
+   * "positive signals" and "meetings booked" were counted over the 30 signals
+   * the feed had loaded, so they stopped at 30 and fell as new neutral ones
+   * pushed older positives off the page.
+   */
+  signalSummary: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { total: 0, positive: 0, meetings: 0 };
+    const rows = await db
+      .select({ signalType: areSignalLog.signalType, sentiment: areSignalLog.sentiment, n: sql<number>`count(*)` })
+      .from(areSignalLog)
+      .where(eq(areSignalLog.workspaceId, ctx.workspace.id))
+      .groupBy(areSignalLog.signalType, areSignalLog.sentiment);
+    let total = 0, positive = 0, meetings = 0;
+    for (const r of rows) {
+      const n = Number(r.n) || 0;
+      total += n;
+      if (r.sentiment === "positive") positive += n;
+      if (r.signalType === "meeting_booked") meetings += n;
+    }
+    return { total, positive, meetings };
+  }),
+
   getSignalCounts: workspaceProcedure
     .input(z.object({ campaignId: z.number().optional() }))
     .query(async ({ ctx, input }) => {

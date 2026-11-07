@@ -62,10 +62,15 @@ describe("the Autonomy Center's engine dial is real", () => {
   it("the dial and both bulk setters go through it", () => {
     expect(page).toContain("trpc.are.campaigns.setAllAutonomy.useMutation");
     expect(page).toContain('onValueChange={(v) => setAllEngineAutonomy.mutate({ mode: v as "full" | "batch_approval" })}');
+    // 2026-11-06 (audit G62): both bulk setters now go through runBulk, which
+    // awaits each change; "Turn on full autonomy" is setAll("approval"). The
+    // engine is still set to batch approval on every bulk change.
+    const bulk = page.slice(page.indexOf("const runBulk = "), page.indexOf("const setAll = "));
+    expect(bulk).toContain('setAllEngineAutonomy.mutateAsync({ mode: "batch_approval" })');
     const setAll = page.slice(page.indexOf("const setAll = "), page.indexOf("const turnOnFullAutonomy"));
-    expect(setAll).toContain('setAllEngineAutonomy.mutate({ mode: "batch_approval" })');
+    expect(setAll).toContain("runBulk(mode, successMessage)");
     const full = page.slice(page.indexOf("const turnOnFullAutonomy"), page.indexOf("const areSettings = "));
-    expect(full).toContain('setAllEngineAutonomy.mutate({ mode: "batch_approval" })');
+    expect(full).toContain('setAll("approval"');
   });
 
   it("review & release is offered nowhere and handled explicitly in the engine", () => {
@@ -195,13 +200,19 @@ describe("numbers that used to omit the engine", () => {
   it("Email Analytics counts campaign sends", () => {
     const smtp = read("routers", "smtpConfig.ts");
     expect(smtp).toContain("from(areExecutionQueue)");
-    expect(smtp).toContain("const totalSent = allSent.length + areSent;");
+    // 2026-11-06 (audit O42): the draft-path count is named, and campaign
+    // sends are still in the total (and reported on their own as well).
+    expect(smtp).toContain("const draftSent = allSent.length;");
+    expect(smtp).toContain("const totalSent = draftSent + areSent;");
   });
 
   it("Dashboards' two stage ratios are named as stage ratios", () => {
     const dash = client("pages", "usip", "Dashboards.tsx");
     expect(dash).toContain('label: "Opportunities with activity %"');
-    expect(dash).toContain('label: "Opportunities past proposal stage %"');
+    // 2026-11-06 (audit G55): reply_rate has counted closed deals, won or lost,
+    // since 2026-09-20, so "past proposal stage" was itself a wrong name. Still
+    // a stage ratio, still not called a reply rate.
+    expect(dash).toContain('label: "Opportunities closed (won or lost) %"');
     expect(dash).not.toContain('label: "Reply rate %"');
   });
 });

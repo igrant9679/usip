@@ -97,6 +97,9 @@ export async function getUserWorkspaces(userId: number) {
       plan: workspaces.plan,
       logoUrl: workspaces.logoUrl,
       role: workspaceMembers.role,
+      // The switcher badges an archived workspace, and only a super admin may
+      // still open one (audit 2026-10-20, G36).
+      archivedAt: workspaces.archivedAt,
     })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
@@ -138,6 +141,9 @@ export async function getWorkspaceMembers(workspaceId: number) {
       title: workspaceMembers.title,
       quota: workspaceMembers.quota,
       memberId: workspaceMembers.id,
+      // Pickers that assign work leave out people who have left (audit
+      // 2026-10-20, P115: lead routing offered them as targets).
+      deactivatedAt: workspaceMembers.deactivatedAt,
     })
     .from(workspaceMembers)
     .innerJoin(users, eq(workspaceMembers.userId, users.id))
@@ -208,7 +214,8 @@ export type PermissionCtx = { workspace: { id: number }; user: { id: number }; m
  *                       sendNow, setSchedule(freq !== "none"); are/prospects.ts
  *                       exportRejections; operations.ts audit.exportCsv (the
  *                       audit CSV is rendered here, so unlike the Leads /
- *                       Contacts / Pipeline exports it has a call to refuse)
+ *                       Contacts / Pipeline exports it has a call to refuse);
+ *                       prospects.ts exportSelected (the People export's own read)
  *   manage_sequences    sequences.ts create/update/delete/fork/updateMeta/
  *                       updateSteps/saveCanvas/setStatus(non-pause)/
  *                       setVisibility/assign, and every sequenceAb mutation

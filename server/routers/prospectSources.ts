@@ -188,6 +188,8 @@ export const prospectSourcesRouter = router({
       }
       try {
         const r = await startRun(ctx.workspace.id, ctx.user.id, input.criteria, input.batchTarget, input.sources ?? null);
+        // Found the same search still going: nothing new was started (P77).
+        if (r.alreadyRunning) return r;
         await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "prospect_search_run", entityId: r.runId, after: { batchTarget: input.batchTarget } });
         return r;
       } catch (e) {
@@ -233,14 +235,28 @@ export const prospectSourcesRouter = router({
     }),
 });
 
-/** Config is non-secret by construction; still drop anything key-shaped defensively. */
-function redactConfig(c: Record<string, unknown>): Record<string, unknown> {
+/**
+ * Config is non-secret by construction; still drop anything named like a
+ * secret, defensively. The names are listed rather than matched by "key"
+ * anywhere in them (N3, 2026-11-06): that also dropped `sampleRowKeys`, the
+ * WarmySender row fields Test connection stores so a renamed field can be
+ * diagnosed, so it never showed.
+ */
+export function redactConfig(c: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const keys = Object.keys(c ?? {});
   for (let i = 0; i < keys.length; i++) {
     const k = keys[i];
-    if (/key|secret|token|password/i.test(k)) continue;
+    if (isSecretName(k)) continue;
     out[k] = c[k];
   }
   return out;
+}
+
+/** "apiKey", "api_key", "key", "secretKey", "clientSecret", "accessToken", "password", "auth"… */
+export function isSecretName(name: string): boolean {
+  const n = name.toLowerCase().replace(/[^a-z]/g, "");
+  return /^(api|secret|private|access|client|signing|webhook)?key$/.test(n)
+    || /(secret|token|password|passwd|credential|bearer)/.test(n)
+    || n === "auth" || n === "authorization";
 }

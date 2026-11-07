@@ -36,6 +36,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { rankOf } from "@shared/roleRank";
 import { widgetFilters } from "@shared/dashboardPresets";
+import { HOME_CHOICES, homeHref } from "@/lib/homeChoice";
 import {
   BarChart2,
   Home,
@@ -78,7 +79,9 @@ const WIDGET_TYPES = [
   { value: "pipeline_stage", label: "Pipeline stage breakdown" },
   { value: "rep_performance",label: "Rep performance table" },
   { value: "email_health",   label: "Email health" },
-  { value: "proposal_expiry_funnel", label: "Proposal expiry funnel" },
+  // "Proposal expiry funnel" is gone from this list: addWidget and the
+  // dashboard_widgets type column refuse it, so picking it failed every time
+  // (audit 2026-10-20, G69). Its renderer stays for any row that has one.
   { value: "table",          label: "Top accounts table" },
 ];
 
@@ -93,8 +96,10 @@ const KPI_METRICS = [
   { value: "meetings_booked",   label: "Meetings booked" },
   // Honest names (audit 2026-09-02): these two are opportunity-stage ratios,
   // not email engagement — the server has always computed them that way.
+  // reply_rate has counted closed deals, won or lost, since 2026-09-20; the
+  // label said "past proposal stage" (G55).
   { value: "response_rate",     label: "Opportunities with activity %" },
-  { value: "reply_rate",        label: "Opportunities past proposal stage %" },
+  { value: "reply_rate",        label: "Opportunities closed (won or lost) %" },
 ];
 
 const CHART_METRICS = [
@@ -284,8 +289,9 @@ function AddWidgetDialog({ open, onOpenChange, onAdd, isPending }: AddWidgetDial
           )}
           {isGoal && (
             <div className="space-y-1.5">
-              <Label className="text-xs">Revenue target ($)</Label>
-              <Input aria-label="Revenue target ($)" type="number" value={goalTarget} onChange={(e) => setGoalTarget(e.target.value)} className="h-8 text-sm" min={0} />
+              {/* The widget measures open and won deal value, not revenue (G55). */}
+              <Label className="text-xs">Target for open + won deal value ($)</Label>
+              <Input aria-label="Target for open + won deal value ($)" type="number" value={goalTarget} onChange={(e) => setGoalTarget(e.target.value)} className="h-8 text-sm" min={1} />
             </div>
           )}
         </div>
@@ -326,9 +332,10 @@ export default function Dashboards() {
   const [customizeMode, setCustomizeMode] = useState(false);
   useEffect(() => { if (!canEdit) setCustomizeMode(false); }, [canEdit]);
   const [filters, setFilters] = useState<DashboardFilters>({ preset: "all" });
-  const [homeDashboard, setHomeDashboard] = useState<string>(
-    () => (typeof window !== "undefined" ? localStorage.getItem(HOME_DASHBOARD_KEY) : null) ?? "/"
-  );
+  // Where "/" lands; App's HomeRoute reads the same key (G56).
+  const [homeDashboard, setHomeDashboard] = useState<string>(() => {
+    try { return homeHref(localStorage.getItem(HOME_DASHBOARD_KEY)); } catch { return homeHref(null); }
+  });
 
   const gridRef = useRef<HTMLDivElement>(null);
   const [gridWidth, setGridWidth] = useState(900);
@@ -413,7 +420,8 @@ export default function Dashboards() {
       <PageHeader title="Dashboards" description="Build custom dashboards with KPI widgets, charts, and live CRM data pulled in real time. Share dashboards with your team or embed them in QBRs and executive reports." pageKey="dashboards"
         icon={<LayoutGrid className="size-5" />}
       >
-        <Button size="sm" variant="outline" onClick={() => setOpenSched(true)}>
+        {/* A schedule belongs to a dashboard, so it waits for one to be open. */}
+        <Button size="sm" variant="outline" onClick={() => setOpenSched(true)} disabled={!selected}>
           <Send className="h-3.5 w-3.5 mr-1" /> Schedule
         </Button>
         {canEdit && (
@@ -437,11 +445,12 @@ export default function Dashboards() {
             right={<Button aria-label="New dashboard" size="sm" variant="ghost" onClick={() => setOpenNew(true)}><Plus className="h-3.5 w-3.5" /></Button>}
           >
             <ul className="space-y-0.5">
-              {/* Pinned system dashboards. "Home 2" (/dashboard-home2) was a
-                  second home page over the same workspace.summary and is
-                  retired (phase 5 item 2, 2026-10-27). */}
-              {[{ label: "Home", href: "/dashboard" }].map((p) => {
-                const isCurrentHome = homeDashboard === p.href || (p.href === "/dashboard" && homeDashboard === "/");
+              {/* The two homes. "Set as home" decides which one "/" opens
+                  (G56); it used to name only the Dashboard, as "Home", and
+                  change nothing. "Home 2" (/dashboard-home2) is retired
+                  (phase 5 item 2, 2026-10-27). */}
+              {HOME_CHOICES.map((p) => {
+                const isCurrentHome = homeDashboard === p.href;
                 return (
                   <li key={p.href} className="group">
                     <div className="flex items-center gap-1">
@@ -452,7 +461,7 @@ export default function Dashboards() {
                         <LayoutDashboard className="h-3 w-3 shrink-0 text-primary" />
                         <span className="truncate">{p.label}</span>
                         {isCurrentHome
-                          ? <span title="Your home dashboard"><Home className="h-3 w-3 ml-auto text-amber-400" /></span>
+                          ? <span title="Velocity opens here"><Home className="h-3 w-3 ml-auto text-amber-400" /></span>
                           : <span className="ml-auto text-[10px] text-muted-foreground/60">System</span>
                         }
                       </Link>
@@ -461,9 +470,9 @@ export default function Dashboards() {
                           title="Set as home"
                           className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity p-1 rounded hover:bg-secondary text-muted-foreground hover:text-amber-400"
                           onClick={() => {
-                            localStorage.setItem(HOME_DASHBOARD_KEY, p.href);
+                            try { localStorage.setItem(HOME_DASHBOARD_KEY, p.href); } catch { /* this visit only */ }
                             setHomeDashboard(p.href);
-                            toast.success(`"${p.label}" is now your home dashboard`);
+                            toast.success(`Velocity now opens on ${p.label}`);
                           }}
                         >
                           <Home className="h-3 w-3" />
@@ -618,7 +627,14 @@ export default function Dashboards() {
           options={[{ value: "daily", label: "Daily" }, { value: "weekly", label: "Weekly" }, { value: "monthly", label: "Monthly" }]}
           defaultValue="weekly" />
         <Field name="recipients" label="Recipients (comma-separated)" required />
-        <p className="text-xs text-muted-foreground">Send-now is wired; recurring delivery requires an external cron.</p>
+        {/* The server's rule (G26), said before it refuses. */}
+        <p className="text-xs text-muted-foreground">
+          {rankOf(current?.role) >= rankOf("manager")
+            ? "Members of this workspace, or any address: an address outside it is recorded in the audit log. Each recipient gets their own email."
+            : "Members of this workspace only; a manager can add an address outside it. Each recipient gets their own email."}
+        </p>
+        {/* The hourly sweep (services/dashboardReportScheduler) sends it; the note said an outside cron was needed. */}
+        <p className="text-xs text-muted-foreground">Checked every hour and sent when due. Send now from the list at any time.</p>
       </FormDialog>
     </Shell>
   );

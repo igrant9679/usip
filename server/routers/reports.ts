@@ -10,12 +10,14 @@
  * Objects: deals (opportunities) · leads · prospects · contacts · activities.
  * Owner/actor user-id columns are resolved to names post-query.
  */
+import { csvCell } from "@shared/csvCell";
 import { TRPCError } from "@trpc/server";
 import { and, asc, avg, count, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, notInArray, or, sum, type SQL } from "drizzle-orm";
 import type { MySqlColumn } from "drizzle-orm/mysql-core";
 import { z } from "zod";
 import { activities, contacts, emailLog, leads, opportunities, prospects, savedReports, users } from "../../drizzle/schema";
 import { checkPermission, getDb } from "../db";
+import { insertIdOf } from "../_core/insertId";
 import { stageIndexFor } from "../_core/stageSemantics";
 import type { StageIndex } from "@shared/stageSemantics";
 import { router } from "../_core/trpc";
@@ -225,7 +227,22 @@ function filterToSql(def: ObjectDef, f: z.infer<typeof filterSchema>, idx: Stage
   }
 }
 
-export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ columns: { key: string; label: string; kind: ColKind }[]; rows: Record<string, unknown>[]; grouped: boolean }> {
+/**
+ * The number field a Sum or Average reads. The builder showed the first one as
+ * picked and sent none, and with none this counted rows under a "Sum of" label
+ * (audit 2026-10-20, G54). So none means that first one, as the builder showed,
+ * and a field that isn't a number, or an object with no number field, is refused.
+ */
+function aggregateColumn(def: ObjectDef, spec: ReportSpec): ColDef | null {
+  if (spec.aggregate !== "sum_value" && spec.aggregate !== "avg_value") return null;
+  const key = spec.aggregateField ?? Object.keys(def.columns).find((k) => def.columns[k].kind === "number");
+  if (!key) throw new TRPCError({ code: "BAD_REQUEST", message: `${spec.object} has no number field to ${spec.aggregate === "sum_value" ? "sum" : "average"}. Count rows instead.` });
+  const c = colOrThrow(def, key);
+  if (c.kind !== "number") throw new TRPCError({ code: "BAD_REQUEST", message: `"${c.label}" isn't a number, so it can't be summed or averaged.` });
+  return c;
+}
+
+export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ columns: { key: string; label: string; kind: ColKind }[]; rows: Record<string, unknown>[]; grouped: boolean; truncated: boolean }> {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
   const def = OBJECTS[spec.object];
@@ -239,26 +256,32 @@ export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ 
   /* grouped mode: one row per group value + aggregate */
   if (spec.groupBy) {
     const g = colOrThrow(def, spec.groupBy);
-    const aggField = spec.aggregateField ? colOrThrow(def, spec.aggregateField) : null;
+    // A date is an instant, so each row was its own group (G54).
+    if (g.kind === "date") throw new TRPCError({ code: "BAD_REQUEST", message: `"${g.label}" is a date, and grouping on it makes a group per row. Filter on it instead.` });
+    const aggField = aggregateColumn(def, spec);
     const aggExpr =
       spec.aggregate === "sum_value" && aggField ? sum(aggField.col)
       : spec.aggregate === "avg_value" && aggField ? avg(aggField.col)
       : count();
-    const rows = await db
+    // One past the cap, so a cut list can say it was cut (G54).
+    const fetched = await db
       .select({ group: g.col, agg: aggExpr, n: count() })
       .from(def.table)
       .where(where)
       .groupBy(g.col)
       .orderBy(desc(count()))
-      .limit(spec.limit);
+      .limit(spec.limit + 1);
+    const truncated = fetched.length > spec.limit;
+    const rows = fetched.slice(0, spec.limit);
     const aggLabel =
-      spec.aggregate === "sum_value" && spec.aggregateField ? `Sum of ${colOrThrow(def, spec.aggregateField).label}`
-      : spec.aggregate === "avg_value" && spec.aggregateField ? `Avg ${colOrThrow(def, spec.aggregateField).label}`
+      spec.aggregate === "sum_value" && aggField ? `Sum of ${aggField.label}`
+      : spec.aggregate === "avg_value" && aggField ? `Avg ${aggField.label}`
       : "Count";
-    let out = rows.map((r) => ({ group: r.group ?? "(empty)", agg: spec.aggregate && spec.aggregate !== "count" ? Number(r.agg ?? 0) : Number(r.n), n: Number(r.n) }));
+    let out = rows.map((r) => ({ group: r.group ?? "(empty)", agg: aggField ? Number(r.agg ?? 0) : Number(r.n), n: Number(r.n) }));
     if (g.kind === "user") out = await resolveUserNames(out, "group");
     return {
       grouped: true,
+      truncated,
       columns: [
         { key: "group", label: g.label, kind: g.kind === "user" ? "text" : g.kind },
         { key: "agg", label: aggLabel, kind: "number" },
@@ -272,8 +295,10 @@ export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ 
   const sel: Record<string, MySqlColumn> = {};
   for (const key of spec.columns) sel[key] = colOrThrow(def, key).col;
   const sortCol = spec.sort ? colOrThrow(def, spec.sort.field).col : null;
-  const base = db.select(sel).from(def.table).where(where).limit(spec.limit);
-  const rows = (sortCol ? await base.orderBy(spec.sort!.dir === "asc" ? asc(sortCol) : desc(sortCol)) : await base) as Record<string, unknown>[];
+  const base = db.select(sel).from(def.table).where(where).limit(spec.limit + 1);
+  const fetched = (sortCol ? await base.orderBy(spec.sort!.dir === "asc" ? asc(sortCol) : desc(sortCol)) : await base) as Record<string, unknown>[];
+  const truncated = fetched.length > spec.limit;
+  const rows = fetched.slice(0, spec.limit);
 
   // resolve user-id columns to names
   let out = rows;
@@ -282,6 +307,7 @@ export async function runSpec(workspaceId: number, spec: ReportSpec): Promise<{ 
   }
   return {
     grouped: false,
+    truncated,
     columns: spec.columns.map((key) => ({ key, label: def.columns[key].label, kind: def.columns[key].kind === "user" ? "text" : def.columns[key].kind })),
     rows: out,
   };
@@ -298,11 +324,8 @@ async function resolveUserNames<T extends Record<string, unknown>>(rows: T[], ke
 }
 
 function toCsv(columns: { key: string; label: string }[], rows: Record<string, unknown>[]): string {
-  const esc = (v: unknown) => {
-    if (v == null) return "";
-    const s = v instanceof Date ? v.toISOString() : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
+  // Formula cells neutralised too (audit 2026-10-20, G49): @shared/csvCell.
+  const esc = csvCell;
   return [columns.map((c) => esc(c.label)).join(","), ...rows.map((r) => columns.map((c) => esc(r[c.key])).join(","))].join("\n");
 }
 
@@ -364,12 +387,16 @@ export const reportsRouter = router({
      * /reports CSV button in every workspace — deliberate, and announced.
      *
      * ⚠️ THIS IS NOT A COMPLETE BOUNDARY, and saying otherwise would be the
-     * half-fix that reads as complete. The Leads, Contacts, Pipeline and
-     * people-selection exports build the CSV IN THE BROWSER out of rows the
-     * list query already returned (see client/src/pages/usip/Leads.tsx —
+     * half-fix that reads as complete. The Leads, Contacts and Pipeline
+     * exports build the CSV IN THE BROWSER out of rows the list query already
+     * returned (see client/src/pages/usip/Leads.tsx —
      * `new Blob([...], { type: "text/csv" })`), so there is no server call to
      * refuse. Those buttons are HIDDEN on `export_data === false`, which is UX,
      * not enforcement: the user already holds the rows.
+     *
+     * The people-selection export is built in the browser too, but from a read
+     * that exists only for it, prospects.exportSelected, so since 2026-11-06
+     * (audit R63) that read is gated as well.
      *
      * The campaign-rejection export used to be listed above as browser-built.
      * It is not: are.prospects.exportRejections renders that CSV server-side,
@@ -420,7 +447,7 @@ export const reportsRouter = router({
         object: input.spec.object,
         config: input.spec,
       });
-      return { id: Number((r as unknown as { insertId?: number })?.insertId ?? 0) };
+      return { id: insertIdOf(r) };
     }),
 
   remove: workspaceProcedure.input(z.object({ id: z.number().int() })).mutation(async ({ ctx, input }) => {

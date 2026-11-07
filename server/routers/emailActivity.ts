@@ -160,8 +160,8 @@ export const emailActivityRouter = {
           stepIndex: areExecutionQueue.stepIndex,
         })
         .from(emailLog)
-        .leftJoin(emailDrafts, eq(emailDrafts.id, emailLog.draftId))
-        .leftJoin(areExecutionQueue, eq(areExecutionQueue.id, emailLog.executionQueueId))
+        .leftJoin(emailDrafts, and(eq(emailDrafts.id, emailLog.draftId), eq(emailDrafts.workspaceId, emailLog.workspaceId)))
+        .leftJoin(areExecutionQueue, and(eq(areExecutionQueue.id, emailLog.executionQueueId), eq(areExecutionQueue.workspaceId, emailLog.workspaceId)))
         .where(and(...conds))
         .orderBy(desc(emailLog.sentAt), desc(emailLog.id))
         .limit(takePlus);
@@ -252,7 +252,7 @@ export const emailActivityRouter = {
           sequenceName: sequences.name,
         })
         .from(emailDrafts)
-        .leftJoin(sequences, eq(sequences.id, emailDrafts.sequenceId))
+        .leftJoin(sequences, and(eq(sequences.id, emailDrafts.sequenceId), eq(sequences.workspaceId, emailDrafts.workspaceId)))
         .where(and(...conds))
         .orderBy(desc(emailDrafts.createdAt), desc(emailDrafts.id))
         .limit(takePlus);
@@ -330,8 +330,8 @@ export const emailActivityRouter = {
           campaignName: areCampaigns.name,
         })
         .from(areExecutionQueue)
-        .leftJoin(prospectQueue, eq(prospectQueue.id, areExecutionQueue.prospectQueueId))
-        .leftJoin(areCampaigns, eq(areCampaigns.id, areExecutionQueue.campaignId))
+        .leftJoin(prospectQueue, and(eq(prospectQueue.id, areExecutionQueue.prospectQueueId), eq(prospectQueue.workspaceId, areExecutionQueue.workspaceId)))
+        .leftJoin(areCampaigns, and(eq(areCampaigns.id, areExecutionQueue.campaignId), eq(areCampaigns.workspaceId, areExecutionQueue.workspaceId)))
         .where(and(...conds))
         .orderBy(desc(areExecutionQueue.scheduledAt), desc(areExecutionQueue.id))
         .limit(takePlus);
@@ -401,7 +401,7 @@ export const emailActivityRouter = {
           toEmail: sendingAccounts.fromEmail,
         })
         .from(emailReplies)
-        .leftJoin(sendingAccounts, eq(sendingAccounts.id, emailReplies.sendingAccountId))
+        .leftJoin(sendingAccounts, and(eq(sendingAccounts.id, emailReplies.sendingAccountId), eq(sendingAccounts.workspaceId, emailReplies.workspaceId)))
         .where(and(...conds))
         .orderBy(desc(emailReplies.receivedAt), desc(emailReplies.id))
         .limit(takePlus);
@@ -566,8 +566,8 @@ export const emailActivityRouter = {
         const rows = await db
           .select({ source: emailLog.source, count: sql<number>`count(*)` })
           .from(emailLog)
-          .leftJoin(emailDrafts, eq(emailDrafts.id, emailLog.draftId))
-          .leftJoin(areExecutionQueue, eq(areExecutionQueue.id, emailLog.executionQueueId))
+          .leftJoin(emailDrafts, and(eq(emailDrafts.id, emailLog.draftId), eq(emailDrafts.workspaceId, emailLog.workspaceId)))
+          .leftJoin(areExecutionQueue, and(eq(areExecutionQueue.id, emailLog.executionQueueId), eq(areExecutionQueue.workspaceId, emailLog.workspaceId)))
           .where(and(...conds))
           .groupBy(emailLog.source);
         chips = rows.map((r) => ({ source: r.source, count: num(r.count) }));
@@ -597,6 +597,10 @@ export const emailActivityRouter = {
       const sentTotal = num(draftEng[0]?.sent) + num(execEng[0]?.sent);
       const openedTotal = num(draftEng[0]?.opened) + num(execEng[0]?.opened);
       const clickedTotal = num(draftEng[0]?.clicked);
+      // Over draft-path sends only (audit 2026-10-20, O42): a campaign send
+      // records no click of its own, so counting it in the denominator pulled
+      // the rate down by every campaign email. Email Analytics divides the same way.
+      const clickableTotal = num(draftEng[0]?.sent);
 
       return {
         sent: num(totals[0]?.sent),
@@ -606,7 +610,7 @@ export const emailActivityRouter = {
         inbound: num(inbound[0]?.count),
         bounced: num(draftEng[0]?.bounced),
         openRate: sentTotal ? Math.round((openedTotal / sentTotal) * 100) : 0,
-        clickRate: sentTotal ? Math.round((clickedTotal / sentTotal) * 100) : 0,
+        clickRate: clickableTotal ? Math.round((clickedTotal / clickableTotal) * 100) : 0,
         bySource: chips,
       };
     }),
@@ -637,16 +641,18 @@ export const emailActivityRouter = {
             execContent: areExecutionQueue.messageContent,
           })
           .from(emailLog)
-          .leftJoin(sendingAccounts, eq(sendingAccounts.id, emailLog.sendingAccountId))
+          .leftJoin(sendingAccounts, and(eq(sendingAccounts.id, emailLog.sendingAccountId), eq(sendingAccounts.workspaceId, emailLog.workspaceId)))
+          // The execution row first: the exec_account join below reads it, and
+          // MySQL refuses an ON clause that names a table joined after it.
+          .leftJoin(areExecutionQueue, and(eq(areExecutionQueue.id, emailLog.executionQueueId), eq(areExecutionQueue.workspaceId, emailLog.workspaceId)))
           // Second chance at the sending account for CAMPAIGN rows: the log
           // records it only for sends made after 0163, while the execution row
           // records it for every send made after 0166. Neither covers the
           // other's gap alone.
-          .leftJoin(execAccount, eq(execAccount.id, areExecutionQueue.sendingAccountId))
+          .leftJoin(execAccount, and(eq(execAccount.id, areExecutionQueue.sendingAccountId), eq(execAccount.workspaceId, emailLog.workspaceId)))
           .leftJoin(users, eq(users.id, emailLog.userId))
-          .leftJoin(areCampaigns, eq(areCampaigns.id, emailLog.campaignId))
-          .leftJoin(emailDrafts, eq(emailDrafts.id, emailLog.draftId))
-          .leftJoin(areExecutionQueue, eq(areExecutionQueue.id, emailLog.executionQueueId))
+          .leftJoin(areCampaigns, and(eq(areCampaigns.id, emailLog.campaignId), eq(areCampaigns.workspaceId, emailLog.workspaceId)))
+          .leftJoin(emailDrafts, and(eq(emailDrafts.id, emailLog.draftId), eq(emailDrafts.workspaceId, emailLog.workspaceId)))
           .where(and(eq(emailLog.id, input.id), eq(emailLog.workspaceId, wsId)))
           .limit(1);
         if (!row) throw new TRPCError({ code: "NOT_FOUND" });
@@ -675,7 +681,7 @@ export const emailActivityRouter = {
             jobFitAnalysis: aiPipelineJobs.fitAnalysis,
           })
           .from(emailDrafts)
-          .leftJoin(aiPipelineJobs, eq(aiPipelineJobs.id, emailDrafts.pipelineJobId))
+          .leftJoin(aiPipelineJobs, and(eq(aiPipelineJobs.id, emailDrafts.pipelineJobId), eq(aiPipelineJobs.workspaceId, emailDrafts.workspaceId)))
           .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, wsId)))
           .limit(1);
         if (!row) throw new TRPCError({ code: "NOT_FOUND" });
@@ -693,8 +699,8 @@ export const emailActivityRouter = {
             campaignName: areCampaigns.name,
           })
           .from(areExecutionQueue)
-          .leftJoin(prospectQueue, eq(prospectQueue.id, areExecutionQueue.prospectQueueId))
-          .leftJoin(areCampaigns, eq(areCampaigns.id, areExecutionQueue.campaignId))
+          .leftJoin(prospectQueue, and(eq(prospectQueue.id, areExecutionQueue.prospectQueueId), eq(prospectQueue.workspaceId, areExecutionQueue.workspaceId)))
+          .leftJoin(areCampaigns, and(eq(areCampaigns.id, areExecutionQueue.campaignId), eq(areCampaigns.workspaceId, areExecutionQueue.workspaceId)))
           .where(and(eq(areExecutionQueue.id, input.id), eq(areExecutionQueue.workspaceId, wsId)))
           .limit(1);
         if (!row) throw new TRPCError({ code: "NOT_FOUND" });
@@ -714,7 +720,7 @@ export const emailActivityRouter = {
       const [row] = await db
         .select({ r: emailReplies, accountEmail: sendingAccounts.fromEmail, accountName: sendingAccounts.name })
         .from(emailReplies)
-        .leftJoin(sendingAccounts, eq(sendingAccounts.id, emailReplies.sendingAccountId))
+        .leftJoin(sendingAccounts, and(eq(sendingAccounts.id, emailReplies.sendingAccountId), eq(sendingAccounts.workspaceId, emailReplies.workspaceId)))
         .where(and(eq(emailReplies.id, input.id), eq(emailReplies.workspaceId, wsId)))
         .limit(1);
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });

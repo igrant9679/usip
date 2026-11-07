@@ -15,7 +15,7 @@
  */
 import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "../../db";
-import { prospects, prospectQueue } from "../../../drizzle/schema";
+import { areCampaigns, prospects, prospectQueue } from "../../../drizzle/schema";
 import { existingClaim, queueIdentityKeys, type QueueIdentityShape } from "./queueIdentity";
 import { describeSuppression, findSuppression } from "../suppression";
 import type { ActiveSequenceHit } from "../crossEngineEnrollment";
@@ -101,6 +101,18 @@ export async function pushPeopleIntoCampaign(
   const added: PushResult["added"] = [];
   const skipped: PushResult["skipped"] = [];
   if (!db || prospectIds.length === 0) return { added, skipped };
+
+  // The campaign must be this workspace's. The manual route checks before it
+  // calls; the router and proposal paths pass an id from a stored row, and a
+  // queue row filed under another workspace's campaign is one the engine
+  // will not work and the screens cannot name. Refuse it here, at the door.
+  const [campaign] = await db.select({ id: areCampaigns.id }).from(areCampaigns)
+    .where(and(eq(areCampaigns.id, campaignId), eq(areCampaigns.workspaceId, workspaceId)))
+    .limit(1);
+  if (!campaign) {
+    for (const id of prospectIds) skipped.push({ prospectId: id, reason: "Campaign not found in this workspace" });
+    return { added, skipped };
+  }
 
   const people = await db
     .select({

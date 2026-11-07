@@ -50,6 +50,7 @@ const DRAFT_MAX_TOKENS = 16_000;
 const RUN_TIMEOUT_MS = 25 * 60_000;
 /** A queued or running job no process is working on, untouched this long, was cut off by a restart. */
 export const ORPHAN_AFTER_MS = 10 * 60_000;
+export const ORPHANED_ERROR = "Stopped when the server restarted. Run it again. A step that was under way when it stopped may still have been billed by Anthropic, so the cost shown may be short.";
 
 export const WEB_SEARCH_TOOL = "web_search_20260209";
 export const WEB_FETCH_TOOL = "web_fetch_20260209";
@@ -397,7 +398,10 @@ export async function failOrphanedJobs(db: Db, workspaceId: number): Promise<voi
   if (!ids.length) return;
   await db
     .update(researchJobs)
-    .set({ status: "failed", error: "Stopped when the server restarted. Run it again. Nothing more was charged.", finishedAt: new Date() })
+    // A call can be in flight when the server stops, and Anthropic may bill
+    // it; its usage never reached us, so the cost shown can be short of what
+    // was spent (audit 2026-10-20, P111: this said nothing more was charged).
+    .set({ status: "failed", error: ORPHANED_ERROR, finishedAt: new Date() })
     .where(and(eq(researchJobs.workspaceId, workspaceId), inArray(researchJobs.id, ids)));
 }
 
@@ -515,9 +519,10 @@ export async function runResearchJob(id: number, signal: AbortSignal): Promise<v
             // live run, uncached, spent 760k input tokens across its parts.
             cache_control: { type: "ephemeral" },
             ...(container ? { container } : {}),
+            // What is left of the run's budget; the loop stops before either runs out (below).
             tools: [
-              { type: WEB_SEARCH_TOOL, name: "web_search", max_uses: Math.max(1, MAX_SEARCHES - totals.searches) },
-              { type: WEB_FETCH_TOOL, name: "web_fetch", max_uses: Math.max(1, MAX_FETCHES - totals.fetches), max_content_tokens: FETCH_MAX_CONTENT_TOKENS },
+              { type: WEB_SEARCH_TOOL, name: "web_search", max_uses: MAX_SEARCHES - totals.searches },
+              { type: WEB_FETCH_TOOL, name: "web_fetch", max_uses: MAX_FETCHES - totals.fetches, max_content_tokens: FETCH_MAX_CONTENT_TOKENS },
             ],
           },
         });
@@ -530,6 +535,13 @@ export async function runResearchJob(id: number, signal: AbortSignal): Promise<v
         await save({});
         if (res.stop_reason !== "pause_turn") {
           if (res.stop_reason === "max_tokens") note("The brief reached its length limit; drafting from what it has.");
+          break;
+        }
+        // The caps are hard (audit 2026-10-20, P101): max_uses bounds one
+        // request, and each continued turn used to be offered at least one more
+        // of each. With either budget spent, the research stops here.
+        if (totals.searches >= MAX_SEARCHES || totals.fetches >= MAX_FETCHES) {
+          note(`The research used its ${MAX_SEARCHES} searches or ${MAX_FETCHES} page reads; drafting from what it has.`);
           break;
         }
         messages.push({ role: "assistant", content: res.content as unknown as Anthropic.ContentBlockParam[] });

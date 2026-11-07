@@ -18,7 +18,7 @@
  * `u:`-keyed sets keep matching rows stored before slug-keying existed.
  */
 import { and, eq } from "drizzle-orm";
-import { prospectQueue } from "../../../drizzle/schema";
+import { areCampaigns, prospectQueue } from "../../../drizzle/schema";
 import { canonicalText } from "@shared/canonicalText";
 import { extractLinkedInIdentifier } from "../linkedinLookup";
 import { getDb } from "../../db";
@@ -60,6 +60,9 @@ export function queueIdentityKeys(p: QueueIdentityShape): string[] {
  * Index of every queue prospect in the workspace, keyed by identity —
  * the exclusivity check's source of truth. On key collision the FIRST
  * (lowest-id) row wins, which keeps the answer stable across runs.
+ *
+ * Only rows whose campaign still exists (audit 2026-10-20, A18): a deleted
+ * campaign's people stayed claimed by it forever and could never join another.
  */
 export async function workspaceQueueIdentityIndex(
   workspaceId: number,
@@ -79,6 +82,7 @@ export async function workspaceQueueIdentityIndex(
       companyDomain: prospectQueue.companyDomain,
     })
     .from(prospectQueue)
+    .innerJoin(areCampaigns, and(eq(areCampaigns.id, prospectQueue.campaignId), eq(areCampaigns.workspaceId, workspaceId)))
     .where(and(eq(prospectQueue.workspaceId, workspaceId)))
     .orderBy(prospectQueue.id);
   for (const r of rows) {

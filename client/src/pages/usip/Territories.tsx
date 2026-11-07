@@ -1,11 +1,22 @@
 import { Button } from "@/components/ui/button";
-import { Field, FormDialog, Section, SelectField, TextareaField } from "@/components/usip/Common";
-import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
+import { ConfirmButton, Field, FormDialog, Section, SelectField } from "@/components/usip/Common";
+import { EmptyState, PageHeader, Shell, SubNav } from "@/components/usip/Shell";
+import { LEAD_ASSIGNMENT_NAV } from "@/lib/leadAssignmentNav";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { Map, Plus, Trash2, Zap } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+
+/**
+ * What the rules do, and only that (audit 2026-10-20, R42). The page said they
+ * routed new leads and accounts on creation, and showed a per-territory
+ * "Rules" JSON that nothing ever read. The JSON is gone from the page; the
+ * routing rules are the rules.
+ */
+export const TERRITORIES_DESCRIPTION =
+  "Group accounts into territories and give each a rep. Routing rules give a new account its territory and owner when it is created, including from a converted lead, and Lead Routing's Geography and Industry rules take their owner from them. Matching ignores case.";
 
 export default function Territories() {
   const utils = trpc.useUtils();
@@ -14,6 +25,8 @@ export default function Territories() {
   const { data: members } = trpc.team.list.useQuery();
   const [open, setOpen] = useState(false);
   const [ruleOpen, setRuleOpen] = useState(false);
+  // Territories and their rules are a manager's to change (R37).
+  const canEdit = useWorkspaceRole().isManager;
   const create = trpc.territories.create.useMutation({ onSuccess: () => { utils.territories.list.invalidate(); setOpen(false); toast.success("Territory created"); }, onError: (e) => toast.error(e.message) });
   const del = trpc.territories.delete.useMutation({ onSuccess: () => utils.territories.list.invalidate(), onError: (e) => toast.error(e.message) });
   const createRule = trpc.crmTerritoryRules.create.useMutation({
@@ -21,15 +34,20 @@ export default function Territories() {
     onError: (e) => toast.error(e.message),
   });
   const delRule = trpc.crmTerritoryRules.delete.useMutation({ onSuccess: () => utils.crmTerritoryRules.list.invalidate(), onError: (e) => toast.error(e.message) });
+  const routingCount = (territoryId: number) => {
+    const n = (rules ?? []).filter((r) => r.territoryId === territoryId).length;
+    return n === 0 ? "No routing rule assigns it" : `${n} routing rule${n === 1 ? "" : "s"} assign${n === 1 ? "s" : ""} it`;
+  };
 
   return (
     <Shell title="Territories">
-      <PageHeader title="Territories" description="Define geographic or account-based territories and assign reps accordingly. Territory rules automatically route new leads and accounts to the correct owner on creation." pageKey="territories"
+      <PageHeader title="Territories" description={TERRITORIES_DESCRIPTION} pageKey="territories"
         icon={<Map className="size-5" />}
       >
-        <Button variant="outline" onClick={() => setRuleOpen(true)}><Zap className="size-4" /> New routing rule</Button>
-        <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New territory</Button>
+        {canEdit && <Button variant="outline" onClick={() => setRuleOpen(true)}><Zap className="size-4" /> New routing rule</Button>}
+        {canEdit && <Button onClick={() => setOpen(true)}><Plus className="size-4" /> New territory</Button>}
       </PageHeader>
+      <SubNav items={LEAD_ASSIGNMENT_NAV} />
       <div className="p-4 md:p-5 space-y-6">
         <Section title={`Territories (${data?.length ?? 0})`}>
           {(data ?? []).length === 0 ? <EmptyState icon={Map} title="None yet" /> : (
@@ -38,16 +56,26 @@ export default function Territories() {
                 <li key={t.id} className="p-3 flex items-center text-sm">
                   <div className="flex-1">
                     <div className="font-medium">{t.name}</div>
-                    <div className="text-xs text-muted-foreground mt-0.5">Rules: {JSON.stringify(t.rules ?? {})}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{routingCount(t.id)}</div>
                   </div>
-                  <Button aria-label="Delete territory" size="sm" variant="ghost" onClick={() => del.mutate({ id: t.id })}><Trash2 className="size-3.5" /></Button>
+                  {/* Asks first, with what points at it (R76); deleting unlinks those rules and the accounts in it (R42). */}
+                  {canEdit && (() => {
+                    const ruleCount = (rules ?? []).filter((r: any) => r.territoryId === t.id).length;
+                    return (
+                      <ConfirmButton ariaLabel="Delete territory" title={`Delete territory "${t.name}"?`}
+                        description={`${ruleCount ? `${ruleCount} routing rule${ruleCount === 1 ? " assigns" : "s assign"} it: ${ruleCount === 1 ? "it keeps its owner and stops" : "they keep their owner and stop"} assigning a territory. ` : ""}Accounts in it are left with no territory and keep their owner.`}
+                        confirmLabel="Delete" disabled={del.isPending} onConfirm={() => del.mutate({ id: t.id })}>
+                        <Trash2 className="size-3.5" />
+                      </ConfirmButton>
+                    );
+                  })()}
                 </li>
               ))}
             </ul>
           )}
         </Section>
 
-        <Section title={`Routing rules (${rules?.length ?? 0})`} description="First-match-wins rules that auto-assign new accounts to a territory and owner on creation. Lower priority = higher precedence.">
+        <Section title={`Routing rules (${rules?.length ?? 0})`} description="First match wins, lowest priority number first. A blank condition matches anything; text matches ignoring case.">
           {(rules ?? []).length === 0 ? <EmptyState icon={Zap} title="No rules" description="Add a rule to auto-route new accounts." /> : (
             <ul className="divide-y rounded-lg border bg-card">
               {(rules ?? []).map((r) => {
@@ -69,7 +97,13 @@ export default function Territories() {
                     <div className="text-xs text-muted-foreground text-right">
                       → {terr?.name ?? "(no territory)"} / {(owner as any)?.name ?? "(no owner)"}
                     </div>
-                    <Button aria-label="Delete rule" size="sm" variant="ghost" onClick={() => delRule.mutate({ id: r.id })}><Trash2 className="size-3.5" /></Button>
+                    {canEdit && (
+                      <ConfirmButton ariaLabel="Delete rule" title={`Delete rule "${r.name}"?`}
+                        description="New accounts it would have matched go to the next rule that matches, or stay with whoever creates them."
+                        confirmLabel="Delete" disabled={delRule.isPending} onConfirm={() => delRule.mutate({ id: r.id })}>
+                        <Trash2 className="size-3.5" />
+                      </ConfirmButton>
+                    )}
                   </li>
                 );
               })}
@@ -109,15 +143,9 @@ export default function Territories() {
       </FormDialog>
 
       <FormDialog open={open} onOpenChange={setOpen} title="New territory" isPending={create.isPending}
-        onSubmit={(f) => {
-          const raw = (String(f.get("rules") ?? "").trim()) || "{}";
-          let rules: any;
-          try { rules = JSON.parse(raw); } catch { toast.error("Rules must be valid JSON — fix or clear the field."); return; }
-          if (typeof rules !== "object" || rules === null || Array.isArray(rules)) { toast.error("Rules must be a JSON object, e.g. {\"region\":\"NA\"}."); return; }
-          create.mutate({ name: String(f.get("name")), rules });
-        }}>
+        onSubmit={(f) => create.mutate({ name: String(f.get("name")) })}>
         <Field name="name" label="Name" required />
-        <TextareaField name="rules" label="Rules (JSON)" defaultValue={`{"region":"NA","segment":"mid_market"}`} rows={3} />
+        <p className="text-xs text-muted-foreground">Then add a routing rule that assigns accounts to it.</p>
       </FormDialog>
     </Shell>
   );

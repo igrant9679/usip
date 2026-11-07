@@ -141,7 +141,16 @@ export function ActivityFeedWidget({ data }: { data: any }) {
 ═══════════════════════════════════════════════════════════════════════════ */
 export function GoalProgressWidget({ data }: { data: any }) {
   const current = Number(data.current ?? 0);
-  const target = Number(data.target ?? 1);
+  // No target (0, blank, not a number) is said, not drawn as NaN% (G55).
+  if (data.target == null) {
+    return (
+      <div className="flex flex-col gap-2 py-2 text-xs text-muted-foreground">
+        <span>Current: <span className="font-mono font-semibold text-foreground">{fmtCurrency(current)}</span></span>
+        <span>No target set. Add the widget again with a target above $0.</span>
+      </div>
+    );
+  }
+  const target = Number(data.target);
   const pct = Math.min(100, data.pct ?? Math.round((current / target) * 100));
   const color = pct >= 100 ? "bg-emerald-500" : pct >= 70 ? "bg-primary" : pct >= 40 ? "bg-amber-500" : "bg-red-500";
   return (
@@ -172,24 +181,30 @@ export function GoalProgressWidget({ data }: { data: any }) {
 export function ComparisonWidget({ data }: { data: any }) {
   const current = Number(data.current ?? 0);
   const previous = Number(data.previous ?? 0);
-  const changePct = Number(data.changePct ?? 0);
+  // null: won something with nothing to compare against. That is no
+  // percentage, where it used to read +100% (G55).
+  const changePct: number | null = data.changePct == null ? null : Number(data.changePct);
   const format = data.format ?? "currency";
-  const isUp = changePct >= 0;
+  const isUp = changePct === null || changePct >= 0;
   return (
     <div className="flex flex-col gap-3 py-2">
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-lg bg-secondary/50 p-3">
-          <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">This Month</div>
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Won this month so far</div>
           <div className="text-xl font-mono font-bold tabular-nums">{fmtValue(current, format)}</div>
         </div>
         <div className="rounded-lg bg-secondary/50 p-3">
-          <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Last Month</div>
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Same days last month</div>
           <div className="text-xl font-mono font-bold tabular-nums text-muted-foreground">{fmtValue(previous, format)}</div>
         </div>
       </div>
-      <div className={`flex items-center gap-1.5 text-sm font-semibold ${isUp ? "text-emerald-500" : "text-red-500"}`}>
+      <div className={`flex items-center gap-1.5 text-sm font-semibold ${changePct === 0 ? "text-muted-foreground" : isUp ? "text-emerald-500" : "text-red-500"}`}>
         {changePct === 0 ? <Minus className="h-4 w-4" /> : isUp ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />}
-        <span>{Math.abs(changePct)}% {isUp ? "increase" : "decrease"} vs last month</span>
+        <span>
+          {changePct === null ? "Up from nothing in the same days last month"
+            : changePct === 0 ? "No change on the same days last month"
+            : `${Math.abs(changePct)}% ${isUp ? "increase" : "decrease"} on the same days last month`}
+        </span>
       </div>
     </div>
   );

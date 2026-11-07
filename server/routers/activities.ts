@@ -1,18 +1,19 @@
 import { TRPCError } from "@trpc/server";
 import { TASK_STATUSES } from "@shared/taskStatus";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray, lte } from "drizzle-orm";
+import { seesAllTasks, taskDueState } from "@shared/taskRules";
 import { z } from "zod";
-import { activities, attachments, notifications, tasks, workspaceSettings } from "../../drizzle/schema";
+import { activities, attachments, notifications, prospects, tasks, workspaceSettings } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { getDb } from "../db";
-import { storagePut } from "../storage";
+import { storageErase, storagePut } from "../storage";
+import { ATTACHMENT_MAX_BASE64, ATTACHMENT_MAX_BYTES, attachmentType } from "../services/attachmentType";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
 import { generateTasksForWorkspace } from "../services/taskAutopilot";
-import { endOfZonedDay } from "@shared/availability";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { assertOutboundNotPaused } from "../services/outboundPause";
-import { assertOwnerInWorkspace } from "../services/foreignIds";
+import { assertOwnerInWorkspace, assertRelatedInWorkspace } from "../services/foreignIds";
 import { deadlineFrom } from "../services/calendarDeadline";
 
 const TASK_TYPES = ["call", "email", "meeting", "linkedin", "todo", "follow_up", "social_touch", "manual_email", "meeting_prep", "crm_update", "generic_action"] as const;
@@ -31,6 +32,24 @@ const TASK_PATCH = z.object({
 
 /* ─── Tasks ──────────────────────────────────────────────────────────── */
 
+/**
+ * A snoozed task comes back when its snooze ends (audit 2026-10-20, R72).
+ * Snooze set status "snoozed" and nothing ever set it back, so a task snoozed
+ * "until tomorrow" stayed out of every Today and Overdue list for good. Run
+ * where tasks are read, rather than by a new timer: it only matches tasks
+ * whose snooze has run out.
+ */
+async function wakeSnoozedTasks(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number) {
+  await db.update(tasks)
+    .set({ status: "open", snoozedUntil: null } as never)
+    .where(and(eq(tasks.workspaceId, workspaceId), eq(tasks.status, "snoozed"), lte(tasks.snoozedUntil, new Date())));
+}
+
+/** `mine`: the task pages' scope (R72) — a rep's own tasks, a manager's everyone's. */
+function taskScopeOwner(ctx: { user: { id: number }; member: { role: string } }, mine: boolean | undefined): number | null {
+  return mine && !seesAllTasks(ctx.member.role) ? ctx.user.id : null;
+}
+
 export const tasksRouter = router({
   list: workspaceProcedure
     .input(z.object({
@@ -44,12 +63,17 @@ export const tasksRouter = router({
       // don't leak into other surfaces (e.g. the Calls queue). The Tasks page
       // opts in with includeDrafts:true and reviews them separately.
       includeDrafts: z.boolean().optional(),
+      /** The task pages' scope (R72): a rep's own tasks, a manager's everyone's. */
+      mine: z.boolean().optional(),
     }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
+      await wakeSnoozedTasks(db, ctx.workspace.id);
       let rows = await db.select().from(tasks).where(eq(tasks.workspaceId, ctx.workspace.id)).orderBy(tasks.dueAt);
       if (input?.ownerOnly) rows = rows.filter((t) => t.ownerUserId === ctx.user.id);
+      const scopeOwner = taskScopeOwner(ctx, input?.mine);
+      if (scopeOwner !== null) rows = rows.filter((t) => t.ownerUserId === scopeOwner);
       if (input?.status) rows = rows.filter((t) => t.status === input.status);
       else if (!input?.includeDrafts) rows = rows.filter((t) => t.status !== "draft");
       if (input?.type) rows = rows.filter((t) => t.type === input.type);
@@ -75,6 +99,7 @@ export const tasksRouter = router({
       // Assigning to another workspace's user (or a leaver) filed the task
       // under someone who can never see it (audit 2026-10-20, C7).
       await assertOwnerInWorkspace(ctx.workspace.id, input.ownerUserId);
+      await assertRelatedInWorkspace(db, input.relatedType, input.relatedId, ctx.workspace.id);
       const r = await db.insert(tasks).values({
         ...input,
         workspaceId: ctx.workspace.id,
@@ -112,7 +137,11 @@ export const tasksRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const dueAt = new Date(Date.now() + input.dueInDays * 86400000);
-      const values = input.prospectIds.map((pid) => ({
+      // Only this workspace's people get a task (audit 2026-10-20, R73).
+      const here = await db.select({ id: prospects.id }).from(prospects)
+        .where(and(eq(prospects.workspaceId, ctx.workspace.id), inArray(prospects.id, input.prospectIds)));
+      if (here.length === 0) return { created: 0 };
+      const values = here.map(({ id: pid }) => ({
         workspaceId: ctx.workspace.id,
         title: input.title,
         type: input.type,
@@ -309,17 +338,22 @@ export const tasksRouter = router({
     }),
 
   /** Queue stats for the Tasks page header. */
-  stats: workspaceProcedure.query(async ({ ctx }) => {
+  stats: workspaceProcedure.input(z.object({ mine: z.boolean().optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return { open: 0, dueToday: 0, overdue: 0, completed: 0, draftsPending: 0, snoozed: 0, aiOpen: 0 };
-    const rows = await db.select({ status: tasks.status, dueAt: tasks.dueAt, source: tasks.source }).from(tasks).where(eq(tasks.workspaceId, ctx.workspace.id));
+    await wakeSnoozedTasks(db, ctx.workspace.id);
+    let rows = await db.select({ status: tasks.status, dueAt: tasks.dueAt, source: tasks.source, ownerUserId: tasks.ownerUserId }).from(tasks).where(eq(tasks.workspaceId, ctx.workspace.id));
+    // The same scope as the list under these cards (R72), so they count it.
+    const scopeOwner = taskScopeOwner(ctx, input?.mine);
+    if (scopeOwner !== null) rows = rows.filter((r) => r.ownerUserId === scopeOwner);
     const now = Date.now();
     // "Today" as the WORKSPACE reads it. This was `setHours(23,59,59,999)` on a
     // bare Date — the container's day, i.e. UTC — so a task due at 8pm Eastern
     // fell into tomorrow and the Tasks header undercounted "due today" every
     // evening. workspace_settings.timezone is the setting Settings promises
-    // governs "activity timestamps"; see services/workspaceTimezone.ts.
-    const endOfToday = new Date(endOfZonedDay(await getWorkspaceTimezone(ctx.workspace.id), now));
+    // governs "activity timestamps"; see services/workspaceTimezone.ts. The
+    // rule itself is @shared/taskRules, which both task pages read too (R72).
+    const tz = await getWorkspaceTimezone(ctx.workspace.id);
     const s = { open: 0, dueToday: 0, overdue: 0, completed: 0, draftsPending: 0, snoozed: 0, aiOpen: 0 };
     for (const r of rows) {
       if (r.status === "done") s.completed++;
@@ -328,11 +362,9 @@ export const tasksRouter = router({
       else if (r.status === "open" || r.status === "in_progress") {
         s.open++;
         if (r.source === "ai") s.aiOpen++;
-        const t = r.dueAt ? new Date(r.dueAt).getTime() : null;
-        if (t !== null) {
-          if (t < now) s.overdue++;
-          else if (t <= endOfToday.getTime()) s.dueToday++;
-        }
+        const due = taskDueState(r.dueAt, now, tz);
+        if (due === "overdue") s.overdue++;
+        else if (due === "today") s.dueToday++;
       }
     }
     return s;
@@ -578,17 +610,24 @@ export const attachmentsRouter = router({
     .input(z.object({
       relatedType: z.string(),
       relatedId: z.number(),
-      fileName: z.string().min(1),
+      fileName: z.string().min(1).max(255),
+      /** Ignored (R100): the server decides the type from the file itself. */
       mimeType: z.string().optional(),
-      base64: z.string().min(1), // raw base64 (no data: prefix)
+      // raw base64 (no data: prefix). Capped here (R100): the only limit was
+      // the browser's, and the API took a file as large as the body parser.
+      base64: z.string().min(1).max(ATTACHMENT_MAX_BASE64, "Files must be under 8 MB"),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const buf = Buffer.from(input.base64, "base64");
+      if (buf.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "The file is empty." });
+      if (buf.length > ATTACHMENT_MAX_BYTES) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "Files must be under 8 MB." });
+      const type = attachmentType(input.fileName, buf);
+      if (!type.ok) throw new TRPCError({ code: "BAD_REQUEST", message: type.reason });
       const safeName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
       const key = `ws-${ctx.workspace.id}/${input.relatedType}-${input.relatedId}/${Date.now()}-${safeName}`;
-      const put = await storagePut(key, buf, input.mimeType ?? "application/octet-stream");
+      const put = await storagePut(key, buf, type.mimeType);
       const r = await db.insert(attachments).values({
         workspaceId: ctx.workspace.id,
         relatedType: input.relatedType,
@@ -596,7 +635,7 @@ export const attachmentsRouter = router({
         fileKey: put.key,
         url: put.url,
         fileName: input.fileName,
-        mimeType: input.mimeType,
+        mimeType: type.mimeType,
         sizeBytes: buf.length,
         uploadedByUserId: ctx.user.id,
       });
@@ -613,10 +652,10 @@ export const attachmentsRouter = router({
    * so the entry says which file was removed, what it was attached to and who
    * uploaded it. None of that is recoverable afterwards.
    *
-   * NOTE, recorded and not acted on: this deletes the DATABASE ROW only. The
-   * stored object behind `fileKey` is left where it is, so the file survives its
-   * attachment and stays reachable by `url`. Whether a delete should also remove
-   * the object is a product and retention decision, not an audit fix.
+   * The stored file goes too (R100). It used to stay where it was, reachable
+   * by `url` after its attachment was deleted. It is erased FIRST, and when
+   * that fails nothing is deleted, so a record never outlives its file the
+   * other way round either and the delete can be tried again.
    */
   delete: repProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
@@ -628,6 +667,14 @@ export const attachmentsRouter = router({
       .where(and(eq(attachments.id, input.id), eq(attachments.workspaceId, ctx.workspace.id)))
       .limit(1);
     if (!doomed) return { ok: true };
+    if (doomed.fileKey) {
+      try {
+        await storageErase(doomed.fileKey);
+      } catch (e) {
+        console.error(`[attachments.delete] erasing ${doomed.fileKey} failed:`, e);
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Couldn't remove the file from storage, so nothing was deleted. Try again." });
+      }
+    }
     await db.delete(attachments).where(and(eq(attachments.id, input.id), eq(attachments.workspaceId, ctx.workspace.id)));
     await recordAudit({
       workspaceId: ctx.workspace.id,

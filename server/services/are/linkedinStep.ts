@@ -21,7 +21,7 @@
  * The state comes from `unipile_invites`, which the accept webhook already
  * maintains.
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import {
   prospectQueue,
   unipileAccounts,
@@ -87,7 +87,9 @@ export function toInviteNote(body: string, max = INVITE_NOTE_MAX): string {
 
 /**
  * Which LinkedIn account should carry this step: the campaign owner's own,
- * else any connected one in the workspace.
+ * else any connected one in the workspace — or, with `ownerOnly`, the owner's
+ * or none. Oldest first either way, so the choice does not depend on the
+ * order the database happens to return rows in (audit 2026-10-20, O12).
  *
  * Owner-first matters for more than attribution — an invitation arrives from a
  * person, and a prospect researched by one rep receiving a request from
@@ -96,6 +98,7 @@ export function toInviteNote(body: string, max = INVITE_NOTE_MAX): string {
 export async function pickLinkedInAccount(
   workspaceId: number,
   ownerUserId: number | null,
+  opts: { ownerOnly?: boolean } = {},
 ): Promise<{ unipileAccountId: string; userId: number | null } | null> {
   const db = await getDb();
   if (!db) return null;
@@ -105,11 +108,21 @@ export async function pickLinkedInAccount(
     .where(and(
       eq(unipileAccounts.workspaceId, workspaceId),
       eq(unipileAccounts.provider, "LINKEDIN"),
-    ));
+    ))
+    .orderBy(asc(unipileAccounts.id));
   if (!accts.length) return null;
   const own = ownerUserId ? accts.find((a) => a.userId === ownerUserId) : undefined;
-  const chosen = own ?? accts[0];
-  return { unipileAccountId: chosen.id, userId: chosen.userId ?? null };
+  const chosen = opts.ownerOnly ? own : own ?? accts[0];
+  return chosen ? { unipileAccountId: chosen.id, userId: chosen.userId ?? null } : null;
+}
+
+/**
+ * Whether a stored LinkedIn network distance means a 1st-degree connection.
+ * Unipile spells it FIRST_DEGREE, DISTANCE_1 or 1 depending on the endpoint.
+ */
+export function isFirstDegree(degree: string | number | null | undefined): boolean {
+  const d = String(degree ?? "").trim().toUpperCase();
+  return d === "1" || d === "1ST" || d === "FIRST" || d === "FIRST_DEGREE" || d === "DISTANCE_1";
 }
 
 /**
@@ -137,11 +150,21 @@ export async function dispatchLinkedInStep(input: {
     return { kind: "failed", reason: HEALABLE_NO_LINKEDIN };
   }
 
-  const account = await pickLinkedInAccount(input.workspaceId, input.campaignOwnerUserId);
+  // The CAMPAIGN OWNER's account and nobody else's, as sequences do (audit
+  // 2026-10-20, O12). This fell back to the workspace's oldest account when
+  // the owner had none, so a rep's campaign invited people as a colleague.
+  const account = await pickLinkedInAccount(input.workspaceId, input.campaignOwnerUserId, { ownerOnly: true });
   if (!account) {
     // A configuration gap, not a fact about this prospect — so the step waits
-    // rather than dying, and every other LinkedIn step this tick would hit it.
-    return { kind: "deferred", reason: "No LinkedIn account connected", stopChannel: true };
+    // rather than dying, and every other LinkedIn step in this campaign would
+    // hit it. The reason reaches the campaign log.
+    return {
+      kind: "deferred",
+      reason: input.campaignOwnerUserId
+        ? "The campaign owner has no LinkedIn account connected"
+        : "The campaign has no owner to send as",
+      stopChannel: true,
+    };
   }
 
   // Where are we with this person? The accept webhook maintains this row.

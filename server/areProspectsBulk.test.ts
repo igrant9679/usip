@@ -157,6 +157,10 @@ describe("are.prospects.bulk", () => {
     expect(cap.inserts.some((i) => i.table === tname(auditLog) && (i.values as any).entityType === "are_prospect_bulk")).toBe(true);
   });
 
+  // 2026-11-06 (tracker 9): approve, reject and skip are now a rep's in bulk
+  // too — the same decisions the row buttons and "Approve all" already let
+  // them make (server/areProspectReview.test.ts pins them). Every other
+  // action is still a manager's, so this pin uses one of those.
   it("is manager-gated", async () => {
     const cap: Cap = { updates: [], inserts: [] };
     h.db = makeDb([row(1)], cap);
@@ -165,6 +169,6 @@ describe("are.prospects.bulk", () => {
     const origSelect = db.select;
     db.select = () => { const b = origSelect(); const origThen = b.then; b.then = (res: any) => origThen((v: any) => res(Array.isArray(v) && v[0]?.mb ? [{ ...v[0], mb: { ...v[0].mb, role: "rep" } }] : v)); return b; };
     h.db = db;
-    await expect(appRouter.createCaller(makeCtx()).are.prospects.bulk({ campaignId: 21, prospectIds: [1], action: "approve" })).rejects.toThrow(/managers and admins/);
+    await expect(appRouter.createCaller(makeCtx()).are.prospects.bulk({ campaignId: 21, prospectIds: [1], action: "suppress" })).rejects.toThrow(/managers and admins/);
   });
 });

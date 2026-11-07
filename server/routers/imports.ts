@@ -16,6 +16,8 @@ import { canonicalizeCompanyDisplayName, cleanPlaceholder, normalizeJobTitle } f
 import { stripNameCredentials } from "../services/enrichment/personName";
 import { buildCompanyCanonicalizer } from "../services/enrichment/companyCanonical";
 import { normalizedAccountFields } from "../services/company/normalize";
+import { describeWriteError } from "../services/dbWriteError";
+import { assertOwnerInWorkspace } from "../services/foreignIds";
 import {
   CONTACT_IMPORT_FIELDS,
   describeDuplicateMappings,
@@ -43,9 +45,46 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-function isValidPhone(phone: string): boolean {
-  if (!phone) return true; // optional
-  return /^[\d\s\+\-\(\)\.]{7,20}$/.test(phone);
+/** Excel saves a number too long for its cell as it shows it: 6.39171E+11. */
+const SCIENTIFIC_NOTATION = /^[+-]?\d+(?:[.,]\d+)?e\+?\d+$/i;
+/** An extension at the end: "x123", "ext. 12", "extension 4", "#12". */
+const PHONE_EXTENSION = /\s*(?:ext(?:ension)?\.?|x|#)\s*(\d{1,6})$/i;
+
+/** A cell value quoted in an error reason, clipped so one long cell can't bloat the report. */
+const clip = (v: string) => (v.length > 80 ? `${v.slice(0, 77)}…` : v);
+
+/**
+ * The phone as it will be stored, or why it can't be.
+ *
+ * The check was the bare pattern below, and it failed whole rows on numbers
+ * that are ordinary in exports (tracker 2026-11-06, item 2: "all imported
+ * contacts are tagged as an error"): a leading apostrophe, which Apollo and
+ * other exporters write so Excel keeps the number as text; `tel:`; an
+ * extension; a slash ("089/123456"). Phone is optional, but a row with an
+ * unreadable phone is an error in both preview and import, so one exporter's
+ * habit failed every row that had a phone. Those forms are read now.
+ *
+ * Scientific notation stays an error: the digits Excel rounded away are gone,
+ * and storing "6.39171E+11" as a phone number would be worse than refusing it.
+ * The reason says what happened and how to fix the column.
+ *
+ * Idempotent, so the classifier can re-read a value mapRowToContact already
+ * normalised. The result fits contacts.phone (varchar 40): 20 + " x" + 6.
+ */
+export function normalizeImportPhone(raw: string): { phone: string } | { error: string } {
+  let v = (raw ?? "").trim().replace(/^'+/, "").replace(/^tel:/i, "").trim();
+  if (!v) return { phone: "" };
+  if (SCIENTIFIC_NOTATION.test(v)) {
+    return {
+      error:
+        `Phone was saved in scientific notation (${clip(raw.trim())}), which loses digits — ` +
+        `format the phone column as Text in Excel and export the file again`,
+    };
+  }
+  const ext = v.match(PHONE_EXTENSION);
+  const main = ext ? v.slice(0, ext.index).trim() : v;
+  if (!/^[\d\s+\-().\/]{7,20}$/.test(main)) return { error: `Invalid phone format: ${clip(raw.trim())}` };
+  return { phone: ext ? `${main} x${ext[1]}` : main };
 }
 
 function mapRowToContact(
@@ -71,6 +110,12 @@ function mapRowToContact(
   if (result.lastName) result.lastName = stripNameCredentials(result.lastName) ?? result.lastName;
   if (result.title) result.title = normalizeJobTitle(result.title) ?? "";
   if (result.company) result.company = canonicalizeCompanyDisplayName(result.company) ?? "";
+  // A readable phone is stored normalised; an unreadable one is left as typed
+  // for classifyImportRow to report.
+  if (result.phone) {
+    const p = normalizeImportPhone(result.phone);
+    if ("phone" in p) result.phone = p.phone;
+  }
   return result;
 }
 
@@ -211,10 +256,11 @@ export function classifyImportRow(
     if (!mapped[f.key]?.trim()) errors.push(`Missing ${f.label}`);
   }
   if (mapped.email && !isValidEmail(mapped.email)) {
-    errors.push(`Invalid email format: ${mapped.email}`);
+    errors.push(`Invalid email format: ${clip(mapped.email)}`);
   }
-  if (mapped.phone && !isValidPhone(mapped.phone)) {
-    errors.push(`Invalid phone format: ${mapped.phone}`);
+  if (mapped.phone) {
+    const p = normalizeImportPhone(mapped.phone);
+    if ("error" in p) errors.push(p.error);
   }
   if (errors.length > 0) {
     return { status: "error", reason: errors.join("; "), isDuplicate: false, emailKey: null, nameKey: null };
@@ -349,9 +395,9 @@ export function buildColumnStats(
 }
 
 /**
- * Error rows grouped by reason, counted over ALL of them — the client only
- * receives the first 200 rows, so a client-side tally would under-count
- * exactly when errors are numerous enough to need a summary.
+ * Error rows grouped by reason, counted over ALL of them. The client received
+ * only the first 200 rows until 2026-11-06 (R52); it gets every one now, for
+ * the report, but the summary is still what reads at a glance.
  */
 export function summarizeErrorReasons(
   errorRows: Array<{ rowIndex: number; reason: string }>,
@@ -459,8 +505,13 @@ export const importsRouter = router({
         existingName: string | null;
       }> = [];
 
-      // Validate each row
+      // Validate each row. validRows is what the import will create — with
+      // skipDuplicates off that INCLUDES the duplicates, which are also in
+      // duplicateRows. newRows counts the rest, so new + duplicates + errors
+      // is the file (audit 2026-10-20, R52: the page added the included
+      // duplicates to validCount a second time).
       const validRows: number[] = [];
+      let newRows = 0;
       const duplicateRows: number[] = [];
       const errorRows: Array<{ rowIndex: number; reason: string }> = [];
       const seenEmails = new Set<string>();
@@ -520,14 +571,22 @@ export const importsRouter = router({
         if (verdict.emailKey) seenEmails.add(verdict.emailKey);
         else if (verdict.nameKey && input.matchOnNameCompany) seenNameKeys.add(verdict.nameKey);
         validRows.push(rowIndex);
+        if (!verdict.isDuplicate) newRows++;
       });
 
       return {
         totalRows: rows.length,
+        /** Rows the import will create: new ones, plus duplicates when they are not skipped. */
         validCount: validRows.length,
+        importCount: validRows.length,
+        /** Rows that match nothing already there. newCount + duplicateCount + errorCount = totalRows. */
+        newCount: newRows,
         duplicateCount: duplicateRows.length,
         errorCount: errorRows.length,
-        errorRows: errorRows.slice(0, 200), // return first 200 errors
+        // Every error row, not the first 200: "Download error report" is the
+        // full list (R52). {rowIndex, reason} with clipped values, so even a
+        // 50,000-row file that fails throughout stays a few MB.
+        errorRows,
         canImport: validRows.length > 0,
         /** Echoed back so the summary can state which rule produced these counts. */
         skipDuplicates: input.skipDuplicates,
@@ -592,6 +651,9 @@ export const importsRouter = router({
       assertNoDuplicateMappings(mapping);
       assertRequiredFieldsMapped(mapping, input.destination);
       const requiredFields = requiredFieldKeysFor(input.destination);
+      // Every imported row is filed under this owner: they must work here now
+      // (audit 2026-10-20, R55), not be another workspace's user or a leaver.
+      await assertOwnerInWorkspace(wsId, input.postImportActions?.ownerUserId);
 
       // Create import record
       const [importRecord] = await db
@@ -866,6 +928,11 @@ export const importsRouter = router({
         title: p.mapped.title?.trim()?.slice(0, 120) || null,
         linkedinUrl: p.mapped.linkedinUrl?.trim() || null,
         city: p.mapped.city?.trim()?.slice(0, 80) || null,
+        // People rows have these columns, unlike contacts; the import mapped
+        // them and then dropped them (audit 2026-10-20, R54).
+        state: p.mapped.state?.trim()?.slice(0, 80) || null,
+        country: p.mapped.country?.trim()?.slice(0, 80) || null,
+        industry: p.mapped.industry?.trim()?.slice(0, 80) || null,
         seniority: p.mapped.seniority?.trim()?.slice(0, 64) || null,
         company: p.mapped.company?.trim()?.slice(0, 200) || null,
         companyDomain: normDomain(p.mapped.website)?.slice(0, 200) ?? null,
@@ -909,8 +976,11 @@ export const importsRouter = router({
                 prospectId: toProspects ? c.id : null,
               });
               importedRows++;
-            } catch {
-              importRowValues.push({ importId, rowIndex: p.rowIndex, rowData: p.row, mappedData: p.mapped, status: "error", errorReason: "Database insert failed" });
+            } catch (e) {
+              // The row's own reason when the database gave one (R54): every
+              // refusal read "Database insert failed", whatever it was.
+              const why = describeWriteError(e);
+              importRowValues.push({ importId, rowIndex: p.rowIndex, rowData: p.row, mappedData: p.mapped, status: "error", errorReason: why ? `Not saved: ${why}` : "Database insert failed" });
               errorRows++;
             }
           }

@@ -80,8 +80,12 @@ describe("pipeline alerts point at something real (report #3)", () => {
   it("orphaned alerts are not returned", () => {
     const src = read("server/routers/pipelineAlerts.ts");
     const { text } = slice(src, "list: workspaceProcedure", "/** Dismiss an alert */");
-    expect(text).toMatch(/\.filter\(\(a\) => oppMap\[a\.opportunityId\]\)/);
-    expect(text).not.toMatch(/opportunity: oppMap\[a\.opportunityId\] \?\? null/);
+    // 2026-11-06 (audit R15, R66): the orphan drop moved into the query — an
+    // inner join to the alert's deal, which also keeps closed deals out and
+    // lets the limit count shown alerts. The guarantee is the same: no alert
+    // without a deal (pipelineAlertsFixes.test.ts runs it).
+    expect(text).toContain(".innerJoin(opportunities, eq(opportunities.id, pipelineAlerts.opportunityId))");
+    expect(text).not.toMatch(/\.leftJoin\(opportunities/);
   });
 
   it("View Opp links to the opportunity, not the board", () => {
@@ -130,7 +134,11 @@ describe("a first sighting is not a job change (report #6)", () => {
     const src = read("server/services/linkedinEnrichment/jobChangeReengagement.ts");
     expect(src).not.toMatch(/\|\|\s*"their previous company"/);
     expect(src).not.toMatch(/\|\|\s*"a new company"/);
-    expect(src).toContain('reason: "incomplete_company_change"');
+    // 2026-11-06 (T1, tracker items 8/14): the refusal moved into
+    // reengageBlocker, the one rule the task writer AND the alerts feed read,
+    // so the feed stops offering Re-engage on a first sighting. Same refusal,
+    // now returned by the rule and passed through by the writer.
+    expect(src).toContain('if (!oldCompany || !newCompany) return "incomplete_company_change";');
   });
 
   it("the manual re-engage path is covered by the same refusal", () => {
@@ -142,13 +150,16 @@ describe("a first sighting is not a job change (report #6)", () => {
     const manual = src.slice(src.indexOf("export async function reengageProspectManually"));
     expect(manual).toContain("maybeCreateJobChangeReengagement(");
     const shared = src.slice(src.indexOf("export async function maybeCreateJobChangeReengagement"));
-    expect(shared).toContain('reason: "incomplete_company_change"');
+    // 2026-11-06: via reengageBlocker (see above), whose refusal the writer returns.
+    expect(shared).toContain("const blocked = reengageBlocker(oldCompany, newCompany);");
+    expect(shared).toContain("if (blocked) return { created: false, reason: blocked };");
   });
 
   it("will not re-engage someone who 'moved to Retired'", () => {
     const src = read("server/services/linkedinEnrichment/jobChangeReengagement.ts");
     expect(src).toContain("NOT_AN_EMPLOYER");
-    expect(src).toContain('reason: "new_company_not_an_employer"');
+    // 2026-11-06: in reengageBlocker, the rule the writer applies (see above).
+    expect(src).toContain('if (isNotAnEmployer(newCompany)) return "new_company_not_an_employer";');
   });
 });
 

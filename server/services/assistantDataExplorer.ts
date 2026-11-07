@@ -18,16 +18,18 @@
  * Filters/aggregates compile through drizzle's own builders — no string SQL
  * ever contains a model-supplied value.
  */
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import type { AnyMySqlColumn, MySqlTable } from "drizzle-orm/mysql-core";
 import { z } from "zod";
 import { getDb } from "../db";
+import { rankOf, ROLE_RANK, type Role } from "@shared/roleRank";
 import {
   accounts, activities, areCampaigns, areExecutionQueue, auditLog, brandObservations,
   calendarEvents, contacts, emailDrafts, emailLog, emailReplies, enrollments, leads,
   meetings, notifications, opportunities, prospectQueue, prospects, recordLists,
   sequences, tasks,
 } from "../../drizzle/schema";
+import { genuineReplyScope } from "./replyScope";
 
 /* ─── The registry: what the assistant may query ─────────────────────────── */
 
@@ -226,6 +228,54 @@ export const EXPLORER_ENTITIES: Record<string, ExplorerEntity> = {
     }),
 };
 
+/* ─── Who may read what: the screens' own gates ─────────────────────────── */
+
+export interface ExplorerViewer { userId: number; role: string }
+
+/**
+ * The role and owner gates the screens apply, applied here too (audit
+ * 2026-10-20, G38). The workspace frame alone let any member ask for the audit
+ * log (an admin's screen), every member's notifications (each person sees
+ * their own) and everyone's calendar (a rep sees their own, a manager anyone's,
+ * as calendar.listEvents decides).
+ *
+ * Synced mail had no gate at all, so a rep could ask for a teammate's private
+ * inbox. Below a manager it now reads as the screens show it: genuine replies,
+ * which Conversations and the Emails tab show every member, plus the rest of
+ * the rep's own mailbox, as My Mailbox does. A manager reads every mailbox,
+ * as My Mailbox lets them.
+ */
+const VIEWER_GATES: Record<string, {
+  minRole?: Role; label: string; ownerCol?: AnyMySqlColumn; managerSeesAll?: boolean;
+  /** Below a manager, the rows a member may read; a manager reads them all. */
+  belowManager?: (viewer: ExplorerViewer) => SQL;
+}> = {
+  audit_log: { minRole: "admin", label: "The audit log" },
+  notifications: { ownerCol: notifications.userId, label: "Notifications" },
+  calendar_events: { ownerCol: calendarEvents.userId, managerSeesAll: true, label: "Calendar events" },
+  email_replies: {
+    label: "Synced mail",
+    belowManager: (viewer) => or(genuineReplyScope(), eq(emailReplies.userId, viewer.userId))!,
+  },
+};
+
+/**
+ * The viewer's part of the frame for one entity: nothing, a predicate to AND
+ * in, or a refusal (thrown, worded for the model to relay).
+ */
+export function viewerScope(entity: string, viewer: ExplorerViewer): SQL | undefined {
+  const gate = Object.prototype.hasOwnProperty.call(VIEWER_GATES, entity) ? VIEWER_GATES[entity] : undefined;
+  if (!gate) return undefined;
+  if (gate.minRole && rankOf(viewer.role) < ROLE_RANK[gate.minRole]) {
+    throw new Error(`${gate.label} is open to ${gate.minRole}s only, as on its own screen. Answer without it.`);
+  }
+  if (gate.ownerCol && !(gate.managerSeesAll && rankOf(viewer.role) >= ROLE_RANK.manager)) {
+    return eq(gate.ownerCol, viewer.userId);
+  }
+  if (gate.belowManager && rankOf(viewer.role) < ROLE_RANK.manager) return gate.belowManager(viewer);
+  return undefined;
+}
+
 /* ─── Spec ───────────────────────────────────────────────────────────────── */
 
 const FILTER_OPS = ["eq", "neq", "gt", "gte", "lt", "lte", "in", "contains", "starts_with", "is_null", "not_null"] as const;
@@ -394,8 +444,12 @@ const truncate = (v: unknown): unknown =>
 export async function runExplorerQuery(
   workspaceId: number,
   rawSpec: unknown,
+  viewer: ExplorerViewer,
 ): Promise<{ rows: Record<string, unknown>[]; total?: number }> {
-  const q = compileExplorerQuery(workspaceId, rawSpec);
+  const compiled = compileExplorerQuery(workspaceId, rawSpec);
+  // The viewer's gate (G38) joins the workspace frame; both selects below read it.
+  const scope = viewerScope(EXPLORER_SPEC.parse(rawSpec).entity, viewer);
+  const q = scope ? { ...compiled, where: and(compiled.where, scope)! } : compiled;
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
 

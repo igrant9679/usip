@@ -13,7 +13,7 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { safeFetch } from "../services/scraper/ssrfGuard";
 import {
-  SENDGRID_PROVIDER, getWorkspaceSendgridKey, redactIntegrationConfig, setWorkspaceSendgridKey,
+  SENDGRID_PROVIDER, getWorkspaceSendgridKey, mergeIntegrationConfig, redactIntegrationConfig, setWorkspaceSendgridKey,
 } from "../services/sendgridKey";
 const PROVIDERS = [
   "manus_oauth",
@@ -118,7 +118,8 @@ export const integrationsRouter = router({
           .update(workspaceIntegrations)
           .set({
             ...(input.status !== undefined ? { status: input.status } : {}),
-            ...(input.config !== undefined ? { config: input.config } : {}),
+            // Merged, never replaced: the draft carries no secrets (G16).
+            ...(input.config !== undefined ? { config: mergeIntegrationConfig(existing.config, input.config) } : {}),
           })
           .where(eq(workspaceIntegrations.id, existing.id));
       } else {
@@ -126,7 +127,7 @@ export const integrationsRouter = router({
           workspaceId: ctx.workspace.id,
           provider: input.provider,
           status: input.status ?? "disconnected",
-          config: input.config ?? {},
+          config: mergeIntegrationConfig({}, input.config ?? {}),
         });
       }
       return { ok: true };

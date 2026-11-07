@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { eq, and } from "drizzle-orm";
 import { getDb } from "../db";
@@ -5,6 +6,13 @@ import { mindmaps, mindmapNodes, mindmapEdges, tasks, activities, notifications 
 import { router } from "../_core/trpc";
 import { repProcedure } from "../_core/workspace";
 import { recordAudit } from "../audit";
+
+/**
+ * The version a save is based on: the map's updatedAt, in whole seconds, which
+ * is all a MySQL timestamp keeps. saveCanvas writes a whole second so the value
+ * it returns is the value a later read gives back.
+ */
+const canvasVersion = (d: Date | string | null | undefined) => (d ? Math.floor(new Date(d).getTime() / 1000) : 0);
 
 // ---------------------------------------------------------------------------
 // Mindmap list & CRUD
@@ -96,35 +104,44 @@ const mindmapsRouter = router({
         .from(mindmapEdges)
         .where(and(eq(mindmapEdges.mindmapId, input.id), eq(mindmapEdges.workspaceId, ctx.workspace.id)));
 
-      return { map, nodes, edges };
+      return { map, nodes, edges, version: canvasVersion(map.updatedAt) };
     }),
 
+  // The limits are the columns' (drizzle/schema.ts): an over-long label used to
+  // pass here and fail the insert AFTER the delete, leaving the map empty (G22).
   saveCanvas: repProcedure
     .input(
       z.object({
         id: z.number(),
+        /**
+         * The version (getCanvas.version, or the last save's) this canvas was
+         * built from. When the map has been saved since, the save is refused
+         * rather than overwriting the newer copy with an older one (G22). Left
+         * out, the save overwrites (the "keep mine" choice).
+         */
+        baseVersion: z.number().int().optional(),
         nodes: z.array(
           z.object({
-            id: z.string(),
+            id: z.string().min(1).max(64),
             type: z.enum(["root", "topic", "subtopic", "task", "note", "idea"]),
-            label: z.string(),
-            notes: z.string().optional(),
+            label: z.string().max(240),
+            notes: z.string().max(20_000).optional(),
             posX: z.number(),
             posY: z.number(),
-            color: z.string().optional(),
-            parentId: z.string().optional(),
-            linkedEntityType: z.string().optional(),
+            color: z.string().max(30).optional(),
+            parentId: z.string().max(64).optional(),
+            linkedEntityType: z.string().max(30).optional(),
             linkedEntityId: z.number().optional(),
           })
-        ),
+        ).max(2_000),
         edges: z.array(
           z.object({
-            id: z.string(),
-            source: z.string(),
-            target: z.string(),
-            label: z.string().optional(),
+            id: z.string().min(1).max(64),
+            source: z.string().min(1).max(64),
+            target: z.string().min(1).max(64),
+            label: z.string().max(120).optional(),
           })
-        ),
+        ).max(4_000),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -138,52 +155,64 @@ const mindmapsRouter = router({
         .from(mindmaps)
         .where(and(eq(mindmaps.id, input.id), eq(mindmaps.workspaceId, wsId)));
       if (!map) throw new Error("Mindmap not found");
-
-      // Atomic replace: delete all existing nodes/edges then re-insert
-      await db
-        .delete(mindmapEdges)
-        .where(and(eq(mindmapEdges.mindmapId, input.id), eq(mindmapEdges.workspaceId, wsId)));
-      await db
-        .delete(mindmapNodes)
-        .where(and(eq(mindmapNodes.mindmapId, input.id), eq(mindmapNodes.workspaceId, wsId)));
-
-      if (input.nodes.length > 0) {
-        await db.insert(mindmapNodes).values(
-          input.nodes.map((n) => ({
-            id: n.id,
-            mindmapId: input.id,
-            workspaceId: wsId,
-            type: n.type,
-            label: n.label,
-            notes: n.notes ?? null,
-            posX: Math.round(n.posX),
-            posY: Math.round(n.posY),
-            color: n.color ?? null,
-            parentId: n.parentId ?? null,
-            linkedEntityType: n.linkedEntityType ?? null,
-            linkedEntityId: n.linkedEntityId ?? null,
-          }))
-        );
+      if (input.baseVersion !== undefined && canvasVersion(map.updatedAt) !== input.baseVersion) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This map was saved somewhere else after you opened it.",
+        });
       }
 
-      if (input.edges.length > 0) {
-        await db.insert(mindmapEdges).values(
-          input.edges.map((e) => ({
-            id: e.id,
-            mindmapId: input.id,
-            workspaceId: wsId,
-            source: e.source,
-            target: e.target,
-            label: e.label ?? null,
-          }))
-        );
-      }
+      // Replace every node and edge in one transaction: the old code deleted
+      // first and inserted after with none, so a failed insert left the map
+      // empty (G22). A failure now leaves the map as it was.
+      const savedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(mindmapEdges)
+          .where(and(eq(mindmapEdges.mindmapId, input.id), eq(mindmapEdges.workspaceId, wsId)));
+        await tx
+          .delete(mindmapNodes)
+          .where(and(eq(mindmapNodes.mindmapId, input.id), eq(mindmapNodes.workspaceId, wsId)));
 
-      // Bump updatedAt on the mindmap
-      await db
-        .update(mindmaps)
-        .set({ updatedAt: new Date() })
-        .where(and(eq(mindmaps.id, input.id), eq(mindmaps.workspaceId, wsId)));
+        if (input.nodes.length > 0) {
+          await tx.insert(mindmapNodes).values(
+            input.nodes.map((n) => ({
+              id: n.id,
+              mindmapId: input.id,
+              workspaceId: wsId,
+              type: n.type,
+              label: n.label,
+              notes: n.notes ?? null,
+              posX: Math.round(n.posX),
+              posY: Math.round(n.posY),
+              color: n.color ?? null,
+              parentId: n.parentId ?? null,
+              linkedEntityType: n.linkedEntityType ?? null,
+              linkedEntityId: n.linkedEntityId ?? null,
+            }))
+          );
+        }
+
+        if (input.edges.length > 0) {
+          await tx.insert(mindmapEdges).values(
+            input.edges.map((e) => ({
+              id: e.id,
+              mindmapId: input.id,
+              workspaceId: wsId,
+              source: e.source,
+              target: e.target,
+              label: e.label ?? null,
+            }))
+          );
+        }
+
+        // Bump updatedAt on the mindmap: it is the canvas's version.
+        await tx
+          .update(mindmaps)
+          .set({ updatedAt: savedAt })
+          .where(and(eq(mindmaps.id, input.id), eq(mindmaps.workspaceId, wsId)));
+      });
+      return { version: canvasVersion(savedAt) };
     }),
 
   // ---------------------------------------------------------------------------

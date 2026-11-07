@@ -24,6 +24,7 @@ import { useLocation, useParams } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { canOpenWorkspace } from "@/lib/activeWorkspace";
 import { Building2 as WsIcon, Check as WsCheck, ChevronsUpDown as WsChevrons } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -75,10 +76,7 @@ import {
   Loader2,
   Send,
   Pencil,
-  Plus,
-  Cloud,
   Database,
-  Share2,
   KeyRound,
   Smartphone,
   Phone,
@@ -135,7 +133,9 @@ const GROUPS: HubGroup[] = [
       { id: "branding", label: "Branding", icon: Palette, internal: true },
       { id: "proposals", label: "Proposals", icon: FileText, internal: true },
       { id: "billing", label: "Billing and credits", icon: CreditCard, internal: true },
-      { id: "system-activity", label: "System activity", icon: Activity, href: "/audit" },
+      // "Audit log", the page's own title: as "System activity" it read as a
+      // different page (the Shell's admin menu made the same fix) (G51).
+      { id: "system-activity", label: "Audit log", icon: Activity, href: "/audit" },
       { id: "tour-builder", label: "Tour builder", icon: Zap, href: "/tour-builder" },
       { id: "danger", label: "Danger zone", icon: AlertTriangle, internal: true },
     ],
@@ -158,10 +158,15 @@ export default function SettingsHub() {
   const [, navigate] = useLocation();
   const [query, setQuery] = useState("");
 
-  // Unknown/absent section → Profile (the default landing subpage).
-  const section = GROUPS.flatMap((g) => g.items).some((i) => i.internal && i.id === params.section)
-    ? (params.section as string)
-    : "profile";
+  // Absent section → Profile (the default landing subpage). A row that links
+  // out, reached by its id, goes where the rail would send it; an id that is no
+  // section says so. Both used to show Profile as if it had been asked for (G51).
+  const askedItem = params.section ? GROUPS.flatMap((g) => g.items).find((i) => i.id === params.section) : undefined;
+  const unknownSection = !!params.section && !askedItem ? params.section : null;
+  useEffect(() => {
+    if (askedItem && !askedItem.internal && askedItem.href) navigate(askedItem.href, { replace: true });
+  }, [askedItem, navigate]);
+  const section = askedItem?.internal ? askedItem.id : "profile";
 
   // "Billing and credits" is the one section behind a per-member permission
   // (access_billing). Granted by default — only an explicit deny row on the
@@ -283,7 +288,15 @@ export default function SettingsHub() {
             <SettingsWorkspaceSwitcher />
           </div>
         </div>
-        {section === "profile" && <ProfileSection />}
+        {unknownSection ? (
+          <div role="alert" className="max-w-xl rounded-xl border bg-card p-5">
+            <div className="text-sm font-semibold">There is no settings section called “{unknownSection}”</div>
+            <p className="mt-1 text-sm text-muted-foreground">The link may be out of date. Pick a section on the left, or go to your profile.</p>
+            <button type="button" onClick={() => navigate("/v2/settings/profile", { replace: true })} className="mt-3 text-sm font-medium text-primary hover:underline">
+              Go to Profile
+            </button>
+          </div>
+        ) : section === "profile" && <ProfileSection />}
         {section === "mailboxes" && <MailboxesSection />}
         {section === "voice-agents" && <VoiceAgentsSection />}
         {section === "knowledge" && <KnowledgeSection />}
@@ -554,23 +567,18 @@ function GeneralTab(props: {
         </div>
       </SettingsCard>
 
-      {/* CRM connection */}
+      {/* CRM connection. Says what is true (audit 2026-10-20, G68): it used to
+          show three made-up CRM tiles and "Your team has not connected a CRM",
+          but there is no CRM integration to connect. Velocity is the CRM. */}
       <SettingsCard title="CRM connection">
         <div className="flex items-start gap-5">
-          <div className="grid grid-cols-2 gap-2 shrink-0">
-            <button
-              type="button"
-              title="Browse integrations"
-              onClick={() => navigate("/v2/settings/integrations")}
-              className="flex size-12 items-center justify-center rounded-xl border-2 border-dashed border-amber-400/70 text-amber-500 transition-colors hover:bg-amber-50 dark:hover:bg-amber-950/30"
-            >
-              <Plus className="size-6" />
-            </button>
-            <div className="flex size-12 items-center justify-center rounded-xl bg-orange-500 text-white shadow-sm"><Share2 className="size-6" /></div>
-            <div className="flex size-12 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-sm"><Database className="size-6" /></div>
-            <div className="flex size-12 items-center justify-center rounded-xl bg-sky-500 text-white shadow-sm"><Cloud className="size-6" /></div>
+          <div className="flex size-12 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground"><Database className="size-6" aria-hidden="true" /></div>
+          <div className="space-y-2 pt-1">
+            <p className="text-[13px] text-muted-foreground">
+              Your accounts, people and deals live in Velocity. Connecting an outside CRM such as Salesforce or HubSpot isn't available yet.
+            </p>
+            <Button variant="outline" size="sm" onClick={() => navigate("/v2/settings/integrations")}>See integrations</Button>
           </div>
-          <p className="text-[13px] text-muted-foreground pt-1">Your team has not connected a CRM</p>
         </div>
       </SettingsCard>
 
@@ -982,7 +990,8 @@ function ChangeEmailDialog({ open, onClose, hasPassword, currentEmail }: { open:
   const [password, setPassword] = useState("");
   const change = trpc.profile.changeMyEmail.useMutation({
     onSuccess: (r: any) => {
-      toast.success(`Login email changed to ${r.email}`);
+      // Nothing has changed yet (audit G32): the new address must confirm.
+      toast.success(`We sent a confirmation link to ${r.email}. Your login email changes when you open it.`);
       utils.profile.getMe.invalidate();
       setNext(""); setPassword("");
       onClose();
@@ -997,7 +1006,7 @@ function ChangeEmailDialog({ open, onClose, hasPassword, currentEmail }: { open:
           <DialogTitle>Change login email</DialogTitle>
           <DialogDescription>
             {hasPassword
-              ? `Currently ${currentEmail}. Confirm with your password — you'll use the new email at your next sign-in.`
+              ? `Currently ${currentEmail}. Confirm with your password. We'll email a link to the new address, and tell ${currentEmail}; the change happens when the link is opened.`
               : "Your sign-in is managed by your identity provider, so the login email can't be changed here."}
           </DialogDescription>
         </DialogHeader>
@@ -1083,15 +1092,18 @@ function SettingsWorkspaceSwitcher() {
       </button>
       {open && (
         <div className="absolute left-0 right-0 top-full z-40 mt-1 rounded-md border bg-popover p-1 shadow-lg">
+          {/* Archived: badged, and open to super admins only (G36), as in Shell. */}
           {workspaces.map((w) => (
             <button
               key={w.id}
               type="button"
+              disabled={!canOpenWorkspace(w)}
               onClick={() => { setOpen(false); if (w.id !== current?.id) switchTo(w.id); }}
-              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] hover:bg-muted"
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] hover:bg-muted disabled:opacity-60 disabled:hover:bg-transparent"
             >
               {current?.id === w.id ? <WsCheck className="size-3.5 shrink-0 text-primary" /> : <span className="size-3.5 shrink-0" />}
               <span className="min-w-0 flex-1 truncate">{w.name}</span>
+              {w.archivedAt && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">Archived</span>}
             </button>
           ))}
         </div>

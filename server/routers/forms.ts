@@ -12,13 +12,15 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { enrollments, forms, formSubmissions, leads } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { isWorkspaceLive } from "../_core/workspaceArchive";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
 import { publicProcedure } from "../_core/trpc";
 import { repProcedure, workspaceProcedure } from "../_core/workspace";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "../_core/activeMembers";
 import { notifyLeadRouted } from "../services/policyNotify";
-import { assertRowInWorkspace } from "../services/foreignIds";
+import { assertRowInWorkspace, sequenceInWorkspace } from "../services/foreignIds";
+import { cleanSubmission, submissionData } from "../services/publicSubmission";
 import { isAllowedRedirect, REDIRECT_URL_ERROR, safeRedirectUrl } from "@shared/safeRedirect";
 
 const FIELD = z.object({ key: z.string(), label: z.string(), required: z.boolean().optional() });
@@ -48,6 +50,7 @@ export const formsRouter = router({
     if (!db) return null;
     const [row] = await db.select().from(forms).where(eq(forms.publicId, input.publicId));
     if (!row || row.status !== "active") return null;
+    if (!(await isWorkspaceLive(row.workspaceId))) return null;
     return { id: row.id, publicId: row.publicId, title: row.title, description: row.description, fields: row.fields, redirectUrl: safeRedirectUrl(row.redirectUrl) };
   }),
 
@@ -153,14 +156,19 @@ export const formsRouter = router({
    * records the submission.
    */
   submit: publicProcedure
-    .input(z.object({ publicId: z.string(), data: z.record(z.string(), z.any()) }))
+    .input(z.object({ publicId: z.string().max(64), data: submissionData }))
     .mutation(async ({ input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [form] = await db.select().from(forms).where(eq(forms.publicId, input.publicId));
       if (!form || form.status !== "active") throw new TRPCError({ code: "NOT_FOUND", message: "Form not available" });
+      if (!(await isWorkspaceLive(form.workspaceId))) throw new TRPCError({ code: "NOT_FOUND", message: "Form not available" });
 
-      const data = input.data ?? {};
+      // Only the form's own fields, as text, required ones filled (G41).
+      const cleaned = cleanSubmission(form.fields, input.data ?? {});
+      // A filled honeypot is a bot: it is told it worked, and nothing is kept.
+      if (cleaned.bot) return { ok: true, redirectUrl: safeRedirectUrl(form.redirectUrl) };
+      const data = cleaned.data;
       const email = str(data.email, 320);
       const rawName = str(data.name, 200);
       const firstName = str(data.firstName, 80) ?? (rawName ? rawName.split(" ")[0] : null);
@@ -179,8 +187,10 @@ export const formsRouter = router({
         let ownerUserId: number | null = await activeOwnerOrNull(form.workspaceId, form.createdByUserId);
         if (form.autoRoute) {
           try {
-            const { routeLeadOwner } = await import("./leadScoring");
-            routedToUserId = await routeLeadOwner(form.workspaceId, { title, company, source: "webform", score: 0, industry: null, country: null, state: null, city: null } as any);
+            const { routeLeadOwner, createTimeScore } = await import("./leadScoring");
+            // Rules on Score see the score the lead is created with (audit P13).
+            const { total: score } = await createTimeScore(form.workspaceId, { title, company, email, phone, source: "webform" });
+            routedToUserId = await routeLeadOwner(form.workspaceId, { title, company, source: "webform", score, industry: null, country: null, state: null, city: null } as any);
             if (routedToUserId) ownerUserId = routedToUserId;
           } catch (e) { console.error("[FormSubmit] routing failed:", e); }
         }
@@ -199,6 +209,8 @@ export const formsRouter = router({
           } as never);
           leadId = Number((r as any)[0]?.insertId ?? 0) || null;
         } catch (e) { console.error("[FormSubmit] lead insert failed:", e); }
+        // Scored on creation (audit P12), without a model call; never throws.
+        if (leadId) await (await import("./leadScoring")).rescoreLead(form.workspaceId, leadId);
 
         // Tell whoever it landed on. Awaited rather than fire-and-forget: it is
         // one insert, and a lead captured but unannounced is the whole bug —
@@ -238,22 +250,27 @@ export const formsRouter = router({
 
         if (leadId && form.autoEnrollSequenceId) {
           try {
-            // Every submit inserts a NEW lead above, so a repeat submitter would
-            // otherwise collect one active enrollment per submission and receive
-            // every step of the sequence that many times. Keyed on email, not
-            // leadId, for exactly that reason.
-            const { hasActiveEnrollmentForEmail } = await import("../services/enrollmentDedupe");
-            if (await hasActiveEnrollmentForEmail(db, form.workspaceId, form.autoEnrollSequenceId, email)) {
-              console.log(`[FormSubmit] ${email} already active in sequence ${form.autoEnrollSequenceId} — not re-enrolling`);
+            // The form's own workspace's sequence, or nobody is enrolled (G4).
+            if (!(await sequenceInWorkspace(db, form.workspaceId, form.autoEnrollSequenceId))) {
+              console.warn(`[FormSubmit] form ${form.id} names sequence ${form.autoEnrollSequenceId}, which is not in its workspace — not enrolling`);
             } else {
-              await db.insert(enrollments).values({
-                workspaceId: form.workspaceId,
-                sequenceId: form.autoEnrollSequenceId,
-                leadId,
-                status: "active",
-                currentStep: 0,
-                nextActionAt: new Date(),
-              } as never);
+              // Every submit inserts a NEW lead above, so a repeat submitter would
+              // otherwise collect one active enrollment per submission and receive
+              // every step of the sequence that many times. Keyed on email, not
+              // leadId, for exactly that reason.
+              const { hasActiveEnrollmentForEmail } = await import("../services/enrollmentDedupe");
+              if (await hasActiveEnrollmentForEmail(db, form.workspaceId, form.autoEnrollSequenceId, email)) {
+                console.log(`[FormSubmit] ${email} already active in sequence ${form.autoEnrollSequenceId} — not re-enrolling`);
+              } else {
+                await db.insert(enrollments).values({
+                  workspaceId: form.workspaceId,
+                  sequenceId: form.autoEnrollSequenceId,
+                  leadId,
+                  status: "active",
+                  currentStep: 0,
+                  nextActionAt: new Date(),
+                } as never);
+              }
             }
           } catch (e) { console.error("[FormSubmit] enroll failed:", e); }
         }

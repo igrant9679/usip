@@ -2,12 +2,28 @@
  * ARE — Campaigns Router
  *
  * Manages autonomous prospecting campaign lifecycle:
- *   list, get, create, update, setStatus, approveBatch
+ *   list, get, create, update, setStatus
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, like, lte, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { areCampaigns, areEngineLogs, campaignRoutingSuggestions, personas, prospectIntelligence, prospectQueue, prospects, researchSectors, sequences, workspaceSettings } from "../../../drizzle/schema";
+
+/**
+ * A first launch asks for the workspace's time zone while it is still the UTC
+ * default (audit 2026-10-20, A31). The cap and the window moved to the
+ * workspace's zone, but a workspace that never chose one still ran on UTC with
+ * nothing saying so. A workspace that wants UTC launches with confirmTimezone.
+ */
+async function assertTimezoneChosen(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number): Promise<void> {
+  const [row] = await db
+    .select({ timezone: workspaceSettings.timezone })
+    .from(workspaceSettings)
+    .where(eq(workspaceSettings.workspaceId, workspaceId))
+    .limit(1);
+  const tz = String(row?.timezone ?? "").trim();
+  if (!tz || tz === "UTC") throw new TRPCError({ code: "PRECONDITION_FAILED", message: TIMEZONE_UNSET_ON_LAUNCH });
+}
 
 /** A caller-chosen research sector must be this workspace's. */
 async function assertResearchSectorInWorkspace(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, sectorId: number, workspaceId: number) {
@@ -24,9 +40,10 @@ import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../../_c
 import { DISCOVERY_REST_MS, ENGINE_LOG_RETENTION_DAYS, runAreEngine } from "../../areEngine";
 import { getWorkspaceSendWindow } from "../../services/sendWindow";
 import { getWorkspaceTimezone, startOfLocalDay } from "../../services/workspaceTimezone";
-import { describeSendWindow, isWithinSendWindow, nextSendWindowOpening } from "@shared/sendWindow";
+import { TIMEZONE_UNSET_ON_LAUNCH, describeSendWindow, isWithinSendWindow, nextSendWindowOpening } from "@shared/sendWindow";
 import { promoteApprovedProspects } from "../../services/are/approvePromotion";
 import { respaceOverdueSteps } from "../../services/are/stepHold";
+import { recountCampaignCounters } from "../../services/are/campaignCounters";
 import { campaignCapMessage, campaignHeadroom } from "../../services/are/campaignConcurrency";
 import { getAreHubFunnelTotals } from "../../services/performanceMetrics";
 import { recordAudit } from "../../audit";
@@ -34,6 +51,7 @@ import { invokeLLM, contentText } from "../../_core/llm";
 import { ARE_DEFAULT_SOURCES, ARE_SOURCES, campaignSources, discoveryIsOff, normalizeSources, resolveSourceOrder, type AreSourceId } from "@shared/areSources";
 import { MIN_STEP_GAP_DAYS, MAX_STEP_GAP_DAYS, effectiveStepGapDays, planRespaceForProspect, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { areExecutionQueue, spendLedger } from "../../../drizzle/schema";
+import { EMPTY_FIXED_COPY, usableFixedSteps } from "@shared/areFixedCopy";
 import { describeSources } from "../../services/prospectSources/registry";
 import { spendDay } from "../../services/spend";
 
@@ -58,8 +76,9 @@ const POOL_HELD_MARKER = "email steps held and re-scheduled: ";
 const DISCOVERY_SUMMARY_MARKER = "Discovery slice ";
 
 export const campaignsRouter = router({
+  /** A page of campaigns, newest first; `count` is how many there are (audit 2026-10-20, A62). */
   list: workspaceProcedure
-    .input(z.object({ status: z.string().optional(), limit: z.number().default(50) }))
+    .input(z.object({ status: z.string().optional(), limit: z.number().int().min(1).max(200).default(50), offset: z.number().int().min(0).default(0) }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -71,8 +90,23 @@ export const campaignsRouter = router({
         .select()
         .from(areCampaigns)
         .where(and(...conditions))
-        .orderBy(desc(areCampaigns.createdAt))
-        .limit(input.limit);
+        // The id breaks createdAt ties, so a campaign is on exactly one page.
+        .orderBy(desc(areCampaigns.createdAt), desc(areCampaigns.id))
+        .limit(input.limit)
+        .offset(input.offset);
+    }),
+
+  count: workspaceProcedure
+    .input(z.object({ status: z.string().optional() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const conditions = [eq(areCampaigns.workspaceId, ctx.workspace.id)];
+      if (input.status) {
+        conditions.push(eq(areCampaigns.status, input.status as "draft" | "active" | "paused" | "completed"));
+      }
+      const [row] = await db.select({ n: sql<number>`count(*)` }).from(areCampaigns).where(and(...conditions));
+      return { total: Number(row?.n ?? 0) };
     }),
 
   /**
@@ -99,7 +133,15 @@ export const campaignsRouter = router({
         .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!campaign) throw new TRPCError({ code: "NOT_FOUND" });
-      return campaign;
+      // The header's counters, recounted now (A50): the engine only recounts
+      // active campaigns, so a paused one's header froze. Stored back, so the
+      // campaign list and the hub read the same numbers. A failed recount
+      // leaves the stored ones: the page still opens.
+      const counters = await recountCampaignCounters(db, ctx.workspace.id, campaign.id).catch((e) => {
+        console.error(`[are.campaigns.get] recount failed for campaign ${campaign.id}:`, (e as Error)?.message ?? e);
+        return {};
+      });
+      return { ...campaign, ...counters };
     }),
 
   create: workspaceProcedure
@@ -158,11 +200,14 @@ export const campaignsRouter = router({
          * 10-minute cron tick.
          */
         launch: z.boolean().default(false),
+        /** Launch even though the workspace's zone is still the UTC default (A31). */
+        confirmTimezone: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      if (input.launch && !input.confirmTimezone) await assertTimezoneChosen(db, ctx.workspace.id);
 
       // Resolve persona → seed icpOverrides if a personaId was supplied.
       let icpOverrides: any = input.icpOverrides;
@@ -325,8 +370,8 @@ export const campaignsRouter = router({
         firstName: prospects.firstName, lastName: prospects.lastName, title: prospects.title, company: prospects.company,
       })
         .from(campaignRoutingSuggestions)
-        .innerJoin(areCampaigns, eq(areCampaigns.id, campaignRoutingSuggestions.campaignId))
-        .innerJoin(prospects, eq(prospects.id, campaignRoutingSuggestions.prospectId))
+        .innerJoin(areCampaigns, and(eq(areCampaigns.id, campaignRoutingSuggestions.campaignId), eq(areCampaigns.workspaceId, campaignRoutingSuggestions.workspaceId)))
+        .innerJoin(prospects, and(eq(prospects.id, campaignRoutingSuggestions.prospectId), eq(prospects.workspaceId, campaignRoutingSuggestions.workspaceId)))
         .where(and(eq(campaignRoutingSuggestions.workspaceId, ctx.workspace.id), eq(campaignRoutingSuggestions.status, "pending")))
         .orderBy(desc(campaignRoutingSuggestions.fit), desc(campaignRoutingSuggestions.id))
         .limit(input?.limit ?? 50);
@@ -592,6 +637,25 @@ export const campaignsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const { id, ...rest } = input;
+      // A fixed-copy campaign with no usable step fails every prospect's
+      // sequence (audit 2026-10-20, A47), so it is refused here, whichever of
+      // the two fields this save changes.
+      if (rest.copyMode !== undefined || rest.fixedSteps !== undefined) {
+        let mode: string | null | undefined = rest.copyMode;
+        let steps: unknown = rest.fixedSteps;
+        if (mode === undefined || steps === undefined) {
+          const [cur] = await db
+            .select({ copyMode: areCampaigns.copyMode, fixedSteps: areCampaigns.fixedSteps })
+            .from(areCampaigns)
+            .where(and(eq(areCampaigns.id, id), eq(areCampaigns.workspaceId, ctx.workspace.id)))
+            .limit(1);
+          mode ??= cur?.copyMode;
+          if (steps === undefined) steps = cur?.fixedSteps;
+        }
+        if (mode === "fixed" && usableFixedSteps(steps) === 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: EMPTY_FIXED_COPY });
+        }
+      }
       const updates: Partial<typeof areCampaigns.$inferInsert> = {};
       if (rest.name !== undefined) updates.name = rest.name;
       if (rest.description !== undefined) updates.description = rest.description;
@@ -665,6 +729,33 @@ export const campaignsRouter = router({
     }),
 
   /**
+   * How many prospects a fit gate of `minConfidence` would reject (audit
+   * 2026-10-20, A14). The engine's screen pass rejects, within a tick, every
+   * row scored above 0 and below the gate that is not enriched yet
+   * (areEngine, "1a. Reject what can never be enriched"), so moving the slider
+   * up is a mass rejection. Same predicate, counted, so Settings can say how
+   * many before it saves.
+   */
+  fitGatePreview: workspaceProcedure
+    .input(z.object({ id: z.number().int(), minConfidence: z.number().int().min(0).max(100) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [row] = await db
+        .select({ n: sql<number>`count(*)` })
+        .from(prospectQueue)
+        .where(and(
+          eq(prospectQueue.campaignId, input.id),
+          eq(prospectQueue.workspaceId, ctx.workspace.id),
+          inArray(prospectQueue.sequenceStatus, ["pending", "sourcing"]),
+          inArray(prospectQueue.enrichmentStatus, ["pending", "enriching"]),
+          gt(prospectQueue.icpMatchScore, 0),
+          lt(prospectQueue.icpMatchScore, input.minConfidence),
+        ));
+      return { wouldReject: Number(row?.n ?? 0) };
+    }),
+
+  /**
    * Move a campaign's PENDING steps onto its cadence grid (0169): for every
    * in-flight prospect, the k-th step of the ordered sequence is due at
    * first-send + k × stepGapDays (a never-touched prospect keeps its first
@@ -734,7 +825,12 @@ export const campaignsRouter = router({
     }),
 
   setStatus: workspaceProcedure
-    .input(z.object({ id: z.number(), status: z.enum(["draft", "active", "paused", "completed"]) }))
+    .input(z.object({
+      id: z.number(),
+      status: z.enum(["draft", "active", "paused", "completed"]),
+      /** Launch even though the workspace's zone is still the UTC default (A31). */
+      confirmTimezone: z.boolean().optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -743,10 +839,15 @@ export const campaignsRouter = router({
         // slot it is being counted against, so a no-op re-save (or a second
         // click on Start) would fail at exactly the limit and look like a bug.
         const [current] = await db
-          .select({ status: areCampaigns.status })
+          .select({ status: areCampaigns.status, startedAt: areCampaigns.startedAt })
           .from(areCampaigns)
           .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)))
           .limit(1);
+        // A first launch only: a campaign that has run before already ran in
+        // whatever zone the workspace has, and resuming it is not the moment.
+        if (current && !current.startedAt && current.status !== "active" && !input.confirmTimezone) {
+          await assertTimezoneChosen(db, ctx.workspace.id);
+        }
         if (current && current.status !== "active") {
           const h = await campaignHeadroom(ctx.workspace.id);
           if (!h.hasRoom) throw new TRPCError({ code: "FORBIDDEN", message: campaignCapMessage(h) });
@@ -836,59 +937,10 @@ export const campaignsRouter = router({
       };
     }),
 
-  /** Approve a batch of prospects for enrollment */
-  approveBatch: workspaceProcedure
-    .input(z.object({ campaignId: z.number(), prospectIds: z.array(z.number()) }))
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      if (input.prospectIds.length === 0) return { approved: 0 };
-
-      let approved = 0;
-      for (const pid of input.prospectIds) {
-        const result = await db
-          .update(prospectQueue)
-          .set({
-            sequenceStatus: "approved",
-            approvedAt: new Date(),
-            approvedByUserId: ctx.user.id,
-          })
-          .where(
-            and(
-              eq(prospectQueue.id, pid),
-              eq(prospectQueue.campaignId, input.campaignId),
-              eq(prospectQueue.workspaceId, ctx.workspace.id),
-            ),
-          );
-        if ((result[0] as { affectedRows?: number }).affectedRows) approved++;
-      }
-
-      // Recount from the queue instead of writing the batch size — the old
-      // `prospectsApproved: input.prospectIds.length` RESET the counter on
-      // every batch (10 approved + 5 more showed 5). A recount is drift-proof
-      // and idempotent. Workspace-scoped (the old update wasn't).
-      const [{ n }] = await db
-        .select({ n: sql<number>`count(*)` })
-        .from(prospectQueue)
-        .where(
-          and(
-            eq(prospectQueue.campaignId, input.campaignId),
-            eq(prospectQueue.workspaceId, ctx.workspace.id),
-            eq(prospectQueue.sequenceStatus, "approved"),
-          ),
-        );
-      await db
-        .update(areCampaigns)
-        .set({ prospectsApproved: Number(n) })
-        .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)));
-
-      // Approved people's companies go to the Companies page (2026-09-15).
-      // Fire-and-forget: association is metadata, never blocks the approval;
-      // the engine's per-tick sweep catches anything this misses.
-      void promoteApprovedProspects(ctx.workspace.id, { campaignId: input.campaignId, queueIds: input.prospectIds });
-
-      return { approved };
-    }),
+  // approveBatch was removed (audit 2026-10-20, A69): no screen called it, and
+  // it approved any row of the campaign whatever its state — rejected,
+  // enrolled or finished. Approving goes through are.prospects.approve,
+  // bulkApprove and approveAllPending, which check.
 
   /**
    * How many people an "Approve all" would approve right now: enriched and
@@ -916,7 +968,7 @@ export const campaignsRouter = router({
    * the tab loads 100 rows, so a client-driven "all" was never all. The
    * COALESCE stamps match `are.prospects.approve` — a row that was already
    * approved keeps its original decision record. Recounts the campaign's
-   * denormalised counter the same way approveBatch does.
+   * denormalised counter from the queue rather than writing a batch size.
    */
   approveAllPending: workspaceProcedure
     .input(z.object({ campaignId: z.number() }))
@@ -934,12 +986,11 @@ export const campaignsRouter = router({
         eq(prospectQueue.enrichmentStatus, "complete"),
       ));
       const approved = Number((r as any)?.[0]?.affectedRows ?? (r as any)?.affectedRows ?? 0);
-      const [{ n }] = await db.select({ n: sql<number>`count(*)` }).from(prospectQueue)
-        .where(and(eq(prospectQueue.campaignId, input.campaignId), eq(prospectQueue.workspaceId, ctx.workspace.id), eq(prospectQueue.sequenceStatus, "approved")));
-      await db.update(areCampaigns).set({ prospectsApproved: Number(n) })
-        .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id)));
+      // The one recount (A50) — "Approved" kept its meaning after Approve all.
+      await recountCampaignCounters(db, ctx.workspace.id, input.campaignId);
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "are_campaign", entityId: input.campaignId, after: { approveAllPending: approved } });
-      // Companies for the newly-approved people — see approveBatch above.
+      // Companies for the newly-approved people (2026-09-15). Fire-and-forget:
+      // association never blocks the approval; the engine's sweep catches misses.
       void promoteApprovedProspects(ctx.workspace.id, { campaignId: input.campaignId, limit: 500 });
       return { approved };
     }),
@@ -1175,6 +1226,10 @@ export const campaignsRouter = router({
         .select({
           working: sql<number>`sum(case when ${prospectQueue.sequenceStatus} <> 'skipped' then 1 else 0 end)`,
           rejected: sql<number>`sum(case when ${prospectQueue.sequenceStatus} = 'skipped' then 1 else 0 end)`,
+          // Staged rows count toward "working" (the engine counts them) but the
+          // Prospects list hides them, so "queue full" over a near-empty list
+          // read as a lie (audit 2026-10-20, A26). Counted apart, and said.
+          staged: sql<number>`sum(case when ${prospectQueue.sequenceStatus} = 'sourcing' then 1 else 0 end)`,
         })
         .from(prospectQueue)
         .where(and(...scoped));
@@ -1206,6 +1261,8 @@ export const campaignsRouter = router({
           working,
           target: campaign.targetProspectCount,
           rejected: Number(queue?.rejected ?? 0),
+          /** Of `working`: discovered without an email, staged while one is found, not on the Prospects list. */
+          staged: Number(queue?.staged ?? 0),
           full: working >= campaign.targetProspectCount,
           /** Below target does not mean searching: discovery rests after an empty run. */
           discoveryRestingUntil: restUntilMs && restUntilMs > Date.now() ? new Date(restUntilMs).toISOString() : null,
@@ -1462,15 +1519,56 @@ export const campaignsRouter = router({
       };
     }),
 
-  delete: workspaceProcedure
+  /**
+   * Delete a campaign: managers only, audited, in one transaction (audit
+   * 2026-10-20, A18). It deleted the campaign row alone, for any member, with
+   * no record. Its people stayed claimed by a campaign that no longer existed,
+   * so they could never join another, and their scheduled steps stayed on the
+   * calendar. Now its unsent steps are stopped and the people still in it are
+   * taken out (canceled, with the reason), and the identity index counts only
+   * rows whose campaign exists, so they are free to join another. Sent steps,
+   * signals and replies are kept: they are those people's history.
+   */
+  delete: managerProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      await db
-        .delete(areCampaigns)
-        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
-      return { success: true };
+      const ws = ctx.workspace.id;
+      const reason = "Campaign deleted";
+      const affected = (res: unknown) => Number((res as Array<{ affectedRows?: number }> | undefined)?.[0]?.affectedRows ?? 0);
+      const done = await db.transaction(async (tx) => {
+        const [campaign] = await tx
+          .select({ id: areCampaigns.id, name: areCampaigns.name, status: areCampaigns.status })
+          .from(areCampaigns)
+          .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ws)))
+          .limit(1);
+        if (!campaign) throw new TRPCError({ code: "NOT_FOUND" });
+        const steps = await tx
+          .update(areExecutionQueue)
+          .set({ status: "skipped", failureReason: reason, executedAt: new Date() })
+          .where(and(
+            eq(areExecutionQueue.workspaceId, ws),
+            eq(areExecutionQueue.campaignId, input.id),
+            inArray(areExecutionQueue.status, ["scheduled", "paused"]),
+          ));
+        const people = await tx
+          .update(prospectQueue)
+          .set({ sequenceStatus: "canceled", rejectedAt: new Date(), rejectionReason: reason })
+          .where(and(
+            eq(prospectQueue.workspaceId, ws),
+            eq(prospectQueue.campaignId, input.id),
+            inArray(prospectQueue.sequenceStatus, ["pending", "approved", "enrolled", "paused", "sourcing"]),
+          ));
+        await tx.delete(areCampaigns).where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ws)));
+        return { campaign, stepsStopped: affected(steps), peopleReleased: affected(people) };
+      });
+      await recordAudit({
+        workspaceId: ws, actorUserId: ctx.user.id, action: "delete", entityType: "are_campaign", entityId: input.id,
+        before: { name: done.campaign.name, status: done.campaign.status },
+        after: { stepsStopped: done.stepsStopped, peopleReleased: done.peopleReleased },
+      });
+      return { success: true, stepsStopped: done.stepsStopped, peopleReleased: done.peopleReleased };
     }),
 
   /**

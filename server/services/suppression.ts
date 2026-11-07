@@ -33,7 +33,7 @@
  * spellings of the same URL or domain.
  */
 import { and, eq, inArray, or } from "drizzle-orm";
-import { areSuppressionList, emailSuppressions } from "../../drizzle/schema";
+import { areSuppressionList, emailSuppressions, prospects } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { normalizeSuppressionEmail } from "../unsubscribe";
 
@@ -128,18 +128,24 @@ function stops(reason: string, channel: SuppressionChannel): boolean {
  * The first suppression that stops contacting this person on this channel, or
  * null. Throws if the database is unreachable: a sender that cannot ask must
  * not assume the answer is no.
+ *
+ * `domain: false` asks about the person only, not their company. A rep
+ * writing from their own mailbox (My Mailbox, O34) must not be refused an
+ * email to an existing customer because the customer's domain is on the
+ * Revenue Engine's do-not-prospect list; the address itself still counts.
  */
 export async function findSuppression(
   workspaceId: number,
   target: SuppressionTarget,
   channel: SuppressionChannel,
+  opts: { domain?: boolean } = {},
 ): Promise<SuppressionHit | null> {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable — suppression could not be checked");
 
   const email = normalizeSuppressionEmail(target.email);
   const liKey = normalizeLinkedinUrl(target.linkedinUrl);
-  const domain = normalizeDomain(target.companyDomain) ?? emailDomain(email);
+  const domain = opts.domain === false ? null : normalizeDomain(target.companyDomain) ?? emailDomain(email);
 
   if (email) {
     const rows = await db
@@ -180,6 +186,44 @@ export async function isPersonSuppressed(
   channel: SuppressionChannel,
 ): Promise<boolean> {
   return (await findSuppression(workspaceId, target, channel)) !== null;
+}
+
+/**
+ * May enrichment give this person a new address? Null means yes.
+ *
+ * Suppression is keyed by what was suppressed (an address, a LinkedIn profile,
+ * a domain), and every send checks the address it is about to use. So a pass
+ * that REPLACES an unsubscribed address with a newly found one made the person
+ * mailable again: the new address is on no list (audit 2026-10-20, P86). Every
+ * writer of a person's email asks this first, before it spends anything, with
+ * every identity it knows: the address on file, the LinkedIn profile, the
+ * domain, and for a campaign row its People row's.
+ *
+ * Bounces don't count, by the same rule the senders use: a bounce says the
+ * address doesn't work, not that the person said no, and finding one that
+ * works is what enrichment is for.
+ */
+export async function suppressionBlockingNewEmail(
+  workspaceId: number,
+  person: SuppressionTarget & { personProspectId?: number | null },
+): Promise<SuppressionHit | null> {
+  const targets: SuppressionTarget[] = [person];
+  if (person.personProspectId) {
+    const db = await getDb();
+    if (!db) throw new Error("Database unavailable — suppression could not be checked");
+    const [p] = await db
+      .select({ email: prospects.email, linkedinUrl: prospects.linkedinUrl, companyDomain: prospects.companyDomain })
+      .from(prospects)
+      .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.id, person.personProspectId)))
+      .limit(1);
+    if (p) targets.push(p);
+  }
+  for (const t of targets) {
+    if (!t.email?.trim() && !t.linkedinUrl?.trim() && !t.companyDomain?.trim()) continue;
+    const hit = await findSuppression(workspaceId, t, "any");
+    if (hit) return hit;
+  }
+  return null;
 }
 
 /** For logs and skip reasons. */

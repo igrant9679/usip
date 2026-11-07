@@ -8,7 +8,7 @@
  * - Remove a suppression (re-enable sending to that address)
  * - See summary counts by reason
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -76,12 +76,25 @@ export function EmailSuppressions() {
 
   const utils = trpc.useUtils();
 
+  // Search runs on the server, across every page (audit 2026-10-20, O53);
+  // it filtered only the page already fetched. A new search starts at page one.
+  const [searchDebounced, setSearchDebounced] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => { setSearchDebounced(search.trim()); setOffset(0); }, 250);
+    return () => clearTimeout(t);
+  }, [search]);
+
   const { data: summary } = trpc.emailSuppressions.summary.useQuery();
-  const { data: rows, isLoading } = trpc.emailSuppressions.list.useQuery({
+  // One row more than the page, to know whether there is a next page: Next
+  // used to show whenever a page was full, and never disabled.
+  const { data: fetched, isLoading } = trpc.emailSuppressions.list.useQuery({
     reason: reasonFilter as any,
-    limit: LIMIT,
+    limit: LIMIT + 1,
     offset,
+    search: searchDebounced || undefined,
   });
+  const rows = (fetched ?? []).slice(0, LIMIT);
+  const hasMore = (fetched?.length ?? 0) > LIMIT;
 
   const addMutation = trpc.emailSuppressions.add.useMutation({
     onSuccess: () => {
@@ -105,9 +118,6 @@ export function EmailSuppressions() {
     onError: (e) => toast.error(e.message),
   });
 
-  const filtered = (rows ?? []).filter((r) =>
-    search ? r.email.toLowerCase().includes(search.toLowerCase()) : true
-  );
 
   const summaryCards = [
     { key: "total", label: "Total Suppressed", icon: Ban, value: summary?.total ?? 0, color: "text-slate-600" },
@@ -192,7 +202,7 @@ export function EmailSuppressions() {
                 <TableRow>
                   <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Loading...</TableCell>
                 </TableRow>
-              ) : filtered.length === 0 ? (
+              ) : rows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center py-12">
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
@@ -205,7 +215,7 @@ export function EmailSuppressions() {
                   </TableCell>
                 </TableRow>
               ) : (
-                filtered.map((row) => {
+                rows.map((row) => {
                   const meta = REASON_LABELS[row.reason] ?? { label: row.reason, color: "" };
                   return (
                     <TableRow key={row.id}>
@@ -243,10 +253,10 @@ export function EmailSuppressions() {
       </Card>
 
       {/* Pagination */}
-      {(rows?.length ?? 0) === LIMIT && (
+      {(offset > 0 || hasMore) && (
         <div className="flex justify-end gap-2 mt-3">
           <Button variant="outline" size="sm" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - LIMIT))}>Previous</Button>
-          <Button variant="outline" size="sm" onClick={() => setOffset(offset + LIMIT)}>Next</Button>
+          <Button variant="outline" size="sm" disabled={!hasMore} onClick={() => setOffset(offset + LIMIT)}>Next</Button>
         </div>
       )}
 

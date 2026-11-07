@@ -14,12 +14,12 @@
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { areScrapeJobs, prospectQueue } from "../../../drizzle/schema";
+import { areCampaigns, areScrapeJobs, prospectQueue } from "../../../drizzle/schema";
 import { getDb } from "../../db";
 import { parseLlmJson } from "./llmJson";
 import { invokeLLM } from "../../_core/llm";
 import { router } from "../../_core/trpc";
-import { workspaceProcedure, isAdminRole } from "../../_core/workspace";
+import { managerProcedure, workspaceProcedure, isAdminRole } from "../../_core/workspace";
 import { cleanScrapedField, isPlaceholderToken, usableDomainOrNull, usableEmailOrNull, usablePhoneOrNull } from "@shared/fieldHygiene";
 import { searchLinkedInProfiles } from "../../services/linkedinLookup";
 import { safeFetch } from "../../services/scraper/ssrfGuard";
@@ -206,11 +206,13 @@ export async function scrapeGoogleBusiness(
       messages: [
         {
           role: "system",
-          content: `You are a B2B prospect researcher. Extract business prospect information ONLY from the provided Google Business search results — never invent businesses that aren't present in the content. Focus on companies matching the ICP: ${icpContext}. For each business found, identify the most likely decision-maker title based on the business type.`,
+          content: `You are a B2B prospect researcher. Extract business prospect information ONLY from the provided Google Business search results — never invent businesses that aren't present in the content. Focus on companies matching the ICP: ${icpContext}. Never invent a person: a name goes in firstName/lastName only if that person's name appears in the content.`,
         },
         {
           role: "user",
-          content: `Search query: "${query}" (results page ${page + 1})\n\nRaw content:\n${rawContent}\n\nExtract up to 10 business prospects that actually appear in the content above. For companies where you cannot find a specific person, use the business owner/manager as the contact. Only output an email if it appears in the content; otherwise leave email blank.`,
+          // Audit 2026-10-20, P73: this asked for "the business owner/manager
+          // as the contact" where no person was found, which invites a name.
+          content: `Search query: "${query}" (results page ${page + 1})\n\nRaw content:\n${rawContent}\n\nExtract up to 10 business prospects that actually appear in the content above. Where the content names no person for a business, leave firstName, lastName and title blank and give the business only. Only output an email if it appears in the content; otherwise leave email blank.`,
         },
       ],
       response_format: PROSPECT_EXTRACTION_SCHEMA,
@@ -222,7 +224,7 @@ export async function scrapeGoogleBusiness(
     const content = result.choices[0]?.message?.content;
     if (!content) continue;
     const parsed = parseLlmJson(content, "scrapeGoogleBusiness");
-    for (const p of (parsed.prospects ?? []) as Array<Record<string, unknown>>) {
+    for (const p of dropUnsourcedPeople((parsed.prospects ?? []) as Array<Record<string, unknown>>, rawContent)) {
       const key = String(p.linkedinUrl || p.email || `${p.firstName}|${p.lastName}|${p.companyName}`).toLowerCase().trim();
       if (!key || seen.has(key)) continue;
       seen.add(key);
@@ -304,7 +306,9 @@ export async function scrapeNews(
       },
       {
         role: "user",
-        content: `News search: "${query}"\n\nContent:\n${rawContent}\n\nFor each company actually mentioned in the content, identify: (1) the trigger event, (2) the most relevant decision-maker to contact, (3) why this trigger event makes them a good prospect right now. Extract up to 10 prospects. Only output an email if it appears in the content.`,
+        // P73: this asked for "the most relevant decision-maker to contact",
+        // which the model answered with a name whether or not one was there.
+        content: `News search: "${query}"\n\nContent:\n${rawContent}\n\nFor each company actually mentioned in the content, identify: (1) the trigger event, (2) a person named in the content in connection with it, if there is one — otherwise leave firstName, lastName and title blank; never supply a name the content does not contain, (3) why this trigger event makes them a good prospect right now. Extract up to 10 prospects. Only output an email if it appears in the content.`,
       },
     ],
     response_format: PROSPECT_EXTRACTION_SCHEMA,
@@ -316,7 +320,38 @@ export async function scrapeNews(
   const content = result.choices[0]?.message?.content;
   if (!content) return [];
   const parsed = parseLlmJson(content, "scrapeNews");
-  return parsed.prospects ?? [];
+  return dropUnsourcedPeople(parsed.prospects ?? [], rawContent);
+}
+
+/**
+ * Research must not invent people (audit 2026-10-20, P73). A name — or an
+ * email — the model returns that is not in the text it was given is taken
+ * off the find, which stays as the company it is about. Compared without
+ * case, accents or punctuation, a name counting when its first and last
+ * words both appear.
+ */
+export function dropUnsourcedPeople(found: Array<Record<string, unknown>>, sourceText: string): Array<Record<string, unknown>> {
+  const fold = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const words = ` ${fold(sourceText).replace(/[^a-z0-9@.]+/g, " ")} `;
+  const hasWord = (w: string) => words.includes(` ${w} `) || words.includes(` ${w}. `);
+  const wordsOf = (s: unknown) => fold(s).replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+  const text = fold(sourceText);
+  return found.map((p) => {
+    const first = wordsOf(p.firstName);
+    const last = wordsOf(p.lastName);
+    const named = first.length > 0 || last.length > 0;
+    const sourced = named && first.every(hasWord) && last.every(hasWord);
+    const email = String(p.email ?? "").trim();
+    const out: Record<string, unknown> = { ...p };
+    if (named && !sourced) {
+      out.firstName = "";
+      out.lastName = "";
+      // A title guessed for the invented person goes with them.
+      out.title = "";
+    }
+    if (email && !text.includes(fold(email))) out.email = "";
+    return out;
+  });
 }
 
 /* ─── Industry events scraper ────────────────────────────────────────────── */
@@ -393,6 +428,15 @@ export async function saveScrapeJobAndQueue(
   sourceType: ScrapeSourceType,
   query: string,
   prospects: Array<Record<string, unknown>>,
+  opts: {
+    /**
+     * The caller already filtered these rows against the workspace's whole
+     * queue and claimed them within its own run (runDiscovery does, once per
+     * run). Reading the whole queue again for every source it saves was the
+     * engine's N+1 (audit 2026-10-20, A34). Every other caller leaves it unset.
+     */
+    identityChecked?: boolean;
+  } = {},
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -402,11 +446,18 @@ export async function saveScrapeJobAndQueue(
   // campaign (one campaign per prospect) and not for the same one (dedup).
   // The engine pre-filters its own discovery; this is the choke point that
   // covers every other caller, so a new ingest path cannot skip the rule.
-  if (campaignId && prospects.length > 0) {
-    const { workspaceQueueIdentityIndex, existingClaim } = await import("../../services/are/queueIdentity");
+  if (campaignId && prospects.length > 0 && !opts.identityChecked) {
+    const { workspaceQueueIdentityIndex, existingClaim, queueIdentityKeys } = await import("../../services/are/queueIdentity");
     const index = await workspaceQueueIdentityIndex(workspaceId);
     const before = prospects.length;
-    prospects = prospects.filter((p) => !existingClaim(index, p));
+    // Claimed as each row is kept (audit A12): the same person twice in one
+    // batch — two spellings of a profile URL, an address in two cases — both
+    // passed a check against the index read before the batch, and both queued.
+    prospects = prospects.filter((p) => {
+      if (existingClaim(index, p)) return false;
+      for (const k of queueIdentityKeys(p)) index.set(k, { rowId: 0, campaignId });
+      return true;
+    });
     const dropped = before - prospects.length;
     if (dropped > 0) {
       console.log(`[scraper] ws=${workspaceId} campaign=${campaignId}: ${dropped} prospect(s) dropped — identity already claimed in this workspace's queue`);
@@ -590,8 +641,27 @@ export async function saveScrapeJobAndQueue(
   }
 }
 
+/**
+ * A scrape's campaign must be this workspace's (audit 2026-10-20, A42): the id
+ * went into the job and every queued row as given, so a scrape could fill
+ * another tenant's campaign queue. Checked before any source is searched.
+ */
+async function assertCampaignHere(workspaceId: number, campaignId: number | null | undefined): Promise<void> {
+  if (campaignId == null) return;
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const [c] = await db.select({ id: areCampaigns.id }).from(areCampaigns)
+    .where(and(eq(areCampaigns.id, campaignId), eq(areCampaigns.workspaceId, workspaceId))).limit(1);
+  if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+}
+
 /* ─── Router ─────────────────────────────────────────────────────────────── */
 
+/**
+ * Running a scrape spends the workspace's source credits and fills a campaign's
+ * review queue, so it is a manager's (audit 2026-10-20, A36). The job list
+ * stays open to everyone.
+ */
 export const scraperRouter = router({
   /** List all scrape jobs for the workspace */
   /**
@@ -619,45 +689,50 @@ export const scraperRouter = router({
     }),
 
   /** Scrape Google Business listings */
-  scrapeGoogleBusiness: workspaceProcedure
+  scrapeGoogleBusiness: managerProcedure
     .input(z.object({ campaignId: z.number().optional(), query: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const prospects = await scrapeGoogleBusiness(ctx.workspace.id, input.campaignId ?? null, input.query, input.icpContext);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "google_business", input.query, prospects);
       return { count: prospects.length, prospects };
     }),
 
   /** LinkedIn search (company-oriented keywords) via real Unipile people search */
-  scrapeLinkedInCompany: workspaceProcedure
+  scrapeLinkedInCompany: managerProcedure
     .input(z.object({ campaignId: z.number().optional(), query: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const prospects = await realLinkedInSearch(ctx, input.query, 25);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "linkedin_company", input.query, prospects);
       return { count: prospects.length, prospects };
     }),
 
   /** LinkedIn people search via real Unipile classic search */
-  scrapeLinkedInPeople: workspaceProcedure
+  scrapeLinkedInPeople: managerProcedure
     .input(z.object({ campaignId: z.number().optional(), query: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const prospects = await realLinkedInSearch(ctx, input.query, 25);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "linkedin_people", input.query, prospects);
       return { count: prospects.length, prospects };
     }),
 
   /** Scrape a specific URL or run a general web search */
-  scrapeWeb: workspaceProcedure
+  scrapeWeb: managerProcedure
     .input(z.object({ campaignId: z.number().optional(), urlOrQuery: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const prospects = await scrapeWeb(ctx.workspace.id, input.campaignId ?? null, input.urlOrQuery, input.icpContext);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "web_scrape", input.urlOrQuery, prospects);
       return { count: prospects.length, prospects };
     }),
 
   /** Monitor news for trigger events and extract prospects */
-  scrapeNews: workspaceProcedure
+  scrapeNews: managerProcedure
     .input(z.object({ campaignId: z.number().optional(), query: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const prospects = await scrapeNews(ctx.workspace.id, input.campaignId ?? null, input.query, input.icpContext);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "news", input.query, prospects);
       return { count: prospects.length, prospects };
@@ -675,16 +750,17 @@ export const scraperRouter = router({
    * `disabled` is read from the map rather than hardcoded, so deleting the
    * entry when a real event-data source is wired in makes this null on its own.
    */
-  scrapeIndustryEvents: workspaceProcedure
+  scrapeIndustryEvents: managerProcedure
     .input(z.object({ campaignId: z.number().optional(), query: z.string().min(3), icpContext: z.string().default("") }))
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const prospects = await scrapeIndustryEvents(ctx.workspace.id, input.campaignId ?? null, input.query, input.icpContext);
       await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId ?? null, "industry_events", input.query, prospects);
       return { count: prospects.length, prospects, disabled: DISABLED_SCRAPE_SOURCES.industry_events ?? null };
     }),
 
-  /** Run all scrapers in parallel for a campaign */
-  runFullScrape: workspaceProcedure
+  /** Run all scrapers for a campaign: they search in parallel and save in turn (A12). */
+  runFullScrape: managerProcedure
     .input(
       z.object({
         campaignId: z.number(),
@@ -700,67 +776,50 @@ export const scraperRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       const results: Record<string, number> = {};
       // A source that cannot run must not arrive as a 0 beside sources that
       // searched and found nobody. Keyed by the same name as `breakdown`, so a
       // caller reading one finds the other.
       const disabled: Record<string, string> = {};
-      const tasks: Promise<void>[] = [];
-
-      if (input.queries.googleBusiness) {
-        tasks.push(
-          scrapeGoogleBusiness(ctx.workspace.id, input.campaignId, input.queries.googleBusiness, input.icpContext)
-            .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "google_business", input.queries.googleBusiness!, p)
-              .then(() => { results.googleBusiness = p.length; })),
-        );
-      }
-      if (input.queries.linkedinCompany) {
-        tasks.push(
-          realLinkedInSearch(ctx, input.queries.linkedinCompany, 25)
-            .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "linkedin_company", input.queries.linkedinCompany!, p)
-              .then(() => { results.linkedinCompany = p.length; })),
-        );
-      }
-      if (input.queries.linkedinPeople) {
-        tasks.push(
-          realLinkedInSearch(ctx, input.queries.linkedinPeople, 25)
-            .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "linkedin_people", input.queries.linkedinPeople!, p)
-              .then(() => { results.linkedinPeople = p.length; })),
-        );
-      }
-      if (input.queries.news) {
-        tasks.push(
-          scrapeNews(ctx.workspace.id, input.campaignId, input.queries.news, input.icpContext)
-            .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "news", input.queries.news!, p)
-              .then(() => { results.news = p.length; })),
-        );
-      }
-      if (input.queries.industryEvents) {
+      const jobs: Array<{ key: string; sourceType: ScrapeSourceType; query: string; scrape: () => Promise<Array<Record<string, unknown>>> }> = [];
+      const q = input.queries;
+      if (q.googleBusiness) jobs.push({ key: "googleBusiness", sourceType: "google_business", query: q.googleBusiness, scrape: () => scrapeGoogleBusiness(ctx.workspace.id, input.campaignId, q.googleBusiness!, input.icpContext) });
+      if (q.linkedinCompany) jobs.push({ key: "linkedinCompany", sourceType: "linkedin_company", query: q.linkedinCompany, scrape: () => realLinkedInSearch(ctx, q.linkedinCompany!, 25) });
+      if (q.linkedinPeople) jobs.push({ key: "linkedinPeople", sourceType: "linkedin_people", query: q.linkedinPeople, scrape: () => realLinkedInSearch(ctx, q.linkedinPeople!, 25) });
+      if (q.news) jobs.push({ key: "news", sourceType: "news", query: q.news, scrape: () => scrapeNews(ctx.workspace.id, input.campaignId, q.news!, input.icpContext) });
+      if (q.industryEvents) {
         const why = DISABLED_SCRAPE_SOURCES.industry_events;
         if (why) disabled.industryEvents = why;
         // Still recorded, so the attempt keeps its place in the audit trail —
         // with its real reason in errorMessage, not the generic one.
-        tasks.push(
-          scrapeIndustryEvents(ctx.workspace.id, input.campaignId, input.queries.industryEvents, input.icpContext)
-            .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "industry_events", input.queries.industryEvents!, p)
-              .then(() => { results.industryEvents = p.length; })),
-        );
+        jobs.push({ key: "industryEvents", sourceType: "industry_events", query: q.industryEvents, scrape: () => scrapeIndustryEvents(ctx.workspace.id, input.campaignId, q.industryEvents!, input.icpContext) });
       }
-      if (input.queries.web) {
-        tasks.push(
-          scrapeWeb(ctx.workspace.id, input.campaignId, input.queries.web, input.icpContext)
-            .then((p) => saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, "web_scrape", input.queries.web!, p)
-              .then(() => { results.web = p.length; })),
-        );
-      }
+      if (q.web) jobs.push({ key: "web", sourceType: "web_scrape", query: q.web, scrape: () => scrapeWeb(ctx.workspace.id, input.campaignId, q.web!, input.icpContext) });
 
-      await Promise.allSettled(tasks);
+      /**
+       * Scraped in parallel, SAVED ONE AT A TIME (audit 2026-10-20, A12). Saved
+       * in parallel, every save read the queue before any of them wrote, so a
+       * person two sources both found was queued twice. In turn, each save
+       * sees what the one before it queued.
+       */
+      const scraped = await Promise.allSettled(jobs.map((j) => j.scrape()));
+      for (let i = 0; i < jobs.length; i++) {
+        const got = scraped[i];
+        if (got.status !== "fulfilled") continue;
+        try {
+          await saveScrapeJobAndQueue(ctx.workspace.id, input.campaignId, jobs[i].sourceType, jobs[i].query, got.value);
+          results[jobs[i].key] = got.value.length;
+        } catch (e) {
+          console.error(`[runFullScrape] saving ${jobs[i].sourceType} failed:`, (e as Error)?.message ?? e);
+        }
+      }
       const total = Object.values(results).reduce((a, b) => a + b, 0);
       return { total, breakdown: results, disabled };
     }),
 
   /** Unified run — dispatches to the right scraper based on source */
-  run: workspaceProcedure
+  run: managerProcedure
     .input(
       z.object({
         campaignId: z.number(),
@@ -770,6 +829,7 @@ export const scraperRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertCampaignHere(ctx.workspace.id, input.campaignId);
       let prospects: any[] = [];
       const { campaignId, source, query } = input;
       if (source === "google_business") {

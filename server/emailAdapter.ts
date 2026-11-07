@@ -40,9 +40,9 @@ export function decryptField(ciphertext: string): string {
  * Mailbox passwords are encrypted when written from 2026-10-24 (audit
  * 2026-10-20, C4: every SMTP and IMAP password sat in plaintext — the
  * schema's "AES-256-GCM encrypted" note on imapPassword described the reader,
- * not the writers). Rows saved before that stay readable as they are until
- * they are next saved, which the owner's rotation of the exposed passwords
- * will do.
+ * not the writers), and OAuth tokens from 2026-11-06. Rows saved before that
+ * are encrypted in place at boot (services/secretBackfill); until that has
+ * run they still read as they are.
  */
 export function readStoredSecret(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -203,7 +203,7 @@ export class ImapSmtpAdapter implements EmailAdapter {
     });
   }
 
-  async listThreads(folder = "INBOX", _pageToken?: string, maxResults = 50): Promise<{ threads: EmailThread[]; nextPageToken?: string }> {
+  async listThreads(folder = "INBOX", pageToken?: string, maxResults = 50): Promise<{ threads: EmailThread[]; nextPageToken?: string }> {
     return this.withImap(folder, async (client) => {
       const lock = await client.getMailboxLock(folder);
       try {
@@ -212,9 +212,15 @@ export class ImapSmtpAdapter implements EmailAdapter {
         // mailbox was most of the Mailbox page's wait (audit 2026-10-20, L8).
         const exists = client.mailbox ? client.mailbox.exists : 0;
         if (!exists) return { threads: [] };
-        const first = Math.max(1, exists - maxResults + 1);
+        // Paged (L8): a later page ends just below the one before it, whose
+        // first sequence number is the token. The token was ignored, so the
+        // list stopped at the newest page and older mail could not be reached.
+        const before = pageToken ? Number(pageToken) : exists + 1;
+        if (!Number.isInteger(before) || before <= 1) return { threads: [] };
+        const last = Math.min(before - 1, exists);
+        const first = Math.max(1, last - maxResults + 1);
         const threads: EmailThread[] = [];
-        for await (const msg of client.fetch(`${first}:*`, { uid: true, flags: true, envelope: true })) {
+        for await (const msg of client.fetch(last === exists ? `${first}:*` : `${first}:${last}`, { uid: true, flags: true, envelope: true })) {
           const env = msg.envelope;
           const from = env?.from?.[0];
           threads.push({
@@ -225,7 +231,7 @@ export class ImapSmtpAdapter implements EmailAdapter {
           });
         }
         threads.sort((a, b) => Number(b.threadId) - Number(a.threadId)); // newest first
-        return { threads };
+        return { threads, nextPageToken: first > 1 ? String(first) : undefined };
       } finally { lock.release(); }
     });
   }

@@ -79,14 +79,12 @@ export async function findDuplicateAccounts(ws: number): Promise<DuplicateGroup[
   ];
   if (groups.length === 0) return [];
 
-  // Linked-contact counts inform which account should be the primary.
+  // People counts inform which account should be the primary: the same
+  // number the company's list row and profile show (R65), not the legacy
+  // contacts.accountId column.
   const ids = groups.flatMap(([, g]) => g.map((r) => r.id));
-  const counts = await db
-    .select({ accountId: contacts.accountId, c: sql<number>`count(*)` })
-    .from(contacts)
-    .where(and(eq(contacts.workspaceId, ws), inArray(contacts.accountId, ids)))
-    .groupBy(contacts.accountId);
-  const byAccount = new Map(counts.map((r) => [Number(r.accountId), Number(r.c)]));
+  const { linkedPeopleCounts } = await import("./profileService");
+  const byAccount = await linkedPeopleCounts(ws, ids);
 
   return groups.map(([key, g, reason]) => ({
     key: reason === "name" ? `name:${key}` : key,

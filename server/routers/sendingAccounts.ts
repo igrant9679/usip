@@ -16,7 +16,7 @@ import {
   workspaceSettings,
 } from "../../drizzle/schema";
 import { router } from "../_core/trpc";
-import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../_core/workspace";
 import {
   DELIVERABILITY_WINDOW_DAYS,
   MIN_DELIVERABILITY_RECIPIENTS,
@@ -246,16 +246,22 @@ const PoolMemberInput = z.object({
   position: z.number().int().optional(),
 });
 
-const PoolCreateInput = z.object({
+// rotationStrategy carries no default here for the reason AccountCreateInput's
+// dailySendLimit doesn't: update takes PoolFields.partial(), which would fill it
+// in and turn a weighted pool round-robin on a rename (same flaw as audit N4).
+const PoolFields = z.object({
   name: z.string().min(1).max(120),
   description: z.string().optional(),
-  rotationStrategy: z.enum(["round_robin", "weighted", "random"]).default("round_robin"),
+  rotationStrategy: z.enum(["round_robin", "weighted", "random"]),
   /**
    * Members can be set in one shot when creating/updating a pool. The
    * UI takes this path; the separate addMember/removeMember endpoints
    * exist for incremental edits but aren't currently used by the page.
    */
   members: z.array(PoolMemberInput).optional(),
+});
+const PoolCreateInput = PoolFields.extend({
+  rotationStrategy: PoolFields.shape.rotationStrategy.default("round_robin"),
 });
 
 // ─── Sending Accounts Router ─────────────────────────────────────────────────
@@ -659,6 +665,9 @@ export const sendingAccountsRouter = router({
         // Encrypted at rest (audit 2026-10-20, C4); every reader decrypts.
         ...(cols.smtpPassword ? { smtpPassword: encryptField(cols.smtpPassword) } : {}),
         ...(cols.imapPassword ? { imapPassword: encryptField(cols.imapPassword) } : {}),
+        // …and the OAuth tokens, which are as good as a password (C4's rest).
+        ...(cols.oauthAccessToken ? { oauthAccessToken: encryptField(cols.oauthAccessToken) } : {}),
+        ...(cols.oauthRefreshToken ? { oauthRefreshToken: encryptField(cols.oauthRefreshToken) } : {}),
         // Defaults applied HERE rather than on the shared schema — see the
         // note on AccountCreateInput. Same values as before for a create.
         dailySendLimit: cols.dailySendLimit ?? 500,
@@ -689,6 +698,8 @@ export const sendingAccountsRouter = router({
       // Mailbox passwords are encrypted at rest (audit 2026-10-20, C4).
       if (typeof patch.smtpPassword === "string" && patch.smtpPassword) patch.smtpPassword = encryptField(patch.smtpPassword);
       if (typeof patch.imapPassword === "string" && patch.imapPassword) patch.imapPassword = encryptField(patch.imapPassword);
+      if (typeof patch.oauthAccessToken === "string" && patch.oauthAccessToken) patch.oauthAccessToken = encryptField(patch.oauthAccessToken);
+      if (typeof patch.oauthRefreshToken === "string" && patch.oauthRefreshToken) patch.oauthRefreshToken = encryptField(patch.oauthRefreshToken);
       await db
         .update(sendingAccounts)
         .set(patch as never)
@@ -889,7 +900,7 @@ export const sendingAccountsRouter = router({
             usingStoredSecret = true;
             stored = { host: existing.smtpHost, port: existing.smtpPort, username: existing.smtpUsername };
           }
-          oauthAccessToken = existing.oauthAccessToken ?? null;
+          oauthAccessToken = readStoredSecret(existing.oauthAccessToken);
         }
       }
       return testSmtpConnection({
@@ -927,7 +938,7 @@ export const sendingAccountsRouter = router({
         smtpUsername: account.smtpUsername,
         smtpPassword: readStoredSecret(account.smtpPassword),
         sesRegion: account.sesRegion,
-        oauthAccessToken: account.oauthAccessToken,
+        oauthAccessToken: readStoredSecret(account.oauthAccessToken),
         // Same resolution as a real send: own copy, else the workspace key.
         // "Check deliverability" reported "API key is required" for every
         // picker-linked mailbox while sending through them worked fine.
@@ -1042,6 +1053,20 @@ export const sendingAccountsRouter = router({
 
 // ─── Sender Pools Router ──────────────────────────────────────────────────────
 
+/**
+ * One row per account in a pool: a duplicate doubled that mailbox's share of
+ * the sends (audit 2026-10-20, O43). The first entry for an account wins.
+ */
+function uniqueByAccount<T extends { accountId: number }>(members: T[]): T[] {
+  const seen = new Set<number>();
+  return members.filter((m) => (seen.has(m.accountId) ? false : (seen.add(m.accountId), true)));
+}
+
+/**
+ * Pools decide which mailboxes a campaign sends from, so changing one takes a
+ * manager (audit 2026-10-20, G52/O43): any rep could rewire them, while the
+ * mailboxes themselves are admin-only. Deleting a pool stays admin-only.
+ */
 export const senderPoolsRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
@@ -1111,13 +1136,14 @@ export const senderPoolsRouter = router({
       return { ...pool, members };
     }),
 
-  create: workspaceProcedure
+  create: managerProcedure
     .input(PoolCreateInput)
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       // Pool row first — strip `members` since it isn't a senderPools column.
-      const { members, ...poolFields } = input;
+      const { members: given, ...poolFields } = input;
+      const members = given ? uniqueByAccount(given) : given;
       const [result] = await db.insert(senderPools).values({
         workspaceId: ctx.workspace.id,
         ...poolFields,
@@ -1175,12 +1201,13 @@ export const senderPoolsRouter = router({
       return { id: poolId, memberCount: members?.length ?? 0 };
     }),
 
-  update: workspaceProcedure
-    .input(PoolCreateInput.partial().extend({ id: z.number().int() }))
+  update: managerProcedure
+    .input(PoolFields.partial().extend({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const { id, members, ...rest } = input;
+      const { id, members: given, ...rest } = input;
+      const members = given ? uniqueByAccount(given) : given;
       // Verify ownership before mutating either pool or members.
       const [existing] = await db
         .select({ id: senderPools.id })
@@ -1285,7 +1312,7 @@ export const senderPoolsRouter = router({
       return { ok: true };
     }),
 
-  addMember: workspaceProcedure
+  addMember: managerProcedure
     .input(
       z.object({
         poolId: z.number().int(),
@@ -1327,6 +1354,17 @@ export const senderPoolsRouter = router({
         });
       }
 
+      const [already] = await db
+        .select({ id: senderPoolMembers.id })
+        .from(senderPoolMembers)
+        .where(and(
+          eq(senderPoolMembers.workspaceId, ctx.workspace.id),
+          eq(senderPoolMembers.poolId, input.poolId),
+          eq(senderPoolMembers.accountId, input.accountId),
+        ))
+        .limit(1);
+      if (already) throw new TRPCError({ code: "CONFLICT", message: "That account is already in this pool." });
+
       const [maxPos] = await db
         .select({ pos: sql<number>`COALESCE(MAX(position), -1)` })
         .from(senderPoolMembers)
@@ -1342,7 +1380,7 @@ export const senderPoolsRouter = router({
       return { ok: true };
     }),
 
-  removeMember: workspaceProcedure
+  removeMember: managerProcedure
     .input(z.object({ memberId: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -1358,7 +1396,7 @@ export const senderPoolsRouter = router({
       return { ok: true };
     }),
 
-  updateMemberWeight: workspaceProcedure
+  updateMemberWeight: managerProcedure
     .input(
       z.object({
         memberId: z.number().int(),

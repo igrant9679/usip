@@ -1,7 +1,7 @@
 /**
  * SequenceSettingsPanel — slide-in right panel for editing sequence-level config:
  * - Sequence name and description
- * - Exit conditions (reply, bounce, unsubscribe, goal_met, manual)
+ * - What stops a person (said, not toggled: see "What stops someone" below)
  * - Sending settings (timezone, send window, skip weekends, reply detection, max steps)
  */
 import { Button } from "@/components/ui/button";
@@ -15,11 +15,6 @@ import { Badge } from "@/components/ui/badge";
 import { Settings2, X } from "lucide-react";
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
-export interface ExitCondition {
-  type: "reply" | "bounce" | "unsubscribe" | "goal_met" | "manual";
-  enabled: boolean;
-}
-
 export interface SequenceSettings {
   timezone?: string;
   sendWindowStart?: string; // "HH:MM" 24h
@@ -34,33 +29,27 @@ interface Props {
   readOnly: boolean;
   name: string;
   description?: string | null;
-  exitConditions: ExitCondition[];
   settings: SequenceSettings;
   onClose: () => void;
   onSave: (patch: {
     name: string;
     description: string;
-    exitConditions: ExitCondition[];
     settings: SequenceSettings;
   }) => void;
 }
 
-/* ─── Default exit conditions ───────────────────────────────────────────── */
-const DEFAULT_EXIT_CONDITIONS: ExitCondition[] = [
-  { type: "reply", enabled: true },
-  { type: "bounce", enabled: true },
-  { type: "unsubscribe", enabled: true },
-  { type: "goal_met", enabled: true },
-  { type: "manual", enabled: true },
+/**
+ * What stops someone, as the engine does it (audit 2026-10-20, O27). This
+ * panel had five "exit condition" switches that were saved and read by
+ * nothing, so turning one off changed nothing and turning one on promised a
+ * stop that never came. They are gone; this says what really happens.
+ */
+export const WHAT_STOPS_SOMEONE = [
+  "A reply pauses them, while Reply detection below is on.",
+  "Unsubscribing, or a do-not-contact entry for their address, LinkedIn profile or company, stops every email and LinkedIn step.",
+  "A bounce stops the email steps; their tasks still come up.",
+  "You can pause or exit anyone by hand from the sequence's contacts.",
 ];
-
-const EXIT_LABELS: Record<string, string> = {
-  reply: "Prospect replies",
-  bounce: "Email hard bounces",
-  unsubscribe: "Prospect unsubscribes",
-  goal_met: "Goal node reached",
-  manual: "Manually exited",
-};
 
 /* ─── Timezone list (abbreviated) ──────────────────────────────────────── */
 /** No zone of its own: the engine uses the workspace's (Settings). */
@@ -99,30 +88,19 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-export function SequenceSettingsPanel({ open, readOnly, name, description, exitConditions, settings, onClose, onSave }: Props) {
+export function SequenceSettingsPanel({ open, readOnly, name, description, settings, onClose, onSave }: Props) {
   const [draftName, setDraftName] = React.useState(name);
   const [draftDesc, setDraftDesc] = React.useState(description ?? "");
-  const [draftExit, setDraftExit] = React.useState<ExitCondition[]>(
-    exitConditions.length > 0 ? exitConditions : DEFAULT_EXIT_CONDITIONS
-  );
   const [draftSettings, setDraftSettings] = React.useState<SequenceSettings>(settings);
 
   // Sync when props change (e.g. after save)
   React.useEffect(() => {
     setDraftName(name);
     setDraftDesc(description ?? "");
-    setDraftExit(exitConditions.length > 0 ? exitConditions : DEFAULT_EXIT_CONDITIONS);
     setDraftSettings(settings);
-  }, [name, description, exitConditions, settings]);
+  }, [name, description, settings]);
 
   if (!open) return null;
-
-  const toggleExit = (type: ExitCondition["type"]) => {
-    if (readOnly) return;
-    setDraftExit((prev) =>
-      prev.map((c) => (c.type === type ? { ...c, enabled: !c.enabled } : c))
-    );
-  };
 
   const patchSettings = (p: Partial<SequenceSettings>) => {
     if (readOnly) return;
@@ -133,7 +111,6 @@ export function SequenceSettingsPanel({ open, readOnly, name, description, exitC
     onSave({
       name: draftName.trim() || name,
       description: draftDesc,
-      exitConditions: draftExit,
       settings: draftSettings,
     });
     onClose();
@@ -174,22 +151,10 @@ export function SequenceSettingsPanel({ open, readOnly, name, description, exitC
 
         <Separator />
 
-        <Section title="Exit conditions">
-          <p className="text-[11px] text-muted-foreground">
-            When any enabled condition is met, the contact is automatically exited from the sequence.
-          </p>
-          <div className="space-y-2">
-            {draftExit.map((cond) => (
-              <div key={cond.type} className="flex items-center justify-between gap-2">
-                <span className="text-xs">{EXIT_LABELS[cond.type]}</span>
-                <Switch aria-label={EXIT_LABELS[cond.type]}
-                  checked={cond.enabled}
-                  disabled={readOnly}
-                  onCheckedChange={() => toggleExit(cond.type)}
-                />
-              </div>
-            ))}
-          </div>
+        <Section title="What stops someone">
+          <ul className="list-disc pl-4 space-y-1 text-[11px] text-muted-foreground">
+            {WHAT_STOPS_SOMEONE.map((line) => <li key={line}>{line}</li>)}
+          </ul>
         </Section>
 
         <Separator />
@@ -246,7 +211,7 @@ export function SequenceSettingsPanel({ open, readOnly, name, description, exitC
           <div className="flex items-center justify-between gap-2">
             <div>
               <div className="text-xs">Reply detection</div>
-              <div className="text-[11px] text-muted-foreground">Auto-exit when a reply is detected</div>
+              <div className="text-[11px] text-muted-foreground">Pause someone's enrolment when they reply</div>
             </div>
             <Switch aria-label="Reply detection"
               checked={draftSettings.replyDetection ?? true}

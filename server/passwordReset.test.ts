@@ -131,7 +131,9 @@ describe("the routes keep their guarantees", () => {
   })();
 
   it("isolated both handlers, and did not run past them", () => {
-    expect(forgot).toContain("await emailPasswordReset(db, user.id);");
+    // 2026-11-06 (audit G31): the handler answers first and sends after, so
+    // the call is no longer awaited; it is still the one way a link is minted.
+    expect(forgot).toContain("void emailPasswordReset(db, user.id)");
     expect(minting.length).toBeGreaterThan(800);
     expect(forgot.length).toBeGreaterThan(400);
     expect(reset.length).toBeGreaterThan(500);

@@ -12,11 +12,12 @@ import dayGridPlugin from "@fullcalendar/daygrid";
 import timeGridPlugin from "@fullcalendar/timegrid";
 import interactionPlugin from "@fullcalendar/interaction";
 import listPlugin from "@fullcalendar/list";
-import { Shell, PageHeader, EmptyState } from "@/components/usip/Shell";
+import { Shell, PageHeader } from "@/components/usip/Shell";
+import { NoCalendarConnected } from "@/components/usip/NoCalendarConnected";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { loadPerUserPref, savePerUserPref } from "@/lib/perUserPref";
-import { REMINDABLE_MEETING_STATUSES } from "@shared/meetingStatus";
+import { REMINDABLE_MEETING_STATUSES, remindableMeetingStatuses } from "@shared/meetingStatus";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,8 +33,9 @@ import {
 } from "lucide-react";
 import { Streamdown } from "@/components/usip/LazyStreamdown";
 import { confirmAction } from "@/components/usip/Common";
-import { rankOf, ROLE_RANK } from "@shared/roleRank";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { pressable } from "@/lib/pressable";
+import { storedAttendees } from "@shared/calendarAttendees";
 
 // ─── Connect Calendar Dialog ───────────────────────────────────────────────────
 
@@ -120,6 +122,10 @@ function ConnectCalendarDialog({ open, onClose }: { open: boolean; onClose: () =
           {isOAuth && (
             <>
               <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
+                <p>
+                  Easier: connect Microsoft 365 on <a href="/connected-accounts" className="underline font-medium text-foreground">Connected Accounts</a> —
+                  no tokens, and your calendar appears here. Use this form only if you manage your own tokens.
+                </p>
                 <p>Obtain tokens from the <strong>Microsoft Azure Portal</strong> (portal.azure.com) or Microsoft OAuth 2.0 Playground. Required scope: <code>Calendars.ReadWrite offline_access</code></p>
               </div>
               <div className="space-y-1">
@@ -210,8 +216,10 @@ function EventDialog({
     toLocalInput(new Date(event?.endAt ?? initialEnd ?? new Date(Date.now() + 3600_000)))
   );
   const [allDay, setAllDay] = useState(event?.allDay ?? false);
+  // Already an array from the JSON column; JSON.parse on it crashed the
+  // dialog for every synced event with attendees (audit 2026-10-20, O20).
   const [attendees, setAttendees] = useState<string>(
-    event?.attendees ? JSON.parse(event.attendees).map((a: any) => a.email).join(", ") : ""
+    storedAttendees(event?.attendees).map((a) => a.email).filter(Boolean).join(", ")
   );
 
   const [aiSummary, setAiSummary] = useState<string | null>(event?.aiSummary ?? null);
@@ -478,14 +486,19 @@ export default function CalendarPage() {
     onError: (e) => toast.error(e.message),
   });
 
-  const isManager = rankOf((user as any)?.role) >= ROLE_RANK.manager;
+  // The workspace role, as calendar's resolveTargetUser checks it (R10).
+  const isManager = useWorkspaceRole().isManager;
 
   // Velocity's OWN meetings (booked by the autopilots, booking links, or by
   // hand) overlay the provider events. Without this, the calendar was empty
   // for everyone who never completed the external-calendar connect flow —
   // while their actual meetings sat one page away on /v2/meetings, invisible
   // here. Read-only on the calendar: clicking one opens the Meetings page.
-  const { data: velocityMeetings } = trpc.meetings.list.useQuery({});
+  // Only the weeks on screen, filtered in SQL (audit 2026-10-20, O41): this
+  // read every meeting the workspace ever had.
+  const { data: velocityMeetings } = trpc.meetings.list.useQuery({
+    statuses: remindableMeetingStatuses(), scheduledFrom: dateRange.from, scheduledTo: dateRange.to,
+  });
 
   // Map DB events to FullCalendar format
   const fcEvents = useMemo(() => {
@@ -545,7 +558,7 @@ export default function CalendarPage() {
 
   return (
     <Shell title="My Calendar">
-      <PageHeader title="My Calendar" description="Schedule and manage meetings, calls, and follow-ups across your entire pipeline. Connect your Google or Outlook calendar to sync events and receive smart scheduling suggestions." pageKey="calendar" 
+      <PageHeader title="My Calendar" description="Schedule and manage meetings, calls, and follow-ups across your entire pipeline. Connect Microsoft 365 / Outlook on Connected Accounts, or an Apple or CalDAV calendar here, to see and create calendar events." pageKey="calendar" 
         icon={<CalendarDays className="size-5" />}
       />
       <div className="h-[calc(100vh-8.5rem)] flex overflow-hidden">
@@ -688,26 +701,19 @@ export default function CalendarPage() {
         </div>
 
         {/* Calendar */}
-        <div className="flex-1 overflow-hidden p-4">
+        <div className="flex-1 overflow-hidden p-4 flex flex-col">
           {eventsLoading && (
             <div className="absolute inset-0 flex items-center justify-center bg-background/50 z-10">
               <Loader2 className="size-6 animate-spin text-muted-foreground" />
             </div>
           )}
-          {accounts?.length === 0 && !accountsLoading ? (
-            <EmptyState
-              icon={CalendarDays}
-              title="No calendar connected"
-              description="Connect a Google, Outlook, or Apple calendar to view and manage your events here."
-              action={
-                !repUserId ? (
-                  <Button onClick={() => setConnectOpen(true)}>
-                    <Plus className="size-4 mr-2" /> Connect Calendar
-                  </Button>
-                ) : undefined
-              }
-            />
-          ) : (
+          {/* Above the calendar, not instead of it: with nothing connected the
+              grid still carries Velocity's own meetings (tracker 2026-11-06,
+              item 6 — see NoCalendarConnected). */}
+          {accounts?.length === 0 && !accountsLoading && (
+            <NoCalendarConnected viewingRep={!!repUserId} onConnect={() => setConnectOpen(true)} />
+          )}
+          <div className="flex-1 min-h-0">
             <FullCalendar
               ref={calendarRef}
               plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin, listPlugin]}
@@ -724,7 +730,7 @@ export default function CalendarPage() {
               dayMaxEvents
               weekends
               datesSet={handleDateSet}
-              dateClick={!repUserId ? handleDateClick : undefined}
+              dateClick={!repUserId && selectedAccountId ? handleDateClick : undefined}
               eventClick={handleEventClick}
               height="100%"
               eventTimeFormat={{ hour: "2-digit", minute: "2-digit", meridiem: "short" }}
@@ -733,7 +739,7 @@ export default function CalendarPage() {
               nowIndicator
               businessHours={{ daysOfWeek: [1, 2, 3, 4, 5], startTime: "08:00", endTime: "18:00" }}
             />
-          )}
+          </div>
         </div>
       </div>
 

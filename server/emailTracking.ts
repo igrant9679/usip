@@ -13,9 +13,12 @@
  * GET /api/track/click/:token?url=...
  *   - Inserts a "click" event into email_tracking_events
  *   - Increments emailDrafts.clickCount, sets lastClickedAt
- *   - Redirects the browser to the original URL
+ *   - Redirects the browser to the original URL when the link carries our
+ *     signature (`sig`, services/trackedLinks.ts); otherwise shows where it
+ *     goes and lets the reader choose (G43)
  */
 
+import { csvCell } from "@shared/csvCell";
 import type { Express, Request, Response } from "express";
 import { openExtensionRequest } from "@shared/proposalExtension";
 import { eq, inArray, sql } from "drizzle-orm";
@@ -28,6 +31,8 @@ import { normalizeSuppressionEmail } from "./unsubscribe";
 import { escapeHtml } from "@shared/escapeHtml";
 import { requireScheduledSecret } from "./scheduledTaskAuth";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "./_core/activeMembers";
+import { noteLeadEngagement } from "./services/leadRescoreQueue";
+import { isSignedClick } from "./services/trackedLinks";
 
 // 1×1 transparent GIF (43 bytes)
 const TRACKING_PIXEL = Buffer.from(
@@ -53,7 +58,15 @@ const TRACK_UNSUB_DONE = (email: string) => `<!DOCTYPE html><html><head><meta ch
 <p style="margin-top:40px;font-size:12px;color:#999">If this was a mistake, please contact the sender directly.</p>
 </body></html>`;
 
-const TRACK_UNSUB_INVALID = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invalid link</title>${TRACK_UNSUB_STYLE}</head>
+/** An unsigned tracked link: say where it goes, and let the reader decide (G43). */
+const TRACK_CLICK_CONFIRM = (url: string) => `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Leaving this email</title>${TRACK_UNSUB_STYLE}</head>
+<body><h1>This link goes to another site</h1>
+<p style="word-break:break-all"><strong>${escapeHtml(url)}</strong></p>
+<p><a href="${escapeHtml(url)}" rel="noopener noreferrer">Continue to that page</a></p>
+<p style="margin-top:24px;font-size:13px;color:#999">If you don't recognise the address, close this page.</p>
+</body></html>`;
+
+const TRACK_UNSUB_INVALID =`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invalid link</title>${TRACK_UNSUB_STYLE}</head>
 <body><h1>This unsubscribe link is not valid</h1><p>Reply to any message from the sender and ask to be removed.</p></body></html>`;
 
 export function registerEmailTrackingRoutes(app: Express) {
@@ -188,6 +201,7 @@ export function registerEmailTrackingRoutes(app: Express) {
           openCount: emailDrafts.openCount,
           sentAt: emailDrafts.sentAt,
           lastOpenedAt: emailDrafts.lastOpenedAt,
+          toLeadId: emailDrafts.toLeadId,
         })
         .from(emailDrafts)
         .where(eq(emailDrafts.trackingToken, token))
@@ -245,6 +259,9 @@ export function registerEmailTrackingRoutes(app: Express) {
           lastOpenedAt: new Date(),
         })
         .where(eq(emailDrafts.id, draft.id));
+      // A person's open moves the lead's score on the next hourly re-score
+      // (audit P12); a machine open returned above and does not.
+      noteLeadEngagement(draft.workspaceId, draft.toLeadId);
 
       /**
        * No A/B counter is bumped here. sequence_ab_variants' counters are dead
@@ -291,8 +308,17 @@ export function registerEmailTrackingRoutes(app: Express) {
       return;
     }
 
-    // Redirect immediately
-    res.redirect(302, safeUrl);
+    /**
+     * Only a link we signed is redirected (audit 2026-10-20, G43); anything
+     * else, an old email's link or a URL someone wrote by hand, gets a page
+     * that names the destination and lets the reader choose. Not a redirect,
+     * so our domain can't be used to bounce a stranger somewhere else.
+     */
+    if (!token || !isSignedClick(token, targetUrl, req.query.sig)) {
+      res.status(200).set("Content-Type", "text/html; charset=utf-8").set("Referrer-Policy", "no-referrer").send(TRACK_CLICK_CONFIRM(safeUrl));
+    } else {
+      res.redirect(302, safeUrl);
+    }
 
     // Record the event asynchronously
     if (!token) return;
@@ -302,7 +328,7 @@ export function registerEmailTrackingRoutes(app: Express) {
       if (!db) return;
 
       const [draft] = await db
-        .select({ id: emailDrafts.id, workspaceId: emailDrafts.workspaceId })
+        .select({ id: emailDrafts.id, workspaceId: emailDrafts.workspaceId, toLeadId: emailDrafts.toLeadId })
         .from(emailDrafts)
         .where(eq(emailDrafts.trackingToken, token))
         .limit(1);
@@ -325,6 +351,7 @@ export function registerEmailTrackingRoutes(app: Express) {
           lastClickedAt: new Date(),
         })
         .where(eq(emailDrafts.id, draft.id));
+      noteLeadEngagement(draft.workspaceId, draft.toLeadId);
     } catch (e) {
       console.error("[EmailTracking] click event failed:", e);
     }
@@ -524,10 +551,11 @@ export function registerEmailTrackingRoutes(app: Express) {
    */
   app.get("/api/track/proposal-click/:token", async (req: Request, res: Response) => {
     const { token } = req.params;
-    const { dest } = req.query as { dest?: string };
-    // Redirect immediately — tracking is best-effort
-    const fallback = dest || "/";
-    res.redirect(302, fallback);
+    // Redirect immediately — tracking is best-effort. Always to this proposal's
+    // own portal page (audit 2026-10-20, G43): it redirected to whatever
+    // `dest` said, an open redirect on our domain. Links already sent carry
+    // a `dest` that is this same page, so they land where they always did.
+    res.redirect(302, `/p/${encodeURIComponent(token ?? "")}`);
     if (!token) return;
     try {
       const db = await getDb();
@@ -1077,7 +1105,6 @@ export function registerEmailTrackingRoutes(app: Express) {
         notifications: notificationsT,
       } = await import("../drizzle/schema");
       const { and: andR, eq: eqR, gte: gteR, desc: descR } = await import("drizzle-orm");
-      const { notifyOwner } = await import("./_core/notification");
 
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
       const activeCampaigns = await db
@@ -1119,12 +1146,8 @@ export function registerEmailTrackingRoutes(app: Express) {
           if (rejected.length === 0) continue;
 
           // Build CSV
-          const escape = (v: unknown) => {
-            if (v == null) return "";
-            const s = String(v);
-            return s.includes(",") || s.includes('"') || s.includes("\n")
-              ? `"${s.replace(/"/g, '""')}"` : s;
-          };
+          // Formula cells neutralised too (audit 2026-10-20, G49).
+          const escape = csvCell;
           const headers = ["ID", "First Name", "Last Name", "Title", "Company", "Industry", "ICP Score", "Rejection Reason", "Rejected At"];
           const rows = rejected.map((r) => [
             r.id, r.firstName, r.lastName, r.title, r.companyName, r.industry,
@@ -1167,15 +1190,9 @@ export function registerEmailTrackingRoutes(app: Express) {
             });
           }
 
-          // Also push a Manus platform notification to the owner
-          await notifyOwner({
-            title: `ARE Rejection Digest: ${campaign.name}`,
-            content: `${rejected.length} prospect${rejected.length !== 1 ? "s" : ""} rejected this week in campaign "${campaign.name}".\n` +
-              rejected.slice(0, 5).map((r) =>
-                `• ${[r.firstName, r.lastName].filter(Boolean).join(" ") || "Unknown"} (${r.companyName ?? "—"}) — ${r.rejectionReason ?? "No reason"}`
-              ).join("\n"),
-          }).catch(() => {/* non-fatal */});
-
+          // The in-app notice above is the digest. A second copy went through
+          // notifyOwner to the platform operator, outside this workspace, with
+          // the prospects' names (audit 2026-10-20, R2).
           digestsSent++;
         } catch (e) {
           errors.push(`campaign ${campaign.id}: ${String(e).slice(0, 120)}`);

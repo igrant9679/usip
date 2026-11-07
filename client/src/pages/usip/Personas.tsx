@@ -29,9 +29,10 @@ import { toast } from "sonner";
 import { Users, Plus, Pencil, Trash2, Sparkles, ChevronDown, ArrowUp, ArrowDown, FolderPlus, Telescope } from "lucide-react";
 import { PersonaResultsBadge, usePersonaResultSummaries } from "@/components/usip/research/ResearchResults";
 import { confirmAction } from "@/components/usip/Common";
-import { ResearchSubNav } from "@/components/usip/research/ResearchFields";
+import { ResearchSubNav, reportDropped } from "@/components/usip/research/ResearchFields";
 import { EMPTY_PERSONA, PersonaFormFields, personaFormFrom, personaPayload, type PersonaForm } from "@/components/usip/research/PersonaFormFields";
 import { icpLabels } from "@shared/icpShape";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 
 /** Per-section collapse map, keyed "cat:<id>" / "uncat". UI-only state. */
 const SECTIONS_LS_KEY = "velocity_personas_sections_collapsed";
@@ -87,6 +88,10 @@ export default function Personas() {
   const updateCategory = trpc.personas.updateCategory.useMutation();
   const deleteCategory = trpc.personas.deleteCategory.useMutation();
   const reorderCategories = trpc.personas.reorderCategories.useMutation();
+  const utils = trpc.useUtils();
+  // A manager writes personas and categories, an admin deletes them (P31);
+  // nobody is offered a control the server would refuse.
+  const { isManager: canEdit, isAdmin: canDelete } = useWorkspaceRole();
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -131,11 +136,12 @@ export default function Personas() {
   const save = async () => {
     if (!form.name.trim()) { toast.error("Name is required"); return; }
     try {
+      // What the cleaner removed as personal data is said (audit 2026-10-20, P125).
       if (editingId) {
-        await update.mutateAsync({ id: editingId, ...personaPayload(form) });
+        reportDropped((await update.mutateAsync({ id: editingId, ...personaPayload(form) })).dropped);
         toast.success("Persona updated");
       } else {
-        await create.mutateAsync(personaPayload(form));
+        reportDropped((await create.mutateAsync(personaPayload(form))).dropped);
         toast.success("Persona created");
       }
       setOpen(false);
@@ -146,6 +152,8 @@ export default function Personas() {
   };
 
   const applyPreset = async (key: string) => {
+    // One click, one persona: a second click while the first is saving made two (P125).
+    if (fromPreset.isPending) return;
     try {
       await fromPreset.mutateAsync({ presetKey: key });
       toast.success("Preset added to your personas");
@@ -155,10 +163,27 @@ export default function Personas() {
     }
   };
 
-  const remove = (id: number) => {
-    confirmAction({ title: "Delete this persona?", description: "This targeting template will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, async () => {
+  const remove = async (id: number) => {
+    // Which campaigns' writers use it, said before it goes; an active one stops it (P32).
+    let campaigns: { name: string; status: string }[] = [];
+    try {
+      campaigns = (await utils.personas.usage.fetch({ id })).campaigns;
+    } catch (e: any) {
+      toast.error(e?.message ?? "Couldn't check which campaigns use this persona");
+      return;
+    }
+    const live = campaigns.filter((c) => c.status === "active");
+    if (live.length) {
+      toast.error(`${live.length === 1 ? `The active campaign "${live[0].name}" uses` : `${live.length} active campaigns use`} this persona. Pause ${live.length === 1 ? "it" : "them"}, or give ${live.length === 1 ? "it" : "them"} another persona, first.`);
+      return;
+    }
+    const used = campaigns.length
+      ? ` ${campaigns.length === 1 ? `The campaign "${campaigns[0].name}" uses` : `${campaigns.length} campaigns use`} it and will be left with no persona.`
+      : "";
+    confirmAction({ title: "Delete this persona?", description: `This targeting template will be permanently deleted.${used} This cannot be undone.`, confirmLabel: "Delete" }, async () => {
       try {
         await del.mutateAsync({ id });
+        toast.success("Persona deleted");
         await refetch();
       } catch (e: any) {
         toast.error(e?.message ?? "Delete failed");
@@ -256,12 +281,16 @@ export default function Personas() {
         </div>
       </div>
       <div className="flex gap-1 shrink-0">
-        <Button aria-label="Edit persona" size="sm" variant="ghost" onClick={() => startEdit(p)}>
-          <Pencil className="size-3.5" />
-        </Button>
-        <Button aria-label="Delete persona" size="sm" variant="ghost" onClick={() => remove(p.id)}>
-          <Trash2 className="size-3.5 text-destructive" />
-        </Button>
+        {canEdit && (
+          <Button aria-label="Edit persona" size="sm" variant="ghost" onClick={() => startEdit(p)}>
+            <Pencil className="size-3.5" />
+          </Button>
+        )}
+        {canDelete && (
+          <Button aria-label="Delete persona" size="sm" variant="ghost" onClick={() => remove(p.id)}>
+            <Trash2 className="size-3.5 text-destructive" />
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -282,12 +311,16 @@ export default function Personas() {
         title="Personas"
         description="The buyers you sell to: who to find, what they care about, and what they push back on."
       >
-        <Button variant="outline" onClick={startCreateCategory}>
-          <FolderPlus className="size-4 mr-1" /> New category
-        </Button>
-        <Button onClick={() => startCreate()}>
-          <Plus className="size-4 mr-1" /> New persona
-        </Button>
+        {canEdit && (
+          <>
+            <Button variant="outline" onClick={startCreateCategory}>
+              <FolderPlus className="size-4 mr-1" /> New category
+            </Button>
+            <Button onClick={() => startCreate()}>
+              <Plus className="size-4 mr-1" /> New persona
+            </Button>
+          </>
+        )}
       </PageHeader>
       <ResearchSubNav />
 
@@ -306,7 +339,7 @@ export default function Personas() {
             <ChevronDown className={`size-4 text-muted-foreground transition-transform ${presetsCollapsed ? "-rotate-90" : ""}`} />
           </button>
           {!presetsCollapsed && (
-            <CardDescription>One-click starting points. Click to clone into your personas list.</CardDescription>
+            <CardDescription>{canEdit ? "One-click starting points. Click to clone into your personas list." : "Starting points a manager can clone into your personas list."}</CardDescription>
           )}
         </CardHeader>
         {!presetsCollapsed && (
@@ -316,7 +349,8 @@ export default function Personas() {
                 <button
                   key={p.key}
                   onClick={() => applyPreset(p.key)}
-                  className="text-left border rounded p-3 hover:bg-accent transition"
+                  disabled={!canEdit || fromPreset.isPending}
+                  className="text-left border rounded p-3 hover:bg-accent transition disabled:opacity-60 disabled:pointer-events-none"
                 >
                   <div className="font-medium text-sm">{p.name}</div>
                   <div className="text-xs text-muted-foreground mt-1">{p.description}</div>
@@ -346,27 +380,31 @@ export default function Personas() {
               count={(personasByCat.get(c.id) ?? []).length}
               collapsed={!!collapsedSections[`cat:${c.id}`]}
               onToggle={() => toggleSection(`cat:${c.id}`)}
-              actions={
+              actions={(canEdit || canDelete) &&
                 <div className="flex gap-1 shrink-0">
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="New persona in this category" onClick={() => startCreate(c.id)}>
-                    <Plus className="size-3.5" />
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Move up" disabled={i === 0 || reorderCategories.isPending} onClick={() => moveCategory(i, -1)}>
-                    <ArrowUp className="size-3.5" />
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Move down" disabled={i === cats.length - 1 || reorderCategories.isPending} onClick={() => moveCategory(i, 1)}>
-                    <ArrowDown className="size-3.5" />
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Rename category" onClick={() => startEditCategory(c)}>
-                    <Pencil className="size-3.5" />
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Delete category" onClick={() => removeCategory(c)}>
-                    <Trash2 className="size-3.5 text-destructive" />
-                  </Button>
+                  {canEdit && (<>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="New persona in this category" onClick={() => startCreate(c.id)}>
+                      <Plus className="size-3.5" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Move up" disabled={i === 0 || reorderCategories.isPending} onClick={() => moveCategory(i, -1)}>
+                      <ArrowUp className="size-3.5" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Move down" disabled={i === cats.length - 1 || reorderCategories.isPending} onClick={() => moveCategory(i, 1)}>
+                      <ArrowDown className="size-3.5" />
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Rename category" onClick={() => startEditCategory(c)}>
+                      <Pencil className="size-3.5" />
+                    </Button>
+                  </>)}
+                  {canDelete && (
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Delete category" onClick={() => removeCategory(c)}>
+                      <Trash2 className="size-3.5 text-destructive" />
+                    </Button>
+                  )}
                 </div>
               }
             >
-              {personaList(personasByCat.get(c.id) ?? [], "No personas in this category yet. Use the + above to add one.")}
+              {personaList(personasByCat.get(c.id) ?? [], canEdit ? "No personas in this category yet. Use the + above to add one." : "No personas in this category yet.")}
             </SectionCard>
           ))}
 
@@ -380,7 +418,7 @@ export default function Personas() {
               collapsed={!!collapsedSections["uncat"]}
               onToggle={() => toggleSection("uncat")}
             >
-              {personaList(uncategorized, "No personas yet. Create one above or clone a preset.")}
+              {personaList(uncategorized, canEdit ? "No personas yet. Create one above or clone a preset." : "No personas yet.")}
             </SectionCard>
           )}
         </div>

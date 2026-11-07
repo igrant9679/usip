@@ -91,6 +91,7 @@ import { runRawMigrations } from "./rawMigrations";
 import { configureTrustProxy } from "./clientIp";
 import { crossSiteCookieWriteGuard, trpcCsrfGuard } from "./csrf";
 import { securityHeaders } from "./securityHeaders";
+import { publicBodyLimit } from "./publicBodyLimit";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -120,6 +121,9 @@ async function startServer() {
   app.disable("x-powered-by");
   app.use(securityHeaders);
   const server = createServer(app);
+  // The public routes are read first, under a small limit (G41); the 50 MB
+  // parsers below then skip them.
+  app.use(publicBodyLimit);
   // Configure body parser with larger size limit for file uploads.
   // `verify` stashes the raw bytes so webhook signature checks (xAI voice)
   // can HMAC the exact payload — JSON.stringify(req.body) is not byte-stable.
@@ -340,6 +344,14 @@ async function startServer() {
       .then((m) => m.backfillDealDates())
       .catch((e) => console.error("[dealDates] backfill failed:", e));
   }, 45_000);
+
+  // Mailbox passwords and OAuth tokens saved before they were encrypted are
+  // encrypted once (audit 2026-10-20, C4). Idempotent: plaintext only.
+  setTimeout(() => {
+    import("../services/secretBackfill")
+      .then((m) => m.encryptLegacyMailboxSecrets())
+      .catch((e) => console.error("[secretBackfill] failed:", e));
+  }, 50_000);
 
   // Scheduled report emails (daily/weekly/monthly via the system sender).
   const runReports = () => {
@@ -830,8 +842,12 @@ async function startServer() {
   setInterval(runBulkJobs, 15_000);
 
   // Engine and discovery logs older than 30 days (audit A24: they were kept
-  // forever, thousands of rows per campaign per day).
+  // forever, thousands of rows per campaign per day), and website visits older
+  // than 180 days (audit P87: kept forever too).
   const runLogRetention = () => {
+    import("../websiteTracking")
+      .then((m) => m.purgeOldWebsiteVisits())
+      .catch((e) => console.error("[WebsiteTracking] visit retention failed:", e));
     import("../areEngine")
       .then((m) => m.purgeOldEngineLogs())
       .catch((e) => console.error("[AreEngine] log retention failed:", e));
@@ -854,6 +870,21 @@ async function startServer() {
   );
   setTimeout(runRenewalStages, 27 * 60 * 1000); // stagger: 27 minutes after boot
   setInterval(runRenewalStages, 6 * 60 * 60 * 1000); // every 6h; bounded per run
+
+  // Lead scores keep themselves current (audit 2026-10-20, P12): they only
+  // changed when a rep pressed Recompute, so decay, Sales-Ready alerts and
+  // score-triggered sequences never happened on their own. Each tick re-scores
+  // leads that engaged since the last one, then leads not scored for a day,
+  // capped per workspace, with no model calls.
+  const runLeadRescore = guardOverlap("LeadRescore", () =>
+    import("../routers/leadScoring")
+      .then((m) => m.runLeadRescoreTick())
+      .then((r) => {
+        if (r.engaged || r.swept || r.failed) console.log(`[LeadRescore] engaged=${r.engaged} swept=${r.swept} failed=${r.failed} pausedSkips=${r.pausedSkips}`);
+      }),
+  );
+  setTimeout(runLeadRescore, 29 * 60 * 1000); // stagger: 29 minutes after boot
+  setInterval(runLeadRescore, 60 * 60 * 1000); // hourly; bounded per run
 
   // Inbound reply poller: check IMAP/Gmail inboxes every 60s for new replies
   startInboundReplyPoller();

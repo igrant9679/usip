@@ -18,7 +18,7 @@
  *   - Signal feed with sentiment colour coding and action badges
  */
 import { Shell, PageHeader, StatCard, EmptyState } from "@/components/usip/Shell";
-import { ConfirmButton } from "@/components/usip/Common";
+import { ConfirmButton, confirmAction } from "@/components/usip/Common";
 import { ProspectAvatar } from "@/components/usip/ProspectAvatar";
 import { emailStatusBadge, genericInboxBadge } from "@/components/usip/people/peopleShared";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -55,6 +55,10 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useClearOnChange } from "@/hooks/useClearOnChange";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { tablistProps, tabProps } from "@/lib/tabs";
+import { RejectProspectDialog, type RejectTarget } from "@/components/usip/are/RejectProspectDialog";
+import { ENRICHMENT_STATES, PROSPECT_VIEW_KEYS, PROSPECT_VIEW_LABEL, type EnrichmentState, type ProspectView } from "@shared/areProspectViews";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
 import { AddExistingProspectsDialog } from "@/components/usip/are/AddExistingProspectsDialog";
@@ -63,9 +67,13 @@ import { AreMessageDialog } from "@/components/usip/are/AreMessageDialog";
 import { IntelligenceDossier } from "@/components/usip/are/IntelligenceDossier";
 import { CampaignResearchCard } from "@/components/usip/are/CampaignResearchCard";
 import { CampaignStallPanel } from "@/components/usip/are/CampaignStallPanel";
+import { askLaunchOnUtc } from "@/components/usip/are/launchTimezone";
+import { useConfirmActivate } from "@/components/usip/are/activateConfirm";
 import { CampaignSourceHealth } from "@/components/usip/are/CampaignSourceHealth";
 import { PlaceVerdictBadge } from "@/components/usip/are/PlaceVerdictBadge";
 import { CampaignTargetingCard } from "@/components/usip/are/CampaignTargetingCard";
+import { targetingFromOverrides } from "@shared/campaignTargeting";
+import { areAutonomyLabel, areStatusLabel } from "@shared/areCampaignLabels";
 import { StepFunnelSankey, type FunnelSelection } from "@/components/usip/are/StepFunnelSankey";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
 import {
@@ -77,9 +85,13 @@ import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { isHtmlBody } from "@shared/emailBody";
 import { CampaignSourcesCard } from "@/components/usip/are/CampaignSourcesCard";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { rankOf } from "@shared/roleRank";
 import { dayOffsetForPosition, sanitizeDayOffsets } from "@shared/areStepCadence";
 import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenceSteps";
+import { APPROVE_THRESHOLD_EXPLAINER, APPROVE_THRESHOLD_START, approveThresholdSummary } from "@shared/areApproveThreshold";
+import { EMPTY_FIXED_COPY, fixedStepDay, usableFixedSteps } from "@shared/areFixedCopy";
+import { IMPORT_CHUNK, addImportTotals, emptyImportTotals, importSummary } from "./areImportModel";
 import {
   signalMeta, describeSignal, actionLabel, signalSourceLabel, stepLabelFromPayload,
   type AreSignalChannel,
@@ -256,6 +268,8 @@ const SIGNAL_COLORS: Record<string, string> = {
 const REJECTION_PAGE = 100;
 /** Prospects per page on the Prospects tab (A45). */
 const PROSPECT_PAGE = 100;
+/** Sequences per page on the Sequences tab (A44): each row carries its whole sequence. */
+const SEQUENCE_PAGE = 50;
 
 const REJECT_TEMPLATES = [
   "Wrong industry",
@@ -408,9 +422,11 @@ function useCampaignSync(campaignId: number) {
 
 /* ─── Prospect row ─────────────────────────────────────────────────────────── */
 function ProspectRow({
-  p, campaignId, onSelect, selected,
+  p, campaignId, onSelect, selected, onReject,
 }: {
   p: any; campaignId: number; onSelect: (id: number) => void; selected: boolean;
+  /** Opens the tab's Reject dialog for this row (A51). */
+  onReject: (t: RejectTarget) => void;
 }) {
   const { invalidateAll } = useCampaignSync(campaignId);
   const [genStartedAt, setGenStartedAt] = useState<number | null>(null);
@@ -428,12 +444,9 @@ function ProspectRow({
     onSuccess: () => { toast.success("Enrichment started"); setTimeout(invalidateAll, 3000); },
     onError: (e) => toast.error(e.message),
   });
+  // Approved rows leave the review queue (tracker 12), so the toast says where they went.
   const approve = trpc.are.prospects.approve.useMutation({
-    onSuccess: () => { toast.success("Prospect approved for sequencing"); invalidateAll(); },
-    onError: (e) => toast.error(e.message),
-  });
-  const skip = trpc.are.prospects.skip.useMutation({
-    onSuccess: invalidateAll,
+    onSuccess: () => { toast.success("Approved for sequencing — now under Approved"); invalidateAll(); },
     onError: (e) => toast.error(e.message),
   });
   // Awaited generate — server now blocks until the LLM pipeline finishes
@@ -626,15 +639,22 @@ function ProspectRow({
           </Button>
         )}
         {p.enrichmentStatus === "complete" && (p.sequenceStatus === "pending" || p.sequenceStatus === "canceled") && (
-          <Button aria-label="Approve" size="sm" variant="ghost" className="h-7 px-2 text-xs text-emerald-600 hover:text-emerald-700"
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px] gap-1 text-emerald-600 hover:text-emerald-700"
+            title="Approve for sequencing"
             onClick={() => approve.mutate({ prospectId: p.id })} disabled={approve.isPending}>
-            {approve.isPending ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />}
+            {approve.isPending ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />} Approve
           </Button>
         )}
-        <Button aria-label="Skip" size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
-          onClick={() => skip.mutate({ prospectId: p.id })} disabled={skip.isPending}>
-          <X className="size-3" />
-        </Button>
+        {/* Reject… with a reason, a confirm and an Undo (A51). The unlabelled ✕
+            here ran `skip`: no reason, no confirm, and it overwrote a reply.
+            A replied or finished prospect is not rejectable. */}
+        {p.sequenceStatus !== "replied" && p.sequenceStatus !== "completed" && (
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px] gap-1 text-muted-foreground hover:text-destructive"
+            title="Reject this prospect"
+            onClick={() => onReject({ id: p.id, name: fullName, sequenceStatus: p.sequenceStatus })}>
+            <X className="size-3" /> Reject…
+          </Button>
+        )}
       </div>
 
       <ChevronRight className="size-4 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0" />
@@ -659,11 +679,14 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
   const [mentionQuery, setMentionQuery] = useState("");
   const [showMentionPicker, setShowMentionPicker] = useState(false);
   const [mentionAnchor, setMentionAnchor] = useState<number>(-1);
+  // Teammates picked from the @ list, by id (A49): only these are notified,
+  // and only while their @name is still in the note.
+  const [mentioned, setMentioned] = useState<Map<number, string>>(new Map());
 
   const invalidate = () => utils.are.prospects.listNotes.invalidate({ prospectId });
 
   const addNote = trpc.are.prospects.addNote.useMutation({
-    onSuccess: () => { setDraft(""); invalidate(); },
+    onSuccess: () => { setDraft(""); setMentioned(new Map()); invalidate(); },
     onError: (e) => toast.error(e.message),
   });
   // campaignId is passed through to addNote for deep-link generation in mention notifications
@@ -783,6 +806,7 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
                       const before = draft.slice(0, mentionAnchor);
                       const after = draft.slice(mentionAnchor + mentionQuery.length + 1);
                       setDraft(before + "@" + m.name + " " + after);
+                      setMentioned((prev) => new Map(prev).set(m.userId, String(m.name ?? "")));
                       setShowMentionPicker(false);
                       setMentionQuery("");
                     }}
@@ -801,7 +825,10 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
           <span className="text-[10px] text-muted-foreground">{draft.length}/4000</span>
           <Button
             size="sm" className="gap-1.5 text-xs"
-            onClick={() => addNote.mutate({ prospectId, campaignId, body: draft, category: draftCategory })}
+            onClick={() => addNote.mutate({
+              prospectId, campaignId, body: draft, category: draftCategory,
+              mentionUserIds: Array.from(mentioned.entries()).filter(([, name]) => name && draft.includes(`@${name}`)).map(([uid]) => uid),
+            })}
             disabled={!draft.trim() || addNote.isPending}
           >
             {addNote.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <StickyNote className="size-3.5" />}
@@ -876,7 +903,10 @@ function ProspectNotes({ prospectId, campaignId }: { prospectId: number; campaig
                     </button>
                     <button
                       className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                      onClick={() => deleteNote.mutate({ noteId: note.id })}
+                      onClick={() => confirmAction(
+                        { title: "Delete this note?", description: "The note is removed for everyone in the workspace. This cannot be undone.", confirmLabel: "Delete" },
+                        () => deleteNote.mutate({ noteId: note.id }),
+                      )}
                       title="Delete"
                     >
                       <Trash2 className="size-3" />
@@ -1053,9 +1083,21 @@ function StatusBadgeMini({ status }: { status: string }) {
 }
 
 function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: any }) {
-  // Explicit limit: the default was 100 and a live campaign's queue held 101
-  // rows, which silently truncated the page.
-  const { data: rows = [], refetch, isLoading } = trpc.are.prospects.listSequences.useQuery({ campaignId, limit: 500 });
+  const [filter, setFilter] = useState<FilterKey>("enrolled");
+  const [search, setSearch] = useState("");
+  const searchQ = useDebouncedValue(search.trim());
+  const [seqPage, setSeqPage] = useState(1);
+  useClearOnChange({ filter, searchQ }, () => setSeqPage(1));
+  // A page of the filter, and the counts for every filter, from the server
+  // (A44). This asked for 500 rows with every full sequence, then counted
+  // and filtered whatever had arrived; an explicit page size still stands
+  // in for the default, which once truncated a 101-row campaign.
+  const { data: seqData, refetch, isLoading } = trpc.are.prospects.listSequences.useQuery(
+    { campaignId, status: filter, ...(searchQ ? { search: searchQ } : {}), limit: SEQUENCE_PAGE, offset: (seqPage - 1) * SEQUENCE_PAGE },
+    { placeholderData: (prev) => prev },
+  );
+  const rows = seqData?.rows ?? [];
+  const seqPages = Math.max(1, Math.ceil((seqData?.total ?? 0) / SEQUENCE_PAGE));
   // ONE representative execution row per (prospect, step), for the whole
   // campaign — server-reduced (are.execution.getStepStates), never truncated.
   // This used to read raw getQueue with limit 200 ("an active campaign has a
@@ -1110,8 +1152,6 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
     onError: (e) => toast.error(e.message),
   });
 
-  const [filter, setFilter] = useState<FilterKey>("enrolled");
-  const [search, setSearch] = useState("");
   const [drawerProspectId, setDrawerProspectId] = useState<number | null>(null);
   const [confirmCancel, setConfirmCancel] = useState<{ prospectId: number; name: string } | null>(null);
   const [generatingId, setGeneratingId] = useState<number | null>(null);
@@ -1119,28 +1159,22 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
   const [genElapsed, setGenElapsed] = useState(0);
   useEffect(() => {
     if (generatingId == null) { setGeneratingStartedAt(null); setGenElapsed(0); return; }
-    setGeneratingStartedAt(Date.now());
-    const id = setInterval(() => {
-      setGenElapsed((prev) => generatingStartedAt ? Math.round((Date.now() - generatingStartedAt) / 1000) : prev + 1);
-    }, 500);
+    // Seconds since THIS start (audit 2026-10-20, A74): the interval read a
+    // stale generatingStartedAt (null) and added 1 every 500 ms, so the timer
+    // ran at double speed.
+    const started = Date.now();
+    setGeneratingStartedAt(started);
+    setGenElapsed(0);
+    const id = setInterval(() => setGenElapsed(Math.round((Date.now() - started) / 1000)), 500);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [generatingId]);
 
-  // Derive counts per status for the summary strip.
-  const countsByStatus = rows.reduce((acc: Record<string, number>, r: any) => {
-    acc[r.sequenceStatus] = (acc[r.sequenceStatus] ?? 0) + 1;
-    return acc;
-  }, {});
-  const filteredRows = rows.filter((r: any) => {
-    if (filter !== "all" && r.sequenceStatus !== filter) return false;
-    if (search) {
-      const q = search.toLowerCase();
-      const hay = `${r.firstName ?? ""} ${r.lastName ?? ""} ${r.companyName ?? ""} ${r.title ?? ""}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
+  // Counts per status for the summary strip — the server's, for every row
+  // that matches the search, not the ones on this page (A44).
+  const countsByStatus: Record<string, number> = seqData?.countsByStatus ?? {};
+  const allCount = Object.values(countsByStatus).reduce((s, n) => s + n, 0);
+  // The server already applied the filter and the search.
+  const filteredRows = rows;
   const seqSel = useRowSelection(filteredRows.map((r: any) => r.prospectId as number));
 
   // What the mass timeline editor needs to know about the selection: how many
@@ -1218,7 +1252,7 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
         />
         <div className="flex flex-wrap gap-1">
           {FILTERS.map((f) => {
-            const n = f === "all" ? rows.length : (countsByStatus[f] ?? 0);
+            const n = f === "all" ? allCount : (countsByStatus[f] ?? 0);
             const label = f === "all" ? "All" : (STATUS_STYLE[f]?.label ?? f);
             return (
               <Button
@@ -1243,11 +1277,19 @@ function SequencesTab({ campaignId, campaign }: { campaignId: number; campaign: 
         />
       ) : (
         <>
-        <div className="mb-2 flex items-center gap-2">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-2 text-[11px] text-muted-foreground cursor-pointer select-none">
             <Checkbox checked={seqSel.allSelected} onCheckedChange={seqSel.toggleAll} aria-label="Select all shown" />
-            Select all {filteredRows.length}
+            Select all {filteredRows.length}{seqPages > 1 ? " on this page" : ""}
           </label>
+          {seqPages > 1 && (
+            <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
+              <span className="mr-1">{(seqPage - 1) * SEQUENCE_PAGE + 1}–{(seqPage - 1) * SEQUENCE_PAGE + rows.length} of {(seqData?.total ?? 0).toLocaleString()}</span>
+              <Button size="sm" variant="outline" className="h-7" disabled={seqPage <= 1} onClick={() => setSeqPage((p) => p - 1)}>Previous</Button>
+              <span className="px-2">Page {seqPage} of {seqPages}</span>
+              <Button size="sm" variant="outline" className="h-7" disabled={seqPage >= seqPages} onClick={() => setSeqPage((p) => p + 1)}>Next</Button>
+            </div>
+          )}
         </div>
         <div className="mb-2"><AreBulkActionBar campaignId={campaignId} selection={seqSel} actions={sequenceTabActions(filter)} timeline={timelineInfo} onDone={() => refetch()} /></div>
         <div className="border rounded-lg bg-card divide-y overflow-hidden">
@@ -1390,6 +1432,8 @@ function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; 
     onError: (e) => toast.error(e.message),
     onSuccess: async () => { toast.success("Released — it enrolls on the next engine run"); await refetch(); },
   });
+  // Releasing overrides a research avoid rule: a manager's (A36).
+  const canRelease = useWorkspaceRole().isManager;
   const [editing, setEditing] = useState<{ arrayIndex: number; subject: string; body: string } | null>(null);
   const steps = (row.generatedSequence ?? []) as any[];
   // The timing that will actually be USED: the prospect's override (0170) or
@@ -1439,11 +1483,15 @@ function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; 
             <div className="font-medium">Held for review</div>
             <div className="break-words">{row.copyHoldReason}</div>
             <div className="text-muted-foreground">
-              This sequence will not be enrolled until someone releases it. Edit the step below and release it, or regenerate the sequence (the new copy is checked again).
+              {canRelease
+                ? "This sequence will not be enrolled until someone releases it. Edit the step below and release it, or regenerate the sequence (the new copy is checked again)."
+                : "This sequence will not be enrolled until a manager releases it. You can edit the step below or regenerate the sequence (the new copy is checked again)."}
             </div>
-            <Button size="sm" variant="outline" disabled={releaseHold.isPending} onClick={() => releaseHold.mutate({ prospectId: row.prospectId })}>
-              Release as it is now
-            </Button>
+            {canRelease && (
+              <Button size="sm" variant="outline" disabled={releaseHold.isPending} onClick={() => releaseHold.mutate({ prospectId: row.prospectId })}>
+                Release as it is now
+              </Button>
+            )}
           </div>
         )}
         {steps.length === 0 ? (
@@ -1555,22 +1603,37 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
   const utils = trpc.useUtils();
   const launch = trpc.discovery.search.useMutation({
     onSuccess: (r) => {
-      toast.success(
-        `Discovery complete — ${r.rawFindCount} raw / ${r.prospectsCreated} new / ${r.highConfidenceCount}H · ${r.mediumConfidenceCount}M · ${r.lowConfidenceCount}L`,
-        { duration: 6000 },
-      );
+      // A run whose finds could not be saved comes back as a result, not an
+      // error (P143), so it is read here, as Find Prospects reads it. The
+      // launcher announced success over a failed run.
+      const lead = r.joinedRunning ? `That search was already running (run #${r.runId}), so it was not started again — ` : "";
+      if (r.status === "failed") {
+        toast.error(`${lead}Run #${r.runId} failed: ${r.errorMessage ?? "the finds could not be saved"}`, { duration: 8000 });
+      } else {
+        toast.success(
+          `${lead}Discovery complete — ${r.rawFindCount} raw / ${r.prospectsCreated} new / ${r.highConfidenceCount}H · ${r.mediumConfidenceCount}M · ${r.lowConfidenceCount}L`,
+          { duration: 6000 },
+        );
+      }
       utils.are.engine.getLogs.invalidate({ campaignId });
       utils.discovery.getLogsForCampaign.invalidate({ campaignId });
     },
     onError: (e) => toast.error(e.message),
   });
 
-  const o = (campaign?.icpOverrides ?? {}) as any;
-  const titles: string[] = o.targetTitles ?? [];
-  const industries: string[] = o.targetIndustries ?? [];
-  const geos: string[] = o.targetGeographies ?? [];
-  const keywords: string[] = o.keywords ?? [];
+  // The shared targeting reader (audit 2026-10-20, A56): the lists can hold
+  // weighted objects copied from an ICP or persona, which this read raw and
+  // rendered as React children (a crash) or sent as "[object Object]".
+  const t = targetingFromOverrides(campaign?.icpOverrides);
+  const titles = t.titles;
+  const industries = t.industries;
+  const geos = t.places;
+  const keywords = t.keywords;
   const ready = titles.length > 0 || industries.length > 0 || geos.length > 0 || keywords.length > 0;
+  // One run searches one title, industry and place (discovery.search takes one
+  // of each), so the card names the ones it will use rather than implying all.
+  const searched = [titles[0], industries[0], geos[0]].filter(Boolean) as string[];
+  const notSearched = Math.max(0, titles.length - 1) + Math.max(0, industries.length - 1) + Math.max(0, geos.length - 1);
 
   return (
     <Card className="border-violet-500/30 bg-violet-500/5">
@@ -1588,10 +1651,17 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
               this campaign's Logs tab.
             </div>
             {ready ? (
-              <div className="flex flex-wrap gap-1 mt-2">
-                {titles.slice(0, 3).map((t) => <Badge key={"t" + t} variant="outline" className="text-[10px]">{t}</Badge>)}
-                {industries.slice(0, 2).map((t) => <Badge key={"i" + t} variant="outline" className="text-[10px]">{t}</Badge>)}
-                {geos.slice(0, 1).map((t) => <Badge key={"g" + t} variant="outline" className="text-[10px]">{t}</Badge>)}
+              <div className="mt-2 space-y-1">
+                <div className="flex flex-wrap items-center gap-1">
+                  <span className="text-[10px] text-muted-foreground">This run searches:</span>
+                  {searched.map((v) => <Badge key={v} variant="outline" className="text-[10px]">{v}</Badge>)}
+                  {keywords.length > 0 && <span className="text-[10px] text-muted-foreground">+ {keywords.length} keyword{keywords.length === 1 ? "" : "s"}</span>}
+                </div>
+                {notSearched > 0 && (
+                  <div className="text-[10px] text-muted-foreground">
+                    {notSearched} more targeting value{notSearched === 1 ? " is" : "s are"} not in this run (it takes the first title, industry and place); the campaign's own discovery uses all of them.
+                  </div>
+                )}
               </div>
             ) : (
               <div className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
@@ -2036,7 +2106,18 @@ function SignalRow({ s, onOpen, selected, onToggleSelect }: { s: SignalFeedRow; 
 }
 
 /* ─── Main page ────────────────────────────────────────────────────────────── */
+/**
+ * Keyed by the campaign id (audit 2026-10-20, A48). The route does not remount
+ * the page when the id changes, so moving from one campaign to another kept
+ * the first one's unsaved drafts, and Save wrote A's settings onto B. A new id
+ * is now a new page, with nothing carried over.
+ */
 export default function ARECampaignDetail() {
+  const { id } = useParams<{ id: string }>();
+  return <ARECampaignDetailPage key={id ?? ""} />;
+}
+
+function ARECampaignDetailPage() {
   const { id } = useParams<{ id: string }>();
   const campaignId = parseInt(id ?? "0");
   const utils = trpc.useUtils();
@@ -2044,14 +2125,30 @@ export default function ARECampaignDetail() {
   const validId = Number.isInteger(campaignId) && campaignId > 0;
   const campaignQ = trpc.are.campaigns.get.useQuery({ id: campaignId }, { enabled: validId });
   const { data: campaign, isLoading: loadingCampaign } = campaignQ;
-  // A page of the review queue, and the counts for all of it (A45).
+  // A page of the review queue, and the counts for all of it (A45). The tab
+  // opens on the rows that still need a decision, so an approved prospect
+  // leaves the list instead of riding along with the next batch (tracker
+  // 12). View, enrichment state and search are the server's (tracker 13,
+  // A45): statusCounts counts what list returns for the same filter.
+  const [prospectView, setProspectView] = useState<ProspectView>("review");
+  const [enrichFilter, setEnrichFilter] = useState<EnrichmentState | null>(null);
+  const [prospectSearch, setProspectSearch] = useState("");
+  const prospectSearchQ = useDebouncedValue(prospectSearch.trim());
+  const prospectFilter = {
+    view: prospectView,
+    ...(enrichFilter ? { enrichmentStatus: enrichFilter } : {}),
+    ...(prospectSearchQ ? { search: prospectSearchQ } : {}),
+  };
   const [prospectPage, setProspectPage] = useState(1);
+  useClearOnChange(prospectFilter, () => setProspectPage(1));
   const { data: prospects, isLoading: loadingProspects } = trpc.are.prospects.list.useQuery(
-    { campaignId, limit: PROSPECT_PAGE, offset: (prospectPage - 1) * PROSPECT_PAGE },
+    { campaignId, ...prospectFilter, limit: PROSPECT_PAGE, offset: (prospectPage - 1) * PROSPECT_PAGE },
     { placeholderData: (prev) => prev },
   );
-  const { data: queueCounts } = trpc.are.prospects.statusCounts.useQuery({ campaignId });
-  const prospectPages = Math.max(1, Math.ceil((queueCounts?.inQueue ?? 0) / PROSPECT_PAGE));
+  const { data: queueCounts } = trpc.are.prospects.statusCounts.useQuery({ campaignId, ...prospectFilter });
+  const prospectPages = Math.max(1, Math.ceil((queueCounts?.matching ?? 0) / PROSPECT_PAGE));
+  const [rejectTarget, setRejectTarget] = useState<RejectTarget | null>(null);
+  const { invalidateAll: invalidateCampaign } = useCampaignSync(campaignId);
   // The no-email door (2026-09-16): staged candidates the email-finder is
   // still working. Hidden from the list above by the server; surfaced only
   // as a count so the funnel stays legible.
@@ -2148,40 +2245,73 @@ export default function ARECampaignDetail() {
   });
   const [reEvalProgress, setReEvalProgress] = useState<{ done: number; total: number } | null>(null);
   const reEvalToastId = useRef<string | number | undefined>(undefined);
+  /**
+   * Re-evaluate All runs as a background job (audit A11): the request returns
+   * with the job and its size, and the bar follows the job's own count. It ran
+   * inside the request, and the bar sat at 0 / N until the end.
+   */
+  const [reEvalJob, setReEvalJob] = useState<{ jobId: number; threshold: number } | null>(null);
   const reEvaluateAll = trpc.are.prospects.reEvaluateAll.useMutation({
-    onMutate: () => {
-      const total = rejectionStats?.total ?? 0;
-      setReEvalProgress({ done: 0, total });
-      reEvalToastId.current = toast.loading(
-        total > 0
-          ? `Re-evaluating 0 / ${total} prospects…`
-          : "Re-evaluating prospects…",
-        { duration: Infinity }
-      );
-    },
     onSuccess: (d) => {
-      setReEvalProgress(null);
-      if (reEvalToastId.current !== undefined) toast.dismiss(reEvalToastId.current);
-      toast.success(
-        d.requalified > 0
-          ? `Re-evaluated ${d.processed} prospects — ${d.requalified} re-qualified (threshold: ${d.threshold})!`
-          : `Re-evaluated ${d.processed} prospects — none met the threshold (${d.threshold}).`
+      if (!d.jobId) {
+        toast.info("Nothing to re-evaluate: only rejections the engine made on the ICP score are re-scored, and this campaign has none.");
+        return;
+      }
+      setReEvalProgress({ done: 0, total: d.total });
+      setReEvalJob({ jobId: d.jobId, threshold: d.threshold });
+      reEvalToastId.current = toast.loading(
+        d.alreadyRunning ? `Re-evaluation already running — ${d.total} prospects…` : `Re-evaluating 0 / ${d.total} prospects…`,
+        { duration: Infinity },
       );
-      if (d.processed > 0 && d.requalified === 0) setShowIcpSuggestion(true);
-      utils.are.prospects.getRejectionStats.invalidate({ campaignId });
-      utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
     },
     onError: (e) => {
       setReEvalProgress(null);
+      setReEvalJob(null);
       if (reEvalToastId.current !== undefined) toast.dismiss(reEvalToastId.current);
       toast.error(e.message);
     },
   });
+  const { data: reEvalJobState } = trpc.are.prospects.getReevalJob.useQuery(
+    { jobId: reEvalJob?.jobId ?? 0 },
+    { enabled: !!reEvalJob, refetchInterval: reEvalJob ? 2000 : false },
+  );
+  useEffect(() => {
+    if (!reEvalJob || reEvalJobState === undefined) return;
+    if (reEvalJobState === null) {
+      // The job is gone (or not this workspace's): stop polling rather than spin.
+      setReEvalProgress(null);
+      setReEvalJob(null);
+      if (reEvalToastId.current !== undefined) toast.dismiss(reEvalToastId.current);
+      return;
+    }
+    const j = reEvalJobState;
+    const done = j.done + j.failed;
+    if (j.status === "queued" || j.status === "running") {
+      setReEvalProgress({ done, total: j.total });
+      reEvalToastId.current = toast.loading(`Re-evaluating ${done} / ${j.total} prospects…`, { id: reEvalToastId.current, duration: Infinity });
+      return;
+    }
+    setReEvalProgress(null);
+    setReEvalJob(null);
+    if (reEvalToastId.current !== undefined) toast.dismiss(reEvalToastId.current);
+    if (j.status !== "done") toast.error(`Re-evaluation ${j.status} after ${done} of ${j.total}${j.message ? ` (${j.message})` : ""}`);
+    else toast.success(
+      j.requalified > 0
+        ? `Re-evaluated ${done} prospects — ${j.requalified} re-qualified (threshold: ${reEvalJob.threshold})!`
+        : `Re-evaluated ${done} prospects — none met the threshold (${reEvalJob.threshold}).`,
+    );
+    if (j.status === "done" && done > 0 && j.requalified === 0) setShowIcpSuggestion(true);
+    utils.are.prospects.getRejectionStats.invalidate({ campaignId });
+    utils.are.prospects.getReevalHistory.invalidate({ campaignId });
+    utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
+  }, [reEvalJobState]); // eslint-disable-line react-hooks/exhaustive-deps
   // Hiding the button is UX; the boundary is the gate on the query itself.
   // This CSV is rendered SERVER-side (are.prospects.exportRejections), so
   // unlike the Leads/Contacts/Pipeline exports it can be — and since
   // 2026-09-20 is — refused rather than merely hidden.
   const { can: canPerm } = usePermissions();
+  // Re-evaluate and scrape are a manager's on the server (A36); a rep isn't offered them.
+  const isManager = useWorkspaceRole().isManager;
   const handleExportCsv = async () => {
     const result = await fetchCsv();
     if (!result.data?.csv) { toast.error("No data to export"); return; }
@@ -2195,13 +2325,28 @@ export default function ARECampaignDetail() {
     toast.success(`Exported ${result.data.count} rejections`);
   };
 
-  const [selectedProspectId, setSelectedProspectId] = useState<number | null>(null);
-  const [dossierOpen, setDossierOpen] = useState(false);
+  // ?prospect=<id> opens that prospect's dossier (audit 2026-10-20, A49):
+  // mention notices and /are/prospects/:id link here, and nothing read it.
+  const linkedProspectId = (() => {
+    const v = Number(new URLSearchParams(typeof window !== "undefined" ? window.location.search : "").get("prospect"));
+    return Number.isInteger(v) && v > 0 ? v : null;
+  })();
+  const [selectedProspectId, setSelectedProspectId] = useState<number | null>(linkedProspectId);
+  const [dossierOpen, setDossierOpen] = useState(linkedProspectId !== null);
+  // A prospect who is not on the loaded page (a link, the funnel, Rejections)
+  // is read by id, so the dossier opens on them instead of "No prospect selected".
+  const selectedOnPage = (prospects ?? []).some((p) => p.id === selectedProspectId);
+  const selectedById = trpc.are.prospects.byIds.useQuery(
+    { campaignId, prospectIds: [selectedProspectId ?? 1] },
+    { enabled: validId && selectedProspectId !== null && !selectedOnPage },
+  );
   // Controlled tab state so empty-state CTAs (e.g. "Go to Scraper") can switch tabs.
   const [tab, setTab] = useState("prospects");
   const [scrapeQuery, setScrapeQuery] = useState("");
   const [scrapeSource, setScrapeSource] = useState<"google_business" | "linkedin" | "web" | "news">("google_business");
-  const [thresholdDraft, setThresholdDraft] = useState<number | null>(null);
+  // undefined is "not edited": null is a real value, Off (A16). With null as
+  // both, Disable on a campaign that had a threshold changed nothing.
+  const [thresholdDraft, setThresholdDraft] = useState<number | null | undefined>(undefined);
   const [minConfDraft, setMinConfDraft] = useState<number | null>(null);
   const [s2oEnabled, setS2oEnabled] = useState<boolean | null>(null);
   const [sourcesDraft, setSourcesDraft] = useState<string[] | null>(null);
@@ -2211,8 +2356,10 @@ export default function ARECampaignDetail() {
   const [fullAck, setFullAck] = useState(false);
   const [gapDraft, setGapDraft] = useState<number | null>(null);
   const [respacePlan, setRespacePlan] = useState<{ gapDays: number; prospectsInFlight: number; prospectsTouched: number; rowsMoved: number; before: { earliest: string; latest: string } | null; after: { earliest: string; latest: string } | null; applied: boolean } | null>(null);
-  // Bulk selection
+  // Bulk selection — cleared when the filter changes, so a mass action only
+  // touches rows the user can see (R4).
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  useClearOnChange(prospectFilter, () => setSelectedIds(new Set()));
   const [reEvaluateAllConfirmOpen, setReEvaluateAllConfirmOpen] = useState(false);
   const [thresholdOverride, setThresholdOverride] = useState<number | null>(null);
   const [showIcpSuggestion, setShowIcpSuggestion] = useState(false);
@@ -2226,10 +2373,11 @@ export default function ARECampaignDetail() {
   // filters and pages; this tab used to render every rejection at once.
   const [rejPage, setRejPage] = useState(1);
   useClearOnChange({ reasonFilter }, () => setRejPage(1));
-  const { data: rejectionStats } = trpc.are.prospects.getRejectionStats.useQuery(
+  const rejectionQ = trpc.are.prospects.getRejectionStats.useQuery(
     { campaignId, reason: reasonFilter, page: rejPage, perPage: REJECTION_PAGE },
     { placeholderData: (prev) => prev },
   );
+  const rejectionStats = rejectionQ.data;
   const rejPages = Math.max(1, Math.ceil((rejectionStats?.itemsTotal ?? 0) / REJECTION_PAGE));
   // Mass-action selection over the rejections on this page.
   const rejectionIds = useMemo(() => ((rejectionStats?.items ?? []) as Array<{ id: number }>).map((item) => item.id), [rejectionStats]);
@@ -2269,15 +2417,36 @@ export default function ARECampaignDetail() {
   const [fixedDraft, setFixedDraft] = useState<Array<{ stepIndex: number; day: number; channel: "email" | "linkedin"; subject: string; body: string }> | null>(null);
   const copyActive = copyDraft ?? ((campaign as any)?.copyMode === "fixed" ? "fixed" : "per_person");
   const fixedSteps = fixedDraft ?? ((Array.isArray((campaign as any)?.fixedSteps) ? (campaign as any).fixedSteps : []) as Array<{ stepIndex: number; day: number; channel: "email" | "linkedin"; subject: string; body: string }>);
-  const setFixedStep = (i: number, patch: Partial<{ day: number; subject: string; body: string }>) =>
+  const setFixedStep = (i: number, patch: Partial<{ subject: string; body: string }>) =>
     setFixedDraft(fixedSteps.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
-  const addFixedStep = () => setFixedDraft([...fixedSteps, { stepIndex: fixedSteps.length, day: fixedSteps.length === 0 ? 0 : (fixedSteps[fixedSteps.length - 1]?.day ?? 0) + 7, channel: "email", subject: "", body: "" }]);
+  const addFixedStep = () => setFixedDraft([...fixedSteps, { stepIndex: fixedSteps.length, day: 0, channel: "email", subject: "", body: "" }]);
   const removeFixedStep = (i: number) => setFixedDraft(fixedSteps.filter((_, idx) => idx !== i).map((s, idx) => ({ ...s, stepIndex: idx })));
+  /**
+   * The Copy card saves on its own (audit 2026-10-20, A46). It went through
+   * the tab's shared save, whose success cleared every other card's unsaved
+   * draft and never its own, so saving copy threw away a threshold being
+   * edited and left "Save copy settings" lit.
+   */
+  const saveCopy = trpc.are.campaigns.update.useMutation({
+    onSuccess: () => {
+      toast.success("Copy settings saved");
+      utils.are.campaigns.get.invalidate({ id: campaignId });
+      setCopyDraft(null);
+      setFixedDraft(null);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  // What the minimum-score slider would reject if saved (A14): the engine
+  // rejects these on its next tick, so the count is shown and confirmed.
+  const fitGatePreview = trpc.are.campaigns.fitGatePreview.useQuery(
+    { id: campaignId, minConfidence: minConfDraft ?? 0 },
+    { enabled: validId && minConfDraft !== null, placeholderData: (prev) => prev },
+  );
   const updateCampaign = trpc.are.campaigns.update.useMutation({
     onSuccess: () => {
       toast.success("Campaign settings saved");
       utils.are.campaigns.get.invalidate({ id: campaignId });
-      setThresholdDraft(null);
+      setThresholdDraft(undefined);
       setMinConfDraft(null);
       setS2oEnabled(null);
       setSourcesDraft(null);
@@ -2299,10 +2468,22 @@ export default function ARECampaignDetail() {
     onError: (e) => toast.error(e.message),
   });
 
+  // A first launch on the UTC default asks first (A31); a yes sends it again with confirmTimezone.
+  const retrySetStatus = useRef<((v: any) => void) | null>(null);
   const setStatus = trpc.are.campaigns.setStatus.useMutation({
-    onSuccess: () => utils.are.campaigns.get.invalidate({ id: campaignId }),
-    onError: (e) => toast.error(e.message),
+    onSuccess: (_r, vars) => {
+      toast.success(vars.status === "active" ? "Campaign activated. The engine picks it up within 3 minutes." : vars.status === "paused" ? "Campaign paused. Nothing more is sent from it." : "Campaign updated");
+      utils.are.campaigns.get.invalidate({ id: campaignId });
+      utils.are.campaigns.list.invalidate();
+    },
+    onError: (e, vars) => {
+      if (askLaunchOnUtc(e.message, () => retrySetStatus.current?.({ ...vars, confirmTimezone: true }))) return;
+      toast.error(e.message);
+    },
   });
+  retrySetStatus.current = setStatus.mutate;
+  // Activate starts real sending, so it asks first (A52), as the list does.
+  const confirmActivate = useConfirmActivate();
 
   const enrichBatch = trpc.are.prospects.enrichBatch.useMutation({
     onSuccess: (d) => {
@@ -2319,21 +2500,38 @@ export default function ARECampaignDetail() {
   const [importOpen, setImportOpen] = useState(false);
   const [importParsed, setImportParsed] = useState<ImportRow[]>([]);
   const [importFileName, setImportFileName] = useState("");
+  // The whole multi-chunk import, so a second click between chunks does nothing (A54, A74).
+  const [importing, setImporting] = useState(false);
+  /**
+   * The whole file, in chunks of the server's 2,000-row limit, one after
+   * another, with every count in the result (audit 2026-10-20, A54). Rows past
+   * 2,000 were dropped without a word, and the toast named duplicates only,
+   * not the rows skipped as empty or as already in another campaign.
+   */
   const importRowsMut = trpc.are.prospects.importRows.useMutation({
-    onSuccess: (d) => {
-      toast.success(
-        `Imported ${d.imported} prospect${d.imported === 1 ? "" : "s"}` +
-        (d.withEmail ? ` (${d.withEmail} with email)` : "") +
-        (d.skippedDuplicates ? ` · ${d.skippedDuplicates} duplicate${d.skippedDuplicates === 1 ? "" : "s"} skipped` : ""),
-      );
+    // runImport reports a failure, with how far the import got before it.
+    onError: () => {},
+  });
+  const runImport = async () => {
+    if (importing) return;
+    setImporting(true);
+    const totals = emptyImportTotals();
+    try {
+      for (let i = 0; i < importParsed.length; i += IMPORT_CHUNK) {
+        addImportTotals(totals, await importRowsMut.mutateAsync({ campaignId, rows: importParsed.slice(i, i + IMPORT_CHUNK) }));
+      }
+      toast.success(importSummary(totals), { duration: 8000 });
       setImportOpen(false);
       setImportParsed([]);
       setImportFileName("");
+    } catch (e) {
+      toast.error(`${(e as Error).message}${totals.imported > 0 || totals.skippedDuplicates > 0 ? `. Before it stopped: ${importSummary(totals)}` : ""}`, { duration: 10000 });
+    } finally {
+      setImporting(false);
       utils.are.prospects.list.invalidate({ campaignId }); utils.are.prospects.statusCounts.invalidate();
       utils.are.campaigns.get.invalidate({ id: campaignId });
-    },
-    onError: (e) => toast.error(e.message),
-  });
+    }
+  };
 
   const scrape = trpc.are.scraper.run.useMutation({
     onSuccess: (d) => {
@@ -2366,10 +2564,11 @@ export default function ARECampaignDetail() {
     );
   }
 
-  const selectedProspect = prospects?.find((p) => p.id === selectedProspectId);
+  const selectedProspect: any = prospects?.find((p) => p.id === selectedProspectId)
+    ?? (selectedById.data ?? []).find((p) => p.id === selectedProspectId);
   const pendingEnrich = queueCounts?.pendingEnrich ?? 0;
   const awaitingApproval = queueCounts?.awaitingApproval ?? 0;
-  const autoThreshold = thresholdDraft !== null ? thresholdDraft : (campaign?.autoApproveThreshold ?? null);
+  const autoThreshold = thresholdDraft !== undefined ? thresholdDraft : (campaign?.autoApproveThreshold ?? null);
   const minConfidence = minConfDraft !== null ? minConfDraft : ((campaign as any)?.minConfidence ?? 40);
   const s2oActive = s2oEnabled !== null ? s2oEnabled : (campaign?.signalToOpportunityEnabled ?? false);
   const autonomyActive = autonomyDraft ?? (campaign?.autonomyMode ?? "batch_approval");
@@ -2416,11 +2615,11 @@ export default function ARECampaignDetail() {
           </Button>
         </Link>
         <Badge variant="outline" className={`text-[10px] px-2 py-0.5 border ${autonomyColor}`}>
-          {campaign.autonomyMode?.replace(/_/g, " ")}
+          {areAutonomyLabel(campaign.autonomyMode)}
         </Badge>
         <Badge variant="outline" className="text-[10px] px-2 py-0.5 border-0"
           style={{ backgroundColor: statusColor + "22", color: statusColor }}>
-          {campaign.status}
+          {areStatusLabel(campaign.status)}
         </Badge>
         {campaign.status === "active" ? (
           <Button size="sm" variant="outline" className="gap-1.5 text-xs"
@@ -2431,7 +2630,7 @@ export default function ARECampaignDetail() {
           </Button>
         ) : (
           <Button size="sm" className="gap-1.5 text-xs"
-            onClick={() => setStatus.mutate({ id: campaignId, status: "active" })}
+            onClick={() => confirmActivate(campaign, () => setStatus.mutate({ id: campaignId, status: "active" }))}
             disabled={setStatus.isPending}>
             {setStatus.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
             Activate
@@ -2576,8 +2775,22 @@ export default function ARECampaignDetail() {
               </div>
             </div>
 
-            {/* Select-all + legend row */}
-            <div className="flex items-center gap-4 mb-3 text-[11px] text-muted-foreground">
+            {/* Which rows: a view, an enrichment state, a search — each
+                counted by the server (tracker 12, 13; A45). The enrichment
+                chips were a legend you could not click. */}
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              <div {...tablistProps("Show prospects")} className="flex flex-wrap gap-1">
+                {PROSPECT_VIEW_KEYS.map((v) => (
+                  <Button key={v} {...tabProps(prospectView === v)} size="sm" variant={prospectView === v ? "default" : "outline"} className="h-7 px-2 text-[11px]"
+                    onClick={() => setProspectView(v)}>
+                    {PROSPECT_VIEW_LABEL[v]} <span className="ml-1 opacity-70 tabular-nums">{(queueCounts?.byView?.[v] ?? 0).toLocaleString()}</span>
+                  </Button>
+                ))}
+              </div>
+              <Input aria-label="Search prospects" value={prospectSearch} onChange={(e) => setProspectSearch(e.target.value)}
+                placeholder="Search name, email, company, title…" className="h-8 text-xs flex-1 min-w-[180px] max-w-xs" />
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mb-3 text-[11px] text-muted-foreground">
               {prospects && prospects.length > 0 && (
                 <label className="flex items-center gap-1.5 cursor-pointer select-none">
                   <Checkbox
@@ -2585,18 +2798,28 @@ export default function ARECampaignDetail() {
                     onCheckedChange={toggleSelectAll}
                     className="size-3.5"
                   />
-                  <span>All</span>
+                  <span>All on this page</span>
                 </label>
               )}
-              <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#34D399]" /> complete</span>
-              <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#F59E0B]" /> enriching</span>
-              <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#94A3B8]" /> pending</span>
-              <span className="flex items-center gap-1"><div className="size-2 rounded-full bg-[#F87171]" /> failed</span>
+              <div role="group" aria-label="Enrichment" className="flex flex-wrap items-center gap-1">
+                <span>Enrichment:</span>
+                {ENRICHMENT_STATES.map((e) => (
+                  <button key={e} type="button" aria-pressed={enrichFilter === e}
+                    onClick={() => setEnrichFilter(enrichFilter === e ? null : e)}
+                    className={`flex items-center gap-1 rounded-full border px-2 py-0.5 transition-colors ${enrichFilter === e ? "border-primary/50 bg-primary/10 text-foreground font-medium" : "border-border hover:border-primary/30"}`}>
+                    <span className="size-2 rounded-full" style={{ backgroundColor: ENRICH_COLOR[e] }} />
+                    {e} <span className="tabular-nums">{(queueCounts?.byEnrichment?.[e] ?? 0).toLocaleString()}</span>
+                  </button>
+                ))}
+                {enrichFilter && (
+                  <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => setEnrichFilter(null)}>any</button>
+                )}
+              </div>
               <span className="ml-auto flex items-center gap-1"><Eye className="size-3" /> Click row to view dossier</span>
             </div>
             {prospectPages > 1 && (
               <div className="flex flex-wrap items-center justify-between gap-2 mb-3 text-xs text-muted-foreground">
-                <span>{(prospectPage - 1) * PROSPECT_PAGE + 1}–{(prospectPage - 1) * PROSPECT_PAGE + (prospects?.length ?? 0)} of {(queueCounts?.inQueue ?? 0).toLocaleString()}</span>
+                <span>{(prospectPage - 1) * PROSPECT_PAGE + 1}–{(prospectPage - 1) * PROSPECT_PAGE + (prospects?.length ?? 0)} of {(queueCounts?.matching ?? 0).toLocaleString()}</span>
                 <div className="flex items-center gap-1">
                   <Button size="sm" variant="outline" className="h-7" disabled={prospectPage <= 1} onClick={() => { setSelectedIds(new Set()); setProspectPage((p) => p - 1); }}>Previous</Button>
                   <span className="px-2">Page {prospectPage} of {prospectPages}</span>
@@ -2618,12 +2841,24 @@ export default function ARECampaignDetail() {
                 <Loader2 className="size-4 animate-spin" /> Loading prospects…
               </div>
             ) : !prospects || prospects.length === 0 ? (
-              <EmptyState
-                icon={Radar}
-                title="No prospects yet"
-                description="Use the Scraper tab to discover prospects from Google Business, LinkedIn, news, or the web."
-                action={<Button size="sm" variant="outline" onClick={() => setTab("scraper")}>Go to Scraper</Button>}
-              />
+              (queueCounts?.inQueue ?? 0) === 0 ? (
+                <EmptyState
+                  icon={Radar}
+                  title="No prospects yet"
+                  description="Use the Scraper tab to discover prospects from Google Business, LinkedIn, news, or the web."
+                  action={<Button size="sm" variant="outline" onClick={() => setTab("scraper")}>Go to Scraper</Button>}
+                />
+              ) : (
+                // The campaign has prospects; this filter has none of them.
+                <EmptyState
+                  icon={Search}
+                  title={prospectSearchQ || enrichFilter ? "No prospects match" : prospectView === "review" ? "Nothing waiting for review" : `No prospects under ${PROSPECT_VIEW_LABEL[prospectView]}`}
+                  description={prospectSearchQ || enrichFilter
+                    ? "Try a different search, or clear the enrichment filter."
+                    : prospectView === "review" ? "Everyone here has been decided. Approved prospects are under Approved; rejected ones are on the Rejections tab." : "Pick another view above."}
+                  action={<Button size="sm" variant="outline" onClick={() => { setProspectView("all"); setEnrichFilter(null); setProspectSearch(""); }}>Show all</Button>}
+                />
+              )
             ) : (
               <div className="space-y-2">
                 {prospects.map((p) => (
@@ -2640,12 +2875,14 @@ export default function ARECampaignDetail() {
                         campaignId={campaignId}
                         onSelect={(id) => { setSelectedProspectId(id); setDossierOpen(true); setDossierTab("intel"); }}
                         selected={selectedProspectId === p.id}
+                        onReject={setRejectTarget}
                       />
                     </div>
                   </div>
                 ))}
               </div>
             )}
+            <RejectProspectDialog target={rejectTarget} presets={REJECT_TEMPLATES} onClose={() => setRejectTarget(null)} onChanged={invalidateCampaign} />
           </TabsContent>
 
           {/* ── Scraper tab ── */}
@@ -2661,6 +2898,8 @@ export default function ARECampaignDetail() {
               {/* Multi-source Discovery (one-click using campaign targeting) */}
               <CampaignDiscoveryLauncher campaignId={campaignId} campaign={campaign} />
             </div>
+            {/* A scrape spends source credits and fills the review queue: a manager's (A36). */}
+            {isManager ? (
             <div className="max-w-2xl space-y-5 mt-6">
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Single-source scrape</div>
 
@@ -2744,6 +2983,9 @@ export default function ARECampaignDetail() {
                 </CardContent>
               </Card>
             </div>
+            ) : (
+              <p className="max-w-2xl mt-6 text-xs text-muted-foreground">A single-source scrape is run by a manager or admin.</p>
+            )}
 
             {/* Recent scrape jobs */}
             <div className="mt-6">
@@ -3107,7 +3349,7 @@ export default function ARECampaignDetail() {
                   </p>
                   <div className="space-y-2">
                     {([
-                      { v: "full", title: "Fully autonomous", body: "Everyone at or above the auto-approve threshold is approved, sequenced, enrolled and sent — nobody reviews. Below the threshold is skipped." },
+                      { v: "full", title: "Fully autonomous", body: "With an auto-approve threshold set, prospects at or above it are approved, sequenced, enrolled and sent with nobody reviewing, and prospects below it are rejected. With no threshold, nothing is approved automatically." },
                       { v: "batch_approval", title: "Batch approval", body: "The engine screens out obvious misses; you approve the rest in batches before anything is sequenced or sent." },
                     ] as const).map((o) => (
                       <button
@@ -3127,7 +3369,7 @@ export default function ARECampaignDetail() {
                   {autonomyDraft === "full" && campaign?.autonomyMode !== "full" && (
                     <label className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed cursor-pointer">
                       <input type="checkbox" className="mt-0.5" checked={fullAck} onChange={(e) => setFullAck(e.target.checked)} />
-                      <span>I understand that with <strong>Fully autonomous</strong> this campaign will approve and email prospects on its own, up to {campaign?.dailySendCap ?? 50}/day, with no human review between discovery and send. The auto-approve threshold {autoThreshold !== null ? `(${autoThreshold})` : "(currently off — set one below, or everyone is approved)"} is the only gate.</span>
+                      <span>I understand that with <strong>Fully autonomous</strong> this campaign will approve and email prospects on its own, up to {campaign?.dailySendCap ?? 50}/day, with no human review between discovery and send. The auto-approve threshold is the only gate: {approveThresholdSummary(autoThreshold)}.</span>
                     </label>
                   )}
                 </CardContent>
@@ -3164,13 +3406,19 @@ export default function ARECampaignDetail() {
                   </div>
                   {copyActive === "fixed" && (
                     <div className="space-y-2">
-                      {fixedSteps.length === 0 && <p className="text-[11px] text-muted-foreground">No steps yet — add the first one.</p>}
+                      {/* The engine spaces steps by the cadence below, so the
+                          day is shown, not typed (A47). */}
+                      <p className="text-[11px] text-muted-foreground">
+                        Steps go out {gapActive} day{gapActive === 1 ? "" : "s"} apart, counted from each prospect's first send — set the gap under Step cadence.
+                      </p>
+                      {usableFixedSteps(fixedSteps) === 0 && (
+                        <p className="text-[11px] text-amber-700 dark:text-amber-300">{EMPTY_FIXED_COPY} Add one before saving.</p>
+                      )}
                       {fixedSteps.map((s, i) => (
                         <div key={i} className="rounded-md border border-border p-3 space-y-2">
                           <div className="flex items-center gap-2">
                             <span className="text-[11px] font-medium">Step {i + 1}</span>
-                            <span className="text-[11px] text-muted-foreground">· day</span>
-                            <Input aria-label={`Step ${i + 1} day`} type="number" min={0} max={365} value={s.day} onChange={(e) => setFixedStep(i, { day: Math.max(0, Number(e.target.value) || 0) })} className="h-7 w-20 text-xs" />
+                            <span className="text-[11px] text-muted-foreground">· day {fixedStepDay(i, gapActive)}</span>
                             <div className="flex-1" />
                             <Button size="sm" variant="ghost" className="h-7 text-[11px] text-destructive" onClick={() => removeFixedStep(i)}>Remove</Button>
                           </div>
@@ -3181,9 +3429,14 @@ export default function ARECampaignDetail() {
                       <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={addFixedStep}>+ Add step</Button>
                     </div>
                   )}
-                  <Button size="sm" className="h-7 text-[11px]" disabled={updateCampaign.isPending || (copyDraft === null && fixedDraft === null)}
-                    onClick={() => updateCampaign.mutate({ id: campaign!.id, copyMode: copyActive, fixedSteps: copyActive === "fixed" ? fixedSteps : undefined } as any)}>
-                    {updateCampaign.isPending ? "Saving…" : "Save copy settings"}
+                  <Button size="sm" className="h-7 text-[11px]"
+                    disabled={saveCopy.isPending || (copyDraft === null && fixedDraft === null) || (copyActive === "fixed" && usableFixedSteps(fixedSteps) === 0)}
+                    onClick={() => saveCopy.mutate({
+                      id: campaign!.id,
+                      copyMode: copyActive,
+                      fixedSteps: copyActive === "fixed" ? fixedSteps.map((s, i) => ({ ...s, stepIndex: i, day: fixedStepDay(i, gapActive) })) : undefined,
+                    })}>
+                    {saveCopy.isPending ? "Saving…" : "Save copy settings"}
                   </Button>
                 </CardContent>
               </Card>
@@ -3240,7 +3493,9 @@ export default function ARECampaignDetail() {
                 </CardContent>
               </Card>
 
-              {/* Auto-approve threshold */}
+              {/* Auto-approve threshold. Only Full Auto has one (A16): the
+                  engine ignores it in Batch approval, so it is not offered. */}
+              {autonomyActive === "full" && (
               <Card className="bg-card border">
                 <CardHeader className="pb-2 pt-4 px-4">
                   <CardTitle className="text-sm flex items-center gap-2">
@@ -3250,7 +3505,7 @@ export default function ARECampaignDetail() {
                 </CardHeader>
                 <CardContent className="px-4 pb-4 space-y-4">
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    Prospects whose ICP match score meets or exceeds this threshold are automatically approved and skip the manual review queue. Set to <strong>Off</strong> to require manual approval for all prospects.
+                    {APPROVE_THRESHOLD_EXPLAINER}
                   </p>
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
@@ -3261,11 +3516,11 @@ export default function ARECampaignDetail() {
                             {autoThreshold}
                           </span>
                         ) : (
-                          <span className="text-xs text-muted-foreground">Off (manual review)</span>
+                          <span className="text-xs text-muted-foreground">Off</span>
                         )}
                         <Button
                           size="sm" variant="outline" className="h-6 px-2 text-[10px]"
-                          onClick={() => setThresholdDraft(autoThreshold === null ? 70 : null)}
+                          onClick={() => setThresholdDraft(autoThreshold === null ? APPROVE_THRESHOLD_START : null)}
                         >
                           {autoThreshold === null ? "Enable" : "Disable"}
                         </Button>
@@ -3286,17 +3541,14 @@ export default function ARECampaignDetail() {
                         </div>
                         <div className="flex items-center gap-2 p-2 rounded-lg bg-muted/50 text-xs">
                           <div className="size-2 rounded-full shrink-0" style={{ backgroundColor: autoThreshold >= 70 ? "#34D399" : autoThreshold >= 40 ? "#F59E0B" : "#F87171" }} />
-                          <span>
-                            {autoThreshold >= 70 ? "High precision — only strong ICP matches will be auto-approved."
-                              : autoThreshold >= 40 ? "Balanced — moderate and strong matches will be auto-approved."
-                              : "High volume — most prospects will be auto-approved regardless of fit."}
-                          </span>
+                          <span>{approveThresholdSummary(autoThreshold)}.</span>
                         </div>
                       </div>
                     )}
                   </div>
                 </CardContent>
               </Card>
+              )}
 
               {/* Enrichment score gate (minConfidence) */}
               <Card className="bg-card border">
@@ -3307,8 +3559,12 @@ export default function ARECampaignDetail() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="px-4 pb-4 space-y-3">
+                  {/* What the engine does with a lower score (A14): it rejects
+                      them on its next run, it does not keep them waiting. */}
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    Only spend AI enrichment budget on discovered prospects whose ICP-match score clears this threshold. Lower-fit prospects stay in the queue but aren't enriched until they qualify.
+                    Only prospects whose ICP-match score reaches this are enriched. Discovered prospects scoring below it are
+                    rejected on the engine's next run (within a few minutes) and listed on the Rejections tab with the reason;
+                    a prospect not scored yet is kept. Raising it rejects everyone already waiting below the new number.
                   </p>
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium">Minimum ICP score to enrich</span>
@@ -3327,6 +3583,13 @@ export default function ARECampaignDetail() {
                     <span>40 — default</span>
                     <span>100 — only perfect fit</span>
                   </div>
+                  {minConfDraft !== null && fitGatePreview.data && (
+                    <p className={`text-[11px] ${fitGatePreview.data.wouldReject > 0 ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"}`}>
+                      {fitGatePreview.data.wouldReject > 0
+                        ? `Saving ${minConfDraft} rejects ${fitGatePreview.data.wouldReject} prospect${fitGatePreview.data.wouldReject === 1 ? "" : "s"} now waiting below it.`
+                        : `Saving ${minConfDraft} rejects nobody waiting now.`}
+                    </p>
+                  )}
                 </CardContent>
               </Card>
 
@@ -3340,12 +3603,12 @@ export default function ARECampaignDetail() {
                 </CardHeader>
                 <CardContent className="px-4 pb-4 space-y-4">
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    When a <strong>meeting_booked</strong> signal is received, the AI automatically creates a CRM account, contact, and opportunity pre-filled with the prospect’s intelligence dossier (hooks, pain signals, recommended timing). The campaign owner is notified via in-app notification.
+                    A booked meeting always adds the person to your CRM as a contact, with their company. With this on, a discovery-stage opportunity is opened too, pre-filled from their intelligence dossier. The campaign's owner is notified in the Inbox either way.
                   </p>
                   <div className="flex items-center justify-between p-3 rounded-xl border bg-muted/30">
                     <div className="space-y-0.5">
                       <div className="text-xs font-medium">Auto-create opportunity on meeting booked</div>
-                      <div className="text-[11px] text-muted-foreground">Creates account + contact + opportunity in the CRM pipeline</div>
+                      <div className="text-[11px] text-muted-foreground">Opens an opportunity in the pipeline as well as adding the contact and company</div>
                     </div>
                     <button aria-label="Auto-create opportunity on meeting booked"
                       onClick={() => setS2oEnabled(!s2oActive)}
@@ -3378,18 +3641,31 @@ export default function ARECampaignDetail() {
               <CampaignSourcesCard stored={(campaign as any)?.prospectSources} draft={sourcesDraft} onChange={setSourcesDraft} />
 
               {/* Save button */}
-              {(thresholdDraft !== null || minConfDraft !== null || s2oEnabled !== null || sourcesDraft !== null || autonomyDraft !== null || gapDraft !== null) && (
+              {(thresholdDraft !== undefined || minConfDraft !== null || s2oEnabled !== null || sourcesDraft !== null || autonomyDraft !== null || gapDraft !== null) && (
                 <div className="flex items-center gap-3">
                   <Button
-                    onClick={() => updateCampaign.mutate({
-                      id: campaignId,
-                      autoApproveThreshold: autoThreshold,
-                      minConfidence,
-                      signalToOpportunityEnabled: s2oActive,
-                      ...(sourcesDraft !== null ? { prospectSources: sourcesDraft } : {}),
-                      ...(autonomyDraft !== null ? { autonomyMode: autonomyDraft } : {}),
-                      ...(gapDraft !== null ? { stepGapDays: gapDraft } : {}),
-                    })}
+                    onClick={() => {
+                      // Only what was edited is written (A46), so this save
+                      // cannot put back a value someone else changed meanwhile.
+                      const save = () => updateCampaign.mutate({
+                        id: campaignId,
+                        ...(thresholdDraft !== undefined ? { autoApproveThreshold: thresholdDraft } : {}),
+                        ...(minConfDraft !== null ? { minConfidence: minConfDraft } : {}),
+                        ...(s2oEnabled !== null ? { signalToOpportunityEnabled: s2oEnabled } : {}),
+                        ...(sourcesDraft !== null ? { prospectSources: sourcesDraft } : {}),
+                        ...(autonomyDraft !== null ? { autonomyMode: autonomyDraft } : {}),
+                        ...(gapDraft !== null ? { stepGapDays: gapDraft } : {}),
+                      });
+                      // A higher fit gate rejects on the next tick (A14): say how many first.
+                      const n = minConfDraft !== null ? fitGatePreview.data?.wouldReject ?? 0 : 0;
+                      if (n > 0) {
+                        confirmAction({
+                          title: `Reject ${n} prospect${n === 1 ? "" : "s"}?`,
+                          description: `A minimum ICP score of ${minConfDraft} rejects the ${n} prospect${n === 1 ? "" : "s"} now waiting below it on the engine's next run, within a few minutes. They are listed on the Rejections tab and can be restored there.`,
+                          confirmLabel: "Save and reject",
+                        }, save);
+                      } else save();
+                    }}
                     disabled={updateCampaign.isPending || needsFullAck}
                     title={needsFullAck ? "Tick the acknowledgement above to switch to fully autonomous" : undefined}
                     className="gap-1.5"
@@ -3399,7 +3675,7 @@ export default function ARECampaignDetail() {
                   </Button>
                   <Button
                     variant="ghost" size="sm" className="text-xs text-muted-foreground"
-                    onClick={() => { setThresholdDraft(null); setMinConfDraft(null); setS2oEnabled(null); setSourcesDraft(null); setAutonomyDraft(null); setFullAck(false); setGapDraft(null); }}
+                    onClick={() => { setThresholdDraft(undefined); setMinConfDraft(null); setS2oEnabled(null); setSourcesDraft(null); setAutonomyDraft(null); setFullAck(false); setGapDraft(null); }}
                   >
                     Discard
                   </Button>
@@ -3409,7 +3685,14 @@ export default function ARECampaignDetail() {
           </TabsContent>
           {/* -- Rejections audit trail tab -- */}
           <TabsContent value="rejections" className="mt-4">
-            {(rejectionStats?.total ?? 0) === 0 ? (
+            {/* Loading and a failed read are not "no rejections" (A74). */}
+            {rejectionQ.isLoading ? (
+              <div className="flex items-center gap-2 text-muted-foreground py-12 justify-center text-sm">
+                <Loader2 className="size-4 animate-spin" /> Loading rejections…
+              </div>
+            ) : rejectionQ.error && !rejectionStats ? (
+              <QueryError compact what="the rejections" message={rejectionQ.error.message} onRetry={() => rejectionQ.refetch()} />
+            ) : (rejectionStats?.total ?? 0) === 0 ? (
               <EmptyState
                 icon={XCircle}
                 title="No rejections yet"
@@ -3539,6 +3822,7 @@ export default function ARECampaignDetail() {
                         </div>
                       </PopoverContent>
                     </Popover>
+                    {isManager && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -3547,15 +3831,16 @@ export default function ARECampaignDetail() {
                         setReEvaluateAllConfirmOpen(true);
                         setShowIcpSuggestion(false);
                       }}
-                      disabled={reEvaluateAll.isPending}
+                      disabled={reEvaluateAll.isPending || !!reEvalJob}
                     >
-                      {reEvaluateAll.isPending ? (
+                      {reEvaluateAll.isPending || reEvalJob ? (
                         <Loader2 className="size-3 animate-spin" />
                       ) : (
                         <RefreshCcw className="size-3" />
                       )}
                       Re-evaluate All
                     </Button>
+                    )}
                     {canPerm("export_data") && (
                     <Button
                       size="sm"
@@ -3625,8 +3910,9 @@ export default function ARECampaignDetail() {
                         {item.contactName || [item.firstName, item.lastName].filter(Boolean).join(" ") || "Unknown"}
                       </div>
                       <div className="text-xs text-muted-foreground truncate">{item.companyName ?? "—"}</div>
-                      {item.contactTitle && (
-                        <div className="text-[10px] text-muted-foreground">{item.contactTitle}</div>
+                      {/* The column is title (A74); contactTitle is not one. */}
+                      {item.title && (
+                        <div className="text-[10px] text-muted-foreground">{item.title}</div>
                       )}
                     </div>
                     <div className="shrink-0 text-right space-y-0.5">
@@ -3642,6 +3928,7 @@ export default function ARECampaignDetail() {
                           {new Date(item.rejectedAt).toLocaleDateString([], { month: "short", day: "numeric" })}
                         </div>
                       )}
+                      {isManager && (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -3656,6 +3943,7 @@ export default function ARECampaignDetail() {
                         )}
                         Re-evaluate
                       </Button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -3801,6 +4089,7 @@ export default function ARECampaignDetail() {
                 <div className="font-medium text-foreground mb-1">
                   {importParsed.length} row{importParsed.length === 1 ? "" : "s"} parsed
                   {" · "}{importParsed.filter((r) => r.email).length} with email
+                  {importParsed.length > IMPORT_CHUNK ? ` · sent in ${Math.ceil(importParsed.length / IMPORT_CHUNK)} parts of up to ${IMPORT_CHUNK.toLocaleString()}` : ""}
                 </div>
                 <div className="text-muted-foreground">
                   Preview: {importParsed.slice(0, 3).map((r) => `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.email || "—").join(", ")}
@@ -3813,10 +4102,10 @@ export default function ARECampaignDetail() {
             <Button variant="outline" size="sm" onClick={() => setImportOpen(false)}>Cancel</Button>
             <Button
               size="sm" className="gap-1.5"
-              disabled={importParsed.length === 0 || importRowsMut.isPending}
-              onClick={() => importRowsMut.mutate({ campaignId, rows: importParsed.slice(0, 2000) })}
+              disabled={importParsed.length === 0 || importing}
+              onClick={() => void runImport()}
             >
-              {importRowsMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
+              {importing ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
               Import {importParsed.length > 0 ? importParsed.length : ""}
             </Button>
           </DialogFooter>
@@ -3887,16 +4176,16 @@ export default function ARECampaignDetail() {
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
               <span className="block">
-                This will re-score all{" "}
-                <strong>{rejectionStats?.total ?? 0} rejected prospect{(rejectionStats?.total ?? 0) !== 1 ? "s" : ""}</strong>{" "}
-                against the current active ICP profile using the LLM scoring agent.
+                This re-scores the prospects the engine rejected for their ICP score against the current active
+                ICP profile, using the LLM scoring agent, up to 500 at a time, in the background. Rejections a
+                person made, and rejections for any other reason, are left as they are.
               </span>
               <span className="block">
-                Auto-approve threshold for this campaign:{" "}
+                Re-qualify line for this run:{" "}
                 <strong className="text-violet-600 dark:text-violet-400">
-                  {autoThreshold !== null ? `${autoThreshold} / 100` : "not set (default 70)"}
+                  {autoThreshold !== null ? `${autoThreshold} / 100 (the auto-approve threshold)` : "70 / 100 (no auto-approve threshold is set)"}
                 </strong>.
-                Prospects scoring at or above this will be moved back to the pending queue.
+                Prospects scoring at or above it go back to the pending queue, where this campaign's usual screening applies.
               </span>
               <span className="block">
                 <span className="text-xs text-muted-foreground">Override threshold for this run only (0–100):</span>

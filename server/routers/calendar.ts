@@ -13,6 +13,7 @@ import { createCalendarAdapter } from "../calendarAdapter";
 import { encryptField } from "../emailAdapter";
 import { invokeLLM, contentText } from "../_core/llm";
 import { assertOutboundNotPausedFor } from "../services/outboundPause";
+import { storedAttendees } from "@shared/calendarAttendees";
 
 function resolveTargetUser(
   ctx: { user: { id: number }; member: { role: string } },
@@ -47,8 +48,8 @@ async function storedAttendeeEmails(workspaceId: number, dbId: number | undefine
   if (!db) return [];
   const [ev] = await db.select({ attendees: calendarEvents.attendees }).from(calendarEvents)
     .where(and(eq(calendarEvents.id, dbId), eq(calendarEvents.workspaceId, workspaceId))).limit(1);
-  const list = Array.isArray(ev?.attendees) ? (ev!.attendees as Array<{ email?: string } | string>) : [];
-  return list.map((a) => (typeof a === "string" ? a : a?.email ?? "")).filter(Boolean);
+  // An array or a JSON string alike (O20): a string read as "no attendees" would skip the pause check.
+  return storedAttendees(ev?.attendees).map((a) => a.email).filter(Boolean);
 }
 
 export const calendarRouter = router({
@@ -125,8 +126,9 @@ export const calendarRouter = router({
         provider: "outlook_oauth",
         label: input.label ?? "Outlook Calendar",
         email: input.email,
-        oauthAccessToken: input.oauthAccessToken,
-        oauthRefreshToken: input.oauthRefreshToken,
+        // Encrypted at rest, as mailbox secrets are (audit 2026-10-20, C4).
+        oauthAccessToken: encryptField(input.oauthAccessToken),
+        oauthRefreshToken: encryptField(input.oauthRefreshToken),
         oauthTokenExpiry: input.oauthTokenExpiry,
         oauthScope: "Calendars.ReadWrite offline_access",
         calendarId: input.calendarId,
@@ -391,12 +393,9 @@ export const calendarRouter = router({
         }
       }
 
-      // Parse attendees
-      let attendeeList = "";
-      try {
-        const att = event.attendees ? JSON.parse(event.attendees as string) : [];
-        attendeeList = att.map((a: any) => a.email || a.name || "").filter(Boolean).join(", ");
-      } catch {}
+      // The JSON column comes back as an array, which JSON.parse threw on, so
+      // every summary said "(none listed)" (O20).
+      const attendeeList = storedAttendees(event.attendees).map((a) => a.email || a.name).filter(Boolean).join(", ");
 
       const prompt = `You are a sales CRM assistant. Generate a concise post-meeting summary for the following calendar event.
 

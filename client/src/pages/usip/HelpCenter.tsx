@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState, PageHeader, Shell } from "@/components/usip/Shell";
 import { useTourEngine, type Tour } from "@/components/usip/TourEngine";
+import { ChatMarkdown } from "@/components/usip/ChatMarkdown";
 import { trpc } from "@/lib/trpc";
 import { Link } from "wouter";
 import {
@@ -42,6 +43,7 @@ import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
 import { isAdminRole } from "@shared/roleRank";
 import { tablistProps, tabProps } from "@/lib/tabs";
+import { CitedArticles, type CitedArticle } from "@/components/usip/CitedArticles";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
@@ -191,7 +193,7 @@ function BrowseTab() {
 
 /* ─── Ask AI Tab (full page) ─────────────────────────────────────────────── */
 
-type Message = { role: "user" | "assistant"; body: string; citedArticleIds?: number[] };
+type Message = { role: "user" | "assistant"; body: string; citedArticles?: CitedArticle[] };
 
 function AskAITab() {
   const [conversationId, setConversationId] = useState<number | null>(null);
@@ -207,9 +209,12 @@ function AskAITab() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  async function handleSend() {
-    if (!input.trim() || isLoading) return;
-    const userMsg = input.trim();
+  // `override` is a suggested question: pressing one asks it, as the Help
+  // drawer's suggestions do. They only copied the text into the box, so the
+  // click looked like it did nothing (tracker 2026-11-06, item 15).
+  async function handleSend(override?: string) {
+    const userMsg = (override ?? input).trim();
+    if (!userMsg || isLoading) return;
     setInput("");
     setMessages((m) => [...m, { role: "user", body: userMsg }]);
     setIsLoading(true);
@@ -223,7 +228,7 @@ function AskAITab() {
       const res = await askAI.mutateAsync({ conversationId: convId, message: userMsg });
       setMessages((m) => [
         ...m,
-        { role: "assistant", body: res.answer, citedArticleIds: res.citedArticleIds },
+        { role: "assistant", body: res.answer, citedArticles: res.citedArticles },
       ]);
     } catch {
       setMessages((m) => [
@@ -256,7 +261,8 @@ function AskAITab() {
               ].map((q) => (
                 <button
                   key={q}
-                  onClick={() => setInput(q)}
+                  onClick={() => void handleSend(q)}
+                  disabled={isLoading}
                   className="px-3 py-1.5 text-xs text-violet-600 border border-violet-200 rounded-full hover:bg-violet-50"
                 >
                   {q}
@@ -274,12 +280,13 @@ function AskAITab() {
                   : "bg-card border border-border text-foreground shadow-sm"
               }`}
             >
-              <p className="whitespace-pre-wrap leading-relaxed">{msg.body}</p>
-              {msg.citedArticleIds && msg.citedArticleIds.length > 0 && (
-                <p className="text-xs mt-2 opacity-60">
-                  📖 Sources: Article {msg.citedArticleIds.join(", ")}
-                </p>
-              )}
+              {/* The assistant's answers through the same renderer as the Help
+                  drawer and the AI Assistant: printed raw, every **bold** run-in
+                  showed its asterisks (tracker 2026-11-06, item 4). */}
+              {msg.role === "user"
+                ? <p className="whitespace-pre-wrap leading-relaxed">{msg.body}</p>
+                : <ChatMarkdown text={msg.body} />}
+              <CitedArticles articles={msg.citedArticles} className="text-xs mt-2 opacity-70" />
             </div>
           </div>
         ))}
@@ -306,7 +313,8 @@ function AskAITab() {
           className="flex-1"
         />
         <Button
-          onClick={handleSend}
+          // Wrapped: passed bare, handleSend would get the click event as its override.
+          onClick={() => void handleSend()}
           disabled={isLoading || !input.trim()}
           className="bg-primary hover:bg-primary/90 text-primary-foreground"
         >
@@ -437,7 +445,9 @@ function AdminTab() {
   const [editArticle, setEditArticle] = useState<any | null>(null);
   const [isNew, setIsNew] = useState(false);
 
-  const { data: articles, refetch } = trpc.helpCenter.listArticles.useQuery({ limit: 50 });
+  // Every status, and every article: the default was published-only and the
+  // first 50, so drafts never showed here (G59).
+  const { data: articles, refetch } = trpc.helpCenter.listArticles.useQuery({ status: "all", limit: 500 });
   const { data: categories } = trpc.helpCenter.listCategories.useQuery();
   const { data: insights } = trpc.helpCenter.getInsights.useQuery();
 

@@ -7,6 +7,8 @@
 import { trpc } from "@/lib/trpc";
 import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenceSteps";
 import { EmptyState } from "@/components/usip/Shell";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
+import { isHtmlBody } from "@shared/emailBody";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { PlaceVerdictBadge } from "@/components/usip/are/PlaceVerdictBadge";
@@ -248,7 +250,12 @@ export function IntelligenceDossier({ prospect }: { prospect: any }) {
                     <span className="text-xs font-medium truncate flex-1">{step.subject}</span>
                   )}
                 </div>
-                <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">{step.body}</p>
+                {/* An edited step is HTML from the rich-text editor (A53): render it,
+                    sanitised, as the Sequences tab and the message preview do. */}
+                {isHtmlBody(step.body)
+                  ? <div className="prose prose-xs dark:prose-invert max-w-none text-xs text-muted-foreground leading-relaxed"
+                      dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(step.body) }} />
+                  : <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">{step.body}</p>}
               </div>
             ))}
           </div>

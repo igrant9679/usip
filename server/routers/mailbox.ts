@@ -28,7 +28,9 @@ import { assertSendAllowed } from "../sendLimits";
 import { escapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { HUMAN_COPY_RULES, humanizeAiCopy } from "../services/humanCopy";
-import { assertOutboundNotPausedFor } from "../services/outboundPause";
+import { assertOutboundNotPausedFor, recipientAddresses } from "../services/outboundPause";
+import { describeSuppression, findSuppression } from "../services/suppression";
+import { attachmentLimitProblem, base64Bytes } from "@shared/mailCompose";
 
 /**
  * Append the rep's email signature to outbound HTML / text if it isn't
@@ -148,6 +150,69 @@ async function assertMailboxOwnership(
     throw new TRPCError({ code: "FORBIDDEN", message: refusal });
   }
 }
+/**
+ * What compose and reply must refuse before anything is sent (audit
+ * 2026-10-20, O34). They checked the pause, ownership and the daily cap, and
+ * nothing else:
+ *
+ *   · a mailbox switched off in Sending Accounts still sent — the switch
+ *     every other sender respects (proposal mail, the pools, the system
+ *     sender) did nothing here;
+ *   · an address that unsubscribed, bounced, complained or was added by hand
+ *     still got the email. The ONE check (services/suppression), both lists,
+ *     by ADDRESS: a company domain on the do-not-prospect list does not stop
+ *     a rep writing to a person there from their own mailbox.
+ *
+ * Refused with the reason, so the page shows why and where to change it.
+ * Attachments are capped here too (O59): past the limit the request failed as
+ * an opaque "too large" after the whole upload.
+ */
+async function assertMailboxCanSend(
+  workspaceId: number,
+  account: { enabled?: boolean | null },
+  recipients: Array<string | null | undefined>,
+  attachments: Array<{ content: string }> | undefined,
+): Promise<void> {
+  if (account.enabled === false) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "This mailbox is switched off in Sending Accounts, so it can't send. Switch it back on there to use it.",
+    });
+  }
+  for (const address of recipientAddresses(recipients)) {
+    const hit = await findSuppression(workspaceId, { email: address }, "email", { domain: false });
+    if (hit) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Not sent: ${address} — ${describeSuppression(hit)}. Remove the address from Suppressions to email it.`,
+      });
+    }
+  }
+  const tooBig = attachmentLimitProblem((attachments ?? []).reduce((n, a) => n + base64Bytes(a.content), 0));
+  if (tooBig) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: tooBig });
+}
+
+/**
+ * The rep's text with its signature, then the quoted original underneath
+ * (O35: Forward used to send the rep's note alone). The signature goes under
+ * what the rep wrote, not under the quote, which is why the quote travels
+ * separately instead of inside bodyHtml.
+ */
+async function bodyForSend(
+  workspaceId: number,
+  userId: number,
+  input: { bodyHtml: string; bodyText?: string; quoted?: { html: string; text: string } },
+): Promise<{ bodyHtml: string; bodyText: string | undefined }> {
+  const withSig = await appendSignature(workspaceId, userId, input.bodyHtml, input.bodyText);
+  if (!input.quoted) return withSig;
+  return {
+    bodyHtml: withSig.bodyHtml + input.quoted.html,
+    bodyText: (withSig.bodyText ?? "") + input.quoted.text,
+  };
+}
+
+const QUOTED = z.object({ html: z.string(), text: z.string() }).optional();
+
 const assertMailboxWriteOwnership = (ctx: Parameters<typeof assertMailboxOwnership>[0], account: Parameters<typeof assertMailboxOwnership>[1]) =>
   assertMailboxOwnership(ctx, account, "You can only send from your own connected mailbox.");
 const assertMailboxReadOwnership = (ctx: Parameters<typeof assertMailboxOwnership>[0], account: Parameters<typeof assertMailboxOwnership>[1]) =>
@@ -181,6 +246,7 @@ export const mailboxRouter = router({
           email: sendingAccounts.fromEmail,
           provider: sendingAccounts.provider,
           unipileAccountId: sendingAccounts.unipileAccountId,
+          enabled: sendingAccounts.enabled,
         })
         .from(sendingAccounts)
         .innerJoin(
@@ -201,6 +267,8 @@ export const mailboxRouter = router({
         provider: a.provider,
         inboxEnabled: true,
         unipileBridged: true,
+        /** Switched off in Sending Accounts: readable, but sends are refused (O34). */
+        enabled: a.enabled !== false,
       }));
     }),
 
@@ -305,17 +373,20 @@ export const mailboxRouter = router({
         contentType: z.string(),
         content: z.string(), // base64
       })).optional(),
+      /** A forwarded original, quoted under the signature (O35). */
+      quoted: QUOTED,
     }))
     .mutation(async ({ ctx, input }) => {
       // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything"). Team-only mail still goes.
       await assertOutboundNotPausedFor(ctx.workspace.id, [input.to, input.cc, input.bcc]);
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       await assertMailboxWriteOwnership(ctx, acc);
+      await assertMailboxCanSend(ctx.workspace.id, acc, [input.to, input.cc, input.bcc], input.attachments);
       const adapter = createEmailAdapter(acc);
       // Cap gate before signature so a blocked send produces a clear
       // error instead of doing the (slow) signature build for nothing.
       await assertSendAllowed(ctx.workspace.id, acc.id);
-      const withSig = await appendSignature(ctx.workspace.id, ctx.user.id, input.bodyHtml, input.bodyText);
+      const withSig = await bodyForSend(ctx.workspace.id, ctx.user.id, input);
       return adapter.sendEmail({
         fromEmail: acc.fromEmail,
         fromName: acc.fromName ?? acc.name,
@@ -350,17 +421,20 @@ export const mailboxRouter = router({
         contentType: z.string(),
         content: z.string(), // base64
       })).optional(),
+      /** A forwarded original, quoted under the signature (O35). */
+      quoted: QUOTED,
     }))
     .mutation(async ({ ctx, input }) => {
       // Pause all outbound holds person sends too (owner, 2026-10-06: "Block everything"). Team-only mail still goes.
       await assertOutboundNotPausedFor(ctx.workspace.id, [input.to, input.cc]);
       const acc = await getAccount(input.accountId, ctx.workspace.id);
       await assertMailboxWriteOwnership(ctx, acc);
+      await assertMailboxCanSend(ctx.workspace.id, acc, [input.to, input.cc], input.attachments);
       const adapter = createEmailAdapter(acc);
       // Cap gate before signature so a blocked send produces a clear
       // error instead of doing the (slow) signature build for nothing.
       await assertSendAllowed(ctx.workspace.id, acc.id);
-      const withSig = await appendSignature(ctx.workspace.id, ctx.user.id, input.bodyHtml, input.bodyText);
+      const withSig = await bodyForSend(ctx.workspace.id, ctx.user.id, input);
       return adapter.sendEmail({
         fromEmail: acc.fromEmail,
         fromName: acc.fromName ?? acc.name,

@@ -51,13 +51,17 @@ function SectionBody({ content }: { content: string }) {
   return <div className="prose prose-sm max-w-none text-gray-700"><Streamdown>{content}</Streamdown></div>;
 }
 
+/**
+ * The badge the CLIENT sees. It used the team's own labels, so a client opening
+ * a link shared before sending saw "Draft", and every client saw "Sent to
+ * Client" (G70). A draft shows no badge; the rest speak to the reader.
+ */
 const STATUS_CONFIG = {
-  draft: { label: "Draft", color: "bg-slate-100 text-slate-600 border-slate-200" },
-  sent: { label: "Sent to Client", color: "bg-blue-50 text-blue-700 border-blue-200" },
-  under_review: { label: "Under Review", color: "bg-amber-50 text-amber-700 border-amber-200" },
+  sent: { label: "Awaiting your review", color: "bg-blue-50 text-blue-700 border-blue-200" },
+  under_review: { label: "Awaiting your review", color: "bg-amber-50 text-amber-700 border-amber-200" },
   accepted: { label: "Accepted", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  not_accepted: { label: "Not Accepted", color: "bg-red-50 text-red-700 border-red-200" },
-  revision_requested: { label: "Revision Requested", color: "bg-orange-50 text-orange-700 border-orange-200" },
+  not_accepted: { label: "Not accepted", color: "bg-red-50 text-red-700 border-red-200" },
+  revision_requested: { label: "Revision requested", color: "bg-orange-50 text-orange-700 border-orange-200" },
 } as const;
 
 const SECTION_LABELS: Record<string, string> = {
@@ -93,6 +97,9 @@ export default function ProposalPortal() {
   });
   const [acceptDialogOpen, setAcceptDialogOpen] = useState(false);
   const [accepted, setAccepted] = useState(false);
+  // Who is accepting, for the acceptance record (audit G18).
+  const [signerName, setSignerName] = useState("");
+  const [signerEmail, setSignerEmail] = useState("");
   const [extensionDialogOpen, setExtensionDialogOpen] = useState(false);
   const [extensionReason, setExtensionReason] = useState("");
   const [extensionSubmitted, setExtensionSubmitted] = useState(false);
@@ -144,7 +151,9 @@ export default function ProposalPortal() {
           <ClipboardList className="size-14 text-gray-300 mx-auto mb-4" />
           <h1 className="text-xl font-semibold text-gray-800 mb-2">Proposal Not Found</h1>
           <p className="text-gray-500 text-sm">
-            This proposal link is invalid or has expired. Please contact the sender for a new link.
+            {error?.data?.code === "NOT_FOUND" && error.message
+              ? error.message
+              : "This proposal link is invalid or has expired. Please contact the sender for a new link."}
           </p>
         </div>
       </div>
@@ -152,7 +161,7 @@ export default function ProposalPortal() {
   }
 
   const { proposal, sections, milestones } = data;
-  const statusCfg = STATUS_CONFIG[proposal.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.draft;
+  const statusCfg: { label: string; color: string } | undefined = STATUS_CONFIG[proposal.status as keyof typeof STATUS_CONFIG];
   const sectionMap: Record<string, string> = {};
   for (const s of sections) sectionMap[s.sectionKey] = s.content;
   const populatedSections = Object.entries(sectionMap).filter(([, v]) => v?.trim());
@@ -166,9 +175,11 @@ export default function ProposalPortal() {
             <ClipboardList className="size-5 text-teal-600" />
             <span className="font-semibold text-gray-800">Proposal</span>
           </div>
-          <span className={cn("text-xs px-2.5 py-1 rounded-full border font-medium", statusCfg.color)}>
-            {statusCfg.label}
-          </span>
+          {statusCfg && (
+            <span className={cn("text-xs px-2.5 py-1 rounded-full border font-medium", statusCfg.color)}>
+              {statusCfg.label}
+            </span>
+          )}
         </div>
       </header>
 
@@ -381,6 +392,7 @@ export default function ProposalPortal() {
                       onChange={(e) => setFeedbackForm(f => ({ ...f, name: e.target.value }))}
                       placeholder="Jane Smith"
                       className="mt-1"
+                      maxLength={200}
                     />
                   </div>
                   <div>
@@ -400,6 +412,7 @@ export default function ProposalPortal() {
                       onChange={(e) => setFeedbackForm(f => ({ ...f, message: e.target.value }))}
                       placeholder="Your questions or comments about this proposal..."
                       className="mt-1 min-h-[120px]"
+                      maxLength={5000}
                     />
                   </div>
                   <Button
@@ -514,6 +527,14 @@ export default function ProposalPortal() {
               By accepting, you confirm that <strong>{proposal.clientName}</strong> agrees to move forward with{" "}
               <strong>{proposal.title}</strong>.
             </p>
+            <div>
+              <Label htmlFor="signer-name" className="text-gray-700">Your full name *</Label>
+              <Input id="signer-name" value={signerName} onChange={(e) => setSignerName(e.target.value)} placeholder="Jane Smith" className="mt-1" maxLength={200} autoComplete="name" />
+            </div>
+            <div>
+              <Label htmlFor="signer-email" className="text-gray-700">Your email (optional)</Label>
+              <Input id="signer-email" type="email" value={signerEmail} onChange={(e) => setSignerEmail(e.target.value)} placeholder="jane@company.com" className="mt-1" maxLength={320} autoComplete="email" />
+            </div>
             <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-emerald-800 text-xs">
               <p className="font-medium mb-1">What happens next:</p>
               <ul className="space-y-0.5">
@@ -528,8 +549,13 @@ export default function ProposalPortal() {
               Cancel
             </Button>
             <Button
-              onClick={() => acceptMutation.mutate({ token })}
-              disabled={acceptMutation.isPending}
+              onClick={() => acceptMutation.mutate({
+                token,
+                signerName: signerName.trim(),
+                signerEmail: signerEmail.trim() || undefined,
+                timeZone: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return undefined; } })(),
+              })}
+              disabled={acceptMutation.isPending || !signerName.trim()}
               className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
             >
               <ThumbsUp className="size-4" />

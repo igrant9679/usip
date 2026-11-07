@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { invalidateDealReads } from "@/lib/crmCache";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -35,11 +36,14 @@ import {
   ArrowRightCircle,
   Mail,
   Trash2,
+  CalendarX,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "wouter";
 import { ConfirmButton } from "@/components/usip/Common";
 import { pressable } from "@/lib/pressable";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 
 const ALERT_CONFIG: Record<
   string,
@@ -59,6 +63,15 @@ const ALERT_CONFIG: Record<
     bg: "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800",
     description: (d) =>
       `Closing in ${d?.daysUntilClose ?? "?"} days with only ${d?.winProb ?? "?"}% win probability`,
+  },
+  // A close date that has passed — it was counted as "closing soon" (R38).
+  past_close_date: {
+    label: "Past Close Date",
+    icon: CalendarX,
+    color: "text-rose-700",
+    bg: "bg-rose-50 dark:bg-rose-900/20 border-rose-200 dark:border-rose-800",
+    description: (d) =>
+      `Close date passed ${d?.daysPastClose ?? "?"} day${d?.daysPastClose === 1 ? "" : "s"} ago, still open at ${d?.winProb ?? "?"}% win probability`,
   },
   amount_change: {
     label: "Amount Changed",
@@ -121,8 +134,10 @@ function MoveStageDialog({
     { enabled: open },
   );
   const stages = pipelineQ.data?.stages ?? [];
+  const utils = trpc.useUtils();
   const moveStage = trpc.pipelineAlerts.moveDealStage.useMutation({
-    onSuccess: () => { toast.success(`Deal moved to ${newStage}`); setNewStage(""); onSuccess(); onClose(); },
+    // The deal's own pages and numbers too, not just this list (R31).
+    onSuccess: () => { toast.success(`Deal moved to ${newStage}`); setNewStage(""); invalidateDealReads(utils); onSuccess(); onClose(); },
     onError: (e) => toast.error(e.message),
   });
   return (
@@ -208,9 +223,13 @@ function AlertCard({ alert, onDismiss }: { alert: any; onDismiss: () => void }) 
   const details = alert.details ?? {};
 
   const dismiss = trpc.pipelineAlerts.dismiss.useMutation({
-    onSuccess: () => { toast.success("Alert dismissed"); onDismiss(); },
+    onSuccess: () => { toast.success("Dismissed for 7 days. It comes back after that if the deal still needs it."); onDismiss(); },
     onError: (e) => toast.error(e.message),
   });
+  // Clearing an alert hides it from everyone: the deal's owner or a manager (R37).
+  const { user } = useAuth();
+  const isManager = useWorkspaceRole().isManager;
+  const canDismiss = isManager || (alert.opportunity?.ownerUserId != null && alert.opportunity.ownerUserId === user?.id);
 
   return (
     <div className={`flex items-start gap-3 p-3 rounded-lg border ${config.bg}`}>
@@ -253,20 +272,22 @@ function AlertCard({ alert, onDismiss }: { alert: any; onDismiss: () => void }) 
                 View Opp
               </Button>
             </Link>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 text-xs px-2 text-muted-foreground hover:text-foreground"
-              onClick={() => dismiss.mutate({ alertId: alert.id })}
-              disabled={dismiss.isPending}
-            >
-              {dismiss.isPending ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <XCircle className="h-3 w-3" />
-              )}
-              Dismiss
-            </Button>
+            {canDismiss && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 text-xs px-2 text-muted-foreground hover:text-foreground"
+                onClick={() => dismiss.mutate({ alertId: alert.id })}
+                disabled={dismiss.isPending}
+              >
+                {dismiss.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <XCircle className="h-3 w-3" />
+                )}
+                Dismiss
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -289,7 +310,7 @@ export default function PipelineAlerts() {
 
   const scan = trpc.pipelineAlerts.scan.useMutation({
     onSuccess: (data) => {
-      toast.success(`Scan complete — ${data.created} new alerts created (${data.scanned} opportunities checked)`);
+      toast.success(`Scan complete — ${data.created} new, ${data.resolved} resolved (${data.scanned} open deals checked)`);
       refetch();
       refetchSummary();
       refetchStuck();
@@ -308,6 +329,8 @@ export default function PipelineAlerts() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Clear all hard-deletes every alert: an admin's (R37).
+  const isAdmin = useWorkspaceRole().isAdmin;
   const clearAll = trpc.pipelineAlerts.clearAll.useMutation({
     onSuccess: (data) => {
       toast.success(`Deleted ${data.deleted} alert${data.deleted === 1 ? "" : "s"}`);
@@ -327,7 +350,7 @@ export default function PipelineAlerts() {
     filterType === "all" ? alerts : alerts.filter((a: any) => a.alertType === filterType);
 
   const totalAlerts = summary?.total ?? 0;
-  const filterTypes = ["all", "no_activity", "closing_soon_regression", "amount_change", "no_champion", "deal_stuck"];
+  const filterTypes = ["all", "no_activity", "closing_soon_regression", "past_close_date", "amount_change", "no_champion", "deal_stuck"];
 
   return (
     <Shell title="Pipeline Alerts">
@@ -341,7 +364,7 @@ export default function PipelineAlerts() {
           <RefreshCw className="h-4 w-4 mr-1" />
           Refresh
         </Button>
-        {totalAlerts > 0 && (
+        {isAdmin && totalAlerts > 0 && (
           <ConfirmButton
             variant="outline"
             size="sm"
@@ -387,10 +410,11 @@ export default function PipelineAlerts() {
       <div className="p-4 md:p-5 space-y-6">
 
       {/* Summary KPI row */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
           { type: "no_activity", label: "No Activity", icon: Clock, color: "text-orange-600" },
           { type: "closing_soon_regression", label: "Closing Soon", icon: TrendingDown, color: "text-red-600" },
+          { type: "past_close_date", label: "Past Close", icon: CalendarX, color: "text-rose-700" },
           { type: "no_champion", label: "No Champion", icon: UserX, color: "text-purple-600" },
           { type: "amount_change", label: "Amount Changed", icon: DollarSign, color: "text-yellow-600" },
           { type: "deal_stuck", label: "Stuck Deals", icon: Timer, color: "text-amber-600", stuckCount: true },

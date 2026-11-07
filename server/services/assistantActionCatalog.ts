@@ -49,7 +49,7 @@ export const ALLOWED_GROUPS: Record<string, { group: string; description: string
   contacts: { group: "CRM", description: "Contacts on accounts" },
   accounts: { group: "CRM", description: "Accounts (companies in the CRM)" },
   companies: { group: "CRM", description: "Company records: search, brand pin, enrich, duplicates" },
-  leads: { group: "CRM", description: "Leads: create, update, convert, rescore" },
+  leads: { group: "CRM", description: "Leads: create, update, convert (scores: leadScoring)" },
   opportunities: { group: "CRM", description: "Deals / opportunities: create, update, stage moves" },
   deals: { group: "CRM", description: "Deal autopilot and pipeline helpers" },
   tasks: { group: "CRM", description: "Tasks: create, complete, snooze, approve drafts" },
@@ -124,7 +124,7 @@ export const DENY_PATH = /^(helpCenter\.(upsert|create|update|delete|generate)|c
 export const SEND_ALLOWLIST: Record<string, string> = {
   "emailDrafts.send": "SENDS EMAIL NOW: send one approved draft to its recipient.",
   "smtpConfig.sendDraft": "SENDS EMAIL NOW: send one approved draft through the workspace sender.",
-  "smtpConfig.sendBulkApproved": "SENDS EMAIL NOW: send every approved draft (or the given draftIds, max 200), one per second.",
+  "smtpConfig.sendBulkApproved": "SENDS EMAIL NOW: send approved drafts (or the given draftIds), oldest first, one per second, at most 25 a run; what is left stays approved for the next run.",
   "meetings.approveAndSend": "SENDS EMAIL NOW: approve one proposed meeting and email the prospect its offered times as links; the calendar event is made only when they pick one (chosenTime optional: offer only that time).",
   "meetings.approveAllProposed": "SENDS EMAIL NOW: approve and email every pending meeting proposal with its free offered times; nothing goes on the calendar until each prospect picks (expired ones are skipped and reported).",
   // 2026-10-06: in Autonomous this button sends what it finds; the card must say so.

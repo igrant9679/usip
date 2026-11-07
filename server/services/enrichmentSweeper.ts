@@ -38,6 +38,7 @@ import { runComprehensiveEnrichment } from "./enrichment/comprehensivePass";
 import { getReoonKey, reoonCheckBalance, reoonStatusToUsip, reoonVerifySingle } from "./reoon";
 import { getQuickEnrichKey, quickenrichFindEmailByLinkedIn } from "./quickenrich";
 import { promoteProspectRow } from "./prospectPromotion";
+import { describeSuppression, suppressionBlockingNewEmail } from "./suppression";
 import { clampSweepCap, SWEEP_DAILY_CAP_DEFAULT } from "@shared/enrichmentLimits";
 
 export type SweepMode = "off" | "approval" | "auto";
@@ -125,6 +126,8 @@ export interface SweepResult {
   quickenrichCredits: number;
   /** Prospects whose new address verified and were promoted into the CRM. */
   promoted: number;
+  /** Queue rows passed over before any spend because the person is suppressed (P86). */
+  suppressedSkipped: number;
   creditsQuick: number;
   creditsPower: number;
   /**
@@ -146,7 +149,7 @@ const emptyResult = (stoppedBecause: SweepResult["stoppedBecause"]): SweepResult
   emailsFound: 0,
   quickenrichAttempted: 0, quickenrichFound: 0, quickenrichCredits: 0,
   qeKeyPresent: false, patternCandidates: 0, qeCandidates: 0,
-  promoted: 0, creditsQuick: 0, creditsPower: 0, stoppedBecause,
+  promoted: 0, suppressedSkipped: 0, creditsQuick: 0, creditsPower: 0, stoppedBecause,
 });
 
 /**
@@ -187,7 +190,9 @@ async function candidatesFor(workspaceId: number, limit: number, retryFailed: bo
   if (!db) return [];
   const conds = [
     eq(prospects.workspaceId, workspaceId),
-    isNull(prospects.email),
+    // An empty string is a missing address too, as in the queue query below
+    // (audit 2026-10-20, P83): `IS NULL` alone never swept those rows.
+    or(isNull(prospects.email), eq(prospects.email, "")),
     isNotNull(prospects.companyDomain),
     isNotNull(prospects.firstName),
     isNotNull(prospects.lastName),
@@ -258,10 +263,14 @@ async function queueCandidatesFor(workspaceId: number, limit: number, retryFaile
       firstName: prospectQueue.firstName,
       lastName: prospectQueue.lastName,
       companyDomain: prospectQueue.companyDomain,
+      linkedinUrl: prospectQueue.linkedinUrl,
       campaignName: areCampaigns.name,
+      // Carried so a find reaches the People row as the QuickEnrich pass's
+      // does (audit 2026-10-20, P82), and so suppression is checked by person.
+      personProspectId: prospectQueue.personProspectId,
     })
     .from(prospectQueue)
-    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
+    .innerJoin(areCampaigns, and(eq(areCampaigns.id, prospectQueue.campaignId), eq(areCampaigns.workspaceId, prospectQueue.workspaceId)))
     .where(and(...conds))
     .orderBy(prospectQueue.id)
     .limit(limit);
@@ -325,7 +334,7 @@ async function quickenrichCandidatesFor(workspaceId: number, limit: number, retr
       companyName: prospectQueue.companyName,
     })
     .from(prospectQueue)
-    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
+    .innerJoin(areCampaigns, and(eq(areCampaigns.id, prospectQueue.campaignId), eq(areCampaigns.workspaceId, prospectQueue.workspaceId)))
     .where(and(...conds))
     .orderBy(prospectQueue.id)
     .limit(limit);
@@ -422,7 +431,7 @@ export async function backfillQueueCompanies(opts: {
   const rows = await db
     .select({ id: prospectQueue.id, linkedinUrl: prospectQueue.linkedinUrl, campaignName: areCampaigns.name })
     .from(prospectQueue)
-    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
+    .innerJoin(areCampaigns, and(eq(areCampaigns.id, prospectQueue.campaignId), eq(areCampaigns.workspaceId, prospectQueue.workspaceId)))
     .where(and(
       eq(prospectQueue.workspaceId, opts.workspaceId),
       isNotNull(prospectQueue.linkedinUrl),
@@ -538,7 +547,7 @@ export async function queueDiagnostics(workspaceId: number): Promise<{
       campaignName: areCampaigns.name,
     })
     .from(prospectQueue)
-    .innerJoin(areCampaigns, eq(prospectQueue.campaignId, areCampaigns.id))
+    .innerJoin(areCampaigns, and(eq(areCampaigns.id, prospectQueue.campaignId), eq(areCampaigns.workspaceId, prospectQueue.workspaceId)))
     .where(and(
       eq(prospectQueue.workspaceId, workspaceId),
       or(isNull(prospectQueue.email), eq(prospectQueue.email, "")),
@@ -662,6 +671,17 @@ export async function sweepWorkspace(
         break;
       }
       try {
+        // A suppressed person gets no new address (audit 2026-10-20, P86).
+        // Asked by person before anything is spent, and marked as this pass's
+        // own attempt so the next run passes the row over too.
+        const blocked = await suppressionBlockingNewEmail(workspaceId, { linkedinUrl: q.linkedinUrl, personProspectId: q.personProspectId });
+        if (blocked) {
+          result.suppressedSkipped++;
+          await db.update(prospectQueue)
+            .set({ enrichmentError: `quickenrich: skipped — ${describeSuppression(blocked)}`.slice(0, 500) } as never)
+            .where(eq(prospectQueue.id, q.id));
+          continue;
+        }
         const found = await quickenrichFindEmailByLinkedIn(qeKey, q.linkedinUrl ?? "", { workspaceId, feature: "enrichmentSweep" });
         result.attempted++;
         result.fromQueue++;
@@ -784,6 +804,18 @@ export async function sweepWorkspace(
         break;
       }
       try {
+        // Same rule as the QuickEnrich pass above (P86); the attempt stamp
+        // keeps the row out of the next run.
+        const blocked = await suppressionBlockingNewEmail(workspaceId, {
+          linkedinUrl: q.linkedinUrl, companyDomain: q.companyDomain, personProspectId: q.personProspectId,
+        });
+        if (blocked) {
+          result.suppressedSkipped++;
+          await db.update(prospectQueue)
+            .set({ enrichedAt: new Date(), enrichmentError: `skipped — ${describeSuppression(blocked)}`.slice(0, 500) } as never)
+            .where(eq(prospectQueue.id, q.id));
+          continue;
+        }
         const found = await resolveVerifiedEmail({
           firstName: q.firstName,
           lastName: q.lastName,
@@ -809,6 +841,18 @@ export async function sweepWorkspace(
           patch.enrichmentError = found.reason.slice(0, 500);
         }
         await db.update(prospectQueue).set(patch as never).where(eq(prospectQueue.id, q.id));
+        // The find reaches the People row too, through the merge, exactly as
+        // the QuickEnrich pass's does (audit 2026-10-20, P82): it stopped at
+        // the queue row, so People stayed empty beside a row being sent to.
+        if (found.email && q.personProspectId) {
+          void import("./personLink")
+            .then((m) => m.mergeIntoPerson(workspaceId, q.personProspectId!, {
+              email: found.email,
+              emailVerification: found.status ?? null,
+              source: "enrichment_sweeper_pattern",
+            }))
+            .catch((e) => console.error("[EnrichmentSweep] People writeback failed:", (e as Error)?.message ?? e));
+        }
       } catch (e) {
         result.attempted++;
         result.fromQueue++;

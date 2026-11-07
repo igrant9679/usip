@@ -31,12 +31,22 @@ import {
   Megaphone,
   Sparkles,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ARE_SOURCES, ARE_SOURCE_IDS, ARE_DEFAULT_SOURCES, DISCOVERY_OFF_NOTE, toggledSources } from "@shared/areSources";
 import { UNSENDABLE_CHANNEL_REASON, isSendableChannel } from "@shared/areSequenceSteps";
 import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
+import { askLaunchOnUtc } from "@/components/usip/are/launchTimezone";
+import { useConfirmActivate } from "@/components/usip/are/activateConfirm";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { ROLE_RANK, rankOf } from "@shared/roleRank";
+import { APPROVE_THRESHOLD_START, approveThresholdSummary } from "@shared/areApproveThreshold";
+import { EMPLOYEE_BANDS, employeeRangeOf, personaToTargeting, wizardDefaults, type EmployeeBand } from "./areCampaignsModel";
+import { AreSubNav } from "@/components/usip/are/AreSubNav";
+import { areAutonomyLabel, areStatusLabel } from "@shared/areCampaignLabels";
+
+const CAMPAIGN_PAGE = 50;
 
 const STATUS_COLOR: Record<string, string> = {
   draft: "#94A3B8",
@@ -49,16 +59,7 @@ const STATUS_COLOR: Record<string, string> = {
 // box always corresponds to a source that actually runs. See shared/areSources.ts.
 const SOURCE_OPTIONS = ARE_SOURCES;
 
-const EMPLOYEE_BANDS = [
-  { value: "any", label: "Any size", min: undefined, max: undefined },
-  { value: "1-10", label: "1–10", min: 1, max: 10 },
-  { value: "11-50", label: "11–50", min: 11, max: 50 },
-  { value: "51-200", label: "51–200", min: 51, max: 200 },
-  { value: "201-500", label: "201–500", min: 201, max: 500 },
-  { value: "501-1000", label: "501–1,000", min: 501, max: 1000 },
-  { value: "1001-5000", label: "1,001–5,000", min: 1001, max: 5000 },
-  { value: "5000+", label: "5,000+", min: 5000, max: undefined },
-] as const;
+// EMPLOYEE_BANDS: areCampaignsModel.ts, beside the persona mapping that reads them (A62).
 
 /** Persona picker for the wizard step 2 — applies a saved/preset persona's
  *  targeting fields onto the form in one click. */
@@ -166,8 +167,20 @@ function TagInput({
 export default function ARECampaigns() {
   const [, navigate] = useLocation();
   const utils = trpc.useUtils();
-  const { data: campaigns, isLoading } = trpc.are.campaigns.list.useQuery({});
-  const [showCreate, setShowCreate] = useState(false);
+  // A page at a time, with the count (audit 2026-10-20, A62): the list showed
+  // the newest 50 and nothing said there were more.
+  const [listPage, setListPage] = useState(1);
+  const { data: campaigns, isLoading } = trpc.are.campaigns.list.useQuery(
+    { limit: CAMPAIGN_PAGE, offset: (listPage - 1) * CAMPAIGN_PAGE },
+    { placeholderData: (prev) => prev },
+  );
+  const { data: campaignCount } = trpc.are.campaigns.count.useQuery({});
+  const listPages = Math.max(1, Math.ceil((campaignCount?.total ?? 0) / CAMPAIGN_PAGE));
+  // ?new=1 (the hub's New Campaign, A76) opens the wizard, once.
+  const [showCreate, setShowCreate] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1");
+  useEffect(() => {
+    if (showCreate && new URLSearchParams(window.location.search).get("new") === "1") navigate("/are/campaigns", { replace: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ARE Settings → "Default Scraper Sources" is the workspace default for new
   // campaigns. This read is the thing that makes that description true — and it
@@ -177,7 +190,12 @@ export default function ARECampaigns() {
   // list — exactly the state the comment claimed to have fixed.
   // Same procedure ARESettings.tsx reads and invalidates on save, so changing
   // the default there is reflected here rather than in a second opinion.
-  const { data: wsSettings } = trpc.settings.getAreSettings.useQuery();
+  const wsSettingsQ = trpc.settings.getAreSettings.useQuery();
+  const wsSettings = wsSettingsQ.data;
+  // Still loading, or failed: the wizard starts on the most manual values and
+  // says so (audit 2026-10-20, A17).
+  const defaultsMissing = !wsSettings;
+  const defaultsFailed = !wsSettings && !!wsSettingsQ.error;
   const defaultSources = useMemo(() => {
     const saved = ((wsSettings as any)?.areScraperSources ?? null) as Record<string, boolean> | null;
     if (!saved) return [...ARE_DEFAULT_SOURCES];
@@ -203,26 +221,12 @@ export default function ARECampaigns() {
    * review_release still got new campaigns created FULLY AUTONOMOUS. A safety
    * setting that silently inverts is worse than no setting.
    *
-   * Fallbacks below are exactly the values the wizard used to hardcode, so a
-   * workspace that has never opened ARE Settings behaves as before.
+   * The fallbacks were the values the wizard used to hardcode — Full Auto at a
+   * 60 threshold — so a slow or failed settings read made a campaign that
+   * approved and sent on its own. They are the most manual ones now
+   * (areCampaignsModel.wizardDefaults; A16, A17).
    */
-  const wsDefaults = useMemo(() => {
-    const s = (wsSettings ?? {}) as Record<string, any>;
-    const channels = (s.areDefaultChannels ?? null) as Record<string, boolean> | null;
-    return {
-      autonomyMode: (s.areDefaultAutonomyMode ?? "full") as "full" | "batch_approval" | "review_release",
-      dailySendCap: Number(s.areDefaultDailySendCap ?? 50) || 50,
-      autoApproveThreshold: s.areDefaultAutoApproveThreshold ?? 60,
-      channelsEnabled: {
-        email: channels?.email ?? true,
-        linkedin: channels?.linkedin ?? false,
-        sms: channels?.sms ?? false,
-        voice: channels?.voice ?? false,
-      },
-      sequenceTemplate: (s.areDefaultSequenceTemplate ?? "standard_7step") as string,
-      signalToOpportunityEnabled: Boolean(s.areDefaultSignalToOpportunity ?? false),
-    };
-  }, [wsSettings]);
+  const wsDefaults = useMemo(() => wizardDefaults(wsSettings), [wsSettings]);
 
   const [step, setStep] = useState(1);
   const TOTAL_STEPS = 4;
@@ -240,8 +244,12 @@ export default function ARECampaigns() {
     targetTitles: [] as string[],
     targetIndustries: [] as string[],
     targetGeographies: [] as string[],
-    employeeBand: "any" as (typeof EMPLOYEE_BANDS)[number]["value"],
+    employeeBand: "any" as EmployeeBand,
     keywords: [] as string[],
+    // From an applied persona (A62): its id, and its size when no band fits it.
+    personaId: null as number | null,
+    personaEmployeeMin: null as number | null,
+    personaEmployeeMax: null as number | null,
   });
   const [form, setForm] = useState(blankForm);
   // AI targeting generation — describe the audience, AI fills the filters.
@@ -267,30 +275,65 @@ export default function ARECampaigns() {
       setForm(blankForm());
     }
   }, [showCreate]);
+  // Defaults that arrive after the wizard opened are applied while the person
+  // has not reached the step that shows them (A17); after that their choices stand.
+  useEffect(() => {
+    if (!showCreate || !wsSettings || step >= 3) return;
+    setForm((f) => ({
+      ...f,
+      autonomyMode: wsDefaults.autonomyMode,
+      dailySendCap: wsDefaults.dailySendCap,
+      autoApproveThreshold: wsDefaults.autoApproveThreshold,
+      prospectSources: [...defaultSources],
+      channelsEnabled: { ...wsDefaults.channelsEnabled },
+    }));
+  }, [wsSettings]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // A first launch on the UTC default asks first (A31); a yes sends it again with confirmTimezone.
+  const retryCreate = useRef<((v: any) => void) | null>(null);
+  const retrySetStatus = useRef<((v: any) => void) | null>(null);
   const create = trpc.are.campaigns.create.useMutation({
     onSuccess: (data) => {
       toast.success(
+        // Every 3 minutes, inside the send window (A73): the copy said every
+        // 10 minutes and round the clock.
         data.launched
-          ? "Campaign launched — engine is running. First tick fires now, then every 10 min."
+          ? "Campaign launched. The engine runs it now and then every 3 minutes; email goes out only inside your send window."
           : "Campaign saved as draft. Activate it whenever you're ready.",
       );
-      utils.are.campaigns.list.invalidate();
+      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
       setShowCreate(false);
       navigate(`/are/campaigns/${data.id}`);
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e, vars) => {
+      if (askLaunchOnUtc(e.message, () => retryCreate.current?.({ ...vars, confirmTimezone: true }))) return;
+      toast.error(e.message);
+    },
   });
+  retryCreate.current = create.mutate;
 
   const setStatus = trpc.are.campaigns.setStatus.useMutation({
-    onSuccess: () => utils.are.campaigns.list.invalidate(),
-    onError: (e) => toast.error(e.message),
+    onSuccess: (_r, vars) => {
+      toast.success(vars.status === "active" ? "Campaign activated. The engine picks it up within 3 minutes." : vars.status === "paused" ? "Campaign paused. Nothing more is sent from it." : "Campaign updated");
+      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      utils.are.campaigns.get.invalidate({ id: vars.id });
+    },
+    onError: (e, vars) => {
+      if (askLaunchOnUtc(e.message, () => retrySetStatus.current?.({ ...vars, confirmTimezone: true }))) return;
+      toast.error(e.message);
+    },
   });
+  retrySetStatus.current = setStatus.mutate;
+  // The same confirm as the campaign page (A52): Activate starts real sending.
+  const confirmActivate = useConfirmActivate();
+  // Delete is a manager's (A18); the server refuses anyone else.
+  const { current: currentWs } = useWorkspace();
+  const canDelete = rankOf(currentWs?.role ?? "rep") >= ROLE_RANK.manager;
 
   const deleteCampaign = trpc.are.campaigns.delete.useMutation({
-    onSuccess: () => {
-      toast.success("Campaign deleted");
-      utils.are.campaigns.list.invalidate();
+    onSuccess: (r) => {
+      toast.success(`Campaign deleted. ${r.stepsStopped} unsent step${r.stepsStopped === 1 ? "" : "s"} stopped; ${r.peopleReleased} ${r.peopleReleased === 1 ? "person is" : "people are"} free to join another campaign.`);
+      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -302,13 +345,11 @@ export default function ARECampaigns() {
   // Build the create payload — folds the wizard's targeting fields into
   // icpOverrides (where the engine's discovery phase reads them).
   const submitCampaign = (launch: boolean) => {
-    const band = EMPLOYEE_BANDS.find((b) => b.value === form.employeeBand);
     const icpOverrides = {
       targetTitles: form.targetTitles,
       targetIndustries: form.targetIndustries,
       targetGeographies: form.targetGeographies,
-      ...(band?.min !== undefined ? { employeeMin: band.min } : {}),
-      ...(band?.max !== undefined ? { employeeMax: band.max } : {}),
+      ...employeeRangeOf(form.employeeBand, form.personaEmployeeMin, form.personaEmployeeMax),
       keywords: form.keywords,
     };
     create.mutate({
@@ -318,7 +359,10 @@ export default function ARECampaigns() {
       goalType: form.goalType,
       targetProspectCount: form.targetProspectCount,
       dailySendCap: form.dailySendCap,
-      autoApproveThreshold: form.autoApproveThreshold,
+      // Only Full Auto has a threshold (A16): a Batch campaign stores none, so
+      // switching it to Full Auto later does not start approving at a number
+      // nobody chose for it.
+      autoApproveThreshold: form.autonomyMode === "full" ? form.autoApproveThreshold : null,
       prospectSources: form.prospectSources,
       channelsEnabled: form.channelsEnabled,
       // The wizard has no field for these two, so they come straight from the
@@ -328,6 +372,8 @@ export default function ARECampaigns() {
       sequenceTemplate: wsDefaults.sequenceTemplate,
       signalToOpportunityEnabled: wsDefaults.signalToOpportunityEnabled,
       icpOverrides,
+      // The persona the targeting came from, so its research reaches the writers.
+      ...(form.personaId != null ? { personaId: form.personaId } : {}),
       launch,
     });
   };
@@ -344,6 +390,7 @@ export default function ARECampaigns() {
           <Plus className="size-4" /> New Campaign
         </Button>
       </PageHeader>
+      <AreSubNav />
 
       <div className="p-4 md:p-6 space-y-4 max-w-5xl">
         {/* Which is which: sequences vs campaigns vs a campaign's sequences (owner ask 2026-09-04). */}
@@ -369,8 +416,8 @@ export default function ARECampaigns() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                     <span className="text-sm font-medium text-foreground truncate">{c.name}</span>
-                    <Badge variant="outline" className="text-[10px] capitalize">{c.status}</Badge>
-                    <Badge variant="secondary" className="text-[10px]">{c.autonomyMode}</Badge>
+                    <Badge variant="outline" className="text-[10px]">{areStatusLabel(c.status)}</Badge>
+                    <Badge variant="secondary" className="text-[10px]">{areAutonomyLabel(c.autonomyMode)}</Badge>
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {c.prospectsDiscovered} discovered · {c.prospectsEnriched} enriched · {c.prospectsContacted} contacted · {c.prospectsReplied} replied · {c.meetingsBooked} meetings
@@ -391,21 +438,29 @@ export default function ARECampaigns() {
                       size="sm"
                       variant="ghost"
                       className="text-emerald-600 hover:text-emerald-700 gap-1 text-xs"
-                      onClick={() => setStatus.mutate({ id: c.id, status: "active" })}
+                      disabled={setStatus.isPending}
+                      onClick={() => confirmActivate(c, () => setStatus.mutate({ id: c.id, status: "active" }))}
                     >
                       <Play className="size-3" /> Activate
                     </Button>
                   ) : null}
+                  {canDelete && (
                   <Button aria-label="Delete campaign"
                     size="sm"
                     variant="ghost"
                     className="text-destructive/60 hover:text-destructive gap-1 text-xs"
+                    disabled={deleteCampaign.isPending}
                     onClick={() => {
-                      confirmAction({ title: "Delete this campaign?", description: "The campaign and its prospect queue will be permanently deleted. This cannot be undone.", confirmLabel: "Delete" }, () => { deleteCampaign.mutate({ id: c.id }); });
+                      confirmAction({
+                        title: `Delete "${c.name}"?`,
+                        description: "The campaign is deleted and its unsent steps are stopped. The people still in it are taken out, so they can be added to another campaign; what was already sent to them stays in their history. This cannot be undone.",
+                        confirmLabel: "Delete",
+                      }, () => { deleteCampaign.mutate({ id: c.id }); });
                     }}
                   >
                     <Trash2 className="size-3" />
                   </Button>
+                  )}
                   <Link href={`/are/campaigns/${c.id}`}>
                     <Button size="sm" variant="ghost" className="gap-1 text-xs">
                       Open <ArrowRight className="size-3" />
@@ -414,6 +469,15 @@ export default function ARECampaigns() {
                 </div>
               </div>
             ))}
+            {listPages > 1 && (
+              <div className="flex items-center justify-between pt-2 text-xs text-muted-foreground">
+                <span>{campaignCount?.total ?? 0} campaigns · page {listPage} of {listPages}</span>
+                <div className="flex gap-1">
+                  <Button size="sm" variant="outline" className="h-7 text-xs" disabled={listPage <= 1} onClick={() => setListPage((n) => n - 1)}>Previous</Button>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" disabled={listPage >= listPages} onClick={() => setListPage((n) => n + 1)}>Next</Button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -534,12 +598,7 @@ export default function ARECampaigns() {
                 </span>
               </div>
               <PersonaApplyPicker
-                onApply={(p) => setForm((f) => ({
-                  ...f,
-                  targetTitles: (p.targetTitles as string[]) ?? f.targetTitles,
-                  targetIndustries: (p.targetIndustries as string[]) ?? f.targetIndustries,
-                  keywords: (p.keywords as string[]) ?? f.keywords,
-                }))}
+                onApply={(p) => setForm((f) => ({ ...f, ...personaToTargeting(p) }))}
               />
               <div>
                 <Label className="text-xs text-muted-foreground mb-1.5 block">Job Titles</Label>
@@ -578,6 +637,9 @@ export default function ARECampaigns() {
                     {EMPLOYEE_BANDS.map((b) => (
                       <SelectItem key={b.value} value={b.value}>{b.label}</SelectItem>
                     ))}
+                    {form.employeeBand === "persona" && (
+                      <SelectItem value="persona">The persona's size: {form.personaEmployeeMin ?? "any"}–{form.personaEmployeeMax ?? "any"}</SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -627,25 +689,45 @@ export default function ARECampaigns() {
                   </SelectContent>
                 </Select>
                 <p className="text-[11px] text-muted-foreground mt-1">
-                  Full Auto is required for true 24/7 unattended operation.
+                  Full Auto approves and sends with nobody reviewing, but only once an auto-approve threshold is set.
+                  Either way, sending happens only inside the workspace's send window.
                 </p>
+                {defaultsMissing && (
+                  <p className="text-[11px] text-amber-700 dark:text-amber-300 mt-1">
+                    {defaultsFailed
+                      ? "Your ARE Settings defaults didn't load, so this campaign starts on Batch approval with no auto-approve threshold. Check ARE Settings, or choose here."
+                      : "Your ARE Settings defaults haven't loaded yet, so this starts on Batch approval with no auto-approve threshold."}
+                  </p>
+                )}
               </div>
+              {/* The threshold is Full Auto's only (A16), and unset means off. */}
+              {form.autonomyMode === "full" && (
               <div>
-                <Label className="text-xs text-muted-foreground mb-1.5 block">
-                  Auto-approve ICP score floor: <span className="font-semibold text-foreground">{form.autoApproveThreshold}</span>
-                </Label>
-                <input aria-label="Auto-approve ICP score floor"
-                  type="range"
-                  min={1}
-                  max={100}
-                  value={form.autoApproveThreshold}
-                  onChange={(e) => setForm((f) => ({ ...f, autoApproveThreshold: parseInt(e.target.value) }))}
-                  className="w-full"
-                />
+                <div className="flex items-center justify-between mb-1.5">
+                  <Label className="text-xs text-muted-foreground block">
+                    Auto-approve threshold: <span className="font-semibold text-foreground">{form.autoApproveThreshold ?? "Off"}</span>
+                  </Label>
+                  <Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[10px]"
+                    onClick={() => setForm((f) => ({ ...f, autoApproveThreshold: f.autoApproveThreshold === null ? APPROVE_THRESHOLD_START : null }))}>
+                    {form.autoApproveThreshold === null ? "Enable" : "Turn off"}
+                  </Button>
+                </div>
+                {form.autoApproveThreshold !== null && (
+                  <input aria-label="Auto-approve threshold"
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={form.autoApproveThreshold}
+                    onChange={(e) => setForm((f) => ({ ...f, autoApproveThreshold: parseInt(e.target.value) }))}
+                    className="w-full"
+                  />
+                )}
                 <p className="text-[11px] text-muted-foreground mt-0.5">
-                  In Full Auto, enriched prospects ≥ this score are auto-approved. Lower = looser, higher = stricter.
+                  {approveThresholdSummary(form.autoApproveThreshold)}.
                 </p>
               </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label className="text-xs text-muted-foreground mb-1.5 block">Target prospects</Label>
@@ -656,7 +738,7 @@ export default function ARECampaigns() {
                   />
                 </div>
                 <div>
-                  <Label className="text-xs text-muted-foreground mb-1.5 block">Daily send cap</Label>
+                  <Label className="text-xs text-muted-foreground mb-1.5 block" title="This campaign's own cap. ARE Settings' Daily Send Cap also limits every campaign together.">Daily send cap (this campaign)</Label>
                   <Input aria-label="Daily send cap"
                     type="number"
                     value={form.dailySendCap}
@@ -706,23 +788,28 @@ export default function ARECampaigns() {
                 </div>
                 <dl className="text-xs space-y-1 [&>div]:flex [&>div]:gap-2 [&_dt]:w-32 [&_dt]:text-muted-foreground [&_dd]:flex-1">
                   <div><dt>Goal</dt><dd className="capitalize">{form.goalType.replace(/_/g, " ")}</dd></div>
-                  <div><dt>Autonomy</dt><dd className="capitalize">{form.autonomyMode.replace(/_/g, " ")}</dd></div>
+                  <div><dt>Autonomy</dt><dd>{areAutonomyLabel(form.autonomyMode)}</dd></div>
                   <div><dt>Titles</dt><dd>{form.targetTitles.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
                   <div><dt>Industries</dt><dd>{form.targetIndustries.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
-                  <div><dt>Company size</dt><dd>{EMPLOYEE_BANDS.find((b) => b.value === form.employeeBand)?.label}</dd></div>
+                  <div><dt>Places</dt><dd>{form.targetGeographies.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
+                  <div><dt>Company size</dt><dd>{form.employeeBand === "persona" ? `${form.personaEmployeeMin ?? "any"}–${form.personaEmployeeMax ?? "any"} (from the persona)` : EMPLOYEE_BANDS.find((b) => b.value === form.employeeBand)?.label}</dd></div>
                   <div><dt>Keywords</dt><dd>{form.keywords.join(", ") || <span className="text-muted-foreground italic">—</span>}</dd></div>
                   <div><dt>Sources</dt><dd>{form.prospectSources.join(", ") || <span className="text-muted-foreground italic">none, so discovery is off</span>}</dd></div>
-                  <div><dt>Target / Daily cap</dt><dd>{form.targetProspectCount} prospects · {form.dailySendCap}/day</dd></div>
-                  <div><dt>Approve floor</dt><dd>ICP ≥ {form.autoApproveThreshold}/100</dd></div>
+                  <div><dt>Target / Daily cap</dt><dd>{form.targetProspectCount} prospects · {form.dailySendCap}/day for this campaign, within the workspace's Revenue Engine cap</dd></div>
+                  <div><dt>Auto-approve</dt><dd>{form.autonomyMode === "full" ? approveThresholdSummary(form.autoApproveThreshold) : "None: you approve every prospect"}</dd></div>
                 </dl>
               </div>
               <div className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 flex items-start gap-2">
                 <Zap className="size-3.5 mt-0.5 flex-shrink-0" />
                 <span>
-                  <strong>Launch now</strong> activates the campaign immediately. The ARE engine will
-                  fire once within seconds and then continue every 10 minutes <strong>24/7 until you
-                  pause or complete it</strong> — scraping prospects, enriching, generating A/B
-                  sequence variants, enrolling, and dispatching email autonomously.
+                  <strong>Launch</strong> activates the campaign now. The engine runs it within seconds
+                  and then every 3 minutes until you pause or complete it — finding prospects, enriching
+                  them, writing each person's sequence and enrolling them. Email is sent only inside your
+                  workspace's send window, up to the daily cap, and nothing is sent while outbound is
+                  paused for the workspace.
+                  {form.autonomyMode !== "full" || form.autoApproveThreshold === null
+                    ? " Nobody is approved for sending until you approve them."
+                    : ` Prospects scoring ${form.autoApproveThreshold} or more are approved and sent with no review.`}
                 </span>
               </div>
             </div>
@@ -760,7 +847,7 @@ export default function ARECampaigns() {
                   className="gap-2"
                 >
                   {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Rocket className="size-4" />}
-                  Launch 24/7
+                  Launch
                 </Button>
               </>
             )}

@@ -29,6 +29,7 @@ import { roleRank } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { recordAudit } from "../audit";
+import { assertOwnerInWorkspace } from "../services/foreignIds";
 import { assignNumber, ensureApplication, getAccount, listNumbers, plivoCreds } from "../services/plivo";
 import {
   agentNumbers,
@@ -69,20 +70,30 @@ function isAdmin(role: string): boolean {
   return roleRank(role as never) >= roleRank("admin");
 }
 
-const agentInput = z.object({
+// NO .default() on the fields, deliberately: update takes agentFields.partial(),
+// and in Zod 4 .partial() still fills a default in. With defaults here, saving a
+// paused agent from its form (which sends no status) switched it back on, and
+// the Active switch (which sends only status) reset voice and model (audit N4,
+// the same trap sendingAccounts.ts already documents). Defaults live on create.
+const agentFields = z.object({
   name: z.string().min(1).max(120),
   purpose: z.enum(["outbound_outreach", "callback_receptionist"]),
   ownerUserId: z.number().int().nullable().optional(),
-  voice: z.string().min(1).max(40).default("eve"),
-  model: z.string().min(1).max(64).default(DEFAULT_VOICE_MODEL),
+  voice: z.string().min(1).max(40),
+  model: z.string().min(1).max(64),
   instructions: z.string().max(8000).nullable().optional(),
   phoneNumber: z.string().max(32).nullable().optional(),
   /** Webhook signing secret from the xAI console number registration (shown once there). */
   sipWebhookSecret: z.string().max(200).nullable().optional(),
   languageHint: z.string().max(16).nullable().optional(),
-  status: z.enum(["active", "paused"]).default("active"),
+  status: z.enum(["active", "paused"]),
   /** Questions an outreach agent works into the call, one at a time (2026-10-06). */
   discoveryQuestions: z.array(z.string().max(200)).max(8).optional(),
+});
+const agentInput = agentFields.extend({
+  voice: agentFields.shape.voice.default("eve"),
+  model: agentFields.shape.model.default(DEFAULT_VOICE_MODEL),
+  status: agentFields.shape.status.default("active"),
 });
 
 const cleanQuestions = (qs: string[] | undefined) => (qs ?? []).map((q) => q.trim()).filter(Boolean).slice(0, 8);
@@ -399,6 +410,10 @@ export const voiceAgentsRouter = router({
         ? (input.ownerUserId ?? ctx.user.id)
         : (input.ownerUserId ?? null);
     assertCanManage(ctx.member.role, ctx.user.id, { purpose: input.purpose, ownerUserId });
+    // The agent answers in its owner's name and books on their calendar, so
+    // the owner is someone working here (audit 2026-10-20, G68): any user id
+    // was accepted, another workspace's people and leavers included.
+    await assertOwnerInWorkspace(ctx.workspace.id, ownerUserId);
     const r = await db.insert(voiceAgents).values({
       workspaceId: ctx.workspace.id,
       ownerUserId,
@@ -413,11 +428,14 @@ export const voiceAgentsRouter = router({
       status: input.status,
       discoveryQuestions: cleanQuestions(input.discoveryQuestions),
     });
-    return { id: Number((r as unknown as { insertId?: number })?.insertId ?? 0) };
+    // mysql2 answers an insert with [ResultSetHeader, fields]: the id is on the
+    // first element. Reading it off the array returned 0, and the form's follow-up
+    // Plivo-number save (skipped on a falsy id) never ran for a new agent (N4).
+    return { id: Number((r as unknown as { insertId?: number }[])[0]?.insertId ?? 0) };
   }),
 
   update: workspaceProcedure
-    .input(agentInput.partial().extend({ id: z.number().int() }))
+    .input(agentFields.partial().extend({ id: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
@@ -443,6 +461,8 @@ export const voiceAgentsRouter = router({
           : effectivePurpose === "callback_receptionist"
             ? (input.ownerUserId ?? ctx.user.id)
             : input.ownerUserId;
+        // Same rule as create (G68): a new owner works here.
+        if (patch.ownerUserId !== agent.ownerUserId) await assertOwnerInWorkspace(ctx.workspace.id, patch.ownerUserId as number | null);
       }
       if (input.voice !== undefined) patch.voice = input.voice.trim();
       if (input.model !== undefined) patch.model = input.model.trim();

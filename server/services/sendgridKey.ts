@@ -81,10 +81,37 @@ export function redactIntegrationConfig(config: unknown): Record<string, unknown
   const c = (config ?? {}) as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(c)) {
-    if (/enc$|secret|token|apikey|api_key|password/i.test(k)) {
-      out[`has${k[0]!.toUpperCase()}${k.slice(1)}`.replace(/Enc$/, "")] = typeof v === "string" ? v.length > 0 : !!v;
+    if (SECRET_CONFIG_KEY.test(k)) {
+      out[redactedFlag(k)] = typeof v === "string" ? v.length > 0 : !!v;
       continue;
     }
+    out[k] = v;
+  }
+  return out;
+}
+
+const SECRET_CONFIG_KEY = /enc$|secret|token|apikey|api_key|password/i;
+const redactedFlag = (k: string) => `has${k[0]!.toUpperCase()}${k.slice(1)}`.replace(/Enc$/, "");
+/** A flag the redactor wrote: `hasApiKey: true`, not a setting of its own. */
+const isRedactionFlag = (k: string, v: unknown) => /^has[A-Z]/.test(k) && typeof v === "boolean";
+
+/**
+ * What integrations.save stores: the form's draft laid over the stored config.
+ *
+ * The form is seeded from the REDACTED row, so it holds no secret and a has*
+ * flag where each one was. Saved whole, it replaced the config: the stored
+ * secret was deleted and the flag written in its place (audit 2026-10-20,
+ * G16). Now a blank secret keeps the stored one, a typed one replaces it,
+ * and flags are never stored (any an earlier save left behind are dropped).
+ */
+export function mergeIntegrationConfig(stored: unknown, draft: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries((stored ?? {}) as Record<string, unknown>)) {
+    if (!isRedactionFlag(k, v)) out[k] = v;
+  }
+  for (const [k, v] of Object.entries(draft)) {
+    if (isRedactionFlag(k, v)) continue;
+    if (SECRET_CONFIG_KEY.test(k) && (v == null || (typeof v === "string" && v.trim() === ""))) continue;
     out[k] = v;
   }
   return out;

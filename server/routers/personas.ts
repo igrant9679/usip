@@ -8,21 +8,22 @@
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { personaCategories, personas, researchSectors } from "../../drizzle/schema";
+import { areCampaigns, personaCategories, personas, researchSectors } from "../../drizzle/schema";
 import { cleanPersonaResearch } from "@shared/researchShape";
 import { getDb } from "../db";
+import { forgetResearchContext } from "../services/research/context";
 import { router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, managerProcedure, workspaceProcedure } from "../_core/workspace";
 
-const PersonaInput = z.object({
+const PersonaFields = z.object({
   name: z.string().min(2).max(120),
   description: z.string().optional(),
-  targetTitles: z.array(z.string()).default([]),
-  targetIndustries: z.array(z.string()).default([]),
-  targetGeographies: z.array(z.string()).default([]),
+  targetTitles: z.array(z.string()),
+  targetIndustries: z.array(z.string()),
+  targetGeographies: z.array(z.string()),
   employeeMin: z.number().int().min(1).nullable().optional(),
   employeeMax: z.number().int().min(1).nullable().optional(),
-  keywords: z.array(z.string()).default([]),
+  keywords: z.array(z.string()),
   categoryId: z.number().int().nullable().optional(),
   // Research (migration 0201): the sector this buyer belongs to and what the
   // AI writers will need about them. Cleaned by the shared research shape,
@@ -34,15 +35,35 @@ const PersonaInput = z.object({
   angle: z.string().max(4000).optional(),
 });
 
-/** The research fields present in an input, cleaned; absent ones stay absent. */
+/** A new persona: the lists it leaves out start empty. */
+const PersonaInput = PersonaFields.extend({
+  targetTitles: z.array(z.string()).default([]),
+  targetIndustries: z.array(z.string()).default([]),
+  targetGeographies: z.array(z.string()).default([]),
+  keywords: z.array(z.string()).default([]),
+});
+
+/**
+ * A change: only what it names. Built without the defaults, because Zod 4
+ * applies a default inside .partial(), so linking a persona to a sector
+ * ({ id, sectorId }) emptied its titles, industries, places and keywords
+ * (found 2026-11-06 while fixing audit P125).
+ */
+const PersonaPatch = PersonaFields.partial();
+
+/**
+ * The research fields present in an input, cleaned; absent ones stay absent.
+ * `dropped` names what the cleaner removed as personal data, which the page
+ * reports (audit 2026-10-20, P125: it was dropped silently).
+ */
 function researchFields(input: { cares?: string; pains?: string[]; objections?: string[]; angle?: string }) {
-  const { content } = cleanPersonaResearch(input);
+  const { content, dropped } = cleanPersonaResearch(input);
   const out: Partial<typeof personas.$inferInsert> = {};
   if (input.cares !== undefined) out.cares = content.cares || null;
   if (input.pains !== undefined) out.pains = content.pains;
   if (input.objections !== undefined) out.objections = content.objections;
   if (input.angle !== undefined) out.angle = content.angle || null;
-  return out;
+  return { fields: out, dropped };
 }
 
 /** A caller-chosen sector must be this workspace's. */
@@ -128,6 +149,11 @@ export const PRESET_PERSONAS = [
   },
 ] as const;
 
+/**
+ * Personas and their categories steer every research writer and campaign that
+ * uses them: a manager writes them and an admin deletes them, as in Research
+ * (audit 2026-10-20, P31). Any member, viewers included, could do both.
+ */
 export const personasRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
@@ -155,17 +181,18 @@ export const personasRouter = router({
       return row;
     }),
 
-  create: workspaceProcedure
+  create: managerProcedure
     .input(PersonaInput)
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       if (input.categoryId != null) await assertCategoryInWorkspace(db, input.categoryId, ctx.workspace.id);
       if (input.sectorId != null) await assertSectorInWorkspace(db, input.sectorId, ctx.workspace.id);
+      const research = researchFields(input);
       const [row] = await db
         .insert(personas)
         .values({
-          ...researchFields(input),
+          ...research.fields,
           sectorId: input.sectorId ?? null,
           workspaceId: ctx.workspace.id,
           name: input.name,
@@ -180,12 +207,13 @@ export const personasRouter = router({
           createdByUserId: ctx.user.id,
         })
         .$returningId();
-      return { id: row.id };
+      forgetResearchContext(ctx.workspace.id);
+      return { id: row.id, dropped: research.dropped };
     }),
 
   /** Create from a preset key (also accepts overrides if user customized). */
-  createFromPreset: workspaceProcedure
-    .input(z.object({ presetKey: z.string(), overrides: PersonaInput.partial().optional() }))
+  createFromPreset: managerProcedure
+    .input(z.object({ presetKey: z.string(), overrides: PersonaPatch.optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -221,8 +249,8 @@ export const personasRouter = router({
       return { id: row.id };
     }),
 
-  update: workspaceProcedure
-    .input(z.object({ id: z.number() }).merge(PersonaInput.partial()))
+  update: managerProcedure
+    .input(z.object({ id: z.number() }).merge(PersonaPatch))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -244,23 +272,63 @@ export const personasRouter = router({
         if (rest.sectorId != null) await assertSectorInWorkspace(db, rest.sectorId, ctx.workspace.id);
         updates.sectorId = rest.sectorId ?? null;
       }
-      Object.assign(updates, researchFields(rest));
+      const research = researchFields(rest);
+      Object.assign(updates, research.fields);
       await db
         .update(personas)
         .set(updates)
         .where(and(eq(personas.id, id), eq(personas.workspaceId, ctx.workspace.id)));
-      return { success: true };
+      forgetResearchContext(ctx.workspace.id);
+      return { success: true, dropped: research.dropped };
     }),
 
-  delete: workspaceProcedure
+  /** The campaigns whose writers use this persona, for the delete confirmation (P32). */
+  usage: workspaceProcedure
+    .input(z.object({ id: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const campaigns = await db
+        .select({ id: areCampaigns.id, name: areCampaigns.name, status: areCampaigns.status })
+        .from(areCampaigns)
+        .where(and(eq(areCampaigns.workspaceId, ctx.workspace.id), eq(areCampaigns.personaId, input.id)))
+        .orderBy(asc(areCampaigns.name));
+      return { campaigns };
+    }),
+
+  /**
+   * Refused while an active campaign uses the persona; a draft, paused or
+   * finished one is cleared of it, so no campaign keeps a dead id and its
+   * writers say they use none (audit 2026-10-20, P32: they kept it and fell
+   * back to guessing from titles).
+   */
+  delete: adminWsProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const using = await db
+        .select({ id: areCampaigns.id, name: areCampaigns.name, status: areCampaigns.status })
+        .from(areCampaigns)
+        .where(and(eq(areCampaigns.workspaceId, ctx.workspace.id), eq(areCampaigns.personaId, input.id)));
+      const live = using.filter((c) => c.status === "active");
+      if (live.length) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `${live.length === 1 ? `The active campaign "${live[0].name}" uses` : `${live.length} active campaigns use`} this persona. Pause ${live.length === 1 ? "it" : "them"}, or give ${live.length === 1 ? "it" : "them"} another persona, first.`,
+        });
+      }
+      if (using.length) {
+        await db
+          .update(areCampaigns)
+          .set({ personaId: null })
+          .where(and(eq(areCampaigns.workspaceId, ctx.workspace.id), eq(areCampaigns.personaId, input.id)));
+      }
       await db
         .delete(personas)
         .where(and(eq(personas.id, input.id), eq(personas.workspaceId, ctx.workspace.id)));
-      return { success: true };
+      forgetResearchContext(ctx.workspace.id);
+      return { success: true, campaignsCleared: using.length };
     }),
 
   // ── Categories ─────────────────────────────────────────────────────
@@ -274,7 +342,7 @@ export const personasRouter = router({
       .orderBy(asc(personaCategories.sortOrder), asc(personaCategories.id));
   }),
 
-  createCategory: workspaceProcedure
+  createCategory: managerProcedure
     .input(z.object({ name: z.string().min(1).max(120) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -297,7 +365,7 @@ export const personasRouter = router({
       return { id: row.id };
     }),
 
-  updateCategory: workspaceProcedure
+  updateCategory: managerProcedure
     .input(z.object({ id: z.number(), name: z.string().min(1).max(120) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -311,7 +379,7 @@ export const personasRouter = router({
     }),
 
   /** Personas in the category survive — they fall back to Uncategorized. */
-  deleteCategory: workspaceProcedure
+  deleteCategory: adminWsProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -330,7 +398,7 @@ export const personasRouter = router({
   /** Full ordered id list → sortOrder = array index. Ids not owned by the
    *  workspace are ignored by the scoped WHERE (not an error — a stale
    *  client list shouldn't fail the whole reorder). */
-  reorderCategories: workspaceProcedure
+  reorderCategories: managerProcedure
     .input(z.object({ ids: z.array(z.number().int()).min(1).max(200) }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();

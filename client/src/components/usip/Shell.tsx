@@ -3,13 +3,13 @@ import { usePageTitle } from "@/lib/usePageTitle";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { canOpenWorkspace } from "@/lib/activeWorkspace";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { HelpHover } from "@/components/usip/HelpTip";
 import { navHelpFor } from "@/lib/helpText";
 import { PRIMARY_TOOLS, TOOLS, type ToolGroup } from "@/lib/toolRegistry";
 import { CommandPalette, openCommandPalette } from "@/components/usip/CommandPalette";
-import { MfaRequiredGate } from "@/components/usip/MfaRequiredGate";
 import { LayoutGrid } from "lucide-react";
 import {
   Activity,
@@ -83,6 +83,7 @@ import { ReactNode, useEffect, useLayoutEffect, useState, useRef, createContext,
 import { Link, useLocation } from "wouter";
 import { rememberPage } from "@/lib/lastPage";
 import { PageTransition } from "@/components/PageTransition";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import { HelpDrawer } from "@/components/usip/HelpDrawer";
 import { AssistantDrawer } from "@/components/usip/AssistantDrawer";
 import { assistantStore } from "@/lib/assistantStore";
@@ -370,6 +371,12 @@ const LIBRARY_LINK: NavLink = {
 // (The old "More" catch-all section is gone — every page either has one slot
 // in a section above, moved to the Settings hub / Admin Settings panel, or is
 // a superseded legacy page whose route still works via deep link.)
+
+/**
+ * The palette opens on Ctrl+K or Cmd+K (CommandPalette). The rail said "Ctrl K"
+ * and the top bar "⌘K"; both now say the one this computer uses (G66).
+ */
+const PALETTE_SHORTCUT = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K";
 
 /* ── Admin Settings popover (bottom-left) ─────────────────────────────────
  * Apollo-style settings panel anchored to the "Admin Settings" nav row.
@@ -690,9 +697,8 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     <div className="h-full flex bg-background text-foreground">
       {/* ⌘K palette — mounted once per Shell, listens globally */}
       <CommandPalette isAdmin={isAdminRole(current?.role)} />
-      {/* Workspace enforce2fa. Mounted here because Shell wraps every authed
-          page, and a member blocked by the policy can reach no other surface. */}
-      <MfaRequiredGate />
+      {/* The enforce2fa gate is mounted in App.tsx's AuthGate, not here: the
+          settings hub renders without Shell, so it sat outside the gate (G66). */}
       {/* Mobile backdrop */}
       {mobileOpen && (
         <div
@@ -726,12 +732,14 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
               <span className="text-[20px] font-bold tracking-tight">Velocity</span>
             </>
           )}
+          {/* Closes the phone drawer. Called "Collapse sidebar" and shown on a
+              desktop too, where the rail is always open and it did nothing (G66). */}
           <button
             type="button"
             onClick={() => setMobileOpen(false)}
-            className="ml-auto shrink-0 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
-            title="Collapse sidebar"
-            aria-label="Collapse sidebar"
+            className="ml-auto shrink-0 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted md:hidden"
+            title="Close menu"
+            aria-label="Close menu"
           >
             <ChevronsLeft className="size-4" />
           </button>
@@ -752,7 +760,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
           >
             <Search className="size-4 shrink-0 opacity-95" />
             <span className="flex-1 truncate text-left">Search…</span>
-            <kbd className="text-[10px] px-1.5 py-0.5 rounded border border-border bg-muted/60">Ctrl K</kbd>
+            <kbd className="text-[10px] px-1.5 py-0.5 rounded border border-border bg-muted/60">{PALETTE_SHORTCUT}</kbd>
           </button>
 
           {/* Top quick-links */}
@@ -773,10 +781,17 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         <div className="border-t border-border px-2 py-2 space-y-0.5">
           {BOTTOM_LINKS.map((l) =>
             l.label === "Admin Settings" ? (
-              <AdminSettingsMenu
-                key="admin-settings"
-                color={(isDark ? l.darkColor : l.color) ?? accentColor}
-              />
+              // A member who isn't an admin was offered Users and Teams, Audit
+              // Log, Security and Integrations, each refused on arrival (G66).
+              // They get their own settings instead.
+              isAdminRole(current?.role) ? (
+                <AdminSettingsMenu
+                  key="admin-settings"
+                  color={(isDark ? l.darkColor : l.color) ?? accentColor}
+                />
+              ) : (
+                renderNavLink({ ...l, href: "/v2/settings/profile", label: "Settings", trailingChevron: false })
+              )
             ) : (
               renderNavLink(l)
             ),
@@ -837,11 +852,15 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
             </button>
             </PopoverTrigger>
               <PopoverContent align="start" sideOffset={4} className="w-64 p-1 shadow-lg">
+                {/* An archived workspace is badged, and only a super admin may
+                    open it: everyone else is refused inside (audit 2026-10-20,
+                    G36). It was listed like any other. */}
                 {workspaces.map((w) => (
                   <button
                     key={w.id}
+                    disabled={!canOpenWorkspace(w)}
                     onClick={() => { setWsOpen(false); if (current?.id !== w.id) switchTo(w.id); }}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm hover:bg-secondary"
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm hover:bg-secondary disabled:opacity-60 disabled:hover:bg-transparent"
                   >
                     {current?.id === w.id ? <Check className="size-3.5 text-primary" /> : <span className="size-3.5" />}
                     {(w as { logoUrl?: string | null }).logoUrl && (
@@ -851,6 +870,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                       <div>{w.name}</div>
                       <div className="text-[11px] text-muted-foreground">{w.role} · {w.plan}</div>
                     </div>
+                    {w.archivedAt && (
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">Archived</span>
+                    )}
                   </button>
                 ))}
                 {/* Creation is super_admin-only server-side; hiding it for
@@ -878,11 +900,17 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 
           <ElsieToggle />
 
-          <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-secondary text-sm w-72">
-            <Search className="size-4 text-muted-foreground" />
-            <input aria-label="Search" className="bg-transparent outline-none flex-1 text-sm" placeholder="Search…" />
-            <kbd className="text-[10px] text-muted-foreground border px-1 rounded">⌘K</kbd>
-          </div>
+          {/* Opens the palette. It was a text box with no handler: typing in it
+              did nothing at all (G66). */}
+          <button
+            type="button"
+            onClick={openCommandPalette}
+            className="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-secondary text-sm w-72 text-left text-muted-foreground hover:text-foreground"
+          >
+            <Search className="size-4" />
+            <span className="flex-1">Search…</span>
+            <kbd className="text-[10px] border px-1 rounded">{PALETTE_SHORTCUT}</kbd>
+          </button>
 
           {actions}
 
@@ -938,7 +966,13 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
         <AssistantDrawer />
 
         <main className="flex-1 overflow-auto bg-background">
-          <PageTransition>{children}</PageTransition>
+          {/* A page's content that breaks shows its error here, inside the shell,
+              so the sidebar and top bar stay usable; the route boundary in
+              App.tsx sat above Shell, so any crash replaced the whole screen
+              (G37). Leaving the page clears it. */}
+          <ErrorBoundary resetKey={location} inline>
+            <PageTransition>{children}</PageTransition>
+          </ErrorBoundary>
         </main>
       </div>
     </div>

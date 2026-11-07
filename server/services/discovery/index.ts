@@ -23,7 +23,7 @@
  *      show "search → 4 sources fanned out → 12 raw finds → … " as a
  *      single coherent trace.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import { getDb } from "../../db";
 import {
   areScrapeJobs,
@@ -47,7 +47,7 @@ import {
   quickenrichContactFinder,
   quickenrichPulledToday,
 } from "../quickenrich";
-import { processRun } from "./consolidate";
+import { processRun, skippedCount, type PersistResult } from "./consolidate";
 
 /**
  * Real LinkedIn people search for Discovery v2 (replaces the old fabricating
@@ -257,12 +257,24 @@ interface RunResult {
   rawFindCount: number;
   perSource: Record<string, { found: number; error?: string }>;
   /** Phase 2 outcome (consolidation + scoring + persist into prospects).
-   *  Populated when runDiscovery completes successfully. */
+   *  Populated when runDiscovery completes successfully. Counts are of the
+   *  people SAVED (P61). */
   prospectsCreated: number;
   prospectsUpdated: number;
+  /** People found and not saved: no full name, archived, suppressed, or
+   *  matching someone in People by name alone. */
+  prospectsSkipped: number;
+  /** Account mode: companies saved. */
+  accountsCreated: number;
   highConfidenceCount: number;
   mediumConfidenceCount: number;
   lowConfidenceCount: number;
+  /** "failed" when the finds could not be saved (P143). */
+  status: "complete" | "failed";
+  errorMessage?: string;
+  /** This request found the same search already running and waited for it
+   *  instead of starting (and paying for) a second one (P72). */
+  joinedRunning?: boolean;
 }
 
 /** Build a single Google-style query string from a structured input. */
@@ -396,7 +408,37 @@ export function toRawFindRow(
  * Synchronous within the request — the fan-out is parallel via
  * Promise.allSettled and bounded by each scraper's own LLM call
  * (~1.5s typical, ~10s worst case at the fetch timeout).
+ *
+ * Audit 2026-10-20, P72: because it is synchronous, a response lost to a
+ * proxy timeout, a dropped connection or a reload leaves the run going with
+ * no run id on the page, and pressing Run again started — and paid for — the
+ * same fan-out a second time. The same search (workspace, mode, fields,
+ * campaign, sources) already running in this process is now joined instead:
+ * the second request waits for the first run and answers with it. Moving the
+ * fan-out to a background job the page polls is what would remove the long
+ * request itself; that is not done here.
  */
+const runningSearches = new Map<string, Promise<RunResult>>();
+
+/** Equal for two requests that would run the same search. */
+export function discoveryFingerprint(
+  workspaceId: number,
+  mode: SearchMode,
+  input: DiscoveryInput,
+  campaignId: number | null | undefined,
+  sources: readonly string[] | null | undefined,
+): string {
+  const fields: Record<string, unknown> = {};
+  for (const k of Object.keys(input).sort()) {
+    const v = (input as Record<string, unknown>)[k];
+    if (Array.isArray(v)) {
+      const list = v.map((x) => String(x).trim()).filter(Boolean);
+      if (list.length) fields[k] = list;
+    } else if (v != null && String(v).trim() !== "") fields[k] = String(v).trim();
+  }
+  return JSON.stringify([workspaceId, mode, campaignId ?? null, fields, sources?.length ? Array.from(new Set(sources)).sort() : null]);
+}
+
 export async function runDiscovery(
   workspaceId: number,
   userId: number | null,
@@ -404,6 +446,46 @@ export async function runDiscovery(
   input: DiscoveryInput,
   campaignId?: number | null,
   /** Per-run source picker (Find Prospects). Absent = every enabled candidate. */
+  opts?: { sources?: readonly string[] | null },
+): Promise<RunResult> {
+  const key = discoveryFingerprint(workspaceId, mode, input, campaignId, opts?.sources);
+  const running = runningSearches.get(key);
+  if (running) return running.then((r) => ({ ...r, joinedRunning: true }));
+  const run = runDiscoveryOnce(workspaceId, userId, mode, input, campaignId, opts)
+    .finally(() => { runningSearches.delete(key); });
+  runningSearches.set(key, run);
+  return run;
+}
+
+/**
+ * A run still "running" this long after it started was cut off by a restart
+ * or a crash (P143): the fan-out is bounded by per-source fetch timeouts, so
+ * a live one finishes in minutes. Reads mark it failed, as the research
+ * pipeline does with its orphans.
+ */
+export const DISCOVERY_ORPHAN_MS = 30 * 60_000;
+
+export async function failOrphanedDiscoveryRuns(workspaceId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(discoveryRuns).set({
+    status: "failed",
+    // No semicolon in the text: tenantScope's scanner reads a statement to its first one.
+    errorMessage: "Stopped before it finished (the server restarted or the run crashed). Its raw finds, if any, are kept. Run it again or re-score them.",
+    completedAt: new Date(),
+  }).where(and(
+    eq(discoveryRuns.workspaceId, workspaceId),
+    eq(discoveryRuns.status, "running"),
+    lt(discoveryRuns.startedAt, new Date(Date.now() - DISCOVERY_ORPHAN_MS)),
+  ));
+}
+
+async function runDiscoveryOnce(
+  workspaceId: number,
+  userId: number | null,
+  mode: SearchMode,
+  input: DiscoveryInput,
+  campaignId?: number | null,
   opts?: { sources?: readonly string[] | null },
 ): Promise<RunResult> {
   const db = await getDb();
@@ -420,6 +502,91 @@ export async function runDiscovery(
   }).$returningId();
   const runId = created.id;
 
+  // Anything that throws from here on would leave the run "running" for ever
+  // (P143): it is marked failed, with the reason, and the error goes on up.
+  try {
+    return await fanOutAndSave(db, workspaceId, runId, startedAt, mode, input, opts);
+  } catch (e) {
+    const message = String((e as Error)?.message ?? e).slice(0, 2000);
+    await db.update(discoveryRuns).set({
+      status: "failed", errorMessage: message, durationMs: Date.now() - startedAt, completedAt: new Date(),
+    }).where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
+    await emitLog(workspaceId, runId, "discovery.error", "error", `Run failed: ${message}`);
+    throw e;
+  }
+}
+
+/**
+ * Link newly saved people to Accounts. persistAsProspects writes company
+ * NAME and DOMAIN but never accountId/globalOrganizationId, even though the
+ * schema comments say those are "populated by CompanyAssociationService" — so
+ * Discovery v2, the flagship sourcing path, produced prospects with no company
+ * association at all. Only the CSV-import path called this service, which is
+ * why imported people had companies and discovered people didn't, and why the
+ * same company appeared as separate unlinked entities per source. Source
+ * search's promote and the LinkedIn import save through the same consolidation
+ * and call this too (P71).
+ *
+ * Fire-and-forget, same as the import path: linking must not slow or fail the
+ * response the user is waiting on.
+ */
+export function associateDiscoveredPeople(workspaceId: number, runId: number): void {
+  void import("../company/associationService")
+    .then((m) => m.associateUnlinkedProspects(workspaceId, 3000, "discovery"))
+    .then((s) => emitLog(workspaceId, runId, "company.associate", "info",
+      `Company association: ${s.linked} linked, ${s.created} accounts created, ${s.needsReview} need review, ${s.missing} without a company`))
+    .catch((e) => console.error("[discovery] company association failed:", e));
+}
+
+/**
+ * Finds that come from somewhere other than the fan-out (the LinkedIn search
+ * card), saved to People through the same run → raw finds → consolidation, so
+ * one set of rules decides who is the same person and who is left out.
+ */
+export async function saveFindsAsPeople(
+  workspaceId: number,
+  userId: number | null,
+  source: string,
+  finds: Array<Record<string, unknown>>,
+  input: Record<string, unknown>,
+): Promise<{ runId: number; prospectsCreated: number; prospectsUpdated: number; prospectsSkipped: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const startedAt = Date.now();
+  const [created] = await db.insert(discoveryRuns).values({
+    workspaceId, userId, campaignId: null, mode: "person", input: input as any, status: "running",
+  }).$returningId();
+  const runId = created.id;
+  try {
+    let stored = 0;
+    for (const f of finds) {
+      try { await db.insert(rawFinds).values(toRawFindRow(workspaceId, runId, source, f)); stored++; }
+      catch (e) { console.error("[discovery] raw_find row unstorable, skipped:", (e as Error)?.message); }
+    }
+    await db.update(discoveryRuns).set({ rawFindCount: stored })
+      .where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
+    const r = await processRun(workspaceId, runId, "person");
+    await db.update(discoveryRuns).set({ status: "complete", durationMs: Date.now() - startedAt, completedAt: new Date() })
+      .where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
+    associateDiscoveredPeople(workspaceId, runId);
+    return { runId, prospectsCreated: r.prospectsCreated, prospectsUpdated: r.prospectsUpdated, prospectsSkipped: skippedCount(r) + (finds.length - stored) };
+  } catch (e) {
+    await db.update(discoveryRuns).set({
+      status: "failed", errorMessage: String((e as Error)?.message ?? e).slice(0, 2000), durationMs: Date.now() - startedAt, completedAt: new Date(),
+    }).where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
+    throw e;
+  }
+}
+
+async function fanOutAndSave(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  workspaceId: number,
+  runId: number,
+  startedAt: number,
+  mode: SearchMode,
+  input: DiscoveryInput,
+  opts?: { sources?: readonly string[] | null },
+): Promise<RunResult> {
   const query = buildQuery(mode, input);
   const icpContext = buildIcpContext(mode, input);
   await emitLog(workspaceId, runId, "discovery.start", "info",
@@ -433,8 +600,8 @@ export async function runDiscovery(
       errorMessage: "No query terms",
       durationMs: Date.now() - startedAt,
       completedAt: new Date(),
-    }).where(eq(discoveryRuns.id, runId));
-    return { runId, rawFindCount: 0, perSource: {}, prospectsCreated: 0, prospectsUpdated: 0, highConfidenceCount: 0, mediumConfidenceCount: 0, lowConfidenceCount: 0 };
+    }).where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
+    return { runId, rawFindCount: 0, perSource: {}, prospectsCreated: 0, prospectsUpdated: 0, prospectsSkipped: 0, accountsCreated: 0, highConfidenceCount: 0, mediumConfidenceCount: 0, lowConfidenceCount: 0, status: "failed", errorMessage: "No query terms" };
   }
 
   // Choose the source mix per mode. Person mode favors profile lookups and the
@@ -540,36 +707,24 @@ export async function runDiscovery(
 
   // Update counters BEFORE Phase 2 so the run is queryable even if
   // consolidation fails (the user still wants to see what came back).
+  // totalFinds counts what was STORED: an unstorable row was subtracted above.
   await db.update(discoveryRuns).set({
     rawFindCount: totalFinds,
   }).where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
 
   // Phase 2: consolidate raw_finds → score → persist into prospects.
-  // Wrapped in try/catch so a Phase 2 failure still leaves a usable
-  // run (raw_finds are queryable, the user can re-trigger consolidate).
-  let persistResult = { prospectsCreated: 0, prospectsUpdated: 0, highConfidenceCount: 0, mediumConfidenceCount: 0, lowConfidenceCount: 0 };
+  // A Phase 2 failure still leaves a usable run (raw_finds are queryable and
+  // Re-score retries the save), but the run says it FAILED, with the reason:
+  // it used to be stamped complete with nothing saved (P143).
+  let persist: PersistResult = { prospectsCreated: 0, prospectsUpdated: 0, highConfidenceCount: 0, mediumConfidenceCount: 0, lowConfidenceCount: 0 };
+  let saveError: string | null = null;
   try {
     if (totalFinds > 0) {
-      persistResult = await processRun(workspaceId, runId, mode);
-
-      // Link the new prospects to Accounts. persistAsProspects writes company
-      // NAME and DOMAIN but never accountId/globalOrganizationId, even though
-      // the schema comments say those are "populated by
-      // CompanyAssociationService" — so Discovery v2, the flagship sourcing
-      // path, produced prospects with no company association at all. Only the
-      // CSV-import path called this service, which is why imported people had
-      // companies and discovered people didn't, and why the same company
-      // appeared as separate unlinked entities per source.
-      //
-      // Fire-and-forget, same as the import path: linking must not slow or
-      // fail the discovery response the user is waiting on.
-      void import("../company/associationService")
-        .then((m) => m.associateUnlinkedProspects(workspaceId, 3000, "discovery"))
-        .then((s) => emitLog(workspaceId, runId, "company.associate", "info",
-          `Company association: ${s.linked} linked, ${s.created} accounts created, ${s.needsReview} need review, ${s.missing} without a company`))
-        .catch((e) => console.error("[discovery] company association failed:", e));
+      persist = await processRun(workspaceId, runId, mode);
+      associateDiscoveredPeople(workspaceId, runId);
     }
   } catch (e) {
+    saveError = `Saving the finds failed: ${String((e as Error)?.message ?? e).slice(0, 500)}. The raw finds are kept; Re-score tries again.`;
     await emitLog(workspaceId, runId, "consolidate.error", "error",
       `Consolidation/persist failed: ${(e as Error)?.message ?? e}`,
       { stack: (e as Error)?.stack });
@@ -577,14 +732,30 @@ export async function runDiscovery(
 
   const durationMs = Date.now() - startedAt;
   await db.update(discoveryRuns).set({
-    status: "complete",
+    status: saveError ? "failed" : "complete",
+    ...(saveError ? { errorMessage: saveError } : {}),
     durationMs,
     completedAt: new Date(),
   }).where(and(eq(discoveryRuns.id, runId), eq(discoveryRuns.workspaceId, workspaceId)));
 
-  await emitLog(workspaceId, runId, "discovery.complete", "info",
-    `Run complete — ${totalFinds} raw / ${persistResult.prospectsCreated} new + ${persistResult.prospectsUpdated} updated / ${persistResult.highConfidenceCount} high · ${persistResult.mediumConfidenceCount} medium · ${persistResult.lowConfidenceCount} low in ${durationMs}ms`,
+  const persistResult = {
+    prospectsCreated: persist.prospectsCreated,
+    prospectsUpdated: persist.prospectsUpdated,
+    prospectsSkipped: skippedCount(persist),
+    accountsCreated: persist.accountsCreated ?? 0,
+    highConfidenceCount: persist.highConfidenceCount,
+    mediumConfidenceCount: persist.mediumConfidenceCount,
+    lowConfidenceCount: persist.lowConfidenceCount,
+  };
+  await emitLog(workspaceId, runId, saveError ? "discovery.failed" : "discovery.complete", saveError ? "error" : "info",
+    saveError
+      ? `Run failed after ${totalFinds} raw finds in ${durationMs}ms — ${saveError}`
+      : `Run complete — ${totalFinds} raw / ${persistResult.prospectsCreated} new + ${persistResult.prospectsUpdated} updated / ${persistResult.highConfidenceCount} high · ${persistResult.mediumConfidenceCount} medium · ${persistResult.lowConfidenceCount} low in ${durationMs}ms`,
     { perSource, durationMs, persistResult });
 
-  return { runId, rawFindCount: totalFinds, perSource, ...persistResult };
+  return {
+    runId, rawFindCount: totalFinds, perSource, ...persistResult,
+    status: saveError ? "failed" : "complete",
+    ...(saveError ? { errorMessage: saveError } : {}),
+  };
 }

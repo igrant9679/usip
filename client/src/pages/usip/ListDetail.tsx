@@ -2,9 +2,9 @@
  * ListDetail — a single record list (/v2/lists/:id).
  *
  * Apollo's list detail: breadcrumb + title + object badge + record count, an
- * "Add records to list" action, a toolbar, and the members table (or the empty
- * state with Find-people / Import / Workflow cards). "Find people/companies"
- * opens a mini-lookup modal to search and add records.
+ * "Add people/companies to list" action, a toolbar, and the members table (or
+ * the empty state with Find / Import cards). Adding opens a mini-lookup modal
+ * to search and add records.
  *
  * Backed by recordLists.get / members / addMembers / removeMember. People lists
  * hold prospects; Companies lists hold accounts.
@@ -35,7 +35,6 @@ import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuRadioGroup,
@@ -48,7 +47,6 @@ import {
   Search,
   Upload,
   Wand2,
-  Workflow,
   Save,
   Settings2,
   ArrowUpDown,
@@ -60,21 +58,26 @@ import {
   ExternalLink,
   Mail,
   Loader2,
-  UserPlus,
   Pencil,
   Check,
 } from "lucide-react";
 import { QueryError } from "@/components/usip/Shell";
 import { NotFoundState, isNotFoundError } from "@/components/usip/QueryState";
+import { formatAmount } from "@shared/money";
 
+// The shared compact format (R98); a dash for no amount.
 function fmtMoney(n: number) {
-  if (!n) return "—";
-  if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
-  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `$${(n / 1e3).toFixed(1)}k`;
-  return `$${Math.round(n)}`;
+  return n ? formatAmount(n, { compact: true }) : "—";
 }
 function toNum(v: unknown) { const n = typeof v === "number" ? v : parseFloat(String(v ?? "0")); return Number.isFinite(n) ? n : 0; }
+
+/** "Added 3 to the list · 1 was already on it". */
+function addedSummary(r: { added: number; alreadyOn?: number; skipped?: number }): string {
+  const parts = [`Added ${r.added.toLocaleString()} to the list`];
+  if (r.alreadyOn) parts.push(`${r.alreadyOn.toLocaleString()} ${r.alreadyOn === 1 ? "was" : "were"} already on it`);
+  if (r.skipped) parts.push(`${r.skipped.toLocaleString()} could not be added (deleted, archived or not this list's kind)`);
+  return parts.join(" · ");
+}
 
 export default function ListDetail() {
   const { id: idStr } = useParams<{ id: string }>();
@@ -88,9 +91,28 @@ export default function ListDetail() {
   const isCompanies = list?.entityType === "companies";
   const { enrichList, running: enriching } = useEnrichJob();
 
-  const removeMut = trpc.recordLists.removeMember.useMutation({ onSuccess: () => { utils.recordLists.members.invalidate({ id }); utils.recordLists.list.invalidate(); }, onError: (e) => toast.error(e.message) });
+  const refreshMembers = () => { utils.recordLists.members.invalidate({ id }); utils.recordLists.list.invalidate(); };
+  // Remove said nothing and could not be undone (audit 2026-10-20, P139).
+  const putBackMut = trpc.recordLists.addMembers.useMutation({
+    onSuccess: (res) => { refreshMembers(); toast.success(res.added ? "Put back on the list" : addedSummary(res)); },
+    onError: (e) => toast.error(e.message),
+  });
+  const removeMut = trpc.recordLists.removeMember.useMutation({
+    onSuccess: (res) => {
+      refreshMembers();
+      const removed = res.removed;
+      toast.success("Removed from the list", removed ? {
+        action: { label: "Undo", onClick: () => putBackMut.mutate({ listId: removed.listId, recordType: removed.recordType as "prospect" | "account", recordIds: [removed.recordId] }) },
+      } : undefined);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  // Adding closed the picker and said nothing (P134).
   const addMut = trpc.recordLists.addMembers.useMutation({
-    onSuccess: () => { utils.recordLists.members.invalidate({ id }); utils.recordLists.list.invalidate(); setAddOpen(false); setPicked(new Set()); },
+    onSuccess: (res) => {
+      refreshMembers(); setAddOpen(false); setPicked(new Set());
+      toast.success(addedSummary(res));
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -207,18 +229,13 @@ export default function ListDetail() {
               <AddToMenu prospectIds={memberProspectIds} label={`Add all ${memberProspectIds.length} to…`} align="end"
                 trigger={<Button variant="outline" size="sm" className="h-7 gap-1.5"><Plus className="size-3.5" /> Add all {memberProspectIds.length} to… <ChevronDown className="size-3 opacity-70" /></Button>} />
             )}
-            <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/v2/data-enrichment?tab=import-contacts")}><Upload className="size-3.5" /> Import</Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" className="h-7 gap-1.5" style={{ backgroundColor: accent }}><Plus className="size-3.5" /> Add records to list <ChevronDown className="size-3 opacity-70" /></Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => { setPicked(new Set()); setAddOpen(true); }}>
-                  {isCompanies ? <Building2 className="size-4 mr-2" /> : <Users className="size-4 mr-2" />} Find {isCompanies ? "companies" : "people"}
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setLocation(isCompanies ? "/accounts" : "/prospects")}><UserPlus className="size-4 mr-2" /> Create {isCompanies ? "company" : "person"}</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            {/* An import does not add to this list, and "Create person" only opened
+                People, so neither said what it did (audit 2026-10-20, P55). Import
+                says where records go; adding is the one thing this button does. */}
+            <Button variant="outline" size="sm" className="h-7 gap-1.5" title={importHint(!!isCompanies)} onClick={() => setLocation("/v2/data-enrichment?tab=import-contacts")}><Upload className="size-3.5" /> Import a CSV</Button>
+            <Button size="sm" className="h-7 gap-1.5" style={{ backgroundColor: accent }} onClick={() => { setPicked(new Set()); setAddOpen(true); }}>
+              <Plus className="size-3.5" /> Add {isCompanies ? "companies" : "people"} to list
+            </Button>
           </div>
         </div>
 
@@ -247,7 +264,8 @@ export default function ListDetail() {
             </Button>
           )}
           <ResearchAiMenu />
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setLocation("/v2/workflows")}><Workflow className="size-4" /> Create workflow <ChevronDown className="size-3.5 opacity-60" /></Button>
+          {/* "Create workflow ▾" opened the Workflows page with no menu, and no
+              workflow can add to a list (P55). */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" title="Sort"><ArrowUpDown className="size-4" /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -265,7 +283,7 @@ export default function ListDetail() {
           {membersQ.isLoading ? (
             <div className="p-3 space-y-2">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-11 rounded bg-muted/50 animate-pulse" />)}</div>
           ) : total === 0 && !query ? (
-            <EmptyState isCompanies={!!isCompanies} onFind={() => { setPicked(new Set()); setAddOpen(true); }} onImport={() => setLocation("/v2/data-enrichment?tab=import-contacts")} onWorkflow={() => setLocation("/v2/workflows")} />
+            <EmptyState isCompanies={!!isCompanies} onFind={() => { setPicked(new Set()); setAddOpen(true); }} onImport={() => setLocation("/v2/data-enrichment?tab=import-contacts")} />
           ) : rows.length === 0 ? (
             <div className="text-center py-16 px-4">
               <p className="text-sm text-muted-foreground">No records match “{query}”.</p>
@@ -363,17 +381,23 @@ export default function ListDetail() {
 
 const PAGE_SIZE = 100;
 
-function EmptyState({ isCompanies, onFind, onImport, onWorkflow }: { isCompanies: boolean; onFind: () => void; onImport: () => void; onWorkflow: () => void }) {
+/** Where an import's records go, which is not this list (P55). */
+function importHint(isCompanies: boolean) {
+  return `Imported records go to ${isCompanies ? "Companies" : "People"}, not to this list. Add them here afterwards with Add ${isCompanies ? "companies" : "people"} to list.`;
+}
+
+function EmptyState({ isCompanies, onFind, onImport }: { isCompanies: boolean; onFind: () => void; onImport: () => void }) {
+  // "Import by CSV" promised records "into this list" and "Create workflow" to
+  // add them automatically; neither flow knows about lists (P55).
   const cards = [
     { icon: isCompanies ? Building2 : Users, title: `Find ${isCompanies ? "companies" : "people"}`, body: `Search for ${isCompanies ? "accounts" : "prospects"} to add to this list`, onClick: onFind },
-    { icon: Upload, title: "Import by CSV", body: "Import records into this list from a CSV file", onClick: onImport },
-    { icon: Workflow, title: "Create workflow", body: `Automatically add ${isCompanies ? "companies" : "people"} to this list`, onClick: onWorkflow },
+    { icon: Upload, title: "Import a CSV", body: importHint(isCompanies), onClick: onImport },
   ];
   return (
     <div className="max-w-2xl mx-auto text-center py-16 px-4">
       <h3 className="text-sm font-semibold">No records</h3>
       <p className="text-sm text-muted-foreground mt-1">No saved {isCompanies ? "companies" : "people"} yet! Add records to this list to get started.</p>
-      <div className="mt-5 grid sm:grid-cols-3 gap-3 text-left">
+      <div className="mt-5 grid sm:grid-cols-2 gap-3 text-left">
         {cards.map((c) => {
           const Icon = c.icon;
           return (
@@ -389,8 +413,8 @@ function EmptyState({ isCompanies, onFind, onImport, onWorkflow }: { isCompanies
   );
 }
 
-/* ── Add-records mini-lookup modal ── */
-function AddRecordsDialog({
+/* ── Add-records mini-lookup modal (exported for server/recordListsTruth.test.ts) ── */
+export function AddRecordsDialog({
   open, onClose, isCompanies, accent, picked, setPicked, adding, onAdd,
 }: {
   open: boolean;
@@ -418,9 +442,12 @@ function AddRecordsDialog({
   const peoplePages = Math.max(1, Math.ceil(peopleTotal / PER_PAGE));
   const accountsQ = trpc.accounts.list.useQuery(undefined, { enabled: open && isCompanies });
 
+  const [, setLocation] = useLocation();
   const all: { id: number; primary: string; secondary?: string }[] = useMemo(() => {
     if (isCompanies) {
-      return ((accountsQ.data ?? []) as any[]).map((a) => ({ id: a.id, primary: a.name, secondary: [a.industry, a.region].filter(Boolean).join(" · ") || a.domain || "" }));
+      // An archived company was offered here and then shown on the list (audit 2026-10-20, P50).
+      return ((accountsQ.data ?? []) as any[]).filter((a) => a.archivedAt == null)
+        .map((a) => ({ id: a.id, primary: a.name, secondary: [a.industry, a.region].filter(Boolean).join(" · ") || a.domain || "" }));
     }
     return (((prospectsQ.data as any)?.data ?? []) as any[]).map((p) => ({ id: p.id, primary: `${p.firstName} ${p.lastName}`.trim(), secondary: [p.title, p.company].filter(Boolean).join(" · ") }));
   }, [isCompanies, accountsQ.data, prospectsQ.data]);
@@ -456,7 +483,8 @@ function AddRecordsDialog({
             <div className="flex flex-col items-center justify-center h-full text-center px-4">
               <Sparkles className="size-6 text-muted-foreground opacity-50 mb-2" />
               <p className="text-sm text-muted-foreground">{!isCompanies && search ? `No one matches "${search}".` : all.length === 0 ? `No ${isCompanies ? "companies" : "people"} in this workspace yet.` : "Start your search by typing above."}</p>
-              {all.length === 0 && !(!isCompanies && search) && <Button variant="outline" size="sm" className="mt-3" onClick={() => (window.location.href = isCompanies ? "/accounts" : "/v2/people")}>Go find some</Button>}
+              {/* In-app navigation: this set window.location and reloaded the whole app (P139). */}
+              {all.length === 0 && !(!isCompanies && search) && <Button variant="outline" size="sm" className="mt-3" onClick={() => setLocation(isCompanies ? "/v2/companies" : "/v2/people")}>Go find some</Button>}
             </div>
           ) : (
             filtered.map((r) => (

@@ -11,7 +11,8 @@
  * bulk + generateDrafts/approveDraft/approveAllDrafts/dismissDraft +
  * get/setAutopilotSettings). Drafts are excluded from the normal queue and
  * reviewed in their own section. The v1 /tasks page (pages/usip/Tasks.tsx,
- * which also exports RelatedTasks) is left untouched.
+ * which also exports RelatedTasks) is still live; both read their overdue,
+ * scope and "recently closed" rules from @shared/taskRules (R72).
  */
 import { useMemo, useState } from "react";
 import { SHOW_MORE_STEP, useShowMore } from "@/hooks/useShowMore";
@@ -39,6 +40,10 @@ import {
   AlertTriangle, Plus, Zap, MoreHorizontal, X, Bot, CheckCheck, Inbox, Trash2, User,
 } from "lucide-react";
 import { confirmAction, ConfirmButton } from "@/components/usip/Common";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
+import { RelatedRecordPicker, type RelatedRecord } from "@/components/usip/RelatedRecordPicker";
+import { recentlyClosed, seesAllTasks, taskDueState } from "@shared/taskRules";
 
 type Task = {
   id: number;
@@ -57,6 +62,8 @@ type Task = {
   /** Who the task belongs to. tasks.list returns whole rows, so this was
    *  always on the wire — this page simply never read it (2026-10-29). */
   ownerUserId?: number | null;
+  completedAt?: string | Date | null;
+  updatedAt?: string | Date | null;
 };
 
 const TYPE_ICON: Record<string, typeof Phone> = {
@@ -128,9 +135,16 @@ export default function TasksV2() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
 
-  const active = trpc.tasks.list.useQuery({});
+  // One scope on both task pages, and on the counts above the list (R72): a
+  // rep sees their own tasks, a manager everyone's. This listed every
+  // owner's tasks to everyone. The AI drafts below stay the workspace's
+  // review queue, because "Approve all" approves all of them.
+  const { current } = useWorkspace();
+  const seesAll = seesAllTasks(current?.role);
+  const { timezone } = useWorkspaceTimezone();
+  const active = trpc.tasks.list.useQuery({ mine: true });
   const drafts = trpc.tasks.list.useQuery({ status: "draft" });
-  const stats = trpc.tasks.stats.useQuery();
+  const stats = trpc.tasks.stats.useQuery({ mine: true });
   const autopilot = trpc.tasks.getAutopilotSettings.useQuery();
 
   const invalidateAll = () => {
@@ -189,7 +203,7 @@ export default function TasksV2() {
   };
   // "" = anyone. Scopes the QUEUE only, which is why it lives in that section's
   // header: the stat cards above come from tasks.stats on the server and count
-  // the whole workspace, and a filter that silently re-scoped the list while
+  // everything this person can see (R72), and a filter that silently re-scoped the list while
   // leaving those numbers alone is how a header ends up counting one population
   // and the list another.
   const [assigneeFilter, setAssigneeFilter] = useState<string>("");
@@ -236,10 +250,9 @@ export default function TasksV2() {
   // and this page rendered neither bucket for it — so the task vanished from
   // the only Tasks page reachable from the nav, with no way to get it back
   // (legacy /tasks, whose "All" tab would show it, is orphaned).
-  const done = useMemo(
-    () => activeTasks.filter((t) => t.status === "done" || t.status === "cancelled").slice(0, 10),
-    [activeTasks],
-  );
+  // The LATEST ten closed (R72): this took the first ten of a list sorted by
+  // due date, which were the oldest.
+  const done = useMemo(() => recentlyClosed(activeTasks, 10), [activeTasks]);
 
   const now = Date.now();
 
@@ -264,7 +277,8 @@ export default function TasksV2() {
 
   const QueueRow = ({ t }: { t: Task }) => {
     const href = recordHref(t);
-    const isOverdue = t.dueAt && new Date(t.dueAt).getTime() < now;
+    // The shared rule (R72), the one /tasks and the stat cards use.
+    const isOverdue = taskDueState(t.dueAt, now, timezone) === "overdue";
     const isCall = t.type === "call";
     return (
       <div className="flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40">
@@ -521,6 +535,8 @@ export default function TasksV2() {
                     {queue.length} of {queueAll.length} in queue
                   </span>
                 )}
+                {/* Only a manager's queue holds other people's tasks (R72). */}
+                {seesAll && <>
                 <label htmlFor="queue-assignee" className="text-muted-foreground">Assignee</label>
                 <select
                   id="queue-assignee"
@@ -533,6 +549,7 @@ export default function TasksV2() {
                     <option key={m.userId} value={String(m.userId)}>{m.name ?? `User ${m.userId}`}</option>
                   ))}
                 </select>
+                </>}
               </div>
             </div>
             <div className="rounded-xl border bg-card overflow-hidden shadow-sm">
@@ -610,7 +627,9 @@ export default function TasksV2() {
       </div>
 
       {/* New task dialog */}
-      <NewTaskDialog open={newOpen} onOpenChange={setNewOpen} onCreate={(v) => create.mutate(v)} pending={create.isPending} members={memberOpts} />
+      {/* The dialog clears once the task is SAVED (R104): it emptied itself
+          on submit, so a refused save lost everything typed. */}
+      <NewTaskDialog open={newOpen} onOpenChange={setNewOpen} onCreate={(v, saved) => create.mutate(v, { onSuccess: saved })} pending={create.isPending} members={memberOpts} />
     </Shell>
   );
 }
@@ -623,7 +642,8 @@ function NewTaskDialog({
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  onCreate: (v: NewTask) => void;
+  /** `saved` runs once the task is stored; the form clears then, not before. */
+  onCreate: (v: NewTask, saved: () => void) => void;
   pending: boolean;
   members: { userId: number; name: string | null }[];
 }) {
@@ -636,6 +656,9 @@ function NewTaskDialog({
   // (activities.ts) — the same contract the legacy page's "— Me —" relied on.
   // Never send 0 or a guessed id.
   const [ownerUserId, setOwnerUserId] = useState<string>("");
+  // The record the task is about, found by name (R104): this page could not
+  // link a task to anything.
+  const [related, setRelated] = useState<RelatedRecord | null>(null);
 
   const submit = () => {
     if (!title.trim()) return;
@@ -646,8 +669,11 @@ function NewTaskDialog({
       priority,
       dueAt: due ? new Date(due).toISOString() : undefined,
       ownerUserId: ownerUserId ? Number(ownerUserId) : undefined,
+      relatedType: related?.type,
+      relatedId: related?.id,
+    }, () => {
+      setTitle(""); setDescription(""); setType("todo"); setPriority("normal"); setDue(""); setOwnerUserId(""); setRelated(null);
     });
-    setTitle(""); setDescription(""); setType("todo"); setPriority("normal"); setDue(""); setOwnerUserId("");
   };
 
   return (
@@ -706,6 +732,7 @@ function NewTaskDialog({
               </select>
             </div>
           </div>
+          <RelatedRecordPicker value={related} onChange={setRelated} idPrefix="task-v2-related" />
           <div className="space-y-1.5">
             <Label htmlFor="task-desc">Notes</Label>
             <Textarea id="task-desc" value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="Optional instructions" />

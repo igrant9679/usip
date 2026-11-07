@@ -30,12 +30,15 @@ export default function ResearchHome() {
   const [aiOpen, setAiOpen] = useState(false);
   const [name, setName] = useState("");
   const [tagline, setTagline] = useState("");
+  const utils = trpc.useUtils();
   const create = trpc.research.markets.create.useMutation({
     onError: (e) => toast.error(e.message),
-    onSuccess: (r) => {
+    onSuccess: async (r) => {
       reportDropped(r.dropped);
       setOpen(false);
       navigate(`/research/markets/${r.id}`);
+      // The new market shows in lists and pickers without waiting out the cache (audit 2026-10-20, P27).
+      await utils.research.invalidate();
     },
   });
   const submit = () => {

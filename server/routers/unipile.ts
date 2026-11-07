@@ -4,12 +4,12 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, gte, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "../db";
 import {
   activities,
-  leads,
+  sendingAccounts,
   unipileAccounts,
   unipileInvites,
   unipileMessages,
@@ -42,6 +42,19 @@ import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { stripNameCredentials } from "../services/enrichment/personName";
 import { genuineSocialReplyScope } from "../services/replyScope";
 import { assertOutboundNotPaused } from "../services/outboundPause";
+import { extractLinkedInIdentifier } from "../services/linkedinLookup";
+
+/**
+ * Who a hand-sent LinkedIn action is for: the slug of a profile URL, or an id
+ * given as is (a provider id such as "ACoAA…" or a bare slug). Null for a URL
+ * that is not a LinkedIn profile.
+ */
+export function linkedInRecipient(input: string): string | null {
+  const s = input.trim();
+  if (!s) return null;
+  if (/linkedin\.com/i.test(s) || /^https?:\/\//i.test(s)) return extractLinkedInIdentifier(s);
+  return /^[A-Za-z0-9_-]{2,200}$/.test(s) ? s : null;
+}
 
 // ─── Provider metadata ────────────────────────────────────────────────────────
 
@@ -69,6 +82,42 @@ const ALL_PROVIDERS = [
   "MICROSOFT",
   "IMAP",
 ];
+
+/** A search with keywords, or with at least one filter that holds a value (P149). */
+export function linkedInSearchHasTerms(keywords: string | undefined, filters: Record<string, unknown> | undefined): boolean {
+  if (keywords?.trim()) return true;
+  const holds = (v: unknown): boolean =>
+    Array.isArray(v) ? v.some(holds) : v && typeof v === "object" ? Object.values(v).some(holds)
+      : typeof v === "number" ? Number.isFinite(v) : typeof v === "string" ? v.trim() !== "" : v === true;
+  return Object.values(filters ?? {}).some(holds);
+}
+
+/**
+ * One LinkedIn search hit as the vendor sent it → the fields an import uses,
+ * or null when it is not a hit at all (P75). Tolerant per field: null is
+ * absent, a number is text, `company` may be `{ name }`, and an over-long
+ * value is cut, so one odd field never fails the rest.
+ */
+export function searchHitFields(raw: unknown): {
+  name?: string; first_name?: string; last_name?: string; title?: string; headline?: string;
+  occupation?: string; company?: string; location?: string; url?: string;
+} | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const h = raw as Record<string, unknown>;
+  const text = (v: unknown, max = 300): string | undefined => {
+    const s = typeof v === "string" ? v : typeof v === "number" && Number.isFinite(v) ? String(v) : "";
+    return s.trim().slice(0, max) || undefined;
+  };
+  const company = text(h.company, 200)
+    ?? (h.company && typeof h.company === "object" ? text((h.company as Record<string, unknown>).name, 200) : undefined);
+  // Only a LinkedIn address is a profile URL.
+  const url = [text(h.public_profile_url, 500), text(h.profile_url, 500)].find((u) => !!u && /(^|\.|\/\/)linkedin\.com\//i.test(u));
+  return {
+    name: text(h.name), first_name: text(h.first_name, 80), last_name: text(h.last_name, 80),
+    title: text(h.title, 200), headline: text(h.headline, 200), occupation: text(h.occupation, 200),
+    company, location: text(h.location, 200), url,
+  };
+}
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 
@@ -155,7 +204,8 @@ export const unipileRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
-      // Verify ownership
+      // Verify ownership — the caller's, in this workspace, which is the only
+      // row the delete below can remove (audit 2026-10-20, O32).
       const [row] = await db
         .select()
         .from(unipileAccounts)
@@ -163,6 +213,7 @@ export const unipileRouter = router({
           and(
             eq(unipileAccounts.unipileAccountId, input.unipileAccountId),
             eq(unipileAccounts.userId, ctx.user.id),
+            eq(unipileAccounts.workspaceId, ctx.workspace.id),
           ),
         )
         .limit(1);
@@ -179,6 +230,17 @@ export const unipileRouter = router({
         .where(and(
           eq(unipileAccounts.unipileAccountId, input.unipileAccountId),
           eq(unipileAccounts.workspaceId, ctx.workspace.id),
+        ));
+      // Its bridged mailbox stops sending (audit 2026-10-20, O33): left enabled,
+      // a sequence or the send fallback could still pick a mailbox whose account
+      // is gone. Disabled, not deleted, so its history and settings stay; a
+      // reconnect makes a new bridge and leaves this one off.
+      await db
+        .update(sendingAccounts)
+        .set({ enabled: false })
+        .where(and(
+          eq(sendingAccounts.unipileAccountId, input.unipileAccountId),
+          eq(sendingAccounts.workspaceId, ctx.workspace.id),
         ));
 
       return { success: true };
@@ -248,11 +310,25 @@ export const unipileRouter = router({
         limit: z.number().min(1).max(100).default(30),
       }),
     )
-    .query(async ({ ctx: _ctx, input }) => {
+    .query(async ({ ctx, input }) => {
+      // Only a chat on one of the caller's own accounts here (audit 2026-10-20,
+      // O32): the vendor answers for any chat id under the platform's key, so
+      // any member could read any workspace's conversation by its id.
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
+      const own = await db
+        .select({ id: unipileAccounts.unipileAccountId })
+        .from(unipileAccounts)
+        .where(and(eq(unipileAccounts.workspaceId, ctx.workspace.id), eq(unipileAccounts.userId, ctx.user.id)));
+      if (own.length === 0) return { items: [] };
       const result = await getChatMessages(input.chatId, {
         cursor: input.cursor,
         limit: input.limit,
       });
+      const mine = new Set(own.map((a) => a.id));
+      if (result.items.some((m) => !mine.has(m.account_id))) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "That chat isn't on one of your connected accounts." });
+      }
       return result;
     }),
 
@@ -306,6 +382,8 @@ export const unipileRouter = router({
         chatId: z.string().optional(),
         unipileAccountId: z.string(),
         attendeesIds: z.array(z.string()).optional(),
+        /** A LinkedIn profile URL or id to start a conversation with (R44). */
+        recipientProfile: z.string().trim().min(1).max(500).optional(),
         text: z.string().min(1).max(4000),
         linkedContactId: z.number().optional(),
         linkedLeadId: z.number().optional(),
@@ -333,6 +411,19 @@ export const unipileRouter = router({
         .limit(1);
       if (!account) throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
 
+      // A profile starts a new conversation with that person as the attendee,
+      // as the sequence engine does (R44). The drawer put the profile URL in
+      // chatId, which names an EXISTING conversation, so no DM ever started.
+      let attendeesIds = input.attendeesIds;
+      if (!input.chatId && !attendeesIds?.length && input.recipientProfile) {
+        const who = linkedInRecipient(input.recipientProfile);
+        if (!who) throw new TRPCError({ code: "BAD_REQUEST", message: "That isn't a LinkedIn profile URL or id." });
+        attendeesIds = [who];
+      }
+      if (!input.chatId && !attendeesIds?.length) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Say who the message is to." });
+      }
+
       // The LinkedIn limit gate (audit 2026-10-20, O11): a person's own DM is
       // still activity on the account the gate protects. Person-initiated, so
       // it may go while the account's automation is switched off; the caps,
@@ -347,12 +438,12 @@ export const unipileRouter = router({
       const result = await sendMessage({
         chatId: input.chatId,
         accountId: input.unipileAccountId,
-        attendeesIds: input.attendeesIds,
+        attendeesIds,
         text: input.text,
         linkedinInmail: input.linkedinInmail,
       });
       if (isLinkedIn) {
-        await recordLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: input.unipileAccountId, kind: "message", source: "manual", targetIdentifier: input.attendeesIds?.[0] ?? null });
+        await recordLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: input.unipileAccountId, kind: "message", source: "manual", targetIdentifier: attendeesIds?.[0] ?? null });
       }
 
       // Store message record. recipientProviderId is not decoration: it is one
@@ -367,7 +458,7 @@ export const unipileRouter = router({
         messageId: result.id,
         direction: "outbound",
         senderName: ctx.user.name ?? undefined,
-        recipientProviderId: input.attendeesIds?.[0] ?? null,
+        recipientProviderId: attendeesIds?.[0] ?? null,
         text: input.text,
         linkedContactId: input.linkedContactId,
         linkedLeadId: input.linkedLeadId,
@@ -436,9 +527,12 @@ export const unipileRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: `Held by LinkedIn limits: ${inviteGate.reason ?? "cap reached"}` });
       }
 
+      // The drawer sends the profile as typed; a URL is not a provider id (R44).
+      const recipientProviderId = linkedInRecipient(input.recipientProviderId);
+      if (!recipientProviderId) throw new TRPCError({ code: "BAD_REQUEST", message: "That isn't a LinkedIn profile URL or id." });
       await sendLinkedInInvitation({
         accountId: input.unipileAccountId,
-        providerId: input.recipientProviderId,
+        providerId: recipientProviderId,
         message: input.message,
       });
       await recordLinkedInAction({ workspaceId: ctx.workspace.id, unipileAccountId: input.unipileAccountId, kind: "invite" });
@@ -448,7 +542,7 @@ export const unipileRouter = router({
         workspaceId: ctx.workspace.id,
         userId: ctx.user.id,
         unipileAccountId: input.unipileAccountId,
-        recipientProviderId: input.recipientProviderId,
+        recipientProviderId,
         recipientName: input.recipientName,
         message: input.message,
         status: "pending",
@@ -856,14 +950,32 @@ export const unipileRouter = router({
     }),
 
   withdrawInvitation: workspaceProcedure
-    .input(z.object({ invitationId: z.string(), unipileAccountId: z.string().optional() }))
+    .input(z.object({
+      invitationId: z.string(),
+      unipileAccountId: z.string().optional(),
+      /** The invitee as our invite rows name them: their public id and/or provider id. */
+      recipient: z.array(z.string().trim().min(1).max(500)).max(4).optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
       if (!acct) throw new TRPCError({ code: "NOT_FOUND", message: "No connected LinkedIn account." });
       await cancelSentInvitation({ accountId: acct, invitationId: input.invitationId });
-      return { ok: true };
+      // The stored invite stayed "pending" after a withdraw (audit 2026-10-20,
+      // O49), so the Revenue Engine's LinkedIn step kept waiting for an accept
+      // that could not come. Only this account's pending rows for this person.
+      let withdrawn = 0;
+      if (input.recipient?.length) {
+        const res = await db.update(unipileInvites).set({ status: "withdrawn" } as never).where(and(
+          eq(unipileInvites.workspaceId, ctx.workspace.id),
+          eq(unipileInvites.unipileAccountId, acct),
+          eq(unipileInvites.status, "pending"),
+          inArray(unipileInvites.recipientProviderId, input.recipient),
+        ));
+        withdrawn = Number((res as any)?.[0]?.affectedRows ?? (res as any)?.affectedRows ?? 0);
+      }
+      return { ok: true, withdrawn };
     }),
 
   listRelations: workspaceProcedure
@@ -878,7 +990,7 @@ export const unipileRouter = router({
     }),
 
   // ─── LinkedIn / Sales Navigator search (per-user) ───────────────────────
-  // Widens the top of the autonomous funnel: search → import as leads →
+  // Widens the top of the autonomous funnel: search → import to People →
   // sequences send invites → accepts fire the Social Autopilot opener → meeting.
   searchLinkedIn: workspaceProcedure
     .input(z.object({
@@ -890,10 +1002,16 @@ export const unipileRouter = router({
       unipileAccountId: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      // A search with nothing in it is not an audience, and it still counts
+      // against the account's daily search cap (audit 2026-10-20, P149: Sales
+      // Navigator sent one when every field was blank).
+      if (!linkedInSearchHasTerms(input.keywords, input.filters)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Enter keywords, or add a location, industry or tenure filter." });
+      }
       const db = await getDb();
       if (!db) return { items: [] as UnipileLinkedInSearchHit[] };
       const acct = await resolveOwnLinkedInAccount(db, ctx.workspace.id, ctx.user.id, input.unipileAccountId);
-      if (!acct) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Connect a LinkedIn account to search." });
+      if (!acct) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Connect your LinkedIn account on Connected Accounts to search — searches run through your own account." });
       // The same gate every automated search now passes (Paused, daily search
       // cap, pacing, hours). A click on the Social page is still a search on
       // the account LinkedIn is watching — and the action it pauses search over.
@@ -930,67 +1048,46 @@ export const unipileRouter = router({
     }),
 
   /**
-   * Import LinkedIn search hits as leads (autonomous-pipeline entry point).
-   * Dedupes against existing leads by linkedinUrl or first+last name so
-   * re-running a search doesn't create duplicates. Returns the count created.
+   * Save LinkedIn search hits to People, the table the rest of Find prospects
+   * writes (audit 2026-10-20, P76: these became CRM Leads, which nothing else
+   * on the tab makes). They go through the discovery save, so the same
+   * identity match (P64), suppression and free-mail rules (P74), provenance
+   * and company linking apply, and the import shows as a run in Recent runs.
+   *
+   * Each hit is checked on its own (P75): the page sends the vendor's rows as
+   * they came, and one null or object-valued field used to reject the whole
+   * import. A hit with nothing usable is counted as skipped.
    */
-  importSearchHitsAsLeads: workspaceProcedure
-    .input(z.object({
-      hits: z.array(z.object({
-        name: z.string().optional(),
-        first_name: z.string().optional(),
-        last_name: z.string().optional(),
-        title: z.string().optional(),
-        headline: z.string().optional(),
-        occupation: z.string().optional(),
-        company: z.string().optional(),
-        location: z.string().optional(),
-        public_profile_url: z.string().optional(),
-        profile_url: z.string().optional(),
-      })).min(1).max(25),
-    }))
+  importSearchHitsToPeople: workspaceProcedure
+    .input(z.object({ hits: z.array(z.unknown()).min(1).max(25) }))
     .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      let created = 0;
-      let skipped = 0;
-      // NO record_created fire in this loop, deliberately: it is a bulk path
-      // (up to 25 LinkedIn hits per call, saved in one gesture), and a rule
-      // with a webhook action would POST once per hit. See the do-not-fire
-      // list in services/workflowEngine.ts.
-      for (const h of input.hits) {
+      let invalid = 0;
+      const finds: Array<Record<string, unknown>> = [];
+      // NO record_created fire, deliberately: a bulk path (up to 25 hits in
+      // one gesture), and a rule with a webhook action would POST once per
+      // hit. See the do-not-fire list in services/workflowEngine.ts.
+      for (const raw of input.hits) {
+        const h = searchHitFields(raw);
+        if (!h) { invalid++; continue; }
         // Credentials come off BEFORE the space split — "Jane Doe, MBA" must
         // not land as lastName "Doe, MBA" (owner rule: no LinkedIn suffixes).
         const cleanName = stripNameCredentials(h.name) ?? "";
         const first = (stripNameCredentials(h.first_name) || cleanName.split(/\s+/)[0] || "").slice(0, 80).trim();
         const last = (stripNameCredentials(h.last_name) || cleanName.split(/\s+/).slice(1).join(" ") || "").slice(0, 80).trim();
-        if (!first && !last) { skipped++; continue; }
-        const url = h.public_profile_url || h.profile_url || null;
-        // Dedupe: same name already a lead in this workspace.
-        const existing = await db
-          .select({ id: leads.id })
-          .from(leads)
-          .where(and(
-            eq(leads.workspaceId, ctx.workspace.id),
-            eq(leads.firstName, first || "-"),
-            eq(leads.lastName, last || "-"),
-          ))
-          .limit(1);
-        if (existing.length) { skipped++; continue; }
-        await db.insert(leads).values({
-          workspaceId: ctx.workspace.id,
-          firstName: first || "-",
-          lastName: last || "-",
-          title: (h.title || h.headline || h.occupation || null)?.slice(0, 120) ?? null,
-          company: (typeof h.company === "string" ? h.company : null)?.slice(0, 200) ?? null,
-          source: "linkedin_search",
-          status: "new",
-          ownerUserId: ctx.user.id,
-          customFields: url ? { linkedinUrl: url, location: h.location ?? null } : null,
-        } as never);
-        created++;
+        if (!first || !last) { invalid++; continue; }
+        finds.push({
+          firstName: first, lastName: last,
+          title: h.title || h.headline || h.occupation || null,
+          companyName: h.company ?? null,
+          linkedinUrl: h.url ?? null,
+          sourceUrl: h.url ?? null,
+          geography: h.location ?? null,
+        });
       }
-      return { created, skipped };
+      if (finds.length === 0) return { created: 0, updated: 0, skipped: invalid, runId: null as number | null };
+      const { saveFindsAsPeople } = await import("../services/discovery");
+      const r = await saveFindsAsPeople(ctx.workspace.id, ctx.user.id, "linkedin_search", finds, { fromLinkedInSearch: true, hits: finds.length });
+      return { created: r.prospectsCreated, updated: r.prospectsUpdated, skipped: invalid + r.prospectsSkipped, runId: r.runId };
     }),
 
   // ─── LinkedIn post engagement (per-user, social warming) ────────────────
@@ -1104,10 +1201,17 @@ async function resolveOwnLinkedInAccount(
   explicitId?: string,
 ): Promise<string | null> {
   if (explicitId) {
+    // This workspace's row too (audit 2026-10-20, O32): by user alone, an
+    // account connected in another workspace — a paused one included — could
+    // react, comment, search and withdraw from here.
     const [row] = await db
       .select({ id: unipileAccounts.unipileAccountId })
       .from(unipileAccounts)
-      .where(and(eq(unipileAccounts.unipileAccountId, explicitId), eq(unipileAccounts.userId, userId)))
+      .where(and(
+        eq(unipileAccounts.unipileAccountId, explicitId),
+        eq(unipileAccounts.userId, userId),
+        eq(unipileAccounts.workspaceId, workspaceId),
+      ))
       .limit(1);
     return row?.id ?? null;
   }

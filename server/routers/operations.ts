@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lte, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { DEFAULT_STAGE_ORDER } from "@shared/stageSemantics";
 import {
@@ -40,13 +40,16 @@ import { checkPermission, getDb } from "../db";
 import { closedStageKeys, stageIndexFor } from "../_core/stageSemantics";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
-import { adminWsProcedure, assertOwnerOrManager, managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, assertOwnerOrManager, managerProcedure, rankOf, repProcedure, ROLE_RANK, workspaceProcedure } from "../_core/workspace";
+import { activeMemberEmails, activeRecipients, revokedMemberEmails } from "../services/reportScheduler";
 import { escapeHtml } from "@shared/escapeHtml";
+import { csvCell } from "@shared/csvCell";
 import { filtersNotApplied } from "@shared/dashboardPresets";
 import { assertRowInWorkspace } from "../services/foreignIds";
 import { storagePut } from "../storage";
 import { buildTransporter, decrypt } from "./smtpConfig";
 import { evalConditions, executeRuleActions, normalizeConditions } from "../services/workflowEngine";
+import { describeRuleActions } from "../services/workflowDryRun";
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 // One arithmetic rule for quote money, shared with the client's preview so the
 // number the user approves is the number stored. See shared/quoteTotals.ts.
@@ -55,7 +58,9 @@ import { LIVE_TRIGGER_IDS, type LiveTrigger } from "@shared/workflowTriggers";
 import { zonedDowHour } from "@shared/availability";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { dayRangeBounds } from "../services/calendarDeadline";
+import { addMonths, closedIn, instantMonthKey, loadMetricDeals, monthKey, monthLabel, monthToDateRanges, zonedYmd } from "../services/dealMetrics";
 import crypto from "crypto";
+import { hashScimToken } from "../scimHttp";
 
 /**
  * SCIM bearer token. This authenticates `/api/scim/v2` (see scimHttp.ts), which
@@ -79,6 +84,42 @@ function newScimBearerToken(): string {
 export { evalConditions };
 
 /* ----- Standalone async helpers (exported for nightly batch) ----- */
+
+/**
+ * The deals this deal_stuck rule has already fired for since they entered their
+ * current stage. Both checks re-ran every action for every stuck deal on every
+ * pass, so a "create a task" rule added another task per stuck deal each night
+ * (G61). A deal now fires once per stay in a stage; moved on and stuck again,
+ * it fires again. Without stageEnteredAt, the stay is read off daysInStage.
+ */
+export async function dealsAlreadyFiredThisStage(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  ruleId: number,
+  deals: { id: number; daysInStage: number | null; stageEnteredAt: Date | string | null }[],
+  now = Date.now(),
+): Promise<Set<number>> {
+  const out = new Set<number>();
+  if (deals.length === 0) return out;
+  const runs = await db.select({ relatedId: workflowRuns.relatedId, runAt: workflowRuns.runAt }).from(workflowRuns)
+    .where(and(
+      eq(workflowRuns.ruleId, ruleId),
+      eq(workflowRuns.relatedType, "opportunity"),
+      inArray(workflowRuns.relatedId, deals.map((d) => d.id)),
+    ));
+  const lastRun = new Map<number, number>();
+  for (const r of runs) {
+    if (r.relatedId == null) continue;
+    const t = new Date(r.runAt).getTime();
+    if (t > (lastRun.get(r.relatedId) ?? -Infinity)) lastRun.set(r.relatedId, t);
+  }
+  for (const d of deals) {
+    const last = lastRun.get(d.id);
+    if (last === undefined) continue;
+    const entered = d.stageEnteredAt ? new Date(d.stageEnteredAt).getTime() : now - (d.daysInStage ?? 0) * 86_400_000;
+    if (last >= entered) out.add(d.id);
+  }
+  return out;
+}
 
 export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMatched: number; actionsTriggered: number }> {
   const db = await getDb();
@@ -122,6 +163,7 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
       // evalConditions in below would evaluate every such rule FALSE forever.
       value: opportunities.value,
       winProb: opportunities.winProb,
+      stageEnteredAt: opportunities.stageEnteredAt,
     }).from(opportunities)
       .where(and(
         eq(opportunities.workspaceId, rule.workspaceId),
@@ -130,8 +172,10 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
         ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
       ));
 
+    const alreadyFired = await dealsAlreadyFiredThisStage(db, rule.id, stuckDeals);
     let firedForRule = 0;
     for (const deal of stuckDeals) {
+      if (alreadyFired.has(deal.id)) continue;
       /**
        * Runs through the SHARED dispatcher rather than a local copy. The local
        * one handled four action types — post_slack, notify_teams, and two names
@@ -181,6 +225,9 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
       actionsTriggered += Array.isArray(rule.actions) ? (rule.actions as unknown[]).length : 0;
       await db.insert(workflowRuns).values({
         workspaceId: rule.workspaceId, ruleId: rule.id, triggeredBy: "deal_stuck_nightly",
+        // Read back by dealsAlreadyFiredThisStage against stageEnteredAt, which
+        // the app writes; the same clock on both sides.
+        runAt: new Date(),
         // workflowRuns.status enum is success|failed|skipped — "error" fails the
         // INSERT, so the one run that had something to report was the one that
         // could not be logged. Same fix already applied to testFire below.
@@ -243,7 +290,9 @@ export const workflowsRouter = router({
     .input(z.object({
       name: z.string().min(1),
       description: z.string().optional(),
-      enabled: z.boolean().default(true),
+      // Off unless the caller says otherwise (G61): a rule fires as soon as it is
+      // enabled, so a new one waits until someone has finished it.
+      enabled: z.boolean().default(false),
       // Only triggers that actually fire at runtime (shared/workflowTriggers).
       // The inline list used to include nps_submitted / field_equals /
       // schedule — nothing dispatches those, so the API accepted rules that
@@ -309,35 +358,35 @@ export const workflowsRouter = router({
     return rows;
   }),
 
-  /** Manually fire a rule for demo / testing — executes ALL real actions. */
-  testFire: workspaceProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+  /**
+   * Test a rule: say what it would do, and do none of it (audit 2026-10-20,
+   * G19). This "simulated run" used to execute every real action, open to
+   * any member: webhooks, Slack and Teams posts, tasks, enrolments, field
+   * writes. Managers only, like create and update, and it is not counted as
+   * a fire. The history row says it was a test.
+   */
+  testFire: managerProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [rule] = await db.select().from(workflowRules).where(and(eq(workflowRules.id, input.id), eq(workflowRules.workspaceId, ctx.workspace.id)));
     if (!rule) throw new TRPCError({ code: "NOT_FOUND" });
-    // Shared executor — runs the same actions the runtime dispatcher does
-    // (webhook/slack/teams + create_task/notify), so a Test reflects reality.
-    // notify targets the tester; no CRM record is linked on a manual test.
-    const errors = await executeRuleActions(ctx.workspace.id, rule, {
-      payload: {}, relatedType: undefined, relatedId: null, ownerUserId: ctx.user.id,
-    });
+    const [wsSettings] = await db
+      .select({ slackWebhookUrl: workspaceSettings.slackWebhookUrl, teamsWebhookUrl: workspaceSettings.teamsWebhookUrl })
+      .from(workspaceSettings)
+      .where(eq(workspaceSettings.workspaceId, ctx.workspace.id));
+    const { plan, problems } = describeRuleActions(rule.actions, wsSettings);
     await db.insert(workflowRuns).values({
-      workspaceId: ctx.workspace.id, ruleId: rule.id, triggeredBy: "manual_test",
+      workspaceId: ctx.workspace.id, ruleId: rule.id, triggeredBy: "test (nothing was run)",
       // workflowRuns.status enum is success|failed|skipped — "error" fails the INSERT.
-      status: errors.length === 0 ? "success" : "failed",
+      status: problems.length === 0 ? "skipped" : "failed",
       actionsRun: rule.actions,
-      errorMessage: errors.length > 0 ? errors.join("; ") : null,
+      errorMessage: problems.length > 0 ? problems.join("; ") : null,
       // Explicitly null: a manual test links to no CRM record, and every other
       // run-history writer names the record that set it off.
       relatedType: null,
       relatedId: null,
     });
-    await db.update(workflowRules).set({ fireCount: rule.fireCount + 1, lastFiredAt: new Date() }).where(eq(workflowRules.id, rule.id));
-    await db.insert(notifications).values({
-      workspaceId: ctx.workspace.id, userId: ctx.user.id, kind: "workflow_fired",
-      title: `Rule fired: ${rule.name}`, body: errors.length === 0 ? "Manual test run completed." : `Completed with errors: ${errors.join("; ")}`,
-    });
-    return { ok: true, errors };
+    return { ok: true, dryRun: true as const, plan, errors: problems };
   }),
 
   /**
@@ -379,6 +428,7 @@ export const workflowsRouter = router({
           // Same reason as the cron twin above: the conditions gate needs them.
           value: opportunities.value,
           winProb: opportunities.winProb,
+          stageEnteredAt: opportunities.stageEnteredAt,
         }).from(opportunities)
           .where(and(
             eq(opportunities.workspaceId, ctx.workspace.id),
@@ -387,8 +437,11 @@ export const workflowsRouter = router({
             ...(targetStage ? [eq(opportunities.stage, targetStage)] : []),
           ));
 
+        // Once per stay in a stage, as the nightly check (G61).
+        const alreadyFired = await dealsAlreadyFiredThisStage(db, rule.id, stuckDeals);
         let firedForRule = 0;
         for (const deal of stuckDeals) {
+          if (alreadyFired.has(deal.id)) continue;
           // Shared dispatcher — see checkDealAging above for why the local copy
           // that used to live here was wrong (six of the eight builder actions
           // did nothing, and the run was still logged "success").
@@ -416,6 +469,7 @@ export const workflowsRouter = router({
           // Log the workflow run
           await db.insert(workflowRuns).values({
             workspaceId: ctx.workspace.id, ruleId: rule.id, triggeredBy: "deal_stuck_check",
+            runAt: new Date(),
             // enum is success|failed|skipped — see checkDealAging above.
             status: errors.length === 0 ? "success" : "failed",
             actionsRun: rule.actions,
@@ -863,6 +917,10 @@ export const dashboardsRouter = router({
     const d = await dashboardForEdit(db, ctx, input.id);
     await db.delete(dashboardWidgets)
       .where(and(eq(dashboardWidgets.dashboardId, d.id), eq(dashboardWidgets.workspaceId, ctx.workspace.id)));
+    // Its schedules go with it: left behind, they stayed on the list naming a
+    // dashboard nobody could open (audit 2026-10-20, G55).
+    await db.delete(reportSchedules)
+      .where(and(eq(reportSchedules.dashboardId, d.id), eq(reportSchedules.workspaceId, ctx.workspace.id)));
     await db.delete(dashboards).where(and(eq(dashboards.id, d.id), eq(dashboards.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -972,6 +1030,20 @@ export const dashboardsRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await dashboardForEdit(db, ctx, input.dashboardId);
+    /**
+     * A report goes to this workspace's people (audit 2026-10-20, G26). Any
+     * member could mail the numbers to any address outside it. A manager may
+     * still add an outside address, as a client or an exec with no account is
+     * a real use, and that is kept in the audit log.
+     */
+    const members = await activeMemberEmails(db, ctx.workspace.id);
+    const outside = input.recipients.filter((r) => !members.has(r.trim().toLowerCase()));
+    if (outside.length > 0) {
+      if (rankOf(ctx.member.role) < ROLE_RANK.manager) {
+        throw new TRPCError({ code: "FORBIDDEN", message: `Only a manager can send a report outside this workspace (${outside.join(", ")}).` });
+      }
+      await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "create", entityType: "dashboard_schedule_outside_recipients", entityId: input.dashboardId, after: { recipients: outside, frequency: input.frequency } });
+    }
     await db.insert(reportSchedules).values({ ...input, workspaceId: ctx.workspace.id, enabled: true });
     return { ok: true };
   }),
@@ -1037,8 +1109,12 @@ export async function sendDashboardScheduleEmail(
     if (!db) return { ok: false, reason: "db_unavailable", message: "Database unavailable" };
     const [sched] = await db.select().from(reportSchedules).where(and(eq(reportSchedules.id, scheduleId), eq(reportSchedules.workspaceId, workspaceId)));
     if (!sched) return { ok: false, reason: "not_found", message: "Schedule not found." };
-    const recipients: string[] = Array.isArray(sched.recipients) ? (sched.recipients as string[]) : [];
-    if (recipients.length === 0) return { ok: false, reason: "no_recipients", message: "No recipients configured for this schedule. Edit the schedule to add recipients." };
+    const configured: string[] = Array.isArray(sched.recipients) ? (sched.recipients as string[]) : [];
+    if (configured.length === 0) return { ok: false, reason: "no_recipients", message: "No recipients configured for this schedule. Edit the schedule to add recipients." };
+    // A deactivated member stops receiving the workspace's numbers (audit
+    // 2026-10-20, G26), as on saved-report schedules.
+    const recipients = activeRecipients(configured, await revokedMemberEmails(db, workspaceId));
+    if (recipients.length === 0) return { ok: false, reason: "no_recipients", message: "Every recipient on this schedule is a deactivated member." };
     const [dash] = await db.select().from(dashboards).where(and(eq(dashboards.id, sched.dashboardId), eq(dashboards.workspaceId, workspaceId)));
     if (!dash) return { ok: false, reason: "not_found", message: "Dashboard not found." };
     const widgets = await db.select().from(dashboardWidgets)
@@ -1062,36 +1138,52 @@ export async function sendDashboardScheduleEmail(
     try { password = decrypt(cfg.encryptedPassword); }
     catch { return { ok: false, reason: "decrypt_failed", message: "Failed to decrypt SMTP password" }; }
     const transporter = buildTransporter({ host: cfg.host, port: cfg.port, secure: cfg.secure, username: cfg.username, password });
-    await transporter.sendMail({
-      from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
-      to: recipients.join(", "),
-      subject: `${dash.name} \u2014 Dashboard Report (${sentAt.toLocaleDateString()})`,
-      html,
-    });
     /**
+     * One message per recipient (audit 2026-10-20, G26): on one To: line every
+     * recipient, an outside one included, saw who else gets the numbers.
+     *
      * Transmission point 3 of 3. Builds its own transporter from the SMTP
      * config and never touches createEmailAdapter, so the meter in that
-     * factory cannot see this send. `recipients` may be several addresses in
-     * one message — counted as the ONE message that was transmitted, which is
-     * what the other two points count too.
+     * factory cannot see these sends: each message transmitted is counted,
+     * which is what the other two points count too.
      *
      * The email_log row (migration 0163) follows the same rule and for the
      * same reason: scheduled reports left the building with no record on the
      * Emails page.
+     *
+     * One address failing doesn't stop the rest, and the run counts as sent
+     * if any went: a retry would mail the others twice. All failing is thrown,
+     * as the single send was.
      */
-    await recordEmailsSent(workspaceId, 1);
-    await logEmailSend({
-      workspaceId,
-      meta: { source: "transactional", sourceLabel: `${dash.name} — Dashboard Report`, userId: actorUserId ?? undefined },
-      fromEmail: cfg.fromEmail,
-      fromName: cfg.fromName,
-      to: recipients,
-      cc: recipients.length > 1 ? recipients.slice(1).join(", ") : null,
-      subject: `${dash.name} — Dashboard Report (${sentAt.toLocaleDateString()})`,
-      bodyHtml: html,
-      status: "sent",
-      sentAt,
-    });
+    let delivered = 0;
+    let firstError: unknown = null;
+    for (const to of recipients) {
+      try {
+        await transporter.sendMail({
+          from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
+          to,
+          subject: `${dash.name} \u2014 Dashboard Report (${sentAt.toLocaleDateString()})`,
+          html,
+        });
+      } catch (e) {
+        firstError ??= e;
+        continue;
+      }
+      delivered++;
+      await recordEmailsSent(workspaceId, 1);
+      await logEmailSend({
+        workspaceId,
+        meta: { source: "transactional", sourceLabel: `${dash.name} — Dashboard Report`, userId: actorUserId ?? undefined },
+        fromEmail: cfg.fromEmail,
+        fromName: cfg.fromName,
+        to: [to],
+        subject: `${dash.name} — Dashboard Report (${sentAt.toLocaleDateString()})`,
+        bodyHtml: html,
+        status: "sent",
+        sentAt,
+      });
+    }
+    if (delivered === 0) throw firstError;
     await db.update(reportSchedules).set({ lastSentAt: sentAt }).where(eq(reportSchedules.id, sched.id));
     return { ok: true, sentAt };
   }
@@ -1188,11 +1280,24 @@ async function resolveWidgetData(
     return and(...conds);
   };
 
-  /* ── Helper: 6-month bucket array ── */
-  const sixMonths = () => Array.from({ length: 6 }, (_, i) => {
-    const d = new Date(); d.setMonth(d.getMonth() - (5 - i));
-    return { label: d.toLocaleString("default", { month: "short" }), key: `${d.getFullYear()}-${d.getMonth()}` };
-  });
+  /* ── Helper: the last six months, in the workspace's zone ── */
+  // Stepped from the 1st: setMonth() on the 29th–31st skipped a month and showed
+  // the next one twice, and the machine's zone (UTC) put a New York evening on
+  // the 31st into the next month (audit 2026-10-20, G25).
+  const sixMonths = () => {
+    const { y, m } = zonedYmd(tz, new Date());
+    return Array.from({ length: 6 }, (_, i) => {
+      const b = addMonths(y, m, i - 5);
+      return { label: monthLabel(b.m), key: monthKey(b.y, b.m) };
+    });
+  };
+  /** When a won deal was won; the same fallback loadMetricDeals uses for a deal from before migration 0211. */
+  const wonAtOf = (o: { wonAt: Date | null; stageEnteredAt: Date | null; updatedAt: Date | null }) => o.wonAt ?? o.stageEnteredAt ?? o.updatedAt;
+  /** Deals per stage, counted and summed in SQL (G58): these widgets read every column of every deal. */
+  const dealsByStage = async () => (await db.select({
+    stage: opportunities.stage, n: sql<number>`count(*)`, v: sql<string>`COALESCE(SUM(${opportunities.value}),0)`,
+  }).from(opportunities).where(oppBase()).groupBy(opportunities.stage))
+    .map((r: { stage: string; n: number; v: string }) => ({ stage: r.stage, count: Number(r.n), value: Number(r.v) }));
 
   /* ═══════════════════════════════════════════════════════════
      KPI metrics (type = kpi | single_value | gauge)
@@ -1215,18 +1320,24 @@ async function resolveWidgetData(
         return { type: w.type, title: w.title, value: Number(r?.s ?? 0), format: "currency" };
       }
       case "win_rate": {
-        const all = await db.select().from(opportunities).where(oppBase());
-        const closed = all.filter((o) => stages.isClosed(o.stage));
-        const wr = closed.length === 0 ? 0 : (closed.filter((o) => stages.isWon(o.stage)).length / closed.length) * 100;
+        let won = 0, closed = 0;
+        for (const r of await dealsByStage()) {
+          if (!stages.isClosed(r.stage)) continue;
+          closed += r.count;
+          if (stages.isWon(r.stage)) won += r.count;
+        }
+        const wr = closed === 0 ? 0 : (won / closed) * 100;
         return { type: w.type, title: w.title, value: Math.round(wr), format: "percent" };
       }
       case "avg_deal": {
-        const won = await db.select().from(opportunities).where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
-        const avg = won.length === 0 ? 0 : won.reduce((s, o) => s + Number(o.value), 0) / won.length;
+        const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)`, n: sql<number>`count(*)` })
+          .from(opportunities).where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
+        const n = Number(r?.n ?? 0);
+        const avg = n === 0 ? 0 : Number(r?.s ?? 0) / n;
         return { type: w.type, title: w.title, value: Math.round(avg), format: "currency" };
       }
       case "sales_cycle_length": {
-        const won = await db.select().from(opportunities)
+        const won = await db.select({ createdAt: opportunities.createdAt, closeDate: opportunities.closeDate }).from(opportunities)
           .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
         const withDates = won.filter((o) => o.closeDate);
         const avgDays = withDates.length === 0 ? 0 :
@@ -1234,13 +1345,12 @@ async function resolveWidgetData(
         return { type: w.type, title: w.title, value: Math.round(avgDays), format: "days" };
       }
       case "activity_counts": {
-        const actConds = actBase();
-        const acts = await db.select().from(activities).where(actConds);
-        const calls = acts.filter((a) => a.type === "call").length;
-        const emails = acts.filter((a) => a.type === "email").length;
-        const meetings = acts.filter((a) => a.type === "meeting").length;
-        return { type: w.type, title: w.title, value: acts.length, format: "number",
-          breakdown: { calls, emails, meetings } };
+        const byType = await db.select({ type: activities.type, n: sql<number>`count(*)` })
+          .from(activities).where(actBase()).groupBy(activities.type);
+        const of = (t: string) => Number(byType.find((r: { type: string }) => r.type === t)?.n ?? 0);
+        const total = byType.reduce((s: number, r: { n: number }) => s + Number(r.n), 0);
+        return { type: w.type, title: w.title, value: total, format: "number",
+          breakdown: { calls: of("call"), emails: of("email"), meetings: of("meeting") } };
       }
       case "meetings_booked": {
         const actConds = actBase(eq(activities.type, "meeting"));
@@ -1248,13 +1358,20 @@ async function resolveWidgetData(
         return { type: w.type, title: w.title, value: Number(r?.c ?? 0), format: "number" };
       }
       case "response_rate": {
-        // Ratio of opportunities with at least one activity to total opportunities
-        const all = await db.select().from(opportunities).where(oppBase());
-        const withActivity = await db.select({ oppId: activities.relatedId })
-          .from(activities)
-          .where(and(eq(activities.workspaceId, workspaceId), eq(activities.relatedType, "opportunity")))
-          .groupBy(activities.relatedId);
-        const rate = all.length === 0 ? 0 : (withActivity.length / all.length) * 100;
+        // Of the deals this widget counts, the share with an activity logged
+        // against them. The top was every deal id any activity named, in no
+        // filter and deleted deals included, so it ran past 100% (G55).
+        const [all] = await db.select({ n: sql<number>`count(*)` }).from(opportunities).where(oppBase());
+        const touched = await db.select({ id: opportunities.id }).from(opportunities)
+          .innerJoin(activities, and(
+            eq(activities.relatedId, opportunities.id),
+            eq(activities.relatedType, "opportunity"),
+            eq(activities.workspaceId, workspaceId),
+          ))
+          .where(oppBase())
+          .groupBy(opportunities.id);
+        const total = Number(all?.n ?? 0);
+        const rate = total === 0 ? 0 : (touched.length / total) * 100;
         return { type: w.type, title: w.title, value: Math.round(rate), format: "percent" };
       }
       case "reply_rate": {
@@ -1263,9 +1380,12 @@ async function resolveWidgetData(
         // 'proposal', a definition no stage flag can express and that a custom
         // pipeline never satisfies at all. "Closed" is the closest honest
         // reading of the engagement proxy this widget claims to be.
-        const all = await db.select().from(opportunities).where(oppBase());
-        const engaged = all.filter((o) => stages.isClosed(o.stage)).length;
-        const rate = all.length === 0 ? 0 : (engaged / all.length) * 100;
+        let total = 0, engaged = 0;
+        for (const r of await dealsByStage()) {
+          total += r.count;
+          if (stages.isClosed(r.stage)) engaged += r.count;
+        }
+        const rate = total === 0 ? 0 : (engaged / total) * 100;
         return { type: w.type, title: w.title, value: Math.round(rate), format: "percent" };
       }
       default: {
@@ -1281,17 +1401,16 @@ async function resolveWidgetData(
      Funnel / Pipeline Stage
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "funnel" || w.type === "pipeline_stage") {
-    const all = await db.select().from(opportunities).where(oppBase());
+    const byStage = await dealsByStage();
     // Lost is excluded — a funnel is the path to a win — but "excluded" now
     // means flagged Lost, not named "lost".
-    const stageKeys = await orderedStageKeys(db, workspaceId, all, (k) => !stages.isLost(k));
+    const stageKeys = await orderedStageKeys(db, workspaceId, byStage, (k) => !stages.isLost(k));
     return {
       type: w.type, title: w.title,
-      series: stageKeys.map((s) => ({
-        stage: s,
-        count: all.filter((o) => o.stage === s).length,
-        value: all.filter((o) => o.stage === s).reduce((sum, o) => sum + Number(o.value), 0),
-      })),
+      series: stageKeys.map((s) => {
+        const r = byStage.find((x) => x.stage === s);
+        return { stage: s, count: r?.count ?? 0, value: r?.value ?? 0 };
+      }),
     };
   }
 
@@ -1300,35 +1419,23 @@ async function resolveWidgetData(
   ═══════════════════════════════════════════════════════════ */
   if (["bar", "line", "area", "stacked_bar"].includes(w.type)) {
     const months = sixMonths();
-    if (cfg.metric === "closed_won" || cfg.metric === "revenue") {
-      const won = await db.select().from(opportunities)
-        .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
-      const out = months.map((m) => ({ label: m.label, value: 0 }));
-      for (const o of won) {
-        if (!o.closeDate) continue;
-        const k = `${o.closeDate.getFullYear()}-${o.closeDate.getMonth()}`;
-        const idx = months.findIndex((m) => m.key === k);
-        if (idx >= 0) out[idx]!.value += Number(o.value);
-      }
-      return { type: w.type, title: w.title, series: out };
-    }
+    const at = (k: string) => months.findIndex((m) => m.key === k);
     if (cfg.metric === "pipeline_created") {
-      const all = await db.select().from(opportunities).where(oppBase());
+      const all = await db.select({ value: opportunities.value, createdAt: opportunities.createdAt })
+        .from(opportunities).where(oppBase());
       const out = months.map((m) => ({ label: m.label, value: 0 }));
       for (const o of all) {
-        const k = `${o.createdAt.getFullYear()}-${o.createdAt.getMonth()}`;
-        const idx = months.findIndex((m) => m.key === k);
+        const idx = at(instantMonthKey(tz, o.createdAt));
         if (idx >= 0) out[idx]!.value += Number(o.value);
       }
       return { type: w.type, title: w.title, series: out };
     }
     if (cfg.metric === "activities") {
-      const actConds = actBase();
-      const acts = await db.select().from(activities).where(actConds);
+      const acts = await db.select({ type: activities.type, occurredAt: activities.occurredAt })
+        .from(activities).where(actBase());
       const out = months.map((m) => ({ label: m.label, calls: 0, emails: 0, meetings: 0 }));
       for (const a of acts) {
-        const k = `${a.occurredAt.getFullYear()}-${a.occurredAt.getMonth()}`;
-        const idx = months.findIndex((m) => m.key === k);
+        const idx = at(instantMonthKey(tz, a.occurredAt));
         if (idx < 0) continue;
         if (a.type === "call") out[idx]!.calls++;
         else if (a.type === "email") out[idx]!.emails++;
@@ -1336,14 +1443,18 @@ async function resolveWidgetData(
       }
       return { type: w.type, title: w.title, series: out, keys: ["calls", "emails", "meetings"] };
     }
-    // Default: closed-won by month
-    const won = await db.select().from(opportunities)
-      .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
+    // closed_won, revenue and the default: won value in the month it was WON,
+    // as the Dashboard's revenue chart counts it. The expected close date put a
+    // deal won in March into whatever month someone had guessed (R16).
+    const won = await db.select({
+      value: opportunities.value, wonAt: opportunities.wonAt,
+      stageEnteredAt: opportunities.stageEnteredAt, updatedAt: opportunities.updatedAt,
+    }).from(opportunities).where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
     const out = months.map((m) => ({ label: m.label, value: 0 }));
     for (const o of won) {
-      if (!o.closeDate) continue;
-      const k = `${o.closeDate.getFullYear()}-${o.closeDate.getMonth()}`;
-      const idx = months.findIndex((m) => m.key === k);
+      const when = wonAtOf(o);
+      if (!when) continue;
+      const idx = at(instantMonthKey(tz, when));
       if (idx >= 0) out[idx]!.value += Number(o.value);
     }
     return { type: w.type, title: w.title, series: out };
@@ -1353,19 +1464,22 @@ async function resolveWidgetData(
      Pie / Donut
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "pie" || w.type === "donut") {
+    const byStage = await dealsByStage();
     if (cfg.metric === "stage_distribution") {
-      const all = await db.select().from(opportunities).where(oppBase());
-      const stageKeys = await orderedStageKeys(db, workspaceId, all, () => true);
+      const stageKeys = await orderedStageKeys(db, workspaceId, byStage, () => true);
       return {
         type: w.type, title: w.title,
-        series: stageKeys.map((s) => ({ name: s, value: all.filter((o) => o.stage === s).length })).filter((s) => s.value > 0),
+        series: stageKeys.map((s) => ({ name: s, value: byStage.find((r) => r.stage === s)?.count ?? 0 })).filter((s) => s.value > 0),
       };
     }
     // Default: win/loss ratio
-    const all = await db.select().from(opportunities).where(oppBase());
-    const won = all.filter((o) => stages.isWon(o.stage)).length;
-    const lost = all.filter((o) => stages.isLost(o.stage)).length;
-    const open = all.length - won - lost;
+    let won = 0, lost = 0, all = 0;
+    for (const o of byStage) {
+      all += o.count;
+      if (stages.isWon(o.stage)) won += o.count;
+      else if (stages.isLost(o.stage)) lost += o.count;
+    }
+    const open = all - won - lost;
     return { type: w.type, title: w.title, series: [{ name: "Won", value: won }, { name: "Lost", value: lost }, { name: "Open", value: open }].filter((s) => s.value > 0) };
   }
 
@@ -1373,10 +1487,11 @@ async function resolveWidgetData(
      Scatter
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "scatter") {
-    const all = await db.select().from(opportunities).where(oppBase());
+    const some = await db.select({ name: opportunities.name, stage: opportunities.stage, value: opportunities.value, daysInStage: opportunities.daysInStage })
+      .from(opportunities).where(oppBase()).limit(50);
     return {
       type: w.type, title: w.title,
-      series: all.slice(0, 50).map((o) => ({
+      series: some.map((o) => ({
         x: o.daysInStage,
         y: Number(o.value),
         name: o.name,
@@ -1389,8 +1504,7 @@ async function resolveWidgetData(
      Heatmap (activity by day-of-week × hour)
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "heatmap") {
-    const actConds = actBase();
-    const acts = await db.select().from(activities).where(actConds);
+    const acts = await db.select({ occurredAt: activities.occurredAt }).from(activities).where(actBase());
     // Build 7×24 grid, bucketed in the WORKSPACE's timezone.
     //
     // This was `getDay()` / `getHours()` — the container's clock, which is UTC in
@@ -1412,13 +1526,13 @@ async function resolveWidgetData(
      Table (top accounts by pipeline)
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "table") {
-    const accs = await db.select().from(opportunities).where(oppBase());
-    const map = new Map<number, number>();
-    for (const o of accs) map.set(o.accountId, (map.get(o.accountId) ?? 0) + Number(o.value));
-    const top = Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, cfg.limit ?? 5);
-    // Fetch account names
-    const accRows = await db.select({ id: accounts.id, name: accounts.name })
-      .from(accounts).where(eq(accounts.workspaceId, workspaceId));
+    const byAccount = await db.select({ accountId: opportunities.accountId, v: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
+      .from(opportunities).where(oppBase()).groupBy(opportunities.accountId);
+    const top = byAccount.map((r: { accountId: number; v: string }) => [r.accountId, Number(r.v)] as const)
+      .sort((a, b) => b[1] - a[1]).slice(0, cfg.limit ?? 5);
+    // Names for the accounts shown, not every account here.
+    const accRows = top.length === 0 ? [] : await db.select({ id: accounts.id, name: accounts.name })
+      .from(accounts).where(and(eq(accounts.workspaceId, workspaceId), inArray(accounts.id, top.map(([id]) => id))));
     const nameMap = new Map(accRows.map((a) => [a.id, a.name]));
     return { type: "table", title: w.title, rows: top.map(([id, v]) => ({ id, name: nameMap.get(id) ?? `Account #${id}`, value: v })) };
   }
@@ -1427,13 +1541,14 @@ async function resolveWidgetData(
      Leaderboard (top reps by deals closed)
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "leaderboard") {
-    const won = await db.select().from(opportunities)
-      .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())));
+    const byOwner = await db.select({ ownerUserId: opportunities.ownerUserId, n: sql<number>`count(*)`, v: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
+      .from(opportunities)
+      .where(and(oppBase(), inArray(opportunities.stage, stages.wonKeys())))
+      .groupBy(opportunities.ownerUserId);
     const repMap = new Map<number, { count: number; value: number }>();
-    for (const o of won) {
-      if (!o.ownerUserId) continue;
-      const cur = repMap.get(o.ownerUserId) ?? { count: 0, value: 0 };
-      repMap.set(o.ownerUserId, { count: cur.count + 1, value: cur.value + Number(o.value) });
+    for (const r of byOwner) {
+      if (!r.ownerUserId) continue;
+      repMap.set(r.ownerUserId, { count: Number(r.n), value: Number(r.v) });
     }
     const memberRows = await db.select({ userId: workspaceMembers.userId, name: users.name })
       .from(workspaceMembers)
@@ -1467,11 +1582,14 @@ async function resolveWidgetData(
      Goal Progress (pipeline value vs target)
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "goal_progress") {
-    const target = Number(cfg.target ?? 1000000);
+    // A target of 0, blank or not a number divided by nothing: a NaN% bar, or
+    // a full one (G55). Such a widget has no target and says so.
+    const raw = Number(cfg.target ?? 1000000);
+    const target = Number.isFinite(raw) && raw > 0 ? raw : null;
     const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
       .from(opportunities).where(and(oppBase(), notInArray(opportunities.stage, stages.lostKeys())));
     const current = Number(r?.s ?? 0);
-    return { type: "goal_progress", title: w.title, current, target, pct: Math.min(100, Math.round((current / target) * 100)) };
+    return { type: "goal_progress", title: w.title, current, target, pct: target === null ? null : Math.min(100, Math.round((current / target) * 100)) };
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -1479,28 +1597,18 @@ async function resolveWidgetData(
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "comparison") {
     const metric = cfg.metric ?? "revenue";
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
-
-    const getVal = async (from: Date, to: Date) => {
-      const conds: any[] = [
-        eq(opportunities.workspaceId, workspaceId),
-        inArray(opportunities.stage, stages.wonKeys()),
-        sql`${opportunities.closeDate} >= ${from}`,
-        sql`${opportunities.closeDate} <= ${to}`,
-      ];
-      if (filters.ownerUserId) conds.push(eq(opportunities.ownerUserId, filters.ownerUserId));
-      if (sourceDealIds) conds.push(inArray(opportunities.id, sourceDealIds));
-      const [r] = await db.select({ s: sql<string>`COALESCE(SUM(${opportunities.value}),0)` })
-        .from(opportunities).where(and(...conds));
-      return Number(r?.s ?? 0);
-    };
-
-    const current = await getVal(startOfMonth, now);
-    const previous = await getVal(startOfLastMonth, endOfLastMonth);
-    const changePct = previous === 0 ? 100 : Math.round(((current - previous) / previous) * 100);
+    // Won value by WHEN it was won, this month so far against the same days of
+    // last month, in the workspace's zone (G55). It summed expected close
+    // dates, a few days of this month against the whole of the last, cut on
+    // the server's clock. The Dashboard counts wins the same way (R16).
+    const { current: thisSpan, previous: lastSpan } = monthToDateRanges(tz);
+    const deals = (await loadMetricDeals(db, workspaceId, { ownerUserId: filters.ownerUserId }))
+      .filter((d) => !sourceDealIds || sourceDealIds.includes(d.id));
+    const current = closedIn(deals, "won", thisSpan).value;
+    const previous = closedIn(deals, "won", lastSpan).value;
+    // Nothing to nothing is no change, and growth from nothing is no percentage
+    // at all: both read +100% (G55).
+    const changePct = previous === 0 ? (current === 0 ? 0 : null) : Math.round(((current - previous) / previous) * 100);
     return { type: "comparison", title: w.title, current, previous, changePct, metric, format: "currency" };
   }
 
@@ -1508,22 +1616,30 @@ async function resolveWidgetData(
      Rep Performance (table of rep KPIs)
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "rep_performance") {
-    const allOpps = await db.select().from(opportunities).where(oppBase());
-    const allActs = await db.select().from(activities).where(actBase());
+    // Counted and summed per owner and stage, and activities per person, in SQL (G58).
+    const oppRows = await db.select({
+      ownerUserId: opportunities.ownerUserId, stage: opportunities.stage,
+      n: sql<number>`count(*)`, v: sql<string>`COALESCE(SUM(${opportunities.value}),0)`,
+    }).from(opportunities).where(oppBase()).groupBy(opportunities.ownerUserId, opportunities.stage);
+    const actRows = await db.select({ actorUserId: activities.actorUserId, n: sql<number>`count(*)` })
+      .from(activities).where(actBase()).groupBy(activities.actorUserId);
     const memberRows = await db.select({ userId: workspaceMembers.userId, name: users.name })
       .from(workspaceMembers)
       .innerJoin(users, eq(users.id, workspaceMembers.userId))
       .where(eq(workspaceMembers.workspaceId, workspaceId));
 
     const rows = memberRows.map((m) => {
-      const myOpps = allOpps.filter((o) => o.ownerUserId === m.userId);
-      const myWon = myOpps.filter((o) => stages.isWon(o.stage));
-      const myClosed = myOpps.filter((o) => stages.isClosed(o.stage));
-      const myActs = allActs.filter((a) => a.actorUserId === m.userId);
-      const winRate = myClosed.length === 0 ? 0 : Math.round((myWon.length / myClosed.length) * 100);
-      const revenue = myWon.reduce((s, o) => s + Number(o.value), 0);
-      const pipeline = myOpps.filter((o) => stages.isOpen(o.stage)).reduce((s, o) => s + Number(o.value), 0);
-      return { name: m.name ?? `Rep #${m.userId}`, deals: myWon.length, revenue, pipeline, winRate, activities: myActs.length };
+      let deals = 0, closed = 0, revenue = 0, pipeline = 0;
+      for (const r of oppRows) {
+        if (r.ownerUserId !== m.userId) continue;
+        const n = Number(r.n), v = Number(r.v);
+        if (stages.isWon(r.stage)) { deals += n; revenue += v; }
+        if (stages.isClosed(r.stage)) closed += n;
+        if (stages.isOpen(r.stage)) pipeline += v;
+      }
+      const winRate = closed === 0 ? 0 : Math.round((deals / closed) * 100);
+      const activities = Number(actRows.find((a: { actorUserId: number | null }) => a.actorUserId === m.userId)?.n ?? 0);
+      return { name: m.name ?? `Rep #${m.userId}`, deals, revenue, pipeline, winRate, activities };
     }).filter((r) => r.deals > 0 || r.pipeline > 0 || r.activities > 0)
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, cfg.limit ?? 10);
@@ -1534,13 +1650,16 @@ async function resolveWidgetData(
      Email Health widget
   ═══════════════════════════════════════════════════════════ */
   if (w.type === "email_health") {
-    const allContacts = await db.select().from(contacts).where(eq(contacts.workspaceId, workspaceId));
-    const total = allContacts.length;
-    const valid = allContacts.filter((c) => c.emailVerificationStatus === "valid").length;
-    const acceptAll = allContacts.filter((c) => c.emailVerificationStatus === "accept_all").length;
-    const risky = allContacts.filter((c) => c.emailVerificationStatus === "risky").length;
-    const invalid = allContacts.filter((c) => c.emailVerificationStatus === "invalid").length;
-    const unknown = allContacts.filter((c) => !c.emailVerificationStatus).length;
+    // Counted per status in SQL: this read every contact's every column (G58).
+    const byStatus = await db.select({ status: contacts.emailVerificationStatus, n: sql<number>`count(*)` })
+      .from(contacts).where(eq(contacts.workspaceId, workspaceId)).groupBy(contacts.emailVerificationStatus);
+    const of = (st: string) => Number(byStatus.find((r: { status: string | null }) => r.status === st)?.n ?? 0);
+    const total = byStatus.reduce((s: number, r: { n: number }) => s + Number(r.n), 0);
+    const valid = of("valid");
+    const acceptAll = of("accept_all");
+    const risky = of("risky");
+    const invalid = of("invalid");
+    const unknown = byStatus.filter((r: { status: string | null }) => !r.status).reduce((s: number, r: { n: number }) => s + Number(r.n), 0);
     const verifiedPct = total === 0 ? 0 : Math.round(((total - unknown) / total) * 100);
     return { type: "email_health", title: w.title, total, valid, acceptAll, risky, invalid, unknown, verifiedPct };
   }
@@ -1585,10 +1704,184 @@ async function resolveWidgetData(
 
 /* ───── Quotes (CPQ) ──────────────────────────────────────────────── */
 
+type QuoteForPdf = {
+  quoteNumber: string;
+  createdAt: Date | null;
+  expiresAt: Date | null;
+  subtotal: string | number;
+  discountTotal: string | number;
+  taxTotal: string | number;
+  total: string | number;
+  notes: string | null;
+  terms: string | null;
+};
+type QuoteLineForPdf = {
+  name: string;
+  description: string | null;
+  quantity: number;
+  unitPrice: string | number;
+  discountPct: string | number;
+  lineTotal: string | number;
+};
+
+/**
+ * A quote as the customer receives it (audit 2026-10-20, R71, R94).
+ *
+ * The header was the literal "USIP" on every workspace's quotes, beside a
+ * "Status: DRAFT" stamp — and since a PDF is only ever generated for a draft
+ * (Mark sent needs one first), every quote a customer saw said DRAFT. It now
+ * carries the workspace's name, the quote's date and the day it is valid
+ * until, and no status.
+ *
+ * Line items were drawn at a running y with no page break, so a long quote
+ * ran off the bottom of the page. A row that won't fit starts a new page,
+ * which repeats the column header, and the totals move over with it.
+ *
+ * `compress` exists for tests, which read the page content.
+ */
+export async function renderQuotePdf(
+  q: QuoteForPdf,
+  lis: QuoteLineForPdf[],
+  opts: { workspaceName: string; timeZone: string; compress?: boolean },
+): Promise<Buffer> {
+  // Lazy-import to keep cold start light; pdfkit is CJS so we destructure .default.
+  const { default: PDFDocument } = await import("pdfkit");
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: "LETTER", margin: 48, compress: opts.compress ?? true });
+    const chunks: Buffer[] = [];
+    doc.on("data", (c: Buffer) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    const day = (d: Date | null) => (d
+      ? new Date(d).toLocaleDateString("en-US", { timeZone: opts.timeZone, year: "numeric", month: "short", day: "numeric" })
+      : "—");
+    const bottom = () => doc.page.height - doc.page.margins.bottom;
+
+    // Header: who the quote is from, which quote, and its dates.
+    doc.fillColor("#0F1F1B").fontSize(24).font("Helvetica-Bold").text(opts.workspaceName.trim() || "Quote", 48, 48, { width: 330 });
+    doc.fontSize(11).font("Helvetica").fillColor("#666").text(`Quote ${q.quoteNumber}`, 48, doc.y, { width: 330 });
+    const leftBottom = doc.y;
+    doc.fontSize(10).fillColor("#666")
+      .text(`Date: ${day(q.createdAt)}`, 380, 52, { width: 184, align: "right" })
+      .text(`Valid until: ${day(q.expiresAt)}`, 380, doc.y, { width: 184, align: "right" });
+    doc.y = Math.max(leftBottom, doc.y) + 6;
+    doc.strokeColor("#14B89A").lineWidth(2).moveTo(48, doc.y).lineTo(564, doc.y).stroke();
+    doc.moveDown(1);
+
+    // Money columns are wide enough for six figures: at 54pt a line or a
+    // total of $10,000.00 or more wrapped onto a second line.
+    const colX = { item: 48, qty: 282, unit: 328, disc: 414, total: 466 };
+    const colW = { item: 226, qty: 40, unit: 80, disc: 46, total: 98 };
+    const tableHeader = (top: number) => {
+      doc.fillColor("#fff").rect(48, top, 516, 22).fill("#0F1F1B");
+      doc.fillColor("#fff").fontSize(9).font("Helvetica-Bold");
+      doc.text("ITEM", colX.item + 6, top + 7);
+      doc.text("QTY", colX.qty, top + 7, { width: colW.qty, align: "right" });
+      doc.text("UNIT", colX.unit, top + 7, { width: colW.unit, align: "right" });
+      doc.text("DISC.", colX.disc, top + 7, { width: colW.disc, align: "right" });
+      doc.text("TOTAL", colX.total, top + 7, { width: colW.total, align: "right" });
+      return top + 28;
+    };
+    let y = tableHeader(doc.y);
+
+    for (const li of lis) {
+      // Measure the row first, so one that won't fit starts the next page.
+      doc.font("Helvetica").fontSize(10);
+      const nameH = doc.heightOfString(li.name, { width: colW.item });
+      const descH = li.description ? doc.fontSize(8).heightOfString(li.description, { width: colW.item }) : 0;
+      doc.fontSize(10);
+      const rowH = Math.max(20, nameH + descH);
+      if (y + rowH + 4 > bottom()) {
+        doc.addPage();
+        y = tableHeader(doc.page.margins.top);
+        doc.font("Helvetica").fontSize(10);
+      }
+      doc.fillColor("#0F1F1B").text(li.name, colX.item + 6, y, { width: colW.item });
+      if (li.description) {
+        doc.fillColor("#666").fontSize(8).text(li.description, colX.item + 6, doc.y, { width: colW.item });
+        doc.fontSize(10).fillColor("#0F1F1B");
+      }
+      doc.text(String(li.quantity), colX.qty, y, { width: colW.qty, align: "right" });
+      // formatMoney, not toLocaleString(): its default maximumFractionDigits
+      // is 3 and minimumFractionDigits 0, so a line of 1234.5 printed as
+      // "$1,234.5" and 1234 as "$1,234" on a document a customer signs.
+      doc.text(formatMoney(li.unitPrice), colX.unit, y, { width: colW.unit, align: "right" });
+      doc.text(`${Number(li.discountPct).toFixed(1)}%`, colX.disc, y, { width: colW.disc, align: "right" });
+      doc.font("Helvetica-Bold").text(formatMoney(li.lineTotal), colX.total, y, { width: colW.total, align: "right" });
+      doc.font("Helvetica");
+      y += rowH + 4;
+      doc.strokeColor("#eee").lineWidth(0.5).moveTo(48, y - 2).lineTo(564, y - 2).stroke();
+    }
+
+    // Totals: five rows and a rule, kept together on one page.
+    if (y + 16 + 110 > bottom()) {
+      doc.addPage();
+      y = doc.page.margins.top - 16;
+    }
+    doc.y = y + 16;
+    const labelX = 330, valX = 424, valW = 140;
+    const totalsRow = (label: string, value: string, bold = false) => {
+      if (bold) doc.font("Helvetica-Bold").fontSize(13).fillColor("#0F1F1B");
+      else doc.font("Helvetica").fontSize(10).fillColor("#0F1F1B");
+      const ty = doc.y;
+      doc.text(label, labelX, ty, { width: 90 });
+      doc.text(value, valX, ty, { width: valW, align: "right" });
+      doc.moveDown(0.3);
+    };
+    totalsRow("Subtotal", formatMoney(q.subtotal));
+    totalsRow("Discount", `−${formatMoney(q.discountTotal)}`);
+    // Always $0.00: quotes.create has no tax input, so this row is decoration.
+    // Left in place rather than removed — a quote with no tax line reads as
+    // "tax not considered", and adding a real tax field is a product decision.
+    totalsRow("Tax", formatMoney(q.taxTotal));
+    doc.strokeColor("#0F1F1B").lineWidth(1.5).moveTo(labelX, doc.y).lineTo(564, doc.y).stroke();
+    doc.moveDown(0.3);
+    totalsRow("Total", formatMoney(q.total), true);
+
+    // Notes & Terms (pdfkit flows long text onto new pages itself).
+    if (q.notes) {
+      doc.moveDown(1.5).font("Helvetica-Bold").fontSize(10).fillColor("#0F1F1B").text("Notes", 48);
+      doc.font("Helvetica").fontSize(10).fillColor("#444").text(q.notes, 48, doc.y, { width: 516 });
+    }
+    if (q.terms) {
+      doc.moveDown(0.8).font("Helvetica-Bold").fontSize(10).fillColor("#0F1F1B").text("Terms", 48);
+      doc.font("Helvetica").fontSize(10).fillColor("#444").text(q.terms, 48, doc.y, { width: 516 });
+    }
+
+    doc.end();
+  });
+}
+
+/**
+ * A quote past its date that was never accepted or rejected (R71). Quotes
+ * stored an expiry and nothing ever acted on it: one from last year could be
+ * marked sent and accepted.
+ */
+export function quoteHasLapsed(q: { status: string; expiresAt: Date | null }, now: number = Date.now()): boolean {
+  if (q.status === "expired") return true;
+  return (q.status === "draft" || q.status === "sent") && q.expiresAt != null && new Date(q.expiresAt).getTime() <= now;
+}
+
+function lapsedQuote(q: { expiresAt: Date | null }) {
+  const when = q.expiresAt ? ` on ${new Date(q.expiresAt).toISOString().slice(0, 10)}` : "";
+  return new TRPCError({ code: "BAD_REQUEST", message: `This quote expired${when}. Create a new quote for new terms.` });
+}
+
 export const quotesRouter = router({
   list: workspaceProcedure.input(z.object({ opportunityId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
+    // A quote past its date that nobody accepted or rejected is expired, and
+    // says so (R71). Written here, where quotes are read, rather than by a new
+    // timer: the statement only matches quotes that have lapsed.
+    await db.update(quotes)
+      .set({ status: "expired" })
+      .where(and(
+        eq(quotes.workspaceId, ctx.workspace.id),
+        inArray(quotes.status, ["draft", "sent"]),
+        lte(quotes.expiresAt, new Date()),
+      ));
     let rows = await db.select().from(quotes).where(eq(quotes.workspaceId, ctx.workspace.id)).orderBy(desc(quotes.createdAt));
     if (input?.opportunityId) rows = rows.filter((r) => r.opportunityId === input.opportunityId);
     return rows;
@@ -1681,90 +1974,10 @@ export const quotesRouter = router({
     if (!q) throw new TRPCError({ code: "NOT_FOUND" });
     const lis = await db.select().from(quoteLineItems).where(eq(quoteLineItems.quoteId, q.id));
 
-    // Lazy-import to keep cold start light; pdfkit is CJS so we destructure .default.
-    const { default: PDFDocument } = await import("pdfkit");
-    const buf: Buffer = await new Promise((resolve, reject) => {
-      const doc = new PDFDocument({ size: "LETTER", margin: 48 });
-      const chunks: Buffer[] = [];
-      doc.on("data", (c: Buffer) => chunks.push(c));
-      doc.on("end", () => resolve(Buffer.concat(chunks)));
-      doc.on("error", reject);
-
-      // Header
-      doc.fillColor("#0F1F1B").fontSize(24).font("Helvetica-Bold").text("USIP", { continued: false });
-      doc.fontSize(11).font("Helvetica").fillColor("#666").text(`Quote ${q.quoteNumber}`);
-      doc.moveUp(2);
-      const status = q.status.toUpperCase();
-      const exp = q.expiresAt ? new Date(q.expiresAt).toLocaleDateString() : "—";
-      doc.fontSize(10).fillColor("#666").text(`Status: ${status}`, { align: "right" }).text(`Expires: ${exp}`, { align: "right" });
-      doc.moveDown(0.5);
-      doc.strokeColor("#14B89A").lineWidth(2).moveTo(48, doc.y).lineTo(564, doc.y).stroke();
-      doc.moveDown(1);
-
-      // Line items header
-      const tableTop = doc.y;
-      const colX = { item: 48, qty: 320, unit: 380, disc: 450, total: 510 };
-      doc.fillColor("#fff").rect(48, tableTop, 516, 22).fill("#0F1F1B");
-      doc.fillColor("#fff").fontSize(9).font("Helvetica-Bold");
-      doc.text("ITEM", colX.item + 6, tableTop + 7);
-      doc.text("QTY", colX.qty, tableTop + 7, { width: 50, align: "right" });
-      doc.text("UNIT", colX.unit, tableTop + 7, { width: 60, align: "right" });
-      doc.text("DISC.", colX.disc, tableTop + 7, { width: 50, align: "right" });
-      doc.text("TOTAL", colX.total, tableTop + 7, { width: 54, align: "right" });
-      let y = tableTop + 28;
-
-      doc.font("Helvetica").fontSize(10).fillColor("#0F1F1B");
-      for (const li of lis) {
-        doc.fillColor("#0F1F1B").text(li.name, colX.item + 6, y, { width: 260 });
-        if (li.description) {
-          doc.fillColor("#666").fontSize(8).text(li.description, colX.item + 6, doc.y, { width: 260 });
-          doc.fontSize(10).fillColor("#0F1F1B");
-        }
-        const rowH = Math.max(20, doc.y - y);
-        doc.text(String(li.quantity), colX.qty, y, { width: 50, align: "right" });
-        // formatMoney, not toLocaleString(): its default maximumFractionDigits
-        // is 3 and minimumFractionDigits 0, so a line of 1234.5 printed as
-        // "$1,234.5" and 1234 as "$1,234" on a document a customer signs.
-        doc.text(formatMoney(li.unitPrice), colX.unit, y, { width: 60, align: "right" });
-        doc.text(`${Number(li.discountPct).toFixed(1)}%`, colX.disc, y, { width: 50, align: "right" });
-        doc.font("Helvetica-Bold").text(formatMoney(li.lineTotal), colX.total, y, { width: 54, align: "right" });
-        doc.font("Helvetica");
-        y += rowH + 4;
-        doc.strokeColor("#eee").lineWidth(0.5).moveTo(48, y - 2).lineTo(564, y - 2).stroke();
-      }
-
-      // Totals
-      doc.y = y + 16;
-      const labelX = 380, valX = 510, valW = 54;
-      const totalsRow = (label: string, value: string, bold = false) => {
-        if (bold) doc.font("Helvetica-Bold").fontSize(13).fillColor("#0F1F1B");
-        else doc.font("Helvetica").fontSize(10).fillColor("#0F1F1B");
-        const ty = doc.y;
-        doc.text(label, labelX, ty, { width: 120 });
-        doc.text(value, valX, ty, { width: valW, align: "right" });
-        doc.moveDown(0.3);
-      };
-      totalsRow("Subtotal", formatMoney(q.subtotal));
-      totalsRow("Discount", `−${formatMoney(q.discountTotal)}`);
-      // Always $0.00: quotes.create has no tax input, so this row is decoration.
-      // Left in place rather than removed — a quote with no tax line reads as
-      // "tax not considered", and adding a real tax field is a product decision.
-      totalsRow("Tax", formatMoney(q.taxTotal));
-      doc.strokeColor("#0F1F1B").lineWidth(1.5).moveTo(labelX, doc.y).lineTo(564, doc.y).stroke();
-      doc.moveDown(0.3);
-      totalsRow("Total", formatMoney(q.total), true);
-
-      // Notes & Terms
-      if (q.notes) {
-        doc.moveDown(1.5).font("Helvetica-Bold").fontSize(10).fillColor("#0F1F1B").text("Notes", 48);
-        doc.font("Helvetica").fontSize(10).fillColor("#444").text(q.notes, 48, doc.y, { width: 516 });
-      }
-      if (q.terms) {
-        doc.moveDown(0.8).font("Helvetica-Bold").fontSize(10).fillColor("#0F1F1B").text("Terms", 48);
-        doc.font("Helvetica").fontSize(10).fillColor("#444").text(q.terms, 48, doc.y, { width: 516 });
-      }
-
-      doc.end();
+    // The workspace's own name on the page, and its days for the dates (R71).
+    const buf = await renderQuotePdf(q, lis, {
+      workspaceName: ctx.workspace.name,
+      timeZone: await getWorkspaceTimezone(ctx.workspace.id),
     });
 
     const key = `ws-${ctx.workspace.id}/quotes/${q.quoteNumber}.pdf`;
@@ -1796,9 +2009,10 @@ export const quotesRouter = router({
     // Read first, so the audit entry below cannot claim a state change that
     // never happened: the UPDATE is workspace-scoped, so a foreign or missing
     // id matched nothing and this still answered ok:true.
-    const [q] = await db.select({ id: quotes.id, quoteNumber: quotes.quoteNumber, status: quotes.status })
+    const [q] = await db.select({ id: quotes.id, quoteNumber: quotes.quoteNumber, status: quotes.status, expiresAt: quotes.expiresAt })
       .from(quotes).where(and(eq(quotes.id, input.id), eq(quotes.workspaceId, ctx.workspace.id)));
     if (!q) throw new TRPCError({ code: "NOT_FOUND", message: "Quote not found" });
+    if (quoteHasLapsed(q)) throw lapsedQuote(q);
 
     const sentAt = new Date();
     await db.update(quotes).set({ status: "sent", sentAt }).where(and(eq(quotes.id, q.id), eq(quotes.workspaceId, ctx.workspace.id)));
@@ -1817,6 +2031,13 @@ export const quotesRouter = router({
   setStatus: workspaceProcedure.input(z.object({ id: z.number(), status: z.enum(["draft", "sent", "accepted", "rejected", "expired"]) })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // A lapsed quote can be recorded as rejected, never revived or accepted
+    // on terms that have run out (R71).
+    if (input.status !== "rejected" && input.status !== "expired") {
+      const [q] = await db.select({ status: quotes.status, expiresAt: quotes.expiresAt }).from(quotes)
+        .where(and(eq(quotes.id, input.id), eq(quotes.workspaceId, ctx.workspace.id)));
+      if (q && quoteHasLapsed(q)) throw lapsedQuote(q);
+    }
     await db.update(quotes).set({ status: input.status }).where(and(eq(quotes.id, input.id), eq(quotes.workspaceId, ctx.workspace.id)));
     return { ok: true };
   }),
@@ -1879,11 +2100,8 @@ function auditWhere(workspaceId: number, input?: { entityType?: string; actorUse
  * produces a file Excel opens wrong.
  */
 function auditToCsv(columns: { key: string; label: string }[], rows: Record<string, unknown>[]): string {
-  const esc = (v: unknown) => {
-    if (v == null) return "";
-    const s = v instanceof Date ? v.toISOString() : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
+  // Formula cells neutralised too (audit 2026-10-20, G49): @shared/csvCell.
+  const esc = csvCell;
   return [columns.map((c) => esc(c.label)).join(","), ...rows.map((r) => columns.map((c) => esc(r[c.key])).join(","))].join("\n");
 }
 
@@ -2064,18 +2282,34 @@ export const notificationsRouter = router({
   }),
 });
 
+/**
+ * SCIM provider tokens are shown ONCE, when made, and stored as a hash
+ * (audit 2026-10-20, G49): they were stored as issued and listProviders sent
+ * every one back to the page. Who made, rotated, switched or removed a
+ * provider is audited, since a provider's token creates and removes people.
+ */
+const scimAudit = (ctx: { workspace: { id: number }; user: { id: number } }, action: "create" | "update" | "delete", id: number, after: Record<string, unknown>) =>
+  recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action, entityType: "scim_provider", entityId: id, after });
+
 export const scimRouter = router({
   listProviders: adminWsProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
-    return db.select().from(scimProviders).where(eq(scimProviders.workspaceId, ctx.workspace.id));
+    return db
+      .select({
+        id: scimProviders.id, workspaceId: scimProviders.workspaceId, name: scimProviders.name,
+        enabled: scimProviders.enabled, lastEventAt: scimProviders.lastEventAt, createdAt: scimProviders.createdAt,
+      })
+      .from(scimProviders)
+      .where(eq(scimProviders.workspaceId, ctx.workspace.id));
   }),
 
   createProvider: adminWsProcedure.input(z.object({ name: z.string().min(1) })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const token = newScimBearerToken();
-    await db.insert(scimProviders).values({ ...input, workspaceId: ctx.workspace.id, bearerToken: token, enabled: true });
+    const [res] = (await db.insert(scimProviders).values({ ...input, workspaceId: ctx.workspace.id, bearerToken: hashScimToken(token), enabled: true })) as any;
+    await scimAudit(ctx, "create", Number(res?.insertId ?? 0), { name: input.name });
     return { ok: true, bearerToken: token };
   }),
 
@@ -2083,6 +2317,7 @@ export const scimRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.update(scimProviders).set({ enabled: input.enabled }).where(and(eq(scimProviders.id, input.id), eq(scimProviders.workspaceId, ctx.workspace.id)));
+    await scimAudit(ctx, "update", input.id, { enabled: input.enabled });
     return { ok: true };
   }),
 
@@ -2090,7 +2325,8 @@ export const scimRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const token = newScimBearerToken();
-    await db.update(scimProviders).set({ bearerToken: token }).where(and(eq(scimProviders.id, input.id), eq(scimProviders.workspaceId, ctx.workspace.id)));
+    await db.update(scimProviders).set({ bearerToken: hashScimToken(token) }).where(and(eq(scimProviders.id, input.id), eq(scimProviders.workspaceId, ctx.workspace.id)));
+    await scimAudit(ctx, "update", input.id, { tokenRotated: true });
     return { ok: true, bearerToken: token };
   }),
 
@@ -2106,6 +2342,7 @@ export const scimRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     await db.delete(scimProviders).where(and(eq(scimProviders.id, input.id), eq(scimProviders.workspaceId, ctx.workspace.id)));
+    await scimAudit(ctx, "delete", input.id, { deleted: true });
     return { ok: true };
   }),
 });

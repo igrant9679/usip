@@ -74,10 +74,15 @@ const GUARD = "await assertOutboundNotPaused(ctx.workspace.id);";
 const SURFACES: Array<{ file: string; start: string; occurrence?: number; guard?: string; before: string; what: string }> = [
   { file: "routers/crm.ts", start: "  sendAdHocEmail: repProcedure", occurrence: 1, before: "adapter.sendEmail(", what: "email from a contact" },
   { file: "routers/crm.ts", start: "  sendAdHocEmail: repProcedure", occurrence: 2, before: "adapter.sendEmail(", what: "email from a lead" },
+  // 2026-11-06 (audit R5): several leads at once, through the single send.
+  { file: "routers/crm.ts", start: "  sendAdHocEmailBulk: repProcedure", before: "caller.leads.sendAdHocEmail(", what: "email to several leads" },
   { file: "routers/mailbox.ts", start: "  sendNew: workspaceProcedure", guard: "await assertOutboundNotPausedFor(ctx.workspace.id, [input.to, input.cc, input.bcc]);", before: "adapter.sendEmail(", what: "mailbox new message" },
   { file: "routers/mailbox.ts", start: "  sendReply: workspaceProcedure", guard: "await assertOutboundNotPausedFor(ctx.workspace.id, [input.to, input.cc]);", before: "adapter.sendEmail(", what: "mailbox reply and forward" },
   { file: "routers/smtpConfig.ts", start: "  sendDraft: workspaceProcedure", before: "transporter.sendMail(", what: "an approved draft by SMTP" },
-  { file: "routers/smtpConfig.ts", start: "  sendBulkApproved: adminWsProcedure", before: "transporter.sendMail(", what: "every approved draft by SMTP" },
+  // 2026-11-06 (audit O16, O47): the run moved into sendApprovedBatch so it can
+  // be single-flight, and each draft inside goes through deliverEmailDraft; the
+  // pause is asked before the run starts, and again per draft inside.
+  { file: "routers/smtpConfig.ts", start: "  sendBulkApproved: adminWsProcedure", before: "sendApprovedBatch(", what: "every approved draft" },
   { file: "routers/sequences.ts", start: "  send: repProcedure.input(z.object({ id: z.number() }))", before: "deliverEmailDraft(", what: "an approved email draft" },
   { file: "routers/proposals.ts", start: "  sendToClient: repProcedure", before: "const db = await getDb();", what: "a proposal to its client" },
   { file: "routers/proposals.ts", start: "  approveExtension: workspaceProcedure", before: ".update(proposals)", what: "an extension approval mailed to the client" },
@@ -139,8 +144,10 @@ describe("every send a person clicks asks first", () => {
   it("Find meetings in Autonomous drafts instead of sending while paused", () => {
     const body = procedure(read("routers/meetings.ts"), "  generateProposals: repProcedure");
     expect(body).toContain("const paused = await isOutboundPaused(ctx.workspace.id);");
-    expect(body).toContain('const send = s?.mode === "auto" && !paused;');
-    expect(body).toContain("{ send }");
+    // 2026-11-06 (audit O29): it also drafts when the page did not confirm a
+    // send; the pause still turns every send off.
+    expect(body).toContain('const send = s?.mode === "auto" && !paused && input?.allowSend !== false;');
+    expect(body).toContain("{ send, onlyProspectIds: input?.prospectIds }");
   });
 
   it("an update with unchanged attendees is checked against the stored ones", () => {

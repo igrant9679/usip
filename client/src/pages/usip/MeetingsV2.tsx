@@ -32,11 +32,15 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ConfirmButton } from "@/components/usip/Common";
+import { ConfirmButton, confirmAction } from "@/components/usip/Common";
 import {
   CalendarClock, CalendarCheck, CalendarX, Sparkles, Bot, Zap, Check, X, Clock, Video, Send,
   MoreHorizontal, Plus, AlertTriangle, Link2, Building2, MailWarning, Copy, ExternalLink, UserRound,
 } from "lucide-react";
+import { CLOSED_MEETING_STATUSES, liveMeetingStatuses } from "@shared/meetingStatus";
+
+/** How many past meetings the page lists. */
+const PAST_SHOWN = 15;
 
 /** A member who can own a proposal, and the calendar its invite would send from. */
 type ProposalOwner = { userId: number; name: string; calendar: "teams" | "no_teams" | "none" };
@@ -107,7 +111,11 @@ export default function MeetingsV2() {
   const accent = useAccentColor();
   const utils = trpc.useUtils();
 
-  const all = trpc.meetings.list.useQuery({});
+  // The live meetings in full and only the closed ones the page shows (audit
+  // 2026-10-20, O41): this read every meeting the workspace ever had.
+  const live = trpc.meetings.list.useQuery({ statuses: liveMeetingStatuses() });
+  const closed = trpc.meetings.list.useQuery({ statuses: [...CLOSED_MEETING_STATUSES], limit: PAST_SHOWN });
+  const all = { isLoading: live.isLoading || closed.isLoading, error: live.error ?? closed.error, refetch: () => { live.refetch(); closed.refetch(); } };
   const stats = trpc.meetings.stats.useQuery();
   const autopilot = trpc.meetings.getAutopilotSettings.useQuery();
   const bookingLink = trpc.bookingLinks.mine.useQuery(undefined as any, { retry: false });
@@ -135,6 +143,43 @@ export default function MeetingsV2() {
     },
     onError: (e) => toast.error(e.message),
   });
+  /**
+   * In Autonomous, Find meetings SENDS what it finds: up to 8 invites on one
+   * click, with only a toast afterwards (audit 2026-10-20, O29). It now asks
+   * first, naming how many and to whom, and sends to no one else. Otherwise
+   * (Approve, Off, or paused) it only drafts proposals, as before.
+   */
+  const [finding, setFinding] = useState(false);
+  const findMeetings = async () => {
+    setFinding(true);
+    try {
+      const p = await utils.client.meetings.previewFindMeetings.query({ limit: 8 });
+      if (!p.send || p.candidates.length === 0) {
+        generate.mutate({ limit: 8, allowSend: false });
+        return;
+      }
+      const n = p.candidates.length;
+      confirmAction({
+        title: `Send ${n} meeting invite${n === 1 ? "" : "s"} now?`,
+        description: (
+          <span className="block space-y-2">
+            <span className="block">Autopilot is Autonomous, so each of these people is emailed a proposal with the owner's free times straight away. Nothing goes on the calendar until they pick one.</span>
+            <span className="block max-h-48 overflow-auto rounded border p-2 text-xs">
+              {p.candidates.map((c) => (
+                <span key={c.id} className="block truncate">{c.name}{c.company ? ` · ${c.company}` : ""} · {c.email}</span>
+              ))}
+            </span>
+          </span>
+        ),
+        confirmLabel: `Send ${n} invite${n === 1 ? "" : "s"}`,
+        destructive: false,
+      }, () => generate.mutate({ limit: 8, prospectIds: p.candidates.map((c) => c.id), allowSend: true }));
+    } catch (e) {
+      toast.error((e as Error).message || "Couldn't look for meetings");
+    } finally {
+      setFinding(false);
+    }
+  };
   const approveSend = trpc.meetings.approveAndSend.useMutation({
     onSuccess: (r) => {
       invalidateAll();
@@ -191,7 +236,19 @@ export default function MeetingsV2() {
     onError: (e) => toast.error(e.message),
   });
   const complete = trpc.meetings.complete.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
-  const cancel = trpc.meetings.cancel.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
+  // Says what happened to the invite (audit O28): cancelling now deletes the
+  // calendar event, which is what tells the attendee.
+  const cancel = trpc.meetings.cancel.useMutation({
+    onSuccess: (r) => {
+      invalidateAll();
+      toast.success(
+        r.calendar === "done" ? "Meeting cancelled — the invite was removed from the calendar and the attendee was sent a cancellation"
+        : r.calendar === "gone" ? "Meeting cancelled — the invite had already been removed from the calendar"
+        : "Meeting cancelled — it was not on a calendar, so nothing was sent to the attendee",
+      );
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const create = trpc.meetings.create.useMutation({
     onSuccess: () => { invalidateAll(); toast.success("Meeting created"); setNewOpen(false); },
     onError: (e) => toast.error(e.message),
@@ -243,7 +300,9 @@ export default function MeetingsV2() {
     },
     onError: (e) => toast.error(e.message),
   });
-  const meetings = (all.data ?? []) as Meeting[];
+  // Newest first across both reads, as the one read returned them.
+  const meetings = useMemo(() => ([...(live.data ?? []), ...(closed.data ?? [])] as Meeting[])
+    .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()), [live.data, closed.data]);
   const s = stats.data ?? { proposed: 0, upcoming: 0, completed: 0, noShow: 0, booked: 0 };
   const now = Date.now();
 
@@ -256,7 +315,7 @@ export default function MeetingsV2() {
   const past = useMemo(() =>
     meetings
       .filter((m) => m.status === "completed" || m.status === "no_show" || m.status === "cancelled" || ((m.status === "scheduled" || m.status === "rescheduled") && m.scheduledAt && new Date(m.scheduledAt).getTime() < now - 3600_000))
-      .slice(0, 15),
+      .slice(0, PAST_SHOWN),
     [meetings, now]);
 
   const StatCard = ({ label, value, tone }: { label: string; value: number; tone?: "danger" | "ai" | "good" }) => {
@@ -302,8 +361,8 @@ export default function MeetingsV2() {
               </SelectContent>
             </Select>
           </div>
-          <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={generate.isPending} onClick={() => generate.mutate({ limit: 8 })}>
-            <Sparkles className="size-3.5" /> {generate.isPending ? "Finding…" : "Find meetings with AI"}
+          <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={generate.isPending || finding} onClick={findMeetings}>
+            <Sparkles className="size-3.5" /> {generate.isPending || finding ? "Finding…" : "Find meetings with AI"}
           </Button>
           <Button size="sm" className="h-7 gap-1.5" onClick={() => setNewOpen(true)}><Plus className="size-3.5" /> New meeting</Button>
         </div>
@@ -483,7 +542,7 @@ export default function MeetingsV2() {
                   <div className="text-sm font-medium">No upcoming meetings</div>
                   <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">Let AI propose meetings with your best-fit prospects, or add one manually.</p>
                   <div className="flex items-center justify-center gap-2 mt-3">
-                    <Button size="sm" variant="outline" className="gap-1.5" disabled={generate.isPending} onClick={() => generate.mutate({ limit: 8 })}><Sparkles className="size-3.5" /> Find meetings with AI</Button>
+                    <Button size="sm" variant="outline" className="gap-1.5" disabled={generate.isPending || finding} onClick={findMeetings}><Sparkles className="size-3.5" /> Find meetings with AI</Button>
                     <Button size="sm" className="gap-1.5" onClick={() => setNewOpen(true)}><Plus className="size-3.5" /> New meeting</Button>
                   </div>
                 </div>
@@ -526,7 +585,18 @@ export default function MeetingsV2() {
                         {m.scheduledAt && <DropdownMenuItem onClick={() => complete.mutate({ id: m.id })}><Check className="size-3.5 mr-2" /> Mark completed</DropdownMenuItem>}
                         {m.scheduledAt && <DropdownMenuItem onClick={() => complete.mutate({ id: m.id, disposition: "no_show" })}>Mark no-show</DropdownMenuItem>}
                         {m.scheduledAt && <DropdownMenuSeparator />}
-                        <DropdownMenuItem onClick={() => cancel.mutate({ id: m.id })} className="text-rose-600"><X className="size-3.5 mr-2" /> Cancel</DropdownMenuItem>
+                        <DropdownMenuItem
+                          // Asks first (audit O28): one stray click used to cancel a real meeting.
+                          onClick={() => confirmAction({
+                            title: "Cancel this meeting?",
+                            description: m.inviteSent
+                              ? `The invite is removed from the calendar, which sends ${m.contactName || m.contactEmail || "the attendee"} a cancellation.`
+                              : "It was never sent to a calendar, so only Velocity's record changes.",
+                            confirmLabel: "Cancel meeting",
+                            cancelLabel: "Keep it",
+                          }, () => cancel.mutate({ id: m.id }))}
+                          className="text-rose-600"
+                        ><X className="size-3.5 mr-2" /> Cancel</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>

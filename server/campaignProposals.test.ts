@@ -157,7 +157,12 @@ describe("the explainer — one component on all three surfaces", () => {
     const seed = read("seedHelpContent.ts");
     expect(seed).toContain('slug: "sequences-vs-campaigns"');
     expect(seed).toContain('pageKey: "sequences"');
-    expect(client("components", "usip", "OutreachExplainer.tsx")).toContain('href="/help/sequences-vs-campaigns"');
+    // 2026-11-06 (audit L10): this pinned "/help/sequences-vs-campaigns", a
+    // route App.tsx never had, so the link 404'd. Articles live under
+    // /help/articles/:slug; pinned against the route table as well.
+    expect(client("components", "usip", "OutreachExplainer.tsx")).toContain('href="/help/articles/sequences-vs-campaigns"');
+    expect(client("App.tsx")).toContain('<Route path="/help/articles/:slug">');
+    expect(client("App.tsx")).not.toContain('path="/help/sequences-vs-campaigns"');
     expect(client("lib", "helpText.ts")).toContain('article: "sequences-vs-campaigns"');
   });
 });

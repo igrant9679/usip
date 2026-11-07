@@ -1145,17 +1145,20 @@ async function pickWorkspaceOwner(db: any, workspaceId: number): Promise<number 
  * sendMeetingInvite and every guard it applies; otherwise it waits for a
  * person to approve it.
  */
-export async function runMeetingAutopilotForWorkspace(
+/**
+ * The prospects a run would propose to, best first, and who already has a
+ * meeting. Shared by the run and by its preview (audit 2026-10-20, O29), so
+ * the confirm before an Autonomous send names the people the run would pick.
+ * `onlyProspectIds` keeps the run to the people a confirm named.
+ */
+async function meetingCandidatePool(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
   workspaceId: number,
   limit: number,
-  ownerUserId?: number | null,
-  opts: { send?: boolean } = {},
-): Promise<{ proposed: number; sent: number; skipped: number }> {
-  const db = await getDb();
-  if (!db) return { proposed: 0, sent: 0, skipped: 0 };
-
-  const fallbackOwner = ownerUserId !== undefined ? ownerUserId : await pickWorkspaceOwner(db, workspaceId);
-
+  onlyProspectIds?: number[],
+) {
+  const emailOf = (p: any) => String(p.email ?? "").trim().toLowerCase();
+  if (onlyProspectIds && !onlyProspectIds.length) return { candidates: [] as any[], busy: new Set<number>(), busyEmails: new Set<string>(), emailOf };
   // Best-AVAILABLE prospects, never suppressed/rejected. We deliberately do NOT
   // hard-gate on confidenceScore >= 70: on real workspaces most prospects are
   // unscored, so that gate found nobody and the autopilot never proposed a
@@ -1171,11 +1174,11 @@ export async function runMeetingAutopilotForWorkspace(
       // be sent one, so proposing to them only fills the review queue.
       isNotNull(prospects.email),
       ne(prospects.email, ""),
+      onlyProspectIds ? inArray(prospects.id, onlyProspectIds) : undefined,
     ))
     .orderBy(sql`${prospects.confidenceScore} DESC`, sql`${prospects.updatedAt} DESC`)
     .limit(limit * 5);
-
-  if (!candidates.length) return { proposed: 0, sent: 0, skipped: 0 };
+  if (!candidates.length) return { candidates, busy: new Set<number>(), busyEmails: new Set<string>(), emailOf };
 
   // Skip prospects that already have an active meeting.
   const ids = candidates.map((p: any) => p.id);
@@ -1186,12 +1189,11 @@ export async function runMeetingAutopilotForWorkspace(
       inArray(meetings.relatedId, ids),
       inArray(meetings.status, ACTIVE_MEETING_STATUSES),
     ));
-  const busy = new Set(existing.map((r: any) => r.relatedId));
+  const busy = new Set<number>(existing.map((r: any) => r.relatedId));
   // And prospects whose EMAIL already has one (2026-09-24): the same person
   // can exist as several prospect rows (CommunityForce had Erika Donalds
   // three times), and the id check above let each copy get its own
   // proposal, which Autonomous would send as its own invite.
-  const emailOf = (p: any) => String(p.email ?? "").trim().toLowerCase();
   const emails = Array.from(new Set(candidates.map(emailOf).filter(Boolean)));
   const liveByEmail = emails.length ? await db.select({ contactEmail: meetings.contactEmail }).from(meetings)
     .where(and(
@@ -1199,7 +1201,46 @@ export async function runMeetingAutopilotForWorkspace(
       inArray(meetings.contactEmail, emails),
       inArray(meetings.status, ACTIVE_MEETING_STATUSES),
     )) : [];
-  const busyEmails = new Set(liveByEmail.map((r: any) => String(r.contactEmail ?? "").trim().toLowerCase()));
+  const busyEmails = new Set<string>(liveByEmail.map((r: any) => String(r.contactEmail ?? "").trim().toLowerCase()));
+  return { candidates, busy, busyEmails, emailOf };
+}
+
+/**
+ * Who a run of `limit` would propose to, without writing or sending anything:
+ * the same pick and the same skips as the run (audit 2026-10-20, O29). The
+ * Meetings page shows it before Find meetings sends in Autonomous.
+ */
+export async function previewMeetingCandidates(
+  workspaceId: number,
+  limit: number,
+): Promise<Array<{ id: number; name: string; email: string; company: string | null }>> {
+  const db = await getDb();
+  if (!db) return [];
+  const { candidates, busy, busyEmails, emailOf } = await meetingCandidatePool(db, workspaceId, limit);
+  const out: Array<{ id: number; name: string; email: string; company: string | null }> = [];
+  for (const p of candidates) {
+    if (out.length >= limit) break;
+    if (busy.has(p.id) || busyEmails.has(emailOf(p))) continue;
+    busy.add(p.id);
+    busyEmails.add(emailOf(p));
+    out.push({ id: p.id, name: [p.firstName, p.lastName].filter(Boolean).join(" ") || p.email, email: p.email, company: p.company ?? null });
+  }
+  return out;
+}
+
+export async function runMeetingAutopilotForWorkspace(
+  workspaceId: number,
+  limit: number,
+  ownerUserId?: number | null,
+  opts: { send?: boolean; onlyProspectIds?: number[] } = {},
+): Promise<{ proposed: number; sent: number; skipped: number }> {
+  const db = await getDb();
+  if (!db) return { proposed: 0, sent: 0, skipped: 0 };
+
+  const fallbackOwner = ownerUserId !== undefined ? ownerUserId : await pickWorkspaceOwner(db, workspaceId);
+
+  const { candidates, busy, busyEmails, emailOf } = await meetingCandidatePool(db, workspaceId, limit, opts.onlyProspectIds);
+  if (!candidates.length) return { proposed: 0, sent: 0, skipped: 0 };
 
   // Per-prospect owner: assign each meeting to the rep who owns the prospect's
   // linked contact/lead, so on 'auto' the invite sends from THAT rep's own

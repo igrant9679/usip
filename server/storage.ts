@@ -71,6 +71,36 @@ export async function storagePut(
   return { key, url: `/manus-storage/${key}` };
 }
 
+/**
+ * Destroy what is stored at a key (audit 2026-10-20, R100).
+ *
+ * The Forge storage API this file uses offers a presigned PUT and a presigned
+ * GET, and no delete — none appears anywhere in this codebase, and guessing an
+ * endpoint would fail silently. So the object is overwritten with nothing,
+ * through the same presigned PUT an upload uses, at the exact key (no hash
+ * suffix): its content is gone and its link serves an empty file. Throws when
+ * the overwrite fails, so a caller can keep its record until it succeeds.
+ */
+export async function storageErase(relKey: string): Promise<void> {
+  const { forgeUrl, forgeKey } = getForgeConfig();
+  const key = normalizeKey(relKey);
+  const presignUrl = new URL("v1/storage/presign/put", forgeUrl + "/");
+  presignUrl.searchParams.set("path", key);
+  const presignResp = await fetch(presignUrl, { headers: { Authorization: `Bearer ${forgeKey}` } });
+  if (!presignResp.ok) {
+    const msg = await presignResp.text().catch(() => presignResp.statusText);
+    throw new Error(`Storage presign failed (${presignResp.status}): ${msg}`);
+  }
+  const { url: s3Url } = (await presignResp.json()) as { url: string };
+  if (!s3Url) throw new Error("Forge returned empty presign URL");
+  const resp = await fetch(s3Url, {
+    method: "PUT",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: new Blob([], { type: "application/octet-stream" }),
+  });
+  if (!resp.ok) throw new Error(`Storage erase failed (${resp.status})`);
+}
+
 export async function storageGet(relKey: string): Promise<{ key: string; url: string }> {
   const key = normalizeKey(relKey);
   return { key, url: `/manus-storage/${key}` };

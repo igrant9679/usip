@@ -79,12 +79,17 @@ describe("an active sequence can never be truncated off the page", () => {
     expect(proc).toContain("prospectQueue.id,");
   });
 
-  it("the default limit clears a real campaign's queue", () => {
-    expect(proc).toContain("limit: z.number().default(500)");
+  // 2026-11-06 (audit A44): the tab pages now. A row past the first page is
+  // reached by paging instead of by a limit big enough to hold everyone, so
+  // nothing can be truncated off the tab; active rows still come first.
+  // server/areSequencesPaging.test.ts pins the counts and pages.
+  it("every row is reachable: the procedure pages", () => {
+    expect(proc).toContain("limit: z.number().int().min(1).max(200).default(100),");
+    expect(proc).toContain(".offset(input.offset);");
   });
 
-  it("the page asks for an explicit limit rather than trusting the default", () => {
-    expect(page).toContain("listSequences.useQuery({ campaignId, limit: 500 })");
+  it("the page asks for an explicit page rather than trusting the default", () => {
+    expect(page).toContain("limit: SEQUENCE_PAGE, offset: (seqPage - 1) * SEQUENCE_PAGE }");
   });
 });
 

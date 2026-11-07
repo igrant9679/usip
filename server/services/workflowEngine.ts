@@ -65,8 +65,10 @@
 import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { getDb } from "../db";
 import { safeFetch } from "./scraper/ssrfGuard";
+import { safeWebhookHeaders } from "./webhookHeaders";
 import { archivedWorkspaceIds, isWorkspaceArchived } from "../_core/workspaceArchive";
 import { notifyIfEnabled } from "./policyNotify";
+import { isOutboundPaused } from "./outboundPause";
 import {
   contacts, emailDrafts, enrollments, leads, notifications, opportunities,
   sequences, tasks, workflowRules, workflowRuns, workspaceSettings,
@@ -86,10 +88,26 @@ export function evalConditions(
   spec: { all?: Array<{ field: string; op: string; value: any }>; any?: Array<{ field: string; op: string; value: any }> },
   payload: Record<string, any>,
 ): boolean {
+  /**
+   * The editor stores every condition value as the string the user typed, and
+   * payloads carry numbers and booleans, so a strict === meant "value equals
+   * 50000" never matched a deal worth 50000 (G61). A number or boolean on
+   * either side is compared as one; strings stay exact.
+   */
+  const same = (a: any, b: any): boolean => {
+    if (a === b) return true;
+    if (a == null || b == null) return false;
+    if (typeof a === "number" || typeof b === "number") {
+      const sa = String(a).trim(), sb = String(b).trim();
+      return sa !== "" && sb !== "" && Number(sa) === Number(sb);
+    }
+    if (typeof a === "boolean" || typeof b === "boolean") return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+    return false;
+  };
   const cmp = (op: string, a: any, b: any) => {
     switch (op) {
-      case "eq": return a === b;
-      case "neq": return a !== b;
+      case "eq": return same(a, b);
+      case "neq": return !same(a, b);
       case "gt": return Number(a) > Number(b);
       case "gte": return Number(a) >= Number(b);
       case "lt": return Number(a) < Number(b);
@@ -170,7 +188,8 @@ async function runAction(
         // Through the SSRF guard (audit 2026-10-20): the URL is whatever a
         // member typed into the rule, and a plain fetch would POST to cloud
         // metadata or the private network.
-        const resp = await safeFetch(String(url), { method: "POST", headers: { "Content-Type": "application/json", ...(p.headers ?? {}) }, body, signal: AbortSignal.timeout(10_000), maxRedirects: 0 });
+        // The rule's own headers are filtered, and can't replace Content-Type (G19).
+        const resp = await safeFetch(String(url), { method: "POST", headers: { ...safeWebhookHeaders(p.headers), "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(10_000), maxRedirects: 0 });
         return resp.ok ? null : `webhook ${url} returned ${resp.status}`;
       }
       case "post_slack": {
@@ -235,6 +254,11 @@ async function runAction(
         const [seq] = await db.select({ id: sequences.id }).from(sequences)
           .where(and(eq(sequences.id, sequenceId), eq(sequences.workspaceId, ws))).limit(1);
         if (!seq) return `enroll_sequence: sequence ${sequenceId} not found in this workspace`;
+        // No enrolment while the workspace's outbound is paused (2026-11-06):
+        // with "equals" now matching numbers (G61), rules that never fired can
+        // start to, and an enrolment made now would queue sends for the moment
+        // the pause lifts. The run records why.
+        if (await isOutboundPaused(ws)) return "enroll_sequence: skipped, outbound is paused for this workspace";
 
         const col = target === "contact" ? enrollments.contactId
           : target === "lead" ? enrollments.leadId : enrollments.prospectId;

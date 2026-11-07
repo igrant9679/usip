@@ -26,6 +26,7 @@ import { calendarMonthKey } from "@shared/calendarDate";
 import { opportunities } from "../../drizzle/schema";
 import type { getDb } from "../db";
 import { stageResolver } from "../_core/stageSemantics";
+import { forecastBuckets } from "@shared/forecastCategory";
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -42,6 +43,8 @@ export type MetricDeal = {
   valueCents: number;
   /** The deal's own win % for an open deal; 100 won, 0 lost. */
   winProb: number;
+  /** A rep's forecast call (R41), or null: counted by win %. */
+  forecastCategory: string | null;
   /** Expected close date — a calendar date. */
   closeDate: Date | null;
   /** When it was won (won deals only). */
@@ -78,6 +81,7 @@ export async function loadMetricDeals(
     stage: opportunities.stage,
     value: opportunities.value,
     winProb: opportunities.winProb,
+    forecastCategory: opportunities.forecastCategory,
     closeDate: opportunities.closeDate,
     stageEnteredAt: opportunities.stageEnteredAt,
     wonAt: opportunities.wonAt,
@@ -100,6 +104,7 @@ export async function loadMetricDeals(
       status,
       valueCents: Math.round(Number(o.value ?? 0) * 100) || 0,
       winProb: status === "won" ? 100 : status === "lost" ? 0 : prob,
+      forecastCategory: o.forecastCategory ?? null,
       closeDate: toDate(o.closeDate),
       wonAt: status === "won" ? closedAt : null,
       lostAt: status === "lost" ? closedAt : null,
@@ -117,9 +122,9 @@ export type OpenTotals = {
   count: number;
   value: number;
   weighted: number;
-  /** Open deals at ≥ 90% (Forecast page). */
+  /** Open deals in Commit: marked so, or unmarked at ≥ 90% (Forecast page, R41). */
   commit: number;
-  /** Open deals at ≥ 50%. */
+  /** Open deals in Best case: Commit and Best case, or unmarked at ≥ 50%. */
   bestCase: number;
 };
 
@@ -130,8 +135,9 @@ export function openTotals(deals: MetricDeal[]): OpenTotals {
     count++;
     value += d.valueCents;
     weighted += (d.valueCents * d.winProb) / 100;
-    if (d.winProb >= 90) commit += d.valueCents;
-    if (d.winProb >= 50) bestCase += d.valueCents;
+    const b = forecastBuckets(d.forecastCategory, d.winProb);
+    if (b.commit) commit += d.valueCents;
+    if (b.bestCase) bestCase += d.valueCents;
   }
   return { count, value: dollars(value), weighted: dollars(weighted), commit: dollars(commit), bestCase: dollars(bestCase) };
 }
@@ -218,7 +224,26 @@ export function currentRanges(tz: string, now: Date = new Date()) {
   };
 }
 
+/**
+ * This month so far, and the same stretch of last month. A flow (wins, new
+ * leads) compared a few days of this month with the whole of the last, so every
+ * month began with a collapse (audit 2026-10-20, G53/G55). The stretch is the
+ * same time since each month began, cut at last month's end when that month is
+ * shorter. Measured in elapsed time, so across a DST change it is an hour out.
+ */
+export function monthToDateRanges(tz: string, now: Date = new Date()): { current: Range; previous: Range } {
+  const r = currentRanges(tz, now);
+  const elapsed = now.getTime() - r.month.start.getTime();
+  return {
+    current: { start: r.month.start, end: new Date(now.getTime() + 1) },
+    previous: { start: r.prevMonth.start, end: new Date(Math.min(r.prevMonth.start.getTime() + elapsed + 1, r.prevMonth.end.getTime())) },
+  };
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "Jan"…"Dec" for a month 1–12, in no machine's locale. */
+export const monthLabel = (m: number) => MONTHS[m - 1];
 
 /**
  * The range a quota target measures (R17). The period names a month
