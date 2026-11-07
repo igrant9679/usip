@@ -1236,6 +1236,59 @@ Write 2-4 paragraphs of professional proposal content for this section. Be speci
       }
       return { ok: true, alreadyAccepted: false, opportunityId };
     }),
+
+  /**
+   * Decline by share token — public, the portal's other answer (audit
+   * 2026-10-20, G70: a client could accept or say nothing). Marks the
+   * proposal not accepted, records who declined and why, and tells the team
+   * the way acceptance does: a notification to the workspace's standing
+   * recipient and an activity on the proposal. A linked deal is left where it
+   * is (a rep decides whether a "no" loses it). Only a proposal that is out
+   * with the client can be declined, and of two clicks one lands.
+   */
+  declineByToken: publicProcedure
+    .input(z.object({
+      token: z.string().min(1).max(128),
+      signerName: z.string().trim().max(200).optional(),
+      reason: z.string().trim().max(2000).optional(),
+    }))
+    .mutation(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "DB unavailable" });
+      const [proposal] = await db.select().from(proposals).where(eq(proposals.shareToken, input.token)).limit(1);
+      if (!proposal || !servedOnPortal(proposal.status)) throw new TRPCError({ code: "NOT_FOUND", message: PORTAL_UNAVAILABLE });
+      if (proposal.status === "not_accepted") return { ok: true, alreadyDeclined: true };
+      const claim = await db
+        .update(proposals)
+        .set({ status: "not_accepted" })
+        .where(and(eq(proposals.id, proposal.id), inArray(proposals.status, ACCEPTABLE_STATUSES)));
+      if (Number((claim as any)?.[0]?.affectedRows ?? 0) !== 1) {
+        const [now] = await db.select({ status: proposals.status }).from(proposals).where(eq(proposals.id, proposal.id)).limit(1);
+        if (now?.status === "not_accepted") return { ok: true, alreadyDeclined: true };
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This proposal can no longer be declined here. Contact the team that sent it." });
+      }
+      const who = (input.signerName || "").trim() || proposal.clientName || "The client";
+      const reason = (input.reason || "").trim();
+      await logProposalActivity(db, {
+        workspaceId: proposal.workspaceId,
+        proposalId: proposal.id,
+        subject: `Declined by ${who} on the client portal`.slice(0, 240),
+        body: reason ? `Reason given: ${reason}` : "No reason given.",
+      });
+      const ownerUserId = await workspaceNotifyUserId(proposal.workspaceId);
+      if (ownerUserId) {
+        await db.insert(notifications).values({
+          workspaceId: proposal.workspaceId,
+          userId: ownerUserId,
+          kind: "system",
+          title: `Proposal declined: ${proposal.title}`.slice(0, 240),
+          body: `${who} declined the proposal on the client portal.${reason ? ` Reason: ${reason.slice(0, 500)}` : ""}`,
+          relatedType: "proposal",
+          relatedId: proposal.id,
+        });
+      }
+      return { ok: true, alreadyDeclined: false };
+    }),
   // ── Proposal revision history ─────────────────────────────────────────────
   /**
    * Restore a past revision back into the live section content.

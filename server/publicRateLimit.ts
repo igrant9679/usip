@@ -69,6 +69,9 @@ const PUBLIC_WRITE_PROCEDURES = [
   "proposals.acceptByToken",
   "proposals.submitFeedback",
   "proposals.requestExtension",
+  // The two Decline buttons (G70): each notifies the team and closes a record.
+  "proposals.declineByToken",
+  "meetingPicks.decline",
   // The link sent to a new sign-in email (G32): token-gated, but public.
   "profile.confirmEmailChange",
   // The landing page's view beacon (L12): a counter a script could spin.

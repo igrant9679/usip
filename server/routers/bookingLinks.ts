@@ -30,7 +30,7 @@ import { hostedPageChatSlug } from "../services/hostedChat";
 import {
   DEFAULT_HORIZON_DAYS, DEFAULT_WORK_DAYS, formatInZone, generateSlots, isValidTimezone,
 } from "@shared/availability";
-import { slugify } from "@shared/slugify";
+import { unguessableSlug } from "@shared/slugify";
 import { isLiveMeetingStatus } from "@shared/meetingStatus";
 
 /**
@@ -464,10 +464,11 @@ export const bookingLinksRouter = router({
       .where(and(eq(bookingLinks.workspaceId, ctx.workspace.id), eq(bookingLinks.userId, ctx.user.id)));
     if (existing) return existing;
 
-    // Lazily provision a stable, unique slug from the rep's name + id.
+    // Lazily provision a stable, unique slug: the rep's name and a random
+    // suffix (G70). It was name + user id, which anyone could walk; links
+    // made that way keep their slug and keep working.
     const [u] = await db.select({ name: users.name }).from(users).where(eq(users.id, ctx.user.id));
-    const base = slugify(u?.name || `rep-${ctx.user.id}`) || `rep-${ctx.user.id}`;
-    const slug = `${base}-${ctx.user.id}`.slice(0, 80);
+    const slug = unguessableSlug(u?.name, `rep-${ctx.user.id}`);
     await db.insert(bookingLinks).values({
       workspaceId: ctx.workspace.id,
       userId: ctx.user.id,

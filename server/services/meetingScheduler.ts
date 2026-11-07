@@ -944,7 +944,33 @@ async function emailProposal(
 
 /* ── the prospect's pick (/m/:token) ──────────────────────────────────── */
 
-export type PickState = "open" | "confirmed" | "expired" | "closed";
+export type PickState = "open" | "confirmed" | "expired" | "closed" | "declined" | "link_expired";
+
+/**
+ * How long a /m link works, counted from when the proposal was emailed
+ * (audit 2026-10-20, G70: the tokens never expired, so a forwarded or leaked
+ * proposal email opened the meeting's page for good). Thirty days is well past
+ * the fourteen-day window the offered times come from; after it the page says
+ * the link has expired and nothing on it can be used.
+ */
+export const PICK_LINK_TTL_DAYS = 30;
+
+/** `meetings.disposition` for a proposal the prospect turned down on its page. */
+export const DECLINED_BY_PROSPECT = "declined_by_prospect";
+
+/** Days the meeting autopilot leaves someone alone after they press Decline. */
+export const DECLINE_QUIET_DAYS = 90;
+
+/** Whether a proposal's /m link is past its life. No send date means none was emailed: not expired. */
+export function pickLinkExpired(
+  m: { proposalSentAt?: Date | string | null; createdAt?: Date | string | null },
+  nowMs = Date.now(),
+): boolean {
+  const from = m.proposalSentAt ?? m.createdAt;
+  if (!from) return false;
+  const ms = new Date(from).getTime();
+  return Number.isFinite(ms) && nowMs - ms > PICK_LINK_TTL_DAYS * 86_400_000;
+}
 
 export interface ProposalPickView {
   title: string;
@@ -997,11 +1023,20 @@ export async function proposalForPick(token: string, nowMs = Date.now()): Promis
   const timezone = await getWorkspaceTimezone(m.workspaceId);
   const [owner] = m.ownerUserId ? await db.select({ name: users.name }).from(users).where(eq(users.id, m.ownerUserId)).limit(1) : [];
   const [ws] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, m.workspaceId)).limit(1);
+  // An expired link shows who it was from and nothing else: no times, no
+  // booked time, no meeting link (G70).
+  if (pickLinkExpired(m, nowMs)) {
+    return {
+      title: m.title, ownerName: owner?.name || "Your host", company: ws?.name ?? "", durationMin: m.durationMin ?? 30,
+      timezone, state: "link_expired", times: [], scheduledAt: null, meetingUrl: null,
+    };
+  }
   const times = Array.isArray(m.proposedTimes) ? (m.proposedTimes as string[]) : [];
   const confirmed = (m.status === "scheduled" || m.status === "rescheduled") && !!m.scheduledAt;
   const open = m.status === "invited" && !m.scheduledAt;
+  const declined = m.status === "cancelled" && m.disposition === DECLINED_BY_PROSPECT;
   const free = open ? await freeOfferedTimes(m, timezone, nowMs) : new Set<string>();
-  const state: PickState = confirmed ? "confirmed" : !open ? "closed" : times.some((t) => Date.parse(t) > nowMs) ? "open" : "expired";
+  const state: PickState = confirmed ? "confirmed" : declined ? "declined" : !open ? "closed" : times.some((t) => Date.parse(t) > nowMs) ? "open" : "expired";
   return {
     title: m.title,
     ownerName: owner?.name || "Your host",
@@ -1017,7 +1052,7 @@ export async function proposalForPick(token: string, nowMs = Date.now()): Promis
 
 export type PickResult =
   | { ok: true; scheduledAt: string; meetingUrl: string | null; already?: boolean }
-  | { ok: false; reason: "not_found" | "not_offered" | "time_passed" | "time_taken" | "closed" | "booking_failed" };
+  | { ok: false; reason: "not_found" | "not_offered" | "time_passed" | "time_taken" | "closed" | "booking_failed" | "link_expired" };
 
 /**
  * The prospect confirms one of the emailed times: checked again (taken, or a
@@ -1029,6 +1064,7 @@ export type PickResult =
 export async function confirmProposalPick(token: string, timeIso: string, nowMs = Date.now()): Promise<PickResult> {
   const m = await meetingByToken(token);
   if (!m) return { ok: false, reason: "not_found" };
+  if (pickLinkExpired(m, nowMs)) return { ok: false, reason: "link_expired" };
   const db = await getDb();
   if (!db) return { ok: false, reason: "booking_failed" };
   const want = Date.parse(timeIso);
@@ -1089,6 +1125,68 @@ export async function confirmProposalPick(token: string, timeIso: string, nowMs 
     }
   }
   return { ok: true, scheduledAt: new Date(want).toISOString(), meetingUrl: after?.meetingUrl ?? null };
+}
+
+export type DeclineResult =
+  | { ok: true; already?: boolean }
+  | { ok: false; reason: "not_found" | "closed" | "link_expired" | "failed" };
+
+/**
+ * The prospect turns the proposal down from its page (audit 2026-10-20, G70:
+ * the page offered Confirm and nothing else, so "no" could only be a reply or
+ * silence). Recorded and told to the owner the way a confirmation is: the
+ * proposal closes as cancelled with disposition DECLINED_BY_PROSPECT and the
+ * attendee's answer set to declined, the owner gets a notification, and the
+ * record's timeline an activity. Only an open proposal can be declined; a
+ * confirmed meeting is changed by replying to its invite, as before. Nothing
+ * is sent to the prospect, and the autopilot leaves them alone for
+ * DECLINE_QUIET_DAYS.
+ */
+export async function declineProposalPick(token: string, note?: string | null, nowMs = Date.now()): Promise<DeclineResult> {
+  const m = await meetingByToken(token);
+  if (!m) return { ok: false, reason: "not_found" };
+  if (pickLinkExpired(m, nowMs)) return { ok: false, reason: "link_expired" };
+  if (m.status === "cancelled" && m.disposition === DECLINED_BY_PROSPECT) return { ok: true, already: true };
+  if (m.status !== "invited" || m.scheduledAt) return { ok: false, reason: "closed" };
+  const db = await getDb();
+  if (!db) return { ok: false, reason: "failed" };
+  const now = new Date(nowMs);
+  // One answer wins: the update names the open state it closes.
+  const claimed = await db.update(meetings).set({
+    status: "cancelled", disposition: DECLINED_BY_PROSPECT, attendeeResponse: "declined", attendeeRespondedAt: now,
+  } as never).where(and(
+    eq(meetings.id, m.id), eq(meetings.workspaceId, m.workspaceId), eq(meetings.status, "invited"), isNull(meetings.scheduledAt),
+  ));
+  if (affectedRows(claimed) !== 1) return { ok: false, reason: "closed" };
+  const who = m.contactName || m.contactEmail || "The prospect";
+  const said = String(note ?? "").trim().slice(0, 500);
+  const saidLine = said ? ` Their note: "${said}"` : "";
+  if (m.ownerUserId) {
+    try {
+      await db.insert(notifications).values({
+        workspaceId: m.workspaceId,
+        userId: m.ownerUserId,
+        kind: "system",
+        title: `Meeting declined: ${who}`.slice(0, 240),
+        body: `${who} declined "${m.title}" from the emailed times.${saidLine}`,
+      } as never);
+    } catch (e) {
+      console.error("[MeetingScheduler] decline notification failed:", e instanceof Error ? e.message : e);
+    }
+  }
+  if (m.relatedType && m.relatedId) {
+    try {
+      await db.insert(activities).values({
+        workspaceId: m.workspaceId, type: "meeting", relatedType: m.relatedType, relatedId: m.relatedId,
+        subject: `Meeting declined: ${m.title}`.slice(0, 240),
+        body: `${who} declined the emailed times.${saidLine}`,
+        actorUserId: null, occurredAt: now,
+      } as never);
+    } catch (e) {
+      console.error("[MeetingScheduler] decline activity failed:", e instanceof Error ? e.message : e);
+    }
+  }
+  return { ok: true };
 }
 
 /**
@@ -1202,6 +1300,22 @@ async function meetingCandidatePool(
       inArray(meetings.status, ACTIVE_MEETING_STATUSES),
     )) : [];
   const busyEmails = new Set<string>(liveByEmail.map((r: any) => String(r.contactEmail ?? "").trim().toLowerCase()));
+  // And anyone who pressed Decline on a proposal page lately (G70): their
+  // proposal is closed, so the checks above read them as free, and the next
+  // run would have offered times again to someone who just said no.
+  const declinedSince = new Date(Date.now() - DECLINE_QUIET_DAYS * 86_400_000);
+  const declined = await db.select({ relatedType: meetings.relatedType, relatedId: meetings.relatedId, contactEmail: meetings.contactEmail })
+    .from(meetings)
+    .where(and(
+      eq(meetings.workspaceId, workspaceId),
+      eq(meetings.disposition, DECLINED_BY_PROSPECT),
+      gte(meetings.updatedAt, declinedSince),
+    ));
+  for (const r of declined as any[]) {
+    if (r.relatedType === "prospect" && r.relatedId) busy.add(r.relatedId);
+    const e = String(r.contactEmail ?? "").trim().toLowerCase();
+    if (e) busyEmails.add(e);
+  }
   return { candidates, busy, busyEmails, emailOf };
 }
 

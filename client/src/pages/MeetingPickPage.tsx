@@ -12,8 +12,12 @@ import { useMemo, useState } from "react";
 import { useRoute, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { CalendarCheck, CheckCircle2, Clock, Loader2, Video } from "lucide-react";
 import { usePageTitle } from "@/lib/usePageTitle";
+
+/** Mirrors PICK_LINK_TTL_DAYS in server/services/meetingScheduler.ts, for the expired page's wording. */
+const PICK_LINK_DAYS = 30;
 
 export default function MeetingPickPage() {
   const [, params] = useRoute("/m/:token");
@@ -26,6 +30,14 @@ export default function MeetingPickPage() {
     meta: { silentError: true },
   });
   const [error, setError] = useState<string | null>(null);
+  // The other answer (G70): closes the proposal and tells the host; books nothing.
+  const decline = trpc.meetingPicks.decline.useMutation({
+    onSuccess: () => { setError(null); setDeclining(false); void view.refetch(); },
+    onError: (e) => { setError(e.message); void view.refetch(); },
+    meta: { silentError: true },
+  });
+  const [declining, setDeclining] = useState(false);
+  const [declineNote, setDeclineNote] = useState("");
 
   const times = view.data?.times ?? [];
   usePageTitle(view.data?.title ?? "Pick a time");
@@ -70,6 +82,16 @@ export default function MeetingPickPage() {
                 <Button variant="outline" size="sm" className="gap-1.5"><Video className="size-4" /> Meeting link</Button>
               </a>
             )}
+          </div>
+        ) : d.state === "declined" ? (
+          <div className="text-center py-12">
+            <div className="text-sm font-medium">You've declined this invitation</div>
+            <p className="text-xs text-muted-foreground mt-1">{d.ownerName} has been told. Reply to their email if you change your mind.</p>
+          </div>
+        ) : d.state === "link_expired" ? (
+          <div className="text-center py-12">
+            <div className="text-sm font-medium">This link has expired</div>
+            <p className="text-xs text-muted-foreground mt-1">Links to pick a time work for {PICK_LINK_DAYS} days. Reply to {d.ownerName}'s email to find a time.</p>
           </div>
         ) : d.state === "expired" ? (
           <div className="text-center py-12">
@@ -121,7 +143,26 @@ export default function MeetingPickPage() {
             ) : (
               <p className="text-[12.5px] text-muted-foreground">None of these times are available any more. Reply to {d.ownerName}'s email to find another.</p>
             )}
-            <p className="text-[11.5px] text-muted-foreground text-center">Confirming sends you a calendar invite. None of these work? Just reply to the email.</p>
+            <p className="text-[11.5px] text-muted-foreground text-center">Confirming sends you a calendar invite. None of these work? Reply to the email, or decline below.</p>
+            {!declining ? (
+              <div className="text-center">
+                <Button variant="ghost" size="sm" className="text-muted-foreground" disabled={confirm.isPending || decline.isPending} onClick={() => setDeclining(true)}>
+                  Decline this invitation
+                </Button>
+              </div>
+            ) : (
+              <div className="rounded-lg border p-3 space-y-2">
+                <label htmlFor="m-decline-note" className="text-[12.5px] font-medium">Decline the invitation{d.ownerName ? ` from ${d.ownerName}` : ""}?</label>
+                <Textarea id="m-decline-note" rows={2} maxLength={500} value={declineNote} onChange={(e) => setDeclineNote(e.target.value)} placeholder="Optional: a note for them" />
+                <div className="flex gap-2 justify-end">
+                  <Button variant="outline" size="sm" disabled={decline.isPending} onClick={() => setDeclining(false)}>Keep it open</Button>
+                  <Button variant="destructive" size="sm" disabled={decline.isPending} onClick={() => decline.mutate({ token, note: declineNote.trim() || undefined })}>
+                    {decline.isPending ? <Loader2 className="size-4 animate-spin mr-1.5" /> : null}
+                    Decline
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

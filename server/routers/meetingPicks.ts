@@ -4,14 +4,16 @@
  *
  * `get` only reads (a mail scanner opening every link books nothing);
  * `confirm` is the page's button, a POST, and is the only thing that puts
- * the meeting on the owner's calendar. The token is 32 random bytes and is
- * the whole credential: it reaches one meeting and says nothing about the
- * workspace beyond its name and the host's.
+ * the meeting on the owner's calendar. `decline` is the other button (G70):
+ * it closes the proposal and tells the owner, and books or sends nothing. The
+ * token is 32 random bytes and is the whole credential: it reaches one meeting
+ * and says nothing about the workspace beyond its name and the host's. It
+ * stops working PICK_LINK_TTL_DAYS after the proposal was emailed.
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { publicProcedure, router } from "../_core/trpc";
-import { confirmProposalPick, proposalForPick } from "../services/meetingScheduler";
+import { confirmProposalPick, declineProposalPick, proposalForPick } from "../services/meetingScheduler";
 
 const token = z.string().min(16).max(64);
 
@@ -22,6 +24,8 @@ const MESSAGES: Record<string, string> = {
   time_taken: "That time was just taken. Please pick another.",
   closed: "This invitation has already been answered.",
   booking_failed: "We couldn't confirm that just now. Please try again in a moment, or reply to the email.",
+  link_expired: "This link has expired. Reply to the email to find a time.",
+  failed: "We couldn't record that just now. Please try again in a moment, or reply to the email.",
 };
 
 export const meetingPicksRouter = router({
@@ -38,6 +42,17 @@ export const meetingPicksRouter = router({
       if (!res.ok) {
         const code = res.reason === "not_found" ? "NOT_FOUND" : res.reason === "booking_failed" ? "INTERNAL_SERVER_ERROR" : "CONFLICT";
         throw new TRPCError({ code, message: MESSAGES[res.reason] ?? MESSAGES.booking_failed });
+      }
+      return res;
+    }),
+
+  decline: publicProcedure
+    .input(z.object({ token, note: z.string().trim().max(500).optional() }))
+    .mutation(async ({ input }) => {
+      const res = await declineProposalPick(input.token, input.note ?? null);
+      if (!res.ok) {
+        const code = res.reason === "not_found" ? "NOT_FOUND" : res.reason === "failed" ? "INTERNAL_SERVER_ERROR" : "CONFLICT";
+        throw new TRPCError({ code, message: MESSAGES[res.reason] ?? MESSAGES.failed });
       }
       return res;
     }),

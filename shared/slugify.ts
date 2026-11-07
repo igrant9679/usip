@@ -34,3 +34,30 @@ export function slugify(s: string, max = SLUG_MAX): string {
     // leave a dangling hyphen for the caller's suffix to double up against.
     .replace(/^-+|-+$/g, "");
 }
+
+/**
+ * Letters and digits a person can read back without confusing them (no 0/o,
+ * 1/l), 32 of them, so each character is exactly five random bits.
+ */
+const TOKEN_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789";
+
+/** `len` random characters from TOKEN_ALPHABET, from the platform's CSPRNG. */
+export function randomSlugToken(len = 10): string {
+  const bytes = new Uint8Array(len);
+  globalThis.crypto.getRandomValues(bytes);
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) out += TOKEN_ALPHABET[bytes[i]! & 31];
+  return out;
+}
+
+/**
+ * A public slug nobody can guess from a name (audit 2026-10-20, G70): the
+ * readable name, then ten random characters (50 bits). Booking links were
+ * `name-<userId>`, so anyone who knew a rep's name could walk the user ids and
+ * find every live booking page. Only NEW links get this shape: an existing
+ * slug is never rewritten, because it is already in signatures and emails.
+ */
+export function unguessableSlug(name: string | null | undefined, fallback: string): string {
+  const base = slugify(name ?? "") || fallback;
+  return `${base}-${randomSlugToken()}`.slice(0, 80);
+}
