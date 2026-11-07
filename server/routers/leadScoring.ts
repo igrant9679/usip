@@ -671,6 +671,9 @@ export const leadScoringRouter = router({
     const { job, existing } = await enqueueJob({
       workspaceId: ctx.workspace.id, userId: ctx.user.id, kind: RECOMPUTE_JOB, payload: {}, total: Number(n ?? 0), oneAtATime: true,
     });
+    // The job's finish writes the audit row (G49: no automatic one now).
+    const { noteAuditRecorded } = await import("../_core/requestContext");
+    noteAuditRecorded();
     return { jobId: job.id, total: job.total, existing };
   }),
 

@@ -40,6 +40,7 @@ import {
   aiPipelineJobs,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { assertRowInWorkspace } from "../services/foreignIds";
 import { wonStageKeys } from "../_core/stageSemantics";
 import { closedIn, closeMonthKey, currentRanges, instantMonthKey, loadMetricDeals, openTotals } from "../services/dealMetrics";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
@@ -735,6 +736,9 @@ export const mailboxAiRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // A mailbox of this workspace (audit 2026-10-20, X1.1), checked before
+      // any AI is spent.
+      await assertRowInWorkspace(db, "sending account", input.accountId, ctx.workspace.id);
 
       const prompt = `You are an email triage AI for a sales rep. Classify this email thread. Return JSON only.
 
@@ -790,6 +794,7 @@ Return: { "label": "urgent|follow_up|fyi|no_action", "confidence": <50-99>, "rat
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertRowInWorkspace(db, "sending account", input.accountId, ctx.workspace.id);
 
       const threadList = input.threads.map((t, i) =>
         `${i + 1}. From: ${t.fromName ?? t.fromEmail} | Subject: ${t.subject} | Preview: ${t.snippet.slice(0, 150)}`

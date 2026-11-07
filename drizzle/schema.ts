@@ -67,6 +67,18 @@ export const users = mysqlTable("users", {
    * could be replayed for that whole window.
    */
   mfaLastStep: int("mfa_last_step"),
+  /**
+   * Email verification for self-registered accounts (migration 0312, audit
+   * 2026-10-20, F1). `emailVerifyTokenHash` is the SHA-256 of the link's
+   * token, set when a stranger registers and cleared when the link is opened,
+   * an invitation is accepted or a password reset is completed (each proves
+   * the mailbox). An account is waiting on verification only while it has a
+   * token hash and no `emailVerifiedAt`: every account from before this, and
+   * every invitee, SCIM or OAuth row, counts as verified.
+   */
+  emailVerifiedAt: timestamp("email_verified_at"),
+  emailVerifyTokenHash: varchar("email_verify_token_hash", { length: 64 }),
+  emailVerifyExpiresAt: timestamp("email_verify_expires_at"),
 });
 export type User = typeof users.$inferSelect;
 
@@ -86,6 +98,26 @@ export const revokedSessions = mysqlTable(
   (t) => ({ byExpiry: index("ix_rs_expires").on(t.expiresAt) }),
 );
 export type InsertUser = typeof users.$inferInsert;
+
+/**
+ * One-time 2FA recovery codes (migration 0310, audit 2026-10-20, G15). A
+ * lost phone used to mean an admin reset or a database ticket. Ten per
+ * account, made at TOTP setup and on demand (making a new set deletes the
+ * old one), stored as salted SHA-256 hashes, shown once. `usedAt` is what
+ * spends a code: the sign-in sets it with a conditional UPDATE, so one code
+ * cannot sign in twice, even from two requests at once.
+ */
+export const mfaBackupCodes = mysqlTable(
+  "mfa_backup_codes",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("userId").notNull(),
+    codeHash: varchar("codeHash", { length: 64 }).notNull(),
+    usedAt: timestamp("usedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byUser: index("ix_mbc_user").on(t.userId) }),
+);
 
 export const workspaces = mysqlTable("workspaces", {
   id: int("id").autoincrement().primaryKey(),
@@ -2388,10 +2420,21 @@ export const loginHistory = mysqlTable(
     /** success | failed | expired_invite */
     outcome: mysqlEnum("outcome", ["success", "failed", "expired_invite"]).default("success").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
+    /**
+     * The session a successful sign-in started (migration 0311, audit
+     * 2026-10-20, F3): its token id, expiry and the account's session version
+     * when minted. The active-sessions list is the rows whose session is
+     * still alive: not expired, same version as the account, jti not revoked.
+     * NULL on failures and on rows from before this shipped.
+     */
+    sessionJti: varchar("sessionJti", { length: 32 }),
+    sessionExpiresAt: timestamp("sessionExpiresAt"),
+    sessionVersion: int("sessionVersion"),
   },
   (t) => ({
     byUser: index("ix_lh_user").on(t.userId),
     byWs: index("ix_lh_ws").on(t.workspaceId),
+    byJti: index("ix_lh_jti").on(t.sessionJti),
   }),
 );
 export type LoginHistory = typeof loginHistory.$inferSelect;

@@ -1803,6 +1803,11 @@ export const prospectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // A campaign named here is this workspace's (audit 2026-10-20, X1.1).
+      if (input?.campaignId != null) {
+        const { requireInWorkspace } = await import("../../services/foreignIds");
+        await requireInWorkspace(db, areCampaigns, input.campaignId, ctx.workspace.id, "Campaign");
+      }
       const rows = await db
         .select({
           id: prospectIntelligence.id,

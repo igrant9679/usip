@@ -55,7 +55,7 @@ export default function Audit() {
 
   return (
     <Shell title="Audit log">
-      <PageHeader title="Audit log" description="Changes to records, members and settings, with before-and-after values where they were recorded. Not every action writes an entry yet, so treat a gap as unrecorded, not as nothing happened. Workspace admins only." pageKey="audit" icon={<ClipboardList className="size-5" />} />
+      <PageHeader title="Audit log" description="Every change made in the app is recorded: who, when, and what it touched. Where the action records its own entry you also get before-and-after values; otherwise the entry names the action and the records it named. Marking things read, layouts and tour progress are not recorded. Workspace admins only." pageKey="audit" icon={<ClipboardList className="size-5" />} />
       <div className="p-4 md:p-5 space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           {/* Entity type filter */}
@@ -140,7 +140,12 @@ export default function Audit() {
                     <StatusPill tone={a.action === "create" ? "success" : a.action === "delete" ? "danger" : "info"}>
                       {a.action}
                     </StatusPill>
-                    <span className="font-mono text-xs">{a.entityType}#{a.entityId}</span>
+                    {/* An automatic entry (G49) names the procedure; it may have no single record id. */}
+                    <span className="font-mono text-xs">
+                      {(a.after as any)?.auto === true && typeof (a.after as any)?.procedure === "string"
+                        ? `${(a.after as any).procedure}${a.entityId != null ? ` #${a.entityId}` : ""}`
+                        : `${a.entityType}#${a.entityId}`}
+                    </span>
                     <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
                       {a.actorUserId && (
                         <button

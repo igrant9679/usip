@@ -187,7 +187,11 @@ describe("only failed sign-ins count against the limit (tracker 16)", () => {
     expect(limiter).toContain("skipSuccessfulRequests: true");
     expect(limiter).toContain("res.statusCode < 400 || res.locals.mfaCodePrompt === true");
     const route = src.slice(src.indexOf('"/api/auth/password-login"'), src.indexOf('"/api/auth/register"'));
-    const prompt = route.slice(route.indexOf("if (!totpCode) {"), route.indexOf("// A code works ONCE"));
+    // 2026-11-07 (G15): the prompt condition now also waits for a backup code
+    // (`!totpCode && !backupCode`); what it pins is unchanged.
+    const promptAt = route.indexOf("if (!totpCode && !backupCode) {");
+    expect(promptAt).toBeGreaterThan(-1);
+    const prompt = route.slice(promptAt, route.indexOf("// A code works ONCE"));
     expect(prompt).toContain("res.locals.mfaCodePrompt = true;");
     // Set only on the prompt: a wrong or spent code must still count.
     expect(route.split("mfaCodePrompt = true").length - 1).toBe(1);

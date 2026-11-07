@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
+import { assertOwnerInWorkspace, requireInWorkspace } from "../services/foreignIds";
 import { getDb } from "../db";
 import { mindmaps, mindmapNodes, mindmapEdges, tasks, activities, notifications } from "../../drizzle/schema";
 import { router } from "../_core/trpc";
@@ -162,6 +163,19 @@ const mindmapsRouter = router({
         });
       }
 
+      /**
+       * A node links only to this workspace's task or note (audit 2026-10-20,
+       * X1.1): any (type, id) was stored. A link that is not one is dropped,
+       * not refused, so a map whose task was since deleted still saves.
+       */
+      const idsOf = (type: string) => input.nodes.filter((n) => n.linkedEntityType === type && n.linkedEntityId != null).map((n) => n.linkedEntityId as number);
+      const taskIds = idsOf("task");
+      const noteIds = idsOf("note");
+      const liveTasks = new Set(taskIds.length ? (await db.select({ id: tasks.id }).from(tasks).where(and(eq(tasks.workspaceId, wsId), inArray(tasks.id, taskIds)))).map((r) => r.id) : []);
+      const liveNotes = new Set(noteIds.length ? (await db.select({ id: activities.id }).from(activities).where(and(eq(activities.workspaceId, wsId), inArray(activities.id, noteIds)))).map((r) => r.id) : []);
+      const linkKept = (n: { linkedEntityType?: string; linkedEntityId?: number }) =>
+        n.linkedEntityId != null && ((n.linkedEntityType === "task" && liveTasks.has(n.linkedEntityId)) || (n.linkedEntityType === "note" && liveNotes.has(n.linkedEntityId)));
+
       // Replace every node and edge in one transaction: the old code deleted
       // first and inserted after with none, so a failed insert left the map
       // empty (G22). A failure now leaves the map as it was.
@@ -187,8 +201,8 @@ const mindmapsRouter = router({
               posY: Math.round(n.posY),
               color: n.color ?? null,
               parentId: n.parentId ?? null,
-              linkedEntityType: n.linkedEntityType ?? null,
-              linkedEntityId: n.linkedEntityId ?? null,
+              linkedEntityType: linkKept(n) ? n.linkedEntityType! : null,
+              linkedEntityId: linkKept(n) ? n.linkedEntityId! : null,
             }))
           );
         }
@@ -235,6 +249,9 @@ const mindmapsRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
       const wsId = ctx.workspace.id;
+      // This workspace's map, and an owner who works here (X1.1).
+      await requireInWorkspace(db, mindmaps, input.mindmapId, wsId, "Mindmap");
+      await assertOwnerInWorkspace(wsId, input.ownerUserId);
 
       // Create the task
       const [result] = await db.insert(tasks).values({
@@ -293,6 +310,7 @@ const mindmapsRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
       const wsId = ctx.workspace.id;
+      await requireInWorkspace(db, mindmaps, input.mindmapId, wsId, "Mindmap");
 
       // Store as an activity note linked to the mindmap
       const [result] = await db.insert(activities).values({

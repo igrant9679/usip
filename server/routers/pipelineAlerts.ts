@@ -472,6 +472,9 @@ export const pipelineAlertsRouter = router({
        * nobody: it never appeared in the deal's activity feed, which is the
        * only place anyone would look for it.
        */
+      // ...and on a deal of this workspace (audit 2026-10-20, X1.1).
+      const { assertRowInWorkspace } = await import("../services/foreignIds");
+      await assertRowInWorkspace(db, "deal", input.opportunityId, ctx.workspace.id);
       await db.insert(activities).values({
         workspaceId: ctx.workspace.id,
         relatedType: "opportunity",

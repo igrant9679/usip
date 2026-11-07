@@ -46,6 +46,7 @@ import {
   workspaceProcedure,
 } from "../_core/workspace";
 import { assertOutboundNotPaused } from "../services/outboundPause";
+import { assertRowInWorkspace } from "../services/foreignIds";
 import { acceptanceRecord, PORTAL_UNAVAILABLE, portalMilestone, portalSection, portalView, proposalShareEmailHtml, servedOnPortal } from "../services/proposalPortal";
 import { clientIpOf } from "../_core/clientIp";
 
@@ -447,6 +448,11 @@ export const proposalsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database unavailable" });
       await getProposalOrThrow(db, input.id, ctx.workspace.id);
+      // The contact and company it links to are this workspace's (audit
+      // 2026-10-20, X1.1): create checked them (proposalLinks), update stored
+      // whatever ids it was sent. Null clears a link, as before.
+      await assertRowInWorkspace(db, "contact", input.contactId, ctx.workspace.id);
+      await assertRowInWorkspace(db, "account", input.accountId, ctx.workspace.id);
       const { id, rfpDeadline, completionDate, budget, expiresAt, skipAutoExtend, ...rest } = input;
       const patch: Record<string, unknown> = { ...rest };
       if (rfpDeadline !== undefined) patch.rfpDeadline = rfpDeadline ? new Date(rfpDeadline) : null;

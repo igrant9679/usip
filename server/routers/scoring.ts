@@ -31,7 +31,15 @@ import { scoreMapForObjects, priorityMapForObjects } from "../services/scoring/s
 import { installDefaultModels } from "../services/scoring/defaults";
 import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../db";
-import { priorityScoreResults, scoreResults } from "../../drizzle/schema";
+import { priorityScoreResults, scoreModels, scoreResults } from "../../drizzle/schema";
+import { assertInWorkspace } from "../services/foreignIds";
+
+/** A score model named by an input must be this workspace's (audit 2026-10-20, X1.1). */
+async function modelHere(workspaceId: number, modelId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  await assertInWorkspace(db, scoreModels, modelId, workspaceId, "score model");
+}
 
 // One rank map — _core/workspace.ts.
 function requireRole(role: string, min: "manager" | "admin") {
@@ -172,6 +180,7 @@ export const scoringRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       requireRole(ctx.member.role, "manager");
+      await modelHere(ctx.workspace.id, input.modelId);
       const groupId = await createCriteriaGroup({ workspaceId: ctx.workspace.id, scoreModelId: input.modelId, name: input.name, maxPoints: input.maxPoints, description: input.description, weight: input.weight, categoryKey: input.categoryKey, orderIndex: input.orderIndex });
       return { groupId };
     }),
@@ -327,6 +336,7 @@ export const scoringRouter = router({
     .input(z.object({ modelId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       requireRole(ctx.member.role, "manager");
+      await modelHere(ctx.workspace.id, input.modelId);
       const jobId = await queueRecalculation(ctx.workspace.id, "model", input.modelId);
       return { jobId };
     }),

@@ -10,6 +10,7 @@ import { getDb } from "../db";
 import { protectedProcedure } from "./trpc";
 import { mergeRequestContext } from "./requestContext";
 import { mfaGateExemptPath, securityPolicyFor } from "./securityPolicy";
+import { autoAuditSkipped, writeAutoAudit } from "./autoAudit";
 import { MFA_REQUIRED_ERR_MSG, WORKSPACE_UNAVAILABLE_ERR_MSG } from "@shared/const";
 import { isAdminRole, rankOf, ROLE_RANK } from "@shared/roleRank";
 
@@ -252,7 +253,7 @@ export async function workspaceDoorRefusal(
  * `workspaceProcedure` is the workhorse. Every CRUD and read operation
  * uses it so that `ctx.workspace` and `ctx.member` are always present.
  */
-export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next, path }) => {
+export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next, path, type, getRawInput }) => {
   const headerVal = ctx.req.headers["x-workspace-id"];
   const headerStr = Array.isArray(headerVal) ? headerVal[0] : headerVal;
   const { workspace, member } = await resolveWorkspace(ctx.user.id, headerStr);
@@ -296,10 +297,25 @@ export const workspaceProcedure = protectedProcedure.use(async ({ ctx, next, pat
    * ceiling prefers the userId anyway — but it makes the store's contents
    * depend on middleware order, which is how the next reader gets it wrong.
    */
-  return mergeRequestContext(
-    { workspaceId: workspace.id, userId: ctx.user.id },
+  /**
+   * Every mutation leaves an audit entry (audit 2026-10-20, G49). A
+   * procedure that calls recordAudit flips `auditMark` and keeps its own,
+   * richer entry; one that does not gets the automatic entry after it
+   * SUCCEEDS: the procedure, the person and the ids in its input, never a
+   * string (_core/autoAudit.ts). A refused or failed call records nothing,
+   * and a short list of high-frequency, low-value mutations is skipped.
+   */
+  const auditMark = { recorded: false };
+  const result = await mergeRequestContext(
+    { workspaceId: workspace.id, userId: ctx.user.id, auditMark },
     () => next({ ctx: { ...ctx, workspace, member } })
   );
+  if (type === "mutation" && result.ok && !auditMark.recorded && !autoAuditSkipped(path)) {
+    let input: unknown;
+    try { input = await getRawInput(); } catch { input = undefined; }
+    await writeAutoAudit({ workspaceId: workspace.id, actorUserId: ctx.user.id, path, input });
+  }
+  return result;
 });
 
 
