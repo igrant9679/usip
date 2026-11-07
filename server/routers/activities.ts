@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { TASK_STATUSES } from "@shared/taskStatus";
-import { and, desc, eq, inArray, lte } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, ne, sql } from "drizzle-orm";
 import { seesAllTasks, taskDueState } from "@shared/taskRules";
 import { z } from "zod";
 import { activities, attachments, notifications, prospects, tasks, workspaceSettings } from "../../drizzle/schema";
@@ -65,21 +65,38 @@ export const tasksRouter = router({
       includeDrafts: z.boolean().optional(),
       /** The task pages' scope (R72): a rep's own tasks, a manager's everyone's. */
       mine: z.boolean().optional(),
+      /** A bound for a screen that shows a page, not everything (O41). Unset: every match, as before. */
+      limit: z.number().int().min(1).max(500).optional(),
+      /**
+       * "due" (the default, as before): by due date, undated first, as MySQL
+       * sorts NULL. "soonest": by due date with undated last, so a bounded
+       * queue starts with what is due. "recent": newest first (a Completed list).
+       */
+      order: z.enum(["due", "soonest", "recent"]).optional(),
     }).optional())
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return [];
       await wakeSnoozedTasks(db, ctx.workspace.id);
-      let rows = await db.select().from(tasks).where(eq(tasks.workspaceId, ctx.workspace.id)).orderBy(tasks.dueAt);
-      if (input?.ownerOnly) rows = rows.filter((t) => t.ownerUserId === ctx.user.id);
+      // Every filter in SQL (audit 2026-10-20, O41): this read every task in
+      // the workspace and filtered in JS, so the Calls page fetched them all
+      // to keep the call tasks.
+      const conds = [eq(tasks.workspaceId, ctx.workspace.id)];
+      if (input?.ownerOnly) conds.push(eq(tasks.ownerUserId, ctx.user.id));
       const scopeOwner = taskScopeOwner(ctx, input?.mine);
-      if (scopeOwner !== null) rows = rows.filter((t) => t.ownerUserId === scopeOwner);
-      if (input?.status) rows = rows.filter((t) => t.status === input.status);
-      else if (!input?.includeDrafts) rows = rows.filter((t) => t.status !== "draft");
-      if (input?.type) rows = rows.filter((t) => t.type === input.type);
-      if (input?.source) rows = rows.filter((t) => t.source === input.source);
-      if (input?.relatedType && input?.relatedId) rows = rows.filter((t) => t.relatedType === input.relatedType && t.relatedId === input.relatedId);
-      return rows;
+      if (scopeOwner !== null) conds.push(eq(tasks.ownerUserId, scopeOwner));
+      if (input?.status) conds.push(eq(tasks.status, input.status));
+      else if (!input?.includeDrafts) conds.push(ne(tasks.status, "draft"));
+      if (input?.type) conds.push(eq(tasks.type, input.type));
+      if (input?.source) conds.push(eq(tasks.source, input.source));
+      if (input?.relatedType && input?.relatedId) {
+        conds.push(eq(tasks.relatedType, input.relatedType), eq(tasks.relatedId, input.relatedId));
+      }
+      const order = input?.order === "recent" ? [desc(tasks.updatedAt), desc(tasks.id)]
+        : input?.order === "soonest" ? [sql`${tasks.dueAt} is null`, asc(tasks.dueAt), asc(tasks.id)]
+        : [asc(tasks.dueAt), asc(tasks.id)];
+      const q = db.select().from(tasks).where(and(...conds)).orderBy(...order);
+      return input?.limit ? q.limit(input.limit) : q;
     }),
 
   create: repProcedure
@@ -338,14 +355,22 @@ export const tasksRouter = router({
     }),
 
   /** Queue stats for the Tasks page header. */
-  stats: workspaceProcedure.input(z.object({ mine: z.boolean().optional() }).optional()).query(async ({ ctx, input }) => {
+  stats: workspaceProcedure.input(z.object({
+    mine: z.boolean().optional(),
+    /** One kind of task (the Calls page counts call tasks, O41), filtered in SQL. */
+    type: z.enum(TASK_TYPES).optional(),
+  }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return { open: 0, dueToday: 0, overdue: 0, completed: 0, draftsPending: 0, snoozed: 0, aiOpen: 0 };
     await wakeSnoozedTasks(db, ctx.workspace.id);
-    let rows = await db.select({ status: tasks.status, dueAt: tasks.dueAt, source: tasks.source, ownerUserId: tasks.ownerUserId }).from(tasks).where(eq(tasks.workspaceId, ctx.workspace.id));
     // The same scope as the list under these cards (R72), so they count it.
     const scopeOwner = taskScopeOwner(ctx, input?.mine);
-    if (scopeOwner !== null) rows = rows.filter((r) => r.ownerUserId === scopeOwner);
+    const rows = await db.select({ status: tasks.status, dueAt: tasks.dueAt, source: tasks.source, ownerUserId: tasks.ownerUserId }).from(tasks)
+      .where(and(
+        eq(tasks.workspaceId, ctx.workspace.id),
+        scopeOwner !== null ? eq(tasks.ownerUserId, scopeOwner) : undefined,
+        input?.type ? eq(tasks.type, input.type) : undefined,
+      ));
     const now = Date.now();
     // "Today" as the WORKSPACE reads it. This was `setHours(23,59,59,999)` on a
     // bare Date — the container's day, i.e. UTC — so a task due at 8pm Eastern

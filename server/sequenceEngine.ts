@@ -1338,20 +1338,7 @@ export async function getEnrollmentStats(
 ): Promise<{ active: number; paused: number; finished: number; exited: number }> {
   const db = await getDb();
   if (!db) return { active: 0, paused: 0, finished: 0, exited: 0 };
-
-  const rows = await db
-    .select()
-    .from(enrollments)
-    .where(
-      and(
-        eq(enrollments.sequenceId, sequenceId),
-        eq(enrollments.workspaceId, workspaceId)
-      )
-    );
-
-  const stats = { active: 0, paused: 0, finished: 0, exited: 0 };
-  for (const row of rows) {
-    stats[row.status as keyof typeof stats]++;
-  }
-  return stats;
+  // Counted in SQL (audit 2026-10-20, O41): this read every enrolment row.
+  const { enrollmentStatusCounts } = await import("./services/sequenceAnalytics");
+  return enrollmentStatusCounts(db, workspaceId, sequenceId);
 }
