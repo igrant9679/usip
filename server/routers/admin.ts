@@ -2036,10 +2036,10 @@ export const teamRouter = router({
   /**
    * Clear a member's authenticator enrolment so they can re-enrol.
    *
-   * There is no backup-code table in the schema, so a lost or wiped phone is
-   * otherwise unrecoverable without a database ticket — and with workspace
-   * `enforce2fa` switched on that member is locked out of the product
-   * entirely, not merely inconvenienced at sign-in. Same rank rule as the
+   * For someone who lost their phone AND their backup codes (G15, 2026-11-07:
+   * the codes now exist, but a lost phone often means lost codes too). With
+   * workspace `enforce2fa` switched on that member is otherwise locked out of
+   * the product entirely, not merely inconvenienced at sign-in. Same rank rule as the
    * rest of the Team page: you can only act on someone below you, or be a
    * super admin, because clearing a peer's second factor is a way past it.
    */
@@ -2063,6 +2063,10 @@ export const teamRouter = router({
         .update(users)
         .set({ mfaTotpSecret: null, mfaTotpEnabledAt: null })
         .where(eq(users.id, member.userId));
+      // The backup codes go with the authenticator (G15): they would otherwise
+      // still sign in past a second factor that is being reset.
+      const { clearBackupCodes } = await import("../services/mfaBackupCodes");
+      await clearBackupCodes(db, member.userId);
       // Sessions minted under the old second factor end with it.
       await revokeAllSessions(db, member.userId);
       await recordAudit({
@@ -2075,6 +2079,40 @@ export const teamRouter = router({
       });
       return { ok: true };
     }),
+
+  /**
+   * Who turning on "Require 2FA" would block (audit 2026-10-20, U21): the
+   * active members without an authenticator, so Settings → Security can say
+   * "N members have no authenticator" before an admin switches it on. Counts
+   * exactly whom the gate stops (workspaceGateRefusal): accepted, not
+   * deactivated, and not super_admin, who is never blocked.
+   */
+  mfaCoverage: adminWsProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const rows = await db
+      .select({
+        name: users.name,
+        email: users.email,
+        role: workspaceMembers.role,
+        mfaEnabledAt: users.mfaTotpEnabledAt,
+      })
+      .from(workspaceMembers)
+      .innerJoin(users, eq(workspaceMembers.userId, users.id))
+      .where(and(
+        eq(workspaceMembers.workspaceId, ctx.workspace.id),
+        isNull(workspaceMembers.deactivatedAt),
+        isNull(workspaceMembers.inviteToken),
+      ));
+    const gated = rows.filter((r) => r.role !== "super_admin");
+    const without = gated.filter((r) => !r.mfaEnabledAt);
+    return {
+      gated: gated.length,
+      withoutAuthenticator: without.length,
+      // A short list to name names; the Team page has the rest (its 2FA column).
+      names: without.slice(0, 10).map((r) => r.name?.trim() || r.email || "A member"),
+    };
+  }),
 
   /** Return the calling member's notification prefs. */
   getNotifPrefs: workspaceProcedure.query(async ({ ctx }) => {

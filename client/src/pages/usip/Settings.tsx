@@ -5,7 +5,7 @@ import { todayLocal } from "@/lib/localDay";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Section, StatusPill, fmt$ } from "@/components/usip/Common";
+import { Section, StatusPill, confirmAction, fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell, StatCard, SubNav } from "@/components/usip/Shell";
 import { SpendSection } from "@/components/usip/SpendReport";
 import { Link, Redirect, useSearch } from "wouter";
@@ -788,6 +788,9 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
   const [timeout_, setTimeout_] = useState<number>(10080);
   const [ip, setIp] = useState<string>("");
   const [enforce2fa, setEnforce2fa] = useState<boolean>(false);
+  // Who "Require 2FA" would block (U21), read before it is turned on.
+  const coverage = trpc.team.mfaCoverage.useQuery(undefined, { enabled: canEdit });
+  const withoutMfa = Number(coverage.data?.withoutAuthenticator ?? 0);
 
   useEffect(() => {
     if (!settings) return;
@@ -795,6 +798,16 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
     setIp((Array.isArray(settings.ipAllowlist) ? settings.ipAllowlist : []).join("\n"));
     setEnforce2fa(Boolean(settings.enforce2fa));
   }, [settings]);
+
+  const doSave = () =>
+    save({
+      sessionTimeoutMin: Number(timeout_),
+      ipAllowlist: ip
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+      enforce2fa,
+    });
 
   return (
     <Section
@@ -804,16 +817,21 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
         canEdit ? (
           <Button
             size="sm"
-            onClick={() =>
-              save({
-                sessionTimeoutMin: Number(timeout_),
-                ipAllowlist: ip
-                  .split(/\r?\n/)
-                  .map((s) => s.trim())
-                  .filter(Boolean),
-                enforce2fa,
-              })
-            }
+            onClick={() => {
+              // Turning the requirement ON while some members have no
+              // authenticator blocks them at once (audit 2026-10-20, U21):
+              // say who, and ask, before it lands.
+              if (enforce2fa && !settings?.enforce2fa && withoutMfa > 0) {
+                confirmAction({
+                  title: `Block ${withoutMfa === 1 ? "1 member" : `${withoutMfa} members`} until they set up 2FA?`,
+                  description: `${withoutMfa === 1 ? "1 member has" : `${withoutMfa} members have`} no authenticator app${coverage.data?.names?.length ? ` (${coverage.data.names.join(", ")}${withoutMfa > coverage.data.names.length ? ", …" : ""})` : ""}. They will be stopped at the door until they connect one. Super admins are never blocked.`,
+                  confirmLabel: "Require 2FA",
+                  destructive: false,
+                }, doSave);
+                return;
+              }
+              doSave();
+            }}
           >
             Save
           </Button>
@@ -873,6 +891,20 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
             connect one; a super admin is never blocked. You must connect your own first
             (Profile → MFA) — saving this without it is refused.
           </div>
+          {canEdit && coverage.data && (
+            <div
+              data-testid="mfa-coverage"
+              className={
+                withoutMfa > 0
+                  ? "rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400"
+                  : "text-xs text-emerald-700 dark:text-emerald-400"
+              }
+            >
+              {withoutMfa > 0
+                ? `${withoutMfa === 1 ? "1 member has" : `${withoutMfa} members have`} no authenticator${settings?.enforce2fa ? " and cannot get in until they set one up" : ": turning this on blocks them until they set one up"}. The Team page's 2FA column shows who.`
+                : "Every member who would be asked already has an authenticator."}
+            </div>
+          )}
         </div>
         <div className="space-y-1 md:col-span-2 opacity-60">
           <Label>IP allowlist (one per line, CIDR supported)</Label>

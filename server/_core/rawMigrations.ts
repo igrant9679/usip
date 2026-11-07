@@ -5011,6 +5011,15 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // One-time 2FA recovery codes (audit 2026-10-20, G15). New table, additive:
+  // no account has codes until it sets up 2FA or asks for a set.
+  {
+    name: "0310_mfa_backup_codes.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `mfa_backup_codes` (`id` int AUTO_INCREMENT PRIMARY KEY, `userId` int NOT NULL, `codeHash` varchar(64) NOT NULL, `usedAt` timestamp NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY `ix_mbc_user` (`userId`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

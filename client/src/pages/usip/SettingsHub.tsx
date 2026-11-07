@@ -86,7 +86,9 @@ import {
   FileText,
   Zap,
   AlertTriangle,
+  ListChecks,
 } from "lucide-react";
+import { BackupCodesPanel } from "@/components/usip/settings/BackupCodesPanel";
 import { isAdminRole } from "@shared/roleRank";
 import { tablistProps, tabProps } from "@/lib/tabs";
 
@@ -683,8 +685,10 @@ function MfaMethodRow({
 function MfaTab({ me, onEditPassword: _onEditPassword }: { me: any; onEditPassword: () => void }) {
   const status = trpc.profile.getMfaStatus.useQuery();
   const totpConnected = !!status.data?.totp.connected;
+  const backupLeft = Number(status.data?.backupCodes?.left ?? 0);
   const [totpOpen, setTotpOpen] = useState(false);
   const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
   const [smsOpen, setSmsOpen] = useState(false);
 
   return (
@@ -703,6 +707,28 @@ function MfaTab({ me, onEditPassword: _onEditPassword }: { me: any; onEditPasswo
                 actionLabel={totpConnected ? "Disconnect" : "Set up"}
                 onAction={() => (totpConnected ? setDisconnectOpen(true) : setTotpOpen(true))}
               />
+              {totpConnected && (
+                /* Backup codes (audit 2026-10-20, G15): how many are left, and a
+                   new set on demand, which replaces the old one. */
+                <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border/70 bg-card px-4 py-3.5 shadow-sm" data-testid="backup-codes-row">
+                  <ListChecks className="size-4 shrink-0 text-foreground/70" />
+                  <span className="text-[14px] font-medium">Backup codes</span>
+                  <span
+                    className={cn(
+                      "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium",
+                      backupLeft > 2
+                        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+                        : "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300",
+                    )}
+                  >
+                    {backupLeft === 1 ? "1 code left" : `${backupLeft} codes left`}
+                  </span>
+                  <div className="flex-1" />
+                  <Button variant="outline" size="sm" onClick={() => setBackupOpen(true)}>
+                    {backupLeft > 0 ? "Make new codes" : "Make backup codes"}
+                  </Button>
+                </div>
+              )}
               <MfaMethodRow
                 icon={Smartphone}
                 name="SMS authentication"
@@ -717,6 +743,7 @@ function MfaTab({ me, onEditPassword: _onEditPassword }: { me: any; onEditPasswo
 
       <TotpSetupDialog open={totpOpen} onClose={() => setTotpOpen(false)} />
       <TotpDisconnectDialog open={disconnectOpen} onClose={() => setDisconnectOpen(false)} hasPassword={!!me?.hasPassword} />
+      <BackupCodesDialog open={backupOpen} onClose={() => setBackupOpen(false)} hasPassword={!!me?.hasPassword} />
 
       {/* SMS — honest unavailability, no fake flow */}
       <Dialog open={smsOpen} onOpenChange={(o) => !o && setSmsOpen(false)}>
@@ -794,6 +821,83 @@ function TotpDisconnectDialog({ open, onClose, hasPassword }: { open: boolean; o
             {disable.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} Disconnect
           </Button>
         </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * A new set of backup codes (G15): confirmed with a current authenticator code
+ * or the password, then shown once. The old set stops working.
+ */
+function BackupCodesDialog({ open, onClose, hasPassword }: { open: boolean; onClose: () => void; hasPassword: boolean }) {
+  const utils = trpc.useUtils();
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const close = () => { setCode(""); setPassword(""); setCodes(null); onClose(); };
+  const regen = trpc.profile.regenerateBackupCodes.useMutation({
+    onSuccess: (r: any) => {
+      setCodes(r?.backupCodes ?? []);
+      utils.profile.getMfaStatus.invalidate();
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Could not make new backup codes"),
+  });
+  const valid = code.replace(/\s+/g, "").length === 6 || (hasPassword && password.length > 0);
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && close()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{codes ? "Your new backup codes" : "Make new backup codes"}</DialogTitle>
+          <DialogDescription>
+            {codes
+              ? "Your old codes no longer work."
+              : `A new set replaces your old codes, which stop working. Confirm with a current authenticator code${hasPassword ? " or your password" : ""}.`}
+          </DialogDescription>
+        </DialogHeader>
+        {codes ? (
+          <div className="space-y-4">
+            <BackupCodesPanel codes={codes} />
+            <div className="flex justify-end pt-1">
+              <Button size="sm" onClick={close}>I've saved them</Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label>Authenticator code</Label>
+                <Input aria-label="Authenticator code"
+                  inputMode="numeric"
+                  placeholder="6-digit code"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/[^\d\s]/g, ""))}
+                  className="tracking-widest"
+                />
+              </div>
+              {hasPassword && (
+                <div className="space-y-1.5">
+                  <Label>… or your password</Label>
+                  <Input aria-label="… or your password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="outline" size="sm" onClick={close}>Cancel</Button>
+              <Button
+                size="sm"
+                disabled={!valid || regen.isPending}
+                onClick={() => regen.mutate({
+                  code: code.replace(/\s+/g, "") || undefined,
+                  currentPassword: password || undefined,
+                })}
+                className="gap-1.5"
+              >
+                {regen.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} Make new codes
+              </Button>
+            </div>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

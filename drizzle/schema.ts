@@ -87,6 +87,26 @@ export const revokedSessions = mysqlTable(
 );
 export type InsertUser = typeof users.$inferInsert;
 
+/**
+ * One-time 2FA recovery codes (migration 0310, audit 2026-10-20, G15). A
+ * lost phone used to mean an admin reset or a database ticket. Ten per
+ * account, made at TOTP setup and on demand (making a new set deletes the
+ * old one), stored as salted SHA-256 hashes, shown once. `usedAt` is what
+ * spends a code: the sign-in sets it with a conditional UPDATE, so one code
+ * cannot sign in twice, even from two requests at once.
+ */
+export const mfaBackupCodes = mysqlTable(
+  "mfa_backup_codes",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("userId").notNull(),
+    codeHash: varchar("codeHash", { length: 64 }).notNull(),
+    usedAt: timestamp("usedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ byUser: index("ix_mbc_user").on(t.userId) }),
+);
+
 export const workspaces = mysqlTable("workspaces", {
   id: int("id").autoincrement().primaryKey(),
   name: varchar("name", { length: 120 }).notNull(),

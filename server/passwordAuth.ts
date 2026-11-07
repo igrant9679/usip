@@ -29,6 +29,7 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { clientIpOf, rateLimitKey } from "./_core/clientIp";
 import { useTotpStep } from "./_core/sessionRevocation";
 import { clearFailures, isLockedOut, noteFailure, SIGN_IN_LOCKED, signInKey } from "./services/accountLockout";
+import { backupCodesLeft, looksLikeBackupCode, useBackupCode } from "./services/mfaBackupCodes";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { escapeHtml } from "@shared/escapeHtml";
 import { safeReturnPath } from "@shared/returnPath";
@@ -97,6 +98,24 @@ async function sessionLifetimeForUser(db: LiveDb, userId: number): Promise<numbe
     console.warn("[passwordAuth] session lifetime lookup failed:", (e as Error).message);
     return ONE_YEAR_MS;
   }
+}
+
+/** A failed second factor in the account's sign-in history. Best effort. */
+async function recordFailedSignIn(db: LiveDb, req: Request, userId: number): Promise<void> {
+  try {
+    const [member] = await db
+      .select({ workspaceId: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.userId, userId))
+      .limit(1);
+    await db.insert(loginHistory).values({
+      userId,
+      workspaceId: member?.workspaceId ?? null,
+      ipAddress: ipKey(req).slice(0, 64),
+      userAgent: (req.headers["user-agent"] ?? "").slice(0, 500),
+      outcome: "failed",
+    });
+  } catch (_) { /* non-fatal */ }
 }
 
 const passwordLoginLimiter = rateLimit({
@@ -507,42 +526,50 @@ export function registerPasswordAuthRoutes(app: Express) {
       //    second factor for every password login. The password has already
       //    been verified above, so telling the client MFA is required leaks
       //    nothing an attacker could use without the password.
+      let backupCodesRemaining: number | null = null;
       if (user.mfaTotpEnabledAt && user.mfaTotpSecret) {
         const totpCode = typeof (req.body ?? {}).totpCode === "string" ? (req.body.totpCode as string) : "";
-        if (!totpCode) {
+        /**
+         * A one-time backup code stands in for the authenticator code (audit
+         * 2026-10-20, G15): sent as `backupCode`, or typed into the code box,
+         * which six digits never look like.
+         */
+        const backupCode = typeof (req.body ?? {}).backupCode === "string" && (req.body.backupCode as string).trim()
+          ? (req.body.backupCode as string)
+          : looksLikeBackupCode(totpCode) ? totpCode : "";
+        if (!totpCode && !backupCode) {
           // The right password, asking for the code: not a failed attempt, so
           // the limiter doesn't count it (see passwordLoginLimiter).
           res.locals.mfaCodePrompt = true;
           res.status(401).json({ error: "Enter the 6-digit code from your authenticator app.", mfaRequired: true });
           return;
         }
-        // A code works ONCE (audit 2026-10-20): its time-step is spent on
-        // success, so the same six digits cannot be replayed for the rest of
-        // their ~90-second window.
-        const { matchTotpStep, totpRefusal } = await import("./services/totp");
-        const step = matchTotpStep(user.mfaTotpSecret, totpCode);
-        if (step === null || !(await useTotpStep(db, user.id, step))) {
-          // A wrong or spent code is a failure against the account too (G9):
-          // whoever holds the password gets ten guesses at the code, not ten
-          // per address.
-          noteFailure(lockKey);
-          try {
-            const [member] = await db
-              .select({ workspaceId: workspaceMembers.workspaceId })
-              .from(workspaceMembers)
-              .where(eq(workspaceMembers.userId, user.id))
-              .limit(1);
-            await db.insert(loginHistory).values({
-              userId: user.id,
-              workspaceId: member?.workspaceId ?? null,
-              ipAddress: ipKey(req).slice(0, 64),
-              userAgent: (req.headers["user-agent"] ?? "").slice(0, 500),
-              outcome: "failed",
-            });
-          } catch (_) { /* non-fatal */ }
-          // A spent step and a wrong code are different answers (item 16).
-          res.status(401).json({ error: totpRefusal(step), mfaRequired: true });
-          return;
+        if (backupCode) {
+          if (!(await useBackupCode(db, user.id, backupCode))) {
+            // Counted against the account like a wrong authenticator code
+            // (G9), so backup codes are not a second, unlimited door.
+            noteFailure(lockKey);
+            await recordFailedSignIn(db, req, user.id);
+            res.status(401).json({ error: "That backup code isn't right, or it has already been used. Each code works once.", mfaRequired: true });
+            return;
+          }
+          backupCodesRemaining = await backupCodesLeft(db, user.id).catch(() => null);
+        } else {
+          // A code works ONCE (audit 2026-10-20): its time-step is spent on
+          // success, so the same six digits cannot be replayed for the rest of
+          // their ~90-second window.
+          const { matchTotpStep, totpRefusal } = await import("./services/totp");
+          const step = matchTotpStep(user.mfaTotpSecret, totpCode);
+          if (step === null || !(await useTotpStep(db, user.id, step))) {
+            // A wrong or spent code is a failure against the account too (G9):
+            // whoever holds the password gets ten guesses at the code, not ten
+            // per address.
+            noteFailure(lockKey);
+            await recordFailedSignIn(db, req, user.id);
+            // A spent step and a wrong code are different answers (item 16).
+            res.status(401).json({ error: totpRefusal(step), mfaRequired: true });
+            return;
+          }
         }
       }
 
@@ -597,7 +624,9 @@ export function registerPasswordAuthRoutes(app: Express) {
       const redirect = safeReturnPath(returnPath);
       const acceptsJson = (req.headers.accept ?? "").includes("application/json");
       if (acceptsJson) {
-        res.json({ ok: true, redirect });
+        // After a backup code, how many are left, so the sign-in page can say
+        // so while there is still time to make a new set (G15).
+        res.json(backupCodesRemaining === null ? { ok: true, redirect } : { ok: true, redirect, backupCodesLeft: backupCodesRemaining });
       } else {
         res.redirect(302, redirect);
       }

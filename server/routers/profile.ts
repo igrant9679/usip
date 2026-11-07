@@ -19,6 +19,25 @@ import { reissueSessionCookie } from "../passwordAuth";
 import { escapeHtml } from "@shared/escapeHtml";
 import { isLockedOut, noteFailure, profileKey } from "../services/accountLockout";
 import { makeEmailChangeToken, readEmailChangeToken } from "../services/emailChangeToken";
+import { BACKUP_CODE_COUNT, backupCodesLeft, clearBackupCodes, replaceBackupCodes } from "../services/mfaBackupCodes";
+
+/**
+ * The setup key as a QR code to scan (audit 2026-10-20, U21): the dialog had
+ * only the 32-character key to type and an "Open in authenticator app" link
+ * that works only on the phone itself. Drawn here, as an SVG data URL, so the
+ * browser bundle carries no QR library. Null if drawing fails: the key and
+ * the link still work, and setup must not fail over a picture.
+ */
+async function totpQrDataUrl(otpauthUrl: string): Promise<string | null> {
+  try {
+    const QRCode = (await import("qrcode")).default;
+    const svg = await QRCode.toString(otpauthUrl, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
+    return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
+  } catch (e) {
+    console.warn("[profile] TOTP QR code failed:", (e as Error).message);
+    return null;
+  }
+}
 
 /** Email-change requests per user per lock window; each sends two emails (G32). */
 const MAX_EMAIL_CHANGE_REQUESTS = 5;
@@ -225,6 +244,9 @@ export const profileRouter = router({
       .limit(1);
     return {
       totp: { connected: !!u?.enabledAt, enabledAt: u?.enabledAt ?? null },
+      // "N codes left" on the security screen (G15). Zero for an account that
+      // set up 2FA before backup codes existed: it can make a set from there.
+      backupCodes: { left: u?.enabledAt ? await backupCodesLeft(db, ctx.user.id) : 0, total: BACKUP_CODE_COUNT },
       sms: { connected: false, available: false },
     };
   }),
@@ -260,7 +282,8 @@ export const profileRouter = router({
     if (secret !== u?.pending) {
       await db.update(users).set({ mfaTotpSecret: secret, mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
     }
-    return { secret, otpauthUrl: totpAuthUrl(secret, u?.email ?? "account"), reused: secret === u?.pending };
+    const otpauthUrl = totpAuthUrl(secret, u?.email ?? "account");
+    return { secret, otpauthUrl, qrDataUrl: await totpQrDataUrl(otpauthUrl), reused: secret === u?.pending };
   }),
 
   /** Confirm enrollment with a live code from the authenticator app. */
@@ -282,11 +305,16 @@ export const profileRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: totpRefusal(step) });
       }
       await db.update(users).set({ mfaTotpEnabledAt: new Date() }).where(eq(users.id, ctx.user.id));
+      // The recovery codes are made with the authenticator (G15) and returned
+      // this once; the dialog shows them before it closes. This procedure is
+      // one of the four the 2FA requirement exempts, so a member forced into
+      // setup gets them too.
+      const backupCodes = await replaceBackupCodes(db, ctx.user.id);
       // Turning on 2FA ends every other session (audit 2026-10-20): a session
       // minted before it was never asked for a code. This browser stays in.
       await revokeAllSessions(db, ctx.user.id);
       await reissueSessionCookie(db, ctx.req, ctx.res, ctx.user.id);
-      return { ok: true };
+      return { ok: true, backupCodes };
     }),
 
   /** Disconnect TOTP. Requires a live code OR the account password. */
@@ -306,6 +334,7 @@ export const profileRouter = router({
       if (!u?.enabledAt || !u.secret) {
         // Nothing active — also clear any dangling unconfirmed secret.
         await db.update(users).set({ mfaTotpSecret: null, mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
+        await clearBackupCodes(db, ctx.user.id);
         return { ok: true };
       }
       // Turning 2FA off is a credential check like the others (G32).
@@ -319,9 +348,44 @@ export const profileRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Confirm with a current authenticator code or your password." });
       }
       await db.update(users).set({ mfaTotpSecret: null, mfaTotpEnabledAt: null }).where(eq(users.id, ctx.user.id));
+      // Codes that would sign in past a second factor the account no longer has.
+      await clearBackupCodes(db, ctx.user.id);
       await revokeAllSessions(db, ctx.user.id);
       await reissueSessionCookie(db, ctx.req, ctx.res, ctx.user.id);
       return { ok: true };
+    }),
+
+  /**
+   * A new set of backup codes (G15), replacing the old set: the old codes
+   * stop working at once. A credential check like turning 2FA off, with the
+   * same lock, because the codes it returns are a way past the second factor.
+   */
+  regenerateBackupCodes: workspaceProcedure
+    .input(z.object({
+      code: z.string().optional(),
+      currentPassword: z.string().optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [u] = await db
+        .select({ secret: users.mfaTotpSecret, enabledAt: users.mfaTotpEnabledAt, passwordHash: users.passwordHash })
+        .from(users)
+        .where(eq(users.id, ctx.user.id))
+        .limit(1);
+      if (!u?.enabledAt || !u.secret) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Set up an authenticator app first; backup codes come with it." });
+      }
+      assertNotLocked(ctx.user.id);
+      const { matchTotpStep } = await import("../services/totp");
+      const step = input.code ? matchTotpStep(u.secret, input.code) : null;
+      const codeOk = step !== null && (await useTotpStep(db, ctx.user.id, step));
+      const pwOk = !!input.currentPassword && !!u.passwordHash && (await bcrypt.compare(input.currentPassword, u.passwordHash));
+      if (!codeOk && !pwOk) {
+        noteFailure(profileKey(ctx.user.id));
+        throw new TRPCError({ code: "FORBIDDEN", message: "Confirm with a current authenticator code or your password." });
+      }
+      return { backupCodes: await replaceBackupCodes(db, ctx.user.id) };
     }),
 
   /**
