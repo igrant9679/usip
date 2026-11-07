@@ -28,7 +28,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { appRouter } from "./routers";
-import { routeLeadOwner } from "./routers/leadScoring";
+import { previewRouting, routeLeadOwner } from "./routers/leadScoring";
 import { pickRoutingMatch, type RoutingRule } from "./leadScoring";
 import { routingConditionsMatch } from "@shared/leadRouting";
 import { SCORE_HISTORY_DAYS, pruneScoreHistory } from "./services/scoreHistoryRetention";
@@ -81,6 +81,20 @@ describe("capacity-aware routing (F43)", () => {
     // A closes a lead: under capacity again, A is next in the rotation.
     rows("leads").find((l) => l.id === 2).status = "unqualified";
     expect(await routeLeadOwner(WS, { score: 0 })).toBe(A);
+  });
+
+  // Merged with RESA 2026-11-07: Test a lead (F41) must honour the same cap,
+  // or the dry run names a rep the router would pass over.
+  it("Test a lead skips a rep at capacity, like the router, and moves no cursor", async () => {
+    rows("lead_routing_rules").push({ id: 1, workspaceId: WS, name: "R", priority: 10, enabled: true, conditions: { all: [] }, strategy: "round_robin", targetUserIds: [A, B], rrCursor: 0, matchCount: 0, capacityPerRep: 2 });
+    const lead = (id: number, owner: number, status: string) => rows("leads").push({ id, workspaceId: WS, ownerUserId: owner, status, firstName: "x", lastName: "y" });
+    lead(1, A, "new"); lead(2, A, "working");
+    const r = await previewRouting(WS, { score: 0 });
+    expect(r.pick).toEqual({ ruleId: 1, ownerUserId: B });
+    expect(rows("lead_routing_rules")[0]).toMatchObject({ rrCursor: 0, matchCount: 0 });
+    // A under capacity again: the dry run offers A, as the router would.
+    rows("leads").find((l) => l.id === 2).status = "unqualified";
+    expect((await previewRouting(WS, { score: 0 })).pick?.ownerUserId).toBe(A);
   });
 
   it("the rule editor saves a capacity, and an edit without one leaves it", async () => {

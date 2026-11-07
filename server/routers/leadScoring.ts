@@ -1176,9 +1176,15 @@ export async function previewRouting(workspaceId: number, input: RoutingPayload)
     strategy: r.strategy,
     targetUserIds: (((r.targetUserIds as number[] | null) ?? []).filter((u) => active.has(u))),
     rrCursor: r.rrCursor,
+    capacityPerRep: r.capacityPerRep ?? null,
   })).sort((x, y) => x.priority - y.priority || x.id - y.id);
+  // The rep capacity the router honours (F43), read the same way, so the dry
+  // run never offers a rep who is full (merged with RESB 2026-11-07).
+  const load = rules.some((r) => r.capacityPerRep != null && r.capacityPerRep > 0)
+    ? await openLeadsByOwner(db, workspaceId, Array.from(active))
+    : null;
   // The pick over every rule, exactly as the router makes it.
-  const pick = pickRoutingMatch(rules, payload, routingConditionsMatch, territoryOwner);
+  const pick = pickRoutingMatch(rules, payload, routingConditionsMatch, territoryOwner, load ? (uid) => load.get(uid) ?? 0 : undefined);
   let reached = true;
   const verdicts: RoutingRuleVerdict[] = rules.map((r) => {
     if (!reached) return { ruleId: r.id, name: r.name, verdict: "not_reached", ownerUserId: null };
