@@ -5011,6 +5011,26 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // A booking's own reschedule-or-cancel page (audit 2026-10-20, F47). Nullable
+  // and unset on every existing meeting: only new bookings get a token, and a
+  // UNIQUE index allows any number of NULLs.
+  {
+    name: "0380_meeting_manage_token.sql",
+    statements: [
+      "ALTER TABLE `meetings` ADD COLUMN `manageToken` varchar(64) NULL",
+      "CREATE UNIQUE INDEX `ux_meetings_manage_token` ON `meetings` (`manageToken`)",
+    ],
+  },
+
+  // Form views, for a per-form conversion rate (audit 2026-10-20, F47). Starts
+  // at 0 for every form: views were never counted before.
+  {
+    name: "0381_form_view_count.sql",
+    statements: [
+      "ALTER TABLE `forms` ADD COLUMN `viewCount` int NOT NULL DEFAULT 0",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

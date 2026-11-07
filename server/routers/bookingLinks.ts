@@ -26,6 +26,10 @@ import { isWorkspaceLive } from "../_core/workspaceArchive";
 import { activities, bookingLinks, calendarEvents, leads, meetings, notifications, users, type BookingLink } from "../../drizzle/schema";
 import { sendMeetingInvite } from "../services/meetingScheduler";
 import { liveCalendarBusy, overlapsAny } from "../services/calendarFreeBusy";
+import { deleteMeetingEvent, moveMeetingEvent } from "../services/meetingCalendarEvent";
+import { appBaseUrl } from "../appUrl";
+import { randomBytes } from "node:crypto";
+import { bookingIcsUid } from "@shared/ics";
 import { describeConfirmationFailure, sendBookingConfirmationEmail, type BookingConfirmationResult } from "../services/bookingConfirmationEmail";
 import { hostedPageChatSlug } from "../services/hostedChat";
 import {
@@ -329,6 +333,11 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
     }
   }
 
+  // The booking's own page (F47): reschedule or cancel without writing in.
+  // 32 random bytes; the token is the whole credential for that one meeting.
+  const manageToken = randomBytes(32).toString("hex");
+  const manageUrl = bookingManageUrl(manageToken);
+
   // Proposed meeting at the chosen time, then book it for real.
   const ins = await db.insert(meetings).values({
     workspaceId: link.workspaceId,
@@ -348,10 +357,16 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
      * own calendar sends to `opts.email`, an address the caller chose: a
      * stranger's text, mailed from the rep, to anyone. It goes on the card's
      * internal line instead, which only the workspace sees.
+     *
+     * The invite text is now our own fixed line with the booking's
+     * reschedule-or-cancel link (F47, 2026-11-07), so a booker whose
+     * confirmation is the provider's invite can change it too. Still nothing
+     * the booker typed.
      */
-    inviteMessage: null,
+    inviteMessage: bookingManageLine(manageUrl),
     aiReasoning: bookerNoteLine(opts.notes),
     source: opts.meetingSource ?? "inbound",
+    manageToken,
   } as never);
   const meetingId = Number((ins as any)[0]?.insertId ?? 0) || 0;
   if (!meetingId) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Could not create the meeting." });
@@ -405,6 +420,7 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
       contactName: opts.name,
       relatedType: leadId ? "lead" : null,
       relatedId: leadId,
+      manageUrl,
     });
   }
   const confirmationSent = confirmation?.ok === true;
@@ -455,7 +471,194 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
     }
   }
 
-  return { meetingId, leadId, calendarBooked: result.sent, confirmationSent, scheduledAt: start.toISOString() };
+  return { meetingId, leadId, calendarBooked: result.sent, confirmationSent, scheduledAt: start.toISOString(), manageUrl };
+}
+
+/* ── A booking's own page: reschedule or cancel (audit 2026-10-20, F47) ── */
+
+/**
+ * /m/b/:token — the page the confirmation and the invite link to. Under /m/
+ * on purpose: index.html already treats /m/<token> paths as credential pages
+ * (never sent to analytics, G45) and as public pages (system fonts, L14).
+ */
+export function bookingManageUrl(token: string, base: string = appBaseUrl()): string {
+  return `${base.replace(/\/+$/, "")}/m/b/${token}`;
+}
+
+/** The invite text of a self-booked meeting: our words and the link, nothing the booker typed. */
+export function bookingManageLine(url: string): string {
+  return `Need to change this? Reschedule or cancel: ${url}`;
+}
+
+export const BOOKING_MANAGE_UNAVAILABLE = "This booking link isn't valid any more.";
+export const BOOKING_MANAGE_CLOSED = "This meeting can no longer be changed here. Reply to the confirmation to reach the host.";
+
+type ManagedMeeting = typeof meetings.$inferSelect;
+
+async function meetingByManageToken(token: string): Promise<ManagedMeeting | null> {
+  const db = await getDb();
+  if (!db || !token) return null;
+  const [m] = await db.select().from(meetings).where(eq(meetings.manageToken, token)).limit(1);
+  return m ?? null;
+}
+
+/** The booking link the meeting was booked through: the host's own link. */
+async function linkForMeeting(m: ManagedMeeting): Promise<BookingLink | null> {
+  const db = await getDb();
+  if (!db || !m.ownerUserId) return null;
+  const [link] = await db.select().from(bookingLinks)
+    .where(and(eq(bookingLinks.workspaceId, m.workspaceId), eq(bookingLinks.userId, m.ownerUserId)));
+  return link ?? null;
+}
+
+function manageState(m: ManagedMeeting, nowMs: number): "open" | "cancelled" | "past" | "closed" {
+  if (m.status === "cancelled") return "cancelled";
+  if (!m.scheduledAt || new Date(m.scheduledAt).getTime() <= nowMs) return "past";
+  // A booker may change any meeting still ahead (the one live-status list).
+  return isLiveMeetingStatus(m.status as string) ? "open" : "closed";
+}
+
+/** Tell the host, on their notifications and the record's timeline. Never throws. */
+async function tellHost(m: ManagedMeeting, title: string, body: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  if (m.ownerUserId) {
+    try {
+      await db.insert(notifications).values({ workspaceId: m.workspaceId, userId: m.ownerUserId, kind: "system", title: title.slice(0, 240), body } as never);
+    } catch (e) { console.error("[bookingLinks] manage notification failed:", (e as Error).message); }
+  }
+  if (m.relatedType && m.relatedId) {
+    try {
+      await db.insert(activities).values({
+        workspaceId: m.workspaceId, type: "meeting", relatedType: m.relatedType, relatedId: m.relatedId,
+        subject: title.slice(0, 240), body, actorUserId: null,
+      } as never);
+    } catch (e) { console.error("[bookingLinks] manage activity failed:", (e as Error).message); }
+  }
+}
+
+/** What the booking's page shows. Null for a token that matches nothing. */
+export async function bookingForManage(token: string, nowMs = Date.now()) {
+  const m = await meetingByManageToken(token);
+  if (!m) return null;
+  const db = await getDb();
+  if (!db) return null;
+  const link = await linkForMeeting(m);
+  const [host] = m.ownerUserId ? await db.select({ name: users.name }).from(users).where(eq(users.id, m.ownerUserId)).catch(() => []) : [];
+  const state = manageState(m, nowMs);
+  // Times to move to: the host's open slots, read as the booking page reads them.
+  const canMove = state === "open" && !!link && link.active && (await isWorkspaceLive(m.workspaceId)) && (await isActiveMember(m.workspaceId, link.userId));
+  const slots = canMove ? await openSlotsForLink(link!, nowMs) : [];
+  return {
+    title: m.title,
+    hostName: host?.name || "your host",
+    durationMin: m.durationMin ?? 30,
+    timezone: link?.timezone ?? "UTC",
+    scheduledAt: m.scheduledAt ? new Date(m.scheduledAt).toISOString() : null,
+    state,
+    canReschedule: canMove,
+    slots,
+    meetingUrl: state === "open" ? m.meetingUrl ?? null : null,
+    /** Stable per meeting, for the page's calendar file. */
+    icsUid: bookingIcsUid(m.workspaceId, m.id),
+  };
+}
+
+/**
+ * The booker cancels (F47). The meeting is closed as cancelled, its calendar
+ * event deleted (the provider tells the attendee, as when a rep cancels), and
+ * the host told. Nothing else is sent. When the calendar refuses the delete,
+ * nothing changes and the booker is asked to try again.
+ */
+export async function cancelBookingByToken(token: string, reason?: string | null, nowMs = Date.now()): Promise<{ ok: true; already?: boolean }> {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const m = await meetingByManageToken(token);
+  if (!m) throw new TRPCError({ code: "NOT_FOUND", message: BOOKING_MANAGE_UNAVAILABLE });
+  const state = manageState(m, nowMs);
+  if (state === "cancelled") return { ok: true, already: true };
+  if (state !== "open") throw new TRPCError({ code: "CONFLICT", message: BOOKING_MANAGE_CLOSED });
+  const calendar = await deleteMeetingEvent(db, m.workspaceId, m);
+  if (calendar.kind === "failed") {
+    console.error(`[bookingLinks] cancel of meeting ${m.id}: calendar refused (${calendar.detail})`);
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "We couldn't cancel that just now. Please try again in a moment, or reply to the confirmation." });
+  }
+  const claimed = await db.update(meetings).set({ status: "cancelled", disposition: "cancelled_by_booker" } as never)
+    .where(and(eq(meetings.id, m.id), eq(meetings.workspaceId, m.workspaceId), ne(meetings.status, "cancelled")));
+  if (Number((claimed as any)?.[0]?.affectedRows ?? 0) !== 1) return { ok: true, already: true };
+  const who = m.contactName || m.contactEmail || "The booker";
+  const said = String(reason ?? "").trim().slice(0, 500);
+  const tz = (await linkForMeeting(m))?.timezone ?? "UTC";
+  await tellHost(m, `Meeting cancelled: ${who}`,
+    `${who} cancelled "${m.title}" (${formatInZone(new Date(m.scheduledAt!), tz)}) from their booking page.${said ? ` Their note: "${said}"` : ""}`);
+  return { ok: true };
+}
+
+/**
+ * The booker moves the meeting to another open time (F47). The new time must
+ * be one the host's booking page offers now, and free on their calendar read
+ * live, exactly as a new booking must. The calendar event moves (the provider
+ * updates the attendee), the reminder is re-armed for the new time, and the
+ * host is told. No email of ours is sent.
+ */
+export async function rescheduleBookingByToken(token: string, startAtIso: string, nowMs = Date.now()): Promise<{ ok: true; scheduledAt: string }> {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const m = await meetingByManageToken(token);
+  if (!m) throw new TRPCError({ code: "NOT_FOUND", message: BOOKING_MANAGE_UNAVAILABLE });
+  if (manageState(m, nowMs) !== "open") throw new TRPCError({ code: "CONFLICT", message: BOOKING_MANAGE_CLOSED });
+  const link = await linkForMeeting(m);
+  if (!link || !link.active || !(await isWorkspaceLive(m.workspaceId)) || !(await isActiveMember(m.workspaceId, link.userId))) {
+    throw new TRPCError({ code: "CONFLICT", message: BOOKING_MANAGE_CLOSED });
+  }
+  const start = new Date(startAtIso);
+  if (Number.isNaN(start.getTime()) || start.getTime() <= nowMs) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Please pick a valid future time." });
+  }
+  const iso = start.toISOString();
+  if (m.scheduledAt && new Date(m.scheduledAt).toISOString() === iso) return { ok: true, scheduledAt: iso };
+  // One rule for "open" (see bookSlotForLink): the page's own slot list,
+  // then the calendar read fresh for that slot.
+  const open = await openSlotsForLink(link, nowMs);
+  if (!open.includes(iso)) throw new TRPCError({ code: "CONFLICT", message: "That time is no longer available — please pick another slot." });
+  if (await slotBusyOnCalendar(link, start)) throw new TRPCError({ code: "CONFLICT", message: BOOKING_SLOT_BUSY });
+
+  const durationMin = m.durationMin ?? link.durationMin;
+  const calendar = await moveMeetingEvent(db, m.workspaceId, m, start);
+  if (calendar.kind === "failed") {
+    console.error(`[bookingLinks] reschedule of meeting ${m.id}: calendar refused (${calendar.detail})`);
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "We couldn't move that just now. Please try again in a moment, or reply to the confirmation." });
+  }
+  const from = m.scheduledAt ? new Date(m.scheduledAt) : null;
+  await db.update(meetings).set({ scheduledAt: start, status: "rescheduled", reminderSentAt: null } as never)
+    .where(and(eq(meetings.id, m.id), eq(meetings.workspaceId, m.workspaceId)));
+  // Someone else booked or moved onto this slot in the same moment: this
+  // move goes back to where it was and the booker picks again (the safe
+  // side: at worst both movers are asked to pick again, never both kept).
+  const clash = await db.select({ id: meetings.id, scheduledAt: meetings.scheduledAt, durationMin: meetings.durationMin, status: meetings.status })
+    .from(meetings)
+    .where(and(
+      eq(meetings.workspaceId, m.workspaceId),
+      eq(meetings.ownerUserId, link.userId),
+      gte(meetings.scheduledAt, new Date(start.getTime() - 24 * 3600000)),
+      lte(meetings.scheduledAt, new Date(start.getTime() + durationMin * 60000)),
+    ));
+  const overlapping = clash.some((o) => {
+    if (o.id === m.id || !o.scheduledAt || !isLiveMeetingStatus(o.status as string)) return false;
+    const s = new Date(o.scheduledAt).getTime();
+    return s < start.getTime() + durationMin * 60000 && start.getTime() < s + (o.durationMin ?? 30) * 60000;
+  });
+  if (overlapping) {
+    await db.update(meetings).set({ scheduledAt: from, status: m.status } as never)
+      .where(and(eq(meetings.id, m.id), eq(meetings.workspaceId, m.workspaceId)));
+    if (from && calendar.kind === "done") await moveMeetingEvent(db, m.workspaceId, { ...m, scheduledAt: start } as ManagedMeeting, from).catch(() => undefined);
+    throw new TRPCError({ code: "CONFLICT", message: "That time was just booked by someone else — please pick another slot." });
+  }
+  const who = m.contactName || m.contactEmail || "The booker";
+  const tz = link.timezone ?? "UTC";
+  await tellHost(m, `Meeting rescheduled: ${who}`,
+    `${who} moved "${m.title}"${from ? ` from ${formatInZone(from, tz)}` : ""} to ${formatInZone(start, tz)} from their booking page.${calendar.kind === "none" ? " It is not on your calendar: add the new time by hand." : ""}`);
+  return { ok: true, scheduledAt: iso };
 }
 
 /**
@@ -630,6 +833,29 @@ export const bookingLinksRouter = router({
         /** No invite went, and the booker was emailed a confirmation instead. */
         confirmationSent: booked.confirmationSent,
         ownerName: undefined as string | undefined,
+        /** The booking's own page, to reschedule or cancel (F47). */
+        manageUrl: booked.manageUrl,
+        /** The meeting's calendar-file UID, so the page's .ics matches the email's. */
+        icsUid: bookingIcsUid(link.workspaceId, booked.meetingId),
       };
     }),
+
+  /** PUBLIC: a booking's own page (/m/b/:token), F47. */
+  manageGet: publicProcedure
+    .input(z.object({ token: z.string().min(32).max(64) }))
+    .query(async ({ input }) => {
+      const view = await bookingForManage(input.token);
+      if (!view) throw new TRPCError({ code: "NOT_FOUND", message: BOOKING_MANAGE_UNAVAILABLE });
+      return view;
+    }),
+
+  /** PUBLIC: the booker cancels their meeting (F47). */
+  manageCancel: publicProcedure
+    .input(z.object({ token: z.string().min(32).max(64), reason: z.string().trim().max(500).optional() }))
+    .mutation(async ({ input }) => cancelBookingByToken(input.token, input.reason ?? null)),
+
+  /** PUBLIC: the booker moves their meeting to another open time (F47). */
+  manageReschedule: publicProcedure
+    .input(z.object({ token: z.string().min(32).max(64), startAt: z.string().datetime() }))
+    .mutation(async ({ input }) => rescheduleBookingByToken(input.token, input.startAt)),
 });

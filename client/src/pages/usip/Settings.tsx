@@ -991,6 +991,17 @@ const PROVIDER_META: Record<string, { name: string; hint: string; builtIn?: bool
     docsUrl: "https://app.sendgrid.com/settings/api_keys",
     configFields: [{ key: "apiKey", label: "API Key", type: "password" }],
   },
+  // F47: optional bot check on public forms and landing pages. Off until both
+  // keys are saved here (or set on the server); the secret is stored encrypted.
+  turnstile: {
+    name: "Cloudflare Turnstile",
+    hint: "Optional bot check on public forms and landing pages. Off until both keys are set; without them forms use the hidden-field and timing checks.",
+    docsUrl: "https://dash.cloudflare.com/?to=/:account/turnstile",
+    configFields: [
+      { key: "siteKey", label: "Site key" },
+      { key: "secretKey", label: "Secret key", type: "password" },
+    ],
+  },
   webhook: {
     name: "Custom Webhook",
     hint: "POST JSON events to an external URL on CRM triggers.",

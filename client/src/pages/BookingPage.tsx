@@ -13,7 +13,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { CalendarCheck, CheckCircle2, Clock, Loader2, ChevronLeft } from "lucide-react";
+import { CalendarCheck, CheckCircle2, Clock, Download, Loader2, ChevronLeft } from "lucide-react";
+import { downloadIcs } from "@/lib/icsDownload";
 import ChatLauncher from "@/components/ChatLauncher";
 import { usePageTitle } from "@/lib/usePageTitle";
 import { nextOpenAfter } from "@shared/availability";
@@ -34,6 +35,9 @@ export default function BookingPage() {
   const [calendarBooked, setCalendarBooked] = useState(false);
   // No invite went and a confirmation email did instead (tracker item 10).
   const [confirmationSent, setConfirmationSent] = useState(false);
+  // The booking's own page, to reschedule or cancel (F47).
+  const [manageUrl, setManageUrl] = useState<string | null>(null);
+  const [icsUid, setIcsUid] = useState<string | null>(null);
 
   const tz = useMemo(() => {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return "your local time"; }
@@ -66,7 +70,7 @@ export default function BookingPage() {
     const wanted = selected;
     setNextFree(null);
     book.mutate({ slug, startAt: wanted, name, email, notes: notes || undefined }, {
-      onSuccess: (r: any) => { setCalendarBooked(!!r?.calendarBooked); setConfirmationSent(!!r?.confirmationSent); setDone(true); },
+      onSuccess: (r: any) => { setCalendarBooked(!!r?.calendarBooked); setConfirmationSent(!!r?.confirmationSent); setManageUrl(typeof r?.manageUrl === "string" ? r.manageUrl : null); setIcsUid(typeof r?.icsUid === "string" ? r.icsUid : null); setDone(true); },
       onError: (err) => {
         if (err.data?.code !== "CONFLICT") return;
         void link.refetch().then((r) => {
@@ -104,6 +108,18 @@ export default function BookingPage() {
                   ? <>A confirmation email is on its way to {email}.</>
                   : <>We've noted your details, but no email could be sent to you — {link.data.ownerName} will be in touch to confirm.</>}
             </p>
+            {/* F47: save it, or change it, without writing in. */}
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              {selected && (
+                <Button variant="outline" size="sm" className="gap-1.5"
+                  onClick={() => downloadIcs({ uid: icsUid ?? `booking-${slug}-${selected}`, title: link.data!.title, startAt: new Date(selected), durationMin: link.data!.durationMin, description: `With ${link.data!.ownerName}.`, url: manageUrl })}>
+                  <Download className="size-4" /> Add to calendar (.ics)
+                </Button>
+              )}
+              {manageUrl && (
+                <a href={manageUrl} className="text-xs text-muted-foreground underline hover:text-foreground">Reschedule or cancel</a>
+              )}
+            </div>
           </div>
         ) : (
           <div className="space-y-5">

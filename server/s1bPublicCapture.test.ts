@@ -44,6 +44,7 @@ vi.mock("./emailDelivery", async (orig) => ({
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { appRouter } from "./routers";
 import { invalidateArchivedWorkspaceCache } from "./_core/workspaceArchive";
+import { formScope, issueSubmitToken, landingScope } from "./services/publicCaptureGuard";
 import {
   BOOKING_CAP_EMAIL, BOOKING_CAP_LINK, MAX_BOOKINGS_PER_EMAIL_PER_DAY, MAX_BOOKINGS_PER_LINK_PER_DAY, openSlotsForLink,
 } from "./routers/bookingLinks";
@@ -58,6 +59,12 @@ const rows = (t: string) => h.db.rowsOf(t) as any[];
 const WS = 2;
 const OTHER = 4;
 
+// Pages served ten seconds ago (F47, 2026-11-07): a submission now carries the
+// token its page was served with; these tests are about what happens after.
+const served = {
+  form: () => issueSubmitToken(formScope("pub80"), Date.now() - 10_000),
+  page: () => issueSubmitToken(landingScope("spring"), Date.now() - 10_000),
+};
 const anon = () => appRouter.createCaller({ user: null, req: { headers: {}, socket: { remoteAddress: "127.0.0.1" } }, res: {} } as unknown as TrpcContext);
 function admin(userId = 20) {
   const user = rows("users").find((u) => u.id === userId);
@@ -123,14 +130,14 @@ describe("G4: a public submission enrols only into its own workspace's sequence"
 
   it("a form saved naming another workspace's sequence creates the lead and enrols nobody", async () => {
     form(60);
-    await anon().forms.submit({ publicId: "pub80", data: { email: "vee@visitor.example" } });
+    await anon().forms.submit({ publicId: "pub80", data: { email: "vee@visitor.example" }, submitToken: served.form() });
     expect(rows("leads")).toHaveLength(1);
     expect(rows("enrollments")).toHaveLength(0);
   });
 
   it("a landing page the same", async () => {
     page(60);
-    await anon().landingPages.submit({ slug: "spring", data: { email: "vee@visitor.example" } });
+    await anon().landingPages.submit({ slug: "spring", data: { email: "vee@visitor.example" }, submitToken: served.page() });
     expect(rows("leads")).toHaveLength(1);
     expect(rows("enrollments")).toHaveLength(0);
   });
@@ -146,8 +153,8 @@ describe("G4: a public submission enrols only into its own workspace's sequence"
     form(50);
     page(50);
     agent(50);
-    await anon().forms.submit({ publicId: "pub80", data: { email: "a@visitor.example" } });
-    await anon().landingPages.submit({ slug: "spring", data: { email: "b@visitor.example" } });
+    await anon().forms.submit({ publicId: "pub80", data: { email: "a@visitor.example" }, submitToken: served.form() });
+    await anon().landingPages.submit({ slug: "spring", data: { email: "b@visitor.example" }, submitToken: served.page() });
     h.turn = turn({ extracted: { name: "C", email: "c@visitor.example", company: null, phone: null } });
     await anon().chatAgents.send({ slug: "help", message: "c@visitor.example" });
     expect(rows("enrollments").map((e) => [e.workspaceId, e.sequenceId])).toEqual([[WS, 50], [WS, 50], [WS, 50]]);
@@ -218,7 +225,11 @@ describe("G17: a public booking is not an invite relay", () => {
   it("the booker's note is kept for the rep and never becomes the invite text", async () => {
     await book("pat@x.example", 0, "Click https://phish.example to claim your prize");
     const m = rows("meetings")[0];
-    expect(m.inviteMessage).toBeNull();
+    // 2026-11-07 (F47): the invite text is now our own fixed line carrying the
+    // booking's reschedule-or-cancel link. What this pins is unchanged: none
+    // of the booker's words reach it.
+    expect(m.inviteMessage).toMatch(/^Need to change this\? Reschedule or cancel: https?:\/\/\S+\/m\/b\/[0-9a-f]{64}$/);
+    expect(m.inviteMessage).not.toContain("phish");
     expect(m.aiReasoning).toBe("Note from the booker: Click https://phish.example to claim your prize");
     // The calendar event's description is built from inviteMessage alone.
     const scheduler = read("server/services/meetingScheduler.ts");
@@ -256,7 +267,9 @@ describe("G17: a public booking is not an invite relay", () => {
       await anon().chatAgents.book({ token: "tok-70", startAt: (await slots())[0] });
       expect(rows("meetings")).toHaveLength(1);
       // The model's summary of what the visitor typed is visitor text too.
-      expect(rows("meetings")[0].inviteMessage).toBeNull();
+      // 2026-11-07 (F47): our fixed reschedule-or-cancel line, never the summary.
+      expect(rows("meetings")[0].inviteMessage).toMatch(/^Need to change this\? Reschedule or cancel: \S+$/);
+      expect(rows("meetings")[0].inviteMessage).not.toMatch(/pricing|instructions/i);
       rows("chat_sessions").length = 0;
       rows("meetings").length = 0;
       session({ qualified: false, score: 45, visitorEmail: "other@visitor.example" });
@@ -317,11 +330,11 @@ describe("G41: a public submission is read against the form's own fields", () =>
   });
 
   it("undeclared keys are dropped, so a POST can't add lead fields the form never asked for", async () => {
-    await anon().forms.submit({ publicId: "pub80", data: { name: "Vee Visitor", email: "vee@visitor.example", company: "Injected Inc", title: "CEO", admin: true } });
+    await anon().forms.submit({ publicId: "pub80", data: { name: "Vee Visitor", email: "vee@visitor.example", company: "Injected Inc", title: "CEO", admin: true }, submitToken: served.form() });
     expect(rows("form_submissions")[0].data).toEqual({ name: "Vee Visitor", email: "vee@visitor.example" });
     expect(rows("leads")[0]).toMatchObject({ email: "vee@visitor.example", company: null, title: null });
     // The landing page reads against its default fields (name, email, company).
-    await anon().landingPages.submit({ slug: "spring", data: { name: "Bo", email: "bo@visitor.example", company: "Bo Co", phone: "555" } });
+    await anon().landingPages.submit({ slug: "spring", data: { name: "Bo", email: "bo@visitor.example", company: "Bo Co", phone: "555" }, submitToken: served.page() });
     expect(rows("landing_page_submissions")[0].data).toEqual({ name: "Bo", email: "bo@visitor.example", company: "Bo Co" });
   });
 

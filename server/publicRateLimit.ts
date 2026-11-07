@@ -76,6 +76,10 @@ const PUBLIC_WRITE_PROCEDURES = [
   "profile.confirmEmailChange",
   // The landing page's view beacon (L12): a counter a script could spin.
   "landingPages.recordView",
+  // Its twin for forms (F47), and a booking's own reschedule and cancel.
+  "forms.recordView",
+  "bookingLinks.manageCancel",
+  "bookingLinks.manageReschedule",
 ];
 
 /**

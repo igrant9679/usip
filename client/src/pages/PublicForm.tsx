@@ -5,9 +5,10 @@
  * and posts to the public forms.submit mutation, which autonomously creates +
  * routes + enrolls a lead. No Shell, no auth — standalone page.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { HONEYPOT_FIELD } from "@shared/publicForm";
 import { HoneypotField } from "@/components/usip/HoneypotField";
+import { useCaptureGuard } from "@/components/usip/CaptureGuard";
 import { useRoute } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { safeRedirectUrl } from "@shared/safeRedirect";
@@ -24,11 +25,36 @@ export default function PublicForm() {
   const [, params] = useRoute("/f/:publicId");
   const publicId = params?.publicId ?? "";
 
-  const form = trpc.forms.getByPublicId.useQuery({ publicId }, { enabled: !!publicId, retry: false });
+  const form = trpc.forms.getByPublicId.useQuery({ publicId }, { enabled: !!publicId, retry: false, refetchOnWindowFocus: false });
   usePageTitle(form.data?.title);
   const submit = trpc.forms.submit.useMutation();
   const [values, setValues] = useState<Record<string, string>>({});
   const [done, setDone] = useState(false);
+  // Bot checks (F47): the first submit token served, and Turnstile when set up.
+  const guard = useCaptureGuard(form.data);
+  // A counter, not a message: a failed count shows the visitor nothing.
+  const recordView = trpc.forms.recordView.useMutation({ meta: { silentError: true } });
+
+  /**
+   * Count this view once the form has rendered (F47, the landing page's L12
+   * rule): once a day per form from this browser, and the server keeps its own
+   * once-a-day check. Crawlers and link previews never run this.
+   */
+  useEffect(() => {
+    if (!form.data || !publicId) return;
+    const day = new Date().toISOString().slice(0, 10);
+    let visitor = "";
+    try {
+      if (localStorage.getItem(`f-viewed:${publicId}`) === day) return;
+      visitor = localStorage.getItem("lp-visitor") || "";
+      if (!visitor) {
+        visitor = Math.random().toString(36).slice(2) + Date.now().toString(36);
+        localStorage.setItem("lp-visitor", visitor);
+      }
+      localStorage.setItem(`f-viewed:${publicId}`, day);
+    } catch { /* storage blocked: the server-side check still holds */ }
+    recordView.mutate({ publicId, visitor: visitor || undefined });
+  }, [form.data, publicId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fields: Field[] = useMemo(() => {
     const f = form.data?.fields;
@@ -37,7 +63,7 @@ export default function PublicForm() {
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    submit.mutate({ publicId, data: values }, {
+    submit.mutate({ publicId, data: values, submitToken: guard.submitToken, turnstileToken: guard.turnstileToken }, {
       onSuccess: (r: any) => {
         // Only an http(s) URL or an in-app path is followed — never a
         // javascript: URL (shared/safeRedirect.ts, audit 2026-10-20).
@@ -45,6 +71,8 @@ export default function PublicForm() {
         if (to) { window.location.href = to; return; }
         setDone(true);
       },
+      // The message renders below the button; a Turnstile answer is single-use.
+      onError: () => guard.reset(),
     });
   };
 
@@ -87,8 +115,9 @@ export default function PublicForm() {
               ))}
             </div>
             <HoneypotField value={values[HONEYPOT_FIELD] ?? ""} onChange={(v) => setValues((s) => ({ ...s, [HONEYPOT_FIELD]: v }))} />
+            {guard.widget}
             {submit.error && <p className="text-xs text-rose-600">{submit.error.message}</p>}
-            <Button type="submit" className="w-full" disabled={submit.isPending}>
+            <Button type="submit" className="w-full" disabled={submit.isPending || guard.waiting}>
               {submit.isPending ? <><Loader2 className="size-4 animate-spin mr-1.5" /> Submitting…</> : "Submit"}
             </Button>
             <p className="text-[10px] text-center text-muted-foreground">Powered by Velocity</p>

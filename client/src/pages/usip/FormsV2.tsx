@@ -21,6 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { confirmAction } from "@/components/usip/Common";
 import { SubmissionExtras } from "@/components/usip/SubmissionExtras";
+import { conversionRate } from "@shared/publicForm";
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from "@/components/ui/select";
@@ -31,7 +32,8 @@ import {
 type Form = {
   id: number; publicId: string; title: string; description?: string | null;
   fields?: any; status: string; autoCreateLead?: boolean; autoRoute?: boolean;
-  autoEnrollSequenceId?: number | null; submitCount?: number | null; updatedAt?: string | Date | null;
+  autoEnrollSequenceId?: number | null; submitCount?: number | null; viewCount?: number | null; updatedAt?: string | Date | null;
+  redirectUrl?: string | null;
 };
 
 const FIELD_PALETTE = [
@@ -131,7 +133,11 @@ export default function FormsV2() {
                         {f.title}
                         <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-[10px]", f.status === "active" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : "bg-secondary text-muted-foreground")}>{f.status}</span>
                       </div>
-                      <div className="text-[11px] text-muted-foreground mt-0.5">{f.submitCount ?? 0} submissions</div>
+                      {/* Views, submissions and the rate between them (F47). */}
+                      <div className="text-[11px] text-muted-foreground mt-0.5">
+                        {f.viewCount ?? 0} views · {f.submitCount ?? 0} submissions ·{" "}
+                        <span title={conversionRate(f.viewCount, f.submitCount).title}>{conversionRate(f.viewCount, f.submitCount).label} converted</span>
+                      </div>
                     </div>
                     <Switch aria-label={`${f.title} active`} checked={f.status === "active"} onCheckedChange={(v) => toggle.mutate({ id: f.id, status: v ? "active" : "inactive" })} />
                   </div>
