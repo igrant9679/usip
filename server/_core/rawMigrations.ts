@@ -5047,6 +5047,31 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, P21 and F42: segments on People. Each segment records
+  // the table it reads. Every existing segment was on CRM contacts; this moves
+  // them to People with their rules unchanged (the People field map reads the
+  // same field names; a rule People have no field for, "Is primary contact",
+  // is kept and flagged, and such a segment enrols no one until edited).
+  //
+  // Moving a segment changes who its auto-enrol rule would enrol, so FIRST
+  // every rule on a segment still on contacts is switched off and marked
+  // "moved_to_people", for a person to turn on again after the dry run; THEN
+  // the segments move. Both UPDATEs touch only rows still on contacts, so a
+  // re-run after a partial failure finds nothing to do twice. Counts are
+  // cleared, so a card says "not counted on People yet" rather than showing a
+  // contacts number as People. New segments default to People.
+  {
+    name: "0363_segments_on_people.sql",
+    statements: [
+      "ALTER TABLE `audience_segments` ADD COLUMN `subject` varchar(16) NOT NULL DEFAULT 'contacts'",
+      "ALTER TABLE `audience_segments` ADD COLUMN `movedToPeopleAt` timestamp NULL",
+      "ALTER TABLE `segment_sequence_rules` ADD COLUMN `offReason` varchar(32) NULL",
+      "UPDATE `segment_sequence_rules` SET `enabled` = 0, `offReason` = 'moved_to_people' WHERE `enabled` = 1 AND `segmentId` IN (SELECT `id` FROM `audience_segments` WHERE `subject` = 'contacts')",
+      "UPDATE `audience_segments` SET `subject` = 'people', `movedToPeopleAt` = NOW(), `contactCount` = NULL, `lastEvaluatedAt` = NULL WHERE `subject` = 'contacts'",
+      "ALTER TABLE `audience_segments` ALTER COLUMN `subject` SET DEFAULT 'people'",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

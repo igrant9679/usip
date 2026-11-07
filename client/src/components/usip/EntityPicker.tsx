@@ -103,7 +103,10 @@ function useEntityItems(type: EntityPickerType): { items: EntityItem[]; loading:
           items: rows.map((s: any) => ({
             id: s.id,
             label: s.name,
-            meta: `${s.contactCount ?? 0} contacts`,
+            // A segment counts People since migration 0363 (audit P21), contacts before.
+            meta: s.subject === "people"
+              ? (s.contactCount == null ? "not counted yet" : `${s.contactCount} ${s.contactCount === 1 ? "person" : "people"}`)
+              : `${s.contactCount ?? 0} contacts`,
             status: s.status,
           })),
           loading: segments.isLoading,

@@ -119,8 +119,10 @@ describe("the real paths use the workspace's zone", () => {
   });
   it("the hourly enrolment and the members page pass it, and it isn't optional", () => {
     const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8").replace(/\r\n/g, "\n");
-    expect(read("server/routers/segmentRules.ts")).toContain("segmentWhere(workspaceId, segRules, matchType, await getWorkspaceTimezone(workspaceId))");
-    expect(read("server/routers/segments.ts")).toContain('as "all" | "any", await getWorkspaceTimezone(ctx.workspace.id))');
-    expect(read("server/services/segmentSql.ts")).toContain('export function segmentWhere(ws: number, rules: SegmentRule[], matchType: "all" | "any", tz: string): SQL | null {');
+    // 2026-11-07 (audit P21): each path also passes the table the segment
+    // reads (People or contacts); the zone is still passed, and still required.
+    expect(read("server/routers/segmentRules.ts")).toContain("segmentWhere(workspaceId, segRules, matchType, await getWorkspaceTimezone(workspaceId), subject)");
+    expect(read("server/routers/segments.ts")).toContain('as "all" | "any", await getWorkspaceTimezone(ctx.workspace.id), subject)');
+    expect(read("server/services/segmentSql.ts")).toContain('export function segmentWhere(ws: number, rules: SegmentRule[], matchType: "all" | "any", tz: string, subject: SegmentSubject = "contacts"): SQL | null {');
   });
 });

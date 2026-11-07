@@ -3062,6 +3062,10 @@ export const audienceSegments = mysqlTable(
     description: text("description"),
     matchType: varchar("matchType", { length: 10 }).default("all").notNull(),
     rules: json("rules").notNull(),
+    /** Migration 0363 (audit P21, F42): the table the segment reads, "people" or "contacts"; the count below is of that table. */
+    subject: varchar("subject", { length: 16 }).default("people").notNull(),
+    /** When migration 0363 moved this segment from CRM contacts to People; null for one made on People. */
+    movedToPeopleAt: timestamp("movedToPeopleAt"),
     contactCount: int("contactCount").default(0),
     lastEvaluatedAt: timestamp("lastEvaluatedAt"),
     createdByUserId: int("createdByUserId"),
@@ -3238,6 +3242,8 @@ export const segmentSequenceRules = mysqlTable(
     enrolledCount: int("enrolledCount").default(0).notNull(),
     /** Migration 0212 (audit 2026-10-20, P2): what the last run matched, enrolled and skipped, and why. */
     lastRunSummary: json("lastRunSummary"),
+    /** Migration 0363 (audit P21): why the rule is off when no person turned it off ("moved_to_people"); cleared when turned on. */
+    offReason: varchar("offReason", { length: 32 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

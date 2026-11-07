@@ -2,19 +2,22 @@ import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
 import { z } from "zod";
 import { getDb } from "../db";
-import { audienceSegments, campaigns, contacts, segmentSequenceRules } from "../../drizzle/schema";
+import { audienceSegments, campaigns, contacts, prospects, segmentSequenceRules } from "../../drizzle/schema";
 import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { segmentProblem } from "@shared/segmentRules";
+import { segmentProblem, segmentSubjectOf, unmappedRules, unmappedSentence, type SegmentSubject } from "@shared/segmentRules";
 import { countSegment, segmentWhere } from "../services/segmentSql";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 
 // ─── Rule schema ──────────────────────────────────────────────────────────────
 const RuleSchema = z.object({
   id: z.string(),
+  // isPrimary is a contact field (kept so a moved rule still loads, P21);
+  // company, industry, state and country are People fields (F42).
   field: z.enum([
     "email", "firstName", "lastName", "title", "phone", "linkedinUrl",
     "seniority", "city", "emailVerificationStatus", "isPrimary", "createdAt",
+    "company", "industry", "state", "country",
   ]),
   operator: z.enum([
     "equals", "not_equals", "contains", "not_contains",
@@ -30,22 +33,32 @@ type Rule = z.infer<typeof RuleSchema>;
 // (services/segmentSql.ts, audit 2026-10-20, P52). Every count used to load
 // every contact in the workspace and filter them here.
 
-/** Refuses a segment that cannot mean what it says (P1, P19). */
-function assertSavable(rules: Rule[]) {
-  const problem = segmentProblem(rules);
+/** Refuses a segment that cannot mean what it says (P1, P19), on the table it reads (P21). */
+function assertSavable(rules: Rule[], subject: SegmentSubject) {
+  const problem = segmentProblem(rules, subject);
   if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
 }
 
 // ─── Router ───────────────────────────────────────────────────────────────────
 export const segmentsRouter = router({
+  /**
+   * Each segment with the table it reads and the saved rules that table has
+   * no field for (audit 2026-10-20, P21): a segment moved from contacts keeps
+   * every rule, and one People cannot evaluate is flagged here, not dropped.
+   */
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) return [];
-    return db
+    const rows = await db
       .select()
       .from(audienceSegments)
       .where(eq(audienceSegments.workspaceId, ctx.workspace.id))
       .orderBy(audienceSegments.name);
+    return rows.map((r) => {
+      const subject = segmentSubjectOf(r.subject);
+      const unmapped = unmappedRules((r.rules as Rule[]) ?? [], subject);
+      return { ...r, subject, unmapped, unmappedNote: unmapped.length ? unmappedSentence(unmapped) : null };
+    });
   }),
 
   create: workspaceProcedure
@@ -56,11 +69,12 @@ export const segmentsRouter = router({
       rules: z.array(RuleSchema),
     }))
     .mutation(async ({ ctx, input }) => {
-      assertSavable(input.rules);
+      // New segments are on People (audit 2026-10-20, P21).
+      assertSavable(input.rules, "people");
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
 
-      const count = await countSegment(db, ctx.workspace.id, input.rules, input.matchType);
+      const count = await countSegment(db, ctx.workspace.id, input.rules, input.matchType, "people");
 
       const [result] = await db.insert(audienceSegments).values({
         workspaceId: ctx.workspace.id,
@@ -68,6 +82,7 @@ export const segmentsRouter = router({
         description: input.description ?? null,
         matchType: input.matchType,
         rules: input.rules,
+        subject: "people",
         contactCount: count,
         lastEvaluatedAt: new Date(),
         createdByUserId: ctx.user.id,
@@ -84,11 +99,17 @@ export const segmentsRouter = router({
       rules: z.array(RuleSchema),
     }))
     .mutation(async ({ ctx, input }) => {
-      assertSavable(input.rules);
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
+      const [seg] = await db.select({ subject: audienceSegments.subject }).from(audienceSegments)
+        .where(and(eq(audienceSegments.id, input.id), eq(audienceSegments.workspaceId, ctx.workspace.id)));
+      if (!seg) throw new TRPCError({ code: "NOT_FOUND", message: "That segment is not in this workspace." });
+      // Held to the fields of the table it reads: an edit of a moved segment
+      // must drop a rule People have no field for (P21).
+      const subject = segmentSubjectOf(seg.subject);
+      assertSavable(input.rules, subject);
 
-      const count = await countSegment(db, ctx.workspace.id, input.rules, input.matchType);
+      const count = await countSegment(db, ctx.workspace.id, input.rules, input.matchType, subject);
 
       await db
         .update(audienceSegments)
@@ -167,7 +188,14 @@ export const segmentsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
-      return { count: await countSegment(db, ctx.workspace.id, input.rules, input.matchType) };
+      // The segment being edited is counted on the table it reads; a new one on People.
+      let subject: SegmentSubject = "people";
+      if (input.segmentId != null) {
+        const [seg] = await db.select({ subject: audienceSegments.subject }).from(audienceSegments)
+          .where(and(eq(audienceSegments.id, input.segmentId), eq(audienceSegments.workspaceId, ctx.workspace.id)));
+        if (seg) subject = segmentSubjectOf(seg.subject);
+      }
+      return { count: await countSegment(db, ctx.workspace.id, input.rules, input.matchType, subject), subject };
     }),
 
   refresh: workspaceProcedure
@@ -187,11 +215,11 @@ export const segmentsRouter = router({
 
       for (const seg of segs) {
         const rules = (seg.rules as Rule[]) ?? [];
-        const count = await countSegment(db, ctx.workspace.id, rules, (seg.matchType ?? "all") as "all" | "any");
+        const count = await countSegment(db, ctx.workspace.id, rules, (seg.matchType ?? "all") as "all" | "any", segmentSubjectOf(seg.subject));
         await db
           .update(audienceSegments)
           .set({ contactCount: count, lastEvaluatedAt: new Date() })
-          .where(eq(audienceSegments.id, seg.id));
+          .where(and(eq(audienceSegments.id, seg.id), eq(audienceSegments.workspaceId, ctx.workspace.id)));
       }
       return { refreshed: segs.length };
     }),
@@ -248,7 +276,7 @@ export const segmentsRouter = router({
         });
       }
       const updatedRules = [...existingRules, ...newRules];
-      const count = await countSegment(db, ctx.workspace.id, updatedRules, effectiveMatch);
+      const count = await countSegment(db, ctx.workspace.id, updatedRules, effectiveMatch, segmentSubjectOf(seg.subject));
       await db.update(audienceSegments).set({ rules: updatedRules, contactCount: count, lastEvaluatedAt: new Date() })
         .where(and(eq(audienceSegments.id, input.segmentId), eq(audienceSegments.workspaceId, ctx.workspace.id)));
       return { added: newRules.length, total: count };
@@ -278,9 +306,24 @@ export const segmentsRouter = router({
           eq(audienceSegments.workspaceId, ctx.workspace.id),
         ));
       if (!seg) throw new TRPCError({ code: "NOT_FOUND", message: "That segment is not in this workspace." });
-      const page = { page: input.page, perPage: input.perPage };
-      const where = segmentWhere(ctx.workspace.id, (seg.rules as Rule[]) ?? [], (seg.matchType ?? "all") as "all" | "any", await getWorkspaceTimezone(ctx.workspace.id));
+      const subject = segmentSubjectOf(seg.subject);
+      const page = { page: input.page, perPage: input.perPage, subject };
+      const where = segmentWhere(ctx.workspace.id, (seg.rules as Rule[]) ?? [], (seg.matchType ?? "all") as "all" | "any", await getWorkspaceTimezone(ctx.workspace.id), subject);
       if (!where) return { ...page, rows: [], total: 0 };
+      // A People segment's members are People (audit 2026-10-20, P21, F42), in
+      // the same columns the page shows for a contacts one, so one table
+      // renders either; personProspectId is the person themself.
+      if (subject === "people") {
+        const [rows, [{ total }]] = await Promise.all([
+          db.select({
+            id: prospects.id, firstName: prospects.firstName, lastName: prospects.lastName, email: prospects.email,
+            title: prospects.title, companyName: prospects.company, emailVerificationStatus: prospects.emailStatus,
+            personProspectId: prospects.id, createdAt: prospects.createdAt,
+          }).from(prospects).where(where).orderBy(desc(prospects.id)).limit(input.perPage).offset((input.page - 1) * input.perPage),
+          db.select({ total: sql<number>`count(*)` }).from(prospects).where(where),
+        ]);
+        return { ...page, rows, total: Number(total) };
+      }
       const [rows, [{ total }]] = await Promise.all([
         db.select({
           id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName, email: contacts.email,
