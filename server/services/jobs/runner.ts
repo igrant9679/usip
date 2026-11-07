@@ -214,6 +214,38 @@ async function runSlice(job: BulkJob): Promise<void> {
   }
 }
 
+/**
+ * Start working the queue now instead of at the next 15-second tick, for a
+ * job a person is watching (a discovery run, audit 2026-10-20 P72). Off the
+ * request's own async context, so the job's calls are not billed to it.
+ */
+// Off under test: a test drives tickJobs itself, and a kick left running
+// would work the queue against the next test's database.
+let kickEnabled = process.env.NODE_ENV !== "test";
+export function kickJobs(budgetMs = JOB_SLICE_MS * 3): void {
+  if (!kickEnabled) return;
+  setTimeout(() => { void tickJobs(budgetMs).catch((e) => console.error("[jobs] kick failed:", e)); }, 0);
+}
+
+/**
+ * Keep a job's heartbeat fresh while one long item runs, so a step that takes
+ * longer than JOB_STALE_MS is not taken for a dead worker and claimed again.
+ */
+export async function withHeartbeat<T>(jobId: number, work: () => Promise<T>, everyMs = 60_000): Promise<T> {
+  const timer = setInterval(() => {
+    void (async () => {
+      const db = await getDb();
+      if (!db) return;
+      await db.update(bulkJobs).set({ heartbeatAt: new Date() }).where(and(eq(bulkJobs.id, jobId), eq(bulkJobs.status, "running")));
+    })().catch(() => {});
+  }, everyMs);
+  try {
+    return await work();
+  } finally {
+    clearInterval(timer);
+  }
+}
+
 /** Stop a queued or running job; a running slice finishes its current item first. */
 export async function cancelJob(workspaceId: number, jobId: number): Promise<boolean> {
   const db = await getDb();
@@ -289,4 +321,9 @@ export async function callerContextFor(job: BulkJob): Promise<unknown> {
 /** Test seam: the in-process re-entrancy guard. */
 export function __resetJobRunnerForTests(): void {
   ticking = false;
+}
+
+/** Test seam: whether kickJobs starts a tick (tests drive tickJobs themselves). */
+export function __setJobKickForTests(on: boolean): void {
+  kickEnabled = on;
 }

@@ -23,12 +23,13 @@ import {
 } from "lucide-react";
 import { useParams, useLocation, Link } from "wouter";
 import { NotFoundState, isNotFoundError } from "@/components/usip/QueryState";
-import { EMAIL_STATUS_VALUES as STATUS_VALUES } from "@shared/segmentRules";
+import { EMAIL_STATUS_VALUES as STATUS_VALUES, segmentFieldsFor, type SegmentSubject } from "@shared/segmentRules";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type RuleField =
   | "email" | "firstName" | "lastName" | "title" | "phone" | "linkedinUrl"
-  | "seniority" | "city" | "emailVerificationStatus" | "isPrimary" | "createdAt";
+  | "seniority" | "city" | "emailVerificationStatus" | "isPrimary" | "createdAt"
+  | "company" | "industry" | "state" | "country";
 
 type RuleOperator =
   | "equals" | "not_equals" | "contains" | "not_contains"
@@ -57,7 +58,12 @@ const FIELDS: { value: RuleField; label: string; type: "text" | "select" | "date
   { value: "phone", label: "Phone", type: "text" },
   { value: "linkedinUrl", label: "LinkedIn URL", type: "text" },
   { value: "seniority", label: "Seniority", type: "text" },
+  // People fields (audit 2026-10-20, F42): a People segment can filter on these.
+  { value: "company", label: "Company", type: "text" },
+  { value: "industry", label: "Industry", type: "text" },
   { value: "city", label: "City", type: "text" },
+  { value: "state", label: "State", type: "text" },
+  { value: "country", label: "Country", type: "text" },
   { value: "emailVerificationStatus", label: "Email Status", type: "select" },
   { value: "isPrimary", label: "Is Primary Contact", type: "boolean" },
   { value: "createdAt", label: "Created Date", type: "date" },
@@ -85,6 +91,12 @@ const EMAIL_STATUS_LABELS: Record<string, string> = {
   valid: "Valid", accept_all: "Accept-All", risky: "Risky", invalid: "Invalid", unknown: "Unknown",
 };
 const EMAIL_STATUS_VALUES = STATUS_VALUES.map((value) => ({ value, label: EMAIL_STATUS_LABELS[value] ?? value }));
+
+/** The fields the segment's table has: People's, or a CRM contact's for a segment not moved (P21). */
+function fieldsFor(subject: SegmentSubject) {
+  const allowed = segmentFieldsFor(subject);
+  return FIELDS.filter((f) => allowed[f.value]);
+}
 
 function getOperators(field: RuleField) {
   const f = FIELDS.find((x) => x.value === field);
@@ -130,6 +142,7 @@ function RuleRow({
   onChange,
   onRemove,
   isFirst,
+  subject,
 }: {
   rule: Rule;
   index: number;
@@ -137,8 +150,13 @@ function RuleRow({
   onChange: (r: Rule) => void;
   onRemove: () => void;
   isFirst: boolean;
+  subject: SegmentSubject;
 }) {
   const fieldMeta = FIELDS.find((f) => f.value === rule.field);
+  const fields = fieldsFor(subject);
+  // A rule moved from contacts on a field People don't have (P21): kept and
+  // shown, so nothing is dropped silently; it must be removed or changed to save.
+  const unmapped = !fields.some((f) => f.value === rule.field);
   const operators = getOperators(rule.field);
   const showValue = needsValue(rule.operator);
 
@@ -161,7 +179,10 @@ function RuleRow({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {FIELDS.map((f) => (
+          {unmapped && fieldMeta && (
+            <SelectItem value={fieldMeta.value} className="text-xs" disabled>{fieldMeta.label} (not a People field)</SelectItem>
+          )}
+          {fields.map((f) => (
             <SelectItem key={f.value} value={f.value} className="text-xs">
               {f.label}
             </SelectItem>
@@ -231,6 +252,11 @@ function RuleRow({
       <Button aria-label="Remove condition" variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={onRemove}>
         <X className="size-3.5" />
       </Button>
+      {unmapped && (
+        <div role="alert" className="basis-full pl-10 text-[11px] text-amber-700 dark:text-amber-400">
+          {fieldMeta?.label ?? rule.field} is a contact field People don't have. This rule was kept when the segment moved to People; remove it or pick a People field to save.
+        </div>
+      )}
     </div>
   );
 }
@@ -243,11 +269,14 @@ function SegmentBuilderModal({
   onSaved,
 }: {
   open: boolean;
-  initial?: { id: number; name: string; description: string; matchType: "all" | "any"; rules: Rule[] };
+  initial?: { id: number; name: string; description: string; matchType: "all" | "any"; rules: Rule[]; subject?: SegmentSubject };
   onClose: () => void;
   onSaved: () => void;
 }) {
   const utils = trpc.useUtils();
+  // New segments are on People (P21); an existing one keeps the table it reads.
+  const subject: SegmentSubject = initial?.subject ?? "people";
+  const who = subject === "people" ? "people" : "CRM contacts";
   const [form, setForm] = useState<SegmentForm>(() =>
     initial
       ? { name: initial.name, description: initial.description, matchType: initial.matchType, rules: initial.rules }
@@ -289,7 +318,7 @@ function SegmentBuilderModal({
 
   const handlePreview = () => {
     setPreviewing(true);
-    evalMut.mutate({ rules: form.rules, matchType: form.matchType });
+    evalMut.mutate({ rules: form.rules, matchType: form.matchType, ...(initial ? { segmentId: initial.id } : {}) });
   };
 
   const handleSave = () => {
@@ -297,7 +326,9 @@ function SegmentBuilderModal({
     // No rules matches every contact, and a linked auto-enrol rule then
     // enrols the whole base on its next hourly run (P1). The server refuses
     // it too.
-    if (form.rules.length === 0) { toast.error("Add at least one rule — a segment with no rules matches every contact."); return; }
+    if (form.rules.length === 0) { toast.error(`Add at least one rule — a segment with no rules matches every ${subject === "people" ? "person" : "contact"}.`); return; }
+    const allowed = fieldsFor(subject);
+    if (form.rules.some((r) => !allowed.some((f) => f.value === r.field))) { toast.error("Remove the rules on fields People don't have first."); return; }
     const unfinished = form.rules.find((r) => needsValue(r.operator) && !r.value.trim());
     if (unfinished) { toast.error("Every rule needs a value (or use \"is empty\")."); return; }
     if (initial) {
@@ -379,6 +410,7 @@ function SegmentBuilderModal({
                     isFirst={i === 0}
                     onChange={(r) => updateRule(rule.id, r)}
                     onRemove={() => removeRule(rule.id)}
+                    subject={subject}
                   />
                 ))}
               </div>
@@ -393,7 +425,7 @@ function SegmentBuilderModal({
             </Button>
             {previewCount !== null && (
               <span className="text-sm font-medium">
-                <span className="text-primary font-bold">{previewCount.toLocaleString()}</span> CRM contacts match
+                <span className="text-primary font-bold">{previewCount.toLocaleString()}</span> {who} match
               </span>
             )}
           </div>
@@ -430,6 +462,8 @@ function SegmentMembers({ id }: { id: number }) {
   );
   const rows = membersQ.data?.rows ?? [];
   const total = membersQ.data?.total ?? 0;
+  // People since migration 0363 (P21); a segment not moved still reads CRM contacts.
+  const people = (membersQ.data?.subject ?? (seg as { subject?: string } | undefined)?.subject) === "people";
   const pages = Math.max(1, Math.ceil(total / MEMBERS_PER_PAGE));
 
   if (!Number.isFinite(id) || (membersQ.error && isNotFoundError(membersQ.error)) || (segmentsQ.isFetched && !segmentsQ.error && !seg)) {
@@ -443,17 +477,19 @@ function SegmentMembers({ id }: { id: number }) {
       </PageHeader>
       <div className="p-4 md:p-6 space-y-3">
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          <Badge variant="secondary" className="text-xs"><Users className="size-3 mr-1" />{membersQ.data ? `${total.toLocaleString()} CRM contacts now` : "Counting…"}</Badge>
+          <Badge variant="secondary" className="text-xs"><Users className="size-3 mr-1" />{membersQ.data ? `${total.toLocaleString()} ${people ? (total === 1 ? "person" : "people") : "CRM contacts"} now` : "Counting…"}</Badge>
           <span className="text-xs text-muted-foreground">
-            Segments read CRM contacts, not People: someone who is only in People is never in a segment. A contact linked to a People record opens it.
+            {people
+              ? "This segment reads People. Archived people are left out."
+              : "This segment still reads CRM contacts, not People: someone who is only in People is not in it. A contact linked to a People record opens it."}
           </span>
         </div>
         {membersQ.isLoading ? (
           <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 rounded" />)}</div>
         ) : membersQ.error && !membersQ.data ? (
-          <QueryError what="this segment's contacts" message={membersQ.error.message} onRetry={() => membersQ.refetch()} />
+          <QueryError what="this segment's members" message={membersQ.error.message} onRetry={() => membersQ.refetch()} />
         ) : rows.length === 0 ? (
-          <EmptyState icon={Users} title="No one is in this segment now" description="No CRM contact matches its rules today." />
+          <EmptyState icon={Users} title="No one is in this segment now" description={people ? "No one in People matches its rules today." : "No CRM contact matches its rules today."} />
         ) : (
           <div className="rounded-lg border bg-card overflow-x-auto">
             <table className="w-full text-sm">
@@ -531,7 +567,7 @@ function SegmentIndex() {
     <Shell title="Segments">
       <PageHeader
         title="Segments" pageKey="segments"
-        description="Rule-based audiences of your CRM contacts. Who is in a segment is worked out each time it is used, by auto-enrol rules and on its own page; the count on a card is from its last save or refresh."
+        description="Rule-based audiences of the people in People. Who is in a segment is worked out each time it is used, by auto-enrol rules and on its own page; the count on a card is from its last save or refresh."
 
         icon={<Filter className="size-5" />}
       >
@@ -553,7 +589,8 @@ function SegmentIndex() {
       <div className="p-4 md:p-6">
         {/* Said here as well as in the header, whose text an admin can replace (P21). */}
         <p className="text-xs text-muted-foreground mb-4">
-          Segments read CRM contacts, not People. Someone who is only in People is never in a segment, and an auto-enroll rule never enrols them.
+          Segments read People (since 2026-11-07; they read CRM contacts before). Segments that moved kept their rules, and the
+          auto-enroll rules on them were switched off: check each rule's dry run on Auto-Enroll Rules, then turn it on again.
         </p>
         {isLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -567,7 +604,7 @@ function SegmentIndex() {
           <EmptyState
             icon={Filter}
             title="No segments yet"
-            description="Create your first segment to start targeting contacts by specific criteria."
+            description="Create your first segment to start targeting people by specific criteria."
             action={
               <Button size="sm" onClick={() => { setEditing(null); setBuilderOpen(true); }}>
                 <Plus className="size-3.5 mr-1.5" />
@@ -614,7 +651,9 @@ function SegmentIndex() {
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary" className="text-xs">
                         <Users className="size-3 mr-1" />
-                        {(seg.contactCount ?? 0).toLocaleString()} CRM contacts
+                        {seg.subject === "people"
+                          ? seg.contactCount == null ? "Not counted on People yet" : `${seg.contactCount.toLocaleString()} ${seg.contactCount === 1 ? "person" : "people"}`
+                          : `${(seg.contactCount ?? 0).toLocaleString()} CRM contacts`}
                       </Badge>
                       <Badge variant="outline" className="text-xs">
                         {(seg.rules as Rule[])?.length ?? 0} rule{((seg.rules as Rule[])?.length ?? 0) !== 1 ? "s" : ""}
@@ -624,7 +663,7 @@ function SegmentIndex() {
                       variant="ghost"
                       size="sm"
                       className="h-7 text-xs"
-                      aria-label={`View the contacts in ${seg.name}`}
+                      aria-label={`View the ${seg.subject === "people" ? "people" : "contacts"} in ${seg.name}`}
                       onClick={() => setLocation(`/segments/${seg.id}`)}
                     >
                       View <ChevronRight className="size-3 ml-0.5" />
@@ -634,6 +673,15 @@ function SegmentIndex() {
                     <div className="text-[11px] text-muted-foreground mt-2">
                       Counted {new Date(seg.lastEvaluatedAt).toLocaleDateString()}
                     </div>
+                  )}
+                  {/* Kept and flagged, never dropped (P21): a rule People have no field for. */}
+                  {seg.unmappedNote && (
+                    <div role="note" className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
+                      {seg.unmappedNote}: edit this segment before it is used.
+                    </div>
+                  )}
+                  {seg.movedToPeopleAt && !seg.unmappedNote && (
+                    <div className="text-[11px] text-muted-foreground mt-1">Moved from CRM contacts to People {new Date(seg.movedToPeopleAt).toLocaleDateString()}.</div>
                   )}
                 </CardContent>
               </Card>
@@ -656,6 +704,7 @@ function SegmentIndex() {
             description: editing.description ?? "",
             matchType: editing.matchType === "any" ? "any" : "all",
             rules: Array.isArray(editing.rules) ? editing.rules : [],
+            subject: editing.subject === "people" ? "people" : "contacts",
           } : undefined}
           onClose={() => { setBuilderOpen(false); setEditing(null); }}
           onSaved={() => { setBuilderOpen(false); setEditing(null); }}
@@ -668,7 +717,7 @@ function SegmentIndex() {
           <DialogHeader>
             <DialogTitle>Delete Segment?</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">This will permanently delete the segment. Contacts are not affected. A segment an auto-enroll rule uses can't be deleted until that rule is.</p>
+          <p className="text-sm text-muted-foreground">This will permanently delete the segment. The people in it are not affected. A segment an auto-enroll rule uses can't be deleted until that rule is.</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmDelete(null)}>Cancel</Button>
             <Button

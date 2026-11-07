@@ -35,7 +35,7 @@ import {
   type MarketContent,
   type SectorContent,
 } from "@shared/researchShape";
-import { requestCostUsd, researchModelOf, type ResearchModelId, type ResearchUsage } from "@shared/researchModels";
+import { draftReserveUsd, formatUsd, requestCostUsd, researchModelOf, type ResearchModelId, type ResearchUsage } from "@shared/researchModels";
 
 /* ── Limits ─────────────────────────────────────────────────────────────── */
 
@@ -461,6 +461,8 @@ export async function runResearchJob(id: number, signal: AbortSignal): Promise<v
   if (!job || job.status !== "queued") return;
 
   const model = researchModelOf(job.model);
+  // Null for a run queued before ceilings existed: it runs as it always did.
+  const ceiling = job.costCeilingUsd != null && Number(job.costCeilingUsd) > 0 ? Number(job.costCeilingUsd) : null;
   const totals: Totals = {
     inputTokens: job.inputTokens ?? 0,
     outputTokens: job.outputTokens ?? 0,
@@ -543,6 +545,13 @@ export async function runResearchJob(id: number, signal: AbortSignal): Promise<v
         // of each. With either budget spent, the research stops here.
         if (totals.searches >= MAX_SEARCHES || totals.fetches >= MAX_FETCHES) {
           note(`The research used its ${MAX_SEARCHES} searches or ${MAX_FETCHES} page reads; drafting from what it has.`);
+          break;
+        }
+        // The run's ceiling (audit 2026-10-20, F8), checked between parts: the
+        // research stops while what it has cost plus what the draft can cost is
+        // still under it, so the finished run lands at or under the ceiling.
+        if (ceiling !== null && totals.costUsd + draftReserveUsd(model, DRAFT_MAX_TOKENS) >= ceiling) {
+          note(`The run is near its ${formatUsd(ceiling)} ceiling (${formatUsd(totals.costUsd)} so far); drafting from what it has.`);
           break;
         }
         messages.push({ role: "assistant", content: res.content as unknown as Anthropic.ContentBlockParam[] });

@@ -1000,6 +1000,8 @@ export const unipileRouter = router({
       filters: z.record(z.string(), z.any()).optional(),
       limit: z.number().int().min(1).max(25).optional(),
       unipileAccountId: z.string().optional(),
+      /** The next page: the cursor the previous page came back with (audit F43). Each page is a search on the account, gated like the first. */
+      cursor: z.string().min(1).max(4000).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       // A search with nothing in it is not an audience, and it still counts
@@ -1023,6 +1025,7 @@ export const unipileRouter = router({
       const res = await searchLinkedIn(acct, {
         api: input.api, category: input.category, keywords: input.keywords,
         filters: input.filters, limit: input.limit ?? 10,
+        ...(input.cursor ? { cursor: input.cursor } : {}),
       });
       await recordLinkedInAction({
         workspaceId: ctx.workspace.id, unipileAccountId: acct, kind: "search", source: "manual",

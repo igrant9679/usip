@@ -10,8 +10,9 @@
  * signed id files a follow-up task, when the visit is to a high-intent page
  * (pricing/demo/contact). An unsigned id is a claim anyone can make, so its
  * visit is still recorded, and the visitors page calls it unverified (P88),
- * but it files nothing. Nothing in Velocity adds a signed id to outbound links
- * yet; that is the work left. This is the honest, provider-free half of the feature;
+ * but it files nothing. Outreach adds a signed id to every link to the
+ * workspace's own site (services/visitorLinks.ts, F40): "p<id>" for a People
+ * row, "c" a contact, "l" a lead. This is the honest, provider-free half of the feature;
  * anonymous IP→company de-anonymization would need a paid IP-intelligence
  * vendor and is deliberately not stubbed.
  */
@@ -19,7 +20,7 @@ import type { Express, Request, Response } from "express";
 import { createHmac, timingSafeEqual } from "crypto";
 import { and, eq, gte, like, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { activities, contacts, leads, tasks, websiteVisits, workspaces } from "../drizzle/schema";
+import { activities, contacts, leads, prospects, tasks, websiteVisits, workspaces } from "../drizzle/schema";
 import { pageIntent } from "@shared/pageIntent";
 import { activeOwnerOrNull } from "./_core/activeMembers";
 import { findSuppression, type SuppressionTarget } from "./services/suppression";
@@ -97,10 +98,15 @@ export async function purgeOldWebsiteVisits(now: Date = new Date()): Promise<num
 async function verifyVisitorIdentity(
   db: any,
   workspaceId: number,
-  claimed: { contactId: number | null; leadId: number | null },
-): Promise<{ contactId: number | null; leadId: number | null }> {
-  const out = { contactId: null as number | null, leadId: null as number | null };
+  claimed: { contactId: number | null; leadId: number | null; prospectId: number | null },
+): Promise<{ contactId: number | null; leadId: number | null; prospectId: number | null }> {
+  const out = { contactId: null as number | null, leadId: null as number | null, prospectId: null as number | null };
   try {
+    if (claimed.prospectId) {
+      const [row] = await db.select({ id: prospects.id }).from(prospects)
+        .where(and(eq(prospects.id, claimed.prospectId), eq(prospects.workspaceId, workspaceId))).limit(1);
+      if (row) out.prospectId = row.id;
+    }
     if (claimed.contactId) {
       const [row] = await db.select({ id: contacts.id }).from(contacts)
         .where(and(eq(contacts.id, claimed.contactId), eq(contacts.workspaceId, workspaceId))).limit(1);
@@ -112,20 +118,21 @@ async function verifyVisitorIdentity(
       if (row) out.leadId = row.id;
     }
   } catch {
-    return { contactId: null, leadId: null };
+    return { contactId: null, leadId: null, prospectId: null };
   }
   return out;
 }
 
-/** Parse a `vid` param of the form "c123" (contact) or "l456" (lead), or a bare number (lead), optionally signed ("l456.<sig>"). */
-function parseVid(vid: string): { contactId: number | null; leadId: number | null } {
-  const out = { contactId: null as number | null, leadId: null as number | null };
+/** Parse a `vid` param of the form "c123" (contact), "l456" (lead), "p789" (People row, F40), or a bare number (lead), optionally signed ("l456.<sig>"). */
+export function parseVid(vid: string): { contactId: number | null; leadId: number | null; prospectId: number | null } {
+  const out = { contactId: null as number | null, leadId: null as number | null, prospectId: null as number | null };
   if (!vid) return out;
-  const m = /^([cl]?)(\d+)(?:\.[A-Za-z0-9_-]{16})?$/.exec(vid.trim());
+  const m = /^([clp]?)(\d+)(?:\.[A-Za-z0-9_-]{16})?$/.exec(vid.trim());
   if (!m) return out;
   const n = Number(m[2]);
   if (!n) return out;
   if (m[1] === "c") out.contactId = n;
+  else if (m[1] === "p") out.prospectId = n;
   else out.leadId = n; // default + "l" → lead
   return out;
 }
@@ -145,13 +152,13 @@ function vidSecret(): string {
 function vidSignature(workspaceId: number, base: string): string {
   return createHmac("sha256", vidSecret()).update(`${workspaceId}:${base}`).digest("base64url").slice(0, 16);
 }
-export function signVisitorId(workspaceId: number, kind: "c" | "l", id: number): string {
+export function signVisitorId(workspaceId: number, kind: "c" | "l" | "p", id: number): string {
   const base = `${kind}${id}`;
   return `${base}.${vidSignature(workspaceId, base)}`;
 }
 /** True only for an id signed for THIS workspace. */
 export function isSignedVid(workspaceId: number, vid: string): boolean {
-  const m = /^([cl]\d+)\.([A-Za-z0-9_-]{16})$/.exec(String(vid ?? "").trim());
+  const m = /^([clp]\d+)\.([A-Za-z0-9_-]{16})$/.exec(String(vid ?? "").trim());
   if (!m) return false;
   const want = Buffer.from(vidSignature(workspaceId, m[1]));
   const got = Buffer.from(m[2]);
@@ -212,7 +219,7 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
       // to it is dropped and the visit is recorded ANONYMOUSLY rather than
       // rejected — the beacon must stay silent and keep counting page views.
       const claimed = parseVid(String(b.vid ?? ""));
-      const { contactId, leadId } = await verifyVisitorIdentity(db, ws.id, claimed);
+      const { contactId, leadId, prospectId } = await verifyVisitorIdentity(db, ws.id, claimed);
       // Only an id we signed can file a task (P5); an unsigned one is recorded and files nothing.
       const signed = isSignedVid(ws.id, String(b.vid ?? ""));
       const intent = pageIntent(path);
@@ -224,6 +231,9 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
         referrer: withoutQuery(b.referrer).slice(0, 1000) || null,
         contactId,
         leadId,
+        prospectId,
+        // Only a record that checks out AND an id we signed (P88).
+        signed: signed && !!(contactId || leadId || prospectId),
         intent,
         userAgent: String(b.ua ?? "").slice(0, 500) || null,
       } as never);
@@ -232,9 +242,11 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
       // spawn one follow-up task/day (deduped) for the record owner. Dedup uses
       // prior high-intent visits for this record in the last 24h, so at most one
       // task fires per prospect per day regardless of page count.
-      if (intent === "high" && (contactId || leadId) && signed) {
+      if (intent === "high" && (contactId || leadId || prospectId) && signed) {
         const since = new Date(Date.now() - 86400000);
-        const recCond = contactId ? eq(websiteVisits.contactId, contactId) : eq(websiteVisits.leadId, leadId as number);
+        const recCond = contactId ? eq(websiteVisits.contactId, contactId)
+          : prospectId ? eq(websiteVisits.prospectId, prospectId)
+          : eq(websiteVisits.leadId, leadId as number);
         const [{ n }] = await db
           .select({ n: sql<number>`count(*)` })
           .from(websiteVisits)
@@ -249,8 +261,13 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
           let ownerUserId: number | null = null;
           let target: SuppressionTarget = {};
           if (contactId) {
-            const [c] = await db.select({ f: contacts.firstName, l: contacts.lastName, o: contacts.ownerUserId, email: contacts.email, linkedinUrl: contacts.linkedinUrl, companyDomain: contacts.companyDomain }).from(contacts).where(eq(contacts.id, contactId)).limit(1);
+            const [c] = await db.select({ f: contacts.firstName, l: contacts.lastName, o: contacts.ownerUserId, email: contacts.email, linkedinUrl: contacts.linkedinUrl, companyDomain: contacts.companyDomain, personId: contacts.personProspectId }).from(contacts).where(eq(contacts.id, contactId)).limit(1);
+            // The contact's People row too (F7): an opt-out on the person counts.
             if (c) { name = `${c.f ?? ""} ${c.l ?? ""}`.trim() || name; ownerUserId = c.o ?? null; target = c; }
+          } else if (prospectId) {
+            // A People row (F40): no owner of its own, so the task is claimable.
+            const [p] = await db.select({ f: prospects.firstName, l: prospects.lastName, email: prospects.email, linkedinUrl: prospects.linkedinUrl, companyDomain: prospects.companyDomain }).from(prospects).where(eq(prospects.id, prospectId)).limit(1);
+            if (p) { name = `${p.f ?? ""} ${p.l ?? ""}`.trim() || name; target = { ...p, personId: prospectId }; }
           } else if (leadId) {
             const [l] = await db.select({ f: leads.firstName, l: leads.lastName, o: leads.ownerUserId, email: leads.email }).from(leads).where(eq(leads.id, leadId)).limit(1);
             if (l) { name = `${l.f ?? ""} ${l.l ?? ""}`.trim() || name; ownerUserId = l.o ?? null; target = l; }
@@ -272,15 +289,15 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
             // time-sensitive task filed under a leaver dies unseen. Unowned
             // is claimable (see _core/activeMembers).
             ownerUserId: await activeOwnerOrNull(ws.id, ownerUserId),
-            relatedType: contactId ? "contact" : "lead",
-            relatedId: contactId ?? leadId,
+            relatedType: contactId ? "contact" : prospectId ? "prospect" : "lead",
+            relatedId: contactId ?? prospectId ?? leadId,
             source: "ai",
           } as never);
           await db.insert(activities).values({
             workspaceId: ws.id,
             type: "system",
-            relatedType: contactId ? "contact" : "lead",
-            relatedId: contactId ?? leadId,
+            relatedType: contactId ? "contact" : prospectId ? "prospect" : "lead",
+            relatedId: contactId ?? prospectId ?? leadId,
             subject: "High-intent website visit",
             body: `Viewed ${path}`,
           } as never);

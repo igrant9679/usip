@@ -249,10 +249,13 @@ describe("segment rules compile to SQL that agrees with the evaluator (P52)", ()
   });
 
   it("the router counts in SQL and getContacts is bounded; no whole-table load remains", async () => {
-    const r = await caller().segments.evaluate({ rules: [{ id: "r", ...rules[2] }], matchType: "all" });
+    // 2026-11-07 (audit P21): a segment not moved (no subject) still counts
+    // contacts in SQL; a new one is on People and counts People the same way.
+    T(audienceSegments).push({ id: 70, workspaceId: LSI, name: "Old", matchType: "all", rules: [] });
+    const r = await caller().segments.evaluate({ rules: [{ id: "r", ...rules[2] }], matchType: "all", segmentId: 70 });
     expect(r.count).toBe(1);
     expect(h.selects.filter((s) => s.table === "contacts").map((s) => s.cols)).toEqual([["n"]]);
-    T(contacts).push(...Array.from({ length: 30 }, (_, i) => contact(100 + i, { title: "VP" })));
+    T(prospects).push(...Array.from({ length: 32 }, (_, i) => ({ id: 100 + i, workspaceId: LSI, firstName: "P", lastName: String(i), title: "VP", verificationStatus: null })));
     await caller().segments.create({ name: "VPs", matchType: "all", rules: [{ id: "a", field: "title", operator: "contains", value: "vp" }] });
     const seg = T(audienceSegments).find((s: any) => s.name === "VPs");
     expect(seg.contactCount).toBe(32);

@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import { tablistProps, tabProps } from "@/lib/tabs";
 import { AccountBriefPanel } from "./company/AccountBriefPanel";
 import { OPPORTUNITY_DELETE_SCOPE } from "@shared/dealDelete";
+import { confirmPaidLookup, useSourceBudgets } from "@/components/usip/SpendPreview";
 
 type RelatedType = "lead" | "contact" | "account" | "opportunity" | "customer";
 
@@ -590,6 +591,7 @@ function RecordDrawerForRecord({
     { id: relatedId ?? 0 },
     { enabled: relatedType === "opportunity" && !!relatedId },
   );
+  const verifyBudgets = useSourceBudgets(relatedType === "contact");
   const verifySingle = trpc.emailVerification.verifySingle.useMutation({
     onSuccess: () => {
       contactData.refetch();
@@ -926,7 +928,8 @@ function RecordDrawerForRecord({
               isVerifying={verifySingle.isPending}
               onVerify={() => {
                 if (relatedId && contactData.data?.email) {
-                  verifySingle.mutate({ contactId: relatedId });
+                  // What it spends, said first (audit 2026-10-20, F8).
+                  confirmPaidLookup({ title: `Verify ${contactData.data.email}?`, vendor: "Reoon", count: 1, unit: "daily credit", allowance: verifyBudgets.data?.reoon.allowance ?? null, confirmLabel: "Verify" }, () => verifySingle.mutate({ contactId: relatedId }));
                 }
               }}
             />

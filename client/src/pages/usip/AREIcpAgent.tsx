@@ -46,6 +46,9 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { confirmAction } from "@/components/usip/Common";
+import { useSourceBudgets } from "@/components/usip/SpendPreview";
+import { aiCallText } from "@shared/spendPreview";
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
 // ICP lists are stored as weighted objects ({title, weight, …}); read them
@@ -569,6 +572,14 @@ export default function AREIcpAgent() {
     },
     onError: (e) => toast.error(e.message),
   });
+  // One model call over the won and lost deals: said, with the month's AI
+  // budget, before it runs (audit 2026-10-20, F8: "Infer").
+  const icpBudgets = useSourceBudgets(canChange);
+  const askRegenerate = () => confirmAction({
+    title: "Run ICP inference now?",
+    description: aiCallText(1, icpBudgets.data?.ai, "over up to 200 won and 100 lost deals"),
+    confirmLabel: "Run inference",
+  }, () => regenerate.mutate());
   const [restoringId, setRestoringId] = useState<number | null>(null);
   const [diffPair, setDiffPair] = useState<[any, any] | null>(null);
   const restore = trpc.are.icp.restore.useMutation({
@@ -620,7 +631,7 @@ export default function AREIcpAgent() {
             <Button
               size="sm"
               className="gap-1.5 text-xs"
-              onClick={() => regenerate.mutate()}
+              onClick={askRegenerate}
               disabled={regenerate.isPending}
             >
               {regenerate.isPending ? (
@@ -650,7 +661,7 @@ export default function AREIcpAgent() {
               : "The ICP Agent needs at least a few won and lost deals in your CRM to infer a profile. A manager runs the first inference."}
             action={canChange &&
               <Button
-                onClick={() => regenerate.mutate()}
+                onClick={askRegenerate}
                 disabled={regenerate.isPending}
                 className="gap-1.5"
               >

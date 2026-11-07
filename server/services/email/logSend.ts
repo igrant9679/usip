@@ -73,6 +73,8 @@ export interface LogEmailSendInput {
   status: "sent" | "failed";
   failureReason?: string | null;
   messageId?: string | null;
+  /** The RFC 5322 Message-ID header, where the adapter knows it (F5). */
+  rfcMessageId?: string | null;
   sentAt?: Date;
 }
 
@@ -170,6 +172,7 @@ export async function logEmailSend(input: LogEmailSendInput): Promise<void> {
       status: input.status,
       failureReason: input.failureReason ? String(input.failureReason).slice(0, 2000) : null,
       messageId: clamp(input.messageId, 500),
+      rfcMessageId: clamp(input.rfcMessageId, 500),
       sentAt: input.sentAt ?? new Date(),
     });
   } catch (e) {

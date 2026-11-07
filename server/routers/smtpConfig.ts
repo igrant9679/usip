@@ -5,7 +5,7 @@
  *   - smtpConfig.get            — return masked config for workspace
  *   - smtpConfig.save           — upsert SMTP config (password AES-256-GCM encrypted)
  *   - smtpConfig.test           — send a test email to the calling user's email
- *   - smtpConfig.sendDraft      — send a single approved draft via Nodemailer
+ *   - smtpConfig.sendDraft      — send a single approved draft through deliverEmailDraft (F24)
  *   - smtpConfig.sendBulkApproved — send approved drafts through deliverEmailDraft, oldest first (1/sec, 25 a request)
  */
 import { TRPCError } from "@trpc/server";
@@ -14,26 +14,17 @@ import { and, asc, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import nodemailer from "nodemailer";
 import { z } from "zod";
 import {
-  activities,
-  contacts,
   emailDrafts,
   emailSuppressions,
   emailTrackingEvents,
-  leads,
   smtpConfigs,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
-import { recordEmailsSent } from "../usageCounters";
-import { logEmailSend } from "../services/email/logSend";
 import { adminWsProcedure, workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
 import { buildMergeContextFromDb, resolveMergeVars, bodyToHtmlDocument, resolveBookingUrl } from "../mergeVars";
 import { areExecutionQueue } from "../../drizzle/schema";
-import { appBaseUrl as publicAppOrigin } from "../appUrl";
 import { assertOutboundNotPaused, isOutboundPaused } from "../services/outboundPause";
-import { describeSuppression, findSuppression } from "../services/suppression";
-import { claimDraftForSend, draftHoldReason, isDefinitelyNotSent, markDraftFailed, releaseDraftClaim } from "../services/draftSend";
-import { makeUnsubscribeUrl, unsubscribeFooter, unsubscribeHeaders } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { seriesSince, trackingSeries } from "../services/email/trackingSeries";
@@ -294,7 +285,20 @@ export const smtpConfigRouter = router({
       }
     }),
 
-  /** Send a single approved email draft */
+  /**
+   * Send a single approved email draft.
+   *
+   * ONE delivery path for every draft send (audit 2026-10-20, F24, after O47).
+   * This built its own nodemailer transporter from the workspace SMTP config,
+   * so the same draft left from a different mailbox, with a different footer
+   * and outside the per-mailbox cap, depending on which button sent it. It now
+   * goes through deliverEmailDraft, as the row's Send, "Send approved" and
+   * auto-send do: the campaign's sender or the sender's own mailbox, the
+   * signature, the unsubscribe footer and headers, the tracking switches, the
+   * workspace and per-mailbox daily caps, the hold (reply, paused enrolment,
+   * paused sequence), suppression, and the claim — taken from 'approved' only,
+   * as before, so a second click or "Send approved" cannot send it again.
+   */
   sendDraft: workspaceProcedure
     .input(z.object({ draftId: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
@@ -303,153 +307,17 @@ export const smtpConfigRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
-      // Load draft
-      const [draft] = await db.select().from(emailDrafts)
+      const [draft] = await db.select({ id: emailDrafts.id, status: emailDrafts.status }).from(emailDrafts)
         .where(and(eq(emailDrafts.id, input.draftId), eq(emailDrafts.workspaceId, ctx.workspace.id)));
       if (!draft) throw new TRPCError({ code: "NOT_FOUND", message: "Draft not found" });
       if (draft.status !== "approved") throw new TRPCError({ code: "BAD_REQUEST", message: "Only approved drafts can be sent" });
 
-      /**
-       * CLAIMED before anything else (audit 2026-10-20, O16/O17): this read
-       * 'approved', sent, and only then wrote 'sent', so a double click, a
-       * second admin or "Send approved" running at the same time sent it
-       * again. Whoever moves it to 'sending' sends it.
-       */
-      if (!(await claimDraftForSend(db, ctx.workspace.id, draft.id, draft.status, ["approved"]))) {
-        throw new TRPCError({ code: "CONFLICT", message: "This draft was just sent or picked up by another sender." });
-      }
-      let transportCalled = false;
-      try {
-
-      const held = await draftHoldReason(db, draft);
-      if (held) throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Not sent: ${held}.` });
-
-      // Resolve recipient email
-      let toEmail = draft.toEmail ?? null;
-      if (!toEmail && draft.toContactId) {
-        const [c] = await db.select({ email: contacts.email }).from(contacts).where(eq(contacts.id, draft.toContactId));
-        toEmail = c?.email ?? null;
-      }
-      if (!toEmail && draft.toLeadId) {
-        const [l] = await db.select({ email: leads.email }).from(leads).where(eq(leads.id, draft.toLeadId));
-        toEmail = l?.email ?? null;
-      }
-      if (!toEmail) throw new TRPCError({ code: "BAD_REQUEST", message: "No recipient email address found for this draft" });
-
-      // The ONE suppression check (services/suppression): both lists, by
-      // address and by company domain.
-      const suppressed = await findSuppression(ctx.workspace.id, { email: toEmail }, "email");
-      if (suppressed) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `${toEmail}: ${describeSuppression(suppressed)}. Remove them from that list to re-enable sending.`,
-        });
-      }
-
-      // Load SMTP config
-      const [cfg] = await db.select().from(smtpConfigs)
-        .where(and(eq(smtpConfigs.workspaceId, ctx.workspace.id), eq(smtpConfigs.enabled, true)));
-      if (!cfg) throw new TRPCError({ code: "NOT_FOUND", message: "No active SMTP config. Configure SMTP in Settings → Email Delivery." });
-
-      let password: string;
-      try { password = decrypt(cfg.encryptedPassword); }
-      catch { throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to decrypt SMTP password" }); }
-
-      const transporter = buildTransporter({ host: cfg.host, port: cfg.port, secure: cfg.secure, username: cfg.username, password });
-
-      // Resolve merge vars before sending — bulk send (sendBulkApproved)
-      // already did this; the single-send path was skipped, so drafts went
-      // out with literal {{firstName}} tokens.
-      const mergeCtx = await buildMergeContextFromDb({
-        contactId: draft.toContactId,
-        leadId: draft.toLeadId,
-        prospectId: draft.toProspectId,
-      });
-      mergeCtx.sender = {
-        name: cfg.fromName, email: cfg.fromEmail,
-        bookingUrl: await resolveBookingUrl(ctx.workspace.id, draft.createdByUserId),
-      };
-      const resolvedSubject = resolveMergeVars(draft.subject, mergeCtx);
-      const resolvedBody = resolveMergeVars(draft.body, mergeCtx);
-
-      // Every email carries an unsubscribe link and the RFC 8058 one-click
-      // headers (O15) — this path sent neither.
-      const unsubscribeUrl = makeUnsubscribeUrl(publicAppOrigin(), ctx.workspace.id, toEmail);
-      const footer = unsubscribeFooter(unsubscribeUrl);
-
-      try {
-        transportCalled = true;
-        await transporter.sendMail({
-          from: cfg.fromName ? `"${cfg.fromName}" <${cfg.fromEmail}>` : cfg.fromEmail,
-          to: toEmail,
-          replyTo: cfg.replyTo ?? undefined,
-          subject: resolvedSubject,
-          text: resolvedBody + footer.text,
-          html: resolvedBody.replace(/\n/g, "<br>") + footer.html,
-          headers: unsubscribeHeaders(publicAppOrigin(), ctx.workspace.id, toEmail),
-        });
-      } catch (err: any) {
-        // Back to 'approved' only when the error proves nothing left;
-        // otherwise 'failed', for a person to decide (O14).
-        const reason = `Failed to send email: ${err?.message}`;
-        if (isDefinitelyNotSent(err)) await releaseDraftClaim(db, draft.id, "approved", reason);
-        else await markDraftFailed(db, draft.id, reason);
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: reason });
-      }
-
-      // Sent. Marked first, so nothing below can make it look unsent (A4).
-      await db.update(emailDrafts).set({ status: "sent", sentAt: new Date(), sendError: null, sendClaimedAt: null } as never).where(eq(emailDrafts.id, draft.id));
-
-      // A real outbound message left the workspace. The metered adapter factory
-      // cannot see this path — it builds its own transporter from the SMTP
-      // config — so it records for itself. After the try/catch, because a throw
-      // means nothing was delivered.
-      await recordEmailsSent(ctx.workspace.id, 1);
-
-      // …and for the same reason, its email_log row. These drafts carry the
-      // sending account the sequence picker chose, so a send that never
-      // reached the log was a send no per-mailbox cap could see — this path
-      // and the campaign pool could each spend the same mailbox's full daily
-      // limit (audit 2026-09-20). It also puts these messages on the Emails
-      // page, where they appeared nowhere before.
-      await logEmailSend({
-        workspaceId: ctx.workspace.id,
-        meta: {
-          source: draft.sequenceId ? "sequence" : draft.aiGenerated ? "ai_draft" : "crm",
-          draftId: draft.id,
-          sequenceId: draft.sequenceId ?? null,
-          contactId: draft.toContactId ?? null,
-          leadId: draft.toLeadId ?? null,
-          userId: ctx.user.id,
-        },
-        sendingAccountId: draft.sendingAccountId ?? null,
-        fromEmail: cfg.fromEmail,
-        fromName: cfg.fromName,
-        to: toEmail,
-        subject: resolvedSubject,
-        bodyText: resolvedBody,
-        status: "sent",
-      });
-
-      // Log to activities
-      if (draft.toContactId || draft.toLeadId) {
-        await db.insert(activities).values({
-          workspaceId: ctx.workspace.id,
-          type: "email",
-          relatedType: draft.toContactId ? "contact" : "lead",
-          relatedId: (draft.toContactId ?? draft.toLeadId)!,
-          subject: draft.subject,
-          body: draft.body,
-          actorUserId: ctx.user.id,
-        });
-      }
-
-      return { ok: true, sentTo: toEmail };
-      } catch (err) {
-        // Stopped before the transport: nothing left, so it is approved again.
-        if (!transportCalled) await releaseDraftClaim(db, draft.id, "approved").catch(() => {});
-        throw err;
-      }
+      // Imported here, not at the top: sequences.ts reaches emailDelivery,
+      // which imports this file.
+      const { deliverEmailDraft } = await import("./sequences");
+      await deliverEmailDraft({ workspaceId: ctx.workspace.id, userId: ctx.user.id, draftId: draft.id, claimFrom: ["approved"] });
+      const [sent] = await db.select({ toEmail: emailDrafts.toEmail }).from(emailDrafts).where(eq(emailDrafts.id, draft.id)).limit(1);
+      return { ok: true, sentTo: sent?.toEmail ?? null };
     }),
 
   /**

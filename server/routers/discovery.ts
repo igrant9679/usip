@@ -20,7 +20,8 @@ import { areCampaigns, discoveryLogs, discoveryRuns, rawFinds } from "../../driz
 import { getDb } from "../db";
 import { router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
-import { failOrphanedDiscoveryRuns, runDiscovery } from "../services/discovery";
+import { associateDiscoveredPeople, failOrphanedDiscoveryRuns, queueDiscovery } from "../services/discovery";
+import { alreadyInWorkspace, workspaceIdentityIndex } from "../services/prospectSources/dedupe";
 import { processRun } from "../services/discovery/consolidate";
 
 const PersonInput = z.object({
@@ -51,8 +52,10 @@ export const discoveryRouter = router({
       // ids from @shared/areSources; the service drops anything the mode does
       // not offer and the workspace mask still wins. Absent = every enabled
       // candidate, as before.
-      z.object({ mode: z.literal("person"), input: PersonInput, campaignId: z.number().optional(), sources: z.array(z.string().max(40)).min(1).max(20).optional() }),
-      z.object({ mode: z.literal("account"), input: AccountInput, campaignId: z.number().optional(), sources: z.array(z.string().max(40)).min(1).max(20).optional() }),
+      // `holdForReview` (audit F38): keep the finds unsaved, each labelled new
+      // or already in People, until someone presses Save to People.
+      z.object({ mode: z.literal("person"), input: PersonInput, campaignId: z.number().optional(), sources: z.array(z.string().max(40)).min(1).max(20).optional(), holdForReview: z.boolean().optional() }),
+      z.object({ mode: z.literal("account"), input: AccountInput, campaignId: z.number().optional(), sources: z.array(z.string().max(40)).min(1).max(20).optional(), holdForReview: z.boolean().optional() }),
     ]))
     .mutation(async ({ ctx, input }) => {
       // The run is stored against this campaign and shows in its Logs tab, so
@@ -64,7 +67,35 @@ export const discoveryRouter = router({
           .where(and(eq(areCampaigns.id, input.campaignId), eq(areCampaigns.workspaceId, ctx.workspace.id))).limit(1);
         if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "That campaign is not in this workspace." });
       }
-      return runDiscovery(ctx.workspace.id, ctx.user.id, input.mode, input.input, input.campaignId ?? null, { sources: input.sources ?? null });
+      // A background job the page follows, not a long request (audit 2026-10-20,
+      // P72): this answers with the run id at once; the same search already
+      // queued or running is joined, not started and paid for again.
+      return queueDiscovery(ctx.workspace.id, ctx.user.id, input.mode, input.input, input.campaignId ?? null, {
+        sources: input.sources ?? null,
+        holdForReview: input.holdForReview ?? false,
+      });
+    }),
+
+  /**
+   * "Already in People?" for finds a page holds before saving them (audit
+   * 2026-10-20, F38): the one identity check Source search and Find prospects
+   * use, here for the LinkedIn search. Reads only.
+   */
+  checkInPeople: workspaceProcedure
+    .input(z.object({
+      records: z.array(z.object({
+        email: z.string().max(320).nullish(),
+        linkedinUrl: z.string().max(2048).nullish(),
+        firstName: z.string().max(200).nullish(),
+        lastName: z.string().max(200).nullish(),
+        companyName: z.string().max(300).nullish(),
+        companyDomain: z.string().max(300).nullish(),
+      })).max(100),
+    }))
+    .query(async ({ ctx, input }) => {
+      if (input.records.length === 0) return [];
+      const index = await workspaceIdentityIndex(ctx.workspace.id);
+      return input.records.map((r) => alreadyInWorkspace(index, r));
     }),
 
   /** Recent discovery runs scoped to a campaign (powers the per-campaign
@@ -179,11 +210,18 @@ export const discoveryRouter = router({
         .where(and(eq(discoveryRuns.id, input.runId), eq(discoveryRuns.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!run) throw new TRPCError({ code: "NOT_FOUND" });
+      if (run.status === "running") throw new TRPCError({ code: "CONFLICT", message: "This run is still going; its finds can be saved once it ends." });
       const r = await processRun(ctx.workspace.id, input.runId, run.mode);
       // A run whose save failed is complete once the re-score has saved (P143).
       if (run.status === "failed" && run.rawFindCount > 0) {
         await db.update(discoveryRuns).set({ status: "complete", errorMessage: null })
           .where(and(eq(discoveryRuns.id, input.runId), eq(discoveryRuns.workspaceId, ctx.workspace.id)));
+      }
+      // A run kept for review is saved now (F38): Save to People is this call.
+      if (run.heldForReview) {
+        await db.update(discoveryRuns).set({ heldForReview: false })
+          .where(and(eq(discoveryRuns.id, input.runId), eq(discoveryRuns.workspaceId, ctx.workspace.id)));
+        associateDiscoveredPeople(ctx.workspace.id, input.runId);
       }
       const { saved: _saved, ...counts } = r;
       return counts;
