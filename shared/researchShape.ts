@@ -83,7 +83,18 @@ export type SectorContent = {
   messaging: { leadWith: string[]; avoid: string[]; vocabulary: string[]; sampleOpening: string };
   facts: {
     marketSize: { value: string; label: string; source: string }[];
-    moneyFlow: { sources: string[]; intermediaries: { name: string; role: string; count: string }[]; recipients: { type: string; approxCount: string; notes: string }[] };
+    moneyFlow: {
+      sources: string[];
+      intermediaries: { name: string; role: string; count: string }[];
+      recipients: { type: string; approxCount: string; notes: string }[];
+      /**
+       * Who pays whom, as the research states it: each end names a source,
+       * an intermediary or a recipient above. The diagram draws these and
+       * nothing else (audit 2026-10-20, U30: it joined every node of one
+       * column to every node of the next, links nobody had stated).
+       */
+      links: { from: string; to: string }[];
+    };
     programs: { name: string; agency: string; flow: string; purpose: string; typicalAward: string; url: string }[];
     buying: string[];
     obligations: string[];
@@ -295,6 +306,7 @@ export function cleanSectorContent(input: unknown): Cleaned<SectorContent> {
         sources: list(mf.sources, LINE, d, "facts.moneyFlow.sources"),
         intermediaries: rows(mf.intermediaries, { name: SHORT, role: LINE, count: SHORT }, "name", d, "facts.moneyFlow.intermediaries"),
         recipients: rows(mf.recipients, { type: SHORT, approxCount: SHORT, notes: LINE }, "type", d, "facts.moneyFlow.recipients"),
+        links: moneyLinks(mf.links, d),
       },
       programs: rows(f.programs, { name: SHORT, agency: SHORT, flow: LINE, purpose: LINE, typicalAward: SHORT, url: 1000 }, "name", d, "facts.programs")
         .map((p) => ({ ...p, url: url(p.url, d, "facts.programs.url") })),
@@ -307,6 +319,20 @@ export function cleanSectorContent(input: unknown): Cleaned<SectorContent> {
     sources: sources(o.sources, d),
   };
   return { content, dropped: d };
+}
+
+/** Stated money-flow links: both ends named, each link once (case aside). */
+function moneyLinks(value: unknown, dropped: Dropped): { from: string; to: string }[] {
+  const seen = new Set<string>();
+  const out: { from: string; to: string }[] = [];
+  for (const r of rows(value, { from: SHORT, to: SHORT }, "from", dropped, "facts.moneyFlow.links")) {
+    if (!r.to) continue;
+    const k = `${r.from.toLowerCase()}\u0000${r.to.toLowerCase()}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({ from: r.from, to: r.to });
+  }
+  return out;
 }
 
 export const emptyMarketContent = (name = ""): MarketContent => cleanMarketContent({ name }).content;
@@ -345,6 +371,49 @@ export function changedParts(before: unknown, after: unknown): string[] {
     if (JSON.stringify(a[key] ?? null) !== JSON.stringify(b[key] ?? null)) out.push(key);
   }
   return out;
+}
+
+/* ── A save that meets a newer one, part by part (audit U30) ────────────── */
+
+/** One top-level part in a save conflict: who changed it since the draft began, and whether both did, differently. */
+export type DraftPart = { part: string; mine: boolean; theirs: boolean; conflict: boolean };
+
+const sameValue = (x: unknown, y: unknown) => JSON.stringify(x ?? null) === JSON.stringify(y ?? null);
+
+/**
+ * What a person's draft and someone else's newer save each changed, part by
+ * part, against the version the draft started from. Only parts someone
+ * changed are listed, in page order.
+ */
+export function draftPartChanges(base: unknown, mine: unknown, theirs: unknown): DraftPart[] {
+  const a = obj(base), m = obj(mine), t = obj(theirs);
+  const order = Object.keys(RESEARCH_PART_LABEL);
+  const keys = Array.from(new Set([...Object.keys(a), ...Object.keys(m), ...Object.keys(t)]))
+    .sort((x, y) => (order.indexOf(x) === -1 ? 99 : order.indexOf(x)) - (order.indexOf(y) === -1 ? 99 : order.indexOf(y)));
+  const out: DraftPart[] = [];
+  for (const k of keys) {
+    const mineChanged = !sameValue(m[k], a[k]);
+    const theirsChanged = !sameValue(t[k], a[k]);
+    if (!mineChanged && !theirsChanged) continue;
+    out.push({ part: k, mine: mineChanged, theirs: theirsChanged, conflict: mineChanged && theirsChanged && !sameValue(m[k], t[k]) });
+  }
+  return out;
+}
+
+/**
+ * The draft rebuilt on the newer save (U30): their version of every part,
+ * except the parts only the person changed, which keep the person's, and the
+ * parts both changed that the person chose to keep (`keepMine`). Saving it
+ * then names the newer revision, so nobody's change is lost by default and
+ * nothing is taken all-or-nothing.
+ */
+export function mergeDraftParts<T>(base: T, mine: T, theirs: T, keepMine: readonly string[]): T {
+  const m = obj(mine);
+  const out: Record<string, unknown> = { ...obj(theirs) };
+  for (const p of draftPartChanges(base, mine, theirs)) {
+    if (p.mine && (!p.conflict || keepMine.includes(p.part))) out[p.part] = m[p.part];
+  }
+  return out as T;
 }
 
 /* ── Personas ───────────────────────────────────────────────────────────── */
