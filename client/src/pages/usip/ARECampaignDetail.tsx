@@ -1603,10 +1603,18 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
   const utils = trpc.useUtils();
   const launch = trpc.discovery.search.useMutation({
     onSuccess: (r) => {
-      toast.success(
-        `Discovery complete — ${r.rawFindCount} raw / ${r.prospectsCreated} new / ${r.highConfidenceCount}H · ${r.mediumConfidenceCount}M · ${r.lowConfidenceCount}L`,
-        { duration: 6000 },
-      );
+      // A run whose finds could not be saved comes back as a result, not an
+      // error (P143), so it is read here, as Find Prospects reads it. The
+      // launcher announced success over a failed run.
+      const lead = r.joinedRunning ? `That search was already running (run #${r.runId}), so it was not started again — ` : "";
+      if (r.status === "failed") {
+        toast.error(`${lead}Run #${r.runId} failed: ${r.errorMessage ?? "the finds could not be saved"}`, { duration: 8000 });
+      } else {
+        toast.success(
+          `${lead}Discovery complete — ${r.rawFindCount} raw / ${r.prospectsCreated} new / ${r.highConfidenceCount}H · ${r.mediumConfidenceCount}M · ${r.lowConfidenceCount}L`,
+          { duration: 6000 },
+        );
+      }
       utils.are.engine.getLogs.invalidate({ campaignId });
       utils.discovery.getLogsForCampaign.invalidate({ campaignId });
     },

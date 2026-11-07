@@ -153,7 +153,7 @@ export async function activeCampaignsForProspects(
       email: prospectQueue.email,
     })
     .from(prospectQueue)
-    .innerJoin(areCampaigns, eq(areCampaigns.id, prospectQueue.campaignId))
+    .innerJoin(areCampaigns, and(eq(areCampaigns.id, prospectQueue.campaignId), eq(areCampaigns.workspaceId, prospectQueue.workspaceId)))
     .where(and(
       eq(prospectQueue.workspaceId, workspaceId),
       statusFilter(prospectQueue.sequenceStatus, opts.statuses === undefined ? ACTIVE_QUEUE_STATUSES : opts.statuses),
