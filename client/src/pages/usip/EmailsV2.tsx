@@ -232,10 +232,15 @@ function EmailDetail({ row, onClose }: { row: EmailFeedRow | null; onClose: () =
                       </span>
                     </Link>
                   ) : null}
+                  {/* A link to the sequence, by name when known, like the
+                      chips beside it (audit 2026-10-20, U29). */}
                   {row.sequenceId ? (
-                    <span className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px]">
-                      <ListOrdered className="size-3" /> Sequence #{row.sequenceId}
-                    </span>
+                    <Link href={`/v2/sequences/${row.sequenceId}`}>
+                      <span className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] hover:bg-muted cursor-pointer">
+                        <ListOrdered className="size-3" /> {d?.sequenceName || (row.source === "sequence" ? row.sourceLabel : null) || `Sequence #${row.sequenceId}`}
+                        <ExternalLink className="size-2.5 opacity-60" />
+                      </span>
+                    </Link>
                   ) : null}
                 </div>
               </div>

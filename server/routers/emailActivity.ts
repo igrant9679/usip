@@ -170,10 +170,14 @@ export const emailActivityRouter = {
           execOpens: areExecutionQueue.openCount,
           execOpenedAt: areExecutionQueue.openedAt,
           stepIndex: areExecutionQueue.stepIndex,
+          // A sequence send logs no label of its own; its sequence's name is
+          // the one people know it by (audit 2026-10-20, U29).
+          sequenceName: sequences.name,
         })
         .from(emailLog)
         .leftJoin(emailDrafts, and(eq(emailDrafts.id, emailLog.draftId), eq(emailDrafts.workspaceId, emailLog.workspaceId)))
         .leftJoin(areExecutionQueue, and(eq(areExecutionQueue.id, emailLog.executionQueueId), eq(areExecutionQueue.workspaceId, emailLog.workspaceId)))
+        .leftJoin(sequences, and(eq(sequences.id, emailLog.sequenceId), eq(sequences.workspaceId, emailLog.workspaceId)))
         .where(and(...conds))
         .orderBy(desc(emailLog.sentAt), desc(emailLog.id))
         .limit(takePlus);
@@ -184,7 +188,7 @@ export const emailActivityRouter = {
         id: r.id,
         direction: "outbound",
         source: r.source,
-        sourceLabel: r.sourceLabel,
+        sourceLabel: r.sourceLabel ?? r.sequenceName ?? null,
         subject: r.subject,
         preview: r.preview,
         fromEmail: r.fromEmail,
@@ -713,6 +717,7 @@ export const emailActivityRouter = {
             execFromEmail: areExecutionQueue.fromEmail,
             userName: users.name,
             campaignName: areCampaigns.name,
+            sequenceName: sequences.name,
             draftBody: emailDrafts.body,
             execContent: areExecutionQueue.messageContent,
           })
@@ -729,6 +734,7 @@ export const emailActivityRouter = {
           .leftJoin(users, eq(users.id, emailLog.userId))
           .leftJoin(areCampaigns, and(eq(areCampaigns.id, emailLog.campaignId), eq(areCampaigns.workspaceId, emailLog.workspaceId)))
           .leftJoin(emailDrafts, and(eq(emailDrafts.id, emailLog.draftId), eq(emailDrafts.workspaceId, emailLog.workspaceId)))
+          .leftJoin(sequences, and(eq(sequences.id, emailLog.sequenceId), eq(sequences.workspaceId, emailLog.workspaceId)))
           .where(and(eq(emailLog.id, input.id), eq(emailLog.workspaceId, wsId)))
           .limit(1);
         if (!row) throw new TRPCError({ code: "NOT_FOUND" });
@@ -742,6 +748,7 @@ export const emailActivityRouter = {
           accountEmail: row.accountEmail ?? row.execAccountEmail ?? row.execFromEmail ?? row.log.fromEmail ?? null,
           userName: row.userName ?? null,
           campaignName: row.campaignName ?? null,
+          sequenceName: row.sequenceName ?? null,
         };
       }
 
@@ -755,16 +762,18 @@ export const emailActivityRouter = {
             jobOrgResearch: aiPipelineJobs.orgResearch,
             jobContactResearch: aiPipelineJobs.contactResearch,
             jobFitAnalysis: aiPipelineJobs.fitAnalysis,
+            sequenceName: sequences.name,
           })
           .from(emailDrafts)
           .leftJoin(aiPipelineJobs, and(eq(aiPipelineJobs.id, emailDrafts.pipelineJobId), eq(aiPipelineJobs.workspaceId, emailDrafts.workspaceId)))
+          .leftJoin(sequences, and(eq(sequences.id, emailDrafts.sequenceId), eq(sequences.workspaceId, emailDrafts.workspaceId)))
           .where(and(eq(emailDrafts.id, input.id), eq(emailDrafts.workspaceId, wsId)))
           .limit(1);
         if (!row) throw new TRPCError({ code: "NOT_FOUND" });
         const job = row.jobOrgResearch || row.jobContactResearch || row.jobFitAnalysis
           ? { orgResearch: row.jobOrgResearch, contactResearch: row.jobContactResearch, fitAnalysis: row.jobFitAnalysis }
           : null;
-        return { ...row.d, job, accountName: null, accountEmail: null, userName: null, campaignName: null };
+        return { ...row.d, job, accountName: null, accountEmail: null, userName: null, campaignName: null, sequenceName: row.sequenceName ?? null };
       }
 
       if (input.kind === "queued") {
@@ -787,6 +796,7 @@ export const emailActivityRouter = {
           body: mc?.body ?? null,
           toEmail: row.toEmail ?? null,
           campaignName: row.campaignName ?? null,
+          sequenceName: null,
           accountName: null,
           accountEmail: null,
           userName: null,
@@ -807,6 +817,7 @@ export const emailActivityRouter = {
         accountEmail: row.accountEmail ?? null,
         userName: null,
         campaignName: null,
+        sequenceName: null,
       };
     }),
 };
