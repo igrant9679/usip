@@ -29,6 +29,8 @@ import {
 } from "../services/linkedinLookup";
 import { buildScrapedProspectValues } from "../services/prospectFromSource";
 import { stripNameCredentials } from "../services/enrichment/personName";
+import { alreadyInWorkspace, workspaceIdentityIndex } from "../services/prospectSources/dedupe";
+import { queueIdentityKeys } from "../services/are/queueIdentity";
 
 // isAdminRole comes from _core/workspace.ts — one rank map for the repo.
 
@@ -134,8 +136,15 @@ export const linkedinFinderRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // The one duplicate check every discovery tool shares (audit 2026-10-20,
+      // F38): a hit already in People is not inserted a second time. This
+      // inserted every hit, so saving a search twice doubled the people.
+      const index = await workspaceIdentityIndex(ctx.workspace.id);
       let created = 0;
+      const alreadyInPeople: number[] = [];
       for (const hit of input.hits) {
+        const known = alreadyInWorkspace(index, { firstName: hit.firstName, lastName: hit.lastName, companyName: hit.company, linkedinUrl: hit.linkedinUrl });
+        if (known.status === "in_people") { if (known.prospectId) alreadyInPeople.push(known.prospectId); continue; }
         try {
           const built = buildScrapedProspectValues({
             workspaceId: ctx.workspace.id,
@@ -163,11 +172,15 @@ export const linkedinFinderRouter = router({
             after: built.audit,
           });
           created++;
+          // A later hit in the same save that is this person is a duplicate too.
+          for (const k of queueIdentityKeys({ firstName: hit.firstName, lastName: hit.lastName, companyName: hit.company, linkedinUrl: hit.linkedinUrl })) {
+            if (!index.has(k)) index.set(k, { where: "people", prospectId: id, campaignId: null });
+          }
         } catch (e) {
           console.error("[linkedinFinder.saveSearchHits] insert failed:", e);
         }
       }
-      return { ok: true as const, created, total: input.hits.length };
+      return { ok: true as const, created, alreadyInPeople: alreadyInPeople.length, total: input.hits.length };
     }),
 
   /** Persist a looked-up (and possibly edited) profile as a prospect. */
@@ -185,6 +198,15 @@ export const linkedinFinderRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+
+      // Already in People (F38): answer with that person instead of a second row.
+      const known = alreadyInWorkspace(await workspaceIdentityIndex(ctx.workspace.id), {
+        firstName: input.firstName, lastName: input.lastName, companyName: input.company,
+        companyDomain: input.companyDomain, linkedinUrl: input.linkedinUrl,
+      });
+      if (known.status === "in_people" && known.prospectId) {
+        return { ok: true as const, prospectId: known.prospectId, alreadyInPeople: true as const };
+      }
 
       const built = buildScrapedProspectValues({
         workspaceId: ctx.workspace.id,

@@ -290,6 +290,12 @@ export type RoutingRule = {
   strategy: "round_robin" | "geography" | "industry" | "direct";
   targetUserIds: number[] | null;
   rrCursor: number;
+  /**
+   * Capacity-aware routing (audit 2026-10-20, F43, migration 0362): the most
+   * open leads a target may own before this rule passes them by. Null or
+   * absent = no limit, which is how every rule worked before.
+   */
+  capacityPerRep?: number | null;
 };
 
 export type RoutingMatch = {
@@ -297,6 +303,8 @@ export type RoutingMatch = {
   ownerUserId: number;
   /** New value of rrCursor to persist for round-robin rules. */
   newCursor?: number;
+  /** How far the round-robin cursor moves: 1, plus each target at capacity it passed. */
+  cursorStep?: number;
 };
 
 export type RoutingPayload = {
@@ -335,27 +343,38 @@ export function pickRoutingMatch(
   payload: RoutingPayload,
   evaluator: (spec: any, p: any) => boolean,
   geoIndustryOwnerLookup?: (rule: RoutingRule, payload: RoutingPayload) => number | null,
+  /** Open leads each user owns now, for rules with a capacity (F43). */
+  openLeadsOf?: (userId: number) => number,
 ): RoutingMatch | null {
   // Equal priorities used to run in whatever order the rows came back (P124).
   const ordered = rules.slice().sort((a, b) => a.priority - b.priority || a.id - b.id);
   for (const r of ordered) {
     if (!ruleMatches(r, payload, evaluator)) continue;
     const targets = r.targetUserIds ?? [];
+    // A target at the rule's capacity is passed by; a rule whose targets are
+    // all full falls through to the next rule, as a rule with none does.
+    const cap = r.capacityPerRep != null && r.capacityPerRep > 0 ? r.capacityPerRep : null;
+    const hasRoom = (uid: number) => cap === null || !openLeadsOf || openLeadsOf(uid) < cap;
     switch (r.strategy) {
       case "round_robin": {
         if (targets.length === 0) continue;
-        const idx = ((r.rrCursor ?? 0) % targets.length + targets.length) % targets.length;
-        const ownerUserId = targets[idx]!;
-        return { ruleId: r.id, ownerUserId, newCursor: (idx + 1) % targets.length };
+        const start = ((r.rrCursor ?? 0) % targets.length + targets.length) % targets.length;
+        let picked: { idx: number; step: number } | null = null;
+        for (let k = 0; k < targets.length; k++) {
+          const idx = (start + k) % targets.length;
+          if (hasRoom(targets[idx]!)) { picked = { idx, step: k + 1 }; break; }
+        }
+        if (!picked) continue;
+        return { ruleId: r.id, ownerUserId: targets[picked.idx]!, newCursor: (picked.idx + 1) % targets.length, cursorStep: picked.step };
       }
       case "direct": {
-        if (targets.length === 0) continue;
+        if (targets.length === 0 || !hasRoom(targets[0]!)) continue;
         return { ruleId: r.id, ownerUserId: targets[0]! };
       }
       case "geography":
       case "industry": {
         const owner = geoIndustryOwnerLookup?.(r, payload) ?? targets[0] ?? null;
-        if (owner == null) continue;
+        if (owner == null || !hasRoom(owner)) continue;
         return { ruleId: r.id, ownerUserId: owner };
       }
     }

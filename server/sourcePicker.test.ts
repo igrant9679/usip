@@ -105,7 +105,11 @@ describe("Find Prospects — the picker is the fan-out", () => {
 
   it("the router accepts a selection and the service narrows AFTER the mask", () => {
     expect(count(discoveryRouter, "sources: z.array(")).toBe(2);
-    expect(discoveryRouter).toContain("{ sources: input.sources ?? null }");
+    // 2026-11-07 (audit P72): the router queues the run with the same
+    // selection, next to the review option, instead of awaiting it.
+    expect(discoveryRouter).toContain("sources: input.sources ?? null,");
+    expect(svc).toContain("sources: opts?.sources?.length ? Array.from(opts.sources) : null, fingerprint,");
+    expect(svc).toContain("fanOutAndSave(db, workspaceId, p.runId, startedAt, p.mode, p.input, { sources: p.sources, holdForReview: p.holdForReview })");
     expect(svc).toContain("selectRunSources(candidates.map((c) => c.id), enabledSources, opts?.sources)");
     // Order matters: the mask is resolved first, then the selection narrows it.
     const maskAt = svc.indexOf("resolveSourceOrder(wsSourceRow?.order, wsSourceRow?.mask, ARE_SOURCE_IDS)");

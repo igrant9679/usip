@@ -509,7 +509,8 @@ describe("bulk verification needs ids or an admin, runs one job at a time, and s
 
   it("'Run now' is for admins and says what it did; the schedule skips archived workspaces", async () => {
     expect((await refusal(caller(REP).emailVerification.triggerReverifyNow())).code).toBe("FORBIDDEN");
-    expect(await caller(ADMIN).emailVerification.triggerReverifyNow()).toEqual({ started: false, emails: 0, reason: "the re-verify schedule is off" });
+    // 2026-11-07 (audit F43): the answer also counts addresses left out at accept-all domains.
+    expect(await caller(ADMIN).emailVerification.triggerReverifyNow()).toEqual({ started: false, emails: 0, reason: "the re-verify schedule is off", skippedAcceptAll: 0 });
     Object.assign(settings(LSI), { reverifyIntervalDays: 30, reverifyStatuses: ["risky"] });
     contact(1, "a@county.gov", { emailVerificationStatus: "risky" });
     // A job already running: the schedule does not start a second.

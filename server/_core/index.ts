@@ -845,6 +845,11 @@ async function startServer() {
   // forever, thousands of rows per campaign per day), and website visits older
   // than 180 days (audit P87: kept forever too).
   const runLogRetention = () => {
+    // Lead score history older than 90 days, keeping each lead's latest
+    // (audit 2026-10-20, F43: it was only ever inserted).
+    import("../services/scoreHistoryRetention")
+      .then((m) => m.pruneScoreHistory())
+      .catch((e) => console.error("[ScoreHistory] retention failed:", e));
     import("../websiteTracking")
       .then((m) => m.purgeOldWebsiteVisits())
       .catch((e) => console.error("[WebsiteTracking] visit retention failed:", e));

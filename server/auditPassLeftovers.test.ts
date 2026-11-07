@@ -311,9 +311,16 @@ describe("3 · a Revenue Engine LinkedIn step goes from the campaign owner's acc
 
 describe("4 · the campaign launcher shows a failed run as failed", () => {
   it("reads the run's status before it says complete", () => {
+    // 2026-11-07 (audit P72): the run is a background job, so the launcher
+    // follows it and reads the FINISHED run's status, through runSummary,
+    // which says failed (with the reason) before it ever says complete.
     const launcher = block(read("client/src/pages/usip/ARECampaignDetail.tsx"), "function CampaignDiscoveryLauncher(", "onError:");
-    expect(launcher).toMatch(/if \(r\.status === "failed"\) \{\s*toast\.error\(`\$\{lead\}Run #\$\{r\.runId\} failed: \$\{r\.errorMessage \?\? "the finds could not be saved"\}`/);
-    expect(launcher).toMatch(/\} else \{\s*toast\.success\(\s*`\$\{lead\}Discovery complete/);
-    expect(launcher.match(/Discovery complete/g)).toHaveLength(1);
+    expect(launcher).toContain("const s = runSummary(run);");
+    expect(launcher).toContain("if (s.ok) toast.success(s.text, { duration: 6000 }); else toast.error(s.text, { duration: 8000 });");
+    expect(launcher).not.toContain("Discovery complete");
+    const summary = block(read("client/src/lib/discoveryRun.ts"), "export function runSummary(", "export function useFollowRun(");
+    expect(summary).toMatch(/if \(r\.status === "failed"\) return \{ ok: false, text: `Run #\$\{r\.id\}: \$\{r\.errorMessage \?\? "the finds could not be saved"\}` \};/);
+    expect(summary.indexOf('if (r.status === "failed")')).toBeLessThan(summary.indexOf("Discovery complete"));
+    expect(summary.indexOf('if (r.status === "failed")')).toBeGreaterThan(-1);
   });
 });

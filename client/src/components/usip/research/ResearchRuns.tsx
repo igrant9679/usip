@@ -55,12 +55,20 @@ export function StartRunDialog({ target, open, onOpenChange }: { target: RunTarg
   const runs = trpc.research.runs.list.useQuery({ limit: 1 }, { enabled: open });
   const [subject, setSubject] = useState("");
   const [focus, setFocus] = useState("");
+  // An estimate and a ceiling per run (audit 2026-10-20, F8): what a run is
+  // likely to cost, and the cost it stops under.
+  const estimate = trpc.research.runs.estimate.useQuery(undefined, { enabled: open });
+  const [ceiling, setCeiling] = useState("");
   useEffect(() => {
     if (open) {
       setSubject("subject" in target && target.subject ? target.subject : "");
       setFocus("");
+      setCeiling("");
     }
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  const ceilingUsd = ceiling.trim() === "" ? estimate.data?.defaultCeilingUsd ?? null : Number(ceiling);
+  const ceilingBad = ceilingUsd == null || !Number.isFinite(ceilingUsd)
+    || (estimate.data && (ceilingUsd < estimate.data.minCeilingUsd || ceilingUsd > estimate.data.maxCeilingUsd));
   const start = trpc.research.runs.start.useMutation({
     onError: (e) => toast.error(e.message),
     onSuccess: (r) => { onOpenChange(false); navigate(`/research/runs/${r.id}`); },
@@ -79,12 +87,14 @@ export function StartRunDialog({ target, open, onOpenChange }: { target: RunTarg
 
   const submit = () => {
     if (isNew && !subject.trim()) { toast.error(target.kind === "market" ? "Name the market" : "Name the sector"); return; }
+    if (ceilingBad || ceilingUsd == null) { toast.error(`Set a ceiling between ${formatUsd(estimate.data?.minCeilingUsd ?? 0.5)} and ${formatUsd(estimate.data?.maxCeilingUsd ?? 100)}`); return; }
     start.mutate({
       kind: target.kind,
       ...("marketId" in target ? { marketId: target.marketId } : {}),
       ...("sectorId" in target ? { sectorId: target.sectorId } : {}),
       ...(isNew ? { subject: subject.trim() } : {}),
       focus: focus.trim() || undefined,
+      costCeilingUsd: ceilingUsd,
     });
   };
 
@@ -115,6 +125,23 @@ export function StartRunDialog({ target, open, onOpenChange }: { target: RunTarg
               Runs on <span className="font-medium">{RESEARCH_MODELS[model].label}</span> with up to 12 web searches and 8 page reads, billed to this workspace's own Anthropic key. You see the cost as it runs; a run usually takes a few minutes.
             </div>
             <div>You have used {used} of {cap} runs in the last 24 hours.</div>
+            {estimate.data && (
+              <div>
+                Estimated cost: about <span className="font-medium">{formatUsd(estimate.data.usd)}</span>
+                {estimate.data.basis === "history"
+                  ? ` (the middle of your last ${estimate.data.runs} finished run${estimate.data.runs === 1 ? "" : "s"} on this model).`
+                  : " (a rough figure at list price: no finished runs on this model yet)."}
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="run-ceiling">Stop at (USD)</Label>
+            <Input id="run-ceiling" type="number" inputMode="decimal" min={estimate.data?.minCeilingUsd ?? 0.5} max={estimate.data?.maxCeilingUsd ?? 100} step="0.5"
+              value={ceiling} onChange={(e) => setCeiling(e.target.value)}
+              placeholder={estimate.data ? String(estimate.data.defaultCeilingUsd) : ""} className="max-w-[140px]" />
+            <p className="text-[11px] text-muted-foreground">
+              The research stops between steps once it nears this and drafts from what it has, so the run ends at or under it.
+            </p>
           </div>
           {noKey && <p className="text-xs text-destructive">This workspace has no Anthropic key of its own. An admin can add one in Settings → Integrations → AI provider keys.</p>}
           {full && runs.data?.nextFreeAt && <p className="text-xs text-destructive">Your next run frees up at {when(runs.data.nextFreeAt)}.</p>}

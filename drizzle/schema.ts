@@ -1802,6 +1802,8 @@ export const leadRoutingRules = mysqlTable(
     targetUserIds: json("targetUserIds"),
     // Round-robin pointer
     rrCursor: int("rrCursor").default(0).notNull(),
+    /** Migration 0362 (audit F43): most open leads a target may own before the rule passes them by; null = no limit. */
+    capacityPerRep: int("capacityPerRep"),
     matchCount: int("matchCount").default(0).notNull(),
     lastMatchedAt: timestamp("lastMatchedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -3085,6 +3087,10 @@ export const audienceSegments = mysqlTable(
     description: text("description"),
     matchType: varchar("matchType", { length: 10 }).default("all").notNull(),
     rules: json("rules").notNull(),
+    /** Migration 0363 (audit P21, F42): the table the segment reads, "people" or "contacts"; the count below is of that table. */
+    subject: varchar("subject", { length: 16 }).default("people").notNull(),
+    /** When migration 0363 moved this segment from CRM contacts to People; null for one made on People. */
+    movedToPeopleAt: timestamp("movedToPeopleAt"),
     contactCount: int("contactCount").default(0),
     lastEvaluatedAt: timestamp("lastEvaluatedAt"),
     createdByUserId: int("createdByUserId"),
@@ -3261,6 +3267,8 @@ export const segmentSequenceRules = mysqlTable(
     enrolledCount: int("enrolledCount").default(0).notNull(),
     /** Migration 0212 (audit 2026-10-20, P2): what the last run matched, enrolled and skipped, and why. */
     lastRunSummary: json("lastRunSummary"),
+    /** Migration 0363 (audit P21): why the rule is off when no person turned it off ("moved_to_people"); cleared when turned on. */
+    offReason: varchar("offReason", { length: 32 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
@@ -4735,6 +4743,10 @@ export const rawFinds = mysqlTable(
     phone: varchar("phone", { length: 40 }),
     location: varchar("location", { length: 200 }),
     rawJson: json("rawJson"),
+    /** Migration 0360 (audit F38): when found, was this someone already in People
+     *  ("in_people"), only in a campaign's queue ("in_campaign"), or "new". Null: not checked. */
+    knownAs: varchar("knownAs", { length: 16 }),
+    knownProspectId: int("knownProspectId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
@@ -4768,6 +4780,12 @@ export const discoveryRuns = mysqlTable(
     lowConfidenceCount: int("lowConfidenceCount").default(0).notNull(),
     durationMs: int("durationMs").default(0).notNull(),
     errorMessage: text("errorMessage"),
+    /** Migration 0360 (audit P72): when a worker began the fan-out. Set once,
+     *  so a job picked up again after a restart never pays for it twice. */
+    fanOutStartedAt: timestamp("fanOutStartedAt"),
+    /** Migration 0360 (audit F38): finds kept unsaved for review, and how many were already in People. */
+    heldForReview: boolean("heldForReview").default(false).notNull(),
+    alreadyInPeople: int("alreadyInPeople").default(0).notNull(),
     startedAt: timestamp("startedAt").defaultNow().notNull(),
     completedAt: timestamp("completedAt"),
   },
@@ -6650,6 +6668,8 @@ export const researchJobs = mysqlTable(
     searches: int("searches").default(0).notNull(),
     fetches: int("fetches").default(0).notNull(),
     costUsd: decimal("costUsd", { precision: 10, scale: 4 }).default("0").notNull(),
+    /** Migration 0361 (audit F8): the cost the person set this run to stay under; null = none (older runs). */
+    costCeilingUsd: decimal("costCeilingUsd", { precision: 10, scale: 4 }),
     error: varchar("error", { length: 500 }),
     startedAt: timestamp("startedAt"),
     finishedAt: timestamp("finishedAt"),

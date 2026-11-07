@@ -7,7 +7,7 @@ import { mergeContacts } from "../services/contactMerge";
 import { DUPLICATE_GROUP_SCAN_CAP, healthMetricsFrom } from "../services/dataHealthMetrics";
 import { recordAudit } from "../audit";
 import { router } from "../_core/trpc";
-import { adminWsProcedure, managerProcedure, repProcedure, requireMinRole, workspaceProcedure } from "../_core/workspace";
+import { adminWsProcedure, isAdminRole, managerProcedure, repProcedure, requireMinRole, workspaceProcedure } from "../_core/workspace";
 
 export const dataHealthRouter = router({
   /**
@@ -29,6 +29,55 @@ export const dataHealthRouter = router({
    * domain), not "linked to an account row" — People are enriched with an
    * employer long before association links them to a Companies record.
    */
+  /**
+   * The credits card on the Data health center (audit 2026-10-20, F10):
+   * what verification and lookups have left, where it can be known.
+   *
+   *   Reoon        on the workspace's OWN key, the account balance from the
+   *                balance endpoint (it spends no credits; the Settings key
+   *                test reads the same call); on the shared key, today's
+   *                allowance under its cap, never the platform account's
+   *                balance, which is not this workspace's to see
+   *   QuickEnrich  emails delivered this month (the spend ledger's billed
+   *                unit) and today's discovery pulls against the cap
+   *   LinkedIn     lookups left today on the accounts this person may use
+   *
+   * A vendor that cannot answer is reported as such, never as zero.
+   */
+  credits: workspaceProcedure.query(async ({ ctx }) => {
+    const wsId = ctx.workspace.id;
+    const { sourceBudgets } = await import("../services/sourceBudgets");
+    const { getReoonKey, reoonCheckBalance } = await import("../services/reoon");
+    const { keySourceOf, spendDay, spendSince } = await import("../services/spend");
+    const b = await sourceBudgets(wsId, ctx.user.id, isAdminRole(ctx.member.role));
+
+    let reoonBalance: { daily: number; instant: number } | null = null;
+    let reoonError: string | null = null;
+    const key = b.reoon.configured ? await getReoonKey(wsId) : "";
+    if (key && keySourceOf(key, process.env.REOON_API_KEY) === "workspace") {
+      try {
+        const bal = await reoonCheckBalance(key);
+        if (bal.api_status && bal.api_status !== "success") reoonError = "Reoon did not accept this workspace's key.";
+        else reoonBalance = { daily: Number(bal.remaining_daily_credits ?? 0), instant: Number(bal.remaining_instant_credits ?? 0) };
+      } catch (e) {
+        reoonError = `Reoon's balance could not be read: ${(e as Error).message}`.slice(0, 200);
+      }
+    }
+
+    const today = spendDay();
+    const monthRows = await spendSince(`${today.slice(0, 8)}01`, wsId);
+    const qeEmailsThisMonth = monthRows
+      .filter((r) => r.vendor === "quickenrich" && r.meter === "email_hits")
+      .reduce((sum, r) => sum + r.quantity, 0);
+
+    return {
+      reoon: { configured: b.reoon.configured, keySource: b.reoon.keySource, balance: reoonBalance, error: reoonError, allowance: b.reoon.allowance },
+      quickenrich: { configured: b.quickenrich.configured, emailsThisMonth: qeEmailsThisMonth, pulls: b.quickenrich.allowance },
+      linkedin: b.linkedin,
+      month: today.slice(0, 7),
+    };
+  }),
+
   getMetrics: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     if (!db) throw new Error("DB unavailable");

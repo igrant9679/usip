@@ -731,6 +731,8 @@ export const leadRoutingRouter = router({
       conditions: z.any(),
       strategy: z.enum(["round_robin", "geography", "industry", "direct"]),
       targetUserIds: z.array(z.number()).default([]),
+      /** Most open leads a target may own before this rule passes them by (F43); null = no limit. */
+      capacityPerRep: z.number().int().min(1).max(100_000).nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       // A blank value, an operator the field can't take, or a Score that isn't
@@ -749,6 +751,8 @@ export const leadRoutingRouter = router({
       const values = {
         name: input.name, priority: input.priority, enabled: input.enabled,
         conditions: input.conditions, strategy: input.strategy, targetUserIds: input.targetUserIds,
+        // Absent (an older client): an existing limit is left as it is.
+        ...(input.capacityPerRep !== undefined ? { capacityPerRep: input.capacityPerRep } : {}),
       };
       // Who changed which rule is kept, like the scoring weights (P127).
       if (input.id) {
@@ -812,6 +816,20 @@ export const leadRoutingRouter = router({
     return { ownerUserId: owner };
   }),
 });
+
+/** Lead statuses that still sit on a rep's plate: what a routing capacity counts (F43). */
+export const OPEN_LEAD_STATUSES = ["new", "working", "qualified"] as const;
+
+/** Open leads each of these users owns in the workspace, counted in SQL. */
+async function openLeadsByOwner(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, userIds: number[]): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  if (userIds.length === 0) return out;
+  const rows = await db.select({ owner: leads.ownerUserId, n: sql<number>`count(*)` }).from(leads)
+    .where(and(eq(leads.workspaceId, workspaceId), inArray(leads.ownerUserId, userIds), inArray(leads.status, [...OPEN_LEAD_STATUSES])))
+    .groupBy(leads.ownerUserId);
+  for (const r of rows) if (r.owner != null) out.set(r.owner, Number(r.n));
+  return out;
+}
 
 /**
  * Public helper: choose an owner for a new/imported lead. Side-effect: advances
@@ -904,7 +922,13 @@ export async function routeLeadOwner(workspaceId: number, payload: RoutingPayloa
       strategy: r.strategy,
       targetUserIds: (((r.targetUserIds as number[] | null) ?? []).filter((u) => active.has(u))),
       rrCursor: r.rrCursor,
+      capacityPerRep: r.capacityPerRep ?? null,
     }));
+    // Capacity-aware routing (audit 2026-10-20, F43): open leads per owner,
+    // read only when a rule sets a capacity, so other workspaces pay nothing.
+    const load = rules.some((r) => r.capacityPerRep != null && r.capacityPerRep > 0)
+      ? await openLeadsByOwner(db, workspaceId, Array.from(active))
+      : null;
     const territoryOwner = (rule: RoutingRule, p: RoutingPayload): number | null => {
       for (const t of territory) {
         if (rule.strategy === "geography" ? !(t.country || t.state) : !t.industry) continue;
@@ -915,7 +939,7 @@ export async function routeLeadOwner(workspaceId: number, payload: RoutingPayloa
       return null;
     };
     // Typed conditions (P42): case-blind text, numeric Score.
-    const m = pickRoutingMatch(rules, payload, routingConditionsMatch, territoryOwner);
+    const m = pickRoutingMatch(rules, payload, routingConditionsMatch, territoryOwner, load ? (uid) => load.get(uid) ?? 0 : undefined);
     if (!m) return null;
     const counted = { matchCount: sql`${leadRoutingRules.matchCount} + 1`, lastMatchedAt: new Date() };
     if (m.newCursor === undefined) {
@@ -925,7 +949,9 @@ export async function routeLeadOwner(workspaceId: number, payload: RoutingPayloa
     }
     // After a few lost races, take the pick rather than leave the lead unowned.
     const seen = attempt < 5 ? rules.find((r) => r.id === m.ruleId)!.rrCursor : undefined;
-    const res = await db.update(leadRoutingRules).set({ rrCursor: sql`${leadRoutingRules.rrCursor} + 1`, ...counted })
+    // A pick that passed reps at capacity moves the cursor past them too (F43).
+    const step = m.cursorStep ?? 1;
+    const res = await db.update(leadRoutingRules).set({ rrCursor: sql`${leadRoutingRules.rrCursor} + ${step}`, ...counted })
       .where(and(
         eq(leadRoutingRules.id, m.ruleId),
         eq(leadRoutingRules.workspaceId, workspaceId),
