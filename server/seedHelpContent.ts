@@ -619,7 +619,7 @@ You rarely create Accounts or Contacts by hand — they're produced by convertin
 
 **Rule of thumb.** One message for everyone → a Sequence, or a fixed-copy campaign. A different message per person, or anything you want the engine to source and run → a Campaign.
 
-**Where people go.** With **Campaign Routing** on (Autonomy Center), the engine puts people who are in nothing into the campaign that fits them best — suggesting picks in Approve, enrolling them in Auto — and **proposes new campaigns** for the people no active campaign fits, grouped by industry, job family and country. Proposals appear on the Revenue Engine hub; creating one makes the campaign (active, batch approval) and adds those people.`,
+**Where people go.** With **Campaign Routing** on (Autonomy Center), the engine puts people who are in nothing into the campaign that fits them best — suggesting picks in Approve, enrolling them in Auto — and **proposes new campaigns** for the people no active campaign fits, grouped by industry, job family and country. Proposals appear on the Revenue Engine hub; creating one makes the campaign as a **draft** (batch approval) and adds those people; nothing runs until you activate it.`,
   },
   {
     slug: "email-builder-templates",

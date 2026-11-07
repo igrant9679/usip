@@ -3,19 +3,20 @@
  * (owner ask 2026-09-04: "suggest new Sequences to be created based on
  * analysis of the People"). Each card is one audience no active campaign
  * targets: who they are, how many, the targeting a campaign for them would
- * carry, and the copy mode. "Create campaign & add" creates it (active,
- * batch approval — nothing sends until the first batch is approved) and
+ * carry, and the copy mode. "Create campaign & add" creates it (a draft
+ * with batch approval — nothing runs until a person activates it, and nothing
+ * sends until its first batch is approved; audit A31) and
  * pushes the people in through the same write path as "Add to…"; Dismiss
  * records the decision so those people are not re-proposed for a month.
  *
  * Runs on the Campaign Routing dial (Autonomy Center): Approve fills this
- * queue hourly; Auto creates the campaigns itself. "Analyse now" runs the
+ * queue hourly; Auto creates the draft campaigns itself. "Analyse now" runs the
  * analysis on demand and always leaves the result here for a human.
  */
 import { Bot, Check, Loader2, Sparkles, X } from "lucide-react";
 import { forbiddenMessage } from "@/lib/forbidden";
 import { ConfirmButton } from "@/components/usip/Common";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ type Targeting = { targetTitles?: string[]; targetIndustries?: string[]; targetG
 
 export function CampaignProposals() {
   const utils = trpc.useUtils();
+  const [, navigate] = useLocation();
   const q = trpc.are.campaigns.listProposals.useQuery({ limit: 10 }, { retry: false });
   const routing = trpc.are.campaigns.getRoutingSettings.useQuery(undefined, { retry: false });
   const refresh = () => {
@@ -36,8 +38,9 @@ export function CampaignProposals() {
     onSuccess: (r, vars) => {
       if (vars.decision === "accept") {
         toast.success(r.campaignId
-          ? `Campaign created — ${r.added} added${r.skipped ? `, ${r.skipped} skipped (already in outreach)` : ""}. The engine will enrich and write their emails; the first batch waits for your approval.`
-          : "Nothing created");
+          ? `Draft campaign created — ${r.added} added${r.skipped ? `, ${r.skipped} skipped (already in outreach)` : ""}. Activate it to start; the first batch still waits for your approval.`
+          : "Nothing created",
+          r.campaignId ? { action: { label: "Open", onClick: () => navigate(`/are/campaigns/${r.campaignId}`) } } : undefined);
       } else toast.info("Dismissed — these people won't be re-proposed for 30 days");
       refresh();
     },
@@ -80,7 +83,7 @@ export function CampaignProposals() {
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-muted-foreground">
             {mode === "off" ? <>Campaign Routing is off — <Link href="/v2/workflows" className="underline">turn it on</Link> to analyse hourly</>
-              : mode === "auto" ? "Auto: new campaigns are created for you" : "Approve: proposals wait here for you"}
+              : mode === "auto" ? "Auto: draft campaigns are created for you to activate" : "Approve: proposals wait here for you"}
           </span>
           <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" disabled={pending} onClick={() => generate.mutate()}>
             {generate.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Bot className="size-3.5" />} Analyse People now
