@@ -790,25 +790,49 @@ describe("the SMTP draft paths claim each draft and always carry an unsubscribe"
     });
   }
 
+  // 2026-11-07 (audit F24): sendDraft sends through deliverEmailDraft, the
+  // one delivery path every other draft send uses — the sending account
+  // through the adapter (h.emails), never the workspace SMTP config (h.smtp).
+  // What these pinned still holds: one email for two clicks, the footer and
+  // RFC 8058 headers, and an ambiguous error leaving it failed.
   it("sendDraft: one email for two clicks, with the footer and RFC 8058 headers", async () => {
     smtpConfig();
     draft(110, { toEmail: ANN, status: "approved" });
     const c = caller(REP).smtpConfig;
     const both = await Promise.allSettled([c.sendDraft({ draftId: 110 }), c.sendDraft({ draftId: 110 })]);
     expect(both.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    expect(h.smtp).toHaveLength(1);
-    expect(h.smtp[0].headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
-    expect(h.smtp[0].html).toContain("Unsubscribe</a>");
-    expect(h.smtp[0].text).toMatch(/Unsubscribe: https?:\/\//);
+    expect(h.smtp).toHaveLength(0);
+    expect(h.emails).toHaveLength(1);
+    expect(h.emails[0].headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
+    expect(h.emails[0].bodyHtml).toContain("Unsubscribe</a>");
+    expect(h.emails[0].bodyText).toMatch(/Unsubscribe: https?:\/\//);
     expect(row("email_drafts", 110).status).toBe("sent");
   });
 
-  it("sendDraft: an ambiguous SMTP error leaves it failed, not approved", async () => {
+  it("sendDraft: an ambiguous send error leaves it failed, not approved", async () => {
     smtpConfig();
     draft(111, { toEmail: ANN, status: "approved" });
-    h.smtpFail = new Error("Connection closed unexpectedly");
+    h.transport = async () => { throw new Error("Connection closed unexpectedly"); };
     await refusal(caller(REP).smtpConfig.sendDraft({ draftId: 111 }));
     expect(row("email_drafts", 111).status).toBe("failed");
+    expect(h.smtp).toHaveLength(0);
+  });
+
+  it("sendDraft: held by the daily cap and by a paused enrolment like every other draft send (F24)", async () => {
+    smtpConfig();
+    draft(112, { toEmail: ANN, status: "approved" });
+    h.capHit = true;
+    await refusal(caller(REP).smtpConfig.sendDraft({ draftId: 112 }));
+    expect(row("email_drafts", 112).status).toBe("approved");
+    h.capHit = false;
+    seq(9, [email()]);
+    enr(19, 9, { contactId: 101 }, { status: "paused" });
+    draft(113, { toEmail: ANN, status: "approved", sequenceId: 9, enrollmentId: 19 });
+    const held = await refusal(caller(REP).smtpConfig.sendDraft({ draftId: 113 }));
+    expect(held.message).toContain("paused");
+    expect(row("email_drafts", 113).status).toBe("approved");
+    expect(h.emails).toHaveLength(0);
+    expect(h.smtp).toHaveLength(0);
   });
 
   it('"Send approved" claims per draft, re-checks pause, and every message has headers and a footer', async () => {
