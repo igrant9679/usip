@@ -52,6 +52,56 @@ import { tablistProps, tabProps } from "@/lib/tabs";
 /** Where the scheduled enrichment Velocity has — the sweep — is set up. */
 const SWEEP_SETTINGS = "/v2/settings/enrichment-sweep";
 
+/**
+ * Credits left, per vendor (audit 2026-10-20, F10): the Reoon balance on the
+ * workspace's own key (today's allowance on the shared one), QuickEnrich's
+ * emails this month and today's pulls, and LinkedIn lookups left today.
+ */
+function CreditsCard() {
+  const q = trpc.dataHealth.credits.useQuery(undefined, { staleTime: 60_000, retry: false });
+  const c = q.data;
+  const nf = (v: number) => v.toLocaleString();
+  const row = (label: string, value: string, sub?: string) => (
+    <div className="flex items-baseline justify-between gap-2 py-1 border-b last:border-0">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="text-right">
+        <span className="text-sm font-medium tabular-nums">{value}</span>
+        {sub && <span className="block text-[10.5px] text-muted-foreground">{sub}</span>}
+      </span>
+    </div>
+  );
+  return (
+    <div className="rounded-xl border bg-card shadow-sm p-4 flex flex-col">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold inline-flex items-center gap-1.5"><CreditCard className="size-4 text-muted-foreground" aria-hidden="true" /> Credits</h3>
+        <span className="text-[10.5px] text-muted-foreground">Verification & lookups</span>
+      </div>
+      <div className="mt-3 flex-1">
+        {q.isLoading ? <div className="text-xs text-muted-foreground py-4">Loading credits…</div>
+          : q.error ? <QueryError compact what="the credits" message={q.error.message} onRetry={() => q.refetch()} />
+          : c && (
+            <>
+              {!c.reoon.configured
+                ? row("Reoon", "no key", "Settings → Data sources")
+                : c.reoon.keySource === "shared"
+                  ? row("Reoon (shared key)", c.reoon.allowance ? `${nf(Math.max(0, c.reoon.allowance.cap - c.reoon.allowance.used))} left today` : "no daily cap", c.reoon.allowance ? `of ${nf(c.reoon.allowance.cap)} a day` : undefined)
+                  : c.reoon.balance
+                    ? row("Reoon balance", `${nf(c.reoon.balance.daily)} daily`, `${nf(c.reoon.balance.instant)} instant credits`)
+                    : row("Reoon balance", "unavailable", c.reoon.error ?? undefined)}
+              {!c.quickenrich.configured
+                ? row("QuickEnrich", "no key", "Settings → Data sources")
+                : row("QuickEnrich", `${nf(c.quickenrich.emailsThisMonth)} emails`, `delivered in ${c.month}${c.quickenrich.pulls ? ` · ${nf(Math.max(0, c.quickenrich.pulls.cap - c.quickenrich.pulls.used))} of ${nf(c.quickenrich.pulls.cap)} pulls left today` : ""}`)}
+              {c.linkedin.accounts === 0
+                ? row("LinkedIn lookups", "no account", "Connect one under Connected accounts")
+                : row("LinkedIn lookups", `${nf(c.linkedin.left)} left today`, `of ${nf(c.linkedin.cap)} across ${c.linkedin.accounts} account${c.linkedin.accounts === 1 ? "" : "s"}`)}
+            </>
+          )}
+      </div>
+      <p className="mt-2 text-[10.5px] text-muted-foreground">What each has cost is in the cost report, Settings → Billing and credits.</p>
+    </div>
+  );
+}
+
 /* ── inline donut chart ── */
 function Donut({ pct, color, sub }: { pct: number; color: string; sub?: string }) {
   const r = 42;
@@ -291,20 +341,11 @@ export default function DataEnrichment() {
                   </div>
                 </Card>
 
-                {/* Says where the spend really is. It promised credit tracking
-                    under an Apollo label and its button opened Data Health; the
-                    "job activity" and "CRM status" cards beside it showed a
-                    fixed empty state and a sync that doesn't exist, and are
-                    gone (audit 2026-10-20, P89). */}
-                <Card title="Credit usage" tag="Verification & lookups">
-                  <div className="text-center py-6">
-                    <CreditCard className="size-7 mx-auto text-muted-foreground opacity-50 mb-2" />
-                    <div className="text-sm font-medium">What enrichment has cost</div>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Verification and lookup spend is in the cost report, under Settings → Billing and credits (admins).
-                    </p>
-                  </div>
-                </Card>
+                {/* What verification and lookups have left (audit 2026-10-20,
+                    F10), in place of the placeholder that only pointed at the
+                    cost report. A vendor that cannot answer says so. */}
+                <CreditsCard />
+
               </div>
             </div>
           )}

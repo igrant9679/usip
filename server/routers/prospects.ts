@@ -33,6 +33,8 @@ import { lookupContactInfo, type LookupResult } from "../services/scraper";
 // services/prospectFromSource.ts.
 import { isSyntheticNameProspect } from "../services/prospectFromSource";
 import { reoonCheckBalance, getReoonKey } from "../services/reoon";
+import { PEOPLE_VERIFY_JOB, PEOPLE_VERIFY_MAX, peopleWithEmail, queuePeopleVerify } from "../services/peopleVerify";
+import { getJob as getBulkJob } from "../services/jobs/runner";
 import { resolveProspectProfileImage } from "../services/profileImage";
 import { SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimits";
 import { promoteProspectRow } from "../services/prospectPromotion";
@@ -736,6 +738,45 @@ export const prospectsRouter = router({
         entityId: p.id, before: { email: p.email, emailStatus: p.emailStatus }, after: { email, emailStatus: verdict, reoon: raw.status },
       });
       return { email, status: verdict, reoonStatus: raw.status, replaced, previousEmail: p.email ?? null };
+    }),
+
+  /**
+   * Verify a selection of People (audit 2026-10-20, F39): a background job
+   * that runs each one through verifyEmail above, so the Data health numbers,
+   * which count People, can move. People with no address are left out and
+   * cost nothing; the shared key's daily allowance is checked first, as the
+   * contact bulk verify checks it. The page confirms the count first (F8).
+   */
+  verifyEmailBulk: workspaceProcedure
+    .input(z.object({ ids: z.array(z.number().int().positive()).min(1).max(PEOPLE_VERIFY_MAX) }))
+    .mutation(async ({ ctx, input }) => {
+      requireMinRole(ctx.member.role, "manager", "Only managers and admins can verify people's emails.");
+      const ids = Array.from(new Set(input.ids));
+      const withEmail = await peopleWithEmail(ctx.workspace.id, ids);
+      if (withEmail.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "None of these people has an email address to verify." });
+      const apiKey = await getReoonKey(ctx.workspace.id);
+      if (!apiKey) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Reoon verification is not configured or is turned off for this workspace (Settings → Data sources)." });
+      const { sharedHeadroom } = await import("./emailVerification");
+      const headroom = await sharedHeadroom(ctx.workspace.id, apiKey);
+      if (withEmail.length > headroom) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: headroom === 0
+            ? "This workspace has used today's allowance on the shared Reoon key."
+            : `Today's allowance on the shared Reoon key has room for ${headroom.toLocaleString()} more addresses; this selection has ${withEmail.length.toLocaleString()}. Select fewer, or try again tomorrow.`,
+        });
+      }
+      const q = await queuePeopleVerify(ctx.workspace.id, ctx.user.id, withEmail);
+      return { ...q, queued: withEmail.length, noEmail: ids.length - withEmail.length };
+    }),
+
+  /** A bulk verify's progress, for the People toolbar (F39). */
+  verifyJob: workspaceProcedure
+    .input(z.object({ jobId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const job = await getBulkJob(ctx.workspace.id, input.jobId);
+      if (!job || job.kind !== PEOPLE_VERIFY_JOB) throw new TRPCError({ code: "NOT_FOUND" });
+      return job;
     }),
 
   reEnrich: workspaceProcedure

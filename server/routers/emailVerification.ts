@@ -79,7 +79,7 @@ const jobStarting = new Set<number>();
  * How many more addresses the shared key's daily cap allows this workspace,
  * or Infinity when it is on its own key or no cap is set.
  */
-async function sharedHeadroom(workspaceId: number, apiKey: string): Promise<number> {
+export async function sharedHeadroom(workspaceId: number, apiKey: string): Promise<number> {
   if (keySourceOf(apiKey, process.env.REOON_API_KEY) !== "shared") return Infinity;
   const policy = await sharedKeyPolicy(workspaceId, "reoon");
   if (policy.dailyCap === null) return Infinity;

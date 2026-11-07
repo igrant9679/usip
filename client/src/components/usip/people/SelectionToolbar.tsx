@@ -18,7 +18,7 @@
  * never wraps at desktop widths.
  */
 import { csvCell } from "@shared/csvCell";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
 import { invalidateEnrollmentReads } from "@/lib/enrollmentCache";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -39,13 +39,14 @@ import { toast } from "sonner";
 import {
   X, Mail, Send, Workflow as WorkflowIcon, ListPlus, Download, Sparkles,
   MoreHorizontal, Search, ChevronDown, Plus, Loader2, Activity, ListChecks,
-  CheckSquare, UserX, Trash2, PhoneCall,
+  CheckSquare, UserX, Trash2, PhoneCall, ShieldCheck,
 } from "lucide-react";
 import { ResearchAiMenu } from "./ResearchAiMenu";
 import { WorkflowSelectionMenu } from "./CreateWorkflowMenu";
 import { useEnrichJob } from "./LinkedInEnrichment";
 import { confirmAction } from "@/components/usip/Common";
-import { useSourceBudgets } from "@/components/usip/SpendPreview";
+import { confirmPaidLookup, useSourceBudgets } from "@/components/usip/SpendPreview";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { enrichFullyText } from "@shared/spendPreview";
 import { formatPhone } from "@shared/phoneFormat";
 import { agentNumbers } from "@shared/voiceCapacity";
@@ -539,7 +540,49 @@ function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
     }
   };
 
-  const busy = enrichJob.running || fullBusy;
+  // Verify People in bulk (audit 2026-10-20, F39): one background job through
+  // the person page's own Verify, asked first with the credits it can spend
+  // (F8). It follows the job, then refreshes People and the Data health counts.
+  const { isManager } = useWorkspaceRole();
+  const [verifyJobId, setVerifyJobId] = useState<number | null>(null);
+  const verifyBulk = trpc.prospects.verifyEmailBulk.useMutation({
+    onSuccess: (r) => {
+      setVerifyJobId(r.jobId);
+      toast.info(r.existing
+        ? "These people are already being verified; following that job."
+        : `Verifying ${r.queued} ${r.queued === 1 ? "address" : "addresses"} in the background${r.noEmail ? ` (${r.noEmail} with no address skipped)` : ""}.`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const verifyJob = trpc.prospects.verifyJob.useQuery({ jobId: verifyJobId ?? 0 }, {
+    enabled: verifyJobId != null,
+    refetchInterval: (q) => {
+      const s = (q.state.data as { status?: string } | undefined)?.status;
+      return s === "queued" || s === "running" ? 3000 : false;
+    },
+  });
+  useEffect(() => {
+    const j = verifyJob.data;
+    if (!j || verifyJobId == null || j.id !== verifyJobId || j.status === "queued" || j.status === "running") return;
+    if (j.status === "done") toast.success(`Verified ${j.done} of ${j.total}${j.failed ? ` · ${j.failed} could not be verified` : ""}.`);
+    else toast.error(`Verification ${j.status}${j.message ? `: ${j.message}` : ""}. ${j.done} of ${j.total} were verified.`);
+    utils.prospects.list.invalidate();
+    utils.prospects.get.invalidate();
+    utils.dataHealth.getMetrics.invalidate();
+    setVerifyJobId(null);
+  }, [verifyJob.data, verifyJobId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const askVerify = () => confirmPaidLookup({
+    title: `Verify the emails of ${selectedIds.length} ${selectedIds.length === 1 ? "person" : "people"}?`,
+    vendor: "Reoon",
+    count: selectedIds.length,
+    unit: "daily credit",
+    allowance: budgets.data?.reoon.allowance ?? null,
+    note: "People with no address are skipped and cost nothing. It runs in the background; each verdict lands on the person and in Data health.",
+    confirmLabel: "Verify",
+  }, () => verifyBulk.mutate({ ids: selectedIds }));
+  const verifying = verifyBulk.isPending || verifyJobId != null;
+
+  const busy = enrichJob.running || fullBusy || verifying;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -556,6 +599,12 @@ function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
         }, () => { void startFull(); })}><Sparkles className="size-4 mr-2" /> Enrich fully (all sources)</DropdownMenuItem>
         <DropdownMenuItem disabled={busy} onClick={start}><Activity className="size-4 mr-2" /> Refresh LinkedIn data</DropdownMenuItem>
         <DropdownMenuItem disabled={busy} onClick={start}><Mail className="size-4 mr-2" /> Detect job changes</DropdownMenuItem>
+        {/* Managers and admins, as prospects.verifyEmail requires. */}
+        {isManager && (
+          <DropdownMenuItem disabled={busy || selectedIds.length > 200} onClick={askVerify}>
+            <ShieldCheck className="size-4 mr-2" /> {selectedIds.length > 200 ? "Verify emails (200 at a time)" : "Verify emails"}
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

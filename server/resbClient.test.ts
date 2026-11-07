@@ -169,6 +169,36 @@ describe("spend is said before it happens (F8, U16)", () => {
   });
 });
 
+describe("verify People from the screen (F39) and the credits card (F10)", () => {
+  it("People's toolbar verifies a selection through the bulk procedure, after the cost confirmation, and follows the job", () => {
+    const st = read("client/src/components/usip/people/SelectionToolbar.tsx");
+    const menu = block(st, "function EnrichMenu(", "function MoreMenu(");
+    const ask = block(menu, "const askVerify = () => confirmPaidLookup({", "const verifying =");
+    expect(ask).toContain('vendor: "Reoon"');
+    expect(ask).toContain("count: selectedIds.length");
+    expect(ask).toContain("() => verifyBulk.mutate({ ids: selectedIds })");
+    expect(menu).toContain("trpc.prospects.verifyEmailBulk.useMutation({");
+    expect(menu).toContain("trpc.prospects.verifyJob.useQuery({ jobId: verifyJobId ?? 0 }");
+    expect(menu).toContain("utils.dataHealth.getMetrics.invalidate();");
+    expect(menu).toContain("{isManager && (");
+    expect(menu).toContain("onClick={askVerify}");
+  });
+
+  it("the Data health center's credits card replaces the placeholder", () => {
+    const de = read("client/src/pages/usip/DataEnrichment.tsx");
+    const center = block(de, '{tab === "Data health center" && (', '{tab === "CRM" && (');
+    expect(center).toContain("<CreditsCard />");
+    expect(center).not.toContain("What enrichment has cost");
+    const card = block(de, "function CreditsCard() {", "/* ── inline donut chart ── */");
+    expect(card).toContain("trpc.dataHealth.credits.useQuery(");
+    expect(card).toContain("Reoon balance");
+    expect(card).toContain("LinkedIn lookups");
+    expect(card).toContain("QuickEnrich");
+    // A failed read is said, never a zero.
+    expect(card).toContain('row("Reoon balance", "unavailable", c.reoon.error ?? undefined)');
+  });
+});
+
 describe("LinkedIn result paging (F43)", () => {
   it("Load the next 10 sends the cursor of the page before and appends", () => {
     const card = block(fp, "function LinkedInSearchCard()", "/* ─── Main panel");
