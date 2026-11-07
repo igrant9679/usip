@@ -67,6 +67,41 @@ export function launcherBudgetLine(sources: readonly string[], b: SourceBudgets 
 }
 
 /**
+ * The most one person's "Enrich fully" can spend (services/enrichment/
+ * comprehensivePass.ts): QuickEnrich bills only an email it delivers, and its
+ * hit is confirmed with one Reoon daily credit; the address finder checks at
+ * most three patterns (scraper/emailPatterns.ts), each with an instant credit
+ * and, until one is deliverable, a daily credit; one LinkedIn lookup is queued
+ * when the person has a profile URL and no profile on file. Pinned by a test.
+ */
+export const ENRICH_FULLY_MAX = { quickenrich: 1, reoonInstant: 3, reoonDaily: 4, linkedin: 1 } as const;
+
+export function enrichFullyText(people: number, b?: SourceBudgets | null): string {
+  const m = ENRICH_FULLY_MAX;
+  const parts = [
+    `For each person it can use up to ${m.quickenrich} QuickEnrich credit (only when an email is found), ${m.reoonInstant} Reoon instant and ${m.reoonDaily} Reoon daily credits to check addresses, and ${m.linkedin} LinkedIn lookup when no profile is on file.`,
+    people > 1 ? `For ${n(people)} people that is at most ${n(people * m.quickenrich)} QuickEnrich, ${n(people * m.reoonInstant)} + ${n(people * m.reoonDaily)} Reoon and ${n(people * m.linkedin)} LinkedIn.` : "",
+  ];
+  if (b) {
+    const left: string[] = [];
+    if (b.quickenrich.configured) left.push(allowanceLine("QuickEnrich pulls", true, b.quickenrich.allowance));
+    if (b.reoon.allowance) left.push(`Reoon shared key: ${n(leftOf(b.reoon.allowance)!)} of ${n(b.reoon.allowance.cap)} left today`);
+    if (b.linkedin.accounts > 0) left.push(`LinkedIn: ${n(b.linkedin.left)} lookups left today`);
+    if (left.length) parts.push(`${left.join(" · ")}.`);
+  }
+  return parts.filter(Boolean).join(" ");
+}
+
+/** "This makes 1 AI call. This month: 120,000 of 2,000,000 tokens used." */
+export function aiCallText(calls: number, ai?: SourceBudgets["ai"] | null, what?: string): string {
+  const head = `This makes ${calls === 1 ? "1 AI call" : `${n(calls)} AI calls`}${what ? ` ${what}` : ""}, billed to this workspace's AI provider.`;
+  if (!ai) return head;
+  return ai.cap
+    ? `${head} This month: ${n(ai.used)} of ${n(ai.cap)} tokens used.`
+    : `${head} This month: ${n(ai.used)} tokens used (no monthly budget set).`;
+}
+
+/**
  * The confirmation for a paid lookup: how many, in the vendor's unit, and
  * what is left today. `count` is what will be sent; `unit` names one of them.
  */

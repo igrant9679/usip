@@ -70,6 +70,48 @@ export function requestCostUsd(model: ResearchModelId, u: ResearchUsage): number
   return tokens + (u.server_tool_use?.web_search_requests ?? 0) * WEB_SEARCH_USD;
 }
 
+/* ── Estimate and ceiling per run (audit 2026-10-20, F8) ─────────────────── */
+
+/**
+ * The ceiling a run starts with unless the person sets another: research
+ * stops between steps once the run's cost, plus what the draft can cost,
+ * would pass it, and drafts from what it has. Generous on purpose, so a run
+ * of the usual size is never cut short by it; it bounds the unusual one.
+ */
+export const DEFAULT_RESEARCH_CEILING_USD = 10;
+export const MIN_RESEARCH_CEILING_USD = 0.5;
+export const MAX_RESEARCH_CEILING_USD = 100;
+
+/**
+ * The usage a run is estimated at before this workspace has finished runs to
+ * go by: fresh input for the first part, the repeats of later parts read from
+ * the cache, the brief, and the twelve searches a run may use. A rough
+ * figure, and said to be one.
+ */
+export const TYPICAL_RESEARCH_USAGE: ResearchUsage = {
+  input_tokens: 200_000,
+  cache_read_input_tokens: 400_000,
+  output_tokens: 20_000,
+  server_tool_use: { web_search_requests: 12 },
+};
+
+/** What the draft step can cost at most: the brief in, a full-length draft out. */
+export function draftReserveUsd(model: ResearchModelId, draftMaxTokens: number): number {
+  return requestCostUsd(model, { input_tokens: 40_000, output_tokens: draftMaxTokens });
+}
+
+/**
+ * A run's estimated cost: the median of this workspace's finished runs on the
+ * same model when there are some, else the typical usage at list price.
+ */
+export function researchEstimate(model: ResearchModelId, pastCosts: number[]): { usd: number; basis: "history" | "list_price"; runs: number } {
+  const costs = pastCosts.filter((c) => Number.isFinite(c) && c > 0).sort((a, b) => a - b);
+  if (costs.length === 0) return { usd: requestCostUsd(model, TYPICAL_RESEARCH_USAGE), basis: "list_price", runs: 0 };
+  const mid = Math.floor(costs.length / 2);
+  const usd = costs.length % 2 ? costs[mid] : (costs[mid - 1] + costs[mid]) / 2;
+  return { usd, basis: "history", runs: costs.length };
+}
+
 export const formatUsd = (n: number | string | null | undefined): string => {
   const v = Number(n ?? 0);
   return v > 0 && v < 0.01 ? "<$0.01" : `$${v.toFixed(2)}`;

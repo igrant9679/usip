@@ -90,12 +90,57 @@ function PeriodPicker({ days, setDays }: { days: number; setDays: (d: number) =>
   );
 }
 
+/**
+ * This calendar month at a glance (audit 2026-10-20, F8: "a monthly spend
+ * card"): each vendor's units since the 1st, and the priced total. The table
+ * below keeps the per-day detail a vendor dashboard is checked against.
+ */
+export function MonthSpendCard() {
+  const q = trpc.spend.month.useQuery();
+  if (q.isLoading) return <div className="p-4 text-sm text-muted-foreground">Loading this month…</div>;
+  if (q.error) return <div className="p-4 text-sm text-red-600 dark:text-red-400">This month's spend could not load: {q.error.message}</div>;
+  const s = q.data!;
+  // One row per vendor and unit, summed across models and keys.
+  const totals = new Map<string, { vendor: string; meter: string; total: number; estUsd: number | null }>();
+  for (const l of s.lines) {
+    const k = `${l.vendor}|${l.meter}`;
+    const t = totals.get(k) ?? { vendor: l.vendor, meter: l.meter, total: 0, estUsd: null };
+    t.total += l.total;
+    if (l.estUsd !== null) t.estUsd = (t.estUsd ?? 0) + l.estUsd;
+    totals.set(k, t);
+  }
+  const rows = Array.from(totals.values());
+  return (
+    <div className="p-4 space-y-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="text-sm font-medium">{s.month} so far</div>
+        <div className="text-sm tabular-nums">{s.estUsd > 0 ? `${formatUsd(s.estUsd)} priced at list` : "No priced usage"}</div>
+      </div>
+      {rows.length === 0 ? (
+        <div className="text-xs text-muted-foreground">Nothing paid for this month.</div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-xs">
+          {rows.map((r) => (
+            <div key={`${r.vendor}|${r.meter}`} className="flex justify-between gap-2">
+              <span className="text-muted-foreground truncate">{VENDOR_LABEL[r.vendor] ?? r.vendor} · {METER_LABEL[r.meter] ?? r.meter}</span>
+              <span className="tabular-nums shrink-0">{n(r.total)}{r.estUsd !== null ? ` · ${formatUsd(r.estUsd)}` : ""}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SpendSection() {
   const [days, setDays] = useState(7);
   const q = trpc.spend.report.useQuery({ days });
   const { user } = useAuth();
   return (
     <>
+      <Section title="This month" description="Paid usage since the 1st (UTC days, as the vendors count them). Dollars only where a list price is on file.">
+        <MonthSpendCard />
+      </Section>
       <Section
         title="Paid usage"
         description="What this workspace spent with each vendor, per day (UTC, as the vendors count it). Est. cost is shown only where a list price is on file."

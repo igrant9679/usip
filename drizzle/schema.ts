@@ -6607,6 +6607,8 @@ export const researchJobs = mysqlTable(
     searches: int("searches").default(0).notNull(),
     fetches: int("fetches").default(0).notNull(),
     costUsd: decimal("costUsd", { precision: 10, scale: 4 }).default("0").notNull(),
+    /** Migration 0361 (audit F8): the cost the person set this run to stay under; null = none (older runs). */
+    costCeilingUsd: decimal("costCeilingUsd", { precision: 10, scale: 4 }),
     error: varchar("error", { length: 500 }),
     startedAt: timestamp("startedAt"),
     finishedAt: timestamp("finishedAt"),

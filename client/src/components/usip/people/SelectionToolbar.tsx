@@ -45,6 +45,8 @@ import { ResearchAiMenu } from "./ResearchAiMenu";
 import { WorkflowSelectionMenu } from "./CreateWorkflowMenu";
 import { useEnrichJob } from "./LinkedInEnrichment";
 import { confirmAction } from "@/components/usip/Common";
+import { useSourceBudgets } from "@/components/usip/SpendPreview";
+import { enrichFullyText } from "@shared/spendPreview";
 import { formatPhone } from "@shared/phoneFormat";
 import { agentNumbers } from "@shared/voiceCapacity";
 import { tablistProps, tabProps } from "@/lib/tabs";
@@ -488,6 +490,7 @@ function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
   // fire-and-forget left the table stale, which read as "photos don't stick".
   const enrichJob = useEnrichJob();
   const start = () => enrichJob.enrich(selectedIds, "people_bulk_action");
+  const budgets = useSourceBudgets();
 
   // Real backend: the comprehensive pass (LinkedIn data on file → Apollo domain
   // → QuickEnrich → pattern+Reoon → scrape, provenance-merged) — the bulk twin
@@ -529,7 +532,8 @@ function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
       utils.linkedinEnrichment.getProspectEnrichment.invalidate();
       // Photos/titles ride the async LinkedIn job; useEnrichJob polls it and
       // re-invalidates the list when profiles land.
-      if (needsLinkedIn.size > 0) enrichJob.enrich(Array.from(needsLinkedIn), "people_bulk_action");
+      // Already in the Enrich fully confirmation's count (one lookup per person).
+      if (needsLinkedIn.size > 0) enrichJob.enrich(Array.from(needsLinkedIn), "people_bulk_action", { confirmed: true });
     } finally {
       setFullBusy(false);
     }
@@ -544,7 +548,12 @@ function EnrichMenu({ selectedIds }: { selectedIds: number[] }) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
-        <DropdownMenuItem disabled={busy} onClick={startFull}><Sparkles className="size-4 mr-2" /> Enrich fully (all sources)</DropdownMenuItem>
+        {/* Spends QuickEnrich, Reoon and LinkedIn: the most it can use is said first (audit 2026-10-20, F8). */}
+        <DropdownMenuItem disabled={busy} onClick={() => confirmAction({
+          title: `Enrich ${selectedIds.length} ${selectedIds.length === 1 ? "person" : "people"} fully?`,
+          description: enrichFullyText(selectedIds.length, budgets.data),
+          confirmLabel: "Spend and enrich",
+        }, () => { void startFull(); })}><Sparkles className="size-4 mr-2" /> Enrich fully (all sources)</DropdownMenuItem>
         <DropdownMenuItem disabled={busy} onClick={start}><Activity className="size-4 mr-2" /> Refresh LinkedIn data</DropdownMenuItem>
         <DropdownMenuItem disabled={busy} onClick={start}><Mail className="size-4 mr-2" /> Detect job changes</DropdownMenuItem>
       </DropdownMenuContent>

@@ -13,8 +13,8 @@ import { trpc } from "@/lib/trpc";
 import { confirmAction } from "@/components/usip/Common";
 import { launcherBudgetLine, paidLookupText, type Allowance } from "@shared/spendPreview";
 
-export function useSourceBudgets() {
-  return trpc.spend.budgets.useQuery(undefined, { staleTime: 30_000, retry: false });
+export function useSourceBudgets(enabled = true) {
+  return trpc.spend.budgets.useQuery(undefined, { staleTime: 30_000, retry: false, enabled });
 }
 
 /** "Apollo: 120 of 500 left today · LinkedIn: 80 of 100 lookups left today · up to 1 AI call". */

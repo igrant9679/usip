@@ -32,6 +32,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { confirmPaidLookup, useSourceBudgets } from "@/components/usip/SpendPreview";
 import {
   User,
   ArrowLeft,
@@ -105,6 +106,8 @@ export default function ProspectDetail() {
   // Verify on the person page (R47, R51): the contact page that had it is
   // retired, and an edited address needs it. prospects.verifyEmail is manager+.
   const { isManager } = useWorkspaceRole();
+  // What a Verify spends, said before it runs (audit 2026-10-20, F8).
+  const budgets = useSourceBudgets();
   const verify = trpc.prospects.verifyEmail.useMutation({
     onSuccess: (r) => { toast.success(`Email ${r.status.replace(/_/g, " ")}`); utils.prospects.get.invalidate({ id }); },
     onError: (e) => toast.error(e.message),
@@ -238,7 +241,7 @@ export default function ProspectDetail() {
                   <a className="hover:underline" href={`mailto:${p.email}`}>{p.email}</a>
                   <Badge variant="outline" className="text-[10px] font-normal">{p.emailStatus ? p.emailStatus.replace(/_/g, " ") : "unverified"}</Badge>
                   {isManager && (
-                    <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px] gap-1" disabled={verify.isPending} onClick={() => verify.mutate({ prospectId: id })}>
+                    <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px] gap-1" disabled={verify.isPending} onClick={() => confirmPaidLookup({ title: `Verify ${p.email}?`, vendor: "Reoon", count: 1, unit: "daily credit", allowance: budgets.data?.reoon.allowance ?? null, note: "The verdict is saved on this person; an invalid address is reported, never removed.", confirmLabel: "Verify" }, () => verify.mutate({ prospectId: id }))}>
                       {verify.isPending ? <Loader2 className="size-3 animate-spin" /> : <ShieldCheck className="size-3" />} Verify
                     </Button>
                   )}

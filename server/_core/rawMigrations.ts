@@ -5027,6 +5027,16 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, F8: a research run carries the cost ceiling the person
+  // confirmed when starting it. Nullable: runs already queued have none and
+  // run as before.
+  {
+    name: "0361_research_run_ceiling.sql",
+    statements: [
+      "ALTER TABLE `research_jobs` ADD COLUMN `costCeilingUsd` decimal(10,4) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

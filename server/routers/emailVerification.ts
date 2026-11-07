@@ -14,6 +14,7 @@ import {
   contacts,
   emailVerificationJobs,
   emailVerificationSnapshots,
+  prospects,
   workspaceSettings,
   workspaces,
 } from "../../drizzle/schema";
@@ -154,15 +155,58 @@ export async function snapshotHealthMetrics(workspaceId: number): Promise<void> 
  * first, never while another job runs, and within the shared key's daily cap.
  * Says what it did, so "Run Now" can too.
  */
-export async function triggerScheduledReverify(
-  workspaceId: number,
-  triggeredByUserId: number | null = null,
-): Promise<{ started: boolean; emails: number; reason?: string }> {
+/** The domain of an address, lower-cased, or "". */
+const domainOf = (email: string | null | undefined) => String(email ?? "").trim().toLowerCase().split("@")[1] ?? "";
+
+/**
+ * Domains this workspace has seen answer accept-all within `sinceMs`: any
+ * address verified accept_all there, on a contact or a person. An accept-all
+ * server says yes to every address, so re-checking one of its addresses buys
+ * the same "accept_all" again (audit 2026-10-20, F43).
+ */
+async function recentAcceptAllDomains(db: Db, workspaceId: number, since: Date, domains: string[]): Promise<Set<string>> {
+  const want = new Set(domains.filter(Boolean));
+  const out = new Set<string>();
+  if (want.size === 0) return out;
+  const [c, p] = await Promise.all([
+    db.select({ email: contacts.email }).from(contacts).where(and(
+      eq(contacts.workspaceId, workspaceId),
+      eq(contacts.emailVerificationStatus, "accept_all"),
+      gt(contacts.emailVerifiedAt, since),
+    )).limit(5000),
+    db.select({ email: prospects.email }).from(prospects).where(and(
+      eq(prospects.workspaceId, workspaceId),
+      eq(prospects.emailStatus, "accept_all"),
+      gt(prospects.emailVerifiedAt, since),
+    )).limit(5000),
+  ]);
+  for (const r of [...c, ...p]) {
+    const d = domainOf(r.email);
+    if (want.has(d)) out.add(d);
+  }
+  return out;
+}
+
+export type ReverifyPlan =
+  | { ok: false; reason: string; due: number; skippedAcceptAll: number }
+  | { ok: true; apiKey: string; emails: string[]; due: number; skippedAcceptAll: number; headroom: number | null; dailyCap: number | null };
+
+/**
+ * What a scheduled re-verify would send now, without sending: the cron, Run
+ * Now and Run Now's confirmation all read this, so the count someone confirms
+ * is the count that goes (audit 2026-10-20, F8).
+ *
+ * An address at a domain that answered accept-all inside the re-verify
+ * interval is left out (F43): its answer cannot change, and each check costs
+ * a credit. A domain's first stale address still goes, so a server that stops
+ * accepting everything is noticed on the next pass.
+ */
+export async function planScheduledReverify(workspaceId: number): Promise<ReverifyPlan> {
   const db = await getDb();
-  if (!db) return { started: false, emails: 0, reason: "no database" };
+  if (!db) return { ok: false, reason: "no database", due: 0, skippedAcceptAll: 0 };
 
   const apiKey = await getReoonKey(workspaceId);
-  if (!apiKey) return { started: false, emails: 0, reason: "no Reoon key for this workspace" };
+  if (!apiKey) return { ok: false, reason: "no Reoon key for this workspace", due: 0, skippedAcceptAll: 0 };
 
   const [settings] = await db
     .select()
@@ -170,17 +214,14 @@ export async function triggerScheduledReverify(
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
 
-  if (!settings?.reverifyIntervalDays) return { started: false, emails: 0, reason: "the re-verify schedule is off" };
+  if (!settings?.reverifyIntervalDays) return { ok: false, reason: "the re-verify schedule is off", due: 0, skippedAcceptAll: 0 };
 
   const intervalDays = settings.reverifyIntervalDays;
   const statuses = Array.isArray(settings.reverifyStatuses)
     ? (settings.reverifyStatuses as string[])
     : ["risky", "accept_all"];
 
-  if (statuses.length === 0) return { started: false, emails: 0, reason: "no statuses are selected for re-verify" };
-  if (jobStarting.has(workspaceId) || (await runningJobFor(db, workspaceId))) {
-    return { started: false, emails: 0, reason: "a verification job is already running" };
-  }
+  if (statuses.length === 0) return { ok: false, reason: "no statuses are selected for re-verify", due: 0, skippedAcceptAll: 0 };
 
   // Cutoff: contacts verified more than N days ago (or never verified)
   const cutoff = new Date();
@@ -203,11 +244,39 @@ export async function triggerScheduledReverify(
     .orderBy(asc(contacts.emailVerifiedAt))
     .limit(BULK_VERIFY_MAX);
 
+  const due = uniqueEmails(staleContacts);
+  const acceptAll = await recentAcceptAllDomains(db, workspaceId, cutoff, due.map(domainOf));
+  const kept = due.filter((e) => !acceptAll.has(domainOf(e)));
+  const skippedAcceptAll = due.length - kept.length;
+
   const headroom = await sharedHeadroom(workspaceId, apiKey);
-  const emails = uniqueEmails(staleContacts).slice(0, Math.min(BULK_VERIFY_MAX, headroom));
+  const emails = kept.slice(0, Math.min(BULK_VERIFY_MAX, headroom));
   if (emails.length === 0) {
-    return { started: false, emails: 0, reason: headroom === 0 ? "the shared Reoon key's daily cap is used up" : "no contacts are due for re-verify" };
+    return {
+      ok: false,
+      due: due.length,
+      skippedAcceptAll,
+      reason: headroom === 0 ? "the shared Reoon key's daily cap is used up"
+        : skippedAcceptAll > 0 ? `the ${skippedAcceptAll} due ${skippedAcceptAll === 1 ? "address is" : "addresses are"} at accept-all domains, which would answer the same again`
+        : "no contacts are due for re-verify",
+    };
   }
+  const policy = keySourceOf(apiKey, process.env.REOON_API_KEY) === "shared" ? await sharedKeyPolicy(workspaceId, "reoon") : null;
+  return { ok: true, apiKey, emails, due: due.length, skippedAcceptAll, headroom: Number.isFinite(headroom) ? headroom : null, dailyCap: policy?.dailyCap ?? null };
+}
+
+export async function triggerScheduledReverify(
+  workspaceId: number,
+  triggeredByUserId: number | null = null,
+): Promise<{ started: boolean; emails: number; reason?: string; skippedAcceptAll?: number }> {
+  const db = await getDb();
+  if (!db) return { started: false, emails: 0, reason: "no database" };
+  if (jobStarting.has(workspaceId) || (await runningJobFor(db, workspaceId))) {
+    return { started: false, emails: 0, reason: "a verification job is already running" };
+  }
+  const plan = await planScheduledReverify(workspaceId);
+  if (!plan.ok) return { started: false, emails: 0, reason: plan.reason, skippedAcceptAll: plan.skippedAcceptAll };
+  const { apiKey, emails } = plan;
 
   jobStarting.add(workspaceId);
   try {
@@ -221,7 +290,7 @@ export async function triggerScheduledReverify(
       progressPct: "0",
       triggeredByUserId,
     });
-    return { started: true, emails: Number(task.count_processing ?? emails.length) };
+    return { started: true, emails: Number(task.count_processing ?? emails.length), skippedAcceptAll: plan.skippedAcceptAll };
   } finally {
     jobStarting.delete(workspaceId);
   }
@@ -580,6 +649,18 @@ export const emailVerificationRouter = router({
    */
   triggerReverifyNow: adminWsProcedure.mutation(async ({ ctx }) => {
     return triggerScheduledReverify(ctx.workspace.id, ctx.user.id);
+  }),
+
+  /**
+   * What Run Now would send, for its confirmation (audit 2026-10-20, F8):
+   * the count, the credits and the shared cap left, from the same plan the run
+   * uses. Spends nothing.
+   */
+  reverifyPreview: adminWsProcedure.query(async ({ ctx }) => {
+    const plan = await planScheduledReverify(ctx.workspace.id);
+    return plan.ok
+      ? { ok: true as const, emails: plan.emails.length, due: plan.due, skippedAcceptAll: plan.skippedAcceptAll, headroom: plan.headroom, dailyCap: plan.dailyCap, reason: null }
+      : { ok: false as const, emails: 0, due: plan.due, skippedAcceptAll: plan.skippedAcceptAll, headroom: null, dailyCap: null, reason: plan.reason };
   }),
 
   /** Get historical trend data for the Email Health widget */

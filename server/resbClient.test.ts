@@ -87,6 +87,88 @@ describe("already in People, before saving (F38)", () => {
   });
 });
 
+describe("spend is said before it happens (F8, U16)", () => {
+  it("the launchers show each source's allowance left today before running (U16)", () => {
+    const panel = block(fp, "export function FindProspectsPanel()", "{/* ── LinkedIn / Sales Navigator search ── */}");
+    expect(panel).toContain("<SourceBudgetLine sources={runSources} />");
+    const launcher = block(camp, "function CampaignDiscoveryLauncher(", "function LogsTab(");
+    expect(launcher).toContain('<SourceBudgetLine sources={["linkedin", "news", "apollo", "quickenrich"]} />');
+    // The same four the launcher's discovery fans out to (pinned to the service elsewhere).
+    const sp = read("client/src/components/usip/SpendPreview.tsx");
+    expect(sp).toContain("trpc.spend.budgets.useQuery(");
+    expect(sp).toContain("launcherBudgetLine(sources, q.data)");
+  });
+
+  it("Verify on the person page and in the contact drawer asks first, with the credit and today's allowance", () => {
+    const pd = read("client/src/pages/usip/ProspectDetail.tsx");
+    expect(pd).toContain('onClick={() => confirmPaidLookup({ title: `Verify ${p.email}?`, vendor: "Reoon", count: 1, unit: "daily credit"');
+    expect(pd).not.toContain("onClick={() => verify.mutate({ prospectId: id })}");
+    const rd = read("client/src/components/usip/RecordDrawer.tsx");
+    const onVerify = block(rd, "onVerify={() => {", "/>");
+    expect(onVerify).not.toContain("                  verifySingle.mutate({ contactId: relatedId });");
+    expect(rd).toContain('confirmPaidLookup({ title: `Verify ${contactData.data.email}?`, vendor: "Reoon", count: 1, unit: "daily credit"');
+    expect(rd).toContain("() => verifySingle.mutate({ contactId: relatedId }));");
+  });
+
+  it("every LinkedIn enrich asks first; Enrich fully's own LinkedIn follow-up is already in its count", () => {
+    const li = read("client/src/components/usip/people/LinkedInEnrichment.tsx");
+    const ret = block(li, "  const askThen = (count: number | null, go: () => void) => {", "/** Compact enrich action");
+    expect(ret).toContain('opts.confirmed ? runMut.mutate({ prospectIds, triggerType }) : askThen(prospectIds.length, () => runMut.mutate({ prospectIds, triggerType }))');
+    expect(ret).toContain("askThen(opts.enrichAll ? null : (opts.prospectIds?.length ?? null), () => runListMut.mutate({ listId, ...opts }))");
+    expect(ret).toContain('unit: "profile lookup"');
+    const st = read("client/src/components/usip/people/SelectionToolbar.tsx");
+    expect(st).toContain('enrichJob.enrich(Array.from(needsLinkedIn), "people_bulk_action", { confirmed: true });');
+  });
+
+  it("Enrich fully, in bulk and in the drawer, states the most it can spend and asks", () => {
+    const st = read("client/src/components/usip/people/SelectionToolbar.tsx");
+    const item = block(st, "<DropdownMenuItem disabled={busy} onClick={() => confirmAction({", "Enrich fully (all sources)</DropdownMenuItem>");
+    expect(item).toContain("description: enrichFullyText(selectedIds.length, budgets.data)");
+    expect(item).toContain("() => { void startFull(); }");
+    expect(st).not.toContain("onClick={startFull}");
+    const people = read("client/src/pages/usip/People.tsx");
+    expect(people).toContain("description: enrichFullyText(1, enrichBudgets.data), confirmLabel: \"Spend and enrich\" }, () => enrichFull.mutate({ prospectId: p.id }))");
+    expect(people).not.toContain("onClick={() => enrichFull.mutate({ prospectId: p.id })}");
+  });
+
+  it("ICP inference (Infer) says it is one AI call, with the month's budget, and asks", () => {
+    const icp = read("client/src/pages/usip/AREIcpAgent.tsx");
+    expect(icp).toContain('description: aiCallText(1, icpBudgets.data?.ai, "over up to 200 won and 100 lost deals")');
+    expect(icp).not.toContain("onClick={() => regenerate.mutate()}");
+    expect(icp.match(/onClick=\{askRegenerate\}/g)).toHaveLength(2);
+  });
+
+  it("Run now on re-verify reads the run's own plan, then states count and credits", () => {
+    const st = read("client/src/pages/usip/Settings.tsx");
+    const ask = block(st, "const askReverifyNow = async () => {", "const [blockInvalid, setBlockInvalid]");
+    expect(ask).toContain("await utils.emailVerification.reverifyPreview.fetch()");
+    expect(ask).toContain('unit: "bulk credit"');
+    expect(ask).toContain("() => triggerNowMut.mutate()");
+    expect(st).toContain("onClick={askReverifyNow}");
+    expect(st).not.toContain("onClick={() => triggerNowMut.mutate()}");
+  });
+
+  it("Link all unlinked says it spends nothing", () => {
+    expect(read("client/src/pages/usip/DataHealth.tsx")).toContain("It reads only what Velocity holds and spends no credits.");
+  });
+
+  it("a research run shows its estimate and takes a ceiling", () => {
+    const rr = read("client/src/components/usip/research/ResearchRuns.tsx");
+    const dlg = block(rr, "export function StartRunDialog(", "/** The workspace's recent runs");
+    expect(dlg).toContain("trpc.research.runs.estimate.useQuery(undefined, { enabled: open })");
+    expect(dlg).toContain("costCeilingUsd: ceilingUsd,");
+    expect(dlg).toContain("Estimated cost: about");
+    expect(dlg).toContain('<Label htmlFor="run-ceiling">Stop at (USD)</Label>');
+  });
+
+  it("Billing has a monthly spend card above the per-day report", () => {
+    const sr = read("client/src/components/usip/SpendReport.tsx");
+    expect(sr).toContain("const q = trpc.spend.month.useQuery();");
+    const section = block(sr, "export function SpendSection() {", "function SharedKeyCell(");
+    expect(section).toContain("<MonthSpendCard />");
+  });
+});
+
 describe("LinkedIn result paging (F43)", () => {
   it("Load the next 10 sends the cursor of the page before and appends", () => {
     const card = block(fp, "function LinkedInSearchCard()", "/* ─── Main panel");
