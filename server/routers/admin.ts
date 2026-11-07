@@ -1915,6 +1915,13 @@ export const teamRouter = router({
           message: `This invite was sent to ${row.userEmail}. Please sign in with that email address.`,
         });
       }
+      // The invitation's token was emailed to this address, so holding it
+      // proves the address: an account still waiting on its sign-up link is
+      // verified now (audit 2026-10-20, F1). ctx.user IS row.userId (checked
+      // just above) and is the full users row, so no extra read; an account
+      // that is not waiting is not written to.
+      const { isEmailVerificationPending, markEmailVerified } = await import("../services/accountEmailVerification");
+      if (isEmailVerificationPending(ctx.user)) await markEmailVerified(db, row.userId);
       // If the member's loginMethod is already a real method (oauth, google, etc.),
       // the OAuth merge already handled the acceptance — just clear the token and return.
       // This covers: (a) the invite-placeholder merge in the OAuth callback, and

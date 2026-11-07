@@ -31,6 +31,8 @@ import { useTotpStep } from "./_core/sessionRevocation";
 import { recordReissuedSession, recordSignIn, sessionTokenOf } from "./_core/sessionRecords";
 import { clearFailures, isLockedOut, noteFailure, SIGN_IN_LOCKED, signInKey } from "./services/accountLockout";
 import { backupCodesLeft, looksLikeBackupCode, useBackupCode } from "./services/mfaBackupCodes";
+import { markEmailVerified, mintEmailVerification, sendVerificationEmail } from "./services/accountEmailVerification";
+import { insertIdOf } from "./_core/insertId";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { escapeHtml } from "@shared/escapeHtml";
 import { safeReturnPath } from "@shared/returnPath";
@@ -447,6 +449,9 @@ export function registerPasswordAuthRoutes(app: Express) {
       .where(eq(users.id, user.id));
     // The way out of a sign-in lock (G9): the reset proved the mailbox.
     if (user.email) clearFailures(signInKey(user.email));
+    // ...and so it confirms the address of an account still waiting on its
+    // verification link (F1).
+    await markEmailVerified(db, user.id).catch(() => {});
 
     res.json({ ok: true });
   });
@@ -743,6 +748,7 @@ export function registerPasswordAuthRoutes(app: Express) {
 
       let userId: number;
       let openId: string;
+      let verification: ReturnType<typeof mintEmailVerification> | null = null;
 
       if (existing && claimedInvite) {
         // The invitee's own placeholder, claimed with its invite token. Setting
@@ -757,6 +763,10 @@ export function registerPasswordAuthRoutes(app: Express) {
             name: cleanName ?? undefined,
             loginMethod: "password",
             lastSignedIn: now,
+            // The invitation's token came to this address, so it is proven (F1).
+            emailVerifiedAt: now,
+            emailVerifyTokenHash: null,
+            emailVerifyExpiresAt: null,
           })
           .where(eq(users.id, existing.id));
         await db
@@ -765,6 +775,13 @@ export function registerPasswordAuthRoutes(app: Express) {
           .where(and(eq(workspaceMembers.id, claimedInvite.memberId), eq(workspaceMembers.userId, existing.id)));
       } else {
         openId = `local:${nanoid(24)}`;
+        /**
+         * A stranger's new account is unverified until its link is opened
+         * (audit 2026-10-20, F1): the token's hash goes in with the row, so
+         * the very first page already shows the banner, and the mail itself
+         * is sent after the answer, below.
+         */
+        verification = mintEmailVerification(now.getTime());
         const [insertResult] = await db.insert(users).values({
           openId,
           email: normalizedEmail,
@@ -772,8 +789,9 @@ export function registerPasswordAuthRoutes(app: Express) {
           passwordHash,
           loginMethod: "password",
           lastSignedIn: now,
+          ...verification.columns,
         });
-        userId = (insertResult as unknown as { insertId: number }).insertId;
+        userId = insertIdOf(insertResult);
       }
 
       // Consume the activation link (single-use) and add the new user to its
@@ -821,9 +839,16 @@ export function registerPasswordAuthRoutes(app: Express) {
       const redirect = safeReturnPath(returnPath);
       const acceptsJson = (req.headers.accept ?? "").includes("application/json");
       if (acceptsJson) {
-        res.json({ ok: true, redirect });
+        res.json({ ok: true, redirect, emailVerificationPending: !!verification });
       } else {
         res.redirect(302, redirect);
+      }
+      // Answer first, send after, as forgot-password does: the mail must not
+      // hold up the sign-up, and a failed send leaves the banner's Resend.
+      if (verification) {
+        const token = verification.token;
+        void sendVerificationEmail(db, userId, token).catch((e) =>
+          console.error("[register] verification email failed:", e instanceof Error ? e.message : e));
       }
     },
   );

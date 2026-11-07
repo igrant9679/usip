@@ -92,6 +92,7 @@ const MeetingPickPage = lazyChunk(() => import("@/pages/MeetingPickPage"));
 const LandingPage = lazyChunk(() => import("@/pages/LandingPage"));
 const ResetPassword = lazyChunk(() => import("@/pages/ResetPassword"));
 const ConfirmEmail = lazyChunk(() => import("@/pages/ConfirmEmail"));
+const VerifyEmail = lazyChunk(() => import("@/pages/VerifyEmail"));
 const LandingPages = lazyChunk(() => import("@/pages/usip/LandingPages"));
 const ChatPage = lazyChunk(() => import("@/pages/ChatPage"));
 const ChatAgents = lazyChunk(() => import("@/pages/usip/ChatAgents"));
@@ -624,6 +625,8 @@ function Router() {
       <Route path="/reset-password"><ResetPassword /></Route>
       {/* PUBLIC too: the link to a new sign-in email may open in a browser that is not signed in (G32). */}
       <Route path="/confirm-email"><ConfirmEmail /></Route>
+      {/* PUBLIC too: a new account's confirmation link (F1) may open where nobody is signed in. */}
+      <Route path="/verify-email"><VerifyEmail /></Route>
       <Route path="/c/:slug"><ChatPage /></Route>
       <Route path="/v2/landing-pages"><AuthGate><LandingPages /></AuthGate></Route>
       <Route path="/v2/chat"><AuthGate><ChatAgents /></AuthGate></Route>

@@ -225,7 +225,11 @@ export const profileRouter = router({
       }
       const [taken] = await db.select({ id: users.id }).from(users).where(eq(users.email, claim.newEmail)).limit(1);
       if (taken && taken.id !== u.id) throw new TRPCError({ code: "BAD_REQUEST", message: "That email is already in use." });
-      await db.update(users).set({ email: claim.newEmail }).where(and(eq(users.id, u.id), eq(users.email, u.email!)));
+      // The link was opened from the new mailbox, which proves it (F1): the
+      // new address is verified, and any sign-up link for the old one is void.
+      await db.update(users)
+        .set({ email: claim.newEmail, emailVerifiedAt: new Date(), emailVerifyTokenHash: null, emailVerifyExpiresAt: null })
+        .where(and(eq(users.id, u.id), eq(users.email, u.email!)));
       return { ok: true as const, email: claim.newEmail };
     }),
 

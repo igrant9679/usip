@@ -5033,6 +5033,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Email verification for self-registered accounts (audit 2026-10-20, F1).
+  // Nullable columns, then an idempotent backfill: every account that exists
+  // counts as verified (stamped with when it was created). The backfill skips
+  // any row with a pending token, so running it again can never verify an
+  // account that registered after this shipped and has not opened its link.
+  {
+    name: "0312_user_email_verification.sql",
+    statements: [
+      "ALTER TABLE `users` ADD COLUMN `email_verified_at` timestamp NULL",
+      "ALTER TABLE `users` ADD COLUMN `email_verify_token_hash` varchar(64) NULL",
+      "ALTER TABLE `users` ADD COLUMN `email_verify_expires_at` timestamp NULL",
+      "CREATE INDEX `ix_users_email_verify` ON `users` (`email_verify_token_hash`)",
+      "UPDATE `users` SET `email_verified_at` = `createdAt` WHERE `email_verified_at` IS NULL AND `email_verify_token_hash` IS NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

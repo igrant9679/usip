@@ -67,6 +67,18 @@ export const users = mysqlTable("users", {
    * could be replayed for that whole window.
    */
   mfaLastStep: int("mfa_last_step"),
+  /**
+   * Email verification for self-registered accounts (migration 0312, audit
+   * 2026-10-20, F1). `emailVerifyTokenHash` is the SHA-256 of the link's
+   * token, set when a stranger registers and cleared when the link is opened,
+   * an invitation is accepted or a password reset is completed (each proves
+   * the mailbox). An account is waiting on verification only while it has a
+   * token hash and no `emailVerifiedAt`: every account from before this, and
+   * every invitee, SCIM or OAuth row, counts as verified.
+   */
+  emailVerifiedAt: timestamp("email_verified_at"),
+  emailVerifyTokenHash: varchar("email_verify_token_hash", { length: 64 }),
+  emailVerifyExpiresAt: timestamp("email_verify_expires_at"),
 });
 export type User = typeof users.$inferSelect;
 
