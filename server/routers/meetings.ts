@@ -328,7 +328,12 @@ export const meetingsRouter = router({
         input.ids ? inArray(meetings.id, input.ids) : undefined,
       );
       const rows = await db.select({ id: meetings.id, ownerUserId: meetings.ownerUserId }).from(meetings).where(open);
-      if (rows.length === 0) return { reassigned: 0 };
+      if (rows.length === 0) {
+        // Nothing moved, so nothing is logged (G49 adds no automatic entry).
+        const { noteNothingToAudit } = await import("../_core/requestContext");
+        noteNothingToAudit();
+        return { reassigned: 0 };
+      }
       await db.update(meetings)
         .set({ ownerUserId: input.toUserId, updatedAt: sql`${meetings.updatedAt}` } as never)
         .where(and(open, inArray(meetings.id, rows.map((r) => r.id))));

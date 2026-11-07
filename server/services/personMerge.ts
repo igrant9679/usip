@@ -115,6 +115,7 @@ import {
   callSuppressions,
 } from "../../drizzle/schema";
 import type { getDb } from "../db";
+import { noteAuditRecorded } from "../_core/requestContext";
 import { isPlaceholderToken, usableEmailOrNull } from "@shared/fieldHygiene";
 import { isGenericInboxEmail } from "@shared/genericEmail";
 
@@ -1849,6 +1850,9 @@ export async function executePersonMerge(
      * not at all, and a cluster that fails is reported, not half-merged. */
     try {
       await db.transaction(async (tx) => {
+        // Committed with the merge, not through recordAudit: mark the request
+        // so no automatic entry is added on top (G49).
+        noteAuditRecorded();
         await tx.insert(auditLog).values({
           workspaceId,
           actorUserId: opts.actorUserId ?? null,

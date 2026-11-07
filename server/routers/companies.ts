@@ -286,6 +286,9 @@ export const companiesRouter = router({
       // pass per workspace at a time (P156).
       const pass = startFirmographicInference(ws, { limit });
       if (!pass) return { started: false as const, alreadyRunning: true as const, before, limit };
+      // The pass writes its audit row when it ends (G49: no automatic one now).
+      const { noteAuditRecorded } = await import("../_core/requestContext");
+      noteAuditRecorded();
       void pass.then(async (t) => {
         await recordAudit({ workspaceId: ws, actorUserId: actor, action: "update", entityType: "firmographic_inference", entityId: ws, after: t as unknown as Record<string, unknown> });
         console.log(`[FirmographicInference] ws=${ws} done`, t);
