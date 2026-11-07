@@ -366,6 +366,34 @@ export function cleanPersonaResearch(input: unknown): Cleaned<PersonaResearch> {
   };
 }
 
+/** The four things the AI writers use about a buyer, as a person reads them. */
+export const PERSONA_RESEARCH_PARTS = [
+  { key: "cares", label: "what they care about" },
+  { key: "pains", label: "pains" },
+  { key: "objections", label: "objections" },
+  { key: "angle", label: "the angle" },
+] as const;
+
+/**
+ * How much of a persona's research is filled in (audit 2026-10-20, U18). The
+ * writers pick a persona by job title only when it has some research
+ * (services/research/context.ts reads this), so a persona with none is
+ * passed over without a word; the Personas page shows this as a badge.
+ */
+export function personaResearchCompleteness(p: { cares?: string | null; pains?: unknown; objections?: unknown; angle?: string | null }): {
+  filled: number; of: number; missing: string[]; level: "complete" | "partial" | "none";
+} {
+  const has = {
+    cares: !!(p.cares ?? "").trim(),
+    pains: Array.isArray(p.pains) && p.pains.some((x) => typeof x === "string" && x.trim()),
+    objections: Array.isArray(p.objections) && p.objections.some((x) => typeof x === "string" && x.trim()),
+    angle: !!(p.angle ?? "").trim(),
+  };
+  const missing = PERSONA_RESEARCH_PARTS.filter((x) => !has[x.key]).map((x) => x.label);
+  const filled = PERSONA_RESEARCH_PARTS.length - missing.length;
+  return { filled, of: PERSONA_RESEARCH_PARTS.length, missing, level: filled === 0 ? "none" : missing.length === 0 ? "complete" : "partial" };
+}
+
 /* ── Accepting an AI research draft, part by part ───────────────────────── */
 
 /** The parts of a sector draft a person can take or leave. Status is never one: a person sets it. */

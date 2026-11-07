@@ -23,7 +23,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { areCampaigns, personas, researchMarkets, researchSectors } from "../../../drizzle/schema";
 import { getDb } from "../../db";
-import { cleanPersonaResearch, cleanSectorContent, type SectorContent } from "@shared/researchShape";
+import { cleanPersonaResearch, cleanSectorContent, personaResearchCompleteness, type SectorContent } from "@shared/researchShape";
 import { icpLabels } from "@shared/icpShape";
 import { pausedDownstreamFilter } from "./downstreamAccounts";
 
@@ -147,7 +147,8 @@ export function titleMatchLength(title: string, titles: string[]): number {
   return best;
 }
 
-const hasResearch = (p: PersonaRow) => !!(p.cares || p.angle || p.pains.length || p.objections.length);
+// One rule with the Personas page's completeness badge (audit U18).
+const hasResearch = (p: PersonaRow) => personaResearchCompleteness(p).filled > 0;
 
 /**
  * A sector that lists industries does not fit someone whose known industry is
