@@ -885,6 +885,16 @@ export const emailDrafts = mysqlTable(
     firstReplyAt: timestamp("firstReplyAt"),
     trackingToken: varchar("trackingToken", { length: 64 }), // unique token for open/click tracking
     /**
+     * The sent email's RFC 5322 Message-ID, in full (migration 0340, audit
+     * 2026-10-20 F5). A reply names it in In-Reply-To and References, which is
+     * how inboundReplyPoller ties the reply to THIS draft. trackingToken holds
+     * the provider's tracking id cut to 64 characters, so a full Message-ID
+     * never matched there and replies fell back to "the latest draft to that
+     * address". Set at send time where the provider returns it (SMTP, SendGrid)
+     * and from the Unipile mail_sent webhook for bridged mailboxes.
+     */
+    messageId: varchar("messageId", { length: 500 }),
+    /**
      * HUMAN opens only, since migration 0165. Machine fetches — Apple Mail
      * Privacy Protection, mail scanners, link previewers — are counted
      * separately below rather than inflating this number, which is the one
@@ -903,6 +913,7 @@ export const emailDrafts = mysqlTable(
   (t) => ({
     byWs: index("ix_ed_ws").on(t.workspaceId, t.status),
     byToken: index("ix_ed_token").on(t.trackingToken),
+    byMessageId: index("ix_ed_msgid").on(t.workspaceId, t.messageId),
     /**
      * Declaration only — migration 0061 has created this in the real database
      * since long before this line existed. Recorded here so the drift stops
@@ -1150,6 +1161,13 @@ export const emailLog = mysqlTable(
     failureReason: text("failureReason"),
     /** Provider message id, where the adapter returns one. */
     messageId: varchar("messageId", { length: 500 }),
+    /**
+     * The RFC 5322 Message-ID header the email went out with, where it is
+     * known at send time (migration 0340, F5). Differs from messageId for
+     * SendGrid (an API id) and Unipile (a tracking id). Replies are matched on
+     * it, and through draftId / executionQueueId it names the exact send.
+     */
+    rfcMessageId: varchar("rfcMessageId", { length: 500 }),
     sentAt: timestamp("sentAt").defaultNow().notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
@@ -1167,6 +1185,7 @@ export const emailLog = mysqlTable(
      * and workspaceId ride along to keep the COUNT(*) covering.
      */
     byAcctSent: index("ix_elog_acct_sent").on(t.sendingAccountId, t.sentAt, t.status, t.workspaceId),
+    byRfcMessageId: index("ix_elog_rfc").on(t.workspaceId, t.rfcMessageId),
   }),
 );
 export type EmailLog = typeof emailLog.$inferSelect;
@@ -1839,6 +1858,12 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
    *  RFC 8058 List-Unsubscribe headers in the SMTP send path. */
   emailOpenTracking: boolean("emailOpenTracking").default(true).notNull(),
   emailClickTracking: boolean("emailClickTracking").default(true).notNull(),
+  /**
+   * More of the workspace's own sites, beside companyWebsite (migration 0343,
+   * audit 2026-10-20 F40): outreach adds a signed visitor id to links to
+   * these hosts and their subdomains. Comma-separated hosts.
+   */
+  trackedSiteDomains: varchar("trackedSiteDomains", { length: 1000 }),
   emailUnsubscribeHeader: boolean("emailUnsubscribeHeader").default(false).notNull(),
   /** Sequence opt-out footer (migration 0119) — when enabled, the message is
    *  appended after the body in sequence sends; its `<%link text%>` becomes a
@@ -3314,6 +3339,15 @@ export const emailSuppressions = mysqlTable(
     source: varchar("source", { length: 32 }),
     draftId: int("draftId"), // the draft that triggered the suppression (if applicable)
     contactId: int("contactId"), // linked contact (if found)
+    /**
+     * The People row this opt-out is about, where it is known (migration 0341,
+     * audit 2026-10-20 F7). Suppression was keyed only by address, so a
+     * person who unsubscribed became mailable again at a new address (a
+     * merge, an edit, enrichment). Checked beside the address by
+     * services/suppression. Never set for a bounce: a bounce is about the
+     * address, not the person.
+     */
+    prospectId: int("prospectId"),
     notes: text("notes"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
@@ -3321,6 +3355,7 @@ export const emailSuppressions = mysqlTable(
     byWs: index("ix_sup_ws").on(t.workspaceId),
     byEmail: index("ix_sup_email").on(t.email),
     uniq: index("ix_sup_uniq").on(t.workspaceId, t.email, t.reason),
+    byPerson: index("ix_sup_person").on(t.workspaceId, t.prospectId),
   }),
 );
 export type EmailSuppression = typeof emailSuppressions.$inferSelect;
@@ -4441,10 +4476,13 @@ export const areSuppressionList = mysqlTable(
     reason: mysqlEnum("reason", ["unsubscribe", "bounce", "competitor", "existing_customer", "manual", "do_not_contact"]).notNull(),
     addedByUserId: int("addedByUserId"),
     addedAt: timestamp("addedAt").defaultNow().notNull(),
+    /** The People row, where known (migration 0341, F7): stops the person, whatever address or profile they have later. */
+    prospectId: int("prospectId"),
   },
   (t) => ({
     byWs: index("ix_asupp_ws").on(t.workspaceId),
     byEmail: index("ix_asupp_email").on(t.workspaceId, t.email),
+    byPerson: index("ix_asupp_person").on(t.workspaceId, t.prospectId),
   }),
 );
 export type AreSuppressionList = typeof areSuppressionList.$inferSelect;
@@ -4570,6 +4608,13 @@ export const prospects = mysqlTable(
     city: varchar("city", { length: 80 }),
     state: varchar("state", { length: 80 }),
     country: varchar("country", { length: 80 }),
+    /**
+     * The person's own IANA time zone, where someone set it (migration 0342,
+     * audit 2026-10-20 F18). A sequence with "Send in each person's time
+     * zone" on schedules their steps in it; without it the zone is told from
+     * state/country where that is reliable, else the sequence's.
+     */
+    timezone: varchar("timezone", { length: 64 }),
     company: varchar("company", { length: 200 }),
     companyDomain: varchar("company_domain", { length: 200 }),
     industry: varchar("industry", { length: 80 }),
@@ -6006,6 +6051,13 @@ export const websiteVisits = mysqlTable(
     referrer: varchar("referrer", { length: 1000 }),
     contactId: int("contactId"),
     leadId: int("leadId"),
+    /** A People row named by a signed "p…" id (migration 0343, audit 2026-10-20 F40). */
+    prospectId: int("prospectId"),
+    /**
+     * The link's id was one Velocity signed for this workspace (0343, P5/P88):
+     * the visit is that person's. Unsigned, it is a claim anyone could make.
+     */
+    signed: boolean("signed").default(false).notNull(),
     intent: varchar("intent", { length: 16 }), // low | medium | high
     userAgent: varchar("userAgent", { length: 500 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -6015,6 +6067,7 @@ export const websiteVisits = mysqlTable(
     byVisitor: index("ix_wv_visitor").on(t.visitorId),
     byContact: index("ix_wv_contact").on(t.contactId),
     byLead: index("ix_wv_lead").on(t.leadId),
+    byProspect: index("ix_wv_prospect").on(t.prospectId),
   }),
 );
 export type WebsiteVisit = typeof websiteVisits.$inferSelect;

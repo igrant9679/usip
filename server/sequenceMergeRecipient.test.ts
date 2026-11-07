@@ -53,10 +53,13 @@ describe("resolveDraftRecipient", () => {
       title: "Grants Management Officer", company: "Montgomery County",
     }]]));
     const r = await resolveDraftRecipient(db as never, 1, { toEmail: "dana@montgomerycountymd.gov", toProspectId: 42 });
+    // 2026-11-07 (audit F7): the recipient also names its People row, so the
+    // suppression check can ask by person; the prospect draft's own id here.
     expect(r).toEqual({
       toEmail: "dana@montgomerycountymd.gov",
       firstName: "Dana", lastName: "Whitfield",
       title: "Grants Management Officer", company: "Montgomery County",
+      personId: 42,
     });
   });
 

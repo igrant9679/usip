@@ -5011,6 +5011,64 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Replies are matched by the sent email's full Message-ID (audit
+  // 2026-10-20, F5). trackingToken is varchar(64), so a full RFC Message-ID
+  // never matched and a reply fell back to the newest draft to that address.
+  // Nullable columns, nothing backfilled: older sends keep matching the way
+  // they did (email_log.messageId already holds the SMTP Message-ID).
+  {
+    name: "0340_send_message_ids.sql",
+    statements: [
+      "ALTER TABLE `email_drafts` ADD COLUMN `messageId` varchar(500) NULL",
+      "CREATE INDEX `ix_ed_msgid` ON `email_drafts` (`workspaceId`, `messageId`)",
+      "ALTER TABLE `email_log` ADD COLUMN `rfcMessageId` varchar(500) NULL",
+      "CREATE INDEX `ix_elog_rfc` ON `email_log` (`workspaceId`, `rfcMessageId`)",
+    ],
+  },
+
+  // Suppression by person, not only by address (audit 2026-10-20, F7). A
+  // nullable People id on both lists, then filled where it can be told: the
+  // linked contact's People row first, else the People row with that address
+  // in the workspace (lowest id). Bounces stay address-only. Idempotent: only
+  // rows still without a person are touched, and re-running finds none. This
+  // can only stop more sends, never fewer.
+  {
+    name: "0341_suppression_person.sql",
+    statements: [
+      "ALTER TABLE `email_suppressions` ADD COLUMN `prospectId` int NULL",
+      "CREATE INDEX `ix_sup_person` ON `email_suppressions` (`workspaceId`, `prospectId`)",
+      "ALTER TABLE `are_suppression_list` ADD COLUMN `prospectId` int NULL",
+      "CREATE INDEX `ix_asupp_person` ON `are_suppression_list` (`workspaceId`, `prospectId`)",
+      "UPDATE `email_suppressions` s JOIN `contacts` c ON c.`id` = s.`contactId` AND c.`workspaceId` = s.`workspaceId` SET s.`prospectId` = c.`person_prospect_id` WHERE s.`prospectId` IS NULL AND s.`reason` <> 'bounce' AND c.`person_prospect_id` IS NOT NULL",
+      "UPDATE `email_suppressions` s SET s.`prospectId` = (SELECT MIN(p.`id`) FROM `prospects` p WHERE p.`workspaceId` = s.`workspaceId` AND p.`email` = s.`email`) WHERE s.`prospectId` IS NULL AND s.`reason` <> 'bounce'",
+      "UPDATE `are_suppression_list` a SET a.`prospectId` = (SELECT MIN(p.`id`) FROM `prospects` p WHERE p.`workspaceId` = a.`workspaceId` AND p.`email` = a.`email`) WHERE a.`prospectId` IS NULL AND a.`reason` <> 'bounce' AND a.`email` IS NOT NULL AND a.`email` <> ''",
+    ],
+  },
+
+  // A person's own time zone (audit 2026-10-20, F18), read only by sequences
+  // that send in each person's time zone, which is off unless set. Nullable,
+  // nothing backfilled.
+  {
+    name: "0342_prospect_timezone.sql",
+    statements: [
+      "ALTER TABLE `prospects` ADD COLUMN `timezone` varchar(64) NULL",
+    ],
+  },
+
+  // Signed visitor links (audit 2026-10-20, P5, P88, F40): a visit can name a
+  // People row, says whether its id was one we signed, and a workspace can
+  // list more of its own sites than the company website. Additive; existing
+  // visits stay unsigned, which is what they were.
+  {
+    name: "0343_signed_visitor_links.sql",
+    statements: [
+      "ALTER TABLE `website_visits` ADD COLUMN `prospectId` int NULL",
+      "ALTER TABLE `website_visits` ADD COLUMN `signed` boolean NOT NULL DEFAULT false",
+      "CREATE INDEX `ix_wv_prospect` ON `website_visits` (`prospectId`)",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `trackedSiteDomains` varchar(1000) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

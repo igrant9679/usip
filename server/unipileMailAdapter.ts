@@ -113,7 +113,7 @@ function cacheRowToThread(row: CacheRow): EmailThread {
 
 function cacheRowToMessage(row: CacheRow): EmailMessage {
   const attachments = Array.isArray(row.attachmentsJson)
-    ? (row.attachmentsJson as Array<{ name?: string; mime?: string; size?: number }>)
+    ? (row.attachmentsJson as Array<{ id?: string; name?: string; mime?: string; size?: number }>)
     : [];
   return {
     messageId: row.emailId,
@@ -130,6 +130,9 @@ function cacheRowToMessage(row: CacheRow): EmailMessage {
       filename: a.name ?? "attachment",
       contentType: a.mime ?? "application/octet-stream",
       size: a.size ?? 0,
+      // The id GET /emails/{id}/attachments/{attachmentId} takes (F26):
+      // without it a download or a forward asked for attachment "0".
+      attachmentId: a.id ?? undefined,
     })),
     inReplyTo: undefined,
     references: undefined,
@@ -205,6 +208,7 @@ function unipileEmailToMessage(email: UnipileEmail): EmailMessage {
       filename: a.name,
       contentType: a.mime ?? "application/octet-stream",
       size: a.size ?? 0,
+      attachmentId: (a as { id?: string }).id ?? undefined,
     })),
     inReplyTo: undefined,
     references: undefined,
@@ -568,7 +572,7 @@ export class UnipileMailAdapter implements EmailAdapter {
   }
 
   /** POST /emails — send a new email (handles new + reply via reply_to). */
-  async sendEmail(input: SendEmailInput): Promise<{ messageId: string; threadId?: string }> {
+  async sendEmail(input: SendEmailInput): Promise<{ messageId: string; threadId?: string; rfcMessageId?: string }> {
     const res = await sendEmail({
       accountId: this.unipileAccountId,
       to: attendeesFromCsv(input.to),
@@ -595,6 +599,8 @@ export class UnipileMailAdapter implements EmailAdapter {
         : { opens: false, links: false },
       attachments: input.attachments,
     });
+    // No rfcMessageId: Unipile's send answer carries none. The mail_sent
+    // webhook does, and stamps it on the draft by this tracking id (F5).
     return { messageId: res.tracking_id, threadId: undefined };
   }
 

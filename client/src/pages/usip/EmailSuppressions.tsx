@@ -7,8 +7,11 @@
  * - Manually add a suppression
  * - Remove a suppression (re-enable sending to that address)
  * - See summary counts by reason
+ * - Export the list, or import one, as CSV (audit 2026-10-20, F27)
+ * - See which person an opt-out is about (F7)
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "wouter";
 import { Shell, PageHeader } from "@/components/usip/Shell";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -42,12 +45,14 @@ import {
 import {
   AlertTriangle,
   Ban,
+  Download,
   Mail,
   MailX,
   Plus,
   RefreshCw,
   Search,
   Trash2,
+  Upload,
   UserX,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -71,6 +76,13 @@ export function EmailSuppressions() {
   const [addReason, setAddReason] = useState<string>("manual");
   const [addNotes, setAddNotes] = useState("");
   const [removeTarget, setRemoveTarget] = useState<number | null>(null);
+  // CSV import (F27): the file's text, its name, and the reason for rows that name none.
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importName, setImportName] = useState("");
+  const [importReason, setImportReason] = useState<string>("manual");
+  const [exporting, setExporting] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   const LIMIT = 50;
 
@@ -108,6 +120,54 @@ export function EmailSuppressions() {
     onError: (e) => toast.error(e.message),
   });
 
+  const importMutation = trpc.emailSuppressions.importCsv.useMutation({
+    onSuccess: (r) => {
+      toast.success(
+        `Imported ${r.added} suppression${r.added === 1 ? "" : "s"}` +
+          (r.alreadySuppressed ? `; ${r.alreadySuppressed} already on the list` : "") +
+          (r.invalid ? `; ${r.invalid} not a valid address` : "") +
+          (r.truncated ? `. Only the first ${r.max.toLocaleString()} rows were read; import the rest separately.` : ""),
+      );
+      setImportOpen(false);
+      setImportText("");
+      setImportName("");
+      utils.emailSuppressions.list.invalidate();
+      utils.emailSuppressions.summary.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  /** The whole filtered list as a CSV file, built on the server (F27). */
+  async function exportCsv() {
+    setExporting(true);
+    try {
+      const r = await utils.client.emailSuppressions.exportCsv.query({ reason: reasonFilter as any, search: searchDebounced || undefined });
+      const blob = new Blob([r.csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `suppressions-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(r.truncated ? `Exported the newest ${r.count.toLocaleString()} — narrow the filter for the rest.` : `Exported ${r.count.toLocaleString()} suppression${r.count === 1 ? "" : "s"}`);
+    } catch (e: any) {
+      toast.error("Export failed: " + (e?.message ?? "unknown error"));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function pickImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > 4_500_000) { toast.error("That file is over 4.5 MB. Split it and import the parts."); return; }
+    const reader = new FileReader();
+    reader.onload = () => { setImportText(String(reader.result ?? "")); setImportName(file.name); };
+    reader.readAsText(file);
+  }
+  const importLines = importText ? importText.split(/\r?\n/).filter((l) => l.trim()).length : 0;
+
   const removeMutation = trpc.emailSuppressions.remove.useMutation({
     onSuccess: () => {
       toast.success("Suppression removed — sending re-enabled for this address");
@@ -131,6 +191,14 @@ export function EmailSuppressions() {
       <PageHeader title="Email Suppressions" description="Manage opt-outs, hard bounces, and global suppression lists to protect your sender reputation. Suppressed addresses are automatically excluded from all future sequences and campaigns." pageKey="email-suppressions"
         icon={<Ban className="size-5" />}
       >
+        <Button variant="outline" size="sm" onClick={exportCsv} disabled={exporting}>
+          <Download className="w-4 h-4 mr-1" />
+          {exporting ? "Exporting..." : "Export CSV"}
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
+          <Upload className="w-4 h-4 mr-1" />
+          Import CSV
+        </Button>
         <Button onClick={() => setAddOpen(true)} size="sm">
           <Plus className="w-4 h-4 mr-1" />
           Add Suppression
@@ -219,7 +287,15 @@ export function EmailSuppressions() {
                   const meta = REASON_LABELS[row.reason] ?? { label: row.reason, color: "" };
                   return (
                     <TableRow key={row.id}>
-                      <TableCell className="font-mono text-sm">{row.email}</TableCell>
+                      <TableCell className="font-mono text-sm">
+                        {row.email}
+                        {/* The person this opt-out follows (F7), at any address they have. */}
+                        {row.prospectId ? (
+                          <Link href={`/prospects/${row.prospectId}`} className="block font-sans text-xs text-primary hover:underline">
+                            Person: {row.personName || `#${row.prospectId}`}
+                          </Link>
+                        ) : null}
+                      </TableCell>
                       <TableCell>
                         <Badge variant="outline" className={`text-xs ${meta.color}`}>{meta.label}</Badge>
                       </TableCell>
@@ -307,6 +383,55 @@ export function EmailSuppressions() {
               disabled={!addEmail || addMutation.isPending}
             >
               {addMutation.isPending ? "Adding..." : "Add Suppression"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import CSV Dialog (F27) */}
+      <Dialog open={importOpen} onOpenChange={(o) => { setImportOpen(o); if (!o) { setImportText(""); setImportName(""); } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Import suppressions from CSV</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2 text-sm">
+            <p className="text-muted-foreground">
+              One address per row, in a column headed <span className="font-mono">email</span> (a file of bare addresses works too).
+              An optional <span className="font-mono">reason</span> column (unsubscribe, bounce, spam, manual) and <span className="font-mono">notes</span> column are read.
+              Addresses already on the list are left alone. Up to 10,000 rows a file.
+            </p>
+            <div className="space-y-1.5">
+              <Label>File</Label>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => importFileRef.current?.click()}>
+                  <Upload className="w-4 h-4 mr-1" /> Choose CSV
+                </Button>
+                <span className="text-xs text-muted-foreground truncate">{importName ? `${importName} — ${importLines.toLocaleString()} line${importLines === 1 ? "" : "s"}` : "No file chosen"}</span>
+              </div>
+              <input ref={importFileRef} type="file" accept=".csv,text/csv,text/plain" aria-label="CSV file to import" className="hidden" onChange={pickImportFile} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Reason for rows that name none</Label>
+              <Select value={importReason} onValueChange={setImportReason}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="manual">Manual</SelectItem>
+                  <SelectItem value="unsubscribe">Unsubscribed</SelectItem>
+                  <SelectItem value="bounce">Bounced</SelectItem>
+                  <SelectItem value="spam_complaint">Spam Complaint</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setImportOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => importMutation.mutate({ csv: importText, defaultReason: importReason as any })}
+              disabled={!importText || importMutation.isPending}
+            >
+              {importMutation.isPending ? "Importing..." : "Import"}
             </Button>
           </DialogFooter>
         </DialogContent>

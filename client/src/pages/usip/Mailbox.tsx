@@ -35,7 +35,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  Mail, MailOpen, RefreshCw, Trash2, Reply, Send, Pencil,
+  Mail, MailOpen, RefreshCw, Trash2, Reply, ReplyAll, Send, Pencil,
   ChevronLeft, Inbox, AlertCircle, Loader2, Users,
   Forward, FolderInput, Archive, ChevronDown, Sparkles,
   Clock, Search, FileText, Download, Paperclip, X, Phone,
@@ -46,7 +46,8 @@ import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { getActiveWorkspaceId } from "@/lib/activeWorkspace";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import {
-  MAILBOX_ATTACHMENT_LIMIT_BYTES, attachmentLimitProblem, composeBodyHtml, forwardedBlock, replyAddressing,
+  MAILBOX_ATTACHMENT_LIMIT_BYTES, attachmentLimitProblem, composeBodyHtml, forwardedAttachmentRefs, forwardedBlock,
+  replyAddressing, replyAllAddressing,
 } from "@shared/mailCompose";
 
 /** Compact "Agent call-backs" rail link — only renders when Grok voice agents
@@ -110,7 +111,7 @@ interface EmailMessage {
   date: Date;
   bodyText: string;
   bodyHtml: string;
-  attachments: Array<{ filename: string; contentType: string; size: number }>;
+  attachments: Array<{ filename: string; contentType: string; size: number; attachmentId?: string }>;
   inReplyTo?: string;
   references?: string;
   unread: boolean;
@@ -211,6 +212,11 @@ function ComposeDialog({ state, account, onClose }: { state: ComposeState; accou
   const [body, setBody] = useState(state.body);
   const [cc, setCc] = useState(state.cc);
   const [aiLoading, setAiLoading] = useState(false);
+  // A forward carries the original's attachments (F26/O35); the server
+  // fetches them from the mailbox. The rep can drop one before sending.
+  const [forwardedAtts, setForwardedAtts] = useState(
+    () => (state.mode === "forward" ? state.originalMessage?.attachments ?? [] : []).map((a, i) => ({ ...a, attachmentId: a.attachmentId ?? String(i) })),
+  );
 
   // Streaming AI draft — replaces the aiDraftReply / aiDraftForward
   // mutations. Tokens fill the body live so the user sees the draft
@@ -351,6 +357,16 @@ function ComposeDialog({ state, account, onClose }: { state: ComposeState; accou
       : undefined;
     if (state.mode === "new") {
       sendNew.mutate({ accountId: state.accountId, to, subject, bodyHtml, bodyText, cc: cc || undefined, attachments: atts });
+    } else if (o) {
+      // A forward is a new message to new people, with the original quoted
+      // and its attachments fetched and carried by the server (F26/O35).
+      const carried = forwardedAttachmentRefs({ messageId: o.messageId, attachments: forwardedAtts });
+      sendNew.mutate({
+        accountId: state.accountId, to, subject, bodyHtml, bodyText, cc: cc || undefined,
+        attachments: atts,
+        quoted,
+        forwardAttachmentsOf: carried,
+      });
     } else {
       sendReply.mutate({
         accountId: state.accountId, threadId: state.threadId ?? "",
@@ -402,7 +418,7 @@ function ComposeDialog({ state, account, onClose }: { state: ComposeState; accou
     const files = Array.from(e.target.files ?? []);
     // Refused here, before reading, at the limit the server enforces (O59):
     // past it the send failed as "request too large" after the whole upload.
-    const total = attachments.reduce((n, a) => n + a.size, 0) + files.reduce((n, f) => n + f.size, 0);
+    const total = attachments.reduce((n, a) => n + a.size, 0) + forwardedAtts.reduce((n, a) => n + (a.size || 0), 0) + files.reduce((n, f) => n + f.size, 0);
     const tooBig = attachmentLimitProblem(total);
     if (tooBig) {
       toast.error(`${tooBig} Remove a file or share a link instead.`);
@@ -537,7 +553,24 @@ function ComposeDialog({ state, account, onClose }: { state: ComposeState; accou
               <div>From: {state.originalMessage.fromName || state.originalMessage.fromEmail}</div>
               <div>Subject: {state.originalMessage.subject}</div>
               <div>Date: {new Date(state.originalMessage.date).toLocaleString()}</div>
-              <div>Quoted in full below your message.{state.originalMessage.attachments?.length ? " Its attachments are not forwarded — attach them again if they are needed." : ""}</div>
+              <div>Quoted in full below your message.</div>
+              {forwardedAtts.length > 0 && (
+                <div className="pt-1">
+                  <div className="text-foreground">Forwarded with its attachments:</div>
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    {forwardedAtts.map((att) => (
+                      <div key={att.attachmentId} className="flex items-center gap-1 bg-background border rounded-md px-2 py-1">
+                        <Paperclip className="size-3" />
+                        <span className="max-w-[140px] truncate">{att.filename}</span>
+                        {att.size > 0 && <span>({Math.round(att.size / 1024)}KB)</span>}
+                        <button type="button" aria-label={`Don't forward ${att.filename}`} onClick={() => setForwardedAtts((prev) => prev.filter((x) => x.attachmentId !== att.attachmentId))} className="ml-1 hover:text-destructive">
+                          <X className="size-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {accountOff && (
@@ -668,6 +701,8 @@ function ThreadView({
   const moveFolders = folders.filter((f) => f.path !== folder && f.name !== folder);
   // The last message someone else sent, and the full References chain (O35).
   const reply = replyAddressing(messages, ownEmail);
+  // Reply all (F26): the same, with everyone else on that message in Cc.
+  const replyAll = replyAllAddressing(messages, ownEmail);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -691,6 +726,19 @@ function ThreadView({
             <Reply className="size-3.5" />
             <span className="hidden sm:inline">Reply</span>
           </Button>
+          {replyAll?.cc ? (
+            <Button variant="ghost" size="sm" className="gap-1.5 text-xs" aria-label="Reply all"
+              onClick={() => onCompose({
+                mode: "reply", accountId, to: replyAll.to,
+                subject: "Re: " + lastMsg.subject.replace(/^Re:\s*/i, ""),
+                body: "", cc: replyAll.cc, threadId,
+                inReplyTo: replyAll.inReplyTo, references: replyAll.references,
+                threadMessages: messages,
+              })}>
+              <ReplyAll className="size-3.5" />
+              <span className="hidden sm:inline">Reply all</span>
+            </Button>
+          ) : null}
           <Button variant="ghost" size="sm" className="gap-1.5 text-xs"
             onClick={() => onCompose({
               mode: "forward", accountId, to: "",
@@ -855,6 +903,11 @@ function SingleAccountThreadList({ accountId, folder, selectedId, onSelect, init
   const { data, isLoading, refetch } = trpc.mailbox.listThreads.useQuery(
     { accountId, folder, pageToken, maxResults: 50 }, { enabled: !!accountId && !debouncedQuery }
   );
+  // The server keeps the list briefly (L8); Refresh asks it to read the mailbox again.
+  const refresh = trpc.mailbox.refresh.useMutation({
+    onSuccess: () => { refetch(); },
+    onError: (e) => toast.error("Refresh failed: " + e.message),
+  });
   const { data: searchData, isLoading: searchLoading } = trpc.mailbox.searchThreads.useQuery(
     { accountId, query: debouncedQuery, folder, maxResults: 30 },
     { enabled: !!accountId && !!debouncedQuery }
@@ -870,7 +923,7 @@ function SingleAccountThreadList({ accountId, folder, selectedId, onSelect, init
       <div className="px-3 py-2 border-b space-y-2 shrink-0">
         <div className="flex items-center justify-between">
           <span className="text-xs text-muted-foreground">{threads.length} thread{threads.length !== 1 ? "s" : ""}</span>
-          <Button aria-label="Refresh" variant="ghost" size="icon" onClick={() => refetch()} className="size-7"><RefreshCw className="size-3.5" /></Button>
+          <Button aria-label="Refresh" variant="ghost" size="icon" disabled={refresh.isPending} onClick={() => refresh.mutate({ accountIds: [accountId] })} className="size-7"><RefreshCw className={cn("size-3.5", refresh.isPending && "animate-spin")} /></Button>
         </div>
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
@@ -940,6 +993,11 @@ function CentralInboxThreadList({ accounts, selectedId, onSelect }: {
   const s3 = trpc.mailbox.searchThreads.useQuery({ accountId: accounts[3]?.id ?? 0, query: debouncedQuery, folder: "INBOX" }, { enabled: !!accounts[3] && !!debouncedQuery });
   const s4 = trpc.mailbox.searchThreads.useQuery({ accountId: accounts[4]?.id ?? 0, query: debouncedQuery, folder: "INBOX" }, { enabled: !!accounts[4] && !!debouncedQuery });
   const qs = [q0, q1, q2, q3, q4].slice(0, accounts.length);
+  // As the single list: the server keeps each inbox briefly (L8), and Refresh reads them again.
+  const refreshAll = trpc.mailbox.refresh.useMutation({
+    onSuccess: () => { qs.forEach((q) => q.refetch()); },
+    onError: (e) => toast.error("Refresh failed: " + e.message),
+  });
   const ss = [s0, s1, s2, s3, s4].slice(0, accounts.length);
   const isLoading = debouncedQuery ? ss.some((q) => q.isLoading) : qs.some((q) => q.isLoading);
   const allThreads: EmailThread[] = debouncedQuery
@@ -953,7 +1011,7 @@ function CentralInboxThreadList({ accounts, selectedId, onSelect }: {
       <div className="px-3 py-2 border-b space-y-2 shrink-0">
         <div className="flex items-center justify-between">
           <span className="text-xs text-muted-foreground">{allThreads.length} thread{allThreads.length !== 1 ? "s" : ""}</span>
-          <Button aria-label="Refresh" variant="ghost" size="icon" onClick={() => qs.forEach((q) => q.refetch())} className="size-7"><RefreshCw className="size-3.5" /></Button>
+          <Button aria-label="Refresh" variant="ghost" size="icon" disabled={refreshAll.isPending || accounts.length === 0} onClick={() => refreshAll.mutate({ accountIds: accounts.slice(0, 5).map((a) => a.id) })} className="size-7"><RefreshCw className={cn("size-3.5", refreshAll.isPending && "animate-spin")} /></Button>
         </div>
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />

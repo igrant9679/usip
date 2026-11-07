@@ -247,7 +247,9 @@ describe("RFC 8058 one-click headers", () => {
     // …and the adapters that can carry them do.
     const adapter = readFileSync("server/emailAdapter.ts", "utf8");
     expect(adapter).toContain("headers: input.headers,");        // SMTP
-    expect(adapter).toContain("headers: input.headers ?? null,"); // SendGrid
+    // 2026-11-07 (audit F5): SendGrid now adds our own Message-ID beside the
+    // caller headers, which still travel unchanged.
+    expect(adapter).toContain("headers: { ...(input.headers ?? {}), \"Message-ID\": rfcMessageId },"); // SendGrid
     const sendgrid = readFileSync("server/services/sendgrid.ts", "utf8");
     expect(sendgrid).toContain("payload.headers");
   });

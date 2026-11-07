@@ -73,6 +73,8 @@ interface EditDraft {
   city: string;
   state: string;
   country: string;
+  /** IANA zone (F18): where recipient-time sequences schedule this person. */
+  timezone: string;
   industry: string;
 }
 
@@ -150,6 +152,7 @@ export default function ProspectDetail() {
     city: p.city ?? "",
     state: p.state ?? "",
     country: p.country ?? "",
+    timezone: (p as { timezone?: string | null }).timezone ?? "",
     industry: p.industry ?? "",
   });
 
@@ -328,7 +331,7 @@ export default function ProspectDetail() {
           <DialogHeader><DialogTitle>Edit prospect</DialogTitle></DialogHeader>
           {editing && (
             <div className="grid gap-3 sm:grid-cols-2">
-              {(["firstName","lastName","title","company","companyDomain","industry","email","phone","linkedinUrl","city","state","country"] as const).map((k) => (
+              {(["firstName","lastName","title","company","companyDomain","industry","email","phone","linkedinUrl","city","state","country","timezone"] as const).map((k) => (
                 <div key={k} className="space-y-1.5">
                   <Label className="text-xs capitalize">{k.replace(/([A-Z])/g, " $1")}</Label>
                   <Input aria-label={k.replace(/([A-Z])/g, " $1")} value={(editing as any)[k]} onChange={(e) => setEditing({ ...editing, [k]: e.target.value })} />
