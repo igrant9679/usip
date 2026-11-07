@@ -5055,6 +5055,20 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Signed visitor links (audit 2026-10-20, P5, P88, F40): a visit can name a
+  // People row, says whether its id was one we signed, and a workspace can
+  // list more of its own sites than the company website. Additive; existing
+  // visits stay unsigned, which is what they were.
+  {
+    name: "0343_signed_visitor_links.sql",
+    statements: [
+      "ALTER TABLE `website_visits` ADD COLUMN `prospectId` int NULL",
+      "ALTER TABLE `website_visits` ADD COLUMN `signed` boolean NOT NULL DEFAULT false",
+      "CREATE INDEX `ix_wv_prospect` ON `website_visits` (`prospectId`)",
+      "ALTER TABLE `workspace_settings` ADD COLUMN `trackedSiteDomains` varchar(1000) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

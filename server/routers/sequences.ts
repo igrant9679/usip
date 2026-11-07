@@ -52,6 +52,7 @@ import { autoSendGroups, sequenceAutoSend } from "@shared/sequenceAutoSend";
 import { nextSendAt } from "@shared/recipientTime";
 import { enrollmentRecipientZones, sequenceUsesRecipientTime } from "../services/recipientZone";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { addVisitorIdsToEmail } from "../services/visitorLinks";
 
 /** One escaper for the whole codebase — @shared/escapeHtml. The comment here
  *  used to read "duplicated from crm.ts — separate router", and duplication is
@@ -2055,7 +2056,7 @@ async function sendClaimedDraft(
   const senderName = senderRow?.name ?? fromAccount.fromName ?? fromAccount.name ?? "";
   const senderEmail = senderRow?.email ?? fromAccount.fromEmail ?? "";
   const [wsSettings] = await db
-    .select({ emailSignature: workspaceSettings.emailSignature, emailOpenTracking: workspaceSettings.emailOpenTracking, emailClickTracking: workspaceSettings.emailClickTracking })
+    .select({ emailSignature: workspaceSettings.emailSignature, emailOpenTracking: workspaceSettings.emailOpenTracking, emailClickTracking: workspaceSettings.emailClickTracking, companyWebsite: workspaceSettings.companyWebsite, trackedSiteDomains: workspaceSettings.trackedSiteDomains })
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
@@ -2146,6 +2147,16 @@ async function sendClaimedDraft(
   const unsubFooterHtml = unsubscribeFooterHtml(unsubscribeUrl);
   const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock + unsubFooterHtml;
   const fullBodyText = renderedBodyText + unsubscribeFooterText(unsubscribeUrl);
+  // A signed visitor id on every link to the workspace's own site (audit
+  // 2026-10-20, P5/P88/F40), so a visit from this email is known to be this
+  // person's. Only while click tracking is on; never on a third-party link
+  // or our own (unsubscribe). The stored draft keeps the text as written.
+  const withVisitorIds = await addVisitorIdsToEmail(
+    workspaceId,
+    { prospectId: draft.toProspectId ?? null, contactId: draft.toContactId ?? null, leadId: draft.toLeadId ?? null },
+    { html: fullBodyHtml, text: fullBodyText },
+    { emailClickTracking: wsSettings?.emailClickTracking ?? null, companyWebsite: wsSettings?.companyWebsite ?? null, trackedSiteDomains: wsSettings?.trackedSiteDomains ?? null },
+  );
 
   // Daily-cap gate — throws TOO_MANY_REQUESTS if either the
   // workspace-wide or per-account cap would be breached. Lives BEFORE
@@ -2167,8 +2178,8 @@ async function sendClaimedDraft(
       fromName: fromAccount.fromName ?? fromAccount.name,
       to: toEmail,
       subject: renderedSubject,
-      bodyHtml: fullBodyHtml,
-      bodyText: fullBodyText,
+      bodyHtml: withVisitorIds.html,
+      bodyText: withVisitorIds.text,
       // The workspace's tracking switches (Settings, migration 0117), as the old
       // bulk Send approved honoured them: with both off, nothing is tracked (2026-11-06).
       track: wsSettings?.emailOpenTracking !== false || wsSettings?.emailClickTracking !== false,

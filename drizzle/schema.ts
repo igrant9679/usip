@@ -1858,6 +1858,12 @@ export const workspaceSettings = mysqlTable("workspace_settings", {
    *  RFC 8058 List-Unsubscribe headers in the SMTP send path. */
   emailOpenTracking: boolean("emailOpenTracking").default(true).notNull(),
   emailClickTracking: boolean("emailClickTracking").default(true).notNull(),
+  /**
+   * More of the workspace's own sites, beside companyWebsite (migration 0343,
+   * audit 2026-10-20 F40): outreach adds a signed visitor id to links to
+   * these hosts and their subdomains. Comma-separated hosts.
+   */
+  trackedSiteDomains: varchar("trackedSiteDomains", { length: 1000 }),
   emailUnsubscribeHeader: boolean("emailUnsubscribeHeader").default(false).notNull(),
   /** Sequence opt-out footer (migration 0119) — when enabled, the message is
    *  appended after the body in sequence sends; its `<%link text%>` becomes a
@@ -6045,6 +6051,13 @@ export const websiteVisits = mysqlTable(
     referrer: varchar("referrer", { length: 1000 }),
     contactId: int("contactId"),
     leadId: int("leadId"),
+    /** A People row named by a signed "p…" id (migration 0343, audit 2026-10-20 F40). */
+    prospectId: int("prospectId"),
+    /**
+     * The link's id was one Velocity signed for this workspace (0343, P5/P88):
+     * the visit is that person's. Unsigned, it is a claim anyone could make.
+     */
+    signed: boolean("signed").default(false).notNull(),
     intent: varchar("intent", { length: 16 }), // low | medium | high
     userAgent: varchar("userAgent", { length: 500 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -6054,6 +6067,7 @@ export const websiteVisits = mysqlTable(
     byVisitor: index("ix_wv_visitor").on(t.visitorId),
     byContact: index("ix_wv_contact").on(t.contactId),
     byLead: index("ix_wv_lead").on(t.leadId),
+    byProspect: index("ix_wv_prospect").on(t.prospectId),
   }),
 );
 export type WebsiteVisit = typeof websiteVisits.$inferSelect;

@@ -76,6 +76,7 @@ import { accountMatchesForLead, findContactByEmail } from "../services/crmMatchi
 import { ACTIVE_ENROLLMENT_STATUSES } from "../services/crossEngineEnrollment";
 import { noteAmountChange } from "./pipelineAlerts";
 import { assertOutboundNotPaused } from "../services/outboundPause";
+import { addVisitorIdsToEmail } from "../services/visitorLinks";
 import { LEAD_LIST_COLUMNS, LEAD_ORDER, leadWhere, searchLeads } from "../services/leadSearch";
 
 /** The ONE public origin — see server/appUrl.ts. */
@@ -1021,6 +1022,9 @@ export const contactsRouter = router({
         const unsubscribeUrl = makeUnsubscribeUrl(getAppBaseUrl(), ctx.workspace.id, contact.email);
         const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock + unsubscribeFooterHtml(unsubscribeUrl);
         const fullBodyText = renderedBodyText + unsubscribeFooterText(unsubscribeUrl);
+        // A signed visitor id on links to the workspace's own site (audit
+        // 2026-10-20, F40), while click tracking is on.
+        const withVisitorIds = await addVisitorIdsToEmail(ctx.workspace.id, { contactId: contact.id }, { html: fullBodyHtml, text: fullBodyText });
 
         let sentMessageId: string | undefined;
         let sentRfcMessageId: string | undefined; // the Message-ID header, for reply matching (F5)
@@ -1035,8 +1039,8 @@ export const contactsRouter = router({
             fromName: fromAccount.fromName ?? fromAccount.name,
             to: contact.email,
             subject: renderedSubject,
-            bodyHtml: fullBodyHtml,
-            bodyText: fullBodyText,
+            bodyHtml: withVisitorIds.html,
+            bodyText: withVisitorIds.text,
             // Sales touch — enable open/click tracking. Webhook events
             // flow back via /api/unipile/email-tracking-webhook and bump
             // openCount / clickCount on the matching emailDrafts row.
@@ -1815,6 +1819,8 @@ export const leadsRouter = router({
       const unsubscribeUrl = makeUnsubscribeUrl(getAppBaseUrl(), ctx.workspace.id, lead.email);
       const fullBodyHtml = bodyHtmlBlock + sigHtmlBlock + unsubscribeFooterHtml(unsubscribeUrl);
       const fullBodyText = renderedBodyText + unsubscribeFooterText(unsubscribeUrl);
+      // A signed visitor id on links to the workspace's own site (F40), while click tracking is on.
+      const withVisitorIds = await addVisitorIdsToEmail(ctx.workspace.id, { leadId: lead.id }, { html: fullBodyHtml, text: fullBodyText });
 
       let sentMessageId: string | undefined;
       let sentRfcMessageId: string | undefined; // the Message-ID header, for reply matching (F5)
@@ -1826,8 +1832,8 @@ export const leadsRouter = router({
           fromName: fromAccount.fromName ?? fromAccount.name,
           to: lead.email,
           subject: renderedSubject,
-          bodyHtml: fullBodyHtml,
-          bodyText: fullBodyText,
+          bodyHtml: withVisitorIds.html,
+          bodyText: withVisitorIds.text,
           track: true,
           // Sitewide email log (migration 0163). The draft is written below,
           // only on success, so the log row is linked to it afterwards by

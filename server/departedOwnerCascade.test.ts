@@ -365,7 +365,8 @@ const SURFACES: Array<{
     what: "a high-intent visit task is not filed under a departed record owner",
     file: "server/websiteTracking.ts",
     start: "await db.insert(tasks).values({",
-    end: 'relatedType: contactId ? "contact" : "lead"',
+    // 2026-11-07 (audit F40): a visit can name a People row, so the end anchor gained "prospect".
+    end: 'relatedType: contactId ? "contact" : prospectId ? "prospect" : "lead"',
     gate: /ownerUserId: await activeOwnerOrNull\(ws\.id, ownerUserId\)/,
   },
   /**

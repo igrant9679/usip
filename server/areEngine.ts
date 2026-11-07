@@ -113,6 +113,7 @@ import {
   sequenceCompletionVerdict,
 } from "./services/sequenceCompletion";
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
+import { addVisitorIdsToEmail } from "./services/visitorLinks";
 import { makeUnsubscribeUrl, unsubscribeFooter, unsubscribeHeaders } from "./unsubscribe";
 import { describeSuppression, findSuppression } from "./services/suppression";
 import { DISPATCH_INTERRUPTED, HELD_PAUSED, HELD_REPLIED, claimStepForDispatch, releaseProspectSteps, respaced } from "./services/are/stepHold";
@@ -2227,6 +2228,15 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
             ? html.replace("</body>", `${optOut.html}</body>`)
             : `${html}\n${optOut.html}`;
           textOut = `${textOut}\n\n${optOut.text}`;
+        }
+        // A signed visitor id on links to the workspace's own site (audit
+        // 2026-10-20, P5/P88/F40), for the person this campaign row is. A
+        // query parameter on their own domain, not a tracking-domain rewrite,
+        // and only while the workspace's click tracking is on.
+        if (p.personProspectId) {
+          const decorated = await addVisitorIdsToEmail(wsId, { prospectId: p.personProspectId }, { html, text: textOut });
+          html = decorated.html;
+          textOut = decorated.text;
         }
 
         /**
