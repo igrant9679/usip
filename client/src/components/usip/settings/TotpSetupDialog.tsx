@@ -22,6 +22,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Copy, Loader2 } from "lucide-react";
+import { BackupCodesPanel } from "./BackupCodesPanel";
 
 export function TotpSetupDialog({
   open,
@@ -37,19 +38,27 @@ export function TotpSetupDialog({
   const utils = trpc.useUtils();
   // `reused`: the key from an earlier, unconfirmed attempt — the entry the
   // person already added to their app still works (tracker 2026-11-06, 16).
-  const [enroll, setEnroll] = useState<{ secret: string; otpauthUrl: string; reused?: boolean } | null>(null);
+  // `qrDataUrl`: the same key as a QR code to scan (U21), drawn by the server.
+  const [enroll, setEnroll] = useState<{ secret: string; otpauthUrl: string; qrDataUrl?: string | null; reused?: boolean } | null>(null);
   const [code, setCode] = useState("");
+  // The backup codes made with the authenticator (G15), shown once after the
+  // confirm and before the dialog closes; null until then.
+  const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
   const start = trpc.profile.startTotpEnrollment.useMutation({
     onSuccess: (r: any) => setEnroll(r),
     onError: (e: any) => { toast.error(e?.message ?? "Could not start enrollment"); onClose(); },
   });
+  const finish = () => {
+    setEnroll(null); setCode(""); setBackupCodes(null);
+    onClose();
+    onConfirmed?.();
+  };
   const confirm = trpc.profile.confirmTotpEnrollment.useMutation({
-    onSuccess: () => {
+    onSuccess: (r: any) => {
       toast.success("Authenticator app connected — codes are now required at password sign-in");
       utils.profile.getMfaStatus.invalidate();
-      setEnroll(null); setCode("");
-      onClose();
-      onConfirmed?.();
+      if (Array.isArray(r?.backupCodes) && r.backupCodes.length > 0) setBackupCodes(r.backupCodes);
+      else finish();
     },
     onError: (e: any) => toast.error(e?.message ?? "Could not confirm the code"),
   });
@@ -57,27 +66,48 @@ export function TotpSetupDialog({
   // Mint a fresh secret each time the dialog opens.
   useEffect(() => {
     if (open && !enroll && !start.isPending) start.mutate();
-    if (!open) { setEnroll(null); setCode(""); }
+    if (!open) { setEnroll(null); setCode(""); setBackupCodes(null); }
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const groupedSecret = enroll ? (enroll.secret.match(/.{1,4}/g) ?? []).join(" ") : "";
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={(o) => { if (!o) { if (backupCodes) finish(); else onClose(); } }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Set up authenticator app</DialogTitle>
+          <DialogTitle>{backupCodes ? "Save your backup codes" : "Set up authenticator app"}</DialogTitle>
           <DialogDescription>
-            Add Velocity to Google Authenticator, Microsoft Authenticator, 1Password or any TOTP app,
-            then confirm with the 6-digit code it shows.
+            {backupCodes
+              ? "Your authenticator app is connected. If you lose your phone, one of these codes gets you back in."
+              : "Add Velocity to Google Authenticator, Microsoft Authenticator, 1Password or any TOTP app, then confirm with the 6-digit code it shows."}
           </DialogDescription>
         </DialogHeader>
-        {!enroll ? (
+        {backupCodes ? (
+          <div className="space-y-4">
+            <BackupCodesPanel codes={backupCodes} />
+            <div className="flex justify-end pt-1">
+              <Button size="sm" onClick={finish}>I've saved them</Button>
+            </div>
+          </div>
+        ) : !enroll ? (
           <div className="flex items-center justify-center py-8 text-muted-foreground">
             <Loader2 className="size-5 animate-spin" />
           </div>
         ) : (
           <div className="space-y-4">
+            {enroll.qrDataUrl && (
+              /* Scan with the phone's authenticator app (audit 2026-10-20, U21).
+                 The key below is the same secret, for typing in by hand. */
+              <div className="flex flex-col items-center gap-1.5">
+                <img
+                  src={enroll.qrDataUrl}
+                  alt="QR code to add Velocity to your authenticator app"
+                  className="size-44 rounded-md border border-border bg-white p-2"
+                  data-testid="totp-qr"
+                />
+                <p className="text-xs text-muted-foreground">Scan this with your authenticator app, or enter the key below.</p>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label>Setup key (enter manually in your app)</Label>
               <div className="flex items-center gap-2">

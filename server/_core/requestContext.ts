@@ -32,9 +32,28 @@ export type RequestStore = {
    * it; the workspace's monthly budget still applies.
    */
   background?: boolean;
+  /**
+   * Set by workspaceProcedure on a mutation (audit 2026-10-20, G49):
+   * recordAudit flips `recorded` when the procedure writes its own entry, so
+   * the automatic entry (_core/autoAudit.ts) is not added on top. An object,
+   * not a flag, so a store merged deeper in the call still points at it.
+   */
+  auditMark?: { recorded: boolean };
 };
 
 const als = new AsyncLocalStorage<RequestStore>();
+
+/** recordAudit's half of the G49 handshake: this request wrote its own audit entry. */
+export function noteAuditRecorded(): void {
+  const mark = als.getStore()?.auditMark;
+  if (mark) mark.recorded = true;
+}
+
+/**
+ * The same mark, for a call that decided it changed nothing worth an entry
+ * ("nothing to move"): a deliberate no-op stays out of the log, as before.
+ */
+export const noteNothingToAudit = noteAuditRecorded;
 
 export function runWithRequestContext<T>(
   store: RequestStore,

@@ -28,7 +28,11 @@ import { sessionLifetimeMs } from "./_core/securityPolicy";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { clientIpOf, rateLimitKey } from "./_core/clientIp";
 import { useTotpStep } from "./_core/sessionRevocation";
+import { recordReissuedSession, recordSignIn, sessionTokenOf } from "./_core/sessionRecords";
 import { clearFailures, isLockedOut, noteFailure, SIGN_IN_LOCKED, signInKey } from "./services/accountLockout";
+import { backupCodesLeft, looksLikeBackupCode, useBackupCode } from "./services/mfaBackupCodes";
+import { markEmailVerified, mintEmailVerification, sendVerificationEmail } from "./services/accountEmailVerification";
+import { insertIdOf } from "./_core/insertId";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { escapeHtml } from "@shared/escapeHtml";
 import { safeReturnPath } from "@shared/returnPath";
@@ -97,6 +101,24 @@ async function sessionLifetimeForUser(db: LiveDb, userId: number): Promise<numbe
     console.warn("[passwordAuth] session lifetime lookup failed:", (e as Error).message);
     return ONE_YEAR_MS;
   }
+}
+
+/** A failed second factor in the account's sign-in history. Best effort. */
+async function recordFailedSignIn(db: LiveDb, req: Request, userId: number): Promise<void> {
+  try {
+    const [member] = await db
+      .select({ workspaceId: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.userId, userId))
+      .limit(1);
+    await db.insert(loginHistory).values({
+      userId,
+      workspaceId: member?.workspaceId ?? null,
+      ipAddress: ipKey(req).slice(0, 64),
+      userAgent: (req.headers["user-agent"] ?? "").slice(0, 500),
+      outcome: "failed",
+    });
+  } catch (_) { /* non-fatal */ }
 }
 
 const passwordLoginLimiter = rateLimit({
@@ -282,6 +304,9 @@ export async function reissueSessionCookie(db: LiveDb, req: Request, res: Respon
   const lifetimeMs = await sessionLifetimeForUser(db, userId);
   const token = await sdk.createSessionToken(u.openId, { name: u.name || "", expiresInMs: lifetimeMs, sessionVersion: u.sessionVersion ?? 0 });
   res.cookie(COOKIE_NAME, token, { ...getSessionCookieOptions(req), maxAge: lifetimeMs });
+  // The same device, now on a new session: its row in the sessions list
+  // follows it (F3), instead of vanishing with the session that just ended.
+  await recordReissuedSession(db, req, { userId, oldToken: sessionTokenOf(req), newToken: token, sessionVersion: u.sessionVersion ?? 0 });
 }
 
 /**
@@ -424,6 +449,9 @@ export function registerPasswordAuthRoutes(app: Express) {
       .where(eq(users.id, user.id));
     // The way out of a sign-in lock (G9): the reset proved the mailbox.
     if (user.email) clearFailures(signInKey(user.email));
+    // ...and so it confirms the address of an account still waiting on its
+    // verification link (F1).
+    await markEmailVerified(db, user.id).catch(() => {});
 
     res.json({ ok: true });
   });
@@ -507,42 +535,50 @@ export function registerPasswordAuthRoutes(app: Express) {
       //    second factor for every password login. The password has already
       //    been verified above, so telling the client MFA is required leaks
       //    nothing an attacker could use without the password.
+      let backupCodesRemaining: number | null = null;
       if (user.mfaTotpEnabledAt && user.mfaTotpSecret) {
         const totpCode = typeof (req.body ?? {}).totpCode === "string" ? (req.body.totpCode as string) : "";
-        if (!totpCode) {
+        /**
+         * A one-time backup code stands in for the authenticator code (audit
+         * 2026-10-20, G15): sent as `backupCode`, or typed into the code box,
+         * which six digits never look like.
+         */
+        const backupCode = typeof (req.body ?? {}).backupCode === "string" && (req.body.backupCode as string).trim()
+          ? (req.body.backupCode as string)
+          : looksLikeBackupCode(totpCode) ? totpCode : "";
+        if (!totpCode && !backupCode) {
           // The right password, asking for the code: not a failed attempt, so
           // the limiter doesn't count it (see passwordLoginLimiter).
           res.locals.mfaCodePrompt = true;
           res.status(401).json({ error: "Enter the 6-digit code from your authenticator app.", mfaRequired: true });
           return;
         }
-        // A code works ONCE (audit 2026-10-20): its time-step is spent on
-        // success, so the same six digits cannot be replayed for the rest of
-        // their ~90-second window.
-        const { matchTotpStep, totpRefusal } = await import("./services/totp");
-        const step = matchTotpStep(user.mfaTotpSecret, totpCode);
-        if (step === null || !(await useTotpStep(db, user.id, step))) {
-          // A wrong or spent code is a failure against the account too (G9):
-          // whoever holds the password gets ten guesses at the code, not ten
-          // per address.
-          noteFailure(lockKey);
-          try {
-            const [member] = await db
-              .select({ workspaceId: workspaceMembers.workspaceId })
-              .from(workspaceMembers)
-              .where(eq(workspaceMembers.userId, user.id))
-              .limit(1);
-            await db.insert(loginHistory).values({
-              userId: user.id,
-              workspaceId: member?.workspaceId ?? null,
-              ipAddress: ipKey(req).slice(0, 64),
-              userAgent: (req.headers["user-agent"] ?? "").slice(0, 500),
-              outcome: "failed",
-            });
-          } catch (_) { /* non-fatal */ }
-          // A spent step and a wrong code are different answers (item 16).
-          res.status(401).json({ error: totpRefusal(step), mfaRequired: true });
-          return;
+        if (backupCode) {
+          if (!(await useBackupCode(db, user.id, backupCode))) {
+            // Counted against the account like a wrong authenticator code
+            // (G9), so backup codes are not a second, unlimited door.
+            noteFailure(lockKey);
+            await recordFailedSignIn(db, req, user.id);
+            res.status(401).json({ error: "That backup code isn't right, or it has already been used. Each code works once.", mfaRequired: true });
+            return;
+          }
+          backupCodesRemaining = await backupCodesLeft(db, user.id).catch(() => null);
+        } else {
+          // A code works ONCE (audit 2026-10-20): its time-step is spent on
+          // success, so the same six digits cannot be replayed for the rest of
+          // their ~90-second window.
+          const { matchTotpStep, totpRefusal } = await import("./services/totp");
+          const step = matchTotpStep(user.mfaTotpSecret, totpCode);
+          if (step === null || !(await useTotpStep(db, user.id, step))) {
+            // A wrong or spent code is a failure against the account too (G9):
+            // whoever holds the password gets ten guesses at the code, not ten
+            // per address.
+            noteFailure(lockKey);
+            await recordFailedSignIn(db, req, user.id);
+            // A spent step and a wrong code are different answers (item 16).
+            res.status(401).json({ error: totpRefusal(step), mfaRequired: true });
+            return;
+          }
         }
       }
 
@@ -566,21 +602,6 @@ export function registerPasswordAuthRoutes(app: Express) {
         }
       } catch (_) { /* non-fatal */ }
 
-      try {
-        const [member] = await db
-          .select({ workspaceId: workspaceMembers.workspaceId })
-          .from(workspaceMembers)
-          .where(eq(workspaceMembers.userId, user.id))
-          .limit(1);
-        await db.insert(loginHistory).values({
-          userId: user.id,
-          workspaceId: member?.workspaceId ?? null,
-          ipAddress: ipKey(req).slice(0, 64),
-          userAgent: (req.headers["user-agent"] ?? "").slice(0, 500),
-          outcome: "success",
-        });
-      } catch (_) { /* non-fatal */ }
-
       // ABSOLUTE age from sign-in, not idle time. A member already signed in
       // keeps the session they hold until it expires, so lowering the setting
       // lands one person at a time as they next sign in.
@@ -591,13 +612,28 @@ export function registerPasswordAuthRoutes(app: Express) {
         sessionVersion: user.sessionVersion ?? 0,
       });
 
+      // The sign-in and the session it started (F3): written after the token
+      // is minted, so the row can name it for the active-sessions list.
+      let firstWorkspaceId: number | null = null;
+      try {
+        const [member] = await db
+          .select({ workspaceId: workspaceMembers.workspaceId })
+          .from(workspaceMembers)
+          .where(eq(workspaceMembers.userId, user.id))
+          .limit(1);
+        firstWorkspaceId = member?.workspaceId ?? null;
+      } catch (_) { /* non-fatal */ }
+      await recordSignIn(db, req, { userId: user.id, workspaceId: firstWorkspaceId, token: sessionToken, sessionVersion: user.sessionVersion ?? 0 });
+
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: lifetimeMs });
 
       const redirect = safeReturnPath(returnPath);
       const acceptsJson = (req.headers.accept ?? "").includes("application/json");
       if (acceptsJson) {
-        res.json({ ok: true, redirect });
+        // After a backup code, how many are left, so the sign-in page can say
+        // so while there is still time to make a new set (G15).
+        res.json(backupCodesRemaining === null ? { ok: true, redirect } : { ok: true, redirect, backupCodesLeft: backupCodesRemaining });
       } else {
         res.redirect(302, redirect);
       }
@@ -712,6 +748,7 @@ export function registerPasswordAuthRoutes(app: Express) {
 
       let userId: number;
       let openId: string;
+      let verification: ReturnType<typeof mintEmailVerification> | null = null;
 
       if (existing && claimedInvite) {
         // The invitee's own placeholder, claimed with its invite token. Setting
@@ -726,6 +763,10 @@ export function registerPasswordAuthRoutes(app: Express) {
             name: cleanName ?? undefined,
             loginMethod: "password",
             lastSignedIn: now,
+            // The invitation's token came to this address, so it is proven (F1).
+            emailVerifiedAt: now,
+            emailVerifyTokenHash: null,
+            emailVerifyExpiresAt: null,
           })
           .where(eq(users.id, existing.id));
         await db
@@ -734,6 +775,13 @@ export function registerPasswordAuthRoutes(app: Express) {
           .where(and(eq(workspaceMembers.id, claimedInvite.memberId), eq(workspaceMembers.userId, existing.id)));
       } else {
         openId = `local:${nanoid(24)}`;
+        /**
+         * A stranger's new account is unverified until its link is opened
+         * (audit 2026-10-20, F1): the token's hash goes in with the row, so
+         * the very first page already shows the banner, and the mail itself
+         * is sent after the answer, below.
+         */
+        verification = mintEmailVerification(now.getTime());
         const [insertResult] = await db.insert(users).values({
           openId,
           email: normalizedEmail,
@@ -741,8 +789,9 @@ export function registerPasswordAuthRoutes(app: Express) {
           passwordHash,
           loginMethod: "password",
           lastSignedIn: now,
+          ...verification.columns,
         });
-        userId = (insertResult as unknown as { insertId: number }).insertId;
+        userId = insertIdOf(insertResult);
       }
 
       // Consume the activation link (single-use) and add the new user to its
@@ -772,16 +821,6 @@ export function registerPasswordAuthRoutes(app: Express) {
         }
       }
 
-      try {
-        await db.insert(loginHistory).values({
-          userId,
-          workspaceId: null,
-          ipAddress: ipKey(req).slice(0, 64),
-          userAgent: (req.headers["user-agent"] ?? "").slice(0, 500),
-          outcome: "success",
-        });
-      } catch (_) { /* non-fatal */ }
-
       // Read AFTER the activation link was consumed above, so a brand-new
       // member picks up their new workspace's policy on their very first
       // session rather than a year-long one.
@@ -791,6 +830,8 @@ export function registerPasswordAuthRoutes(app: Express) {
         expiresInMs: lifetimeMs,
         sessionVersion: existing?.sessionVersion ?? 0,
       });
+      // The sign-in and the session it started (F3).
+      await recordSignIn(db, req, { userId, workspaceId: null, token: sessionToken, sessionVersion: existing?.sessionVersion ?? 0 });
 
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: lifetimeMs });
@@ -798,9 +839,16 @@ export function registerPasswordAuthRoutes(app: Express) {
       const redirect = safeReturnPath(returnPath);
       const acceptsJson = (req.headers.accept ?? "").includes("application/json");
       if (acceptsJson) {
-        res.json({ ok: true, redirect });
+        res.json({ ok: true, redirect, emailVerificationPending: !!verification });
       } else {
         res.redirect(302, redirect);
+      }
+      // Answer first, send after, as forgot-password does: the mail must not
+      // hold up the sign-up, and a failed send leaves the banner's Resend.
+      if (verification) {
+        const token = verification.token;
+        void sendVerificationEmail(db, userId, token).catch((e) =>
+          console.error("[register] verification email failed:", e instanceof Error ? e.message : e));
       }
     },
   );

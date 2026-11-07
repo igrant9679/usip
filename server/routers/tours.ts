@@ -176,6 +176,8 @@ export const toursRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
+      // The tour it must follow is this workspace's (audit 2026-10-20, X1.1).
+      if (input.prerequisiteTourId != null) await assertTourHere(db, input.prerequisiteTourId, ctx.workspace.id);
       const { id, steps, ...rest } = input;
       const payload = { ...rest, workspaceId: ctx.workspace.id, createdBy: ctx.user.id };
 
@@ -251,6 +253,8 @@ export const toursRouter = router({
     .input(z.object({ tourId: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
+      // A tour of this workspace (X1.1): progress was recorded against any id.
+      await assertTourHere(db, input.tourId, ctx.workspace.id);
       const existing = await db
         .select()
         .from(userTourProgress)
@@ -337,6 +341,7 @@ export const toursRouter = router({
     .input(z.object({ tourId: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await requireDb();
+      await assertTourHere(db, input.tourId, ctx.workspace.id);
       const existing = await db
         .select()
         .from(userTourProgress)

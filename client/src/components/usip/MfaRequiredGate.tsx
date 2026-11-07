@@ -57,9 +57,11 @@ export function MfaRequiredGate() {
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            {/* True since G15 (audit 2026-10-20): the button now exists. */}
-            Lost the phone your codes were on? An admin can press Reset 2FA on your row of the Team
-            page — there are no backup codes.
+            {/* True since G15 (audit 2026-10-20): the Reset 2FA button exists,
+                and since 2026-11-07 setup hands out one-time backup codes. */}
+            Once it is connected you'll get ten one-time backup codes: each signs you in once if you
+            lose your phone. Lost the phone and the codes? An admin can press
+            Reset 2FA on your row of the Team page.
           </p>
           <div className="flex justify-end gap-2 pt-1">
             <Button variant="outline" size="sm" onClick={() => logout()}>Sign out</Button>

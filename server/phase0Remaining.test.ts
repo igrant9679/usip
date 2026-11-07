@@ -373,7 +373,11 @@ describe("sessions can be ended", () => {
     const reset = pa.slice(pa.indexOf('"/api/auth/reset-password"'), pa.indexOf('"/api/auth/password-login"'));
     expect(reset).toContain("sessionVersion: sql`${users.sessionVersion} + 1`");
     const profile = strip(read("server/routers/profile.ts"));
-    expect(profile.match(/await revokeAllSessions\(db, ctx\.user\.id\);\n\s+await reissueSessionCookie\(db, ctx\.req, ctx\.res, ctx\.user\.id\);/g)).toHaveLength(3);
+    // 4 since 2026-11-07 (audit F3): profile.signOutEverywhere is the fourth,
+    // ending every session and re-issuing this browser's like the other three.
+    expect(profile.match(/await revokeAllSessions\(db, ctx\.user\.id\);\n\s+await reissueSessionCookie\(db, ctx\.req, ctx\.res, ctx\.user\.id\);/g)).toHaveLength(4);
+    const everywhere = profile.slice(profile.indexOf("signOutEverywhere: workspaceProcedure"), profile.indexOf("changeMyPassword: workspaceProcedure"));
+    expect(everywhere).toContain("await revokeAllSessions(db, ctx.user.id);");
   });
 });
 

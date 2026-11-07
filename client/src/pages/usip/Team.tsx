@@ -614,6 +614,8 @@ export default function Team() {
                       <th className="px-3 py-2">Member</th>
                       <th className="px-3 py-2">Title</th>
                       <th className="px-3 py-2">Role</th>
+                      {/* Who signs in with an authenticator (audit 2026-10-20, U21). */}
+                      <th className="px-3 py-2">2FA</th>
                       <th className="px-3 py-2">Quota</th>
                       <th className="px-3 py-2">Last active</th>
                       <th className="px-3 py-2">Deactivated</th>
@@ -670,11 +672,6 @@ export default function Team() {
                                       <KeyRound className="size-2.5" /> No password
                                     </span>
                                   )}
-                                  {Number(m.mfaEnabled) === 1 && (
-                                    <span title="Signs in with an authenticator app" className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-                                      <ShieldCheck className="size-2.5" /> 2FA
-                                    </span>
-                                  )}
                                 </div>
                                 <div className="text-xs text-muted-foreground truncate">{m.email}</div>
                               </div>
@@ -708,6 +705,20 @@ export default function Team() {
                               </select>
                             ) : (
                               <StatusPill tone={roleTone(m.role)}>{m.role}</StatusPill>
+                            )}
+                          </td>
+                          {/* The 2FA column (U21): the badge that sat by the name, plus
+                              "Not set up", so an admin can see who "Require 2FA" would
+                              block. Nothing for an invitation nobody has accepted. */}
+                          <td className="px-3 py-2 text-xs" data-testid="member-mfa">
+                            {Number(m.mfaEnabled) === 1 ? (
+                              <span title="Signs in with an authenticator app" className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                                <ShieldCheck className="size-2.5" /> 2FA
+                              </span>
+                            ) : inviteState === "pending" || inviteState === "expired" ? (
+                              <span className="text-muted-foreground">—</span>
+                            ) : (
+                              <span className="text-muted-foreground">Not set up</span>
                             )}
                           </td>
                           <td className="px-3 py-2 tabular-nums text-xs">

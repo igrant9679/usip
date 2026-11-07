@@ -1424,6 +1424,12 @@ export const prospectsRouter = router({
   enrichFull: workspaceProcedure
     .input(z.object({ prospectId: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
+      // This workspace's person, before any enrichment is spent (audit
+      // 2026-10-20, X1.1).
+      const db0 = await getDb();
+      if (!db0) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const { requireInWorkspace } = await import("../services/foreignIds");
+      await requireInWorkspace(db0, prospects, input.prospectId, ctx.workspace.id, "Prospect");
       const result = await runComprehensiveEnrichment({
         workspaceId: ctx.workspace.id,
         prospectId: input.prospectId,

@@ -56,6 +56,8 @@ import { areExecutionQueue, spendLedger } from "../../../drizzle/schema";
 import { EMPTY_FIXED_COPY, usableFixedSteps } from "@shared/areFixedCopy";
 import { describeSources } from "../../services/prospectSources/registry";
 import { spendDay } from "../../services/spend";
+import { assertInWorkspace, requireInWorkspace } from "../../services/foreignIds";
+import { icpProfiles } from "../../../drizzle/schema";
 
 /** The model-token meters (services/spend), summed per source for F12. */
 const TOKEN_METERS = ["input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens"];
@@ -231,6 +233,8 @@ export const campaignsRouter = router({
         await assertResearchSectorInWorkspace(db, input.researchSectorId, ctx.workspace.id);
         researchSectorId = input.researchSectorId;
       }
+      // The ICP profile it targets is this workspace's (audit 2026-10-20, X1.1).
+      await assertInWorkspace(db, icpProfiles, input.icpProfileId, ctx.workspace.id, "ICP profile");
       if (input.personaId) {
         const [p] = await db
           .select()
@@ -357,6 +361,12 @@ export const campaignsRouter = router({
   applyBestFit: workspaceProcedure
     .input(z.object({ picks: z.array(z.object({ prospectId: z.number().int().positive(), campaignId: z.number().int().positive(), fit: z.number().int().min(0).max(100), reasoning: z.string().max(400).default("") })).min(1).max(100) }))
     .mutation(async ({ ctx, input }) => {
+      // Every pick's person and campaign are this workspace's (X1.1): the
+      // routing suggestions below were written with whatever ids were sent.
+      const db0 = await getDb();
+      if (!db0) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertInWorkspace(db0, prospects, input.picks.map((p) => p.prospectId), ctx.workspace.id, "person");
+      await assertInWorkspace(db0, areCampaigns, input.picks.map((p) => p.campaignId), ctx.workspace.id, "campaign");
       const { applyPicks } = await import("../../services/campaignRouter");
       const r = await applyPicks(ctx.workspace.id, input.picks.map((p) => ({ ...p, campaignName: null, alternatives: [], usedModel: false })));
       const db = await getDb();
@@ -987,6 +997,9 @@ export const campaignsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // This workspace's campaign (X1.1): the update was scoped, but another's
+      // id still wrote an audit row and a recount for that campaign.
+      await requireInWorkspace(db, areCampaigns, input.campaignId, ctx.workspace.id, "Campaign");
       const r = await db.update(prospectQueue).set({
         sequenceStatus: "approved",
         approvedAt: sql`COALESCE(${prospectQueue.approvedAt}, NOW())`,
