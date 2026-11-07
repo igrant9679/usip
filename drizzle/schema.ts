@@ -1783,6 +1783,8 @@ export const leadRoutingRules = mysqlTable(
     targetUserIds: json("targetUserIds"),
     // Round-robin pointer
     rrCursor: int("rrCursor").default(0).notNull(),
+    /** Migration 0362 (audit F43): most open leads a target may own before the rule passes them by; null = no limit. */
+    capacityPerRep: int("capacityPerRep"),
     matchCount: int("matchCount").default(0).notNull(),
     lastMatchedAt: timestamp("lastMatchedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),

@@ -1102,6 +1102,10 @@ export default function DataHealth() {
                 <CardTitle className="text-sm font-medium">
                   Top Duplicate Groups ({dupes.length} found)
                 </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Contacts are no longer merged here. Link each contact to its People record (Split People, below),
+                  then merge the duplicate People: one merge keeps every field and repoints everything that refers to them.
+                </p>
               </CardHeader>
               <CardContent className="pt-0">
                 <div className="divide-y">
@@ -1126,17 +1130,16 @@ export default function DataHealth() {
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <Badge variant="outline">{group.count}×</Badge>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-xs px-2"
-                          disabled={!canMerge}
-                          title={canMerge ? undefined : "Only admins can merge contacts"}
-                          onClick={() => setMergeGroup(group as DupeGroup)}
-                        >
-                          <GitMerge className="size-3 mr-1" />
-                          Merge
-                        </Button>
+                        {/* The contact merge is retired for the People merge
+                            (audit 2026-10-20, F43): contacts are no longer the
+                            record, so the fix is to link each to its person
+                            (Split People below) and merge the People. The
+                            dialog and dataHealth.mergeContacts stay, so this
+                            button can come back in one line. */}
+                        <a href="#people-merge" className="inline-flex items-center h-7 text-xs px-2 rounded-md border hover:bg-muted">
+                          <GitMerge className="size-3 mr-1" aria-hidden="true" />
+                          Merge the People
+                        </a>
                       </div>
                     </div>
                   ))}
@@ -1148,6 +1151,7 @@ export default function DataHealth() {
 
         <SplitPeopleSection canLinkAll={canLinkAll} />
 
+        <div id="people-merge" className="scroll-mt-4" />
         <PeopleMergeSection />
 
         {/* The same merge, keyed on the LinkedIn profile instead of the address

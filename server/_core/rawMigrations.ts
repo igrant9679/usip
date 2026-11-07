@@ -5037,6 +5037,16 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, F43: capacity-aware routing. A rule may cap the open
+  // leads a target owns before it passes them by. Nullable: every existing
+  // rule keeps no limit.
+  {
+    name: "0362_routing_capacity.sql",
+    statements: [
+      "ALTER TABLE `lead_routing_rules` ADD COLUMN `capacityPerRep` int NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------
