@@ -1727,13 +1727,16 @@ export async function resolveDraftRecipient(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
   workspaceId: number,
   draft: { toEmail?: string | null; toContactId?: number | null; toLeadId?: number | null; toProspectId?: number | null },
-): Promise<{ toEmail: string | null; firstName: string | null; lastName: string | null; title: string | null; company: string | null }> {
+): Promise<{ toEmail: string | null; firstName: string | null; lastName: string | null; title: string | null; company: string | null; personId: number | null }> {
   const out = {
     toEmail: draft.toEmail ?? null,
     firstName: null as string | null,
     lastName: null as string | null,
     title: null as string | null,
     company: null as string | null,
+    // The People row, so the suppression check asks by person too (audit
+    // 2026-10-20, F7): a prospect draft's own id, a contact's People link.
+    personId: (draft.toProspectId ?? null) as number | null,
   };
   if (draft.toContactId) {
     const [c] = await db
@@ -1743,6 +1746,7 @@ export async function resolveDraftRecipient(
         lastName: contacts.lastName,
         title: contacts.title,
         accountName: accounts.name,
+        personProspectId: contacts.personProspectId,
       })
       .from(contacts)
       .leftJoin(accounts, eq(accounts.id, contacts.accountId))
@@ -1754,6 +1758,7 @@ export async function resolveDraftRecipient(
       out.lastName = c.lastName ?? null;
       out.title = c.title ?? null;
       out.company = c.accountName ?? null;
+      out.personId = c.personProspectId ?? null;
     }
   } else if (draft.toLeadId) {
     const [l] = await db
@@ -1887,7 +1892,7 @@ async function sendClaimedDraft(
   // the email suppression list and the do-not-contact list, by address and
   // by company domain. Mark the draft rejected so it falls out of the
   // pending queue and surfaces the reason in audit.
-  const suppression = await findSuppression(workspaceId, { email: toEmail }, "email");
+  const suppression = await findSuppression(workspaceId, { email: toEmail, personId: recipient.personId }, "email");
   if (suppression) {
     await db
       .update(emailDrafts)

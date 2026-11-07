@@ -138,7 +138,7 @@ export async function pushPeopleIntoCampaign(
       continue;
     }
     // The ONE suppression check, at the door into a campaign (A8).
-    const suppression = await findSuppression(workspaceId, { email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain }, "any");
+    const suppression = await findSuppression(workspaceId, { email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain, personId: p.id }, "any");
     if (suppression) {
       skipped.push({ prospectId: p.id, reason: `Suppressed — ${describeSuppression(suppression)}` });
       continue;

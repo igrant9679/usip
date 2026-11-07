@@ -5026,6 +5026,25 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Suppression by person, not only by address (audit 2026-10-20, F7). A
+  // nullable People id on both lists, then filled where it can be told: the
+  // linked contact's People row first, else the People row with that address
+  // in the workspace (lowest id). Bounces stay address-only. Idempotent: only
+  // rows still without a person are touched, and re-running finds none. This
+  // can only stop more sends, never fewer.
+  {
+    name: "0341_suppression_person.sql",
+    statements: [
+      "ALTER TABLE `email_suppressions` ADD COLUMN `prospectId` int NULL",
+      "CREATE INDEX `ix_sup_person` ON `email_suppressions` (`workspaceId`, `prospectId`)",
+      "ALTER TABLE `are_suppression_list` ADD COLUMN `prospectId` int NULL",
+      "CREATE INDEX `ix_asupp_person` ON `are_suppression_list` (`workspaceId`, `prospectId`)",
+      "UPDATE `email_suppressions` s JOIN `contacts` c ON c.`id` = s.`contactId` AND c.`workspaceId` = s.`workspaceId` SET s.`prospectId` = c.`person_prospect_id` WHERE s.`prospectId` IS NULL AND s.`reason` <> 'bounce' AND c.`person_prospect_id` IS NOT NULL",
+      "UPDATE `email_suppressions` s SET s.`prospectId` = (SELECT MIN(p.`id`) FROM `prospects` p WHERE p.`workspaceId` = s.`workspaceId` AND p.`email` = s.`email`) WHERE s.`prospectId` IS NULL AND s.`reason` <> 'bounce'",
+      "UPDATE `are_suppression_list` a SET a.`prospectId` = (SELECT MIN(p.`id`) FROM `prospects` p WHERE p.`workspaceId` = a.`workspaceId` AND p.`email` = a.`email`) WHERE a.`prospectId` IS NULL AND a.`reason` <> 'bounce' AND a.`email` IS NOT NULL AND a.`email` <> ''",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

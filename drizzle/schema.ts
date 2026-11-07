@@ -3333,6 +3333,15 @@ export const emailSuppressions = mysqlTable(
     source: varchar("source", { length: 32 }),
     draftId: int("draftId"), // the draft that triggered the suppression (if applicable)
     contactId: int("contactId"), // linked contact (if found)
+    /**
+     * The People row this opt-out is about, where it is known (migration 0341,
+     * audit 2026-10-20 F7). Suppression was keyed only by address, so a
+     * person who unsubscribed became mailable again at a new address (a
+     * merge, an edit, enrichment). Checked beside the address by
+     * services/suppression. Never set for a bounce: a bounce is about the
+     * address, not the person.
+     */
+    prospectId: int("prospectId"),
     notes: text("notes"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
@@ -3340,6 +3349,7 @@ export const emailSuppressions = mysqlTable(
     byWs: index("ix_sup_ws").on(t.workspaceId),
     byEmail: index("ix_sup_email").on(t.email),
     uniq: index("ix_sup_uniq").on(t.workspaceId, t.email, t.reason),
+    byPerson: index("ix_sup_person").on(t.workspaceId, t.prospectId),
   }),
 );
 export type EmailSuppression = typeof emailSuppressions.$inferSelect;
@@ -4460,10 +4470,13 @@ export const areSuppressionList = mysqlTable(
     reason: mysqlEnum("reason", ["unsubscribe", "bounce", "competitor", "existing_customer", "manual", "do_not_contact"]).notNull(),
     addedByUserId: int("addedByUserId"),
     addedAt: timestamp("addedAt").defaultNow().notNull(),
+    /** The People row, where known (migration 0341, F7): stops the person, whatever address or profile they have later. */
+    prospectId: int("prospectId"),
   },
   (t) => ({
     byWs: index("ix_asupp_ws").on(t.workspaceId),
     byEmail: index("ix_asupp_email").on(t.workspaceId, t.email),
+    byPerson: index("ix_asupp_person").on(t.workspaceId, t.prospectId),
   }),
 );
 export type AreSuppressionList = typeof areSuppressionList.$inferSelect;

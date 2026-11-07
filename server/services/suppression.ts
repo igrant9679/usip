@@ -31,9 +31,15 @@
  * they carry one. New rows are written normalised (normaliseAreSuppression);
  * older rows were stored as typed, so the read also matches the common
  * spellings of the same URL or domain.
+ *
+ * By person (audit 2026-10-20, F7). A suppression also carries the People row
+ * it is about, where that is known (prospectId), and a caller that knows whose
+ * address it is asks with `personId`: an opt-out then follows the person to a
+ * new address, a merge or an enrichment, instead of stopping only the address
+ * it arrived from. Bounces are never matched by person, by the rule above.
  */
 import { and, eq, inArray, or } from "drizzle-orm";
-import { areSuppressionList, emailSuppressions, prospects } from "../../drizzle/schema";
+import { areSuppressionList, contacts, emailSuppressions, prospectQueue, prospects } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { normalizeSuppressionEmail } from "../unsubscribe";
 
@@ -41,7 +47,7 @@ export type SuppressionChannel = "email" | "linkedin" | "any";
 
 export type SuppressionHit = {
   list: "email_suppressions" | "are_suppression_list";
-  matched: "email" | "linkedin" | "domain";
+  matched: "email" | "linkedin" | "domain" | "person";
   reason: string;
 };
 
@@ -49,6 +55,8 @@ export type SuppressionTarget = {
   email?: string | null;
   linkedinUrl?: string | null;
   companyDomain?: string | null;
+  /** The People row this is, when the caller knows it (F7). */
+  personId?: number | null;
 };
 
 /** "https://www.linkedin.com/in/Jane-Doe/?trk=x" → "in/jane-doe"; a bare slug → "in/<slug>". */
@@ -146,20 +154,30 @@ export async function findSuppression(
   const email = normalizeSuppressionEmail(target.email);
   const liKey = normalizeLinkedinUrl(target.linkedinUrl);
   const domain = opts.domain === false ? null : normalizeDomain(target.companyDomain) ?? emailDomain(email);
+  const personId = Number(target.personId) > 0 ? Number(target.personId) : null;
+  /** A person match (F7): never a bounce, which is about an address. */
+  const personMatch = (r: { prospectId?: unknown; reason: unknown }) =>
+    personId !== null && Number(r.prospectId) === personId && String(r.reason) !== "bounce";
 
-  if (email) {
+  if (email || personId) {
+    const keys = [];
+    if (email) keys.push(eq(emailSuppressions.email, email));
+    if (personId) keys.push(eq(emailSuppressions.prospectId, personId));
     const rows = await db
-      .select({ reason: emailSuppressions.reason })
+      .select({ email: emailSuppressions.email, reason: emailSuppressions.reason, prospectId: emailSuppressions.prospectId })
       .from(emailSuppressions)
-      .where(and(eq(emailSuppressions.workspaceId, workspaceId), eq(emailSuppressions.email, email)));
-    const hit = rows.find((r) => stops(String(r.reason), channel));
-    if (hit) return { list: "email_suppressions", matched: "email", reason: String(hit.reason) };
+      .where(and(eq(emailSuppressions.workspaceId, workspaceId), keys.length === 1 ? keys[0] : or(...keys)));
+    const byAddress = rows.find((r) => !!email && normalizeSuppressionEmail(r.email) === email && stops(String(r.reason), channel));
+    if (byAddress) return { list: "email_suppressions", matched: "email", reason: String(byAddress.reason) };
+    const byPerson = rows.find((r) => personMatch(r) && stops(String(r.reason), channel));
+    if (byPerson) return { list: "email_suppressions", matched: "person", reason: String(byPerson.reason) };
   }
 
   const any = [];
   if (email) any.push(eq(areSuppressionList.email, email));
   if (liKey) any.push(inArray(areSuppressionList.linkedinUrl, linkedinVariants(liKey, target.linkedinUrl ?? "")));
   if (domain) any.push(inArray(areSuppressionList.companyDomain, domainVariants(domain)));
+  if (personId) any.push(eq(areSuppressionList.prospectId, personId));
   if (any.length === 0) return null;
   const rows = await db
     .select({
@@ -167,6 +185,7 @@ export async function findSuppression(
       linkedinUrl: areSuppressionList.linkedinUrl,
       companyDomain: areSuppressionList.companyDomain,
       reason: areSuppressionList.reason,
+      prospectId: areSuppressionList.prospectId,
     })
     .from(areSuppressionList)
     .where(and(eq(areSuppressionList.workspaceId, workspaceId), any.length === 1 ? any[0] : or(...any)));
@@ -176,6 +195,51 @@ export async function findSuppression(
     if (email && normalizeSuppressionEmail(r.email) === email) return { list: "are_suppression_list", matched: "email", reason };
     if (liKey && normalizeLinkedinUrl(r.linkedinUrl) === liKey) return { list: "are_suppression_list", matched: "linkedin", reason };
     if (domain && normalizeDomain(r.companyDomain) === domain) return { list: "are_suppression_list", matched: "domain", reason };
+    if (personMatch(r)) return { list: "are_suppression_list", matched: "person", reason };
+  }
+  return null;
+}
+
+/**
+ * The People row a suppression being written is about, or null (F7). Tried
+ * in order: a People id the writer already has (checked against the
+ * workspace), a campaign row's People link, a contact's People link, then the
+ * People row with that address (the lowest id). Null for a bounce, which is
+ * about an address. Best effort: a failed lookup writes the suppression by
+ * address, as before, and never stops it being written.
+ */
+export async function suppressionPersonId(
+  workspaceId: number,
+  hint: { reason?: string | null; prospectId?: number | null; prospectQueueId?: number | null; contactId?: number | null; email?: string | null },
+): Promise<number | null> {
+  if (hint.reason === "bounce") return null;
+  try {
+    const db = await getDb();
+    if (!db) return null;
+    if (hint.prospectId) {
+      const [p] = await db.select({ id: prospects.id }).from(prospects)
+        .where(and(eq(prospects.id, hint.prospectId), eq(prospects.workspaceId, workspaceId))).limit(1);
+      if (p) return p.id;
+    }
+    if (hint.prospectQueueId) {
+      const [q] = await db.select({ person: prospectQueue.personProspectId }).from(prospectQueue)
+        .where(and(eq(prospectQueue.id, hint.prospectQueueId), eq(prospectQueue.workspaceId, workspaceId))).limit(1);
+      if (q?.person) return Number(q.person);
+    }
+    if (hint.contactId) {
+      const [c] = await db.select({ person: contacts.personProspectId }).from(contacts)
+        .where(and(eq(contacts.id, hint.contactId), eq(contacts.workspaceId, workspaceId))).limit(1);
+      if (c?.person) return Number(c.person);
+    }
+    const email = normalizeSuppressionEmail(hint.email);
+    if (email) {
+      const found = await db.select({ id: prospects.id }).from(prospects)
+        .where(and(eq(prospects.workspaceId, workspaceId), eq(prospects.email, email)));
+      const ids = found.map((r: { id: number }) => Number(r.id)).filter((n: number) => n > 0).sort((a: number, b: number) => a - b);
+      if (ids.length) return ids[0];
+    }
+  } catch (e) {
+    console.warn("[suppression] person lookup failed:", (e as Error)?.message ?? e);
   }
   return null;
 }
@@ -218,9 +282,12 @@ export async function suppressionBlockingNewEmail(
       .limit(1);
     if (p) targets.push(p);
   }
+  // The person themselves (F7): an opt-out recorded against their People row
+  // stops a new address even when every address on file is clean.
+  const personId = person.personProspectId ?? person.personId ?? null;
   for (const t of targets) {
-    if (!t.email?.trim() && !t.linkedinUrl?.trim() && !t.companyDomain?.trim()) continue;
-    const hit = await findSuppression(workspaceId, t, "any");
+    if (!t.email?.trim() && !t.linkedinUrl?.trim() && !t.companyDomain?.trim() && !personId) continue;
+    const hit = await findSuppression(workspaceId, { ...t, personId }, "any");
     if (hit) return hit;
   }
   return null;
@@ -228,7 +295,7 @@ export async function suppressionBlockingNewEmail(
 
 /** For logs and skip reasons. */
 export function describeSuppression(hit: SuppressionHit): string {
-  const what = hit.matched === "email" ? "address" : hit.matched === "linkedin" ? "LinkedIn profile" : "company domain";
+  const what = hit.matched === "email" ? "address" : hit.matched === "linkedin" ? "LinkedIn profile" : hit.matched === "person" ? "person" : "company domain";
   const list = hit.list === "email_suppressions" ? "email suppression list" : "do-not-contact list";
   return `${what} is on the ${list} (${hit.reason})`;
 }

@@ -150,11 +150,16 @@ async function suppressIfNew(
     )
     .limit(1);
   if (existing.length > 0) return "already";
+  // The People row with this address, so the opt-out follows the person to a
+  // new address (audit 2026-10-20, F7). Best effort: by address regardless.
+  const { suppressionPersonId } = await import("./services/suppression");
+  const prospectId = await suppressionPersonId(workspaceId, { reason: "unsubscribe", email: lower });
   await db.insert(emailSuppressions).values({
     workspaceId,
     email: lower,
     reason: "unsubscribe",
     source,
+    prospectId,
   });
   /**
    * Read it back before anyone is told it exists.

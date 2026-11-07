@@ -113,6 +113,8 @@ import {
   voiceCalls,
   voiceCallRequests,
   callSuppressions,
+  emailSuppressions,
+  areSuppressionList,
 } from "../../drizzle/schema";
 import type { getDb } from "../db";
 import { isPlaceholderToken, usableEmailOrNull } from "@shared/fieldHygiene";
@@ -238,6 +240,9 @@ export const PERSON_REF_TABLES: PersonRefTable[] = [
   // so does their do-not-call entry (unique per number, not per person).
   { key: "voiceCallRequests.prospectId", table: voiceCallRequests, column: voiceCallRequests.prospectId, field: "prospectId", wsColumn: voiceCallRequests.workspaceId, idColumn: voiceCallRequests.id },
   { key: "callSuppressions.prospectId", table: callSuppressions, column: callSuppressions.prospectId, field: "prospectId", wsColumn: callSuppressions.workspaceId, idColumn: callSuppressions.id },
+  // Suppression by person (F7, migration 0341): an opt-out follows the merged person.
+  { key: "emailSuppressions.prospectId", table: emailSuppressions, column: emailSuppressions.prospectId, field: "prospectId", wsColumn: emailSuppressions.workspaceId, idColumn: emailSuppressions.id },
+  { key: "areSuppressionList.prospectId", table: areSuppressionList, column: areSuppressionList.prospectId, field: "prospectId", wsColumn: areSuppressionList.workspaceId, idColumn: areSuppressionList.id },
   // A test call that played this person (2026-10-06).
   { key: "voiceCalls.testAsProspectId", table: voiceCalls, column: voiceCalls.testAsProspectId, field: "testAsProspectId", wsColumn: voiceCalls.workspaceId, idColumn: voiceCalls.id },
 ];

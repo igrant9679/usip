@@ -644,14 +644,18 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
         let toContactId: number | undefined;
         let toLeadId: number | undefined;
         let toProspectId: number | undefined;
+        // Whose address this is, so an opt-out recorded against the person
+        // stops it too (audit 2026-10-20, F7).
+        let personId: number | null = null;
         if (enrollment.contactId) {
           const [contact] = await db
-            .select({ email: contacts.email, linkedinUrl: contacts.linkedinUrl, companyDomain: contacts.companyDomain })
+            .select({ email: contacts.email, linkedinUrl: contacts.linkedinUrl, companyDomain: contacts.companyDomain, personProspectId: contacts.personProspectId })
             .from(contacts)
             .where(and(eq(contacts.id, enrollment.contactId), eq(contacts.workspaceId, enrollment.workspaceId)));
           toEmail = contact?.email ?? undefined;
           linkedinUrl = contact?.linkedinUrl ?? null;
           companyDomain = contact?.companyDomain ?? null;
+          personId = contact?.personProspectId ?? null;
           toContactId = enrollment.contactId;
         } else if (enrollment.leadId) {
           const [lead] = await db
@@ -671,6 +675,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           linkedinUrl = prospect?.linkedinUrl ?? null;
           companyDomain = prospect?.companyDomain ?? null;
           toProspectId = enrollment.prospectId;
+          personId = enrollment.prospectId;
         }
 
         /**
@@ -685,7 +690,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
          */
         let skip: string | null = toEmail ? null : "no email address";
         if (toEmail) {
-          const hit = await findSuppression(enrollment.workspaceId, { email: toEmail, linkedinUrl, companyDomain }, "email");
+          const hit = await findSuppression(enrollment.workspaceId, { email: toEmail, linkedinUrl, companyDomain, personId }, "email");
           if (hit) skip = describeSuppression(hit);
         }
 
@@ -907,7 +912,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
         else if (!identifier) skip = "no LinkedIn profile on the record";
         else if (!isInvite && !text.trim()) skip = "the step has no message";
         else {
-          const hit = await findSuppression(enrollment.workspaceId, { email, linkedinUrl, companyDomain }, "linkedin");
+          const hit = await findSuppression(enrollment.workspaceId, { email, linkedinUrl, companyDomain, personId: enrollment.prospectId ?? personProspectId ?? null }, "linkedin");
           if (hit) skip = describeSuppression(hit);
         }
         if (!skip && isInvite) {

@@ -249,7 +249,8 @@ export function registerWebsiteTrackingRoutes(app: Express): void {
           let ownerUserId: number | null = null;
           let target: SuppressionTarget = {};
           if (contactId) {
-            const [c] = await db.select({ f: contacts.firstName, l: contacts.lastName, o: contacts.ownerUserId, email: contacts.email, linkedinUrl: contacts.linkedinUrl, companyDomain: contacts.companyDomain }).from(contacts).where(eq(contacts.id, contactId)).limit(1);
+            const [c] = await db.select({ f: contacts.firstName, l: contacts.lastName, o: contacts.ownerUserId, email: contacts.email, linkedinUrl: contacts.linkedinUrl, companyDomain: contacts.companyDomain, personId: contacts.personProspectId }).from(contacts).where(eq(contacts.id, contactId)).limit(1);
+            // The contact's People row too (F7): an opt-out on the person counts.
             if (c) { name = `${c.f ?? ""} ${c.l ?? ""}`.trim() || name; ownerUserId = c.o ?? null; target = c; }
           } else if (leadId) {
             const [l] = await db.select({ f: leads.firstName, l: leads.lastName, o: leads.ownerUserId, email: leads.email }).from(leads).where(eq(leads.id, leadId)).limit(1);

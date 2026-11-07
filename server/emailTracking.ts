@@ -28,6 +28,7 @@ import { getDb } from "./db";
 import { appUrl } from "./appUrl";
 import { emailDrafts, emailTrackingEvents } from "../drizzle/schema";
 import { normalizeSuppressionEmail } from "./unsubscribe";
+import { suppressionPersonId } from "./services/suppression";
 import { escapeHtml } from "@shared/escapeHtml";
 import { requireScheduledSecret } from "./scheduledTaskAuth";
 import { activeOwnerOrNull, workspaceNotifyUserId } from "./_core/activeMembers";
@@ -1433,6 +1434,11 @@ export async function processBounceEvent(
         email: normalizeSuppressionEmail(event.email),
         reason: suppressionReason,
         draftId: draft?.id ?? null,
+        // A complaint is the person saying no (F7); a bounce stays the address's.
+        prospectId: suppressionReason === "bounce" ? null : await suppressionPersonId(workspaceId, {
+          reason: suppressionReason, prospectId: (draft as { toProspectId?: number | null } | undefined)?.toProspectId ?? null,
+          contactId: (draft as { toContactId?: number | null } | undefined)?.toContactId ?? null, email: event.email,
+        }),
         notes: event.message?.slice(0, 512) ?? null,
       });
     }
