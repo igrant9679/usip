@@ -5020,6 +5020,19 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // The session each sign-in started (audit 2026-10-20, F3), for the
+  // active-sessions list and signing out one device. Nullable columns with no
+  // default: every existing row is a sign-in from before, which lists nothing.
+  {
+    name: "0311_login_history_sessions.sql",
+    statements: [
+      "ALTER TABLE `login_history` ADD COLUMN `sessionJti` varchar(32) NULL",
+      "ALTER TABLE `login_history` ADD COLUMN `sessionExpiresAt` timestamp NULL",
+      "ALTER TABLE `login_history` ADD COLUMN `sessionVersion` int NULL",
+      "CREATE INDEX `ix_lh_jti` ON `login_history` (`sessionJti`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

@@ -252,8 +252,8 @@ function Landing() {
       if (typeof data.backupCodesLeft === "number") {
         window.alert(
           data.backupCodesLeft === 0
-            ? "That was your last backup code. Make a new set in Settings → Profile → Multi-factor authentication."
-            : `Signed in with a backup code. You have ${data.backupCodesLeft} left; you can make a new set in Settings → Profile → Multi-factor authentication.`,
+            ? "That was your last backup code. Make a new set in Settings → Profile → Security."
+            : `Signed in with a backup code. You have ${data.backupCodesLeft} left; you can make a new set in Settings → Profile → Security.`,
         );
       }
       // The server already sanitises `redirect`; re-checked here because this

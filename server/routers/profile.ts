@@ -11,10 +11,11 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
-import { users, workspaceMembers } from "../../drizzle/schema";
+import { loginHistory, users, workspaceMembers } from "../../drizzle/schema";
 import { publicProcedure, router } from "../_core/trpc";
 import { workspaceProcedure } from "../_core/workspace";
-import { revokeAllSessions, useTotpStep } from "../_core/sessionRevocation";
+import { revokeAllSessions, revokeSessionJti, useTotpStep } from "../_core/sessionRevocation";
+import { listLiveSessions, sessionTokenOf } from "../_core/sessionRecords";
 import { reissueSessionCookie } from "../passwordAuth";
 import { escapeHtml } from "@shared/escapeHtml";
 import { isLockedOut, noteFailure, profileKey } from "../services/accountLockout";
@@ -387,6 +388,49 @@ export const profileRouter = router({
       }
       return { backupCodes: await replaceBackupCodes(db, ctx.user.id) };
     }),
+
+  /* ── Sessions (audit 2026-10-20, F3) ────────────────────────────────────
+     Session versioning already ended every session on a password or 2FA
+     change; there was no way for a person to do it themselves, or to see
+     where they were signed in. */
+
+  /** Where this account is signed in: device, address and when, from login history. */
+  listMySessions: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    return listLiveSessions(db, ctx.user.id, sessionTokenOf(ctx.req));
+  }),
+
+  /** Sign out one listed session, on whatever device holds it. */
+  signOutSession: workspaceProcedure
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Only the account's own rows: an id from anyone else's history is "not found".
+      const [row] = await db
+        .select({ jti: loginHistory.sessionJti, expiresAt: loginHistory.sessionExpiresAt })
+        .from(loginHistory)
+        .where(and(eq(loginHistory.id, input.id), eq(loginHistory.userId, ctx.user.id)))
+        .limit(1);
+      if (!row?.jti) throw new TRPCError({ code: "NOT_FOUND", message: "That session isn't one of yours, or it has already ended." });
+      await revokeSessionJti(db, row.jti, ctx.user.id, row.expiresAt ?? new Date(Date.now() + 366 * 86_400_000));
+      return { ok: true as const };
+    }),
+
+  /**
+   * "Sign out everywhere": every session this account holds ends, on every
+   * device (the session version every token carries moves on). This browser
+   * is given a fresh session so the person is not thrown out of the page
+   * they pressed it on, exactly as after changing their own password.
+   */
+  signOutEverywhere: workspaceProcedure.mutation(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    await revokeAllSessions(db, ctx.user.id);
+    await reissueSessionCookie(db, ctx.req, ctx.res, ctx.user.id);
+    return { ok: true as const };
+  }),
 
   /**
    * Self-service password change. Users who already have a password must

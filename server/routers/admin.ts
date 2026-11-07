@@ -250,6 +250,21 @@ export async function getOrSeedSettings(workspaceId: number) {
 }
 
 /**
+ * What an admin sees of a sign-in: everything but the session it started
+ * (migration 0311, F3). A token id is no credential, but nothing here needs
+ * it, and it is the handle "sign out this session" acts on.
+ */
+const LOGIN_HISTORY_COLUMNS = {
+  id: loginHistory.id,
+  userId: loginHistory.userId,
+  workspaceId: loginHistory.workspaceId,
+  ipAddress: loginHistory.ipAddress,
+  userAgent: loginHistory.userAgent,
+  outcome: loginHistory.outcome,
+  createdAt: loginHistory.createdAt,
+};
+
+/**
  * Which of a member's sign-ins this workspace's admins may see (audit
  * 2026-10-20): those recorded against THIS workspace. The Team page used to
  * show every sign-in of the account — when, from which address and browser —
@@ -365,7 +380,7 @@ export const settingsRouter = router({
         throw new TRPCError({
           code: "FORBIDDEN",
           message:
-            "Connect your own authenticator app first (Settings → Profile → Multi-factor authentication). " +
+            "Connect your own authenticator app first (Settings → Profile → Security). " +
             "Turning this on without it would lock you out.",
         });
       }
@@ -1778,7 +1793,7 @@ export const teamRouter = router({
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
       return db
-        .select()
+        .select(LOGIN_HISTORY_COLUMNS)
         .from(loginHistory)
         .where(and(eq(loginHistory.userId, member.userId), await loginHistoryScope(db, ctx.workspace.id, member.userId)))
         .orderBy(desc(loginHistory.createdAt))
@@ -2026,7 +2041,7 @@ export const teamRouter = router({
         if (range.to) conditions.push(lte(loginHistory.createdAt, range.to) as any);
       }
       return db
-        .select()
+        .select(LOGIN_HISTORY_COLUMNS)
         .from(loginHistory)
         .where(and(...conditions))
         .orderBy(desc(loginHistory.createdAt))

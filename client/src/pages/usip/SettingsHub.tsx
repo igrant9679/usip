@@ -89,6 +89,7 @@ import {
   ListChecks,
 } from "lucide-react";
 import { BackupCodesPanel } from "@/components/usip/settings/BackupCodesPanel";
+import { confirmAction } from "@/components/usip/Common";
 import { isAdminRole } from "@shared/roleRank";
 import { tablistProps, tabProps } from "@/lib/tabs";
 
@@ -334,7 +335,8 @@ export default function SettingsHub() {
 
 const PROFILE_TABS = [
   { id: "general", label: "General" },
-  { id: "mfa", label: "Multi-factor authentication" },
+  // "Security" since 2026-11-07 (F3, G15): 2FA, backup codes and where you are signed in.
+  { id: "mfa", label: "Security" },
   { id: "email-settings", label: "Email settings" },
 ] as const;
 type ProfileTab = (typeof PROFILE_TABS)[number]["id"];
@@ -741,6 +743,8 @@ function MfaTab({ me, onEditPassword: _onEditPassword }: { me: any; onEditPasswo
         </div>
       </section>
 
+      <SessionsCard />
+
       <TotpSetupDialog open={totpOpen} onClose={() => setTotpOpen(false)} />
       <TotpDisconnectDialog open={disconnectOpen} onClose={() => setDisconnectOpen(false)} hasPassword={!!me?.hasPassword} />
       <BackupCodesDialog open={backupOpen} onClose={() => setBackupOpen(false)} hasPassword={!!me?.hasPassword} />
@@ -823,6 +827,78 @@ function TotpDisconnectDialog({ open, onClose, hasPassword }: { open: boolean; o
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Where you are signed in, and Sign out everywhere (audit 2026-10-20, F3).
+ * Built from login history: each sign-in since 2026-11-07 records the session
+ * it started, so the list is the ones still alive. Older sessions are not
+ * listed, and the note says Sign out everywhere ends them too.
+ */
+function SessionsCard() {
+  const utils = trpc.useUtils();
+  const sessions = trpc.profile.listMySessions.useQuery();
+  const signOutOne = trpc.profile.signOutSession.useMutation({
+    onSuccess: () => { toast.success("That session is signed out"); utils.profile.listMySessions.invalidate(); },
+    onError: (e: any) => toast.error(e?.message ?? "Could not sign that session out"),
+  });
+  const signOutAll = trpc.profile.signOutEverywhere.useMutation({
+    onSuccess: () => { toast.success("Signed out everywhere else. This browser stays signed in."); utils.profile.listMySessions.invalidate(); },
+    onError: (e: any) => toast.error(e?.message ?? "Could not sign out everywhere"),
+  });
+  const list = (sessions.data ?? []) as Array<{ id: number; device: string; ipAddress: string | null; signedInAt: string | Date; current: boolean }>;
+  return (
+    <section className="rounded-xl border border-border/70 bg-card shadow-sm" data-testid="sessions-card">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-5 py-3.5">
+        <span className="text-[13px] font-medium">Where you're signed in</span>
+        <div className="flex-1" />
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={signOutAll.isPending}
+          onClick={() => confirmAction({
+            title: "Sign out everywhere?",
+            description: "Every session on every other device and browser ends now, including any you can't see in this list. This browser stays signed in.",
+            confirmLabel: "Sign out everywhere",
+          }, () => signOutAll.mutate())}
+        >
+          {signOutAll.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null} Sign out everywhere
+        </Button>
+      </div>
+      <div className="p-4 space-y-2">
+        {sessions.isLoading ? (
+          <div className="h-16 rounded-xl bg-muted/50 animate-pulse" />
+        ) : list.length === 0 ? (
+          <p className="text-[13px] text-muted-foreground">No sessions recorded yet. Sign-ins from now on are listed here.</p>
+        ) : (
+          <ul className="divide-y divide-border/60">
+            {list.map((s) => (
+              <li key={s.id} className="flex flex-wrap items-center gap-3 py-2.5">
+                <Monitor className="size-4 shrink-0 text-foreground/70" aria-hidden="true" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium">
+                    {s.device}
+                    {s.current && <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">This browser</span>}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {s.ipAddress ?? "Unknown address"} · signed in {new Date(s.signedInAt).toLocaleString()}
+                  </div>
+                </div>
+                {!s.current && (
+                  <Button variant="ghost" size="sm" disabled={signOutOne.isPending} onClick={() => signOutOne.mutate({ id: s.id })}>
+                    Sign out
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="text-[11px] text-muted-foreground">
+          Sessions started before 7 November 2026 aren't listed. Sign out everywhere ends them too.
+        </p>
+      </div>
+    </section>
   );
 }
 

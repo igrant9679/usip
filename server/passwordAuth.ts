@@ -28,6 +28,7 @@ import { sessionLifetimeMs } from "./_core/securityPolicy";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { clientIpOf, rateLimitKey } from "./_core/clientIp";
 import { useTotpStep } from "./_core/sessionRevocation";
+import { recordReissuedSession, recordSignIn, sessionTokenOf } from "./_core/sessionRecords";
 import { clearFailures, isLockedOut, noteFailure, SIGN_IN_LOCKED, signInKey } from "./services/accountLockout";
 import { backupCodesLeft, looksLikeBackupCode, useBackupCode } from "./services/mfaBackupCodes";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
@@ -301,6 +302,9 @@ export async function reissueSessionCookie(db: LiveDb, req: Request, res: Respon
   const lifetimeMs = await sessionLifetimeForUser(db, userId);
   const token = await sdk.createSessionToken(u.openId, { name: u.name || "", expiresInMs: lifetimeMs, sessionVersion: u.sessionVersion ?? 0 });
   res.cookie(COOKIE_NAME, token, { ...getSessionCookieOptions(req), maxAge: lifetimeMs });
+  // The same device, now on a new session: its row in the sessions list
+  // follows it (F3), instead of vanishing with the session that just ended.
+  await recordReissuedSession(db, req, { userId, oldToken: sessionTokenOf(req), newToken: token, sessionVersion: u.sessionVersion ?? 0 });
 }
 
 /**
@@ -593,21 +597,6 @@ export function registerPasswordAuthRoutes(app: Express) {
         }
       } catch (_) { /* non-fatal */ }
 
-      try {
-        const [member] = await db
-          .select({ workspaceId: workspaceMembers.workspaceId })
-          .from(workspaceMembers)
-          .where(eq(workspaceMembers.userId, user.id))
-          .limit(1);
-        await db.insert(loginHistory).values({
-          userId: user.id,
-          workspaceId: member?.workspaceId ?? null,
-          ipAddress: ipKey(req).slice(0, 64),
-          userAgent: (req.headers["user-agent"] ?? "").slice(0, 500),
-          outcome: "success",
-        });
-      } catch (_) { /* non-fatal */ }
-
       // ABSOLUTE age from sign-in, not idle time. A member already signed in
       // keeps the session they hold until it expires, so lowering the setting
       // lands one person at a time as they next sign in.
@@ -617,6 +606,19 @@ export function registerPasswordAuthRoutes(app: Express) {
         expiresInMs: lifetimeMs,
         sessionVersion: user.sessionVersion ?? 0,
       });
+
+      // The sign-in and the session it started (F3): written after the token
+      // is minted, so the row can name it for the active-sessions list.
+      let firstWorkspaceId: number | null = null;
+      try {
+        const [member] = await db
+          .select({ workspaceId: workspaceMembers.workspaceId })
+          .from(workspaceMembers)
+          .where(eq(workspaceMembers.userId, user.id))
+          .limit(1);
+        firstWorkspaceId = member?.workspaceId ?? null;
+      } catch (_) { /* non-fatal */ }
+      await recordSignIn(db, req, { userId: user.id, workspaceId: firstWorkspaceId, token: sessionToken, sessionVersion: user.sessionVersion ?? 0 });
 
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: lifetimeMs });
@@ -801,16 +803,6 @@ export function registerPasswordAuthRoutes(app: Express) {
         }
       }
 
-      try {
-        await db.insert(loginHistory).values({
-          userId,
-          workspaceId: null,
-          ipAddress: ipKey(req).slice(0, 64),
-          userAgent: (req.headers["user-agent"] ?? "").slice(0, 500),
-          outcome: "success",
-        });
-      } catch (_) { /* non-fatal */ }
-
       // Read AFTER the activation link was consumed above, so a brand-new
       // member picks up their new workspace's policy on their very first
       // session rather than a year-long one.
@@ -820,6 +812,8 @@ export function registerPasswordAuthRoutes(app: Express) {
         expiresInMs: lifetimeMs,
         sessionVersion: existing?.sessionVersion ?? 0,
       });
+      // The sign-in and the session it started (F3).
+      await recordSignIn(db, req, { userId, workspaceId: null, token: sessionToken, sessionVersion: existing?.sessionVersion ?? 0 });
 
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: lifetimeMs });

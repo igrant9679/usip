@@ -2381,10 +2381,21 @@ export const loginHistory = mysqlTable(
     /** success | failed | expired_invite */
     outcome: mysqlEnum("outcome", ["success", "failed", "expired_invite"]).default("success").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
+    /**
+     * The session a successful sign-in started (migration 0311, audit
+     * 2026-10-20, F3): its token id, expiry and the account's session version
+     * when minted. The active-sessions list is the rows whose session is
+     * still alive: not expired, same version as the account, jti not revoked.
+     * NULL on failures and on rows from before this shipped.
+     */
+    sessionJti: varchar("sessionJti", { length: 32 }),
+    sessionExpiresAt: timestamp("sessionExpiresAt"),
+    sessionVersion: int("sessionVersion"),
   },
   (t) => ({
     byUser: index("ix_lh_user").on(t.userId),
     byWs: index("ix_lh_ws").on(t.workspaceId),
+    byJti: index("ix_lh_jti").on(t.sessionJti),
   }),
 );
 export type LoginHistory = typeof loginHistory.$inferSelect;
