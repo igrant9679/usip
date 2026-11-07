@@ -5011,6 +5011,22 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, P72 and F38. A discovery search runs as a background job
+  // now: fanOutStartedAt is set once when a worker begins, so a job picked up
+  // again after a restart never pays for the fan-out twice. Each raw find says
+  // whether it was already in People when found, and a run can be kept
+  // unsaved for review. All nullable or defaulted: existing runs read as before.
+  {
+    name: "0360_discovery_run_job.sql",
+    statements: [
+      "ALTER TABLE `discovery_runs` ADD COLUMN `fanOutStartedAt` timestamp NULL",
+      "ALTER TABLE `discovery_runs` ADD COLUMN `heldForReview` boolean NOT NULL DEFAULT false",
+      "ALTER TABLE `discovery_runs` ADD COLUMN `alreadyInPeople` int NOT NULL DEFAULT 0",
+      "ALTER TABLE `raw_finds` ADD COLUMN `knownAs` varchar(16) NULL",
+      "ALTER TABLE `raw_finds` ADD COLUMN `knownProspectId` int NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

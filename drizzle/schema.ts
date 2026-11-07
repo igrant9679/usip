@@ -4690,6 +4690,10 @@ export const rawFinds = mysqlTable(
     phone: varchar("phone", { length: 40 }),
     location: varchar("location", { length: 200 }),
     rawJson: json("rawJson"),
+    /** Migration 0360 (audit F38): when found, was this someone already in People
+     *  ("in_people"), only in a campaign's queue ("in_campaign"), or "new". Null: not checked. */
+    knownAs: varchar("knownAs", { length: 16 }),
+    knownProspectId: int("knownProspectId"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
@@ -4723,6 +4727,12 @@ export const discoveryRuns = mysqlTable(
     lowConfidenceCount: int("lowConfidenceCount").default(0).notNull(),
     durationMs: int("durationMs").default(0).notNull(),
     errorMessage: text("errorMessage"),
+    /** Migration 0360 (audit P72): when a worker began the fan-out. Set once,
+     *  so a job picked up again after a restart never pays for it twice. */
+    fanOutStartedAt: timestamp("fanOutStartedAt"),
+    /** Migration 0360 (audit F38): finds kept unsaved for review, and how many were already in People. */
+    heldForReview: boolean("heldForReview").default(false).notNull(),
+    alreadyInPeople: int("alreadyInPeople").default(0).notNull(),
     startedAt: timestamp("startedAt").defaultNow().notNull(),
     completedAt: timestamp("completedAt"),
   },

@@ -747,8 +747,11 @@ export const prospectsRouter = router({
         .where(and(eq(prospects.id, input.id), eq(prospects.workspaceId, ctx.workspace.id)))
         .limit(1);
       if (!p) throw new TRPCError({ code: "NOT_FOUND" });
-      const { runDiscovery } = await import("../services/discovery");
-      return runDiscovery(ctx.workspace.id, ctx.user.id, "person", {
+      // A background run like Find prospects' (audit 2026-10-20, P72): it
+      // answers with the run id at once, and the same request already running
+      // is joined rather than paid for again.
+      const { queueDiscovery } = await import("../services/discovery");
+      return queueDiscovery(ctx.workspace.id, ctx.user.id, "person", {
         jobTitle: p.title ?? undefined,
         industry: p.industry ?? undefined,
         companyName: p.company ?? undefined,

@@ -117,10 +117,14 @@ export default function ProspectDetail() {
     },
     onError: (e) => toast.error(e.message),
   });
+  // A background run now (audit 2026-10-20, P72): the toast names the run, and
+  // the run's page follows it to the end.
   const reEnrich = trpc.prospects.reEnrich.useMutation({
     onSuccess: (r) => {
-      toast.success(`Re-enriched — ${r.rawFindCount} new raw finds, score now ${r.highConfidenceCount} high / ${r.mediumConfidenceCount} medium / ${r.lowConfidenceCount} low`);
-      utils.prospects.get.invalidate({ id });
+      toast.success(r.joinedRunning ? `Re-enrich is already running (run #${r.runId}).` : `Re-enrich started (run #${r.runId}); this person updates when it finishes.`, {
+        action: { label: "Open run", onClick: () => setLocation(`/find-prospects?runId=${r.runId}`) },
+      });
+      utils.discovery.listRuns.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
