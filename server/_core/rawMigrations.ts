@@ -5045,6 +5045,16 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // A person's own time zone (audit 2026-10-20, F18), read only by sequences
+  // that send in each person's time zone, which is off unless set. Nullable,
+  // nothing backfilled.
+  {
+    name: "0342_prospect_timezone.sql",
+    statements: [
+      "ALTER TABLE `prospects` ADD COLUMN `timezone` varchar(64) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

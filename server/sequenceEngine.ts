@@ -15,6 +15,7 @@
 
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { inSendWindow } from "./services/sendWindow";
+import { enrollmentRecipientZone, sequenceUsesRecipientTime } from "./services/recipientZone";
 import { and, asc, eq, gte, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import {
   accounts,
@@ -613,8 +614,16 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
           cfg = await resolveSendSettings(seq, enrollment.workspaceId);
           sendSettings.set(seq.id, cfg);
         }
-        if (!inSequenceWindow(cfg, now)) {
-          await hold(nextWindowOpen(cfg, now));
+        // Recipient-time sending (audit 2026-10-20, F18), when the sequence
+        // has it on: the step comes due inside the window in the PERSON's
+        // zone (stored, else told from their state/country, else the
+        // sequence's). Timing only: the daily caps below still count in the
+        // sequence's day, and the workspace send window still holds every send.
+        const windowCfg = sequenceUsesRecipientTime(seq.settings)
+          ? { ...cfg, timezone: (await enrollmentRecipientZone(db, enrollment.workspaceId, enrollment, cfg.timezone)).zone }
+          : cfg;
+        if (!inSequenceWindow(windowCfg, now)) {
+          await hold(nextWindowOpen(windowCfg, now));
           continue;
         }
 

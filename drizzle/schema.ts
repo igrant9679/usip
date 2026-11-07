@@ -4602,6 +4602,13 @@ export const prospects = mysqlTable(
     city: varchar("city", { length: 80 }),
     state: varchar("state", { length: 80 }),
     country: varchar("country", { length: 80 }),
+    /**
+     * The person's own IANA time zone, where someone set it (migration 0342,
+     * audit 2026-10-20 F18). A sequence with "Send in each person's time
+     * zone" on schedules their steps in it; without it the zone is told from
+     * state/country where that is reliable, else the sequence's.
+     */
+    timezone: varchar("timezone", { length: 64 }),
     company: varchar("company", { length: 200 }),
     companyDomain: varchar("company_domain", { length: 200 }),
     industry: varchar("industry", { length: 80 }),

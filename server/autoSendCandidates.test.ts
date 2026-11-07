@@ -46,7 +46,11 @@ describe("the auto-send page contains only sendable drafts", () => {
   });
 
   it("the cold-outreach opt-in still decides how NULL scores are treated", () => {
-    expect(fn).toContain("ws.aiAutoSendAllowUnscored");
+    // 2026-11-07 (audit F22): the opt-in reaches the gate through the draft's
+    // group: the workspace's for sequences that follow it (autoSendGroups in
+    // @shared/sequenceAutoSend), a sequence's own for one set to auto-send.
+    expect(fn).toContain("group.allowUnscored");
+    expect(readFileSync(join(__dirname, "..", "shared", "sequenceAutoSend.ts"), "utf8")).toContain("const wsUnscored = !!ws.aiAutoSendAllowUnscored;");
     expect(fn).toMatch(/IS NULL OR \$\{recipientScoreExpr\} >= \$\{scoreMin\}/);
     expect(fn).toMatch(/IS NOT NULL AND \$\{recipientScoreExpr\} >= \$\{scoreMin\}/);
   });

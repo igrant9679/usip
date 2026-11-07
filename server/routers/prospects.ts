@@ -37,6 +37,7 @@ import { resolveProspectProfileImage } from "../services/profileImage";
 import { SWEEP_DAILY_CAP_MAX, SWEEP_DAILY_CAP_MIN } from "@shared/enrichmentLimits";
 import { promoteProspectRow } from "../services/prospectPromotion";
 import { describeWriteError } from "../services/dbWriteError";
+import { validZone } from "@shared/recipientTime";
 
 /**
  * A People search term as a LIKE pattern that means what was typed: % and _
@@ -464,6 +465,8 @@ export const prospectsRouter = router({
       city: editText(80),
       state: editText(80),
       country: editText(80),
+      /** IANA zone, e.g. "Europe/London" (F18); blank clears it. */
+      timezone: editText(64).refine((v) => v == null || validZone(v) !== null, "Not a time zone. Use a name like Europe/London or America/Chicago."),
       industry: editText(80),
       verificationStatus: z.enum(["verified", "needs_review", "rejected"]).optional(),
       verificationNotes: z.string().max(2000).nullable().optional(),
