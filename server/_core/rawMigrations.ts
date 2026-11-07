@@ -5011,6 +5011,21 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Replies are matched by the sent email's full Message-ID (audit
+  // 2026-10-20, F5). trackingToken is varchar(64), so a full RFC Message-ID
+  // never matched and a reply fell back to the newest draft to that address.
+  // Nullable columns, nothing backfilled: older sends keep matching the way
+  // they did (email_log.messageId already holds the SMTP Message-ID).
+  {
+    name: "0340_send_message_ids.sql",
+    statements: [
+      "ALTER TABLE `email_drafts` ADD COLUMN `messageId` varchar(500) NULL",
+      "CREATE INDEX `ix_ed_msgid` ON `email_drafts` (`workspaceId`, `messageId`)",
+      "ALTER TABLE `email_log` ADD COLUMN `rfcMessageId` varchar(500) NULL",
+      "CREATE INDEX `ix_elog_rfc` ON `email_log` (`workspaceId`, `rfcMessageId`)",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

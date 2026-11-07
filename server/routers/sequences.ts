@@ -2108,6 +2108,9 @@ async function sendClaimedDraft(
 
   // ── Deliver ──────────────────────────────────────────────────────
   let sentMessageId: string | undefined;
+  // The RFC Message-ID header the email went out with, where the adapter
+  // knows it (audit 2026-10-20, F5); replies are matched on it.
+  let sentRfcMessageId: string | undefined;
   let deliveryError: string | undefined;
   let deliveryErr: unknown;
   claim.transportCalled = true;
@@ -2136,6 +2139,7 @@ async function sendClaimedDraft(
       headers: unsubscribeHeaders(getAppBaseUrl(), workspaceId, toEmail),
     });
     sentMessageId = sendRes.messageId;
+    sentRfcMessageId = sendRes.rfcMessageId || undefined;
   } catch (err) {
     deliveryErr = err;
     deliveryError = err instanceof Error ? err.message : String(err);
@@ -2154,6 +2158,9 @@ async function sendClaimedDraft(
         sentAt: new Date(),
         reviewedByUserId: userId,
         trackingToken: sentMessageId.slice(0, 64),
+        // In full, so a reply's In-Reply-To finds this draft (F5). Unipile
+        // reports no header here; its mail_sent webhook fills it in.
+        messageId: sentRfcMessageId ? sentRfcMessageId.slice(0, 500) : null,
         toEmail,
         sendingAccountId: fromAccount.id,
         sendError: null,

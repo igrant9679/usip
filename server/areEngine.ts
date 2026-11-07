@@ -2297,6 +2297,10 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
               // inbox a prospect had heard from.
               sendingAccountId: sendRes.accountId ?? null,
               fromEmail: sendRes.fromEmail ?? null,
+              // The sent email's Message-ID (audit 2026-10-20, F5): campaign
+              // sends kept none, so a reply could only be matched by address,
+              // to the newest queue row, whichever campaign it was.
+              externalId: sendRes.messageId ? sendRes.messageId.slice(0, 256) : null,
             })
             .where(eq(areExecutionQueue.id, step.id));
           result.sent++;

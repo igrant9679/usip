@@ -885,6 +885,16 @@ export const emailDrafts = mysqlTable(
     firstReplyAt: timestamp("firstReplyAt"),
     trackingToken: varchar("trackingToken", { length: 64 }), // unique token for open/click tracking
     /**
+     * The sent email's RFC 5322 Message-ID, in full (migration 0340, audit
+     * 2026-10-20 F5). A reply names it in In-Reply-To and References, which is
+     * how inboundReplyPoller ties the reply to THIS draft. trackingToken holds
+     * the provider's tracking id cut to 64 characters, so a full Message-ID
+     * never matched there and replies fell back to "the latest draft to that
+     * address". Set at send time where the provider returns it (SMTP, SendGrid)
+     * and from the Unipile mail_sent webhook for bridged mailboxes.
+     */
+    messageId: varchar("messageId", { length: 500 }),
+    /**
      * HUMAN opens only, since migration 0165. Machine fetches — Apple Mail
      * Privacy Protection, mail scanners, link previewers — are counted
      * separately below rather than inflating this number, which is the one
@@ -903,6 +913,7 @@ export const emailDrafts = mysqlTable(
   (t) => ({
     byWs: index("ix_ed_ws").on(t.workspaceId, t.status),
     byToken: index("ix_ed_token").on(t.trackingToken),
+    byMessageId: index("ix_ed_msgid").on(t.workspaceId, t.messageId),
     /**
      * Declaration only — migration 0061 has created this in the real database
      * since long before this line existed. Recorded here so the drift stops
@@ -1150,6 +1161,13 @@ export const emailLog = mysqlTable(
     failureReason: text("failureReason"),
     /** Provider message id, where the adapter returns one. */
     messageId: varchar("messageId", { length: 500 }),
+    /**
+     * The RFC 5322 Message-ID header the email went out with, where it is
+     * known at send time (migration 0340, F5). Differs from messageId for
+     * SendGrid (an API id) and Unipile (a tracking id). Replies are matched on
+     * it, and through draftId / executionQueueId it names the exact send.
+     */
+    rfcMessageId: varchar("rfcMessageId", { length: 500 }),
     sentAt: timestamp("sentAt").defaultNow().notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
@@ -1167,6 +1185,7 @@ export const emailLog = mysqlTable(
      * and workspaceId ride along to keep the COUNT(*) covering.
      */
     byAcctSent: index("ix_elog_acct_sent").on(t.sendingAccountId, t.sentAt, t.status, t.workspaceId),
+    byRfcMessageId: index("ix_elog_rfc").on(t.workspaceId, t.rfcMessageId),
   }),
 );
 export type EmailLog = typeof emailLog.$inferSelect;

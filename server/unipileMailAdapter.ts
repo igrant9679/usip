@@ -568,7 +568,7 @@ export class UnipileMailAdapter implements EmailAdapter {
   }
 
   /** POST /emails — send a new email (handles new + reply via reply_to). */
-  async sendEmail(input: SendEmailInput): Promise<{ messageId: string; threadId?: string }> {
+  async sendEmail(input: SendEmailInput): Promise<{ messageId: string; threadId?: string; rfcMessageId?: string }> {
     const res = await sendEmail({
       accountId: this.unipileAccountId,
       to: attendeesFromCsv(input.to),
@@ -595,6 +595,8 @@ export class UnipileMailAdapter implements EmailAdapter {
         : { opens: false, links: false },
       attachments: input.attachments,
     });
+    // No rfcMessageId: Unipile's send answer carries none. The mail_sent
+    // webhook does, and stamps it on the draft by this tracking id (F5).
     return { messageId: res.tracking_id, threadId: undefined };
   }
 

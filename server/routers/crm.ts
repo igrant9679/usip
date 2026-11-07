@@ -1023,6 +1023,7 @@ export const contactsRouter = router({
         const fullBodyText = renderedBodyText + unsubscribeFooterText(unsubscribeUrl);
 
         let sentMessageId: string | undefined;
+        let sentRfcMessageId: string | undefined; // the Message-ID header, for reply matching (F5)
         let deliveryError: string | undefined;
         try {
           // Workspace + per-account cap gate (assertSendAllowed throws
@@ -1053,6 +1054,7 @@ export const contactsRouter = router({
             headers: unsubscribeHeaders(getAppBaseUrl(), ctx.workspace.id, contact.email),
           });
           sentMessageId = sendRes.messageId;
+          sentRfcMessageId = sendRes.rfcMessageId || undefined;
         } catch (err) {
           deliveryError = err instanceof Error ? err.message : String(err);
           console.error(
@@ -1081,6 +1083,7 @@ export const contactsRouter = router({
             // Cap at 64 chars to match the column width — Unipile ids
             // we've seen are 22 chars but column is varchar(64).
             trackingToken: sentMessageId.slice(0, 64),
+            messageId: sentRfcMessageId ? sentRfcMessageId.slice(0, 500) : null,
           });
           // Join the log row to the draft that owns this send's open/click
           // counters, so the Emails page can show them (migration 0163).
@@ -1814,6 +1817,7 @@ export const leadsRouter = router({
       const fullBodyText = renderedBodyText + unsubscribeFooterText(unsubscribeUrl);
 
       let sentMessageId: string | undefined;
+      let sentRfcMessageId: string | undefined; // the Message-ID header, for reply matching (F5)
       let deliveryError: string | undefined;
       try {
         await assertSendAllowed(ctx.workspace.id, fromAccount.id);
@@ -1836,6 +1840,7 @@ export const leadsRouter = router({
           headers: unsubscribeHeaders(getAppBaseUrl(), ctx.workspace.id, lead.email),
         });
         sentMessageId = sendRes.messageId;
+        sentRfcMessageId = sendRes.rfcMessageId || undefined;
       } catch (err) {
         deliveryError = err instanceof Error ? err.message : String(err);
         console.error(
@@ -1855,6 +1860,7 @@ export const leadsRouter = router({
           createdByUserId: ctx.user.id,
           sentAt: new Date(),
           trackingToken: sentMessageId.slice(0, 64),
+          messageId: sentRfcMessageId ? sentRfcMessageId.slice(0, 500) : null,
         });
         // Join the log row to the draft that owns this send's open/click
         // counters, so the Emails page can show them (migration 0163).
