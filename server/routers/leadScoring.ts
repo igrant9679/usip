@@ -116,7 +116,15 @@ async function aggregateBehaviorMany(workspaceId: number, leadIds: number[]): Pr
   // that a lead's score can auto-enrol them in a sequence: fabricated
   // engagement would have started real outreach.
   const drafts = byLead(
-    await db.select().from(emailDrafts).where(and(eq(emailDrafts.workspaceId, workspaceId), inArray(emailDrafts.toLeadId, ids))),
+    // The counters and times only: a sample of leads can have thousands of
+    // drafts, and their bodies are not read here.
+    await db
+      .select({
+        toLeadId: emailDrafts.toLeadId, status: emailDrafts.status, openCount: emailDrafts.openCount, clickCount: emailDrafts.clickCount,
+        bouncedAt: emailDrafts.bouncedAt, sentAt: emailDrafts.sentAt, lastOpenedAt: emailDrafts.lastOpenedAt, lastClickedAt: emailDrafts.lastClickedAt,
+      })
+      .from(emailDrafts)
+      .where(and(eq(emailDrafts.workspaceId, workspaceId), inArray(emailDrafts.toLeadId, ids))),
     (d) => d.toLeadId,
   );
 
