@@ -38,7 +38,7 @@ import {
   scrapeNews,
 } from "../../routers/are/scraper";
 import { searchLinkedInProfiles } from "../linkedinLookup";
-import { apolloSearchPeople, getApolloDailyCap, apolloPulledToday } from "../apollo";
+import { apolloEmailReady, apolloSearchPeople, getApolloDailyCap, apolloPulledToday } from "../apollo";
 import {
   buildQuickenrichFilters,
   getQuickEnrichKey,
@@ -95,10 +95,10 @@ async function discoverLinkedInPeople(
  * rather than the flattened query string, so Apollo filters on real fields
  * instead of keyword-matching a sentence.
  *
- * Search-only (zero Apollo credits, no emails returned) — the company domain
- * it supplies is what downstream enrichment needs. Returns [] when no key is
- * configured or the daily cap is spent, so the rest of the fan-out is
- * unaffected.
+ * Search-only (zero Apollo credits, no emails returned). Its api_search rows
+ * are masked, so only the people an email lookup can use are kept (see
+ * apolloEmailReady). Returns [] when no key is configured or the daily cap is
+ * spent, so the rest of the fan-out is unaffected.
  */
 /**
  * Record a discovery pull into the SAME daily ledger the ARE campaigns read
@@ -159,8 +159,21 @@ async function discoverViaApollo(
     perPage: Math.min(headroom, 25),
   }, "findProspects");
   if (!res.ok) return { raw: [], note: res.error ?? "the Apollo search failed" };
-  await recordPullLedger(workspaceId, "apollo", buildQuery(mode, input), res.prospects.length);
-  return { raw: res.prospects.map((x) => ({ ...x })) };
+  // The campaigns' rule (areEngine discoverViaApollo): keep only people an
+  // email lookup can work from. api_search masks every row (last name
+  // hidden, no LinkedIn URL or company domain), and a masked find pushed to
+  // a campaign is rejected after enrichment. Only kept rows use the cap.
+  const ready = res.prospects.filter(apolloEmailReady);
+  const left = res.prospects.length - ready.length;
+  const masked = res.prospects.filter((x) => !apolloEmailReady(x) && x.lastNameMasked).length;
+  await recordPullLedger(workspaceId, "apollo", buildQuery(mode, input), ready.length);
+  return {
+    raw: ready.map((x) => ({ ...x })),
+    ...(left > 0 ? {
+      note: `${left} of ${res.prospects.length} left out: no LinkedIn URL, and no full name with a company domain, so no email lookup can find them`
+        + (masked > 0 ? ` (${masked} with the last name hidden: Apollo's free search masks it and sends no domain)` : ""),
+    } : {}),
+  };
 }
 
 /**
