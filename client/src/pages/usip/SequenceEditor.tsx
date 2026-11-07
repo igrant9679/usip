@@ -37,6 +37,7 @@ import { ConfirmButton } from "@/components/usip/Common";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { SequenceReport } from "@/components/usip/SequenceReport";
 import { StepTemplatePicker } from "@/components/usip/StepTemplatePicker";
+import { SequenceSendingSettings } from "@/components/usip/SequenceSendingSettings";
 
 /**
  * `enabled: false` marks a RETIRED step: the send engine skips it entirely.
@@ -269,7 +270,7 @@ export default function SequenceEditor() {
           {/* EDITOR */}
           {tab === "Editor" && (
             <div className="max-w-2xl mx-auto p-4 md:p-6">
-              <SequenceDraftsNote className="mb-3" />
+              <SequenceDraftsNote className="mb-3" sequenceSettings={seq.settings} />
               <div className="flex items-center gap-2 mb-4">
                 <span className="text-[12px] font-medium px-2 py-1 rounded-md border bg-card inline-flex items-center gap-1.5"><Send className="size-3.5" style={{ color: accent }} /> {steps.length} step{steps.length === 1 ? "" : "s"}</span>
                 {updateSteps.isPending && <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1"><Loader2 className="size-3 animate-spin" /> Saving…</span>}
@@ -410,6 +411,8 @@ export default function SequenceEditor() {
                 <p className="text-[12px] text-muted-foreground">{describeSendWindow(seq.settings)}</p>
                 <p className="text-[12px] text-muted-foreground mt-1">Sending also waits for the workspace send window in Settings. Change this sequence's window from its canvas, under Sequence settings.</p>
               </div>
+              {/* Review or auto-send, and recipient time, for this sequence (F22, F18). */}
+              <SequenceSendingSettings sequenceId={id} settings={seq.settings} accent={accent} />
             </div>
           )}
         </div>
@@ -567,7 +570,11 @@ function ContactsTab({
                   </div>
                   <div className="text-[11px] text-muted-foreground truncate">
                     Step {(e?.currentStep ?? 0) + 1}
-                    {e?.nextActionAt && ` · Next ${new Date(e.nextActionAt).toLocaleDateString()}`}
+                    {/* When the next step goes, in the zone it runs in (F18): the
+                        person's own when the sequence sends in each person's time zone. */}
+                    {e?.nextSendAt
+                      ? ` · Next send ${formatInZone(e.nextSendAt, e.sendZone)}${e.sendZone ? ` (${e.sendZone}${e.zoneSource === "stored" ? ", their zone" : e.zoneSource === "location" ? ", from their location" : ""})` : ""}`
+                      : e?.nextActionAt && ` · Next ${new Date(e.nextActionAt).toLocaleDateString()}`}
                     {/* A paused row with a resumeAt is an out-of-office snooze that
                         resumes itself, not a dead end — the rep needs to see that
                         before resuming it by hand on top of the sweep. */}
@@ -587,6 +594,15 @@ function ContactsTab({
       {/* The bulk enrol picker lives on legacy /sequences and is not here yet; the gap is recorded in HANDOFF.md. */}
     </div>
   );
+}
+
+/** "Tue, Nov 10, 9:00 AM" in a zone, or in the viewer's own when none is given. */
+function formatInZone(ms: number, zone?: string | null): string {
+  try {
+    return new Date(ms).toLocaleString(undefined, { timeZone: zone || undefined, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  } catch {
+    return new Date(ms).toLocaleString();
+  }
 }
 
 function AddStepButton({ accent, open, setOpen, onAdd }: { accent: string; open: boolean; setOpen: (b: boolean) => void; onAdd: (make: () => Step) => void }) {

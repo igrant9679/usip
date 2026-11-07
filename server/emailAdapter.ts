@@ -12,7 +12,7 @@ import { senderDisplayName } from "./mergeVars";
 import { applyAccountSendDefaults } from "./services/sending/accountDefaults";
 import type { EmailLogMeta } from "./services/email/logSend";
 import { recordEmailsSent } from "./usageCounters";
-import { createDecipheriv, createCipheriv, randomBytes } from "crypto";
+import { createDecipheriv, createCipheriv, randomBytes, randomUUID } from "crypto";
 
 /* ─── Encryption helpers ─────────────────────────────────────────────────── */
 function getEncKey(): Buffer {
@@ -78,7 +78,8 @@ export interface EmailMessage {
   date: Date;
   bodyText: string;
   bodyHtml: string;
-  attachments: Array<{ filename: string; contentType: string; size: number }>;
+  /** attachmentId: the provider's id (Unipile); IMAP attachments are fetched by position. */
+  attachments: Array<{ filename: string; contentType: string; size: number; attachmentId?: string }>;
   inReplyTo?: string;
   references?: string;
   unread: boolean;
@@ -154,12 +155,34 @@ export interface SendEmailInput {
   headers?: Record<string, string>;
 }
 
+/**
+ * What a send returns. `messageId` is the provider's id for the send (the SMTP
+ * Message-ID, SendGrid's X-Message-Id, Unipile's tracking id) and is what the
+ * callers have always stored. `rfcMessageId` is the RFC 5322 Message-ID header
+ * the email carried, when the adapter knows it at send time (audit
+ * 2026-10-20, F5): a reply names it in In-Reply-To and References, so it is
+ * what ties a reply to the exact send. Unipile does not report it here; its
+ * mail_sent webhook does, and is recorded there.
+ */
+export interface SendEmailResult {
+  messageId: string;
+  threadId?: string;
+  rfcMessageId?: string;
+}
+
+/** A Message-ID for a send whose provider takes one from us: <uuid@sender-domain>. */
+export function newRfcMessageId(fromEmail: string | null | undefined): string {
+  const at = String(fromEmail ?? "").lastIndexOf("@");
+  const domain = at > 0 ? String(fromEmail).slice(at + 1).trim().toLowerCase().replace(/[^a-z0-9.-]/g, "") : "";
+  return `<${randomUUID()}@${domain || "velocity.local"}>`;
+}
+
 export interface EmailAdapter {
   listThreads(folder: string, pageToken?: string, maxResults?: number): Promise<{ threads: EmailThread[]; nextPageToken?: string }>;
   searchThreads(query: string, folder?: string, maxResults?: number): Promise<{ threads: EmailThread[] }>;
   getThread(threadId: string, folder?: string): Promise<EmailMessage[]>;
   getAttachment(messageId: string, attachmentId: string): Promise<{ data: Buffer; contentType: string; filename: string }>;
-  sendEmail(input: SendEmailInput): Promise<{ messageId: string; threadId?: string }>;
+  sendEmail(input: SendEmailInput): Promise<SendEmailResult>;
   markRead(messageId: string, read: boolean): Promise<void>;
   moveToTrash(messageId: string): Promise<void>;
   moveToFolder(messageId: string, destFolder: string, currentFolder?: string): Promise<void>;
@@ -266,7 +289,7 @@ export class ImapSmtpAdapter implements EmailAdapter {
     });
   }
 
-  async sendEmail(input: SendEmailInput): Promise<{ messageId: string }> {
+  async sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
     const acc = this.account;
     if (!acc.smtpHost || !acc.smtpUsername || !acc.smtpPassword) throw new Error("SMTP not configured");
     let smtpPassword: string;
@@ -287,7 +310,8 @@ export class ImapSmtpAdapter implements EmailAdapter {
         contentType: a.contentType,
       })),
     });
-    return { messageId: info.messageId };
+    // nodemailer's messageId IS the Message-ID header it wrote (F5).
+    return { messageId: info.messageId, rfcMessageId: info.messageId };
   }
 
   async markRead(messageId: string, read: boolean): Promise<void> {
@@ -384,7 +408,7 @@ export class SendGridAdapter implements EmailAdapter {
     this.account = account;
   }
 
-  async sendEmail(input: SendEmailInput): Promise<{ messageId: string; threadId?: string }> {
+  async sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
     const { sendViaSendGrid } = await import("./services/sendgrid");
     const { tryDecryptSecret } = await import("./_core/crypto");
     // The account's own key, else the workspace's single key from Settings →
@@ -426,6 +450,8 @@ export class SendGridAdapter implements EmailAdapter {
       }
     }
 
+    const supplied = Object.entries(input.headers ?? {}).find(([k]) => k.toLowerCase() === "message-id")?.[1];
+    const rfcMessageId = supplied || newRfcMessageId(input.fromEmail || this.account.fromEmail);
     const res = await sendViaSendGrid(apiKey, {
       to: input.to,
       subject: input.subject,
@@ -436,13 +462,15 @@ export class SendGridAdapter implements EmailAdapter {
       // the pool and the signature use, so From never shows a bare address.
       fromName: input.fromName ?? (senderDisplayName(this.account) || null),
       replyTo,
-      // List-Unsubscribe / List-Unsubscribe-Post (RFC 8058) travel here.
-      headers: input.headers ?? null,
+      // List-Unsubscribe / List-Unsubscribe-Post (RFC 8058) travel here, and
+      // our own Message-ID (F5): SendGrid's API answers with its X-Message-Id,
+      // not the header a reply will quote, so the header is set here and kept.
+      headers: { ...(input.headers ?? {}), "Message-ID": rfcMessageId },
     });
     // Throw rather than return a sentinel: the pool sender counts a resolved
     // sendEmail as a delivered send and increments the daily quota on it.
     if (!res.ok) throw new Error(res.reason ?? "SendGrid send failed");
-    return { messageId: res.messageId ?? "" };
+    return { messageId: res.messageId || rfcMessageId, rfcMessageId };
   }
 
   async listThreads(): Promise<{ threads: EmailThread[]; nextPageToken?: string }> {
@@ -581,7 +609,7 @@ export function createEmailAdapter(account: SendingAccount): EmailAdapter {
     }
     await recordEmailsSent(account.workspaceId, 1);
     const { logEmailSend } = await import("./services/email/logSend");
-    await logEmailSend({ ...logCommon, status: "sent", messageId: result?.messageId ?? null });
+    await logEmailSend({ ...logCommon, status: "sent", messageId: result?.messageId ?? null, rfcMessageId: result?.rfcMessageId ?? null });
     return result;
   };
   return adapter;

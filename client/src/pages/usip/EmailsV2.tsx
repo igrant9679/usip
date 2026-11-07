@@ -56,6 +56,9 @@ const STATUSES = [
   { value: "sent", label: "Sent" },
   { value: "engaged", label: "Opened or clicked" },
   { value: "awaiting", label: "Needs review" },
+  // The stuck-drafts card links here (F23).
+  { value: "approved", label: "Approved, not sent" },
+  { value: "held", label: "Held (paused or ended)" },
   { value: "scheduled", label: "Scheduled" },
   { value: "failed", label: "Failed" },
   { value: "bounced", label: "Bounced" },

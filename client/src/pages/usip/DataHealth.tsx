@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLocation } from "wouter";
+import { StuckDraftsCard } from "@/components/usip/StuckDraftsCard";
 import { useState } from "react";
 import { toast } from "sonner";
 import {
@@ -1007,6 +1008,15 @@ export default function DataHealth() {
               />
             </div>
           )}
+        </section>
+
+        {/* Stuck drafts (audit 2026-10-20, F23): emails that will not go
+            out by themselves, each linking to the Emails page filtered to them. */}
+        <section>
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+            Stuck drafts
+          </h2>
+          <StuckDraftsCard />
         </section>
 
         {/* Email Verification Breakdown */}

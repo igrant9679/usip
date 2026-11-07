@@ -145,6 +145,14 @@ describe("the sequence pages say email steps write drafts (O48)", () => {
     expect(html(createElement(SequenceDraftsNote))).toContain("or auto-send does, if it&#x27;s on.");
   });
 
+  it("on one sequence's page, its own review-or-auto-send choice (F22)", () => {
+    h.autoSend = { data: { aiAutoSendEnabled: true, aiAutoSendScoreMin: 70 } };
+    expect(html(createElement(SequenceDraftsNote, { sequenceSettings: { autoSend: "review" } }))).toContain("This sequence always waits for review");
+    h.autoSend = { data: { aiAutoSendEnabled: false } };
+    expect(html(createElement(SequenceDraftsNote, { sequenceSettings: { autoSend: "auto", autoSendScoreMin: 40 } }))).toContain("auto-sends to people scoring 40 or more");
+    expect(html(createElement(SequenceDraftsNote, { sequenceSettings: {} }))).toContain("Auto-send is off in this workspace.");
+  });
+
   it("on the lists, in the editor, on the canvas and in the help article", () => {
     expect(read("client/src/pages/usip/SequencesV2.tsx")).toContain("<SequenceDraftsNote />");
     expect(read("client/src/pages/usip/Sequences.tsx")).toContain("<SequenceDraftsNote />");
@@ -153,7 +161,9 @@ describe("the sequence pages say email steps write drafts (O48)", () => {
     const article = read("server/seedHelpContent.ts");
     expect(article).not.toContain("The engine creates and sends drafts on cadence.");
     expect(article).toContain("Email steps write **drafts** on cadence: nothing is sent until someone reviews and sends them");
-    expect(read("client/src/pages/usip/SequenceEditor.tsx")).toContain('<SequenceDraftsNote className="mb-3" />');
+    // 2026-11-07 (audit F22): the editor passes the sequence's own settings, so
+    // its own review-or-auto-send choice is what the note says.
+    expect(read("client/src/pages/usip/SequenceEditor.tsx")).toContain('<SequenceDraftsNote className="mb-3" sequenceSettings={seq.settings} />');
     expect(read("client/src/pages/usip/SequenceCanvas.tsx")).toContain("Email steps write drafts: nothing is sent until someone reviews and sends them");
   });
 });

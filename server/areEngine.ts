@@ -113,6 +113,7 @@ import {
   sequenceCompletionVerdict,
 } from "./services/sequenceCompletion";
 import { appBaseUrl as publicAppOrigin } from "./appUrl";
+import { addVisitorIdsToEmail } from "./services/visitorLinks";
 import { makeUnsubscribeUrl, unsubscribeFooter, unsubscribeHeaders } from "./unsubscribe";
 import { describeSuppression, findSuppression } from "./services/suppression";
 import { DISPATCH_INTERRUPTED, HELD_PAUSED, HELD_REPLIED, claimStepForDispatch, releaseProspectSteps, respaced } from "./services/are/stepHold";
@@ -1166,7 +1167,7 @@ async function enrollApprovedForCampaignUnlocked(
       // Suppressed? Skip rather than enroll. The ONE check (A8): both lists,
       // by address, LinkedIn profile and company domain — this read the
       // campaign list by address only, and never the workspace list.
-      const suppression = await findSuppression(wsId, { email: row.email, linkedinUrl: row.linkedinUrl, companyDomain: row.companyDomain }, "any");
+      const suppression = await findSuppression(wsId, { email: row.email, linkedinUrl: row.linkedinUrl, companyDomain: row.companyDomain, personId: row.personProspectId ?? null }, "any");
       if (suppression) {
         await db
           .update(prospectQueue)
@@ -2017,7 +2018,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
           }
           // The ONE suppression check, LinkedIn channel (A8): LinkedIn steps
           // checked no list at all. A bounce alone does not stop this channel.
-          const liSuppression = await findSuppression(wsId, { email: lp.email, linkedinUrl: lp.linkedinUrl, companyDomain: lp.companyDomain }, "linkedin");
+          const liSuppression = await findSuppression(wsId, { email: lp.email, linkedinUrl: lp.linkedinUrl, companyDomain: lp.companyDomain, personId: lp.personProspectId ?? null }, "linkedin");
           if (liSuppression) {
             await db.update(areExecutionQueue)
               .set({ status: "skipped", failureReason: `On suppression list (${describeSuppression(liSuppression)})`.slice(0, 500), executedAt: new Date() })
@@ -2151,7 +2152,7 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
         // enrolment): the ONE check (A8) — both lists, by address, LinkedIn
         // profile and company domain. The workspace list was added here on
         // 2026-09-20; the profile and domain columns were never read.
-        const suppression = await findSuppression(wsId, { email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain }, "email");
+        const suppression = await findSuppression(wsId, { email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain, personId: p.personProspectId ?? null }, "email");
         if (suppression) {
           await db
             .update(areExecutionQueue)
@@ -2228,6 +2229,15 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
             : `${html}\n${optOut.html}`;
           textOut = `${textOut}\n\n${optOut.text}`;
         }
+        // A signed visitor id on links to the workspace's own site (audit
+        // 2026-10-20, P5/P88/F40), for the person this campaign row is. A
+        // query parameter on their own domain, not a tracking-domain rewrite,
+        // and only while the workspace's click tracking is on.
+        if (p.personProspectId) {
+          const decorated = await addVisitorIdsToEmail(wsId, { prospectId: p.personProspectId }, { html, text: textOut });
+          html = decorated.html;
+          textOut = decorated.text;
+        }
 
         /**
          * CLAIM THE ROW BEFORE SENDING — this is cold outbound, so a duplicate
@@ -2297,6 +2307,10 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
               // inbox a prospect had heard from.
               sendingAccountId: sendRes.accountId ?? null,
               fromEmail: sendRes.fromEmail ?? null,
+              // The sent email's Message-ID (audit 2026-10-20, F5): campaign
+              // sends kept none, so a reply could only be matched by address,
+              // to the newest queue row, whichever campaign it was.
+              externalId: sendRes.messageId ? sendRes.messageId.slice(0, 256) : null,
             })
             .where(eq(areExecutionQueue.id, step.id));
           result.sent++;

@@ -20,7 +20,8 @@ describe("ARE campaign mail is compliant bulk mail", () => {
     // land in email_suppressions; the dispatcher must read it too.
     // Since 2026-10-26 (audit A8) through the ONE check, which reads both
     // lists — and the LinkedIn-profile and company-domain columns too.
-    expect(engine).toContain('findSuppression(wsId, { email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain }, "email")');
+    // 2026-11-07 (audit F7): and by the campaign row's People link.
+    expect(engine).toContain('findSuppression(wsId, { email: p.email, linkedinUrl: p.linkedinUrl, companyDomain: p.companyDomain, personId: p.personProspectId ?? null }, "email")');
     const suppression = readFileSync("server/services/suppression.ts", "utf8");
     expect(suppression).toContain(".from(emailSuppressions)");
     expect(suppression).toContain(".from(areSuppressionList)");

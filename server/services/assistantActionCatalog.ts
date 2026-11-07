@@ -123,7 +123,7 @@ export const DENY_PATH = /^(helpCenter\.(upsert|create|update|delete|generate)|c
  */
 export const SEND_ALLOWLIST: Record<string, string> = {
   "emailDrafts.send": "SENDS EMAIL NOW: send one approved draft to its recipient.",
-  "smtpConfig.sendDraft": "SENDS EMAIL NOW: send one approved draft through the workspace sender.",
+  "smtpConfig.sendDraft": "SENDS EMAIL NOW: send one approved draft the way the row's Send does (the campaign's or sender's mailbox, caps, footer).",
   "smtpConfig.sendBulkApproved": "SENDS EMAIL NOW: send approved drafts (or the given draftIds), oldest first, one per second, at most 25 a run; what is left stays approved for the next run.",
   "meetings.approveAndSend": "SENDS EMAIL NOW: approve one proposed meeting and email the prospect its offered times as links; the calendar event is made only when they pick one (chosenTime optional: offer only that time).",
   "meetings.approveAllProposed": "SENDS EMAIL NOW: approve and email every pending meeting proposal with its free offered times; nothing goes on the calendar until each prospect picks (expired ones are skipped and reported).",

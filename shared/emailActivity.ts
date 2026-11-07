@@ -130,6 +130,11 @@ export const EMAIL_STATUS_GROUPS: Record<string, string[]> = {
   sent: ["sent"],
   failed: ["failed"],
   awaiting: ["pending_review", "ai_pending_review", "approved"],
+  // The stuck-drafts card's links (audit 2026-10-20, F23): approved and not
+  // sent, and waiting drafts held by a paused or ended enrolment or a sequence
+  // that is not running.
+  approved: ["approved"],
+  held: ["pending_review", "ai_pending_review", "approved"],
   scheduled: ["scheduled", "paused"],
   received: ["received"],
 };
@@ -140,7 +145,7 @@ export interface EmailFeedFilters {
   direction: "all" | "outbound" | "inbound";
   /** An `email_log.source` value, `inbound`, or `all`. */
   source: string;
-  /** sent | engaged | bounced | failed | awaiting | scheduled | received | all */
+  /** sent | engaged | bounced | failed | awaiting | approved | held | scheduled | received | all */
   status: string;
 }
 
@@ -174,6 +179,8 @@ export function statusApplies(filters: EmailFeedFilters, kind: EmailFeedKind): b
       // log row tells its story — the SMTP draft paths write none.
       return kind === "log" || kind === "queued" || kind === "draft";
     case "awaiting":
+    case "approved":
+    case "held":
       return kind === "draft";
     case "scheduled":
       return kind === "queued";

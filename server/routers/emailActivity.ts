@@ -32,7 +32,7 @@
  * row's business, because the log row is the one carrying the delivery outcome.
  */
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, like, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   aiPipelineJobs,
@@ -41,11 +41,23 @@ import {
   emailDrafts,
   emailLog,
   emailReplies,
+  enrollments,
   prospectQueue,
   sendingAccounts,
   sequences,
   users,
 } from "../../drizzle/schema";
+
+/** Waiting drafts statuses: written, not sent, not refused. */
+const WAITING = ["pending_review", "ai_pending_review", "approved"] as const;
+/**
+ * A waiting draft that will not go while things stay as they are (audit
+ * 2026-10-20, F23): its enrolment was paused (a reply, or by hand) or ended,
+ * or its sequence is not running. Needs enrollments and sequences joined.
+ */
+const heldDraft = () => or(inArray(enrollments.status, ["paused", "exited"]), inArray(sequences.status, ["draft", "paused", "archived"]));
+/** The start of every reason auto-send holds a draft for its sender (O13). */
+const AUTO_SEND_HELD = "Not sent automatically:%";
 import { alias } from "drizzle-orm/mysql-core";
 import { getDb } from "../db";
 import { genuineReplyScope } from "../services/replyScope";
@@ -225,6 +237,12 @@ export const emailActivityRouter = {
         conds.push(inArray(emailDrafts.status, ["pending_review", "ai_pending_review", "approved"]));
       }
       if (input.status === "failed") conds.push(eq(emailDrafts.status, "failed"));
+      // The stuck-drafts card's filters (F23).
+      if (input.status === "approved") conds.push(eq(emailDrafts.status, "approved"));
+      if (input.status === "held") {
+        conds.push(inArray(emailDrafts.status, [...WAITING]));
+        conds.push(heldDraft()!);
+      }
       if (term) {
         conds.push(sql`(${emailDrafts.subject} LIKE ${like} OR ${emailDrafts.toEmail} LIKE ${like}
           OR ${emailDrafts.body} LIKE ${like})`);
@@ -253,6 +271,7 @@ export const emailActivityRouter = {
         })
         .from(emailDrafts)
         .leftJoin(sequences, and(eq(sequences.id, emailDrafts.sequenceId), eq(sequences.workspaceId, emailDrafts.workspaceId)))
+        .leftJoin(enrollments, and(eq(enrollments.id, emailDrafts.enrollmentId), eq(enrollments.workspaceId, emailDrafts.workspaceId)))
         .where(and(...conds))
         .orderBy(desc(emailDrafts.createdAt), desc(emailDrafts.id))
         .limit(takePlus);
@@ -449,6 +468,49 @@ export const emailActivityRouter = {
   }),
 
   /**
+   * Drafts that are stuck (audit 2026-10-20, F23), for the health card: each
+   * count is what its link's filter on the Emails page lists.
+   *   approvedUnsent  approved by a person and not sent: nothing sends an
+   *                   approved draft on its own (auto-send takes drafts
+   *                   awaiting review), so these wait for Send or Send approved
+   *   failedSends     a send was tried and its outcome is unknown, so nothing
+   *                   retries it by itself; sequence drafts counted apart
+   *   autoSendHeld    auto-send held it for its sender: nobody to send as, or
+   *                   no mailbox of their own (O13)
+   *   heldByPause     waiting while its enrolment is paused (a reply, or by
+   *                   hand) or ended, or its sequence is not running
+   */
+  stuckDrafts: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const wsId = ctx.workspace.id;
+    const n = (rows: Array<{ count: unknown }>) => num(rows[0]?.count);
+    const [approved, oldestApproved, failed, failedSeq, autoHeld, paused] = await Promise.all([
+      db.select({ count: sql<number>`count(*)` }).from(emailDrafts)
+        .where(and(eq(emailDrafts.workspaceId, wsId), eq(emailDrafts.status, "approved"))),
+      db.select({ at: emailDrafts.createdAt }).from(emailDrafts)
+        .where(and(eq(emailDrafts.workspaceId, wsId), eq(emailDrafts.status, "approved")))
+        .orderBy(asc(emailDrafts.createdAt)).limit(1),
+      db.select({ count: sql<number>`count(*)` }).from(emailDrafts)
+        .where(and(eq(emailDrafts.workspaceId, wsId), eq(emailDrafts.status, "failed"))),
+      db.select({ count: sql<number>`count(*)` }).from(emailDrafts)
+        .where(and(eq(emailDrafts.workspaceId, wsId), eq(emailDrafts.status, "failed"), isNotNull(emailDrafts.sequenceId))),
+      db.select({ count: sql<number>`count(*)` }).from(emailDrafts)
+        .where(and(eq(emailDrafts.workspaceId, wsId), inArray(emailDrafts.status, ["pending_review", "ai_pending_review"]), like(emailDrafts.sendError, AUTO_SEND_HELD))),
+      db.select({ count: sql<number>`count(*)` }).from(emailDrafts)
+        .leftJoin(sequences, and(eq(sequences.id, emailDrafts.sequenceId), eq(sequences.workspaceId, emailDrafts.workspaceId)))
+        .leftJoin(enrollments, and(eq(enrollments.id, emailDrafts.enrollmentId), eq(enrollments.workspaceId, emailDrafts.workspaceId)))
+        .where(and(eq(emailDrafts.workspaceId, wsId), inArray(emailDrafts.status, [...WAITING]), heldDraft())),
+    ]);
+    return {
+      approvedUnsent: { count: n(approved), oldestAt: (oldestApproved[0]?.at as Date | undefined) ?? null, href: "/v2/emails?status=approved" },
+      failedSends: { count: n(failed), sequenceCount: n(failedSeq), href: "/v2/emails?status=failed" },
+      autoSendHeld: { count: n(autoHeld), href: "/v2/emails?status=awaiting&source=sequence" },
+      heldByPause: { count: n(paused), href: "/v2/emails?status=held" },
+    };
+  }),
+
+  /**
    * Headline numbers and the per-source counts behind the filter chips.
    *
    * Counted across the WHOLE workspace, never across the page — a chip reading
@@ -550,6 +612,20 @@ export const emailActivityRouter = {
           .where(and(
             eq(emailDrafts.workspaceId, wsId),
             inArray(emailDrafts.status, ["pending_review", "ai_pending_review", "approved"]),
+          ))
+          .groupBy(draftSrcExpr);
+        chips = rows.map((r) => ({ source: String(r.source), count: num(r.count) }));
+      } else if (stFilter === "approved" || stFilter === "held") {
+        // The stuck-drafts card's filters (F23), counted as the list filters them.
+        const rows = await db
+          .select({ source: draftSrcExpr, count: sql<number>`count(*)` })
+          .from(emailDrafts)
+          .leftJoin(sequences, and(eq(sequences.id, emailDrafts.sequenceId), eq(sequences.workspaceId, emailDrafts.workspaceId)))
+          .leftJoin(enrollments, and(eq(enrollments.id, emailDrafts.enrollmentId), eq(enrollments.workspaceId, emailDrafts.workspaceId)))
+          .where(and(
+            eq(emailDrafts.workspaceId, wsId),
+            stFilter === "approved" ? eq(emailDrafts.status, "approved") : inArray(emailDrafts.status, [...WAITING]),
+            stFilter === "held" ? heldDraft() : undefined,
           ))
           .groupBy(draftSrcExpr);
         chips = rows.map((r) => ({ source: String(r.source), count: num(r.count) }));
