@@ -115,9 +115,14 @@ beforeEach(() => {
     { id: 3, workspaceId: OTHER, userId: STRANGER, role: "rep", deactivatedAt: null, inviteToken: null, lastActiveAt: new Date() },
   );
 });
+// 2026-11-07 (audit X1.1): calls, meetings and notes are refused on a record
+// that is not this workspace's, so R7 and R45 seed the lead they log on; what
+// they check is unchanged.
+const seedLead40 = () => rows("leads").push({ id: 40, workspaceId: WS, firstName: "Lee", lastName: "D" });
 
 describe("R7 · the drawer timeline shows what was logged", () => {
   it("type, note text and call outcome come through from the real rows", async () => {
+    seedLead40();
     const c = caller();
     await c.activities.logCall({ relatedType: "lead", relatedId: 40, disposition: "voicemail", durationSec: 30, outcome: "Left a message", notes: "Asked for a call back Tuesday" });
     await c.activities.logMeeting({ relatedType: "lead", relatedId: 40, subject: "Discovery", notes: "Budget is approved" });
@@ -139,6 +144,7 @@ describe("R7 · the drawer timeline shows what was logged", () => {
 
 describe("R45 · one notes store", () => {
   it("a note written in the drawer is a crmNotes row the detail page lists, and its @mention notifies a member", async () => {
+    seedLead40();
     const c = caller();
     const r = await c.crmNotes.create({ entityType: "lead", entityId: 40, body: "Ping @[Ann](user:5) and @[Sam](user:6) and me @[Olu](user:1)" });
     expect(r.mentioned.sort()).toEqual([ANN, STRANGER]);

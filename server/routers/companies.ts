@@ -21,6 +21,19 @@ import { getDb } from "../db";
 import { and, eq, isNull } from "drizzle-orm";
 import { accounts } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
+import { requireInWorkspace } from "../services/foreignIds";
+
+/**
+ * The company a per-account action names must be this workspace's (audit
+ * 2026-10-20, X1.1). The writes below were scoped, so another workspace's id
+ * changed nothing, but each still wrote an audit row saying it had acted on
+ * that company. NOT_FOUND, as a missing one.
+ */
+async function companyHere(workspaceId: number, accountId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  await requireInWorkspace(db, accounts, accountId, workspaceId, "Company");
+}
 import { searchWorkspaceAccounts } from "../services/company/searchService";
 
 /** Distinct trimmed values with how many rows have each, most first. */
@@ -75,6 +88,7 @@ export const companiesRouter = router({
     .input(z.object({ accountId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       requireRole(ctx.member.role, "admin");
+      await companyHere(ctx.workspace.id, input.accountId);
       const { reconcileAccountBrand } = await import("../services/company/brandReconciler");
       const result = await reconcileAccountBrand(ctx.workspace.id, input.accountId, { byUserId: ctx.user.id });
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "brand_reconcile", entityId: input.accountId, after: { action: result.action, changes: result.changes } });
@@ -148,6 +162,7 @@ export const companiesRouter = router({
     .input(z.object({ accountId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       requireRole(ctx.member.role, "admin");
+      await companyHere(ctx.workspace.id, input.accountId);
       const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       await db.update(accounts).set({ brandOverride: null } as never).where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, input.accountId)));
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "delete", entityType: "brand_override", entityId: input.accountId });
@@ -201,6 +216,7 @@ export const companiesRouter = router({
     .input(z.object({ accountId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       requireRole(ctx.member.role, "admin");
+      await companyHere(ctx.workspace.id, input.accountId);
       const db = await getDb(); if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       await db.update(accounts).set({ archivedAt: new Date() } as never).where(and(eq(accounts.workspaceId, ctx.workspace.id), eq(accounts.id, input.accountId)));
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "company_archive", entityId: input.accountId, after: { archived: true } });
@@ -286,6 +302,7 @@ export const companiesRouter = router({
     .input(z.object({ accountId: z.number().int().positive(), provided: z.record(z.string(), z.any()).optional() }))
     .mutation(async ({ ctx, input }) => {
       requireRole(ctx.member.role, "manager");
+      await companyHere(ctx.workspace.id, input.accountId);
       const res = await enrichCompany(ctx.workspace.id, input.accountId, { userId: ctx.user.id, provided: input.provided ?? null });
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "company_enrichment", entityId: input.accountId, after: { fields: res.fieldsUpdated } });
       return res;

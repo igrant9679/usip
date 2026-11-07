@@ -359,6 +359,9 @@ export const meetingsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // About a record of this workspace, when it is about one (X1.1).
+      const { assertRecordInWorkspace } = await import("../services/foreignIds");
+      await assertRecordInWorkspace(db, input.relatedType, input.relatedId, ctx.workspace.id);
       const scheduledAt = input.scheduledAt ? new Date(input.scheduledAt) : null;
       const ins = await db.insert(meetings).values({
         workspaceId: ctx.workspace.id,

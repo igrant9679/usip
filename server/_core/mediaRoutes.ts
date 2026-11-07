@@ -14,11 +14,12 @@
  * cannot run script.
  */
 import type { Express, Request, Response } from "express";
-import { and, eq, isNull } from "drizzle-orm";
-import { accounts, workspaceMembers } from "../../drizzle/schema";
+import { eq } from "drizzle-orm";
+import { accounts } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { resolveCompanyLogo } from "../services/company/logoService";
 import { sdk } from "./sdk";
+import { workspaceDoorRefusal } from "./workspace";
 
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon", "image/avif"]);
 
@@ -39,9 +40,9 @@ export async function serveAccountLogo(req: Request, res: Response): Promise<voi
     res.status(404).end();
     return;
   }
-  let userId: number;
+  let user: Awaited<ReturnType<typeof sdk.authenticateRequest>>;
   try {
-    userId = (await sdk.authenticateRequest(req)).id;
+    user = await sdk.authenticateRequest(req);
   } catch {
     res.status(401).end();
     return;
@@ -63,12 +64,13 @@ export async function serveAccountLogo(req: Request, res: Response): Promise<voi
     res.status(404).end();
     return;
   }
-  const [member] = await db
-    .select({ id: workspaceMembers.id })
-    .from(workspaceMembers)
-    .where(and(eq(workspaceMembers.userId, userId), eq(workspaceMembers.workspaceId, row.workspaceId), isNull(workspaceMembers.deactivatedAt)))
-    .limit(1);
-  if (!member) {
+  /**
+   * The one door rule (audit 2026-10-20, F4), shared with workspaceProcedure,
+   * the stream routes and the storage proxy: this route had its own copy of
+   * the membership check, which let in an invitation nobody had accepted, a
+   * member of an archived workspace and one the 2FA requirement stops.
+   */
+  if (await workspaceDoorRefusal(db, user, row.workspaceId)) {
     res.status(404).end();
     return;
   }

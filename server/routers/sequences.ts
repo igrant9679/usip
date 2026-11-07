@@ -1,6 +1,7 @@
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 import { inSendWindow } from "../services/sendWindow";
 import { TRPCError } from "@trpc/server";
+import { assertOwnerInWorkspace } from "../services/foreignIds";
 import { createHash } from "crypto";
 import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -840,6 +841,9 @@ export const sequencesRouter = router({
     await checkPermission(ctx, "manage_sequences");
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // The rep it is assigned to works here (audit 2026-10-20, X1.1): any
+    // user id was stored, another workspace's included. Null unassigns.
+    await assertOwnerInWorkspace(ctx.workspace.id, input.userId);
     await db.update(sequences).set({ assignedToUserId: input.userId } as never)
       .where(and(eq(sequences.id, input.id), eq(sequences.workspaceId, ctx.workspace.id)));
     await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "sequence", entityId: input.id, after: { op: "assign", assignedToUserId: input.userId } });

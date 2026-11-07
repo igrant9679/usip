@@ -372,6 +372,9 @@ export const opportunityIntelligenceRouter = router({
         .from(opportunities)
         .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
       if (!opp) throw new TRPCError({ code: "NOT_FOUND" });
+      // A co-owner works here (audit 2026-10-20, X1.1): any user id was added.
+      const { assertOwnerInWorkspace } = await import("../services/foreignIds");
+      await assertOwnerInWorkspace(ctx.workspace.id, input.userId);
       const existing: Record<string, any> = (opp.customFields as any) ?? {};
       const coOwners: number[] = existing.coOwners ?? [];
       if (!coOwners.includes(input.userId)) coOwners.push(input.userId);

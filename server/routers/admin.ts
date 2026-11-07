@@ -385,6 +385,13 @@ export const settingsRouter = router({
         });
       }
       const current = await getOrSeedSettings(ctx.workspace.id); // ensure row exists
+      // The system sender is one of this workspace's mailboxes (audit
+      // 2026-10-20, X1.1). sendSystemEmail re-checks at send time; this stops
+      // another tenant's mailbox id being stored at all.
+      if (input.systemSenderAccountId != null) {
+        const { assertRowInWorkspace } = await import("../services/foreignIds");
+        await assertRowInWorkspace(db, "sending account", input.systemSenderAccountId, ctx.workspace.id);
+      }
       // The send window's two hours are checked TOGETHER, against whichever
       // half is not being changed: saving an end hour of 5 must not leave a
       // start of 6 behind it and a window that never opens.

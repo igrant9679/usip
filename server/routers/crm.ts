@@ -49,7 +49,7 @@ import { router } from "../_core/trpc";
 import { adminWsProcedure, managerProcedure, rankOf, repProcedure, ROLE_RANK, workspaceProcedure } from "../_core/workspace";
 import { FORECAST_CATEGORIES } from "@shared/forecastCategory";
 import { activeOwnerOrNull } from "../_core/activeMembers";
-import { assertOwnerInWorkspace, assertRowInWorkspace } from "../services/foreignIds";
+import { assertOwnerInWorkspace, assertRecordInWorkspace, assertRowInWorkspace } from "../services/foreignIds";
 import { closedStageKeys, defaultPipelineId, invalidateStageIndex, resolvedStageFor, stageIndexFor, stageResolver } from "../_core/stageSemantics";
 import { isSuppressed, makeUnsubscribeUrl, unsubscribeHeaders } from "../unsubscribe";
 import { assertSendAllowed } from "../sendLimits";
@@ -2897,6 +2897,8 @@ export const crmNotesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // On a record of this workspace (audit 2026-10-20, X1.1).
+      await assertRecordInWorkspace(db, input.entityType, input.entityId, ctx.workspace.id);
       const r = await db.insert(crmNotes).values({
         workspaceId: ctx.workspace.id,
         entityType: input.entityType,

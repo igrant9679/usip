@@ -167,10 +167,21 @@ describe("/api/media/account-logo serves members only (L6)", () => {
   };
   beforeEach(() => {
     h.db = makeSqlFakeDb({ realMembers: true });
+    // 2026-11-07 (audit F4): the route now asks workspaceDoorRefusal, which
+    // joins the workspace (archive) and reads the invite token, so both are
+    // seeded. Members 14 (an invitation not accepted) and 15 (a rep of an
+    // archived workspace) are the two the old inline check let in.
+    h.db.rowsOf("workspaces").push(
+      { id: LSI, name: "LSI", slug: "lsi", ownerUserId: 11, archivedAt: null },
+      { id: OTHER, name: "Other", slug: "other", ownerUserId: 12, archivedAt: null },
+      { id: 77, name: "Archived", slug: "archived", ownerUserId: 15, archivedAt: new Date() },
+    );
     h.db.rowsOf("workspace_members").push(
-      { id: 1, workspaceId: LSI, userId: 11, role: "rep", deactivatedAt: null },
-      { id: 2, workspaceId: OTHER, userId: 12, role: "admin", deactivatedAt: null },
-      { id: 3, workspaceId: LSI, userId: 13, role: "rep", deactivatedAt: new Date() },
+      { id: 1, workspaceId: LSI, userId: 11, role: "rep", deactivatedAt: null, inviteToken: null },
+      { id: 2, workspaceId: OTHER, userId: 12, role: "admin", deactivatedAt: null, inviteToken: null },
+      { id: 3, workspaceId: LSI, userId: 13, role: "rep", deactivatedAt: new Date(), inviteToken: null },
+      { id: 4, workspaceId: LSI, userId: 14, role: "rep", deactivatedAt: null, inviteToken: "t".repeat(40) },
+      { id: 5, workspaceId: 77, userId: 15, role: "rep", deactivatedAt: null, inviteToken: null },
     );
     h.db.rowsOf("accounts").push(
       acct(1, { logoUrl: PNG_URI, logoSourceType: "website_logo", logoStatus: "available" }),
@@ -202,6 +213,12 @@ describe("/api/media/account-logo serves members only (L6)", () => {
     expect((await get("1", 13)).statusCode).toBe(404);
     expect((await get("99", 11)).statusCode).toBe(404);
     expect((await get("x", 11)).statusCode).toBe(404);
+  });
+
+  it("the shared door rule (F4): an unaccepted invitation and an archived workspace's rep are refused too", async () => {
+    expect((await get("1", 14)).statusCode).toBe(404);
+    h.db.rowsOf("accounts").push({ ...acct(70, { logoUrl: PNG_URI, logoSourceType: "website_logo", logoStatus: "available" }), workspaceId: 77 });
+    expect((await get("70", 15)).statusCode).toBe(404);
   });
 
   it("only a stored image the account may show", async () => {
