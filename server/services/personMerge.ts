@@ -372,6 +372,8 @@ export const MERGEABLE_FIELDS = [
   "verificationSetBy", "verificationSetByUserId", "verificationSetAt",
   "lastDiscoveryRunId", "profileImageUrl", "profileImageSource",
   "profileImageSourceUrl", "profileImageLastVerifiedAt", "profileImageStatus",
+  // The person's own time zone (migration 0342, F18): a survivor with none takes the loser's.
+  "timezone",
 ] as const;
 
 /** Excluded from MERGEABLE_FIELDS on purpose, with the reason. The completeness
