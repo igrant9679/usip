@@ -37,6 +37,7 @@ import { HUMAN_COPY_RULES, humanizeAiCopy } from "./humanCopy";
 import { buildBrandContext } from "./brandContext";
 import { proposalKnowledgeQuery } from "./knowledgeQueries";
 import { createCalendarAdapter } from "../calendarAdapter";
+import { __resetCalendarFreeBusyCacheForTests, forgetCalendarBusy, liveCalendarBusy } from "./calendarFreeBusy";
 import { attributeMeetingBookingToAre } from "../routers/are/execution";
 // One slot generator + one timezone rule, shared with the booking link. See
 // shared/availability.ts for why this cannot import them from bookingLinks.ts.
@@ -250,12 +251,13 @@ export async function createMeetingProposal(workspaceId: number, target: Meeting
  * for five minutes so a Regenerate all pass reads each calendar once, not
  * once per proposal. Best-effort: a provider failure leaves the stored events
  * to decide, as before.
+ *
+ * The read and its cache moved to services/calendarFreeBusy.ts (G42) so the
+ * booking-link page reads the same calendar the same way; this name stays for
+ * the tests that reset it.
  */
-const LIVE_BUSY_TTL_MS = 5 * 60_000;
-const liveBusyCache = new Map<number, { at: number; busy: { startAt: Date; endAt: Date }[] }>();
-
 export function __resetLiveBusyCacheForTests(): void {
-  liveBusyCache.clear();
+  __resetCalendarFreeBusyCacheForTests();
 }
 
 async function liveOwnerBusy(
@@ -264,23 +266,7 @@ async function liveOwnerBusy(
   from: Date,
   to: Date,
 ): Promise<{ startAt: Date; endAt: Date }[]> {
-  const db = await getDb();
-  if (!db) return [];
-  const [acc] = await db.select().from(calendarAccounts)
-    .where(and(eq(calendarAccounts.workspaceId, workspaceId), eq(calendarAccounts.userId, ownerUserId)))
-    .limit(1);
-  if (!acc) return [];
-  const hit = liveBusyCache.get(acc.id);
-  if (hit && Date.now() - hit.at < LIVE_BUSY_TTL_MS) return hit.busy;
-  try {
-    const events = await createCalendarAdapter(acc as any).listEvents(acc.calendarId ?? "primary", from, to);
-    const busy = events.map((e) => ({ startAt: new Date(e.startAt), endAt: new Date(e.endAt) }));
-    liveBusyCache.set(acc.id, { at: Date.now(), busy });
-    return busy;
-  } catch (e) {
-    console.error(`[MeetingScheduler] live calendar read failed for calendar ${acc.id}:`, e instanceof Error ? e.message : String(e));
-    return [];
-  }
+  return (await liveCalendarBusy(workspaceId, ownerUserId, from, to)).busy;
 }
 
 /**
@@ -867,7 +853,7 @@ export async function sendMeetingInvite(workspaceId: number, meetingId: number, 
         calendarEventId: calEventId, calendarAccountId: acc.id, meetingUrl: result.meetingUrl ?? null,
       } as never).where(eq(meetings.id, meetingId));
       // The drafting cache no longer knows this slot is taken.
-      liveBusyCache.delete(acc.id);
+      forgetCalendarBusy(acc.id);
       // Count toward the ARE campaign KPI (non-blocking, deduped, no-op for a
       // non-ARE attendee): now only for an agreed time.
       if (agreed) void attributeMeetingBookingToAre(workspaceId, { id: meetingId, contactEmail: m.contactEmail });

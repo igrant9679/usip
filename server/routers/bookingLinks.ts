@@ -25,6 +25,7 @@ import { getDb } from "../db";
 import { isWorkspaceLive } from "../_core/workspaceArchive";
 import { activities, bookingLinks, calendarEvents, leads, meetings, notifications, users, type BookingLink } from "../../drizzle/schema";
 import { sendMeetingInvite } from "../services/meetingScheduler";
+import { liveCalendarBusy, overlapsAny } from "../services/calendarFreeBusy";
 import { describeConfirmationFailure, sendBookingConfirmationEmail, type BookingConfirmationResult } from "../services/bookingConfirmationEmail";
 import { hostedPageChatSlug } from "../services/hostedChat";
 import {
@@ -109,7 +110,31 @@ async function busyEventsFor(workspaceId: number, userId: number, nowMs: number)
     const s = m.startAt as Date;
     busy.push({ startAt: s, endAt: new Date(s.getTime() + (m.durationMin ?? 30) * 60000) });
   }
+  // And the calendar itself, read live (G42): stored events change only on a
+  // sync, so a meeting made in Outlook since then was offered as open. Cached
+  // for five minutes per calendar; a failed read leaves the rows above.
+  const live = await liveCalendarBusy(workspaceId, userId, from, to);
+  for (const r of live.busy) busy.push(r);
   return busy;
+}
+
+/** What a visitor is told when the calendar shows the slot busy at the last moment. */
+export const BOOKING_SLOT_BUSY = "That time is no longer free on the host's calendar. Please pick another time.";
+
+/**
+ * The last check before a booking is accepted (G42): the host's calendar read
+ * fresh for exactly this slot, no cache. Covers a meeting put in the calendar
+ * after the page loaded (or within the slot list's five-minute cache). A
+ * provider that fails or is slow leaves the decision to the stored events and
+ * meetings already checked, so a flaky calendar does not stop all bookings.
+ * Returns true when the slot is busy.
+ */
+export async function slotBusyOnCalendar(link: BookingLink, start: Date): Promise<boolean> {
+  const end = new Date(start.getTime() + link.durationMin * 60000);
+  // From a day earlier, so an event that began before the slot and runs into
+  // it is returned by providers that match on start time.
+  const live = await liveCalendarBusy(link.workspaceId, link.userId, new Date(start.getTime() - 86_400_000), end, { fresh: true });
+  return live.read === "ok" && overlapsAny(live.busy, start, end);
 }
 
 /**
@@ -261,6 +286,12 @@ export async function bookSlotForLink(link: BookingLink, opts: BookSlotOpts) {
    */
   if (!(await isActiveMember(link.workspaceId, link.userId))) {
     throw new TRPCError({ code: "NOT_FOUND", message: BOOKING_UNAVAILABLE });
+  }
+
+  // Free/busy, live, for this slot only (G42). The page offers the next open
+  // times when this refuses (BookingPage.tsx refetches the list).
+  if (await slotBusyOnCalendar(link, start)) {
+    throw new TRPCError({ code: "CONFLICT", message: BOOKING_SLOT_BUSY });
   }
 
   await assertBookingCaps(db, link, opts.email);
