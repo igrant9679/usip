@@ -20,6 +20,7 @@ import { useTheme, PALETTES } from "@/contexts/ThemeContext";
 import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { confirmPaidLookup } from "@/components/usip/SpendPreview";
 import { isAdminRole } from "@shared/roleRank";
 import { DEFAULT_SEND_WINDOW, WEEKDAY_LABELS, describeSendWindow, isWithinSendWindow, normalizeSendWindow, parseSendDays } from "@shared/sendWindow";
 
@@ -1662,6 +1663,25 @@ function EmailVerificationSettingsSection({ isAdmin }: { isAdmin: boolean }) {
       : toast.info(`Nothing started: ${r.reason ?? "no contacts are due"}.`),
     onError: (e) => toast.error(e.message),
   });
+  // Run Now says how many addresses and credits first (audit 2026-10-20, F8),
+  // from the same plan the run sends.
+  const askReverifyNow = async () => {
+    try {
+      const p = await utils.emailVerification.reverifyPreview.fetch();
+      if (!p.ok) { toast.info(`Nothing to run: ${p.reason}.`); return; }
+      confirmPaidLookup({
+        title: `Re-verify ${p.emails.toLocaleString()} address${p.emails === 1 ? "" : "es"} now?`,
+        vendor: "Reoon",
+        count: p.emails,
+        unit: "bulk credit",
+        allowance: p.dailyCap != null && p.headroom != null ? { used: p.dailyCap - p.headroom, cap: p.dailyCap } : null,
+        note: p.skippedAcceptAll ? `${p.skippedAcceptAll.toLocaleString()} more at accept-all domains are skipped: they would answer the same again.` : undefined,
+        confirmLabel: "Re-verify",
+      }, () => triggerNowMut.mutate());
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
   const [blockInvalid, setBlockInvalid] = useState(false);
   const [reverifyInterval, setReverifyInterval] = useState<string>("disabled");
   const [reverifyRisky, setReverifyRisky] = useState(true);
@@ -1762,7 +1782,7 @@ function EmailVerificationSettingsSection({ isAdmin }: { isAdmin: boolean }) {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => triggerNowMut.mutate()}
+                  onClick={askReverifyNow}
                   disabled={triggerNowMut.isPending || reverifyInterval === "disabled"}
                   title="Run re-verify now for all qualifying contacts"
                 >

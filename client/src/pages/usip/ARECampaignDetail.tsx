@@ -151,6 +151,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useLocation } from "wouter";
 import { toast } from "sonner";
 import { pressable } from "@/lib/pressable";
+import { runSummary, useFollowRun } from "@/lib/discoveryRun";
+import { SourceBudgetLine } from "@/components/usip/SpendPreview";
 
 /* ─── CSV import helper ────────────────────────────────────────────────────── */
 export type ImportRow = {
@@ -1601,21 +1603,26 @@ function SequenceDrawer({ row, campaignGapDays, onClose, refetch }: { row: any; 
  *  sentence and that list disagree again. */
 function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: number; campaign: any }) {
   const utils = trpc.useUtils();
+  // The run is a background job now (audit 2026-10-20, P72): the launch
+  // answers with the run id at once and the card follows the run. A run whose
+  // finds could not be saved still ends "failed" with the reason (P143), and
+  // is read here as Find Prospects reads it.
+  const [runId, setRunId] = useState<number | null>(null);
+  const follow = useFollowRun(runId, (run) => {
+    const s = runSummary(run);
+    if (s.ok) toast.success(s.text, { duration: 6000 }); else toast.error(s.text, { duration: 8000 });
+    utils.are.engine.getLogs.invalidate({ campaignId });
+    utils.discovery.getLogsForCampaign.invalidate({ campaignId });
+  });
+  const followed = follow.query.data as { id: number; status: string } | undefined;
+  const running = runId != null && followed?.id === runId && followed.status === "running";
   const launch = trpc.discovery.search.useMutation({
     onSuccess: (r) => {
-      // A run whose finds could not be saved comes back as a result, not an
-      // error (P143), so it is read here, as Find Prospects reads it. The
-      // launcher announced success over a failed run.
-      const lead = r.joinedRunning ? `That search was already running (run #${r.runId}), so it was not started again — ` : "";
-      if (r.status === "failed") {
-        toast.error(`${lead}Run #${r.runId} failed: ${r.errorMessage ?? "the finds could not be saved"}`, { duration: 8000 });
-      } else {
-        toast.success(
-          `${lead}Discovery complete — ${r.rawFindCount} raw / ${r.prospectsCreated} new / ${r.highConfidenceCount}H · ${r.mediumConfidenceCount}M · ${r.lowConfidenceCount}L`,
-          { duration: 6000 },
-        );
-      }
-      utils.are.engine.getLogs.invalidate({ campaignId });
+      setRunId(r.runId);
+      follow.arm(r.runId);
+      toast.info(r.joinedRunning
+        ? `That search was already running (run #${r.runId}), so it was not started again.`
+        : `Discovery started (run #${r.runId}); it runs in the background and this card says when it ends.`);
       utils.discovery.getLogsForCampaign.invalidate({ campaignId });
     },
     onError: (e) => toast.error(e.message),
@@ -1670,10 +1677,12 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
             )}
           </div>
         </div>
+        {/* What each paid source has left today, before running (U16). */}
+        {ready && <SourceBudgetLine sources={["linkedin", "news", "apollo", "quickenrich"]} />}
         <Button
           size="sm"
           className="w-full gap-1.5"
-          disabled={launch.isPending || !ready}
+          disabled={launch.isPending || running || !ready}
           onClick={() => launch.mutate({
             mode: "person",
             campaignId,
@@ -1685,8 +1694,8 @@ function CampaignDiscoveryLauncher({ campaignId, campaign }: { campaignId: numbe
             },
           })}
         >
-          {launch.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-          {launch.isPending ? "Running discovery…" : "Run discovery now"}
+          {launch.isPending || running ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+          {launch.isPending ? "Starting discovery…" : running ? `Run #${runId} running in the background…` : "Run discovery now"}
         </Button>
       </CardContent>
     </Card>

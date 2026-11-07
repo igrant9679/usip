@@ -9,7 +9,7 @@ import { confirmAction } from "@/components/usip/Common";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useConfirmAutoEnrol } from "@/hooks/useConfirmAutoEnrol";
 import { trpc } from "@/lib/trpc";
-import { ruleState, runSummary, wouldEnrolLine } from "@/lib/segmentAutoEnrol";
+import { dryRunLine, ruleState, runSummary, wouldEnrolLine, type RulePreview } from "@/lib/segmentAutoEnrol";
 import { CheckCircle2, Loader2, Play, Plus, Trash2, Users, Zap, SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -78,6 +78,21 @@ export default function SegmentRules() {
   const [newSegmentId, setNewSegmentId] = useState("");
   const [newSequenceId, setNewSequenceId] = useState("");
 
+  // The auto-enrol dry run (audit 2026-10-20, F42): what a rule would do now —
+  // would enrol X, Y already enrolled, Z blocked — without enrolling anyone.
+  // Rules that moved to People arrive switched off; this is how a person
+  // checks one before turning it on again (P21).
+  const [dryRun, setDryRun] = useState<{ ruleId: number; result: RulePreview | null; error: string | null } | null>(null);
+  const runDry = async (rule: { id: number; segmentId: number; sequenceId: number }) => {
+    setDryRun({ ruleId: rule.id, result: null, error: null });
+    try {
+      const result = await utils.segmentRules.preview.fetch({ segmentId: rule.segmentId, sequenceId: rule.sequenceId }, { staleTime: 0 });
+      setDryRun({ ruleId: rule.id, result, error: null });
+    } catch (e) {
+      setDryRun({ ruleId: rule.id, result: null, error: e instanceof Error ? e.message : "The dry run could not be read." });
+    }
+  };
+
   // How many the new rule would enrol, shown before anyone presses Add (P57).
   const preview = trpc.segmentRules.preview.useQuery(
     { segmentId: Number(newSegmentId), sequenceId: Number(newSequenceId) },
@@ -91,7 +106,7 @@ export default function SegmentRules() {
 
   return (
     <Shell title="Segment Auto-Enroll">
-      <PageHeader title="Segment Auto-Enroll" description="Every hour, each enabled rule enrols the contacts its segment matches into its sequence, skipping anyone already enrolled, invalid, suppressed or in a campaign. Segments read CRM contacts, not People." pageKey="segment-rules"
+      <PageHeader title="Segment Auto-Enroll" description="Every hour, each enabled rule enrols the people its segment matches into its sequence, skipping anyone already enrolled, without a usable address, suppressed or in a campaign. Nothing is enrolled while outbound is paused." pageKey="segment-rules"
         icon={<SlidersHorizontal className="size-5" />}
       >
         {isAdmin && (
@@ -105,7 +120,8 @@ export default function SegmentRules() {
       <div className="p-4 md:p-5 space-y-6">
         {/* Said here as well as in the header, whose text an admin can replace (P21). */}
         <p className="text-xs text-muted-foreground">
-          Rules enrol CRM contacts. Someone who is only in People is never in a segment, so a rule never enrols them.
+          Rules enrol People (segments moved from CRM contacts on 2026-11-07). Every rule on a moved segment was switched off:
+          use Dry run to see who it would enrol now, then turn it on again.
         </p>
 
         {isAdmin && (
@@ -162,7 +178,7 @@ export default function SegmentRules() {
           <div className="text-center py-16 text-muted-foreground">
             <Users className="size-10 mx-auto mb-3 opacity-30" />
             <p className="font-medium">No auto-enroll rules yet</p>
-            <p className="text-sm mt-1">Add a rule above to automatically enroll contacts from a segment into a sequence.</p>
+            <p className="text-sm mt-1">Add a rule above to automatically enroll people from a segment into a sequence.</p>
           </div>
         ) : (
           <div className="space-y-3">
@@ -204,8 +220,32 @@ export default function SegmentRules() {
                     {state.enrolling ? <><CheckCircle2 className="size-3 mr-1" />Active</> : state.label}
                   </Badge>
                   {state.why && <span className="text-[11px] text-muted-foreground shrink-0">{state.why}</span>}
+                  {/* Off because its segment moved, not because someone paused it (P21). */}
+                  {!rule.enabled && rule.offReason === "moved_to_people" && (
+                    <span className="basis-full text-[11px] text-amber-700 dark:text-amber-400">
+                      Switched off when its segment moved to People. Check the dry run, then turn it on again.
+                    </span>
+                  )}
+                  {dryRun?.ruleId === rule.id && (
+                    <div className="basis-full rounded-md border bg-muted/40 px-3 py-2 text-xs" aria-live="polite">
+                      {dryRun.error ? <span className="text-destructive">{dryRun.error}</span>
+                        : !dryRun.result ? "Working out who this rule would enrol…"
+                        : (
+                          <>
+                            <div className="font-medium">{dryRunLine(dryRun.result)}</div>
+                            {dryRun.result.sample && dryRun.result.sample.length > 0 && (
+                              <div className="text-muted-foreground mt-0.5">
+                                For example: {dryRun.result.sample.map((p) => p.name).join(", ")}{dryRun.result.wouldEnrol > dryRun.result.sample.length ? `, and ${(dryRun.result.wouldEnrol - dryRun.result.sample.length).toLocaleString()} more` : ""}.
+                              </div>
+                            )}
+                            <div className="text-muted-foreground mt-0.5">A dry run enrols no one.</div>
+                          </>
+                        )}
+                    </div>
+                  )}
                   {isAdmin && (
                     <div className="flex items-center gap-1 shrink-0">
+                      <Button size="sm" variant="ghost" className="text-xs" onClick={() => void runDry(rule)}>Dry run</Button>
                       <Button size="sm" variant="ghost" disabled={toggle.isPending} className="text-xs"
                         onClick={() => rule.enabled
                           ? toggle.mutate({ id: rule.id, segmentId: rule.segmentId, sequenceId: rule.sequenceId, enabled: false })
@@ -227,7 +267,7 @@ export default function SegmentRules() {
 
         <div className="border border-border rounded-lg p-4 bg-muted/30 text-sm text-muted-foreground space-y-1">
           <p className="font-medium text-foreground">How it works</p>
-          <p>Every hour, Velocity evaluates all enabled rules. Contacts matching the segment's filter criteria that are not already enrolled in the linked sequence are automatically enrolled.</p>
+          <p>Every hour, Velocity evaluates all enabled rules. People matching the segment's filter criteria who are not already enrolled in the linked sequence are automatically enrolled. Dry run shows who that would be now, without enrolling anyone.</p>
           <p>Use <strong>Run now</strong> to trigger an immediate evaluation without waiting for the next hourly cycle.</p>
         </div>
       </div>

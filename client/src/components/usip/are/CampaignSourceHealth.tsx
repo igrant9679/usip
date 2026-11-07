@@ -139,8 +139,13 @@ function SourceRow({ s }: { s: Source }) {
         )}
       </td>
       <td className="py-2 pr-3 text-[11px]">
-        {!s.budget ? (
-          <span className="text-muted-foreground">not tracked</span>
+        {s.lookupsLeftToday != null ? (
+          /* LinkedIn's allowance is lookups left today on the workspace's accounts (F12). */
+          <>{s.lookupsLeftToday.toLocaleString()} lookups left today</>
+        ) : !s.budget ? (
+          s.aiCallsPerRun > 0
+            ? <span className="text-muted-foreground">no vendor budget · up to {s.aiCallsPerRun} AI {plural(s.aiCallsPerRun, "call", "calls")} a run</span>
+            : <span className="text-muted-foreground">not tracked</span>
         ) : s.budget.leadsRemaining != null ? (
           <>
             {s.budget.leadsRemaining.toLocaleString()} left
@@ -169,10 +174,22 @@ function SourceRow({ s }: { s: Source }) {
             )}
           </>
         )}
+        {/* The yield's third step, all time on this campaign, and the last time
+            it found anyone (audit 2026-10-20, F12). */}
+        {s.yield.kept > 0 && (
+          <div className="text-[10.5px] text-muted-foreground mt-0.5">
+            {s.yield.kept.toLocaleString()} kept so far → <span className="text-foreground">{s.yield.admitted.toLocaleString()} admitted</span>
+          </div>
+        )}
+        <div className="text-[10.5px] text-muted-foreground">
+          {s.lastSuccessAt ? `last found people ${when(s.lastSuccessAt)}` : "no success on record yet"}
+        </div>
       </td>
       <td className="py-2 text-[11px]">
+        {/* This source's model tokens for this campaign today (F12), apart from the workspace's vendor units. */}
+        {s.tokensToday > 0 && <div>{s.tokensToday.toLocaleString()} AI tokens on this campaign</div>}
         {!s.spendToday ? (
-          <span className="text-muted-foreground">nothing recorded</span>
+          s.tokensToday > 0 ? null : <span className="text-muted-foreground">nothing recorded</span>
         ) : (
           <>
             {s.spendToday.meters.map((m, i) => (
@@ -280,9 +297,10 @@ export function CampaignSourceHealth({ campaignId }: { campaignId: number }) {
         </div>
 
         <div className="text-[10.5px] text-muted-foreground/80">
-          "Last attempt" is the engine's last discovery summary for this campaign, not a success time: nothing records
-          when a source last succeeded. Engine logs are kept {data.logRetentionDays} days, so "no attempt on record"
-          means none in that window.
+          "Last attempt" is the engine's last discovery summary for this campaign. "Last found people" is the last time
+          a source returned people that were saved, recorded since 2026-11-07, so an older success reads as none on
+          record. Engine logs are kept {data.logRetentionDays} days, so "no attempt on record" means none in that window.
+          "Admitted" counts the people a source put in this campaign's queue that left staging and were not rejected.
         </div>
       </CardContent>
     </Card>

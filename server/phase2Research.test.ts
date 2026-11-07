@@ -100,9 +100,13 @@ describe("a segment says what it means (P1, P19)", () => {
     const admin = caller(ADMIN);
     const save = (rules: any[]) => refusal(admin.segments.create({ name: "S", matchType: "all", rules }));
     expect((await save([])).message).toMatch(/at least one rule/);
-    expect((await save([rule("isPrimary", "contains", "true")])).message).toMatch(/does not apply/);
+    // 2026-11-07 (audit P21): a new segment is on People, which has no
+    // "Is primary contact"; that field is refused as a contact field, and the
+    // operator and empty-value cases are pinned on fields People have.
+    expect((await save([rule("isPrimary", "equals", "true")])).message).toMatch(/contact field People don't have/);
+    expect((await save([rule("createdAt", "contains", "2026")])).message).toMatch(/does not apply/);
     expect((await save([rule("emailVerificationStatus", "contains", "valid")])).message).toMatch(/does not apply/);
-    expect((await save([rule("isPrimary", "equals", "")])).message).toMatch(/needs a value/);
+    expect((await save([rule("title", "equals", "")])).message).toMatch(/needs a value/);
     expect((await save([rule("createdAt", "gt", "last week")])).message).toMatch(/not a date/);
     expect((await save([rule("emailVerificationStatus", "equals", "great")])).message).toMatch(/not an email status/);
     expect(rows("audience_segments")).toHaveLength(0);
