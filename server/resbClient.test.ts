@@ -199,6 +199,18 @@ describe("verify People from the screen (F39) and the credits card (F10)", () =>
   });
 });
 
+describe("the source health strip shows the rest of the yield and the spend (F12)", () => {
+  it("each row shows admitted, last success, AI tokens on the campaign, and LinkedIn's lookups left", () => {
+    const strip = read("client/src/components/usip/are/CampaignSourceHealth.tsx");
+    const row = block(strip, "function SourceRow(", "export function CampaignSourceHealth(");
+    expect(row).toContain("{s.yield.admitted.toLocaleString()} admitted");
+    expect(row).toContain("last found people ${when(s.lastSuccessAt)}");
+    expect(row).toContain("{s.tokensToday.toLocaleString()} AI tokens on this campaign");
+    expect(row).toContain("{s.lookupsLeftToday.toLocaleString()} lookups left today");
+    expect(row).toContain("up to {s.aiCallsPerRun} AI");
+  });
+});
+
 describe("LinkedIn result paging (F43)", () => {
   it("Load the next 10 sends the cursor of the page before and appends", () => {
     const card = block(fp, "function LinkedInSearchCard()", "/* ─── Main panel");
