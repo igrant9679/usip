@@ -198,12 +198,17 @@ describe("numbers that used to omit the engine", () => {
   });
 
   it("Email Analytics counts campaign sends", () => {
+    // 2026-11-07 (audit 2026-10-20, F44/O42): the summary reads the metrics
+    // module. Campaign sends are in its tracked total and reported on their
+    // own (campaignSent), and "Emails sent" is the send log, which every send
+    // path writes, campaign dispatch included.
     const smtp = read("routers", "smtpConfig.ts");
-    expect(smtp).toContain("from(areExecutionQueue)");
-    // 2026-11-06 (audit O42): the draft-path count is named, and campaign
-    // sends are still in the total (and reported on their own as well).
-    expect(smtp).toContain("const draftSent = allSent.length;");
-    expect(smtp).toContain("const totalSent = draftSent + areSent;");
+    expect(smtp).toContain("emailEngagement(db, ws)");
+    expect(smtp).toContain("campaignSent: e.campaign.sent,");
+    expect(smtp).toContain("trackedSent: e.trackedSent,");
+    const m = read("services", "activityMetrics.ts");
+    expect(m).toContain(".from(areExecutionQueue)");
+    expect(m).toContain("const trackedSent = draft.sent + campaign.sent;");
   });
 
   it("Dashboards' two stage ratios are named as stage ratios", () => {

@@ -62,6 +62,7 @@ import { alias } from "drizzle-orm/mysql-core";
 import { getDb } from "../db";
 import { genuineReplyScope } from "../services/replyScope";
 import { workspaceProcedure } from "../_core/workspace";
+import { countReplies, emailEngagement, emailsSent } from "../services/activityMetrics";
 import {
   failureReasonFor, feedSourceApplies, mergeFeed,
   type EmailFeedKind, type EmailFeedRow,
@@ -529,19 +530,16 @@ export const emailActivityRouter = {
       const wsId = ctx.workspace.id;
       const campaignScope = input.campaignId ? eq(emailLog.campaignId, input.campaignId) : undefined;
 
+      // Sent, failed, replies and engagement are the metrics module's (audit
+      // 2026-10-20, F44/O42): Email Analytics, Analytics and Home read the
+      // same functions, so the same number never differs between screens.
       const [bySource, totals, drafts, queued, inbound, engagement] = await Promise.all([
         db
           .select({ source: emailLog.source, count: sql<number>`count(*)` })
           .from(emailLog)
           .where(and(eq(emailLog.workspaceId, wsId), campaignScope))
           .groupBy(emailLog.source),
-        db
-          .select({
-            sent: sql<number>`sum(case when ${emailLog.status} = 'sent' then 1 else 0 end)`,
-            failed: sql<number>`sum(case when ${emailLog.status} = 'failed' then 1 else 0 end)`,
-          })
-          .from(emailLog)
-          .where(and(eq(emailLog.workspaceId, wsId), campaignScope)),
+        emailsSent(db, wsId, { campaignId: input.campaignId }),
         db
           .select({ count: sql<number>`count(*)` })
           .from(emailDrafts)
@@ -558,38 +556,12 @@ export const emailActivityRouter = {
             inArray(areExecutionQueue.status, ["scheduled", "paused"]),
             input.campaignId ? eq(areExecutionQueue.campaignId, input.campaignId) : undefined,
           )),
-        db
-          .select({ count: sql<number>`count(*)` })
-          .from(emailReplies)
-          // Genuine replies only (replyScope.ts) — unscoped, this stat said
-          // "74,943 inbound" on the Emails tab while Conversations said 0.
-          .where(and(eq(emailReplies.workspaceId, wsId), genuineReplyScope())),
-        // Open/click rates read the owning rows, which is where the counters
-        // actually live. Drafts and campaign sends are counted together
-        // because the page presents one funnel, not two.
-        Promise.all([
-          db
-            .select({
-              sent: sql<number>`count(*)`,
-              opened: sql<number>`sum(case when ${emailDrafts.openCount} > 0 then 1 else 0 end)`,
-              clicked: sql<number>`sum(case when ${emailDrafts.clickCount} > 0 then 1 else 0 end)`,
-              bounced: sql<number>`sum(case when ${emailDrafts.bouncedAt} is not null then 1 else 0 end)`,
-            })
-            .from(emailDrafts)
-            .where(and(eq(emailDrafts.workspaceId, wsId), eq(emailDrafts.status, "sent"))),
-          db
-            .select({
-              sent: sql<number>`count(*)`,
-              opened: sql<number>`sum(case when ${areExecutionQueue.openedAt} is not null then 1 else 0 end)`,
-            })
-            .from(areExecutionQueue)
-            .where(and(
-              eq(areExecutionQueue.workspaceId, wsId),
-              eq(areExecutionQueue.channel, "email"),
-              eq(areExecutionQueue.status, "sent"),
-              input.campaignId ? eq(areExecutionQueue.campaignId, input.campaignId) : undefined,
-            )),
-        ]),
+        // Genuine replies only (replyScope.ts, inside countReplies) — unscoped,
+        // this stat said "74,943 inbound" on the Emails tab while Conversations said 0.
+        countReplies(db, wsId),
+        // Open, click, bounce and reply counts read the rows that own them, per
+        // path (activityMetrics.emailEngagement); with a campaign, only its sends.
+        emailEngagement(db, wsId, { campaignId: input.campaignId }),
       ]);
 
       /**
@@ -606,7 +578,7 @@ export const emailActivityRouter = {
       const stFilter = input.status;
       let chips: { source: string; count: number }[];
       if (stFilter === "received") {
-        chips = [{ source: "inbound", count: num(inbound[0]?.count) }];
+        chips = [{ source: "inbound", count: inbound }];
       } else if (stFilter === "scheduled") {
         chips = [{ source: "campaign", count: num(queued[0]?.count) }];
       } else if (stFilter === "awaiting") {
@@ -667,30 +639,27 @@ export const emailActivityRouter = {
         for (const r of bySource) m.set(r.source, num(r.count));
         for (const r of draftRows) m.set(String(r.source), (m.get(String(r.source)) ?? 0) + num(r.count));
         m.set("campaign", (m.get("campaign") ?? 0) + num(queued[0]?.count));
-        m.set("inbound", (m.get("inbound") ?? 0) + num(inbound[0]?.count));
+        m.set("inbound", (m.get("inbound") ?? 0) + inbound);
         const merged: { source: string; count: number }[] = [];
         m.forEach((count, source) => { merged.push({ source, count }); });
         chips = merged;
       }
 
-      const [draftEng, execEng] = engagement;
-      const sentTotal = num(draftEng[0]?.sent) + num(execEng[0]?.sent);
-      const openedTotal = num(draftEng[0]?.opened) + num(execEng[0]?.opened);
-      const clickedTotal = num(draftEng[0]?.clicked);
-      // Over draft-path sends only (audit 2026-10-20, O42): a campaign send
-      // records no click of its own, so counting it in the denominator pulled
-      // the rate down by every campaign email. Email Analytics divides the same way.
-      const clickableTotal = num(draftEng[0]?.sent);
-
       return {
-        sent: num(totals[0]?.sent),
-        failed: num(totals[0]?.failed),
+        sent: totals.sent,
+        failed: totals.failed,
         awaiting: num(drafts[0]?.count),
         scheduled: num(queued[0]?.count),
-        inbound: num(inbound[0]?.count),
-        bounced: num(draftEng[0]?.bounced),
-        openRate: sentTotal ? Math.round((openedTotal / sentTotal) * 100) : 0,
-        clickRate: clickableTotal ? Math.round((clickedTotal / clickableTotal) * 100) : 0,
+        inbound,
+        bounced: engagement.draft.bounced,
+        // Each rate over the sends that can produce it (O42): opens over all
+        // tracked sends, clicks over sequence/CRM sends (campaign links are not
+        // rewritten), replies per path in its own unit.
+        openRate: engagement.rates.open,
+        clickRate: engagement.rates.click,
+        draftReplyRate: engagement.rates.draftReply,
+        campaignReplyRate: engagement.rates.campaignReply,
+        engagement,
         bySource: chips,
       };
     }),

@@ -20,8 +20,14 @@ const prospectsRouter = readFileSync(join(__dirname, "routers", "prospects.ts"),
 
 describe("digest24h reads the sitewide send log", () => {
   it("emailsSent counts email_log 'sent' rows in the window", () => {
-    expect(attention).toContain("from(emailLog)");
-    expect(attention).toMatch(/eq\(emailLog\.status, "sent"\), gte\(emailLog\.sentAt, since\)/);
+    // 2026-11-07 (audit 2026-10-20, F44): through the metrics module's
+    // emailsSent, the definition every screen shares.
+    expect(attention).toContain("emailsSent(db, ws, { window: { start: since } })");
+    const m = readFileSync(join(__dirname, "services", "activityMetrics.ts"), "utf8");
+    const fn = m.slice(m.indexOf("export async function emailsSent("), m.indexOf("export async function emailsSentBySource("));
+    expect(fn).toContain(".from(emailLog)");
+    expect(fn).toContain('eq(emailLog.status, "sent")');
+    expect(fn).toContain("within(emailLog.sentAt, opts.window)");
   });
 
   it("no digest count reads emailDrafts' sent rows (the flow campaigns never touch)", () => {

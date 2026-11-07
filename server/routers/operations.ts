@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, lte, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { DEFAULT_STAGE_ORDER } from "@shared/stageSemantics";
 import {
@@ -55,8 +55,9 @@ import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 // number the user approves is the number stored. See shared/quoteTotals.ts.
 import { centsToDecimal, computeQuoteTotals, formatMoney } from "@shared/quoteTotals";
 import { LIVE_TRIGGER_IDS, type LiveTrigger } from "@shared/workflowTriggers";
-import { zonedDowHour } from "@shared/availability";
+import { wallTimeToUtcMs, zonedDowHour } from "@shared/availability";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { activitiesWhere, activityCountsByType } from "../services/activityMetrics";
 import { dayRangeBounds } from "../services/calendarDeadline";
 import { addMonths, closedIn, instantMonthKey, loadMetricDeals, monthKey, monthLabel, monthToDateRanges, zonedYmd } from "../services/dealMetrics";
 import crypto from "crypto";
@@ -1272,13 +1273,9 @@ async function resolveWidgetData(
   };
 
   /* ── Helper: base activity conditions (dates, and the person who did it) ── */
-  const actBase = (...more: any[]) => {
-    const conds: any[] = [eq(activities.workspaceId, workspaceId), ...more];
-    if (filters.ownerUserId) conds.push(eq(activities.actorUserId, filters.ownerUserId));
-    if (range.from) conds.push(sql`${activities.occurredAt} >= ${range.from}`);
-    if (range.to) conds.push(sql`${activities.occurredAt} <= ${range.to}`);
-    return and(...conds);
-  };
+  // The metrics module's definition (audit 2026-10-20, F44), so every
+  // activity widget counts what the rest of the product calls an activity.
+  const actBase = (...more: any[]) => activitiesWhere(workspaceId, { from: range.from, to: range.to, actorUserId: filters.ownerUserId }, ...more);
 
   /* ── Helper: the last six months, in the workspace's zone ── */
   // Stepped from the 1st: setMonth() on the 29th–31st skipped a month and showed
@@ -1345,12 +1342,9 @@ async function resolveWidgetData(
         return { type: w.type, title: w.title, value: Math.round(avgDays), format: "days" };
       }
       case "activity_counts": {
-        const byType = await db.select({ type: activities.type, n: sql<number>`count(*)` })
-          .from(activities).where(actBase()).groupBy(activities.type);
-        const of = (t: string) => Number(byType.find((r: { type: string }) => r.type === t)?.n ?? 0);
-        const total = byType.reduce((s: number, r: { n: number }) => s + Number(r.n), 0);
-        return { type: w.type, title: w.title, value: total, format: "number",
-          breakdown: { calls: of("call"), emails: of("email"), meetings: of("meeting") } };
+        const c = await activityCountsByType(db, workspaceId, { from: range.from, to: range.to, actorUserId: filters.ownerUserId });
+        return { type: w.type, title: w.title, value: c.total, format: "number",
+          breakdown: { calls: c.calls, emails: c.emails, meetings: c.meetings } };
       }
       case "meetings_booked": {
         const actConds = actBase(eq(activities.type, "meeting"));
@@ -1431,8 +1425,11 @@ async function resolveWidgetData(
       return { type: w.type, title: w.title, series: out };
     }
     if (cfg.metric === "activities") {
+      // Only the six months it shows (O41/G58): this read every activity ever logged.
+      const first = months[0]!.key.split("-").map(Number);
+      const sixMonthsAgo = new Date(wallTimeToUtcMs(tz, first[0]!, first[1]!, 1, 0));
       const acts = await db.select({ type: activities.type, occurredAt: activities.occurredAt })
-        .from(activities).where(actBase());
+        .from(activities).where(actBase(gte(activities.occurredAt, sixMonthsAgo)));
       const out = months.map((m) => ({ label: m.label, calls: 0, emails: 0, meetings: 0 }));
       for (const a of acts) {
         const idx = at(instantMonthKey(tz, a.occurredAt));

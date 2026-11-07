@@ -13,6 +13,13 @@
  *
  * Left (not built here): one metrics service for both pages, campaign click
  * counts, reply rates.
+ *
+ * 2026-11-07 (audit 2026-10-20, F44/O42): those are built now, in
+ * services/activityMetrics.ts, and pinned in metrActivityMetrics.test.ts. The
+ * summary counts in SQL there, so the cases below that call it run on the SQL
+ * fake (makeSqlFakeDb) instead of the row-returning stub, with the same
+ * fixture and the same expectations; "Emails sent" became the sitewide send
+ * log (as on the Emails page), the tracked sends beside it.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -23,6 +30,7 @@ const h = vi.hoisted(() => ({ db: null as any, drafts: [] as any[], are: { sent:
 vi.mock("./db", async (a) => ({ ...(await a<typeof import("./db")>()), getDb: async () => h.db }));
 
 import { appRouter } from "./routers";
+import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { dayIn, lastDays, trackingSeries } from "./services/email/trackingSeries";
 import { _clearWorkspaceTimezoneCache } from "./services/workspaceTimezone";
 
@@ -71,10 +79,15 @@ beforeEach(() => {
 
 describe("draft-path and Revenue Engine mail are counted apart", () => {
   beforeEach(() => {
+    h.db = makeSqlFakeDb({ roles: { 2: "admin" }, wsId: () => 2 });
+    const rows = (t: string) => h.db.rowsOf(t) as any[];
+    rows("workspace_settings").push({ workspaceId: 2, timezone: NY });
     // Ten sequence/CRM sends: four opened (one three times), two clicked.
-    h.drafts = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, sentAt: new Date(), openCount: i === 0 ? 3 : i < 4 ? 1 : 0, clickCount: i < 2 ? 1 : 0 }));
+    for (let i = 0; i < 10; i++) rows("email_drafts").push({ id: i + 1, workspaceId: 2, status: "sent", sentAt: new Date(), openCount: i === 0 ? 3 : i < 4 ? 1 : 0, clickCount: i < 2 ? 1 : 0, bouncedAt: null });
     // Ten campaign sends, five opened; a campaign send records no click.
-    h.are = { sent: 10, opened: 5 };
+    for (let i = 0; i < 10; i++) rows("are_execution_queue").push({ id: 100 + i, workspaceId: 2, channel: "email", status: "sent", prospectQueueId: 500 + i, openedAt: i < 5 ? new Date() : null });
+    // The send log: the twenty, plus one mailbox reply (every path counts as sent).
+    for (let i = 0; i < 21; i++) rows("email_log").push({ id: i + 1, workspaceId: 2, source: i < 10 ? "sequence" : i < 20 ? "campaign" : "mailbox", status: "sent", sentAt: new Date() });
   });
 
   it("the click rate is over the sends that can be clicked", async () => {
@@ -85,7 +98,9 @@ describe("draft-path and Revenue Engine mail are counted apart", () => {
 
   it("each path's sends and opens are reported, and opened means the same on both", async () => {
     const s = await caller().smtpConfig.getAnalyticsSummary();
-    expect(s).toMatchObject({ totalSent: 20, draftSent: 10, campaignSent: 10, draftOpened: 4, campaignOpened: 5, uniqueOpened: 9 });
+    expect(s).toMatchObject({ trackedSent: 20, draftSent: 10, campaignSent: 10, draftOpened: 4, campaignOpened: 5, uniqueOpened: 9 });
+    // "Emails sent" is every path, from the send log, as on the Emails page (F44).
+    expect(s.totalSent).toBe(21);
     expect(s).toMatchObject({ openRate: 45, draftOpenRate: 40, campaignOpenRate: 50 });
   });
 
@@ -95,11 +110,16 @@ describe("draft-path and Revenue Engine mail are counted apart", () => {
     expect(s.totalClicks).toBe(2);
   });
 
-  it("the Emails page divides clicks the same way", () => {
+  it("the Emails page divides clicks the same way", async () => {
+    // 2026-11-07 (F44/O42): both read activityMetrics.emailEngagement, so the
+    // two pages give one click rate on one fixture.
     const src = read("server/routers/emailActivity.ts");
-    expect(src).toContain("const clickableTotal = num(draftEng[0]?.sent);");
-    expect(src).toContain("clickRate: clickableTotal ? Math.round((clickedTotal / clickableTotal) * 100) : 0,");
+    expect(src).toContain("clickRate: engagement.rates.click,");
     expect(src).not.toContain("clickRate: sentTotal ?");
+    const page = await caller().emailActivity.stats({ status: "sent" });
+    const summary = await caller().smtpConfig.getAnalyticsSummary();
+    expect(page.clickRate).toBe(summary.clickRate);
+    expect(page.clickRate).toBe(20);
   });
 });
 
@@ -141,11 +161,15 @@ describe("the daily series is the workspace's days", () => {
 });
 
 describe("the page promises only what is there", () => {
-  it("no reply rates, no AI insights", () => {
+  it("no AI insights; the reply rate shown is the one computed from matched replies", () => {
+    // 2026-11-07 (F44/O42): reply rates exist now (activityMetrics, matched
+    // replies only), so the page may show one, and only the summary's.
     const page = read("client/src/pages/usip/EmailAnalytics.tsx");
-    expect(page).not.toContain("reply rates");
     expect(page).not.toContain("AI-powered insights");
+    expect(page).not.toMatch(/AI insights/i);
     expect(page).toContain("summary.campaignSent} Revenue Engine");
-    expect(page).toContain("Revenue Engine sends record no clicks here");
+    expect(page).toContain("value={summary ? `${summary.draftReplyRate}%` : \"—\"}");
+    // Campaign links are not click-tracked, and the page says so instead of a 0%.
+    expect(page).toContain("Revenue Engine links aren't click-tracked");
   });
 });

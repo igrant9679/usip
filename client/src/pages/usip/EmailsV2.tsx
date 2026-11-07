@@ -362,8 +362,10 @@ export default function EmailsV2() {
     } as any);
   };
 
-  const StatCard = ({ label, value, tone, onClick }: {
+  const StatCard = ({ label, value, tone, onClick, sub }: {
     label: string; value: string | number; tone?: "good" | "warn" | "danger"; onClick?: () => void;
+    /** What the number counts, when the label alone would mislead (O42). */
+    sub?: string;
   }) => {
     const color = tone === "good" ? "#059669" : tone === "warn" ? "#d97706" : tone === "danger" ? "#e11d48" : accent;
     return (
@@ -379,6 +381,7 @@ export default function EmailsV2() {
       >
         <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
         <div className="text-xl font-semibold tabular-nums mt-0.5" style={{ color }}>{value}</div>
+        {sub ? <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{sub}</div> : null}
       </button>
     );
   };
@@ -435,10 +438,13 @@ export default function EmailsV2() {
           </div>
 
           {/* Stats — every one of them clickable into the matching filter. */}
-          <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-            <StatCard label="Sent" value={(st?.sent ?? 0).toLocaleString()} tone="good" onClick={() => setFilter(() => { setStatus("sent"); setDirection("outbound"); })} />
-            <StatCard label="Open rate" value={`${st?.openRate ?? 0}%`} onClick={() => setFilter(() => { setStatus("engaged"); setDirection("outbound"); })} />
-            <StatCard label="Click rate" value={`${st?.clickRate ?? 0}%`} />
+          {/* Sent, open, click and reply are the metrics module's numbers
+              (audit 2026-10-20, F44/O42): Email Analytics shows the same. */}
+          <div className="grid grid-cols-2 lg:grid-cols-7 gap-3">
+            <StatCard label="Sent" value={(st?.sent ?? 0).toLocaleString()} tone="good" sub="Every send path" onClick={() => setFilter(() => { setStatus("sent"); setDirection("outbound"); })} />
+            <StatCard label="Open rate" value={`${st?.openRate ?? 0}%`} sub="Of tracked sends" onClick={() => setFilter(() => { setStatus("engaged"); setDirection("outbound"); })} />
+            <StatCard label="Click rate" value={`${st?.clickRate ?? 0}%`} sub="Sequence & CRM email" />
+            <StatCard label="Reply rate" value={`${st?.draftReplyRate ?? 0}%`} sub={`Sequence & CRM · Revenue Engine ${st?.campaignReplyRate ?? 0}% of people`} />
             <StatCard label="Needs review" value={st?.awaiting ?? 0} tone={st?.awaiting ? "warn" : undefined} onClick={() => setFilter(() => setStatus("awaiting"))} />
             <StatCard label="Scheduled" value={(st?.scheduled ?? 0).toLocaleString()} onClick={() => setFilter(() => setStatus("scheduled"))} />
             <StatCard label="Failed / bounced" value={(st?.failed ?? 0) + (st?.bounced ?? 0)} tone={(st?.failed ?? 0) + (st?.bounced ?? 0) ? "danger" : undefined} onClick={() => setFilter(() => setStatus("failed"))} />
