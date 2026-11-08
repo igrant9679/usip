@@ -125,6 +125,10 @@ export default function DealsV2() {
   const pipelineId = selectedPipelineId ?? defaultPipelineId;
   // That pipeline's deals, read by the server (L7).
   const board = trpc.opportunities.board.useQuery({ pipelineId }, { enabled: pipelines.data !== undefined });
+  // Column counts and values from the server, over every deal in scope
+  // (audit 2026-10-20, X4.1): won and lost columns show their latest deals.
+  const boardTotals = trpc.opportunities.boardTotals.useQuery({ pipelineId }, { enabled: pipelines.data !== undefined });
+  const totalsByStage = useMemo(() => new Map((boardTotals.data ?? []).map((t) => [t.stage, t])), [boardTotals.data]);
   // The header numbers come from the server's deal metrics — the same ones
   // the Dashboard, Pipeline forecast, Forecast and Quota read (audit
   // 2026-10-20, R39) — for the pipeline this board shows.
@@ -362,14 +366,16 @@ export default function DealsV2() {
             <div className="flex gap-3 overflow-x-auto pb-2">
               {stages.map((st, si) => {
                 const list = byStage[st.key] ?? [];
-                const colValue = list.reduce((s, o) => s + Number(o.value ?? 0), 0);
+                const t = totalsByStage.get(st.key);
+                const colCount = t?.count ?? list.length;
+                const colValue = t?.value ?? list.reduce((s, o) => s + Number(o.value ?? 0), 0);
                 const hue = stageHue(st, si);
                 return (
                   <div key={st.key} className="w-64 shrink-0">
                     <div className="flex items-center justify-between px-1 mb-1.5">
                       <div className="text-[12px] font-semibold flex items-center gap-1.5" style={{ color: hue }}>
                         <span className="size-2 rounded-full" style={{ backgroundColor: hue }} />
-                        {st.label} <span className="text-muted-foreground font-normal">{list.length}</span>
+                        {st.label} <span className="text-muted-foreground font-normal">{colCount}</span>
                       </div>
                       <span className="text-[10px] text-muted-foreground tabular-nums">{money(colValue)}</span>
                     </div>
@@ -378,6 +384,7 @@ export default function DealsV2() {
                       style={{ borderTop: `3px solid ${hue}`, backgroundColor: `${hue}0d`, borderColor: `${hue}33` }}
                     >
                       {list.map((o) => <Card key={o.id} o={o} hue={hue} />)}
+                      {colCount > list.length && <p className="px-1 text-[10px] text-muted-foreground">The latest {list.length} of {colCount.toLocaleString()} shown.</p>}
                     </div>
                   </div>
                 );

@@ -5,8 +5,9 @@
  *         the database refuses says why; LeadRocks recognises one profile
  *         however its URL is written, in the file and against People; the
  *         LeadRocks result lists the real reasons rows failed
- *   R90 · a preview is capped at 20 MB, a person has one pending preview per
- *         workspace, and only its owner can discard it
+ *   R90 · an upload is capped at 20 MB, a person has one pending upload per
+ *         workspace, and only its owner can discard or commit it (since
+ *         2026-11-07 through the one importer, F32)
  *   R48 · picking a campaign or sequence is a review that enrols on Confirm,
  *         and List adds the people to a list instead of opening the Lists page
  */
@@ -26,7 +27,7 @@ vi.mock("./services/company/associationService", async (a) => ({ ...(await a<typ
 
 import { makeSqlFakeDb } from "./__fakes__/sqlFakeDb";
 import { appRouter } from "./routers";
-import { PREVIEW_CSV_MAX } from "./routers/prospectImports";
+import { IMPORT_FILE_MAX_BYTES } from "./services/importFiles";
 
 const WS = 2, OTHER = 9;
 const root = join(__dirname, "..");
@@ -89,6 +90,17 @@ describe("R54 · a CSV into People keeps its fields, and says why a row failed",
   });
 });
 
+/*
+ * 2026-11-07 (CRMP, F32): the separate LeadRocks importer (prospectImports,
+ * ProspectImportDialog) is retired; a LeadRocks file is a preset of the one
+ * CSV importer. These blocks keep what they protected, through imports.*:
+ * one profile however its URL is written (R54), the real reason a row
+ * failed (R54), and an upload capped, one per person, and only theirs (R90).
+ */
+const lrMapping = (p: { presetMapping: Record<string, string> | null }) => p.presetMapping as Record<string, string>;
+const lrCommit = (userId: number, fileToken: string, mapping: Record<string, string>, ws = WS) =>
+  caller(userId, ws).imports.commit({ fileToken, filename: "lr.csv", fieldMapping: mapping, destination: "prospects", skipDuplicates: true, matchOnNameCompany: false });
+
 describe("R54 · LeadRocks knows one profile however it is written", () => {
   const header = "First Name,Last Name,Linked Url,Company Website,Company,Job Title,Work Email #1,Work Email #1 Status,Location,Industry";
   const line = (first: string, last: string, url: string) => `${first},${last},${url},acme.example,Acme,CFO,${first.toLowerCase()}@acme.example,ok,"Austin, TX, United States",Banking`;
@@ -105,51 +117,55 @@ describe("R54 · LeadRocks knows one profile however it is written", () => {
       line("Jo", "Roe", "https://www.linkedin.com/in/jo-roe"),
       line("Al", "Bee", "https://linkedin.com/in/al-bee/"),
     ].join("\n");
-    const p = await caller().prospectImports.parsePreview({ csv, filename: "lr.csv" });
-    expect(p).toMatchObject({ totalRows: 4, duplicateInFile: 1, alreadyExisting: 1, toImport: 2 });
-    expect(p.sample.map((s: any) => `${s.firstName} ${s.lastName}`)).toEqual(["Jane Doe", "Al Bee"]);
+    const p = await caller().imports.parseCSV({ csvText: csv, filename: "lr.csv" });
+    expect(p.preset).toBe("leadrocks");
+    const v = await caller().imports.validateRows({ fileToken: p.fileToken, filename: "lr.csv", fieldMapping: lrMapping(p), destination: "prospects", skipDuplicates: true, matchOnNameCompany: false });
+    expect(v).toMatchObject({ totalRows: 4, duplicateCount: 2, newCount: 2, importCount: 2 });
+    const r = await lrCommit(1, p.fileToken, lrMapping(p));
+    expect(r.importedRows).toBe(2);
+    expect(rows("prospects").filter((x) => x.workspaceId === WS && x.id > 2).map((s: any) => `${s.firstName} ${s.lastName}`)).toEqual(["Jane Doe", "Al Bee"]);
   });
 
-  it("the commit result lists why rows failed, not a guess", async () => {
+  it("the commit records why rows failed, not a guess", async () => {
     const csv = [header, line("Jane", "Doe", "https://www.linkedin.com/in/jane-doe"), line("Bad", "Row", "https://www.linkedin.com/in/bad-row")].join("\n");
-    const p = await caller().prospectImports.parsePreview({ csv, filename: "lr.csv" });
+    const p = await caller().imports.parseCSV({ csvText: csv, filename: "lr.csv" });
     h.refuse = (table, row) => (table === "prospects" && row.firstName === "Bad" ? tooLong() : null);
-    const r = await caller().prospectImports.commit({ importToken: p.importToken });
-    expect(r).toMatchObject({ created: 1, errored: 1, failureReasons: [{ reason: "title is too long", count: 1 }] });
-    const dialog = read("client/src/pages/usip/ProspectImportDialog.tsx");
-    expect(dialog).not.toContain("Likely a race-condition duplicate");
-    expect(dialog).toContain("{(result.failureReasons ?? []).map((r) => (");
+    const r = await lrCommit(1, p.fileToken, lrMapping(p));
+    expect(r).toMatchObject({ importedRows: 1, errorRows: 1 });
+    expect(rows("contact_import_rows").find((x) => x.status === "error").errorReason).toBe("Not saved: title is too long");
   });
 });
 
-describe("R90 · previews are capped, one per person, and only theirs to discard", () => {
-  const csv = (n: number) => ["First Name,Last Name,Linked Url,Company Website,Work Email #1", ...Array.from({ length: n }, (_, i) => `P${i},Q,https://www.linkedin.com/in/p${i},acme.example,p${i}@acme.example`)].join("\n");
+describe("R90 · uploads are capped, one per person, and only theirs to discard", () => {
+  const csv = (n: number) => ["First Name,Last Name,Linked Url,Company Website,Work Email #1,Company", ...Array.from({ length: n }, (_, i) => `P${i},Q,https://www.linkedin.com/in/p${i},acme.example,p${i}@acme.example,Acme`)].join("\n");
 
-  it("refuses a CSV over 20 MB, and the dialog says so before uploading", async () => {
-    expect(PREVIEW_CSV_MAX).toBe(20_000_000);
-    const big = "x".repeat(PREVIEW_CSV_MAX + 1);
-    expect((await refusal(caller().prospectImports.parsePreview({ csv: big }))).code).toBe("BAD_REQUEST");
-    expect(read("client/src/pages/usip/ProspectImportDialog.tsx")).toContain("if (file.size > 20_000_000) {");
+  it("refuses a file over 20 MB, and the page says so before uploading", async () => {
+    expect(IMPORT_FILE_MAX_BYTES).toBe(20_000_000);
+    const big = `First Name,Last Name\n${"x".repeat(IMPORT_FILE_MAX_BYTES)}`;
+    expect((await refusal(caller().imports.parseCSV({ csvText: big, filename: "big.csv" }))).code).toBe("BAD_REQUEST");
+    expect(read("client/src/pages/usip/ImportContacts.tsx")).toContain("if (f.size > 10 * 1024 * 1024) {");
   });
 
-  it("a second preview replaces the first; another person's stays", async () => {
-    const first = await caller(1).prospectImports.parsePreview({ csv: csv(2) });
-    const theirs = await caller(7).prospectImports.parsePreview({ csv: csv(2) });
-    const second = await caller(1).prospectImports.parsePreview({ csv: csv(3) });
-    expect((await refusal(caller(1).prospectImports.commit({ importToken: first.importToken }))).code).toBe("NOT_FOUND");
-    expect((await caller(7).prospectImports.commit({ importToken: theirs.importToken })).created).toBe(2);
-    expect((await caller(1).prospectImports.commit({ importToken: second.importToken })).created).toBe(3);
+  it("a second upload replaces the first; another person's stays", async () => {
+    const first = await caller(1).imports.parseCSV({ csvText: csv(2), filename: "a.csv" });
+    const theirs = await caller(7).imports.parseCSV({ csvText: csv(2), filename: "b.csv" });
+    const second = await caller(1).imports.parseCSV({ csvText: csv(3), filename: "c.csv" });
+    expect((await refusal(lrCommit(1, first.fileToken, lrMapping(first)))).code).toBe("NOT_FOUND");
+    expect((await lrCommit(7, theirs.fileToken, lrMapping(theirs))).importedRows).toBe(2);
+    expect((await lrCommit(1, second.fileToken, lrMapping(second))).importedRows).toBe(1); // two of its three are the same profiles as above
   });
 
-  it("discard is the owner's, in the owner's workspace", async () => {
-    const p = await caller(1).prospectImports.parsePreview({ csv: csv(1) });
-    expect((await refusal(caller(7).prospectImports.discard({ importToken: p.importToken }))).code).toBe("FORBIDDEN");
-    expect((await refusal(caller(1, OTHER).prospectImports.discard({ importToken: p.importToken }))).code).toBe("FORBIDDEN");
-    // Still there: its owner can commit it.
-    expect((await caller(1).prospectImports.commit({ importToken: p.importToken })).created).toBe(1);
-    const q = await caller(1).prospectImports.parsePreview({ csv: csv(1).replace("p0", "z0").replace("p0@", "z0@") });
-    await caller(1).prospectImports.discard({ importToken: q.importToken });
-    expect((await refusal(caller(1).prospectImports.commit({ importToken: q.importToken }))).code).toBe("NOT_FOUND");
+  it("discard and commit are the owner's, in the owner's workspace", async () => {
+    const p = await caller(1).imports.parseCSV({ csvText: csv(1), filename: "a.csv" });
+    expect((await refusal(caller(7).imports.discard({ fileToken: p.fileToken }))).code).toBe("FORBIDDEN");
+    expect((await refusal(caller(1, OTHER).imports.discard({ fileToken: p.fileToken }))).code).toBe("FORBIDDEN");
+    expect((await refusal(lrCommit(7, p.fileToken, lrMapping(p)))).code).toBe("FORBIDDEN");
+    // Still there: its owner can commit it, once.
+    expect((await lrCommit(1, p.fileToken, lrMapping(p))).importedRows).toBe(1);
+    expect((await refusal(lrCommit(1, p.fileToken, lrMapping(p)))).code).toBe("NOT_FOUND");
+    const q = await caller(1).imports.parseCSV({ csvText: csv(1).replace(/p0/g, "z0"), filename: "q.csv" });
+    await caller(1).imports.discard({ fileToken: q.fileToken });
+    expect((await refusal(lrCommit(1, q.fileToken, lrMapping(q)))).code).toBe("NOT_FOUND");
   });
 });
 
@@ -169,11 +185,15 @@ describe("R48 · Add to… reviews before it enrols, and List adds to a list", (
     expect(s.split("pushToCampaign(").length - 1).toBe(1);
     expect(s.split("bulkEnroll.mutate(").length - 1).toBe(1);
     const confirm = s.slice(s.indexOf("const confirm = () => {"), s.indexOf("// The review: what Confirm will do"));
-    expect(confirm).toContain('if (picked.kind === "campaign") void pushToCampaign(picked);');
-    expect(confirm).toContain("else bulkEnroll.mutate({ sequenceId: picked.id, prospectIds, contactIds, leadIds });");
+    // 2026-11-07 (CRMP, F36): Confirm enrols the ids the review kept, which is
+    // everyone given unless people at a do-not-contact company were left out.
+    expect(confirm).toContain('if (picked.kind === "campaign") void pushToCampaign(picked, ids);');
+    expect(confirm).toContain("else bulkEnroll.mutate({ sequenceId: picked.id, ...ids });");
+    expect(confirm).toContain("prospectIds: keep(prospectIds, skip?.prospectIds),");
     // Both panes show the review.
     expect(s.split("{review}").length - 1).toBe(2);
-    expect(s).toContain("<Button size=\"sm\" onClick={confirm} disabled={pending}>");
+    // 2026-11-07 (CRMP, F36): Confirm also waits for the do-not-contact check.
+    expect(s).toContain("<Button size=\"sm\" onClick={confirm} disabled={pending || dncBlocks}>");
   });
 
   it("List adds the selected people to the picked list, and no longer just opens /v2/lists", () => {

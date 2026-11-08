@@ -69,6 +69,9 @@ const viewFiltersSchema = z
     hasLinkedin: z.boolean().optional(),
     tiers: z.array(z.enum(["high", "medium", "low"])).max(3).optional(),
     seniorities: z.array(z.string().max(40)).max(12).optional(),
+    // One company's people (2026-11-07, F36): a pill the page shows is a
+    // filter a search can store. Checked as this workspace's on save.
+    companyId: z.number().int().positive().optional(),
   })
   .strict();
 
@@ -119,6 +122,12 @@ export const savedSearchesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new Error("Database unavailable");
+      // A stored company filter names a company of this workspace (X1.1).
+      if (input.config.filters.companyId) {
+        const { requireInWorkspace } = await import("../services/foreignIds");
+        const { accounts } = await import("../../drizzle/schema");
+        await requireInWorkspace(db, accounts, input.config.filters.companyId, ctx.workspace.id, "Company");
+      }
       if (input.id) {
         await db
           .update(savedSearches)

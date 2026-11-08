@@ -153,7 +153,9 @@ describe("wiring (structural)", () => {
   it("the sweep discovers work by updatedAt look-back — no per-seam hooks to forget", () => {
     expect(svc).toContain("gte(prospects.updatedAt, since)");
     // No ingest seam imports this service; coverage comes from the scan.
-    for (const seam of ["routers/imports.ts", "routers/prospectImports.ts", "services/discovery/consolidate.ts", "services/personLink.ts"]) {
+    // 2026-11-07 (CRMP, F32): the LeadRocks importer is a preset of imports.ts
+    // now (services/importPresets.ts); routers/prospectImports.ts is gone.
+    for (const seam of ["routers/imports.ts", "services/importPresets.ts", "services/discovery/consolidate.ts", "services/personLink.ts"]) {
       expect(readFileSync(`server/${seam}`, "utf8")).not.toContain("nameVerification");
     }
   });

@@ -61,9 +61,14 @@ function AiPricingPanel({ quote }: { quote: any }) {
 export default function Quotes() {
   const utils = trpc.useUtils();
   const list = trpc.quotes.list.useQuery();
-  const opps = trpc.opportunities.list.useQuery();
+  // The New quote picker: the deals touched most recently (opportunities.list
+  // is capped since audit 2026-10-20, X4.1). The quotes' own deals are read by
+  // id, so an older deal still names its quote.
+  const opps = trpc.opportunities.list.useQuery({ limit: 500 });
+  const quoteOppIds = Array.from(new Set(((list.data ?? []) as Array<{ opportunityId?: number | null }>).map((q) => q.opportunityId).filter((id): id is number => typeof id === "number"))).slice(0, 500);
+  const quoteOpps = trpc.opportunities.list.useQuery({ ids: quoteOppIds, limit: 500 }, { enabled: quoteOppIds.length > 0 });
   const products = trpc.products.list.useQuery();
-  const oppMap = new Map((opps.data ?? []).map((o) => [o.id, o]));
+  const oppMap = new Map([...(opps.data ?? []), ...(quoteOpps.data ?? [])].map((o) => [o.id, o]));
 
   const [openNew, setOpenNew] = useState(false);
   const [oppId, setOppId] = useState<string>("");

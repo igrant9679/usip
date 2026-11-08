@@ -42,7 +42,8 @@ export const recordListsRouter = router({
     .input(z.object({
       name: z.string().trim().min(1, "Give the list a name").max(200),
       entityType: z.enum(["people", "companies"]).default("people"),
-      description: z.string().optional(),
+      // Entered in the New list dialog now (audit 2026-10-20, U31).
+      description: z.string().trim().max(1000).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -51,7 +52,7 @@ export const recordListsRouter = router({
         workspaceId: ctx.workspace.id,
         name: input.name,
         entityType: input.entityType,
-        description: input.description ?? null,
+        description: input.description || null,
         createdByUserId: ctx.user.id,
       });
       return { id: Number((res as any).insertId) };
@@ -97,8 +98,32 @@ export const recordListsRouter = router({
       perPage: z.number().int().min(10).max(500).default(100),
       search: z.string().max(200).optional(),
       sort: z.enum(["added", "name"]).default("added"),
+      /** Only members whose record this person owns (audit 2026-10-20, U31). */
+      ownerUserId: z.number().int().positive().optional(),
     }))
     .query(({ ctx, input }) => listMemberPage(ctx.workspace.id, input)),
+
+  /**
+   * Which of these records are already on the list, so the Add dialog can
+   * mark them instead of offering them again (audit 2026-10-20, U31).
+   */
+  membership: workspaceProcedure
+    .input(z.object({ id: z.number().int().positive(), recordIds: z.array(z.number().int().positive()).max(200) }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db || input.recordIds.length === 0) return [] as number[];
+      const [list] = await db.select({ entityType: recordLists.entityType }).from(recordLists)
+        .where(and(eq(recordLists.id, input.id), eq(recordLists.workspaceId, ctx.workspace.id)));
+      if (!list) throw new TRPCError({ code: "NOT_FOUND", message: "That list is not in this workspace." });
+      const rows = await db.select({ rid: recordListMembers.recordId }).from(recordListMembers)
+        .where(and(
+          eq(recordListMembers.listId, input.id),
+          eq(recordListMembers.workspaceId, ctx.workspace.id),
+          eq(recordListMembers.recordType, list.entityType === "companies" ? "account" : "prospect"),
+          inArray(recordListMembers.recordId, Array.from(new Set(input.recordIds))),
+        ));
+      return Array.from(new Set(rows.map((r) => r.rid)));
+    }),
 
   /**
    * Add records to a list (de-duplicated against existing membership).
@@ -202,4 +227,38 @@ export const recordListsRouter = router({
     await db.delete(recordListMembers).where(and(eq(recordListMembers.id, input.memberId), eq(recordListMembers.workspaceId, ctx.workspace.id)));
     return { ok: true, removed: removed ?? null };
   }),
+
+  /**
+   * Remove several members of one list at once (audit 2026-10-20, U19): the
+   * page could only remove one row at a time. Only this list's members in
+   * this workspace are removed; the records themselves are untouched. Returns
+   * what it removed, so the page can offer Undo.
+   */
+  removeMembers: workspaceProcedure
+    .input(z.object({ listId: z.number().int().positive(), memberIds: z.array(z.number().int().positive()).min(1).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database unavailable");
+      const [list] = await db.select({ id: recordLists.id }).from(recordLists)
+        .where(and(eq(recordLists.id, input.listId), eq(recordLists.workspaceId, ctx.workspace.id)));
+      if (!list) throw new TRPCError({ code: "NOT_FOUND", message: "That list is not in this workspace." });
+      const memberIds = Array.from(new Set(input.memberIds));
+      const removed = await db
+        .select({ id: recordListMembers.id, recordType: recordListMembers.recordType, recordId: recordListMembers.recordId })
+        .from(recordListMembers)
+        .where(and(
+          eq(recordListMembers.listId, input.listId),
+          eq(recordListMembers.workspaceId, ctx.workspace.id),
+          inArray(recordListMembers.id, memberIds),
+        ));
+      if (removed.length === 0) return { removed: 0, listId: input.listId, recordType: null as string | null, recordIds: [] as number[] };
+      await db.delete(recordListMembers).where(and(
+        eq(recordListMembers.listId, input.listId),
+        eq(recordListMembers.workspaceId, ctx.workspace.id),
+        inArray(recordListMembers.id, removed.map((r) => r.id)),
+      ));
+      await db.update(recordLists).set({ updatedAt: new Date() })
+        .where(and(eq(recordLists.id, input.listId), eq(recordLists.workspaceId, ctx.workspace.id)));
+      return { removed: removed.length, listId: input.listId, recordType: removed[0].recordType as string | null, recordIds: removed.map((r) => r.recordId) };
+    }),
 });

@@ -320,8 +320,12 @@ async function latestScore(workspaceId: number, leadId: number) {
  *    and never an enrolment while outbound is paused. Without this, the first
  *    sweeps after deploy would enrol every lead already above a trigger and
  *    alert on every lead past Sales Ready (review of P12, 2026-11-06).
+ *  - "intake" (a lead made by promoting a person, or by a booking): the score
+ *    and the Sales-Ready alert only; it never asks for an enrolment, so
+ *    scoring these paths (audit 2026-10-20, F33) cannot start a send that
+ *    did not start before.
  */
-type ScoreTrigger = "person" | "create" | "schedule";
+type ScoreTrigger = "person" | "create" | "schedule" | "intake";
 
 async function recomputeOne(workspaceId: number, leadId: number, opts: { ai: boolean; trigger: ScoreTrigger } = { ai: true, trigger: "person" }) {
   const db = await getDb();
@@ -413,7 +417,7 @@ async function recomputeOne(workspaceId: number, leadId: number, opts: { ai: boo
   // the workspace's outbound is paused: nothing is queued, and the skip is
   // logged (by the tick, once per workspace, for the schedule).
   let enrolment: "checked" | "skipped_paused" | "not_asked" = "not_asked";
-  const askEnrol = opts.trigger !== "schedule" || (!backfill && breakdown.total > previousTotal);
+  const askEnrol = opts.trigger === "intake" ? false : opts.trigger !== "schedule" || (!backfill && breakdown.total > previousTotal);
   if (askEnrol) {
     if (opts.trigger !== "person" && (await isOutboundPaused(workspaceId))) {
       enrolment = "skipped_paused";
@@ -451,6 +455,22 @@ export async function rescoreLead(workspaceId: number, leadId: number): Promise<
   } catch (e) {
     console.error(`[LeadScoring] re-score failed for lead ${leadId}:`, (e as Error)?.message ?? e);
   }
+}
+
+/**
+ * Score a lead made by promoting a person or by a booking (audit 2026-10-20,
+ * F33), off the request: those paths left the score at its default until
+ * someone pressed Recompute. No model call and no enrolment ("intake").
+ * Returns the promise so a caller or a test can wait on it; it never rejects.
+ */
+export function scoreNewLeadInBackground(workspaceId: number, leadId: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      recomputeOne(workspaceId, leadId, { ai: false, trigger: "intake" })
+        .catch((e) => console.error(`[LeadScoring] intake score failed for lead ${leadId}:`, (e as Error)?.message ?? e))
+        .finally(() => resolve());
+    }, 0);
+  });
 }
 
 /** A lead with no engagement yet: what a new lead's behaviour scores. */

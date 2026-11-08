@@ -59,7 +59,8 @@ export default function CompanyProfile() {
   const { data: contacts } = trpc.companies.contacts.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   // This company's deals, asked of the server; it loaded every deal in the
   // workspace and filtered here (audit 2026-10-20, R66).
-  const { data: companyOpps } = trpc.opportunities.list.useQuery({ accountId: id }, { enabled: Number.isFinite(id) && id > 0 });
+  // The list is capped at 200 unless asked (X4.1); a company page asks for up to 1,000 of its own deals.
+  const { data: companyOpps } = trpc.opportunities.list.useQuery({ accountId: id, limit: 1000 }, { enabled: Number.isFinite(id) && id > 0 });
   const opps = (companyOpps ?? []) as any[];
   const { data: history } = trpc.companies.enrichmentHistory.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   const { data: activity } = trpc.companies.activity.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
@@ -159,6 +160,8 @@ export default function CompanyProfile() {
           <section className="rounded-lg border border-border">
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
               <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">People at this company ({contacts?.length ?? 0})</div>
+              {/* People filtered to this company, with every People filter and bulk action (audit 2026-10-20, F36). */}
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setLocation(`/v2/people?companyId=${id}`)}>Open in People</Button>
             </div>
             {contacts && contacts.length > 0 ? (
               <div className="overflow-x-auto"><table className="w-full text-sm">

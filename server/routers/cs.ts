@@ -28,6 +28,24 @@ function withStage<T extends { renewalStage: string; contractEnd: Date | null }>
   return { ...c, renewalStage: renewalStageFor({ current: c.renewalStage, contractEnd: c.contractEnd }) };
 }
 
+/**
+ * When a QBR is (audit 2026-10-20, U27): with a length, an instant and its
+ * length; without, a calendar day as before. A time with no instant in it
+ * ("2026-11-20" plus a length) is refused rather than read as midnight UTC.
+ */
+export function qbrWhen(scheduledAt: string, durationMinutes?: number): { scheduledAt: Date; durationMinutes: number | null } {
+  if (durationMinutes != null) {
+    const d = new Date(scheduledAt);
+    if (!/T\d{2}:\d{2}/.test(scheduledAt) || Number.isNaN(d.getTime())) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "A QBR with a length needs a date and a time." });
+    }
+    return { scheduledAt: d, durationMinutes };
+  }
+  const day = calendarDayFrom(scheduledAt);
+  if (!day) throw new TRPCError({ code: "BAD_REQUEST", message: "Pick the QBR's day." });
+  return { scheduledAt: day, durationMinutes: null };
+}
+
 export const csRouter = router({
   list: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
@@ -199,12 +217,22 @@ export const csRouter = router({
   listQbrs: workspaceProcedure.input(z.object({ customerId: z.number().optional() }).optional()).query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];
-    let rows = await db.select().from(qbrs).where(eq(qbrs.workspaceId, ctx.workspace.id)).orderBy(desc(qbrs.scheduledAt));
-    if (input?.customerId) rows = rows.filter((r) => r.customerId === input.customerId);
-    return rows;
+    // One customer's in SQL, not every QBR filtered here.
+    return db.select().from(qbrs)
+      .where(and(eq(qbrs.workspaceId, ctx.workspace.id), input?.customerId ? eq(qbrs.customerId, input.customerId) : undefined))
+      .orderBy(desc(qbrs.scheduledAt));
   }),
 
-  scheduleQbr: repProcedure.input(z.object({ customerId: z.number(), scheduledAt: z.string() })).mutation(async ({ ctx, input }) => {
+  /**
+   * A day ("YYYY-MM-DD"), or a time with a length (audit 2026-10-20, U27): a
+   * QBR could only be put on a day, with no time and so no calendar invite.
+   * With `durationMinutes`, `scheduledAt` must be an instant.
+   */
+  scheduleQbr: repProcedure.input(z.object({
+    customerId: z.number(),
+    scheduledAt: z.string(),
+    durationMinutes: z.number().int().min(15).max(480).optional(),
+  })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     // The customer must be this workspace's (audit 2026-10-20, C8): the QBR
@@ -213,8 +241,26 @@ export const csRouter = router({
     const [c] = await db.select({ id: customers.id }).from(customers)
       .where(and(eq(customers.id, input.customerId), eq(customers.workspaceId, ctx.workspace.id)));
     if (!c) throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found" });
-    const r = await db.insert(qbrs).values({ workspaceId: ctx.workspace.id, customerId: input.customerId, scheduledAt: calendarDayFrom(input.scheduledAt) ?? new Date(input.scheduledAt), status: "scheduled" });
+    const when = qbrWhen(input.scheduledAt, input.durationMinutes);
+    const r = await db.insert(qbrs).values({ workspaceId: ctx.workspace.id, customerId: input.customerId, ...when, status: "scheduled" });
     return { id: Number((r as any)[0]?.insertId ?? 0) };
+  }),
+
+  /** Move a scheduled QBR to another day or time (U27), e.g. an overdue one. */
+  rescheduleQbr: repProcedure.input(z.object({
+    id: z.number().int().positive(),
+    scheduledAt: z.string(),
+    durationMinutes: z.number().int().min(15).max(480).nullable().optional(),
+  })).mutation(async ({ ctx, input }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const [q] = await db.select({ id: qbrs.id, status: qbrs.status }).from(qbrs)
+      .where(and(eq(qbrs.id, input.id), eq(qbrs.workspaceId, ctx.workspace.id)));
+    if (!q) throw new TRPCError({ code: "NOT_FOUND" });
+    if (q.status !== "scheduled") throw new TRPCError({ code: "BAD_REQUEST", message: "Only a scheduled QBR can be moved." });
+    const when = qbrWhen(input.scheduledAt, input.durationMinutes ?? undefined);
+    await db.update(qbrs).set(when).where(and(eq(qbrs.id, input.id), eq(qbrs.workspaceId, ctx.workspace.id)));
+    return { ok: true };
   }),
 
   generateQbrPrep: repProcedure.input(z.object({ qbrId: z.number() })).mutation(async ({ ctx, input }) => {
