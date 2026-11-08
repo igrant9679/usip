@@ -13,7 +13,7 @@
  * Each stamps its own column (migration 0391) and is cleared when the
  * campaign starts working again (a raised target, new people), so the next
  * finish is told again. In-app only: no email is sent, and the campaign's
- * status is left as it is (marking it complete stays a person's choice).
+ * status is left as it is (archiving it stays a person's choice).
  *
  * Called from the engine's tick for each active campaign; never throws.
  */
@@ -75,7 +75,7 @@ export async function noticeCampaignFinished(c: FinishedCampaign, now: Date = ne
         workspaceId: c.workspaceId, campaignId: c.id, relatedId: c.id, relatedType: "are_campaign",
         eventType: "campaign_completed",
         title: `${c.name} has finished its sequences`,
-        body: `Every prospect in it has finished: ${replied.toLocaleString("en-US")} replied, ${completed.toLocaleString("en-US")} ran to the end, and no step is waiting.${reached ? "" : ` Discovery keeps looking for more until it reaches the target of ${c.targetProspectCount.toLocaleString("en-US")}.`} Mark it complete or archive it from the campaign page when you are done with it.`,
+        body: `Every prospect in it has finished: ${replied.toLocaleString("en-US")} replied, ${completed.toLocaleString("en-US")} ran to the end, and no step is waiting.${reached ? "" : ` Discovery keeps looking for more until it reaches the target of ${c.targetProspectCount.toLocaleString("en-US")}.`} Archive it from the campaign page when you are done with it; its people and replies are kept.`,
       });
       out.sequencesEnded = true;
     } else if (!ended && c.sequencesEndedNoticeAt) {
