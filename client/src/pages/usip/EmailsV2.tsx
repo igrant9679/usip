@@ -571,7 +571,9 @@ export default function EmailsV2() {
                 return (
                   <div
                     key={row.key}
-                    className="flex items-center gap-3 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40 cursor-pointer"
+                    // On a phone the status and Send/Approve wrap under the subject
+                    // instead of squeezing it to a few letters (audit U8).
+                    className="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1.5 px-3 py-2.5 border-b border-border/60 last:border-0 hover:bg-muted/40 cursor-pointer"
                     {...pressable(() => setSelected(row))}
                   >
                     <span
@@ -586,7 +588,7 @@ export default function EmailsV2() {
                         : pending ? <Clock className="size-3.5" />
                         : <Icon className="size-3.5" />}
                     </span>
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-1 basis-[calc(100%-2.75rem)] sm:basis-0">
                       <div className="text-sm font-medium truncate">{row.subject || "(no subject)"}</div>
                       <div className="text-[11px] text-muted-foreground truncate">
                         {row.direction === "inbound" ? "from " : "to "}{who || "unknown recipient"}

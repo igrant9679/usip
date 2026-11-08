@@ -713,7 +713,8 @@ export default function Proposals() {
       )}
 
       {/* Stats bar */}
-      <div className="grid grid-cols-4 gap-4 px-6 py-4 border-b border-border shrink-0">
+      {/* Two across on a phone, four from sm up (audit U8). */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 px-4 sm:px-6 py-4 border-b border-border shrink-0">
         {[
           { label: "Total", value: counts.total, color: "text-foreground" },
           { label: "Accepted", value: counts.accepted, color: "text-emerald-600" },
@@ -728,7 +729,7 @@ export default function Proposals() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-col gap-2 px-6 py-3 border-b border-border shrink-0">
+      <div className="flex flex-col gap-2 px-4 sm:px-6 py-3 border-b border-border shrink-0">
         <div className="relative max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
           <Input aria-label="Search proposals"
@@ -825,7 +826,7 @@ export default function Proposals() {
       </div>
 
       {/* List */}
-      <div className="flex-1 overflow-y-auto px-6 py-4">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
         {isLoading ? (
           <div className="space-y-3">
             {[1, 2, 3].map((i) => (
@@ -878,8 +879,8 @@ export default function Proposals() {
                 >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-medium text-foreground truncate">{p.title}</span>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
+                      <span className="font-medium text-foreground truncate max-w-full">{p.title}</span>
                       <StatusBadge status={p.status as ProposalStatus} />
                       {(p as any).engagementScore > 0 && (
                         <EngagementBadge score={(p as any).engagementScore} />

@@ -36,6 +36,8 @@ import { pressable } from "@/lib/pressable";
 import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import { useIsMobile } from "@/hooks/useMobile";
 import { urlParam, useUrlState } from "@/lib/urlState";
+import { HeaderActions } from "@/components/usip/HeaderActions";
+import { RecordCards } from "@/components/usip/RecordCards";
 import { invalidateCompanyReads } from "@/lib/entityCache";
 
 const RATING_STYLE: Record<string, string> = {
@@ -386,6 +388,8 @@ export default function Companies() {
           <Building2 className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Find companies</h1>
           <div className="flex-1" />
+          {/* On a phone these fold into a More menu (audit U8). */}
+          <HeaderActions keep={0} label="More company actions">
           <DuplicateReview />
           <Button variant="outline" size="sm" className="h-7 gap-1.5" disabled={backfill.isPending} onClick={() => backfill.mutate({})} title="Create/link companies from uploaded prospects">
             <RefreshCw className={`size-3.5 ${backfill.isPending ? "animate-spin" : ""}`} /> Sync from prospects
@@ -396,6 +400,7 @@ export default function Companies() {
             </Button>
           )}
           <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setLocation("/v2/data-enrichment?tab=import-contacts")}><Upload className="size-3.5" /> Import</Button>
+          </HeaderActions>
         </div>
 
         <div className="flex flex-1 min-h-0">
@@ -544,6 +549,40 @@ export default function Companies() {
                   {activeCount ? <Button variant="outline" size="sm" className="mt-3" onClick={clearAll}>Clear filters</Button>
                     : <Button size="sm" className="mt-3 gap-1.5" disabled={backfill.isPending} onClick={() => backfill.mutate({})}><Sparkles className="size-4" /> Sync companies from prospects</Button>}
                 </div>
+              ) : phone ? (
+                // One card per company on a phone (audit U8): the same columns, stacked.
+                <RecordCards
+                  label="Companies"
+                  rows={rows}
+                  rowKey={(a) => a.id}
+                  busy={isPlaceholderData}
+                  primary={(a) => (
+                    <div className="flex items-center gap-2 min-w-0">
+                      <CompanyAvatar name={a.name} domain={a.domain} logoUrl={a.logo?.url} faviconUrl={a.logo?.faviconUrl} size="md" />
+                      <div className="min-w-0">
+                        <span className="block truncate">{a.name}{isResearchSource(a.sourceType) ? <span className="ml-1.5 rounded-full bg-violet-500/15 px-1.5 py-px text-[10px] font-medium text-violet-700 dark:text-violet-300">Research</span> : null}</span>
+                        {a.domain && <span className="block truncate text-[11px] font-normal text-muted-foreground">{a.domain}</span>}
+                      </div>
+                    </div>
+                  )}
+                  fields={[
+                    { key: "contacts", label: "Contacts", render: (a) => (a.contactCount > 0 ? a.contactCount : "—") },
+                    { key: "employees", label: "Employees", render: (a) => (a.employeeCount ? a.employeeCount.toLocaleString() : (a.employeeBand || "—")) },
+                    { key: "score", label: "Score", render: (a) => (a.accountRating ? <span className={`rounded-full px-1.5 py-0.5 text-[11px] font-medium ${RATING_STYLE[a.accountRating] ?? RATING_STYLE.not_a_fit}`}>{a.accountScore != null ? Math.round(a.accountScore) : "–"}</span> : "—") },
+                    { key: "industry", label: "Industry", render: (a) => a.industry ?? "—" },
+                    { key: "location", label: "Location", render: (a) => [a.hqCity, a.hqState, a.hqCountry].filter(Boolean).join(", ") || a.region || "—" },
+                  ]}
+                  footer={(a) => (
+                    <>
+                      {a.domain && <a href={`https://${a.domain}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"><Globe className="size-3.5" /> Website</a>}
+                      {a.linkedinCompanyUrl && <a href={a.linkedinCompanyUrl.startsWith("http") ? a.linkedinCompanyUrl : `https://${a.linkedinCompanyUrl}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"><Link2 className="size-3.5" /> LinkedIn</a>}
+                    </>
+                  )}
+                  onOpen={(a) => setLocation(`/v2/companies/${a.id}`)}
+                  checked={(a) => checked.has(a.id)}
+                  onCheck={(a) => setChecked((p) => { const n = new Set(p); n.has(a.id) ? n.delete(a.id) : n.add(a.id); return n; })}
+                  checkLabel="Select company"
+                />
               ) : (
                 <table className={cn("w-full text-sm transition-opacity", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
                   <thead className="sticky top-0 z-10 bg-card border-b border-border">

@@ -167,6 +167,7 @@ import { runSummary, useFollowRun } from "@/lib/discoveryRun";
 import { SourceBudgetLine } from "@/components/usip/SpendPreview";
 import { invalidateCampaignReads } from "@/lib/entityCache";
 import { urlParam, useUrlState, type UrlParam } from "@/lib/urlState";
+import { HeaderActions } from "@/components/usip/HeaderActions";
 
 /* ─── CSV import helper ────────────────────────────────────────────────────── */
 export type ImportRow = {
@@ -2898,7 +2899,8 @@ function ARECampaignDetailPage() {
               : `Window ${capAndWindow.data.sending.windowDescription} (${capAndWindow.data.sending.windowOpen ? "open now" : "closed now"})`}
           </span>
         )}
-        {campaign.status === "active" ? (
+        {/* On a phone Clone, Archive and Delete fold into More; the status button stays (audit U8). */}
+        <HeaderActions keep={0} label="More campaign actions" pinnedAt="start" pinned={campaign.status === "active" ? (
           <Button size="sm" variant="outline" className="gap-1.5 text-xs"
             onClick={() => setStatus.mutate({ id: campaignId, status: "paused" })}
             disabled={setStatus.isPending}>
@@ -2917,7 +2919,7 @@ function ARECampaignDetailPage() {
             {setStatus.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
             Activate
           </Button>
-        )}
+        )}>
         {/* Lifecycle (F15): clone as a draft, archive instead of delete, delete for admins. */}
         <Button size="sm" variant="ghost" className="gap-1.5 text-xs" disabled={cloneCampaign.isPending}
           title="Copy this campaign's setup into a new draft"
@@ -2947,6 +2949,7 @@ function ARECampaignDetailPage() {
             <Trash2 className="size-3.5" />
           </Button>
         )}
+        </HeaderActions>
       </PageHeader>
 
       <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">

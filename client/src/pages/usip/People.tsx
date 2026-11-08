@@ -119,6 +119,8 @@ import { pressable } from "@/lib/pressable";
 import { ResponsiveRail } from "@/components/usip/ResponsiveRail";
 import { useIsMobile } from "@/hooks/useMobile";
 import { hasAnyParam, urlParam, useUrlState } from "@/lib/urlState";
+import { HeaderActions } from "@/components/usip/HeaderActions";
+import { RecordCards } from "@/components/usip/RecordCards";
 import { SORT_FIELD_VALUES } from "@/components/usip/people/savedSearchConfig";
 
 /**
@@ -1049,13 +1051,16 @@ export default function People() {
 
               <div className="flex-1" />
 
-              <ResearchAiMenu />
-              <CreateWorkflowMenu />
-              <Button variant="outline" size="sm" onClick={() => setSettings({ open: true, mode: "create" })}>Save as new search</Button>
-              <SortMenu current={{ field: sortField, dir: sortDir }} onApply={(field, dir) => { setSortField(field); setSortDir(dir); }} />
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setSettings({ open: true, mode: "settings" })}>
-                <Settings2 className="size-4" /> Search settings
-              </Button>
+              {/* On a phone these fold into one More menu (audit U8). */}
+              <HeaderActions bare keep={0} label="More people actions">
+                <ResearchAiMenu />
+                <CreateWorkflowMenu />
+                <Button variant="outline" size="sm" onClick={() => setSettings({ open: true, mode: "create" })}>Save as new search</Button>
+                <SortMenu current={{ field: sortField, dir: sortDir }} onApply={(field, dir) => { setSortField(field); setSortDir(dir); }} />
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setSettings({ open: true, mode: "settings" })}>
+                  <Settings2 className="size-4" /> Search settings
+                </Button>
+              </HeaderActions>
             </div>
 
             {/* selection action bar */}
@@ -1120,6 +1125,29 @@ export default function People() {
                   <p className="text-sm text-muted-foreground mt-1">Try loosening the filters on the left.</p>
                   <Button variant="outline" size="sm" className="mt-3" onClick={clearAll}>Clear all filters</Button>
                 </div>
+              ) : phone ? (
+                // One card per person on a phone, from the table's own cells (audit U8).
+                <RecordCards
+                  label="People"
+                  rows={rows}
+                  rowKey={(p) => p.id}
+                  busy={isPlaceholderData}
+                  primary={(p) => COLUMN_REGISTRY.name.cell(p, { onAction, changeSummary: liSummaryMap.get(p.id), scoreCell: scoreMap.get(p.id), enrollments: enrollmentMap })}
+                  fields={visibleColumns.filter((k) => k !== "name").map((k) => ({
+                    key: k,
+                    label: COLUMN_REGISTRY[k].label,
+                    render: (p: Prospect) => COLUMN_REGISTRY[k].cell(p, { onAction, changeSummary: liSummaryMap.get(p.id), scoreCell: scoreMap.get(p.id), enrollments: enrollmentMap }),
+                  }))}
+                  onOpen={(p) => setSelectedId(p.id)}
+                  selected={(p) => selectedId === p.id}
+                  checked={(p) => matchingAll || checked.has(p.id)}
+                  onCheck={(p) => (setMatchingAll(false), setChecked((prev) => {
+                    const next = new Set(prev);
+                    next.has(p.id) ? next.delete(p.id) : next.add(p.id);
+                    return next;
+                  }))}
+                  checkLabel="Select person"
+                />
               ) : (
                 <table className={cn("w-full border-separate border-spacing-0 text-[13px] transition-opacity", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
                   {/* Sticky axes live on the CELLS (not thead/tr): every th is
