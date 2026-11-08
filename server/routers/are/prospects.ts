@@ -33,7 +33,7 @@ import { csvCell } from "@shared/csvCell";
 import { REJECTION_KINDS, REJECTION_KIND_LABEL, isRejectionKind, rejectionKindLabel, type RejectionKind } from "@shared/rejectionKind";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, like, lt, ne, or, sql, type SQL } from "drizzle-orm";
-import { enqueueJob, findActiveJob, getJob, registerJobKind } from "../../services/jobs/runner";
+import { enqueueJob, findActiveJob, getJob, kickJobs, registerJobKind } from "../../services/jobs/runner";
 import { retryAt } from "../../services/are/retryBackoff";
 import { HELD_PAUSED, holdProspectSteps, releaseProspectSteps, stopProspectSteps } from "../../services/are/stepHold";
 import { z } from "zod";
@@ -3401,6 +3401,8 @@ export const prospectsRouter = router({
       }).$returningId();
       const payload: ReevalAllPayload = { campaignId: input.campaignId, prospectIds: rejected.map((r) => r.id), threshold: autoApproveThreshold, runId: run.id };
       const { job } = await enqueueJob({ workspaceId: ctx.workspace.id, userId: ctx.user.id, kind: REEVAL_ALL_JOB, payload, total: rejected.length });
+      // Started now through the runner's kick, not at its next 15-second tick (F14).
+      kickJobs();
       return { jobId: job.id, total: rejected.length, threshold: autoApproveThreshold, alreadyRunning: false };
     }),
 
