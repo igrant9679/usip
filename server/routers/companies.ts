@@ -18,7 +18,7 @@ import { TRPCError } from "@trpc/server";
 import { router } from "../_core/trpc";
 import { workspaceProcedure, requireMinRole } from "../_core/workspace";
 import { getDb } from "../db";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { accounts } from "../../drizzle/schema";
 import { recordAudit } from "../audit";
 import { requireInWorkspace } from "../services/foreignIds";
@@ -50,6 +50,9 @@ import {
 } from "../services/company/profileService";
 import { associateUnlinkedProspects } from "../services/company/associationService";
 import { enrichCompany, bulkEnrichCompanies } from "../services/company/enrichmentService";
+
+/** Companies one bulkEnrich call enriches: the bulk job's slice (services/bulkByFilter CHUNK.enrich). */
+const BULK_ENRICH_SLICE = 25;
 import { findDuplicateAccounts, mergeAccounts } from "../services/company/mergeService";
 
 // One rank map — _core/workspace.ts. Four routers had their own copy.
@@ -310,11 +313,39 @@ export const companiesRouter = router({
       await recordAudit({ workspaceId: ctx.workspace.id, actorUserId: ctx.user.id, action: "update", entityType: "company_enrichment", entityId: input.accountId, after: { fields: res.fieldsUpdated } });
       return res;
     }),
+  /**
+   * One slice of enrichment, called by the bulk job (services/bulkByFilter,
+   * 25 at a time). It took up to 500 and enriched them one by one inside the
+   * request (audit 2026-10-20, X4.4); a selection now goes through
+   * enrichSelection below, as a job, and this call is bounded to one slice.
+   */
   bulkEnrich: workspaceProcedure
-    .input(z.object({ accountIds: z.array(z.number().int().positive()).min(1).max(500) }))
+    .input(z.object({ accountIds: z.array(z.number().int().positive()).min(1).max(BULK_ENRICH_SLICE) }))
     .mutation(async ({ ctx, input }) => {
       requireRole(ctx.member.role, "manager");
       return bulkEnrichCompanies(ctx.workspace.id, input.accountIds, ctx.user.id);
+    }),
+
+  /**
+   * "Enrich" on selected companies (up to 500, the old cap), as a background
+   * job (X4.4): the same job the "all matching" enrich uses, run as the person
+   * who started it, through bulkEnrich a slice at a time. Enrichment reads the
+   * evidence on file and calls no paid source, so there is nothing to spend
+   * and nothing to confirm.
+   */
+  enrichSelection: workspaceProcedure
+    .input(z.object({ accountIds: z.array(z.number().int().positive()).min(1).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      requireRole(ctx.member.role, "manager");
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const wanted = Array.from(new Set(input.accountIds));
+      // Only this workspace's companies go into the job (X1.1).
+      const here = (await db.select({ id: accounts.id }).from(accounts)
+        .where(and(eq(accounts.workspaceId, ctx.workspace.id), inArray(accounts.id, wanted)))).map((r) => r.id);
+      if (here.length === 0) throw new TRPCError({ code: "NOT_FOUND", message: "None of these companies are in this workspace." });
+      const { queueBulk } = await import("../services/bulkByFilter");
+      return queueBulk({ workspaceId: ctx.workspace.id, userId: ctx.user.id, entity: "companies", action: "enrich", ids: here.sort((a, b) => a - b), scope: "selection" });
     }),
 
   /**

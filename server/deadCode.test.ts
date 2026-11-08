@@ -153,6 +153,7 @@ const NO_CLIENT_CALLER: Record<string, string> = {
   // Batch CRMP's, merged 2026-11-07.
   "imports.discard": THIS_WEEK("f504f4dd", "batch CRMP added it to throw away a pending upload; its control is that pipeline's to wire"),
   "prospects.findContactInfoBatch": "called slice by slice by the bulk job, as the person who started it (services/bulkByFilter.ts runChunk)",
+  "companies.bulkEnrich": "called slice by slice by the bulk job (services/bulkByFilter.ts runChunk); the page queues a selection through companies.enrichSelection (audit X4.4)",
   "meetings.propose": ASSISTANT,
   "meetings.reschedule": ASSISTANT,
   "meetings.cancelSentInvites": OWNER_TOOL("admin only, dry run by default (2026-10-06)"),
