@@ -25,6 +25,9 @@ async function assertTimezoneChosen(db: NonNullable<Awaited<ReturnType<typeof ge
   if (!tz || tz === "UTC") throw new TRPCError({ code: "PRECONDITION_FAILED", message: TIMEZONE_UNSET_ON_LAUNCH });
 }
 
+/** Archived campaigns (F15) only when asked for, else none of them. */
+const archivedIs = (archived: boolean) => (archived ? isNotNull(areCampaigns.archivedAt) : isNull(areCampaigns.archivedAt));
+
 /** A caller-chosen research sector must be this workspace's. */
 async function assertResearchSectorInWorkspace(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, sectorId: number, workspaceId: number) {
   const [row] = await db
@@ -60,6 +63,7 @@ import { EMPTY_FIXED_COPY, usableFixedSteps } from "@shared/areFixedCopy";
 import { describeSources } from "../../services/prospectSources/registry";
 import { spendDay } from "../../services/spend";
 import { assertInWorkspace, requireInWorkspace } from "../../services/foreignIds";
+import { campaignPreflight, preflightRefusal } from "../../services/are/campaignPreflight";
 import { icpProfiles } from "../../../drizzle/schema";
 
 /** The model-token meters (services/spend), summed per source for F12. */
@@ -95,11 +99,17 @@ const DISCOVERY_SUMMARY_MARKER = "Discovery slice ";
 export const campaignsRouter = router({
   /** A page of campaigns, newest first; `count` is how many there are (audit 2026-10-20, A62). */
   list: workspaceProcedure
-    .input(z.object({ status: z.string().optional(), limit: z.number().int().min(1).max(200).default(50), offset: z.number().int().min(0).default(0) }))
+    .input(z.object({
+      status: z.string().optional(),
+      limit: z.number().int().min(1).max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+      /** Archived campaigns (F15) are left out unless this is true, which lists only them. */
+      archived: z.boolean().default(false),
+    }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const conditions = [eq(areCampaigns.workspaceId, ctx.workspace.id)];
+      const conditions = [eq(areCampaigns.workspaceId, ctx.workspace.id), archivedIs(input.archived)];
       if (input.status) {
         conditions.push(eq(areCampaigns.status, input.status as "draft" | "active" | "paused" | "completed"));
       }
@@ -114,11 +124,11 @@ export const campaignsRouter = router({
     }),
 
   count: workspaceProcedure
-    .input(z.object({ status: z.string().optional() }))
+    .input(z.object({ status: z.string().optional(), archived: z.boolean().default(false) }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const conditions = [eq(areCampaigns.workspaceId, ctx.workspace.id)];
+      const conditions = [eq(areCampaigns.workspaceId, ctx.workspace.id), archivedIs(input.archived)];
       if (input.status) {
         conditions.push(eq(areCampaigns.status, input.status as "draft" | "active" | "paused" | "completed"));
       }
@@ -615,7 +625,8 @@ export const campaignsRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const res = await db.update(areCampaigns)
         .set({ autonomyMode: input.mode } as never)
-        .where(and(eq(areCampaigns.workspaceId, ctx.workspace.id), ne(areCampaigns.status, "archived" as never)));
+        // Archived campaigns keep the mode they were archived with (F15).
+        .where(and(eq(areCampaigns.workspaceId, ctx.workspace.id), isNull(areCampaigns.archivedAt)));
       await db.insert(workspaceSettings)
         .values({ workspaceId: ctx.workspace.id, areDefaultAutonomyMode: input.mode } as never)
         .onDuplicateKeyUpdate({ set: { areDefaultAutonomyMode: input.mode } as never });
@@ -877,6 +888,15 @@ export const campaignsRouter = router({
         if (current && current.status !== "active") {
           const h = await campaignHeadroom(ctx.workspace.id);
           if (!h.hasRoom) throw new TRPCError({ code: "FORBIDDEN", message: campaignCapMessage(h) });
+          // Archived is out of service (F15): unarchive first, on purpose.
+          const [full] = await db.select().from(areCampaigns)
+            .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id))).limit(1);
+          if (full?.archivedAt) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This campaign is archived. Unarchive it before activating it." });
+          // The pre-flight (F15): refused only for what would make it fail.
+          if (full) {
+            const { blockers } = await campaignPreflight(db, ctx.workspace.id, full);
+            if (blockers.length > 0) throw new TRPCError({ code: "PRECONDITION_FAILED", message: preflightRefusal(blockers) });
+          }
         }
       }
       const [prior] = await db.select({ status: areCampaigns.status }).from(areCampaigns)
@@ -1588,8 +1608,104 @@ export const campaignsRouter = router({
     }),
 
   /**
-   * Delete a campaign: managers only, audited, in one transaction (audit
-   * 2026-10-20, A18). It deleted the campaign row alone, for any member, with
+   * What activating this campaign needs, and what is missing (F15): sender
+   * accounts, the owner's LinkedIn account, a Reoon key, sources, the time
+   * zone and the pause. `blockers` are what setStatus refuses on.
+   */
+  preflight: workspaceProcedure
+    .input(z.object({ id: z.number() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [campaign] = await db.select().from(areCampaigns)
+        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id))).limit(1);
+      if (!campaign) throw new TRPCError({ code: "NOT_FOUND" });
+      const r = await campaignPreflight(db, ctx.workspace.id, campaign);
+      return { ...r, archived: !!campaign.archivedAt, canActivate: r.blockers.length === 0 && !campaign.archivedAt };
+    }),
+
+  /**
+   * Archive instead of delete (F15): out of the list and out of service, with
+   * every prospect, step and reply kept, and undone in one click. An active
+   * campaign is paused as it is archived, so archiving only ever sends less.
+   */
+  archive: workspaceProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await requireInWorkspace(db, areCampaigns, input.id, ctx.workspace.id, "Campaign");
+      const [cur] = await db.select({ status: areCampaigns.status, archivedAt: areCampaigns.archivedAt }).from(areCampaigns)
+        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id))).limit(1);
+      if (cur?.archivedAt) return { success: true, paused: false };
+      const paused = cur?.status === "active";
+      await db.update(areCampaigns)
+        .set({ archivedAt: new Date(), ...(paused ? { status: "paused" as const } : {}) } as never)
+        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
+      return { success: true, paused };
+    }),
+
+  /** Back from the archive (F15): listed again, as it was archived — never re-activated by this. */
+  unarchive: workspaceProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await requireInWorkspace(db, areCampaigns, input.id, ctx.workspace.id, "Campaign");
+      await db.update(areCampaigns).set({ archivedAt: null } as never)
+        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
+      return { success: true };
+    }),
+
+  /**
+   * A copy of a campaign's setup as a new DRAFT (F15): targeting, sources,
+   * caps, channels, cadence, copy and prompts. None of its people, steps,
+   * counters or discovery progress come along, and nothing runs until the
+   * copy is activated. The person cloning owns the copy.
+   */
+  clone: workspaceProcedure
+    .input(z.object({ id: z.number(), name: z.string().trim().min(2).max(200).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const [src] = await db.select().from(areCampaigns)
+        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id))).limit(1);
+      if (!src) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+      const name = (input.name ?? `Copy of ${src.name}`).slice(0, 200);
+      const [row] = await db.insert(areCampaigns).values({
+        workspaceId: ctx.workspace.id,
+        name,
+        description: src.description,
+        status: "draft",
+        autonomyMode: src.autonomyMode,
+        icpProfileId: src.icpProfileId,
+        icpOverrides: src.icpOverrides,
+        researchSectorId: src.researchSectorId,
+        personaId: src.personaId,
+        prospectSources: src.prospectSources,
+        targetProspectCount: src.targetProspectCount,
+        dailySendCap: src.dailySendCap,
+        channelsEnabled: src.channelsEnabled,
+        sequenceTemplate: src.sequenceTemplate,
+        stepGapDays: src.stepGapDays,
+        sequencePrompt: src.sequencePrompt,
+        promptSubject: src.promptSubject,
+        promptBody: src.promptBody,
+        promptSignature: src.promptSignature,
+        copyMode: src.copyMode,
+        fixedSteps: src.fixedSteps,
+        goalType: src.goalType,
+        autoApproveThreshold: src.autoApproveThreshold,
+        minConfidence: src.minConfidence,
+        signalToOpportunityEnabled: src.signalToOpportunityEnabled,
+        ownerUserId: ctx.user.id,
+      } as never).$returningId();
+      return { id: row.id, name };
+    }),
+
+  /**
+   * Delete a campaign: admins only (F15: archive is the everyday way out,
+   * and a manager's), audited, in one transaction (audit 2026-10-20, A18). It deleted the campaign row alone, for any member, with
    * no record. Its people stayed claimed by a campaign that no longer existed,
    * so they could never join another, and their scheduled steps stayed on the
    * calendar. Now its unsent steps are stopped and the people still in it are
@@ -1597,7 +1713,7 @@ export const campaignsRouter = router({
    * rows whose campaign exists, so they are free to join another. Sent steps,
    * signals and replies are kept: they are those people's history.
    */
-  delete: managerProcedure
+  delete: adminWsProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();

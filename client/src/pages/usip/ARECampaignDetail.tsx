@@ -104,6 +104,8 @@ import {
 } from "@shared/areSignals";
 import {
   Activity,
+  Archive,
+  ArchiveRestore,
   ArrowDown,
   ArrowLeft,
   ArrowUp,
@@ -116,6 +118,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock,
+  Copy,
   Download,
   ExternalLink,
   Eye,
@@ -2689,6 +2692,42 @@ function ARECampaignDetailPage() {
   // Activate starts real sending, so it asks first (A52), as the list does.
   const confirmActivate = useConfirmActivate();
 
+  // Archive instead of delete, clone as a draft, delete for admins (F15).
+  const isAdmin = rankOf(useWorkspace().current?.role ?? "rep") >= rankOf("admin");
+  const archiveCampaign = trpc.are.campaigns.archive.useMutation({
+    onSuccess: (r) => {
+      toast.success(r.paused ? "Campaign paused and archived. Nothing more is sent from it." : "Campaign archived.");
+      utils.are.campaigns.get.invalidate({ id: campaignId });
+      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      utils.are.campaigns.stallReasons.invalidate({ campaignId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const unarchiveCampaign = trpc.are.campaigns.unarchive.useMutation({
+    onSuccess: () => {
+      toast.success("Campaign unarchived. Activate it when you are ready.");
+      utils.are.campaigns.get.invalidate({ id: campaignId });
+      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const cloneCampaign = trpc.are.campaigns.clone.useMutation({
+    onSuccess: (r) => {
+      toast.success(`"${r.name}" created as a draft. Nothing runs until you activate it.`);
+      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      setLocation(`/are/campaigns/${r.id}`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const deleteCampaign = trpc.are.campaigns.delete.useMutation({
+    onSuccess: (r) => {
+      toast.success(`Campaign deleted. ${r.stepsStopped} unsent step${r.stepsStopped === 1 ? "" : "s"} stopped; ${r.peopleReleased} ${r.peopleReleased === 1 ? "person is" : "people are"} free to join another campaign.`);
+      utils.are.campaigns.list.invalidate(); utils.are.campaigns.count.invalidate();
+      setLocation("/are/campaigns");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   const enrichBatch = trpc.are.prospects.enrichBatch.useMutation({
     onSuccess: (d) => {
       toast.success(`Enrichment started for ${d.started} prospects`);
@@ -2834,6 +2873,11 @@ function ARECampaignDetailPage() {
             {setStatus.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Pause className="size-3.5" />}
             Pause
           </Button>
+        ) : campaign.archivedAt ? (
+          <Button size="sm" variant="outline" className="gap-1.5 text-xs" disabled={unarchiveCampaign.isPending}
+            onClick={() => unarchiveCampaign.mutate({ id: campaignId })}>
+            <ArchiveRestore className="size-3.5" /> Unarchive
+          </Button>
         ) : (
           <Button size="sm" className="gap-1.5 text-xs"
             onClick={() => confirmActivate(campaign, () => setStatus.mutate({ id: campaignId, status: "active" }))}
@@ -2842,9 +2886,44 @@ function ARECampaignDetailPage() {
             Activate
           </Button>
         )}
+        {/* Lifecycle (F15): clone as a draft, archive instead of delete, delete for admins. */}
+        <Button size="sm" variant="ghost" className="gap-1.5 text-xs" disabled={cloneCampaign.isPending}
+          title="Copy this campaign's setup into a new draft"
+          onClick={() => cloneCampaign.mutate({ id: campaignId })}>
+          <Copy className="size-3.5" /> Clone
+        </Button>
+        {!campaign.archivedAt && (
+          <Button size="sm" variant="ghost" className="gap-1.5 text-xs text-muted-foreground" disabled={archiveCampaign.isPending}
+            onClick={() => confirmAction({
+              title: `Archive "${campaign.name}"?`,
+              description: campaign.status === "active"
+                ? "It is paused and leaves the campaign list: nothing more is sent from it. Its people, steps and replies are kept, and Unarchive brings it back."
+                : "It leaves the campaign list. Its people, steps and replies are kept, and Unarchive brings it back.",
+              confirmLabel: "Archive",
+              destructive: false,
+            }, () => archiveCampaign.mutate({ id: campaignId }))}>
+            <Archive className="size-3.5" /> Archive
+          </Button>
+        )}
+        {isAdmin && (
+          <Button size="sm" variant="ghost" aria-label="Delete campaign" className="gap-1.5 text-xs text-destructive/70 hover:text-destructive" disabled={deleteCampaign.isPending}
+            onClick={() => confirmAction({
+              title: `Delete "${campaign.name}"?`,
+              description: "The campaign is deleted and its unsent steps are stopped. The people still in it are taken out, so they can be added to another campaign; what was already sent to them stays in their history. This cannot be undone — Archive keeps everything instead.",
+              confirmLabel: "Delete",
+            }, () => deleteCampaign.mutate({ id: campaignId }))}>
+            <Trash2 className="size-3.5" />
+          </Button>
+        )}
       </PageHeader>
 
       <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
+        {campaign.archivedAt && (
+          <div role="status" className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-300 flex flex-wrap items-center gap-2">
+            <Archive className="size-3.5" />
+            Archived {new Date(campaign.archivedAt).toLocaleDateString()}: it is out of the campaign list and cannot be activated. Its people, steps and replies are kept.
+          </div>
+        )}
 
         {/* ── Metrics row ── */}
         <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3">

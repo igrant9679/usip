@@ -4178,6 +4178,13 @@ export const areCampaigns = mysqlTable(
     signalToOpportunityEnabled: boolean("signalToOpportunityEnabled").default(false).notNull(), // auto-create opp on meeting_booked signal
     startedAt: timestamp("startedAt"),
     completedAt: timestamp("completedAt"),
+    /** Archived instead of deleted (migration 0390, audit F15): hidden from the
+     *  list by default, never active; null on every campaign not archived. */
+    archivedAt: timestamp("archivedAt"),
+    /** When the "reached its target" / "every sequence has ended" notices went
+     *  out (migration 0391, audit F15), so each is sent once per finish. */
+    targetReachedNoticeAt: timestamp("targetReachedNoticeAt"),
+    sequencesEndedNoticeAt: timestamp("sequencesEndedNoticeAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },

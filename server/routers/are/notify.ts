@@ -22,9 +22,10 @@
  *                          settings SELECT per open.
  *   hook_enhanced        — AI rewrote the outreach hook. NO switch, same
  *                          reason (services/signalEnhancement.ts).
- *   campaign_completed   — declared here, dispatched from NOWHERE. Kept in the
- *                          union so an implementer has the name; it is not a
- *                          notice anyone receives today.
+ *   campaign_completed   — the campaign reached its target, or every one of
+ *                          its sequences ended. Emitted once per finish from
+ *                          services/are/campaignFinished.ts (audit F15). NO
+ *                          switch: it fires at most twice per campaign.
  *
  * Only the three gated types pay for the settings lookup — the ungated ones
  * never touch workspace_settings.

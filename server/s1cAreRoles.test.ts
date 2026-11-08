@@ -100,13 +100,16 @@ describe("A36: the manager-only engine actions refuse a rep", () => {
     expect(h.fetched).toHaveLength(0);
   });
 
-  it("a manager can release a hold, restore an ICP and delete a campaign", async () => {
+  it("a manager can release a hold and restore an ICP; deleting a campaign is an admin's", async () => {
     const m = as("manager");
     expect(await m.are.prospects.releaseCopyHold({ prospectId: 1 })).toEqual({ released: true });
     expect(rows("prospect_intelligence")[0].copyHoldReason).toBeNull();
     await m.are.icp.restore({ id: 2 });
     expect(rows("icp_profiles").find((p) => p.id === 2).isActive).toBe(true);
-    await m.are.campaigns.delete({ id: 7 });
+    // 2026-11-07 (audit F15): archive is the everyday way out and a manager's;
+    // delete moved up to admins. Still refused to a rep (the list above).
+    await expect(m.are.campaigns.delete({ id: 7 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await as("admin").are.campaigns.delete({ id: 7 });
     expect(rows("are_campaigns").map((c) => c.id)).toEqual([77]);
   });
 

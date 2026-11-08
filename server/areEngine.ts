@@ -126,6 +126,7 @@ import { downstreamAccountFor, hasSellerDownstreamLink } from "./services/resear
 import { perSectorSliceGroups, pickFallback, researchTargeting, sliceGroupKey, vendorGroupFor, workspaceIcpFallback, type SliceGroup } from "./services/research/targetingPrior";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { inSendWindow } from "./services/sendWindow";
+import { noticeCampaignFinished } from "./services/are/campaignFinished";
 import { recountCampaignCounters } from "./services/are/campaignCounters";
 import { parseTargetPlaces, placeFit, placeStringOf } from "./services/placeFit";
 import { cleanScrapedField } from "@shared/fieldHygiene";
@@ -2596,6 +2597,9 @@ async function tickCampaign(campaign: Campaign, result: AreEngineResult, step: E
     console.error(`[AreEngine] campaign ${campId} discovery phase failed:`, e);
     await emitLog(wsId, campId, "discovery", "error", String((e as Error)?.message ?? e));
   }
+
+  /* ── Finished? The owner hears once: target reached, every sequence ended (audit F15) ── */
+  await noticeCampaignFinished(campaign);
 }
 
 /* ─── Discovery — scrape one source to top up a drained campaign ────────── */
