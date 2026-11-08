@@ -117,6 +117,43 @@ export function perSectorSliceGroups(args: {
   return [{ titles: pick(own.titles, inferred.titles), industries: pick(own.industries, inferred.industries), geos: pick(own.geos, inferred.geos), keywords: own.keywords }, ...sectorGroups];
 }
 
+/**
+ * A stable name for one group's lists, so a vendor's page cursor stays with
+ * the group it was walking (F37 remainder). Short: it is a key in the
+ * campaign's discovery state JSON.
+ */
+export function sliceGroupKey(g: SliceGroup): string {
+  const norm = (xs: string[]) => xs.map((x) => String(x).trim().toLowerCase()).filter(Boolean).sort();
+  const text = JSON.stringify([norm(g.titles), norm(g.industries), norm(g.geos), norm(g.keywords)]);
+  // FNV-1a, 32 bits, twice with different offsets: a key, not a security hash.
+  let a = 0x811c9dc5, b = 0x01000193 ^ text.length;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193) >>> 0;
+    b = Math.imul(b ^ c, 0x01000197) >>> 0;
+  }
+  return `g${a.toString(36)}${b.toString(36)}`;
+}
+
+/**
+ * The group the paid vendor searches (Apollo, QuickEnrich, LeadOcean,
+ * WarmySender) take this run (audit 2026-10-20, F37 remainder). RESA paired
+ * each sector's titles with its own industries and places in the rotating
+ * queries; the vendors still got the union, so one sector's titles were
+ * searched with another's industries. Now they search one group per run, the
+ * next after the one used last time (by key, so adding a sector does not
+ * restart the turn), which keeps each vendor at one search per run and inside
+ * its daily cap exactly as before. Null when there are no per-sector groups:
+ * the vendors take the combined lists, as they always did.
+ */
+export function vendorGroupFor(groups: SliceGroup[] | null, lastKey: string | null | undefined): { key: string; index: number; count: number; group: SliceGroup } | null {
+  if (!groups || groups.length === 0) return null;
+  const keys = groups.map(sliceGroupKey);
+  const at = lastKey ? keys.indexOf(lastKey) : -1;
+  const index = (at + 1) % groups.length;
+  return { key: keys[index], index, count: groups.length, group: groups[index] };
+}
+
 /** The research as a prompt section for ICP inference; "" when there is none. */
 export function priorSection(sectors: SectorContent[]): string {
   if (!sectors.length) return "";

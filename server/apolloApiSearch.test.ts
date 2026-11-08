@@ -245,9 +245,13 @@ describe("the engine's Apollo source", () => {
   });
 
   it("persists the cursor next to QuickEnrich's", () => {
-    expect(engine).toContain("discoverViaApollo(campaign, { titles, industries, geos, keywords, overrides: size }, persistedState.ap ?? null, remaining)");
+    // 2026-11-07 (audit F37 rest, batch ARES): the vendors search one
+    // researched sector group per run, each group with its own cursors; with
+    // no groups they take the combined lists and the shared cursor, as before.
+    expect(engine).toContain("discoverViaApollo(campaign, { ...vendorTargeting, overrides: size }, vendorCursors.ap ?? null, remaining)");
     expect(engine).toContain("apolloNextPage = nextAp;");
-    expect(engine).toContain("ap: apolloNextPage ?? persistedState.ap ?? null,");
+    expect(engine).toContain("ap: vendorGroup ? (persistedState.ap ?? null) : (apolloNextPage ?? persistedState.ap ?? null),");
+    expect(engine).toContain("ap: apolloNextPage ?? vendorCursors.ap ?? null,");
   });
 });
 

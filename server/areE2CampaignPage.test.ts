@@ -106,7 +106,10 @@ describe("the discovery launcher (A56)", () => {
     expect(launcher).toContain("const t = targetingFromOverrides(campaign?.icpOverrides);");
     expect(launcher).not.toContain("o.targetTitles ?? []");
     expect(launcher).toContain("This run searches:");
-    expect(launcher).toContain("the campaign's own discovery uses all of them.");
+    // 2026-11-07 (audit A56, batch ARES): the run now searches every value,
+    // so the card says so instead of naming the ones it left out. Executed in
+    // campaignLaunchDiscovery.test.ts.
+    expect(launcher).toContain("Every value above is searched");
   });
 });
 
