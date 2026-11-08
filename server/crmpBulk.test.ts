@@ -202,6 +202,13 @@ describe("Companies and Leads take all matching too (F30)", () => {
     expect(leads).toContain("leadIds={matchingAll ? matchIds : Array.from(selectedIds)}");
   });
 
+  it("the assistant cannot start a bulk action on all matching or a bulk enrich: those are a person's click", async () => {
+    const { buildCatalogFrom } = await import("./services/assistantActionCatalog");
+    const paths = buildCatalogFrom(appRouter as never).map((e) => e.path);
+    for (const p of ["prospects.bulkByFilter", "leads.bulkByFilter", "companies.bulkByFilter", "prospects.enrichFullBulk"]) expect(paths).not.toContain(p);
+    expect(paths).toContain("prospects.matchingIds");
+  });
+
   it("enrolling all matching goes through Add to… with the matching ids, so every enrolment check applies; the bulk job never enrols", () => {
     const toolbar = read("client/src/components/usip/people/SelectionToolbar.tsx");
     expect(toolbar).toContain("<AddToMenu prospectIds={actIds} label=\"Add to…\"");

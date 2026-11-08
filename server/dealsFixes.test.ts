@@ -298,7 +298,9 @@ describe("L7, R66: a board reads one pipeline's deals", () => {
     expect(page).toContain("trpc.oppIntelligence.getIntelligenceForBoard.useQuery(boardInput,");
     expect(page).not.toContain("trpc.accounts.list.useQuery()");
     const csv = page.slice(page.indexOf('{can("export_data") && ('), page.indexOf("Export CSV"));
-    expect(csv).toContain("const rows = filteredOpps;");
+    // 2026-11-07 (CRMP, X4.1): won and lost columns show their latest deals,
+    // so the CSV asks the server for the whole board, in the same scope.
+    expect(csv).toContain("const rows = await utils.opportunities.boardExport.fetch(boardInput)");
     expect(page).toContain("<ForecastView scope={boardInput} scopeLabel={scopeLabel} />");
   });
 });
@@ -590,7 +592,9 @@ describe("R66: the deal list filters in SQL", () => {
   });
 
   it("the company page and the Home widget ask for what they show", () => {
-    expect(read("client/src/pages/usip/CompanyProfile.tsx")).toContain("trpc.opportunities.list.useQuery({ accountId: id },");
+    // 2026-11-07 (CRMP, X4.1): the list is capped unless asked, so the page
+    // asks for up to 1,000 of this company's deals; still by account in SQL.
+    expect(read("client/src/pages/usip/CompanyProfile.tsx")).toContain("trpc.opportunities.list.useQuery({ accountId: id, limit: 1000 },");
     expect(read("client/src/pages/usip/CompanyProfile.tsx")).not.toContain("filter((o) => o.accountId === id)");
     // 2026-11-06: Home now reads opportunities.recent (audit G56/G58), which is
     // bounded the same way and reads open deals by each deal's own pipeline.

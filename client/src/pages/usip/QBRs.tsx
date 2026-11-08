@@ -4,7 +4,8 @@ import { EmptyState, PageHeader, QueryError, Shell, TableSkeleton } from "@/comp
 import { trpc } from "@/lib/trpc";
 import { invalidateCustomerReads } from "@/lib/crmCache";
 import { CalendarCheck2, CalendarPlus, Plus, Sparkles, Presentation } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { SHOW_MORE_STEP, useShowMore } from "@/hooks/useShowMore";
 import { toast } from "sonner";
 import { buildIcs } from "@shared/ics";
 import { groupQbrs, qbrDay, qbrEnd, qbrHasTime, QBR_DURATIONS, type QbrLike } from "@shared/qbrSchedule";
@@ -59,6 +60,21 @@ function whenFromForm(f: FormData): { scheduledAt: string; durationMinutes?: num
   const at = new Date(`${day}T${time}`);
   if (Number.isNaN(at.getTime())) return null;
   return { scheduledAt: at.toISOString(), durationMinutes: Number(f.get("durationMinutes") ?? 60) || 60 };
+}
+
+/** A group's QBRs, 50 at a time (X4.2): the completed group only ever grows. */
+function ShowMoreList<T>({ items, scope, render, noun }: { items: T[]; scope: string; render: (item: T) => ReactNode; noun: string }) {
+  const rows = useShowMore(items, scope);
+  return (
+    <div className="space-y-3">
+      {rows.shown.map(render)}
+      {rows.remaining > 0 && (
+        <button type="button" onClick={rows.showMore} className="w-full rounded-lg border px-3 py-2 text-center text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground">
+          Show {Math.min(rows.remaining, SHOW_MORE_STEP)} more {noun} ({rows.remaining.toLocaleString()} not shown)
+        </button>
+      )}
+    </div>
+  );
 }
 
 const GROUPS = [
@@ -155,7 +171,7 @@ export default function QBRs() {
               </div>
               {groups[g.key].length === 0
                 ? <p className="text-xs text-muted-foreground">Nothing scheduled ahead.</p>
-                : <div className="space-y-3">{groups[g.key].map((q) => renderQbr(q, g.key === "overdue"))}</div>}
+                : <ShowMoreList items={groups[g.key]} scope={g.key} render={(q) => renderQbr(q, g.key === "overdue")} noun="QBRs" />}
             </section>
           ))
         )}

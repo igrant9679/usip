@@ -59,7 +59,8 @@ export default function CompanyProfile() {
   const { data: contacts } = trpc.companies.contacts.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   // This company's deals, asked of the server; it loaded every deal in the
   // workspace and filtered here (audit 2026-10-20, R66).
-  const { data: companyOpps } = trpc.opportunities.list.useQuery({ accountId: id }, { enabled: Number.isFinite(id) && id > 0 });
+  // The list is capped at 200 unless asked (X4.1); a company page asks for up to 1,000 of its own deals.
+  const { data: companyOpps } = trpc.opportunities.list.useQuery({ accountId: id, limit: 1000 }, { enabled: Number.isFinite(id) && id > 0 });
   const opps = (companyOpps ?? []) as any[];
   const { data: history } = trpc.companies.enrichmentHistory.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
   const { data: activity } = trpc.companies.activity.useQuery({ accountId: id }, { enabled: Number.isFinite(id) });
