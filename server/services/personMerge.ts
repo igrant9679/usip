@@ -105,6 +105,7 @@ import {
   prospectLinkedinFieldSnapshots,
   prospectQueue,
   prospectSearchResults,
+  rawFinds,
   prospects,
   recordListMembers,
   scoreHistory,
@@ -118,6 +119,7 @@ import {
   websiteVisits,
 } from "../../drizzle/schema";
 import type { getDb } from "../db";
+import { noteAuditRecorded } from "../_core/requestContext";
 import { isPlaceholderToken, usableEmailOrNull } from "@shared/fieldHygiene";
 import { isGenericInboxEmail } from "@shared/genericEmail";
 
@@ -237,6 +239,8 @@ export const PERSON_REF_TABLES: PersonRefTable[] = [
   { key: "linkedinEnrichmentBatchRows.providedProspectId", table: linkedinEnrichmentBatchRows, column: linkedinEnrichmentBatchRows.providedProspectId, field: "providedProspectId", wsColumn: linkedinEnrichmentBatchRows.workspaceId, idColumn: linkedinEnrichmentBatchRows.id },
   { key: "linkedinEnrichmentBatchRows.matchedProspectId", table: linkedinEnrichmentBatchRows, column: linkedinEnrichmentBatchRows.matchedProspectId, field: "matchedProspectId", wsColumn: linkedinEnrichmentBatchRows.workspaceId, idColumn: linkedinEnrichmentBatchRows.id },
   { key: "prospectSearchResults.promotedProspectId", table: prospectSearchResults, column: prospectSearchResults.promotedProspectId, field: "promotedProspectId", wsColumn: prospectSearchResults.workspaceId, idColumn: prospectSearchResults.id },
+  // The person a discovery find was already when found (migration 0360, audit F38).
+  { key: "rawFinds.knownProspectId", table: rawFinds, column: rawFinds.knownProspectId, field: "knownProspectId", wsColumn: rawFinds.workspaceId, idColumn: rawFinds.id },
   // AI calls (2026-10-04): a queued or finished call follows the person, and
   // so does their do-not-call entry (unique per number, not per person).
   { key: "voiceCallRequests.prospectId", table: voiceCallRequests, column: voiceCallRequests.prospectId, field: "prospectId", wsColumn: voiceCallRequests.workspaceId, idColumn: voiceCallRequests.id },
@@ -1859,6 +1863,9 @@ export async function executePersonMerge(
      * not at all, and a cluster that fails is reported, not half-merged. */
     try {
       await db.transaction(async (tx) => {
+        // Committed with the merge, not through recordAudit: mark the request
+        // so no automatic entry is added on top (G49).
+        noteAuditRecorded();
         await tx.insert(auditLog).values({
           workspaceId,
           actorUserId: opts.actorUserId ?? null,

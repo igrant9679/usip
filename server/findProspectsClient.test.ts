@@ -46,8 +46,14 @@ describe("Data enrichment's Needs-review badge (L3, P141)", () => {
 
 describe("Find prospects refreshes what each action changed (P142)", () => {
   it("search, re-score and the LinkedIn import", () => {
-    const search = block(fp, "const search = trpc.discovery.search.useMutation({", "const runSearch = () => {");
+    // 2026-11-07 (audit P72): the search is a background job, so what it saved
+    // is refreshed when the followed run ENDS (useFollowRun's handler, just
+    // above the mutation); the mutation refreshes the run, its trace and the
+    // history at once. Both halves are read, so the guarantee is unchanged.
+    const search = block(fp, "const follow = useFollowRun(activeRunId", "const runSearch = () => {");
     for (const r of ["utils.prospects.list.invalidate()", "utils.discovery.listRuns.invalidate()", "utils.discovery.getRun.invalidate(", "utils.discovery.getLogs.invalidate("]) expect(search).toContain(r);
+    const finished = block(fp, "const follow = useFollowRun(activeRunId", "const search = trpc.discovery.search.useMutation({");
+    expect(finished).toContain("utils.prospects.list.invalidate()");
     const reprocess = block(fp, "const reprocess = trpc.discovery.reprocess.useMutation({", "onError:");
     for (const r of ["utils.discovery.getRun.invalidate(", "utils.discovery.listRuns.invalidate()", "utils.prospects.list.invalidate()"]) expect(reprocess).toContain(r);
     const imp = block(fp, "const importPeople = trpc.unipile.importSearchHitsToPeople.useMutation({", "onError:");
@@ -56,11 +62,16 @@ describe("Find prospects refreshes what each action changed (P142)", () => {
   });
 
   it("the toast counts what was saved and says when a running search was joined (P61, P72)", () => {
+    // 2026-11-07 (audit P72): the summary comes from the finished run, through
+    // runSummary (client/src/lib/discoveryRun.ts); "already running" is said
+    // when the search answers.
     const search = block(fp, "const search = trpc.discovery.search.useMutation({", "const runSearch = () => {");
-    expect(search).toContain("r.prospectsSkipped");
-    expect(search).toContain("r.accountsCreated");
     expect(search).toContain("r.joinedRunning");
-    expect(search).toContain('r.status === "failed"');
+    expect(block(fp, "const follow = useFollowRun(activeRunId", "const search = trpc.discovery.search.useMutation({")).toContain("runSummary(run)");
+    const summary = block(read("client/src/lib/discoveryRun.ts"), "export function runSummary(", "export function useFollowRun(");
+    expect(summary).toContain("r.prospectsSkipped");
+    expect(summary).toContain("r.accountsCreated");
+    expect(summary).toContain('r.status === "failed"');
   });
 });
 

@@ -5,7 +5,7 @@ import { todayLocal } from "@/lib/localDay";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Section, StatusPill, fmt$ } from "@/components/usip/Common";
+import { Section, StatusPill, confirmAction, fmt$ } from "@/components/usip/Common";
 import { PageHeader, Shell, StatCard, SubNav } from "@/components/usip/Shell";
 import { SpendSection } from "@/components/usip/SpendReport";
 import { Link, Redirect, useSearch } from "wouter";
@@ -20,6 +20,7 @@ import { useTheme, PALETTES } from "@/contexts/ThemeContext";
 import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { confirmPaidLookup } from "@/components/usip/SpendPreview";
 import { isAdminRole } from "@shared/roleRank";
 import { DEFAULT_SEND_WINDOW, WEEKDAY_LABELS, describeSendWindow, isWithinSendWindow, normalizeSendWindow, parseSendDays } from "@shared/sendWindow";
 
@@ -788,6 +789,9 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
   const [timeout_, setTimeout_] = useState<number>(10080);
   const [ip, setIp] = useState<string>("");
   const [enforce2fa, setEnforce2fa] = useState<boolean>(false);
+  // Who "Require 2FA" would block (U21), read before it is turned on.
+  const coverage = trpc.team.mfaCoverage.useQuery(undefined, { enabled: canEdit });
+  const withoutMfa = Number(coverage.data?.withoutAuthenticator ?? 0);
 
   useEffect(() => {
     if (!settings) return;
@@ -795,6 +799,16 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
     setIp((Array.isArray(settings.ipAllowlist) ? settings.ipAllowlist : []).join("\n"));
     setEnforce2fa(Boolean(settings.enforce2fa));
   }, [settings]);
+
+  const doSave = () =>
+    save({
+      sessionTimeoutMin: Number(timeout_),
+      ipAllowlist: ip
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+      enforce2fa,
+    });
 
   return (
     <Section
@@ -804,16 +818,21 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
         canEdit ? (
           <Button
             size="sm"
-            onClick={() =>
-              save({
-                sessionTimeoutMin: Number(timeout_),
-                ipAllowlist: ip
-                  .split(/\r?\n/)
-                  .map((s) => s.trim())
-                  .filter(Boolean),
-                enforce2fa,
-              })
-            }
+            onClick={() => {
+              // Turning the requirement ON while some members have no
+              // authenticator blocks them at once (audit 2026-10-20, U21):
+              // say who, and ask, before it lands.
+              if (enforce2fa && !settings?.enforce2fa && withoutMfa > 0) {
+                confirmAction({
+                  title: `Block ${withoutMfa === 1 ? "1 member" : `${withoutMfa} members`} until they set up 2FA?`,
+                  description: `${withoutMfa === 1 ? "1 member has" : `${withoutMfa} members have`} no authenticator app${coverage.data?.names?.length ? ` (${coverage.data.names.join(", ")}${withoutMfa > coverage.data.names.length ? ", …" : ""})` : ""}. They will be stopped at the door until they connect one. Super admins are never blocked.`,
+                  confirmLabel: "Require 2FA",
+                  destructive: false,
+                }, doSave);
+                return;
+              }
+              doSave();
+            }}
           >
             Save
           </Button>
@@ -873,6 +892,20 @@ function SecurityTab({ settings, save, canEdit }: { settings: any; save: (v: any
             connect one; a super admin is never blocked. You must connect your own first
             (Profile → MFA) — saving this without it is refused.
           </div>
+          {canEdit && coverage.data && (
+            <div
+              data-testid="mfa-coverage"
+              className={
+                withoutMfa > 0
+                  ? "rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400"
+                  : "text-xs text-emerald-700 dark:text-emerald-400"
+              }
+            >
+              {withoutMfa > 0
+                ? `${withoutMfa === 1 ? "1 member has" : `${withoutMfa} members have`} no authenticator${settings?.enforce2fa ? " and cannot get in until they set one up" : ": turning this on blocks them until they set one up"}. The Team page's 2FA column shows who.`
+                : "Every member who would be asked already has an authenticator."}
+            </div>
+          )}
         </div>
         <div className="space-y-1 md:col-span-2 opacity-60">
           <Label>IP allowlist (one per line, CIDR supported)</Label>
@@ -990,6 +1023,17 @@ const PROVIDER_META: Record<string, { name: string; hint: string; builtIn?: bool
     hint: "One API key for the whole workspace — sends campaigns and lists the senders you can link as mailboxes. Needs Mail Send permission.",
     docsUrl: "https://app.sendgrid.com/settings/api_keys",
     configFields: [{ key: "apiKey", label: "API Key", type: "password" }],
+  },
+  // F47: optional bot check on public forms and landing pages. Off until both
+  // keys are saved here (or set on the server); the secret is stored encrypted.
+  turnstile: {
+    name: "Cloudflare Turnstile",
+    hint: "Optional bot check on public forms and landing pages. Off until both keys are set; without them forms use the hidden-field and timing checks.",
+    docsUrl: "https://dash.cloudflare.com/?to=/:account/turnstile",
+    configFields: [
+      { key: "siteKey", label: "Site key" },
+      { key: "secretKey", label: "Secret key", type: "password" },
+    ],
   },
   webhook: {
     name: "Custom Webhook",
@@ -1630,6 +1674,25 @@ function EmailVerificationSettingsSection({ isAdmin }: { isAdmin: boolean }) {
       : toast.info(`Nothing started: ${r.reason ?? "no contacts are due"}.`),
     onError: (e) => toast.error(e.message),
   });
+  // Run Now says how many addresses and credits first (audit 2026-10-20, F8),
+  // from the same plan the run sends.
+  const askReverifyNow = async () => {
+    try {
+      const p = await utils.emailVerification.reverifyPreview.fetch();
+      if (!p.ok) { toast.info(`Nothing to run: ${p.reason}.`); return; }
+      confirmPaidLookup({
+        title: `Re-verify ${p.emails.toLocaleString()} address${p.emails === 1 ? "" : "es"} now?`,
+        vendor: "Reoon",
+        count: p.emails,
+        unit: "bulk credit",
+        allowance: p.dailyCap != null && p.headroom != null ? { used: p.dailyCap - p.headroom, cap: p.dailyCap } : null,
+        note: p.skippedAcceptAll ? `${p.skippedAcceptAll.toLocaleString()} more at accept-all domains are skipped: they would answer the same again.` : undefined,
+        confirmLabel: "Re-verify",
+      }, () => triggerNowMut.mutate());
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
   const [blockInvalid, setBlockInvalid] = useState(false);
   const [reverifyInterval, setReverifyInterval] = useState<string>("disabled");
   const [reverifyRisky, setReverifyRisky] = useState(true);
@@ -1730,7 +1793,7 @@ function EmailVerificationSettingsSection({ isAdmin }: { isAdmin: boolean }) {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => triggerNowMut.mutate()}
+                  onClick={askReverifyNow}
                   disabled={triggerNowMut.isPending || reverifyInterval === "disabled"}
                   title="Run re-verify now for all qualifying contacts"
                 >

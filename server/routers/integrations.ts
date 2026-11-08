@@ -15,6 +15,8 @@ import { safeFetch } from "../services/scraper/ssrfGuard";
 import {
   SENDGRID_PROVIDER, getWorkspaceSendgridKey, mergeIntegrationConfig, redactIntegrationConfig, setWorkspaceSendgridKey,
 } from "../services/sendgridKey";
+import { TURNSTILE_PROVIDER, TURNSTILE_SECRET_FIELD, turnstileConfig } from "../services/publicCaptureGuard";
+import { encryptSecret } from "../_core/crypto";
 const PROVIDERS = [
   "manus_oauth",
   "scim",
@@ -24,6 +26,7 @@ const PROVIDERS = [
   "google_maps",
   "webhook",
   "sendgrid",
+  "turnstile",
 ] as const;
 type Provider = (typeof PROVIDERS)[number];
 
@@ -113,13 +116,24 @@ export const integrationsRouter = router({
           ),
         );
 
+      // Turnstile's secret (F47) is stored encrypted, like the SendGrid key:
+      // the typed `secretKey` becomes `secretKeyEnc` and the plaintext never
+      // reaches the config column. A blank one keeps whatever is stored.
+      let config = input.config;
+      if (input.provider === TURNSTILE_PROVIDER && config) {
+        const { secretKey, ...rest } = config as Record<string, unknown>;
+        config = typeof secretKey === "string" && secretKey.trim()
+          ? { ...rest, [TURNSTILE_SECRET_FIELD]: encryptSecret(secretKey.trim()) }
+          : rest;
+      }
+
       if (existing) {
         await db
           .update(workspaceIntegrations)
           .set({
             ...(input.status !== undefined ? { status: input.status } : {}),
             // Merged, never replaced: the draft carries no secrets (G16).
-            ...(input.config !== undefined ? { config: mergeIntegrationConfig(existing.config, input.config) } : {}),
+            ...(config !== undefined ? { config: mergeIntegrationConfig(existing.config, config) } : {}),
           })
           .where(eq(workspaceIntegrations.id, existing.id));
       } else {
@@ -127,7 +141,7 @@ export const integrationsRouter = router({
           workspaceId: ctx.workspace.id,
           provider: input.provider,
           status: input.status ?? "disconnected",
-          config: mergeIntegrationConfig({}, input.config ?? {}),
+          config: mergeIntegrationConfig({}, config ?? {}),
         });
       }
       return { ok: true };
@@ -211,6 +225,16 @@ export const integrationsRouter = router({
             success = v.ok;
             result = v.ok ? "SendGrid key is valid and can send mail." : (v.error ?? "SendGrid key test failed.");
           }
+        } else if (input.provider === TURNSTILE_PROVIDER) {
+          // Which pair the public pages will use (F47). Nothing is sent to
+          // Cloudflare from here: a verify needs a token a visitor's widget made.
+          const cfg = await turnstileConfig(ctx.workspace.id);
+          success = Boolean(cfg);
+          result = !cfg
+            ? "Add both the site key and the secret key. Until then public forms use the hidden-field and timing checks only."
+            : cfg.source === "workspace"
+              ? "Turnstile is on for this workspace's public forms and landing pages."
+              : "This workspace has no keys of its own; the server's Turnstile keys are in use.";
         } else {
           result = `No test handler for provider "${input.provider}".`;
           success = false;

@@ -241,8 +241,10 @@ describe("segments say they read CRM contacts, not People (P21), and counts can 
     segment(5, { contactCount: 12, lastEvaluatedAt: new Date("2026-11-01T12:00:00Z") });
     h.queries["segments.list"] = { data: rows("audience_segments"), isLoading: false };
     const page = html(createElement(Segments));
+    // 2026-11-07 (audit P21): segments read People now; one not moved (no
+    // subject, as these fixtures) still labels its count as CRM contacts.
     expect(page).toContain("12 CRM contacts");
-    expect(page).toContain("Segments read CRM contacts, not People.");
+    expect(page).toContain("Segments read People (since 2026-11-07; they read CRM contacts before).");
     expect(page).not.toContain("Segments update automatically");
     expect(page).toContain("Counted ");
     const refresh = h.buttons.find((b) => textOf(b).includes("Refresh counts"));
@@ -259,9 +261,11 @@ describe("segments say they read CRM contacts, not People (P21), and counts can 
     expect(row("audience_segments", 5).contactCount).toBe(2);
   });
 
-  it("the auto-enrol page says rules enrol contacts, not People", () => {
+  it("the auto-enrol page says rules enrol People, and that moved rules were switched off", () => {
+    // 2026-11-07 (audit P21): the decision this pinned (stay on contacts) was
+    // the owner's to change, and is changed; the page says what is true now.
     h.queries["segmentRules.list"] = { data: [], isLoading: false };
-    expect(html(createElement(SegmentRules))).toContain("Rules enrol CRM contacts. Someone who is only in People is never in a segment");
+    expect(html(createElement(SegmentRules))).toContain("Rules enrol People (segments moved from CRM contacts on 2026-11-07). Every rule on a moved segment was switched off");
   });
 
   it("evaluation stays on contacts: someone only in People is in no segment and is never enrolled", async () => {
@@ -443,7 +447,8 @@ describe("the Segment Auto-Enroll page", () => {
 
   it("the header says hourly, not on every update (P56), and the tab has a title (P140)", async () => {
     const html = await render();
-    expect(html).toContain("Every hour, each enabled rule enrols the contacts its segment matches");
+    // 2026-11-07 (audit P21): People, not contacts; still hourly.
+    expect(html).toContain("Every hour, each enabled rule enrols the people its segment matches");
     expect(html).not.toContain("Rules evaluate on every record update");
     expect(h.titles).toContain("Segment Auto-Enroll");
   });
@@ -484,7 +489,8 @@ describe("the Segment Auto-Enroll page", () => {
     const [runNow] = h.mutations["segmentRules.runEnrollment"];
     runNow.onSuccess({ ok: true, enrolled: 2, peopleSkipped: 3, rulesRefused: 1, rules: 3 });
     expect(h.invalidated).toContain("segmentRules.list");
-    expect(h.toasts.map((t) => t.msg)).toEqual(["Enrollment complete — 2 enrolled · 3 contacts skipped · 1 rule refused (see its row)"]);
+    // 2026-11-07 (audit P21): rules enrol People or contacts, so the toast says "skipped" without naming either.
+    expect(h.toasts.map((t) => t.msg)).toEqual(["Enrollment complete — 2 enrolled · 3 skipped · 1 rule refused (see its row)"]);
   });
 });
 
@@ -507,7 +513,7 @@ describe("the hourly run counts people and rules apart, and links to a real page
     const r = await runSegmentEnrollmentForWorkspace(WS);
     expect(r).toEqual({ enrolled: 1, peopleSkipped: 2, rulesRefused: 3, rules: 4 });
     expect(row("segment_sequence_rules", 1).lastRunSummary).toMatchObject({ matched: 3, enrolled: 1, skipped: { invalidEmail: 1, alreadyEnrolled: 1 } });
-    expect(runSummary(r)).toBe("Enrollment complete — 1 enrolled · 2 contacts skipped · 3 rules refused (see their rows)");
+    expect(runSummary(r)).toBe("Enrollment complete — 1 enrolled · 2 skipped · 3 rules refused (see their rows)");
   });
 
   it("the owner's notice separates them and links to /segment-rules, a route the app has", async () => {
@@ -530,8 +536,10 @@ describe("Unknown is an email status a segment can use (P140)", () => {
     expect(segmentProblem([{ field: "emailVerificationStatus", operator: "equals", value: "unknown" }])).toBeNull();
     contact(1, { emailVerificationStatus: "unknown" }); contact(2);
     expect(await countSegment(h.db, WS, [{ field: "emailVerificationStatus", operator: "equals", value: "unknown" }], "all")).toBe(1);
+    // 2026-11-07 (audit P21): a new segment is on People, whose email status is the same five values.
+    rows("prospects").push({ id: 801, workspaceId: WS, firstName: "U", lastName: "N", emailStatus: "unknown", verificationStatus: null }, { id: 802, workspaceId: WS, firstName: "V", lastName: "N", emailStatus: "valid", verificationStatus: null });
     await caller().segments.create({ name: "Unverified", matchType: "all", rules: [{ id: "u", field: "emailVerificationStatus", operator: "equals", value: "unknown" }] });
-    expect(rows("audience_segments")[0].contactCount).toBe(1);
+    expect(rows("audience_segments")[0]).toMatchObject({ subject: "people", contactCount: 1 });
     // The editor's status list is the server's, labelled.
     expect(read("client/src/pages/usip/Segments.tsx")).toContain("const EMAIL_STATUS_VALUES = STATUS_VALUES.map((value) => ({ value, label: EMAIL_STATUS_LABELS[value] ?? value }));");
     expect(read("client/src/pages/usip/Segments.tsx")).toContain('unknown: "Unknown"');

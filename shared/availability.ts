@@ -195,3 +195,15 @@ export function generateSlots(
   }
   return slots;
 }
+
+/**
+ * The first `n` open slots after `wanted`, earliest first (G42): what the
+ * booking page offers when the time someone picked was taken while they typed.
+ */
+export function nextOpenAfter(slots: string[], wanted: string, n: number): string[] {
+  const at = Date.parse(wanted);
+  return slots
+    .filter((s) => Date.parse(s) > at)
+    .sort((a, b) => Date.parse(a) - Date.parse(b))
+    .slice(0, n);
+}

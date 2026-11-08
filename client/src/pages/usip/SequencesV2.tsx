@@ -19,6 +19,7 @@ import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { SendingStatusBar } from "@/components/usip/SendingStatusBar";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
 import { OutreachExplainer } from "@/components/usip/OutreachExplainer";
@@ -163,7 +164,8 @@ export default function SequencesV2() {
     onError: (e) => toast.error(e.message),
   });
   // Assign-to-rep (managers+): team member list + the assign mutation.
-  const isManager = !!current?.role && ["manager", "admin", "super_admin"].includes(current.role);
+  // The one rank map (shared/roleRank via useWorkspaceRole), not a hand-rolled list (audit X1.3).
+  const isManager = useWorkspaceRole().isManager;
   const teamQ = trpc.team.list.useQuery(undefined as any, { retry: false, enabled: isManager });
   const members = ((teamQ.data ?? []) as any[]).map((m) => ({ userId: m.userId as number, name: (m.name as string) ?? `User ${m.userId}` }));
   const memberName = (uid?: number | null) => (uid ? members.find((m) => m.userId === uid)?.name ?? `User ${uid}` : null);

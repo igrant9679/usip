@@ -5011,6 +5011,44 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // One-time 2FA recovery codes (audit 2026-10-20, G15). New table, additive:
+  // no account has codes until it sets up 2FA or asks for a set.
+  {
+    name: "0310_mfa_backup_codes.sql",
+    statements: [
+      "CREATE TABLE IF NOT EXISTS `mfa_backup_codes` (`id` int AUTO_INCREMENT PRIMARY KEY, `userId` int NOT NULL, `codeHash` varchar(64) NOT NULL, `usedAt` timestamp NULL, `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY `ix_mbc_user` (`userId`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ],
+  },
+
+  // The session each sign-in started (audit 2026-10-20, F3), for the
+  // active-sessions list and signing out one device. Nullable columns with no
+  // default: every existing row is a sign-in from before, which lists nothing.
+  {
+    name: "0311_login_history_sessions.sql",
+    statements: [
+      "ALTER TABLE `login_history` ADD COLUMN `sessionJti` varchar(32) NULL",
+      "ALTER TABLE `login_history` ADD COLUMN `sessionExpiresAt` timestamp NULL",
+      "ALTER TABLE `login_history` ADD COLUMN `sessionVersion` int NULL",
+      "CREATE INDEX `ix_lh_jti` ON `login_history` (`sessionJti`)",
+    ],
+  },
+
+  // Email verification for self-registered accounts (audit 2026-10-20, F1).
+  // Nullable columns, then an idempotent backfill: every account that exists
+  // counts as verified (stamped with when it was created). The backfill skips
+  // any row with a pending token, so running it again can never verify an
+  // account that registered after this shipped and has not opened its link.
+  {
+    name: "0312_user_email_verification.sql",
+    statements: [
+      "ALTER TABLE `users` ADD COLUMN `email_verified_at` timestamp NULL",
+      "ALTER TABLE `users` ADD COLUMN `email_verify_token_hash` varchar(64) NULL",
+      "ALTER TABLE `users` ADD COLUMN `email_verify_expires_at` timestamp NULL",
+      "CREATE INDEX `ix_users_email_verify` ON `users` (`email_verify_token_hash`)",
+      "UPDATE `users` SET `email_verified_at` = `createdAt` WHERE `email_verified_at` IS NULL AND `email_verify_token_hash` IS NULL",
+    ],
+  },
+
   // Replies are matched by the sent email's full Message-ID (audit
   // 2026-10-20, F5). trackingToken is varchar(64), so a full RFC Message-ID
   // never matched and a reply fell back to the newest draft to that address.
@@ -5066,6 +5104,87 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
       "ALTER TABLE `website_visits` ADD COLUMN `signed` boolean NOT NULL DEFAULT false",
       "CREATE INDEX `ix_wv_prospect` ON `website_visits` (`prospectId`)",
       "ALTER TABLE `workspace_settings` ADD COLUMN `trackedSiteDomains` varchar(1000) NULL",
+    ],
+  },
+
+  // Audit 2026-10-20, P72 and F38. A discovery search runs as a background job
+  // now: fanOutStartedAt is set once when a worker begins, so a job picked up
+  // again after a restart never pays for the fan-out twice. Each raw find says
+  // whether it was already in People when found, and a run can be kept
+  // unsaved for review. All nullable or defaulted: existing runs read as before.
+  {
+    name: "0360_discovery_run_job.sql",
+    statements: [
+      "ALTER TABLE `discovery_runs` ADD COLUMN `fanOutStartedAt` timestamp NULL",
+      "ALTER TABLE `discovery_runs` ADD COLUMN `heldForReview` boolean NOT NULL DEFAULT false",
+      "ALTER TABLE `discovery_runs` ADD COLUMN `alreadyInPeople` int NOT NULL DEFAULT 0",
+      "ALTER TABLE `raw_finds` ADD COLUMN `knownAs` varchar(16) NULL",
+      "ALTER TABLE `raw_finds` ADD COLUMN `knownProspectId` int NULL",
+    ],
+  },
+
+  // Audit 2026-10-20, F8: a research run carries the cost ceiling the person
+  // confirmed when starting it. Nullable: runs already queued have none and
+  // run as before.
+  {
+    name: "0361_research_run_ceiling.sql",
+    statements: [
+      "ALTER TABLE `research_jobs` ADD COLUMN `costCeilingUsd` decimal(10,4) NULL",
+    ],
+  },
+
+  // Audit 2026-10-20, F43: capacity-aware routing. A rule may cap the open
+  // leads a target owns before it passes them by. Nullable: every existing
+  // rule keeps no limit.
+  {
+    name: "0362_routing_capacity.sql",
+    statements: [
+      "ALTER TABLE `lead_routing_rules` ADD COLUMN `capacityPerRep` int NULL",
+    ],
+  },
+
+  // Audit 2026-10-20, P21 and F42: segments on People. Each segment records
+  // the table it reads. Every existing segment was on CRM contacts; this moves
+  // them to People with their rules unchanged (the People field map reads the
+  // same field names; a rule People have no field for, "Is primary contact",
+  // is kept and flagged, and such a segment enrols no one until edited).
+  //
+  // Moving a segment changes who its auto-enrol rule would enrol, so FIRST
+  // every rule on a segment still on contacts is switched off and marked
+  // "moved_to_people", for a person to turn on again after the dry run; THEN
+  // the segments move. Both UPDATEs touch only rows still on contacts, so a
+  // re-run after a partial failure finds nothing to do twice. Counts are
+  // cleared, so a card says "not counted on People yet" rather than showing a
+  // contacts number as People. New segments default to People.
+  {
+    name: "0363_segments_on_people.sql",
+    statements: [
+      "ALTER TABLE `audience_segments` ADD COLUMN `subject` varchar(16) NOT NULL DEFAULT 'contacts'",
+      "ALTER TABLE `audience_segments` ADD COLUMN `movedToPeopleAt` timestamp NULL",
+      "ALTER TABLE `segment_sequence_rules` ADD COLUMN `offReason` varchar(32) NULL",
+      "UPDATE `segment_sequence_rules` SET `enabled` = 0, `offReason` = 'moved_to_people' WHERE `enabled` = 1 AND `segmentId` IN (SELECT `id` FROM `audience_segments` WHERE `subject` = 'contacts')",
+      "UPDATE `audience_segments` SET `subject` = 'people', `movedToPeopleAt` = NOW(), `contactCount` = NULL, `lastEvaluatedAt` = NULL WHERE `subject` = 'contacts'",
+      "ALTER TABLE `audience_segments` ALTER COLUMN `subject` SET DEFAULT 'people'",
+    ],
+  },
+
+  // A booking's own reschedule-or-cancel page (audit 2026-10-20, F47). Nullable
+  // and unset on every existing meeting: only new bookings get a token, and a
+  // UNIQUE index allows any number of NULLs.
+  {
+    name: "0380_meeting_manage_token.sql",
+    statements: [
+      "ALTER TABLE `meetings` ADD COLUMN `manageToken` varchar(64) NULL",
+      "CREATE UNIQUE INDEX `ux_meetings_manage_token` ON `meetings` (`manageToken`)",
+    ],
+  },
+
+  // Form views, for a per-form conversion rate (audit 2026-10-20, F47). Starts
+  // at 0 for every form: views were never counted before.
+  {
+    name: "0381_form_view_count.sql",
+    statements: [
+      "ALTER TABLE `forms` ADD COLUMN `viewCount` int NOT NULL DEFAULT 0",
     ],
   },
 

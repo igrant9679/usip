@@ -21,7 +21,7 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import { daysUntilContractEnd, renewalStageFor } from "@shared/renewalStage";
-import { LIVE_TRIGGER_IDS } from "@shared/workflowTriggers";
+import { LIVE_TRIGGER_IDS, describeTriggerPayloadsForPrompt } from "@shared/workflowTriggers";
 import {
   accounts,
   aiWorkflowSuggestions,
@@ -40,6 +40,7 @@ import {
   aiPipelineJobs,
 } from "../../drizzle/schema";
 import { getDb } from "../db";
+import { assertRowInWorkspace } from "../services/foreignIds";
 import { wonStageKeys } from "../_core/stageSemantics";
 import { closedIn, closeMonthKey, currentRanges, instantMonthKey, loadMetricDeals, openTotals } from "../services/dealMetrics";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
@@ -413,7 +414,8 @@ Existing workflow rules: ${existingRules.map((r) => `"${r.name}" (trigger: ${r.t
 Pipeline stage counts: ${oppCounts.map((o) => `${o.stage}: ${o.count}`).join(", ")}
 
 Rules are trigger → conditions → actions. Only use these VALID values (anything else is ignored by the engine):
-- triggerType: "record_created" (a lead, contact or opportunity was created — ALWAYS set triggerConfig.entity to one of "lead"/"contact"/"opportunity"/"any"; payload has entity/id/ownerUserId plus EXACTLY these keys — company/title/source/status/email for a lead, title/email/accountId/source for a contact, name/stage/value/winProb/accountId for an opportunity — so a condition on anything else can never match; note a lead's score is written after creation, so never condition on it here), "record_updated" (same entities and the same triggerConfig.entity requirement; payload is the record after the change — score and grade included — plus changed:[field names]), "stage_changed" (an opportunity moved — payload has stage/fromStage/value/winProb/isWon/isLost), "task_overdue" (a task passed its due date — payload has title/type/priority/dueAt), "signal_received" (an intent signal — for a job change set triggerConfig.signal:"job_change"; payload has name/oldCompany/newCompany), "deal_stuck" (a deal sat too long in one stage — set triggerConfig.days and optionally triggerConfig.stage; payload has stage/daysInStage/value/winProb).
+- triggerType: one of these (anything else is ignored), each with the payload its conditions can read — the same declaration the rule editor offers (F46):
+${describeTriggerPayloadsForPrompt()}
 - conditions: array of { "field": <a payload field>, "op": "eq|neq|gt|gte|lt|lte|contains|in", "value": <value> }. Empty array = always. For "in", pass an array of values.
 - actions[].type: "create_task" (params: title, priority:"low|normal|high|urgent", dueInDays, type:"follow_up|call|manual_email"), "notify" (params: title, message), "post_slack" (params: message), "notify_teams" (params: message), "webhook" (params: url).
 
@@ -735,6 +737,9 @@ export const mailboxAiRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // A mailbox of this workspace (audit 2026-10-20, X1.1), checked before
+      // any AI is spent.
+      await assertRowInWorkspace(db, "sending account", input.accountId, ctx.workspace.id);
 
       const prompt = `You are an email triage AI for a sales rep. Classify this email thread. Return JSON only.
 
@@ -790,6 +795,7 @@ Return: { "label": "urgent|follow_up|fyi|no_action", "confidence": <50-99>, "rat
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertRowInWorkspace(db, "sending account", input.accountId, ctx.workspace.id);
 
       const threadList = input.threads.map((t, i) =>
         `${i + 1}. From: ${t.fromName ?? t.fromEmail} | Subject: ${t.subject} | Preview: ${t.snippet.slice(0, 150)}`

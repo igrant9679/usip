@@ -14,6 +14,7 @@ import { LinkedInActionsPanel } from "./detail/LinkedInActionsPanel";
 import { useLocation } from "wouter";
 import { LEAD_TIERS, leadTierLabel, type LeadTier } from "@shared/leadTier";
 import { savedScoreLine, type SavedScore } from "@/lib/leadScoreText";
+import { AiFitDetails } from "./AiFitDetails";
 import { ContactOverview } from "./detail/ContactOverview";
 import { AccountOverview } from "./detail/AccountOverview";
 import { OpportunityOverview } from "./detail/OpportunityOverview";
@@ -25,6 +26,7 @@ import { toast } from "sonner";
 import { tablistProps, tabProps } from "@/lib/tabs";
 import { AccountBriefPanel } from "./company/AccountBriefPanel";
 import { OPPORTUNITY_DELETE_SCOPE } from "@shared/dealDelete";
+import { confirmPaidLookup, useSourceBudgets } from "@/components/usip/SpendPreview";
 
 type RelatedType = "lead" | "contact" | "account" | "opportunity" | "customer";
 
@@ -73,7 +75,10 @@ function LeadScorePanel({ leadId }: { leadId: number }) {
       <Accordion open={openSec === "firmo"} onToggle={() => setOpenSec(openSec === "firmo" ? null : "firmo")} title="Firmographic" value={bd.firmographic.value} max={bd.firmographic.max} reasons={bd.firmographic.reasons} />
       {/* Behaviour below zero is shown as it is: it lowers the total (P33). */}
       <Accordion open={openSec === "behav"} onToggle={() => setOpenSec(openSec === "behav" ? null : "behav")} title="Behavioral" value={bd.behavioral.value} max={bd.behavioral.max} reasons={bd.behavioral.reasons} />
-      <Accordion open={openSec === "ai"} onToggle={() => setOpenSec(openSec === "ai" ? null : "ai")} title="AI Fit" value={bd.aiFit.value} max={bd.aiFit.max} reasons={bd.aiFit.reasons} />
+      {/* The stored assessment in full: pains, products, risks (audit U32). */}
+      <Accordion open={openSec === "ai"} onToggle={() => setOpenSec(openSec === "ai" ? null : "ai")} title="AI Fit" value={bd.aiFit.value} max={bd.aiFit.max} reasons={bd.aiFit.reasons}>
+        <AiFitDetails details={bd.aiFit.details} />
+      </Accordion>
 
       <div className="rounded border bg-card p-3">
         <div className="text-xs font-semibold mb-1">90-day history</div>
@@ -85,7 +90,7 @@ function LeadScorePanel({ leadId }: { leadId: number }) {
   );
 }
 
-function Accordion({ open, onToggle, title, value, max, reasons }: { open: boolean; onToggle: () => void; title: string; value: number; max: number; reasons: string[] }) {
+function Accordion({ open, onToggle, title, value, max, reasons, children }: { open: boolean; onToggle: () => void; title: string; value: number; max: number; reasons: string[]; children?: React.ReactNode }) {
   const pct = Math.max(0, Math.min(100, Math.round((value / Math.max(1, max)) * 100)));
   return (
     <div className="rounded border bg-card">
@@ -102,6 +107,7 @@ function Accordion({ open, onToggle, title, value, max, reasons }: { open: boole
           {reasons.length === 0 ? <li>No contributing signals.</li> : reasons.slice(0, 8).map((r, i) => <li key={i}>• {r}</li>)}
         </ul>
       )}
+      {open && children && <div className="px-3 pb-3 -mt-1">{children}</div>}
     </div>
   );
 }
@@ -585,6 +591,7 @@ function RecordDrawerForRecord({
     { id: relatedId ?? 0 },
     { enabled: relatedType === "opportunity" && !!relatedId },
   );
+  const verifyBudgets = useSourceBudgets(relatedType === "contact");
   const verifySingle = trpc.emailVerification.verifySingle.useMutation({
     onSuccess: () => {
       contactData.refetch();
@@ -921,7 +928,8 @@ function RecordDrawerForRecord({
               isVerifying={verifySingle.isPending}
               onVerify={() => {
                 if (relatedId && contactData.data?.email) {
-                  verifySingle.mutate({ contactId: relatedId });
+                  // What it spends, said first (audit 2026-10-20, F8).
+                  confirmPaidLookup({ title: `Verify ${contactData.data.email}?`, vendor: "Reoon", count: 1, unit: "daily credit", allowance: verifyBudgets.data?.reoon.allowance ?? null, confirmLabel: "Verify" }, () => verifySingle.mutate({ contactId: relatedId }));
                 }
               }}
             />

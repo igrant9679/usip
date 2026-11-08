@@ -20,6 +20,7 @@ import { getDb } from "../db";
 import { activities, tasks, workspaceSettings } from "../../drizzle/schema";
 import { reengageBlocker, reengageProspectManually, type JobChangeReengageResult } from "../services/linkedinEnrichment/jobChangeReengagement";
 import { recordAudit } from "../audit";
+import { assertInWorkspace, requireInWorkspace } from "../services/foreignIds";
 import { checkLinkedInEnrichmentHealth } from "../services/linkedinEnrichment/health";
 import {
   createBatch, startBatch, retryFailedRows, applyReview, getBatch, getBatchRows,
@@ -323,6 +324,11 @@ export const linkedinEnrichmentRouter = router({
     }))
     .mutation(async ({ ctx, input }) => {
       requireRole(ctx.member.role, "manager");
+      // A row that names a person names one of this workspace's (audit
+      // 2026-10-20, X1.1); the batch stored any id it was sent.
+      const db0 = await getDb();
+      if (!db0) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertInWorkspace(db0, prospects, input.rows.map((r) => r.prospectId), ctx.workspace.id, "person");
       const summary = await createBatch({
         workspaceId: ctx.workspace.id,
         userId: ctx.user.id,
@@ -441,6 +447,10 @@ export const linkedinEnrichmentRouter = router({
       changeIds: z.array(z.number().int().positive()).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      // This workspace's person (X1.1): the activity below was filed on any id.
+      const db0 = await getDb();
+      if (!db0) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await requireInWorkspace(db0, prospects, input.prospectId, ctx.workspace.id, "Person");
       const res = await acknowledgeChanges({
         workspaceId: ctx.workspace.id, prospectId: input.prospectId,
         userId: ctx.user.id, changeIds: input.changeIds,
@@ -594,6 +604,8 @@ export const linkedinEnrichmentRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const ws = ctx.workspace.id;
+      // The deletes are scoped; this keeps another's id out of the audit (X1.1).
+      await requireInWorkspace(db, linkedinEnrichmentBatches, input.batchId, ws, "Batch");
       await db.delete(linkedinEnrichmentBatchRows).where(and(eq(linkedinEnrichmentBatchRows.workspaceId, ws), eq(linkedinEnrichmentBatchRows.batchId, input.batchId)));
       await db.delete(linkedinEnrichmentBatches).where(and(eq(linkedinEnrichmentBatches.workspaceId, ws), eq(linkedinEnrichmentBatches.id, input.batchId)));
       await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "delete", entityType: "linkedin_enrichment_batch", entityId: input.batchId });
@@ -608,6 +620,7 @@ export const linkedinEnrichmentRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const ws = ctx.workspace.id;
+      await requireInWorkspace(db, linkedinEnrichmentJobs, input.jobId, ws, "Job");
       await db.delete(linkedinEnrichmentJobItems).where(and(eq(linkedinEnrichmentJobItems.workspaceId, ws), eq(linkedinEnrichmentJobItems.jobId, input.jobId)));
       await db.delete(linkedinEnrichmentJobs).where(and(eq(linkedinEnrichmentJobs.workspaceId, ws), eq(linkedinEnrichmentJobs.id, input.jobId)));
       await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "delete", entityType: "linkedin_enrichment_job", entityId: input.jobId });
@@ -628,6 +641,7 @@ export const linkedinEnrichmentRouter = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const ws = ctx.workspace.id;
       const pid = input.prospectId;
+      await requireInWorkspace(db, prospects, pid, ws, "Person");
       await db.delete(prospectLinkedinFieldChanges).where(and(eq(prospectLinkedinFieldChanges.workspaceId, ws), eq(prospectLinkedinFieldChanges.prospectId, pid)));
       await db.delete(prospectLinkedinFieldSnapshots).where(and(eq(prospectLinkedinFieldSnapshots.workspaceId, ws), eq(prospectLinkedinFieldSnapshots.prospectId, pid)));
       await db.delete(prospectLinkedinEnrichments).where(and(eq(prospectLinkedinEnrichments.workspaceId, ws), eq(prospectLinkedinEnrichments.prospectId, pid)));

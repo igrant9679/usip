@@ -130,7 +130,10 @@ describe("A36: the manager-only engine actions refuse a rep", () => {
     expect(block(detail, "{isManager && (\n                      <Button", "Re-evaluate\n")).toContain("reEvaluate.mutate({ prospectId: item.id })");
     expect(block(detail, "{isManager ? (\n            <div className=\"max-w-2xl space-y-5 mt-6\">", "{/* Recent scrape jobs */}")).toContain("scrape.mutate(");
     const icp = read("client/src/pages/usip/AREIcpAgent.tsx");
-    expect(block(icp, "{canChange && (\n          <>", "</PageHeader>")).toContain("regenerate.mutate()");
+    // 2026-11-07 (audit F8): Regenerate asks first (one AI call); the
+    // manager-only button is still the one that runs it.
+    expect(block(icp, "{canChange && (\n          <>", "</PageHeader>")).toContain("onClick={askRegenerate}");
+    expect(block(icp, "const askRegenerate = () => confirmAction({", "const [restoringId")).toContain("() => regenerate.mutate()");
     expect(block(icp, "{canChange && (\n          <>", "</PageHeader>")).toContain("setOverrideOpen(true)");
     expect(icp).toContain("onRestore={canChange ? () => { setRestoringId(v.id); restore.mutate({ id: v.id }); } : undefined}");
     const list = read("client/src/pages/usip/ARECampaigns.tsx");

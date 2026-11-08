@@ -22,6 +22,9 @@ import { notifyLeadRouted } from "../services/policyNotify";
 import { assertRowInWorkspace, sequenceInWorkspace } from "../services/foreignIds";
 import { cleanSubmission, submissionData } from "../services/publicSubmission";
 import { isAllowedRedirect, REDIRECT_URL_ERROR, safeRedirectUrl } from "@shared/safeRedirect";
+import { clientIpOf } from "../_core/clientIp";
+import { assertHumanSubmission, formScope, issueSubmitToken, turnstileSiteKey } from "../services/publicCaptureGuard";
+import { firstViewToday } from "./landingPages";
 
 const FIELD = z.object({ key: z.string(), label: z.string(), required: z.boolean().optional() });
 
@@ -51,8 +54,34 @@ export const formsRouter = router({
     const [row] = await db.select().from(forms).where(eq(forms.publicId, input.publicId));
     if (!row || row.status !== "active") return null;
     if (!(await isWorkspaceLive(row.workspaceId))) return null;
-    return { id: row.id, publicId: row.publicId, title: row.title, description: row.description, fields: row.fields, redirectUrl: safeRedirectUrl(row.redirectUrl) };
+    return {
+      id: row.id, publicId: row.publicId, title: row.title, description: row.description, fields: row.fields, redirectUrl: safeRedirectUrl(row.redirectUrl),
+      // F47: when the page was served (signed), and the Turnstile site key
+      // only when one is configured. See services/publicCaptureGuard.ts.
+      submitToken: issueSubmitToken(formScope(row.publicId)),
+      turnstileSiteKey: await turnstileSiteKey(row.workspaceId),
+    };
   }),
+
+  /**
+   * PUBLIC: count a view of an active form, once per visitor per form per UTC
+   * day (audit F47: forms showed submissions with nothing to divide them by).
+   * Same rule and the same once-a-day memory as landingPages.recordView.
+   */
+  recordView: publicProcedure
+    .input(z.object({ publicId: z.string().max(64), visitor: z.string().max(64).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return { counted: false };
+      const [f] = await db.select({ id: forms.id, status: forms.status, workspaceId: forms.workspaceId })
+        .from(forms).where(eq(forms.publicId, input.publicId));
+      if (!f || f.status !== "active" || !(await isWorkspaceLive(f.workspaceId))) return { counted: false };
+      const who = input.visitor?.trim() || `ip:${clientIpOf(ctx.req as never)}`;
+      if (!firstViewToday(`form-${f.id}`, who)) return { counted: false };
+      await db.update(forms).set({ viewCount: sql`${forms.viewCount} + 1` } as never)
+        .where(eq(forms.id, f.id)).catch(() => {});
+      return { counted: true };
+    }),
 
   create: repProcedure
     .input(z.object({
@@ -156,8 +185,15 @@ export const formsRouter = router({
    * records the submission.
    */
   submit: publicProcedure
-    .input(z.object({ publicId: z.string().max(64), data: submissionData }))
-    .mutation(async ({ input }) => {
+    .input(z.object({
+      publicId: z.string().max(64),
+      data: submissionData,
+      /** From getByPublicId: when the form was served (F47). */
+      submitToken: z.string().max(200).optional(),
+      /** The Turnstile widget's answer, when the workspace has Turnstile set up. */
+      turnstileToken: z.string().max(4096).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [form] = await db.select().from(forms).where(eq(forms.publicId, input.publicId));
@@ -168,6 +204,15 @@ export const formsRouter = router({
       const cleaned = cleanSubmission(form.fields, input.data ?? {});
       // A filled honeypot is a bot: it is told it worked, and nothing is kept.
       if (cleaned.bot) return { ok: true, redirectUrl: safeRedirectUrl(form.redirectUrl) };
+      // Time to submit, and Turnstile when configured (F47). Refused with
+      // words a person can act on; nothing is created or counted.
+      await assertHumanSubmission({
+        workspaceId: form.workspaceId,
+        scope: formScope(form.publicId),
+        submitToken: input.submitToken,
+        turnstileToken: input.turnstileToken,
+        ip: ctx.req ? clientIpOf(ctx.req as never) : null,
+      });
       const data = cleaned.data;
       const email = str(data.email, 320);
       const rawName = str(data.name, 200);

@@ -49,10 +49,14 @@ import {
 } from "../services/research/store";
 export { REVISIONS_KEPT, insertMarket, insertSector, marketContentOf, saveMarket, saveSector, sectorContentOf, type SaveResult } from "../services/research/store";
 import {
+  DEFAULT_RESEARCH_CEILING_USD,
   DEFAULT_RESEARCH_DAILY_RUNS,
+  MAX_RESEARCH_CEILING_USD,
   MAX_RESEARCH_DAILY_RUNS,
+  MIN_RESEARCH_CEILING_USD,
   RESEARCH_MODELS,
   isResearchModel,
+  researchEstimate,
   researchModelOf,
 } from "@shared/researchModels";
 import {
@@ -586,6 +590,8 @@ export const researchRouter = router({
         sectorId: Id.optional(),
         subject: z.string().trim().max(160).optional(),
         focus: z.string().trim().max(2000).optional(),
+        /** The cost to stay under, from the start dialog (audit F8); absent = the default ceiling. */
+        costCeilingUsd: z.number().min(MIN_RESEARCH_CEILING_USD).max(MAX_RESEARCH_CEILING_USD).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         const db = await requireDb();
@@ -653,12 +659,32 @@ export const researchRouter = router({
             focus: input.focus?.trim() || null,
             status: "queued",
             model: st.model,
+            costCeilingUsd: (input.costCeilingUsd ?? DEFAULT_RESEARCH_CEILING_USD).toFixed(4),
           })
           .$returningId();
-        await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "create", entityType: "research_run", entityId: row.id, after: { kind: input.kind, subject, marketId, sectorId, model: st.model } });
+        await recordAudit({ workspaceId: ws, actorUserId: ctx.user.id, action: "create", entityType: "research_run", entityId: row.id, after: { kind: input.kind, subject, marketId, sectorId, model: st.model, costCeilingUsd: input.costCeilingUsd ?? DEFAULT_RESEARCH_CEILING_USD } });
         enqueueResearchJob(row.id);
         return { id: row.id };
       }),
+
+    /**
+     * What a run is likely to cost before it starts, and the ceiling it will
+     * stop under (audit 2026-10-20, F8): the median of this workspace's last
+     * finished runs on the model, else the typical usage at list price.
+     */
+    estimate: workspaceProcedure.query(async ({ ctx }) => {
+      const db = await requireDb();
+      const st = await researchSettingsOf(db, ctx.workspace.id);
+      const model = researchModelOf(st.model);
+      const past = await db
+        .select({ costUsd: researchJobs.costUsd })
+        .from(researchJobs)
+        .where(and(eq(researchJobs.workspaceId, ctx.workspace.id), eq(researchJobs.model, model), eq(researchJobs.status, "done")))
+        .orderBy(desc(researchJobs.id))
+        .limit(10);
+      const e = researchEstimate(model, past.map((p) => Number(p.costUsd)));
+      return { model, ...e, defaultCeilingUsd: DEFAULT_RESEARCH_CEILING_USD, minCeilingUsd: MIN_RESEARCH_CEILING_USD, maxCeilingUsd: MAX_RESEARCH_CEILING_USD };
+    }),
 
     /** Recent runs in the workspace, and where the caller stands against the daily number. */
     // Up to 200, so the Research page can show older runs (audit 2026-10-20, P113).

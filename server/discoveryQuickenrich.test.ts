@@ -149,7 +149,9 @@ describe("QuickEnrich is the PRIMARY source (owner decision 2026-08-24), and the
     // and the loop stops once `slots` net-new prospects are queued — a later
     // source is never called (or paid) for people an earlier one supplied.
     // The old Promise.allSettled fan-out paid every vendor for the same person.
-    expect(engine).toContain("value = await taskFactories[id](remaining)");
+    // 2026-11-07 (audit F12): each source runs under its own spend feature,
+    // still awaited one at a time, in order, with the slots still open.
+    expect(engine).toContain("value = await mergeRequestContext({ feature: DISCOVERY_SOURCE_FEATURE(id, campaign.id) }, () => taskFactories[id](remaining));");
     expect(engine).toContain("const remaining = slots - totalNew;");
     expect(engine).toContain('skipped: "target met by earlier sources"');
     expect(engine).not.toContain("const settled = await Promise.allSettled(tasks)");

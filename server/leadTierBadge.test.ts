@@ -185,9 +185,15 @@ describe("the server derives the grade from the shared mapping", () => {
 
   it("the tier vocabulary has one home", () => {
     // server/leadScoring.ts re-exports the type; the values live in shared.
+    // 2026-11-07 (audit U17): the scoring math moved to shared/leadScoreMath.ts
+    // so the browser can run it; that module re-exports the type, and the
+    // server re-exports the module. Neither may declare the union itself.
     const scoring = strip(read("server/leadScoring.ts"));
-    expect(scoring).toMatch(/export type \{ LeadTier \} from "@shared\/leadTier";/);
-    expect(scoring, "the tier union was re-declared locally")
-      .not.toMatch(/type LeadTier = "cold"/);
+    expect(scoring).toContain('export * from "@shared/leadScoreMath";');
+    const math = strip(read("shared/leadScoreMath.ts"));
+    expect(math).toMatch(/export type \{ LeadTier \} from "\.\/leadTier";/);
+    for (const [name, src] of [["server/leadScoring.ts", scoring], ["shared/leadScoreMath.ts", math]] as const) {
+      expect(src, `the tier union was re-declared locally in ${name}`).not.toMatch(/type LeadTier = "cold"/);
+    }
   });
 });

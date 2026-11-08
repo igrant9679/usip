@@ -25,6 +25,7 @@ import { slugify } from "@shared/slugify";
 import { isAllowedRedirect, REDIRECT_URL_ERROR, safeRedirectUrl } from "@shared/safeRedirect";
 import { assertRowInWorkspace, sequenceInWorkspace } from "../services/foreignIds";
 import { cleanSubmission, submissionData } from "../services/publicSubmission";
+import { assertHumanSubmission, issueSubmitToken, landingScope, turnstileSiteKey } from "../services/publicCaptureGuard";
 
 type FormField = { key: string; label: string; required?: boolean };
 const DEFAULT_FIELDS: FormField[] = [
@@ -43,7 +44,9 @@ const fieldSchema = z.object({ key: z.string().max(40), label: z.string().max(12
  */
 const viewsSeen = new Map<string, string>();
 const MAX_VIEW_KEYS = 100_000;
-export function firstViewToday(pageId: number, visitor: string, now = new Date()): boolean {
+// `pageId` is a landing page's id, or a prefixed key from another counter
+// (forms pass `form-<id>`, F47) so the two id spaces never share a slot.
+export function firstViewToday(pageId: number | string, visitor: string, now = new Date()): boolean {
   const day = now.toISOString().slice(0, 10);
   const key = `${pageId}|${visitor}`;
   if (viewsSeen.get(key) === day) return false;
@@ -256,6 +259,10 @@ export const landingPagesRouter = router({
        * question — and in `auto` mode book — without an outbound send.
        */
       chatSlug: await hostedPageChatSlug(p.workspaceId),
+      // F47: when the page was served (signed), and the Turnstile site key
+      // only when one is configured. See services/publicCaptureGuard.ts.
+      submitToken: issueSubmitToken(landingScope(p.slug)),
+      turnstileSiteKey: await turnstileSiteKey(p.workspaceId),
     };
   }),
 
@@ -284,8 +291,15 @@ export const landingPagesRouter = router({
 
   /** PUBLIC: handle a submission — autonomously create + route + enroll a lead. */
   submit: publicProcedure
-    .input(z.object({ slug: z.string().min(1).max(80), data: submissionData }))
-    .mutation(async ({ input }) => {
+    .input(z.object({
+      slug: z.string().min(1).max(80),
+      data: submissionData,
+      /** From getBySlug: when the page was served (F47). */
+      submitToken: z.string().max(200).optional(),
+      /** The Turnstile widget's answer, when the workspace has Turnstile set up. */
+      turnstileToken: z.string().max(4096).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const [page] = await db.select().from(landingPages).where(eq(landingPages.slug, input.slug));
@@ -296,6 +310,14 @@ export const landingPagesRouter = router({
       const fields = Array.isArray(page.formFields) && page.formFields.length ? page.formFields : DEFAULT_FIELDS;
       const cleaned = cleanSubmission(fields, input.data ?? {});
       if (cleaned.bot) return { ok: true, redirectUrl: safeRedirectUrl(page.redirectUrl) };
+      // Time to submit, and Turnstile when configured (F47), as forms.submit.
+      await assertHumanSubmission({
+        workspaceId: page.workspaceId,
+        scope: landingScope(page.slug),
+        submitToken: input.submitToken,
+        turnstileToken: input.turnstileToken,
+        ip: ctx.req ? clientIpOf(ctx.req as never) : null,
+      });
       const data = cleaned.data;
       const email = str(data.email, 320);
       const rawName = str(data.name, 200);

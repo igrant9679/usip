@@ -250,6 +250,21 @@ export async function getOrSeedSettings(workspaceId: number) {
 }
 
 /**
+ * What an admin sees of a sign-in: everything but the session it started
+ * (migration 0311, F3). A token id is no credential, but nothing here needs
+ * it, and it is the handle "sign out this session" acts on.
+ */
+const LOGIN_HISTORY_COLUMNS = {
+  id: loginHistory.id,
+  userId: loginHistory.userId,
+  workspaceId: loginHistory.workspaceId,
+  ipAddress: loginHistory.ipAddress,
+  userAgent: loginHistory.userAgent,
+  outcome: loginHistory.outcome,
+  createdAt: loginHistory.createdAt,
+};
+
+/**
  * Which of a member's sign-ins this workspace's admins may see (audit
  * 2026-10-20): those recorded against THIS workspace. The Team page used to
  * show every sign-in of the account — when, from which address and browser —
@@ -365,11 +380,18 @@ export const settingsRouter = router({
         throw new TRPCError({
           code: "FORBIDDEN",
           message:
-            "Connect your own authenticator app first (Settings → Profile → Multi-factor authentication). " +
+            "Connect your own authenticator app first (Settings → Profile → Security). " +
             "Turning this on without it would lock you out.",
         });
       }
       const current = await getOrSeedSettings(ctx.workspace.id); // ensure row exists
+      // The system sender is one of this workspace's mailboxes (audit
+      // 2026-10-20, X1.1). sendSystemEmail re-checks at send time; this stops
+      // another tenant's mailbox id being stored at all.
+      if (input.systemSenderAccountId != null) {
+        const { assertRowInWorkspace } = await import("../services/foreignIds");
+        await assertRowInWorkspace(db, "sending account", input.systemSenderAccountId, ctx.workspace.id);
+      }
       // The send window's two hours are checked TOGETHER, against whichever
       // half is not being changed: saving an end hour of 5 must not leave a
       // start of 6 behind it and a window that never opens.
@@ -1778,7 +1800,7 @@ export const teamRouter = router({
         .where(and(eq(workspaceMembers.id, input.memberId), eq(workspaceMembers.workspaceId, ctx.workspace.id)));
       if (!member) throw new TRPCError({ code: "NOT_FOUND", message: "Member not found" });
       return db
-        .select()
+        .select(LOGIN_HISTORY_COLUMNS)
         .from(loginHistory)
         .where(and(eq(loginHistory.userId, member.userId), await loginHistoryScope(db, ctx.workspace.id, member.userId)))
         .orderBy(desc(loginHistory.createdAt))
@@ -1900,6 +1922,13 @@ export const teamRouter = router({
           message: `This invite was sent to ${row.userEmail}. Please sign in with that email address.`,
         });
       }
+      // The invitation's token was emailed to this address, so holding it
+      // proves the address: an account still waiting on its sign-up link is
+      // verified now (audit 2026-10-20, F1). ctx.user IS row.userId (checked
+      // just above) and is the full users row, so no extra read; an account
+      // that is not waiting is not written to.
+      const { isEmailVerificationPending, markEmailVerified } = await import("../services/accountEmailVerification");
+      if (isEmailVerificationPending(ctx.user)) await markEmailVerified(db, row.userId);
       // If the member's loginMethod is already a real method (oauth, google, etc.),
       // the OAuth merge already handled the acceptance — just clear the token and return.
       // This covers: (a) the invite-placeholder merge in the OAuth callback, and
@@ -2026,7 +2055,7 @@ export const teamRouter = router({
         if (range.to) conditions.push(lte(loginHistory.createdAt, range.to) as any);
       }
       return db
-        .select()
+        .select(LOGIN_HISTORY_COLUMNS)
         .from(loginHistory)
         .where(and(...conditions))
         .orderBy(desc(loginHistory.createdAt))
@@ -2036,10 +2065,10 @@ export const teamRouter = router({
   /**
    * Clear a member's authenticator enrolment so they can re-enrol.
    *
-   * There is no backup-code table in the schema, so a lost or wiped phone is
-   * otherwise unrecoverable without a database ticket — and with workspace
-   * `enforce2fa` switched on that member is locked out of the product
-   * entirely, not merely inconvenienced at sign-in. Same rank rule as the
+   * For someone who lost their phone AND their backup codes (G15, 2026-11-07:
+   * the codes now exist, but a lost phone often means lost codes too). With
+   * workspace `enforce2fa` switched on that member is otherwise locked out of
+   * the product entirely, not merely inconvenienced at sign-in. Same rank rule as the
    * rest of the Team page: you can only act on someone below you, or be a
    * super admin, because clearing a peer's second factor is a way past it.
    */
@@ -2063,6 +2092,10 @@ export const teamRouter = router({
         .update(users)
         .set({ mfaTotpSecret: null, mfaTotpEnabledAt: null })
         .where(eq(users.id, member.userId));
+      // The backup codes go with the authenticator (G15): they would otherwise
+      // still sign in past a second factor that is being reset.
+      const { clearBackupCodes } = await import("../services/mfaBackupCodes");
+      await clearBackupCodes(db, member.userId);
       // Sessions minted under the old second factor end with it.
       await revokeAllSessions(db, member.userId);
       await recordAudit({
@@ -2075,6 +2108,40 @@ export const teamRouter = router({
       });
       return { ok: true };
     }),
+
+  /**
+   * Who turning on "Require 2FA" would block (audit 2026-10-20, U21): the
+   * active members without an authenticator, so Settings → Security can say
+   * "N members have no authenticator" before an admin switches it on. Counts
+   * exactly whom the gate stops (workspaceGateRefusal): accepted, not
+   * deactivated, and not super_admin, who is never blocked.
+   */
+  mfaCoverage: adminWsProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const rows = await db
+      .select({
+        name: users.name,
+        email: users.email,
+        role: workspaceMembers.role,
+        mfaEnabledAt: users.mfaTotpEnabledAt,
+      })
+      .from(workspaceMembers)
+      .innerJoin(users, eq(workspaceMembers.userId, users.id))
+      .where(and(
+        eq(workspaceMembers.workspaceId, ctx.workspace.id),
+        isNull(workspaceMembers.deactivatedAt),
+        isNull(workspaceMembers.inviteToken),
+      ));
+    const gated = rows.filter((r) => r.role !== "super_admin");
+    const without = gated.filter((r) => !r.mfaEnabledAt);
+    return {
+      gated: gated.length,
+      withoutAuthenticator: without.length,
+      // A short list to name names; the Team page has the rest (its 2FA column).
+      names: without.slice(0, 10).map((r) => r.name?.trim() || r.email || "A member"),
+    };
+  }),
 
   /** Return the calling member's notification prefs. */
   getNotifPrefs: workspaceProcedure.query(async ({ ctx }) => {

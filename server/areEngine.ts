@@ -88,7 +88,7 @@ import {
 } from "./services/apollo";
 import { archivedWorkspaceIds } from "./_core/workspaceArchive";
 import { stageIndexFor } from "./_core/stageSemantics";
-import { mergeOwnRequestContext } from "./_core/requestContext";
+import { mergeOwnRequestContext, mergeRequestContext } from "./_core/requestContext";
 import { queueIdentityKeys } from "./services/are/queueIdentity";
 import { promoteApprovedProspects } from "./services/are/approvePromotion";
 import { areNotify } from "./routers/are/notify";
@@ -123,7 +123,7 @@ import { icpLabels } from "@shared/icpShape";
 import { dropNeverTarget, neverTargetHit, neverTargetReason } from "@shared/researchTargeting";
 import { campaignNeverTarget } from "./services/research/neverTarget";
 import { downstreamAccountFor, hasSellerDownstreamLink } from "./services/research/downstreamAccounts";
-import { pickFallback, researchTargeting, workspaceIcpFallback } from "./services/research/targetingPrior";
+import { perSectorSliceGroups, pickFallback, researchTargeting, workspaceIcpFallback, type SliceGroup } from "./services/research/targetingPrior";
 import { isHtmlBody, htmlBodyToText } from "@shared/emailBody";
 import { inSendWindow } from "./services/sendWindow";
 import { recountCampaignCounters } from "./services/are/campaignCounters";
@@ -2516,7 +2516,18 @@ type DiscoveryState = {
   lastRunNew?: number;
   /** Sources resting after empty runs, by source id (A25). `held` = the vendor asked for the wait, not an empty run. */
   src?: Record<string, { empty: number; nextAt: number | null; held?: boolean }>;
+  /** When each source last returned people and they were saved, by source id (audit F12: "true last success"). */
+  ok?: Record<string, number>;
 };
+
+/**
+ * The spend-ledger feature a discovery source's paid calls are recorded under
+ * while it runs for a campaign (audit 2026-10-20, F12: tokens spent per
+ * source). services/spend reads the request context's feature when a call
+ * names none; this names the source and the campaign, so the campaign's
+ * source health can sum each source's tokens.
+ */
+export const DISCOVERY_SOURCE_FEATURE = (sourceId: string, campaignId: number) => `are.discovery.${sourceId}#c${campaignId}`;
 
 /** A campaign whose last discovery run found nobody new waits this long (A25). */
 export const DISCOVERY_REST_MS = 30 * 60 * 1000;
@@ -2597,7 +2608,22 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   // lastSearchedAt and lastNewCount per slice. Every tick the engine
   // picks the STALEST slice (null first, then oldest) so over time it
   // covers the full ICP grid without increasing per-tick API spend.
-  const targetingSlices = buildQuerySlices({ titles, industries, geos, keywords, sizeHint });
+  // F37 (audit 2026-10-20): when blank fields fall back to the researched
+  // sectors, each sector's titles are searched with its own industries and
+  // places, not with every other sector's. Only the rotating queries change;
+  // the vendor searches below still take the combined lists.
+  const sectorGroups = perSectorSliceGroups({
+    mode: fallback,
+    own: {
+      titles: overrides.targetTitles?.length ? icpLabels(overrides.targetTitles, "title") : [],
+      industries: overrides.targetIndustries?.length ? icpLabels(overrides.targetIndustries, "industry") : [],
+      geos: overrides.targetGeographies?.length ? icpLabels(overrides.targetGeographies, "geography") : [],
+      keywords: overrides.keywords?.length ? overrides.keywords : [],
+    },
+    inferred: { titles: icpLabels(icp?.targetTitles, "title"), industries: icpLabels(icp?.targetIndustries, "industry"), geos: icpLabels(icp?.targetGeographies, "geography") },
+    researched,
+  });
+  const targetingSlices = buildQuerySlices({ titles, industries, geos, keywords, sizeHint, groups: sectorGroups });
   if (targetingSlices.length === 0) {
     await emitLog(campaign.workspaceId, campaign.id, "discovery", "warn",
       "Discovery skipped — campaign has no targeting (titles/industries/geos/keywords). Open the campaign and add targets, or apply a Persona.");
@@ -2842,6 +2868,8 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
   let sourcesAsked = 0;
   let sourcesNotAsked = 0;
   const perSource: Record<string, { raw: number; new: number; error?: string; skipped?: string }> = {};
+  // Last success per source (F12), carried from the stored state.
+  const lastOk: Record<string, number> = { ...(persistedState.ok ?? {}) };
   // F17: the campaign's places, classified once, and what the check found.
   const targetPlaces = parseTargetPlaces(geos);
   const territoryMode = territoryModeOf(campaign.icpOverrides);
@@ -2864,7 +2892,8 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     }
     let value: SourceResult;
     try {
-      value = await taskFactories[id](remaining);
+      // Tokens a source spends are recorded under its own feature (F12).
+      value = await mergeRequestContext({ feature: DISCOVERY_SOURCE_FEATURE(id, campaign.id) }, () => taskFactories[id](remaining));
     } catch (err) {
       const empty = (sourceState[id]?.empty ?? 0) + 1;
       sourceState[id] = { empty, nextAt: Date.now() + discoveryBackoffMs(empty) };
@@ -2961,10 +2990,14 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
       // claimed in it (A34): the save does not read the queue again.
       await saveScrapeJobAndQueue(campaign.workspaceId, campaign.id, sourceType, q, scored, { identityChecked: true });
       totalNew += scored.length;
-      perSource[sourceType] = { raw: raw.length, new: scored.length };
+      // Keyed by the source's id, as every other perSource entry is: the
+      // scrape-job name ("linkedin_people") hid LinkedIn's successful attempts
+      // from the campaign's source health, which reads by id (F12).
+      perSource[id] = { raw: raw.length, new: scored.length };
+      if (raw.length > 0) lastOk[id] = Date.now();
     } catch (e) {
       console.error(`[AreEngine] saveScrapeJobAndQueue (${sourceType}) failed:`, e);
-      perSource[sourceType] = { raw: raw.length, new: 0, error: String((e as Error)?.message ?? e) };
+      perSource[id] = { raw: raw.length, new: 0, error: String((e as Error)?.message ?? e) };
       await emitLog(campaign.workspaceId, campaign.id, "discovery", "error",
         `Failed to save ${sourceType} results: ${(e as Error)?.message ?? e}`, errorDetails(e));
     }
@@ -3006,6 +3039,7 @@ async function runDiscovery(campaign: Campaign, slots: number = Number.MAX_SAFE_
     lastRunAt: nothingAsked ? persistedState.lastRunAt : now,
     lastRunNew: nothingAsked ? persistedState.lastRunNew : totalNew,
     src: sourceState,
+    ok: lastOk,
     // The QuickEnrich page cursor rides the same JSON: the advanced state
     // when this tick pulled, else whatever was stored (a skipped pull — no
     // key, no headroom — must not reset the rotation).
@@ -3058,8 +3092,29 @@ export function buildQuerySlices(args: {
   geos: string[];
   keywords: string[];
   sizeHint: string;
+  /**
+   * Build each group's product separately instead of the flat lists' (F37:
+   * one researched sector's titles with only its own industries and places),
+   * then take them in turn, so every group gets its share of the cap.
+   */
+  groups?: SliceGroup[] | null;
 }): Array<{ id: string; q: string }> {
   const MAX_SLICES = 120;
+  if (args.groups && args.groups.length > 0) {
+    const perGroup = args.groups.map((g) => buildQuerySlices({ titles: g.titles, industries: g.industries, geos: g.geos, keywords: g.keywords, sizeHint: args.sizeHint }));
+    const out: Array<{ id: string; q: string }> = [];
+    const seen = new Set<string>();
+    for (let i = 0; out.length < MAX_SLICES && perGroup.some((g) => i < g.length); i++) {
+      for (const g of perGroup) {
+        const s = g[i];
+        if (!s || seen.has(s.id)) continue;
+        seen.add(s.id);
+        out.push(s);
+        if (out.length >= MAX_SLICES) break;
+      }
+    }
+    return out;
+  }
   // Safety ceiling on the raw build so a pathological ICP (e.g. 10×10×10×10)
   // can't blow up memory; we stride-sample down to MAX_SLICES afterwards.
   const BUILD_CEILING = MAX_SLICES * 12;

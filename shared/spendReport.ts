@@ -98,6 +98,26 @@ export function unitCostUsd(vendor: string, meter: string, model: string, quanti
 
 const TOKEN_METERS = new Set(["input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens"]);
 
+/**
+ * What one model call has cost on average, from the ledger rows of the calls
+ * in question, for a control that says what it will spend before it spends
+ * it (audit 2026-10-20, P144 and the "Spending" rule). Calls are counted on
+ * the input-token rows (every call writes one). Null with no calls, or when
+ * any row is a model with no price on file: a guessed price is worse than none.
+ */
+export function averageCallCostUsd(rows: Array<Pick<SpendRowIn, "vendor" | "meter" | "model" | "quantity" | "calls">>): { perCall: number; calls: number } | null {
+  let usd = 0;
+  let calls = 0;
+  for (const r of rows) {
+    if (r.meter === "input_tokens") calls += r.calls;
+    if (!r.quantity) continue;
+    const c = unitCostUsd(r.vendor, r.meter, r.model, r.quantity);
+    if (c === null) return null;
+    usd += c;
+  }
+  return calls > 0 ? { perCall: usd / calls, calls } : null;
+}
+
 export function summarizeSpend(rows: SpendRowIn[], days: string[]): SpendSummary {
   const inRange = new Set(days);
   const lines = new Map<string, SpendLine>();

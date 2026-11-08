@@ -71,7 +71,10 @@ describe("equals on a number (G61)", () => {
 describe("each trigger offers the fields its event carries (G61)", () => {
   const sites: Record<string, string[]> = {
     stage_changed: ["server/services/workflowEngine.ts"],
-    deal_stuck: ["server/routers/operations.ts"],
+    // 2026-11-07 (F46): both deal_stuck sites in operations.ts now build their
+    // payload with buildDealStuckPayload in workflowEngine.ts, which the dry
+    // run shares. The keys are checked where they are set.
+    deal_stuck: ["server/routers/operations.ts", "server/services/workflowEngine.ts"],
     task_overdue: ["server/services/workflowEngine.ts"],
     signal_received: [
       "server/services/linkedinEnrichment/jobChangeReengagement.ts",

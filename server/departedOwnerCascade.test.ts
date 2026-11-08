@@ -422,6 +422,18 @@ const SURFACES: Array<{
     end: "\n}",
     gate: /if \(!\(await isActiveMember\(workspaceId, userId\)\)\) \{\s*throw new TRPCError\(\{ code: "BAD_REQUEST"/,
   },
+  {
+    /**
+     * 2026-11-07 (audit X1.1): a note's @mention notified whatever user id the
+     * body named, another workspace's or a leaver's included. Only active
+     * members here are told now, as crmNotes.create already did.
+     */
+    what: "an activity note's mention notifies only active members of this workspace",
+    file: "server/routers/activities.ts",
+    start: "addNote: repProcedure",
+    end: "return { ok: true, mentioned };",
+    gate: /const here = await activeMemberIds\(ctx\.workspace\.id, mentioned\);[\s\S]*if \(uid === ctx\.user\.id \|\| !here\.has\(uid\)\) continue;/,
+  },
 ];
 
 describe("every session-less path that names a member gates on active membership", () => {
@@ -449,7 +461,9 @@ describe("every session-less path that names a member gates on active membership
     // by the territory rules now (audit R42).
     // Same day: 41, with areNotifyRecipient — an ARE notice goes to the
     // campaign's owner, while they are an active member (audit A57).
-    expect(SURFACES.length).toBe(41);
+    // 2026-11-07: 42, with activities.addNote — a mention notifies only an
+    // active member of this workspace (audit X1.1).
+    expect(SURFACES.length).toBe(42);
     expect(new Set(SURFACES.map((s) => `${s.file}::${s.start}`)).size).toBe(SURFACES.length);
   });
 
@@ -554,6 +568,12 @@ describe("no unattended path reads workspaces.ownerUserId raw any more", () => {
     // the owner as team.deactivate and team.delete do. The raw column is the
     // question there too; it addresses nothing to the owner.
     ["server/scimHttp.ts", "setScimActive refuses to deprovision the workspace's owner, comparing the column to the person being deprovisioned"],
+    // 2026-11-07 (audit F1): picking whose system sender carries a sign-up
+    // verification link. The account's own workspaces go through
+    // pickResetSenderWorkspace (owned first, the reset mail's order); with
+    // none, the platform's sender is a workspace a platform owner OWNS, so
+    // the raw column is the question. Nothing is addressed to the owner.
+    ["server/services/accountEmailVerification.ts", "verificationSenderWorkspace picks the sender of a sign-up link; it addresses nothing to the owner"],
   ]);
 
   it("every raw read is either gone or allowlisted with a reason", () => {

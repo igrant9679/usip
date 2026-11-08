@@ -21,6 +21,7 @@ import {
   XCircle,
   RotateCcw,
   ThumbsUp,
+  ThumbsDown,
   Timer,
   AlertTriangle,
   CalendarClock,
@@ -63,6 +64,11 @@ const STATUS_CONFIG = {
   not_accepted: { label: "Not accepted", color: "bg-red-50 text-red-700 border-red-200" },
   revision_requested: { label: "Revision requested", color: "bg-orange-50 text-orange-700 border-orange-200" },
 } as const;
+
+/** Statuses a client can still answer from — the server's ACCEPTABLE_STATUSES (proposals.ts). */
+function isOpenForAnswer(status: string | null | undefined): boolean {
+  return status === "sent" || status === "under_review" || status === "revision_requested";
+}
 
 const SECTION_LABELS: Record<string, string> = {
   executive_summary: "Executive Summary",
@@ -116,6 +122,18 @@ export default function ProposalPortal() {
       setExtensionSubmitted(true);
       setExtensionDialogOpen(false);
       toast.success("Extension request sent \u2014 the team has been notified.");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  // The portal's other answer (G70): a client could accept or say nothing.
+  const [declineDialogOpen, setDeclineDialogOpen] = useState(false);
+  const [declined, setDeclined] = useState(false);
+  const [declineReason, setDeclineReason] = useState("");
+  const declineMutation = trpc.proposals.declineByToken.useMutation({
+    onSuccess: () => {
+      setDeclined(true);
+      setDeclineDialogOpen(false);
+      toast.success("Thanks for letting us know. The team has been told.");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -236,8 +254,9 @@ export default function ProposalPortal() {
               {proposal.description}
             </p>
           )}
-          {/* Accept Proposal CTA */}
-          {proposal.status !== "accepted" && !accepted && (
+          {/* Accept / Decline CTA — only while the proposal is out with the
+              client: the server refuses both on any other status (R24, G70). */}
+          {isOpenForAnswer(proposal.status) && !accepted && !declined && (
             <div className="mt-4 pt-4 border-t border-gray-100 flex flex-wrap items-center gap-3">
               <Button
                 onClick={() => setAcceptDialogOpen(true)}
@@ -245,6 +264,14 @@ export default function ProposalPortal() {
               >
                 <ThumbsUp className="size-4" />
                 Accept This Proposal
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setDeclineDialogOpen(true)}
+                className="gap-2 text-gray-700"
+              >
+                <ThumbsDown className="size-4" />
+                Decline
               </Button>
               {(proposal as any).expiresAt && (() => {
                 const extStatus = extensionStatus?.status ?? "none";
@@ -296,6 +323,12 @@ export default function ProposalPortal() {
             <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-2 text-emerald-700">
               <CheckCircle2 className="size-5 text-emerald-500" />
               <span className="text-sm font-medium">This proposal has been accepted.</span>
+            </div>
+          )}
+          {(proposal.status === "not_accepted" || declined) && !accepted && (
+            <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-2 text-gray-700">
+              <ThumbsDown className="size-5 text-gray-400" />
+              <span className="text-sm font-medium">This proposal has been declined. Contact the team if you'd like to revisit it.</span>
             </div>
           )}
         </div>
@@ -560,6 +593,39 @@ export default function ProposalPortal() {
             >
               <ThumbsUp className="size-4" />
               {acceptMutation.isPending ? "Accepting..." : "Yes, Accept"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Decline Proposal dialog (G70) */}
+      <Dialog open={declineDialogOpen} onOpenChange={setDeclineDialogOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Decline this proposal?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm text-gray-600">
+            <p>The team that sent <strong>{proposal.title}</strong> will be told. Nothing else changes, and you can still contact them.</p>
+            <div>
+              <Label htmlFor="decline-name" className="text-gray-700">Your name (optional)</Label>
+              <Input id="decline-name" value={signerName} onChange={(e) => setSignerName(e.target.value)} className="mt-1" maxLength={200} autoComplete="name" />
+            </div>
+            <div>
+              <Label htmlFor="decline-reason" className="text-gray-700">Reason (optional)</Label>
+              <Textarea id="decline-reason" rows={3} value={declineReason} onChange={(e) => setDeclineReason(e.target.value)} className="mt-1" maxLength={2000} placeholder="Budget, timing, chose another option…" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeclineDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => declineMutation.mutate({ token, signerName: signerName.trim() || undefined, reason: declineReason.trim() || undefined })}
+              disabled={declineMutation.isPending}
+              className="gap-1.5"
+            >
+              <ThumbsDown className="size-4" />
+              {declineMutation.isPending ? "Declining..." : "Yes, decline"}
             </Button>
           </DialogFooter>
         </DialogContent>

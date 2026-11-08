@@ -15,6 +15,7 @@ import { RunsForRecord } from "@/components/usip/research/ResearchRuns";
 import { ExtLink, ScoreDots } from "@/components/usip/research/ReportBits";
 import { SECTOR_SCORE_KEYS, SECTOR_SCORE_LABEL, isWebLink } from "@shared/researchShape";
 import { NotFoundState } from "@/components/usip/QueryState";
+import { scoredCount } from "@shared/researchReports";
 
 const List = ({ items }: { items: string[] }) =>
   items.length ? <ul className="list-disc pl-5 space-y-1 text-sm">{items.map((x, i) => <li key={i}>{x}</li>)}</ul> : <p className="text-sm text-muted-foreground">Nothing recorded yet.</p>;
@@ -66,6 +67,7 @@ export default function ResearchSectorReport() {
             {SECTOR_SCORE_KEYS.map((k) => (
               <div key={k} className="flex items-center gap-2"><span className="text-muted-foreground w-12">{SECTOR_SCORE_LABEL[k]}</span><ScoreDots value={c.scores[k]} /></div>
             ))}
+            <div className="text-muted-foreground">{scoredCount(c.scores)} of {SECTOR_SCORE_KEYS.length} scored</div>
           </div>
         </Section>
 

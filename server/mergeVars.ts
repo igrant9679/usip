@@ -24,7 +24,7 @@ import { isActiveMember } from "./_core/activeMembers";
 import { contacts, accounts, leads, prospects, bookingLinks, users } from "../drizzle/schema";
 import { escapeHtml } from "@shared/escapeHtml";
 import { isHtmlBody } from "@shared/emailBody";
-import { slugify } from "@shared/slugify";
+import { unguessableSlug } from "@shared/slugify";
 import { clickSignature } from "./services/trackedLinks";
 import { buildMergeLookup, isEmptyLinkToken, normalizeMergeKey, parseMergeToken, resolveMergeName, stripEmptyLinkCarriers } from "@shared/mergeKeys";
 
@@ -93,9 +93,8 @@ export async function resolveBookingUrl(
       const [u] = await db.select({ name: users.name }).from(users).where(eq(users.id, userId));
       // Same rule as bookingLinks.ts, which MINTS this slug — an inline copy
       // here meant {{bookingLink}} could resolve to a URL the booking router
-      // would never have generated.
-      const base = slugify(u?.name ?? `rep-${userId}`) || `rep-${userId}`;
-      const slug = `${base}-${userId}`.slice(0, 80);
+      // would never have generated. Unguessable, like every new link (G70).
+      const slug = unguessableSlug(u?.name, `rep-${userId}`);
       await db.insert(bookingLinks).values({ workspaceId, userId, slug, title: "Book a meeting" } as never);
       [link] = await db
         .select({ slug: bookingLinks.slug, active: bookingLinks.active })

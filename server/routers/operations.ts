@@ -21,6 +21,7 @@ import {
   dashboards,
   notifications,
   opportunities,
+  products,
   quoteLineItems,
   quotes,
   reportSchedules,
@@ -45,11 +46,13 @@ import { activeMemberEmails, activeRecipients, revokedMemberEmails } from "../se
 import { escapeHtml } from "@shared/escapeHtml";
 import { csvCell } from "@shared/csvCell";
 import { filtersNotApplied } from "@shared/dashboardPresets";
-import { assertRowInWorkspace } from "../services/foreignIds";
+import { assertInWorkspace, assertOwnerInWorkspace, assertRowInWorkspace } from "../services/foreignIds";
 import { storagePut } from "../storage";
 import { buildTransporter, decrypt } from "./smtpConfig";
-import { evalConditions, executeRuleActions, normalizeConditions } from "../services/workflowEngine";
+import { buildDealStuckPayload, evalConditions, executeRuleActions, normalizeConditions } from "../services/workflowEngine";
 import { describeRuleActions } from "../services/workflowDryRun";
+import { DryRunRefusal, dryRunRuleAgainstRecord } from "../services/workflowRecordDryRun";
+import { searchWorkflowRecords, workflowEditorOptions } from "../services/workflowEditorData";
 import { archivedWorkspaceIds } from "../_core/workspaceArchive";
 // One arithmetic rule for quote money, shared with the client's preview so the
 // number the user approves is the number stored. See shared/quoteTotals.ts.
@@ -201,17 +204,8 @@ export async function checkDealAging(): Promise<{ rulesChecked: number; dealsMat
        * out-of-enum value in strict mode. The shared handler uses
        * "workflow_fired", which is in it.
        */
-      const payload = {
-        entity: "opportunity",
-        id: deal.id,
-        name: deal.name,
-        stage: deal.stage,
-        daysInStage: deal.daysInStage,
-        value: Number(deal.value ?? 0),
-        winProb: deal.winProb,
-        ownerUserId: deal.ownerId ?? null,
-        ruleName: rule.name,
-      };
+      // One builder for both deal_stuck sites and the dry run (F46).
+      const payload = buildDealStuckPayload(deal, rule.name);
       // deal_stuck was the one trigger that IGNORED its own conditions: both
       // loops ran the actions on every stuck deal, so a rule scoped to
       // "negotiation only, over $50k" alerted on every stalled deal in the
@@ -391,6 +385,66 @@ export const workflowsRouter = router({
   }),
 
   /**
+   * Try a rule against one real record (audit 2026-10-20, F46): the payload its
+   * trigger would carry, which gates and conditions pass, and what each action
+   * would do to that record. Reads only: nothing is written, sent or logged.
+   * Takes the editor's unsaved draft, or a saved rule by id.
+   */
+  dryRun: managerProcedure
+    .input(z.object({
+      id: z.number().int().positive().optional(),
+      draft: z.object({
+        triggerType: z.enum(LIVE_TRIGGER_IDS as unknown as [LiveTrigger, ...LiveTrigger[]]),
+        triggerConfig: z.record(z.string(), z.any()).optional(),
+        conditions: z.array(z.object({ field: z.string(), op: z.string(), value: z.any() })).optional(),
+        actions: z.array(z.object({ type: z.string(), params: z.record(z.string(), z.any()) })).optional(),
+      }).optional(),
+      recordType: z.enum(["lead", "contact", "opportunity", "task"]),
+      recordId: z.number().int().positive(),
+      signal: z.string().max(40).optional(),
+      fromStage: z.string().max(60).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      let rule = input.draft ?? null;
+      if (!rule) {
+        if (!input.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Pick a rule to try." });
+        const [saved] = await db.select().from(workflowRules).where(and(eq(workflowRules.id, input.id), eq(workflowRules.workspaceId, ctx.workspace.id)));
+        if (!saved) throw new TRPCError({ code: "NOT_FOUND" });
+        rule = saved as never;
+      }
+      try {
+        return await dryRunRuleAgainstRecord(db, ctx.workspace.id, rule as never, {
+          recordType: input.recordType, recordId: input.recordId, signal: input.signal ?? null, fromStage: input.fromStage ?? null,
+        });
+      } catch (e) {
+        if (e instanceof DryRunRefusal) throw new TRPCError({ code: "BAD_REQUEST", message: e.message });
+        throw e;
+      }
+    }),
+
+  /** Names for the editor's pickers (G71): members, sequences and stages. */
+  editorOptions: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) return { users: [], sequences: [], stages: [], campaigns: [] };
+    return workflowEditorOptions(db, ctx.workspace.id);
+  }),
+
+  /** Records by name, for the dry run's record picker and the editor's account picker (F46, G71). */
+  searchRecords: workspaceProcedure
+    .input(z.object({
+      type: z.enum(["lead", "contact", "opportunity", "task", "account"]),
+      q: z.string().max(80).optional(),
+      ids: z.array(z.number().int().positive()).max(50).optional(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      return searchWorkflowRecords(db, ctx.workspace.id, input.type, input.q, input.ids);
+    }),
+
+  /**
    * Check all deal_stuck workflow rules for a workspace and fire any that match.
    * Called by the nightly batch job (or manually from admin panel).
    */
@@ -446,17 +500,8 @@ export const workflowsRouter = router({
           // Shared dispatcher — see checkDealAging above for why the local copy
           // that used to live here was wrong (six of the eight builder actions
           // did nothing, and the run was still logged "success").
-          const payload = {
-            entity: "opportunity",
-            id: deal.id,
-            name: deal.name,
-            stage: deal.stage,
-            daysInStage: deal.daysInStage,
-            value: Number(deal.value ?? 0),
-            winProb: deal.winProb,
-            ownerUserId: deal.ownerId ?? null,
-            ruleName: rule.name,
-          };
+          // The same builder as the nightly sweep above (F46).
+          const payload = buildDealStuckPayload(deal, rule.name);
           // Conditions honoured here too — the manual check and the nightly
           // cron must agree about which deals a rule covers.
           if (!evalConditions(normalizeConditions(rule.conditions), payload)) continue;
@@ -589,6 +634,8 @@ export const campaignsRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // The owner works here (audit 2026-10-20, X1.1).
+    await assertOwnerInWorkspace(ctx.workspace.id, input.patch.ownerUserId);
     const patch: any = { ...input.patch };
     if (patch.budget !== undefined) patch.budget = String(patch.budget);
     if (patch.startsAt && typeof patch.startsAt === "string") patch.startsAt = new Date(patch.startsAt);
@@ -633,6 +680,10 @@ export const campaignsRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // The campaign, and a sequence component, are this workspace's (X1.1):
+    // another's campaign id filed a component under that tenant's campaign.
+    await assertInWorkspace(db, campaigns, input.campaignId, ctx.workspace.id, "campaign");
+    if (input.componentType === "sequence") await assertInWorkspace(db, sequences, input.componentId, ctx.workspace.id, "sequence");
     await db.insert(campaignComponents).values({ ...input, workspaceId: ctx.workspace.id });
     return { ok: true };
   }),
@@ -1917,6 +1968,8 @@ export const quotesRouter = router({
     const [opp] = await db.select({ id: opportunities.id }).from(opportunities)
       .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
     if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+    // A line's product, when it names one, is this workspace's (X1.1).
+    await assertInWorkspace(db, products, input.lineItems.map((li) => li.productId), ctx.workspace.id, "product");
 
     // One arithmetic rule, in integer cents — @shared/quoteTotals. Every figure
     // below is DERIVED from the rounded line figures, so the PDF's rows sum to

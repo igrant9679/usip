@@ -33,6 +33,10 @@ import { ResearchSubNav, reportDropped } from "@/components/usip/research/Resear
 import { EMPTY_PERSONA, PersonaFormFields, personaFormFrom, personaPayload, type PersonaForm } from "@/components/usip/research/PersonaFormFields";
 import { icpLabels } from "@shared/icpShape";
 import { useWorkspaceRole } from "@/hooks/useWorkspaceRole";
+import { filterPersonas, isFiltering, NO_PERSONA_FILTER, type PersonaFilter } from "@/lib/personaFilters";
+import { personaResearchCompleteness } from "@shared/researchShape";
+import { StartCampaignFromPersona } from "@/components/usip/research/StartCampaignFromPersona";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 /** Per-section collapse map, keyed "cat:<id>" / "uncat". UI-only state. */
 const SECTIONS_LS_KEY = "velocity_personas_sections_collapsed";
@@ -95,6 +99,9 @@ export default function Personas() {
 
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  // Search and filters (audit 2026-10-20, U18).
+  const [filter, setFilter] = useState<PersonaFilter>(NO_PERSONA_FILTER);
+  const filtering = isFiltering(filter);
   const [form, setForm] = useState<PersonaForm>(EMPTY_PERSONA);
 
   // Category create/rename dialog
@@ -245,7 +252,8 @@ export default function Personas() {
   // so the persona never silently disappears from the page.
   const catIds = new Set(cats.map((c: any) => c.id));
   const personasByCat = new Map<number | null, any[]>();
-  for (const p of list as any[]) {
+  const visible = filterPersonas(list as any[], filter, sectorName);
+  for (const p of visible) {
     const key = p.categoryId != null && catIds.has(p.categoryId) ? (p.categoryId as number) : null;
     const arr = personasByCat.get(key) ?? [];
     arr.push(p);
@@ -253,7 +261,11 @@ export default function Personas() {
   }
   const uncategorized = personasByCat.get(null) ?? [];
 
-  const renderPersona = (p: any) => (
+  const renderPersona = (p: any) => {
+    // Writers pass over a persona with no research; say so (U18).
+    const research = personaResearchCompleteness(p);
+    const used = p.campaignCount ?? 0;
+    return (
     <div key={p.id} className="flex items-start justify-between border rounded p-3">
       <div className="min-w-0 flex-1">
         <div className="font-medium text-sm">{p.name}</div>
@@ -278,9 +290,20 @@ export default function Personas() {
             </Badge>
           )}
           <PersonaResultsBadge personaId={p.id} name={p.name} tally={personaResults[p.id]} />
+          <Badge
+            variant="outline"
+            className={`text-[10px] ${research.level === "complete" ? "border-emerald-300 text-emerald-700 dark:text-emerald-300" : research.level === "partial" ? "border-amber-300 text-amber-700 dark:text-amber-300" : "border-rose-300 text-rose-700 dark:text-rose-300"}`}
+            title={research.level === "none" ? "The AI writers skip a persona with no research when they match by job title." : research.missing.length ? `Missing: ${research.missing.join(", ")}` : "What they care about, pains, objections and the angle are all filled in."}
+          >
+            {research.level === "none" ? "No research: writers skip it" : `Research ${research.filled} of ${research.of}`}
+          </Badge>
+          <Badge variant="outline" className="text-[10px]" title={used ? `${p.activeCampaignCount ?? 0} of them active` : "No Revenue Engine campaign uses this persona"}>
+            {used ? `Used by ${used} campaign${used === 1 ? "" : "s"}` : "Not used by a campaign"}
+          </Badge>
         </div>
       </div>
-      <div className="flex gap-1 shrink-0">
+      <div className="flex gap-1 shrink-0 items-start">
+        <StartCampaignFromPersona persona={p} sectorName={p.sectorId != null ? sectorName.get(p.sectorId) ?? null : null} />
         {canEdit && (
           <Button aria-label="Edit persona" size="sm" variant="ghost" onClick={() => startEdit(p)}>
             <Pencil className="size-3.5" />
@@ -293,7 +316,8 @@ export default function Personas() {
         )}
       </div>
     </div>
-  );
+    );
+  };
 
   const personaList = (items: any[], emptyText: string) =>
     items.length === 0 ? (
@@ -366,6 +390,58 @@ export default function Personas() {
         )}
       </Card>
 
+      {/* Search and filters (U18) */}
+      {(list as any[]).length > 0 && (
+        <Card className="mb-4 shrink-0">
+          <CardContent className="pt-6 flex flex-wrap items-end gap-3">
+            <div className="space-y-1 flex-1 min-w-[12rem]">
+              <Label htmlFor="persona-search" className="text-xs">Search</Label>
+              <Input id="persona-search" placeholder="Name, title, industry, keyword or sector" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Sector</Label>
+              <Select value={String(filter.sector)} onValueChange={(v) => setFilter({ ...filter, sector: v === "any" || v === "none" ? v : Number(v) })}>
+                <SelectTrigger aria-label="Sector" className="w-44"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="any">Any sector</SelectItem>
+                  <SelectItem value="none">No sector</SelectItem>
+                  {sectorOptions.map((s) => <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Research</Label>
+              <Select value={filter.research} onValueChange={(v) => setFilter({ ...filter, research: v as PersonaFilter["research"] })}>
+                <SelectTrigger aria-label="Research" className="w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="any">Any</SelectItem>
+                  <SelectItem value="complete">Complete</SelectItem>
+                  <SelectItem value="partial">Partly filled in</SelectItem>
+                  <SelectItem value="none">None</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Campaigns</Label>
+              <Select value={filter.use} onValueChange={(v) => setFilter({ ...filter, use: v as PersonaFilter["use"] })}>
+                <SelectTrigger aria-label="Campaigns" className="w-44"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="any">Any</SelectItem>
+                  <SelectItem value="used">Used by a campaign</SelectItem>
+                  <SelectItem value="unused">Not used</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {filtering && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground pb-2">
+                <span role="status">{visible.length} of {(list as any[]).length} match</span>
+                <Button size="sm" variant="ghost" className="h-7" onClick={() => setFilter(NO_PERSONA_FILTER)}>Clear</Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Saved personas, one collapsible section per category */}
       {error ? (
         <Card className="shrink-0"><CardContent className="pt-6"><QueryError message={error.message} onRetry={() => refetch()} /></CardContent></Card>
@@ -373,7 +449,11 @@ export default function Personas() {
         <Card className="shrink-0"><CardContent className="pt-6"><TableSkeleton rows={5} /></CardContent></Card>
       ) : (
         <div className="space-y-4">
-          {cats.map((c: any, i: number) => (
+          {filtering && visible.length === 0 && (
+            <Card className="shrink-0"><CardContent className="pt-6 text-sm text-muted-foreground text-center">No personas match. <Button size="sm" variant="link" onClick={() => setFilter(NO_PERSONA_FILTER)}>Clear the filters</Button></CardContent></Card>
+          )}
+          {/* While filtering, a category with no match is left out. */}
+          {cats.map((c: any, i: number) => (filtering && !(personasByCat.get(c.id) ?? []).length) ? null : (
             <SectionCard
               key={c.id}
               title={c.name}
@@ -411,7 +491,7 @@ export default function Personas() {
           {/* Uncategorized — always present when it has personas; doubles as
               the only section while no categories exist yet. Not movable or
               deletable since it's the fallback, not a real category. */}
-          {(cats.length === 0 || uncategorized.length > 0) && (
+          {(uncategorized.length > 0 || (!filtering && cats.length === 0)) && (
             <SectionCard
               title={cats.length === 0 ? "Your personas" : "Uncategorized"}
               count={uncategorized.length}

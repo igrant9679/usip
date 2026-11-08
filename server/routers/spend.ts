@@ -19,7 +19,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { adminProcedure, router } from "../_core/trpc";
-import { workspaceProcedure } from "../_core/workspace";
+import { isAdminRole, workspaceProcedure } from "../_core/workspace";
 import { checkPermission, getDb } from "../db";
 import { workspaceSettings, workspaces } from "../../drizzle/schema";
 import { tryDecryptSecret } from "../_core/crypto";
@@ -35,6 +35,29 @@ function periodDays(days: number): string[] {
 }
 
 export const spendRouter = router({
+  /**
+   * Each paid source's allowance left today and the AI budget (audit
+   * 2026-10-20, F8, U16): what the launchers and the cost confirmations show
+   * BEFORE a run. Anyone who can start a run can see what it may spend, so
+   * it is not billing-gated; it reads counts, never keys.
+   */
+  budgets: workspaceProcedure.query(async ({ ctx }) => {
+    const { sourceBudgets } = await import("../services/sourceBudgets");
+    return sourceBudgets(ctx.workspace.id, ctx.user.id, isAdminRole(ctx.member.role));
+  }),
+
+  /**
+   * This calendar month's paid usage, the "monthly spend card" (audit F8): the
+   * report's own summary over the UTC days from the 1st to today.
+   */
+  month: workspaceProcedure.query(async ({ ctx }) => {
+    await checkPermission(ctx, "access_billing");
+    const today = spendDay();
+    const days = dayRange(`${today.slice(0, 8)}01`, today);
+    const rows = await spendSince(days[0], ctx.workspace.id);
+    return { month: today.slice(0, 7), ...summarizeSpend(rows, days) };
+  }),
+
   report: workspaceProcedure.input(periodInput).query(async ({ ctx, input }) => {
     await checkPermission(ctx, "access_billing");
     const days = periodDays(input?.days ?? 7);

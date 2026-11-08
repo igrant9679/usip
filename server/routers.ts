@@ -5,6 +5,7 @@ import { endCurrentSession } from "./_core/sessionRevocation";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { workspaceRouter } from "./routers/workspace";
+import { accountVerificationRouter } from "./routers/accountVerification";
 import { accountsRouter, contactsRouter, crmNotesRouter, crmPipelinesRouter, crmTerritoryRulesRouter, leadsRouter, opportunitiesRouter, productsRouter, territoriesRouter } from "./routers/crm";
 import { activitiesRouter, attachmentsRouter, tasksRouter } from "./routers/activities";
 import { emailDraftsRouter, sequencesRouter, sequenceAbRouter } from "./routers/sequences";
@@ -103,6 +104,8 @@ export const appRouter = router({
   }),
 
   workspace: workspaceRouter,
+  // The sign-up email check (audit 2026-10-20, F1); not the People verifier, emailVerification.
+  accountVerification: accountVerificationRouter,
   assistant: assistantRouter,
   scoring: scoringRouter,
   companies: companiesRouter,
