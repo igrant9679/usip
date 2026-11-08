@@ -32,7 +32,7 @@ import { stageResolver } from "../_core/stageSemantics";
 import { invokeLLM } from "../_core/llm";
 import { router } from "../_core/trpc";
 import { managerProcedure, repProcedure, workspaceProcedure } from "../_core/workspace";
-import { boardScopeWhere } from "./crm";
+import { BOARD_SCOPE, boardScopeWhere } from "./crm";
 
 /* ─── helpers ────────────────────────────────────────────────────────────── */
 
@@ -432,7 +432,8 @@ export const opportunityIntelligenceRouter = router({
    * (audit 2026-10-20, L7).
    */
   getIntelligenceForBoard: workspaceProcedure
-    .input(z.object({ ownerUserId: z.number().optional(), pipelineId: z.number().optional() }).optional())
+    // The board's whole scope, close-date range included (U13).
+    .input(BOARD_SCOPE)
     .query(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) return [];

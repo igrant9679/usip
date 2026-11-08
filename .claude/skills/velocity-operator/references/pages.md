@@ -15,7 +15,7 @@ The first stop every day. Three things:
 3. **What the autopilots did** — the recent engine and autopilot events.
 Work it top to bottom; each row links to the queue it came from.
 
-### ★ Dashboard — `/dashboard`
+### ★ Dashboard — `/v2/home?view=pipeline` (the Pipeline view of Home)
 Pipeline at a glance: revenue by period, win/loss, stage funnel, top reps, recent deals. Read-only. Good for a manager's Monday glance; `/dashboards` is where custom boards live.
 
 ### ★ AI Assistant — `/v2/ai-assistant`
@@ -77,17 +77,14 @@ Every company with its people, enrichment (industry, size, revenue, HQ, tech), b
 ### ★ Leads — `/leads`
 Inbound and engaged people awaiting qualification. Score 0–100 (Lead Scoring), owner (Lead Routing), status new → working → qualified/unqualified → converted. **Convert** creates Account + Contact + Opportunity in one step. AI Pipeline nightly batch drafts outreach for leads above the score threshold.
 
-### ★ Deals — `/v2/deals`
-Kanban board of open opportunities by stage; list and forecast views. Drag between stages; each card shows value, win probability, days in stage, next step, owner. **Pipeline Alerts** strip (`#alerts`): stale (no touch 14 days), low probability, no champion, slipped close date. Deal Autopilot in Approve proposes next steps as draft tasks (with suggested win-prob in the description); in Auto it writes next step + win-prob onto the deal and opens follow-up tasks (2026-09-20).
-
-### ★ Sales Pipeline — `/pipeline`
-The traditional stage board over the same opportunities as Deals, back on the rail 2026-09-20 (it had lost its `toolRegistry` entry, never its route). What only this page has: the **Forecast** view (`opportunities.forecast` — weighted and committed projections by stage, with AI commentary you can *generate*, not just read), **New opportunity** with an account picker, **Export CSV**, and a switcher across every pipeline from `/settings/pipelines`. Deals is the complement: Deal Autopilot and the Pipeline Alerts strip live there, not here.
+### ★ Sales Pipeline — `/pipeline` (the one deal board)
+Every opportunity by stage (2026-11-08, audit U13: the separate Deals board was folded in here and redirects, `#alerts` included). Drag between stages or use a card's **Move** menu; a move to a lost stage asks why. Filter by **Owner** and **Close date** (`?owner=`, `?close=`: passed, this month, this fiscal quarter, next 90 days, none); won and lost columns fold away, and **Show more** pages past their latest 50. Header: pipeline switcher, **Deal Autopilot** dial (Approve proposes next steps as draft tasks; Auto writes next step + win-prob onto the deal and opens follow-up tasks), **Analyze with AI** (asks first: up to 15 AI calls), **Export CSV**, **New opportunity**. **Pipeline Alerts** strip (`#alerts`): stale, low probability, no champion, slipped close date. The **Forecast** tab gives weighted projections by stage with AI commentary you can *generate*.
 
 ### ★ Lists — `/v2/lists`
 Named static sets of people or companies. Create from a filter (AI Assistant or People bulk action), add/remove members, use as the source in the Add existing wizard, bulk enroll, export.
 
 ### ★ Tasks — `/v2/tasks`
-Your to-do queue: open, in progress, snoozed, done. AI-proposed **draft** tasks land here for approval (Task Autopilot in Approve). Types cover call, email, meeting, LinkedIn, follow-up, meeting prep, CRM update. Overdue tasks fire the `task_overdue` workflow trigger. Tasks can be **assigned**: pick an assignee when creating one (blank means you), see the owner on each queue row, and filter the queue by assignee — the assignee is notified when it is not you. The filter scopes the queue only; the stat cards above it count the whole workspace.
+The one task page (2026-11-08: the old `/tasks` page is retired and redirects here). Views: Queue, Today, Overdue, Upcoming, Done, All (`?view=`), filtered by assignee (managers) and related record; Reopen a closed task, Cancel an open one. Your to-do queue: open, in progress, snoozed, done. AI-proposed **draft** tasks land here for approval (Task Autopilot in Approve). Types cover call, email, meeting, LinkedIn, follow-up, meeting prep, CRM update. Overdue tasks fire the `task_overdue` workflow trigger. Tasks can be **assigned**: pick an assignee when creating one (blank means you), see the owner on each queue row, and filter the queue by assignee — the assignee is notified when it is not you. The filter scopes the queue only; the stat cards above it count the whole workspace.
 
 ---
 

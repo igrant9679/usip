@@ -22,6 +22,7 @@ import { isLockedOut, noteFailure, profileKey } from "../services/accountLockout
 import { makeEmailChangeToken, readEmailChangeToken } from "../services/emailChangeToken";
 import { BACKUP_CODE_COUNT, backupCodesLeft, clearBackupCodes, replaceBackupCodes } from "../services/mfaBackupCodes";
 import { openTotpSecret, sealTotpSecret } from "../services/totpSecret";
+import { HOME_VIEWS } from "@shared/homeView";
 
 /**
  * The setup key as a QR code to scan (audit 2026-10-20, U21): the dialog had
@@ -520,7 +521,7 @@ export const profileRouter = router({
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
     const [row] = await db
-      .select({ themePalette: users.themePalette, elsieEnabled: users.elsieEnabled })
+      .select({ themePalette: users.themePalette, elsieEnabled: users.elsieEnabled, homeView: users.homeView })
       .from(users)
       .where(eq(users.id, ctx.user.id))
       .limit(1);
@@ -529,6 +530,9 @@ export const profileRouter = router({
     return {
       themePalette: row?.themePalette ?? null,
       elsieEnabled: row?.elsieEnabled ?? true,
+      // "Set as home", per person (audit U33). Null = never chose; an unknown
+      // stored value reads as never chose rather than reaching the client.
+      homeView: HOME_VIEWS.find((v) => v === row?.homeView) ?? null,
     };
   }),
 
@@ -542,6 +546,8 @@ export const profileRouter = router({
     .input(z.object({
       themePalette: z.enum(["teal", "indigo", "violet", "rose", "amber", "ocean", "graphite"]).nullable().optional(),
       elsieEnabled: z.boolean().optional(),
+      /** Which view of the one home page Velocity opens on (U33); null forgets the choice. */
+      homeView: z.enum(HOME_VIEWS).nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -552,6 +558,7 @@ export const profileRouter = router({
         set.themePalette = input.themePalette && input.themePalette !== "teal" ? input.themePalette : null;
       }
       if (input.elsieEnabled !== undefined) set.elsieEnabled = input.elsieEnabled;
+      if (input.homeView !== undefined) set.homeView = input.homeView;
       if (Object.keys(set).length > 0) {
         await db.update(users).set(set as never).where(eq(users.id, ctx.user.id));
       }

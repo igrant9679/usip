@@ -5449,6 +5449,18 @@ const MIGRATIONS: Array<{ name: string; statements: string[] }> = [
     ],
   },
 
+  // Audit 2026-10-20, U33 (batch CONB, 2026-11-08): "Set as home" follows the
+  // person, not the browser. Which view of the one home page Velocity opens
+  // on: "today" (what needs you) or "pipeline" (the dashboard numbers).
+  // Nullable: NULL is "never chose", which opens the dashboard as before; a
+  // choice kept in a browser is carried over by that browser once.
+  {
+    name: "0430_user_home_view.sql",
+    statements: [
+      "ALTER TABLE `users` ADD COLUMN `home_view` varchar(16) NULL",
+    ],
+  },
+
 ];
 
 // ---------------------------------------------------------------------------

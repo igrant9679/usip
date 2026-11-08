@@ -243,7 +243,7 @@ export default function OpportunityDetail() {
   // A failed load and a missing deal are different facts (audit X1.6).
   if (error && !data && !isNotFoundError(error)) return <Shell title="Opportunity"><QueryError what="this deal" message={error.message} onRetry={() => { void refetch(); }} /></Shell>;
   if (isLoading) return <Shell title="Opportunity"><div className="p-4 md:p-5 text-sm text-muted-foreground">Loading…</div></Shell>;
-  if (!data) return <Shell title="Opportunity"><NotFoundState what="deal" backHref="/v2/deals" backLabel="Back to deals" /></Shell>;
+  if (!data) return <Shell title="Opportunity"><NotFoundState what="deal" backHref="/pipeline" backLabel="Back to deals" /></Shell>;
 
   const { opportunity: o, account, contactRoles } = data;
   // Flags, not the key — see crm.getWithRelated.
@@ -408,7 +408,7 @@ export default function OpportunityDetail() {
       {/* The side panels each have their own read; one that fails says so (audit X1.6). */}
       <div className="px-4 md:px-6 pt-2 empty:hidden"><FailedLoadsBanner /></div>
       <DetailHeader
-        back={{ href: "/v2/deals", label: "Deals" }}
+        back={{ href: "/pipeline", label: "Deals" }}
         icon={<KanbanSquare />}
         title={o.name}
         tourId="page-opportunity-detail"

@@ -43,6 +43,9 @@ export const users = mysqlTable("users", {
    *  across devices — same reasoning as themePalette (migration 0133).
    *  NULL = never set, which means ON: a new user is who the guide is for. */
   elsieEnabled: boolean("elsie_enabled"),
+  /** Which view of the one home page Velocity opens on (migration 0430, audit
+   *  U33): "today" or "pipeline". NULL = never chose = the dashboard view. */
+  homeView: varchar("home_view", { length: 16 }),
   /** TOTP MFA (migration 0116): base32 secret + activation time. A secret
    *  with NULL enabled-at = enrollment started but not yet confirmed. */
   // Encrypted at rest (services/totpSecret.ts, migration 0350): iv:tag:ciphertext hex.

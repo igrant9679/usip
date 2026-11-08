@@ -82,7 +82,11 @@ describe("the assignee filter", () => {
     // queueAll -> queue, not one list filtered in place: without the former
     // there is no honest denominator.
     expect(v2).toContain("const queueAll = useMemo(");
-    expect(v2).toMatch(/const queue = useMemo\(\n\s*\(\) => \(assigneeFilter \? queueAll\.filter/);
+    // 2026-11-08 (CONB, R72): the related-record filter joined the assignee
+    // one, so the queue filters queueAll by both through `passes`; the
+    // denominator is still the unfiltered list.
+    expect(v2).toMatch(/const queue = useMemo\(\n\s*\(\) => \(filtersOn \? queueAll\.filter\(passes\) : queueAll\)/);
+    expect(v2).toContain('(!assigneeFilter || String(t.ownerUserId ?? "") === assigneeFilter)');
     expect(v2).toMatch(/\{queue\.length\} of \{queueAll\.length\} in queue/);
   });
 
@@ -101,9 +105,15 @@ describe("the assignee filter", () => {
   });
 });
 
-describe("/tasks is NOT retired by this port (owner's decision, not taken)", () => {
-  it("the legacy page is still routed and still owns the embeddable block", () => {
-    expect(app).toContain('<Route path="/tasks"><AuthGate><Tasks /></AuthGate></Route>');
+// 2026-11-08 (batch CONB, R72 and X6.3): the owner delegated the decision this
+// block used to guard, and /tasks is now retired into /v2/tasks, after its
+// remaining tabs, filter, Reopen and Cancel were folded in (conbTasks.test.ts
+// pins those). What stays true: the file is kept and still owns RelatedTasks,
+// which record pages embed, so the retirement was a redirect, not a deletion.
+describe("/tasks is retired into /v2/tasks, and the file keeps the embeddable block", () => {
+  it("the legacy path redirects, and RelatedTasks is still exported", () => {
+    expect(app).toContain('<Route path="/tasks"><AuthGate><RetiredRedirect from="/tasks" /></AuthGate></Route>');
+    expect(app).not.toContain('<Route path="/tasks"><AuthGate><Tasks /></AuthGate></Route>');
     // RelatedTasks is embedded elsewhere (record drawers), so the file is not
     // only a page — another reason retiring the route is not a deletion.
     expect(v1).toContain("export function RelatedTasks(");
@@ -112,7 +122,7 @@ describe("/tasks is NOT retired by this port (owner's decision, not taken)", () 
     const mapEnd = retired.indexOf("} as const;", mapStart);
     const keys = [...retired.slice(mapStart, mapEnd).matchAll(/"([^"]+)":/g)].map((m) => m[1]);
     expect(keys.length, "retired paths").toBeGreaterThan(2);
-    expect(keys).not.toContain("/tasks");
+    expect(keys).toContain("/tasks");
   });
 
   it("still sets the owner on create, so the port did not move the capability", () => {

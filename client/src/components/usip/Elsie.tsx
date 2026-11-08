@@ -154,7 +154,6 @@ const ROUTE_PAGE_KEYS: Array<[string, string]> = [
   // tour of a retired page instead of "People and Companies", and how its Help
   // drawer showed an empty article list. server/tourAnchors.test.ts now fails
   // on any duplicate prefix.
-  ["/v2/deals", "deals"],
   ["/v2/meetings", "meetings"],
   ["/v2/tasks", "tasks"],
   ["/v2/forms", "forms"],

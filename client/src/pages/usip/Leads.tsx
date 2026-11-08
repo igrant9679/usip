@@ -275,7 +275,7 @@ export default function Leads() {
 
   return (
     <Shell title="Leads">
-      <PageHeader title="Leads" description="Capture and qualify inbound leads before they enter the CRM pipeline. A new lead goes to a rep by your lead routing rules. A–D scores are worked out by the hourly re-score as leads engage or go stale, and at once when you click AI score. Leads are not enriched automatically." pageKey="leads"
+      <PageHeader title="Leads" description="Inbound enquiries (chat, booking pages, forms) waiting to be qualified; converting one creates the company, contact and deal. Every person you have imported or sourced is in People, the person database. Capture and qualify inbound leads before they enter the CRM pipeline. A new lead goes to a rep by your lead routing rules. A–D scores are worked out by the hourly re-score as leads engage or go stale, and at once when you click AI score. Leads are not enriched automatically." pageKey="leads"
         icon={<UserPlus className="size-5" />}
       >
         {/* On a phone: the search and New lead stay, the rest fold into More (audit U8). */}

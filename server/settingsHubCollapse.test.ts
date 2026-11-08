@@ -108,7 +108,10 @@ describe("the legacy Settings page stays collapsed into the hub (2026-09-15, pin
     expect(settings).toContain("Email identity (From-name + signature) rides with delivery");
     // The fields the split could have orphaned are still edited somewhere.
     expect(settings).toContain("emailFromName");
-    expect(settings).toContain("emailSignature");
+    // 2026-11-08 (CONB, G51): the default signature moved to Settings → Email
+    // signature, the one place signatures are edited; this card links there.
+    expect(settings).toContain('<Link href="/v2/settings/signature"');
+    expect(readFileSync(join(__dirname, "..", "client/src/components/usip/settings/SignatureSection.tsx"), "utf8")).toContain("emailSignature");
     expect(settings).toMatch(/\{tab === "smtp" && \(\n\s*<>\n\s*<SmtpTab canEdit=\{isAdmin\} \/>\n\s*<BrandingTab/);
     // Colours/logo/voice live in the hub's own section, which must still exist.
     expect(internalSectionIds()).toContain("branding");

@@ -293,8 +293,11 @@ describe("L7, R66: a board reads one pipeline's deals", () => {
 
   it("the Pipeline page asks for its pipeline, and exports and forecasts what it shows", () => {
     const page = read("client/src/pages/usip/Pipeline.tsx");
-    expect(page).toContain("const boardInput = useMemo(() => ({ ownerUserId, pipelineId }), [ownerUserId, pipelineId]);");
-    expect(page).toContain("trpc.opportunities.board.useQuery(boardInput,");
+    // 2026-11-08 (CONB, U13): the close-date filter joined the scope, and the
+    // board's own query adds its closed columns' page size on top of it.
+    expect(page).toContain("const boardInput = useMemo(() => ({ ownerUserId, pipelineId, closeRange }), [ownerUserId, pipelineId, closeRange]);");
+    expect(page).toContain("const boardQueryInput = useMemo(() => ({ ...boardInput, closedLimit }), [boardInput, closedLimit]);");
+    expect(page).toContain("trpc.opportunities.board.useQuery(boardQueryInput,");
     expect(page).toContain("trpc.oppIntelligence.getIntelligenceForBoard.useQuery(boardInput,");
     expect(page).not.toContain("trpc.accounts.list.useQuery()");
     const csv = page.slice(page.indexOf('{can("export_data") && ('), page.indexOf("Export CSV"));
@@ -314,9 +317,11 @@ describe("R30: the owner filter clears, and a move updates the board on screen",
     expect(page).toContain("new URLSearchParams(search).get(\"owner\")");
     expect(page).not.toContain("window.location.search");
     const move = page.slice(page.indexOf("const setStage = trpc.opportunities.setStage.useMutation({"), page.indexOf("const [addOpen, setAddOpen]"));
-    expect(move).toContain("utils.opportunities.board.getData(boardInput)");
-    expect(move).toContain("utils.opportunities.board.setData(boardInput, (old)");
-    expect(move).toContain("utils.opportunities.board.setData(boardInput, ctx.prev)");
+    // 2026-11-08 (CONB, U13): the board's cache key is boardQueryInput (the
+    // scope plus the closed columns' page size); still one key for every call.
+    expect(move).toContain("utils.opportunities.board.getData(boardQueryInput)");
+    expect(move).toContain("utils.opportunities.board.setData(boardQueryInput, (old)");
+    expect(move).toContain("utils.opportunities.board.setData(boardQueryInput, ctx.prev)");
     expect(move).not.toContain("setData(undefined");
   });
 });

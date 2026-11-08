@@ -197,7 +197,7 @@ export default function CompanyProfile() {
           <section className="rounded-lg border border-border">
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
               <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Deals ({opps.length})</div>
-              <Button size="sm" variant="ghost" className="h-7 text-[12px]" onClick={() => setLocation("/v2/deals")}>Open pipeline</Button>
+              <Button size="sm" variant="ghost" className="h-7 text-[12px]" onClick={() => setLocation("/pipeline")}>Open pipeline</Button>
             </div>
             {opps.length > 0 ? (
               <ul className="divide-y divide-border">

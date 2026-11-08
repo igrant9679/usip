@@ -15,6 +15,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Archive, Loader2, MailQuestion, UserX } from "lucide-react";
 import { EmailVerificationBanner } from "@/components/usip/EmailVerificationBanner";
+import { PendingInvitations } from "@/components/usip/PendingInvitations";
 
 export type AccessProblem = "deactivated" | "invite_pending" | "none" | "archived";
 
@@ -25,7 +26,7 @@ const COPY: Record<AccessProblem, { title: string; body: string }> = {
   },
   invite_pending: {
     title: "Your invitation is waiting",
-    body: "Open the invitation link in your email to join the workspace. If it has expired, ask your administrator to send a new one.",
+    body: "Accept it below, or open the invitation link in your email. If it has expired, ask your administrator to send a new one.",
   },
   none: {
     title: "You're not in a workspace yet",
@@ -45,6 +46,7 @@ export function WorkspaceAccessScreen({
   onSwitch,
   onSignOut,
   notice,
+  invitations,
 }: {
   problem: AccessProblem;
   workspaceName?: string | null;
@@ -53,6 +55,8 @@ export function WorkspaceAccessScreen({
   onSignOut?: () => void;
   /** Shown under the message: the email-confirmation banner (F1), when it applies. */
   notice?: ReactNode;
+  /** Invitations waiting for this person, with Accept (U10). */
+  invitations?: ReactNode;
 }) {
   const copy = COPY[problem];
   const Icon = problem === "archived" ? Archive : problem === "invite_pending" ? MailQuestion : UserX;
@@ -68,6 +72,7 @@ export function WorkspaceAccessScreen({
           </div>
         </div>
         {notice}
+        {invitations}
         {others.length > 0 && onSwitch && (
           <div className="space-y-1.5">
             <p className="text-xs text-muted-foreground">You can carry on in another workspace:</p>
@@ -99,7 +104,8 @@ export function WorkspaceAccessGate({ children }: { children: ReactNode }) {
     }
     // A stranger who just signed up lands here, so the confirm-your-email
     // banner (F1) belongs here as well as in the shell.
-    return <WorkspaceAccessScreen problem={state} onSignOut={() => void logout()} notice={<EmailVerificationBanner compact />} />;
+    // Invitations waiting for this account can be accepted right here (U10).
+    return <WorkspaceAccessScreen problem={state} onSignOut={() => void logout()} notice={<EmailVerificationBanner compact />} invitations={<PendingInvitations className="rounded-md border border-border" />} />;
   }
   if (current && !canOpenWorkspace(current)) {
     return (

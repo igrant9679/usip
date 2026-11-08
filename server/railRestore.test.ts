@@ -27,16 +27,21 @@ const primaryHrefs = new Set(PRIMARY_TOOLS.map((t) => t.href));
 const tool = (href: string) => TOOLS.find((t) => t.href === href)!;
 
 describe("what came back to the rail", () => {
+  // 2026-11-08 (batch CONB, U33): the Dashboard is the Pipeline view of the one
+  // home page now, so its rail entry links that view. The owner's ask still
+  // holds: Dashboard is on the rail, second after Home, with help copy.
   it("Dashboard: registered primary in Daily AND in the Shell's top row, with help copy", () => {
-    expect(tool("/dashboard")).toBeTruthy();
-    expect(tool("/dashboard").group).toBe("Daily");
-    expect(primaryHrefs.has("/dashboard")).toBe(true);
+    const DASH = "/v2/home?view=pipeline";
+    expect(tool(DASH)).toBeTruthy();
+    expect(tool(DASH).label).toBe("Dashboard");
+    expect(tool(DASH).group).toBe("Daily");
+    expect(primaryHrefs.has(DASH)).toBe(true);
     const shell = client("components", "usip", "Shell.tsx");
     const top = shell.slice(shell.indexOf("const TOP_LINKS"), shell.indexOf("// THE RAIL IS A BUDGET"));
-    expect(top).toContain('{ href: "/dashboard", label: "Dashboard", icon: LayoutDashboard');
+    expect(top).toContain(`{ href: "${DASH}", label: "Dashboard", icon: LayoutDashboard`);
     // Home stays first — Dashboard is the second row, not the landing page.
-    expect(top.indexOf('href: "/v2/home"')).toBeLessThan(top.indexOf('href: "/dashboard"'));
-    expect(NAV_HELP["/dashboard"]?.body).toBeTruthy();
+    expect(top.indexOf('href: "/v2/home"')).toBeLessThan(top.indexOf(`href: "${DASH}"`));
+    expect(NAV_HELP[DASH]?.body).toBeTruthy();
   });
 
   it("Lists and Tasks under CRM; Campaigns and Social under Outreach", () => {
@@ -79,16 +84,16 @@ describe("what came back to the rail", () => {
     expect(existsSync(join(__dirname, "..", "client", "src", "pages", "usip", "Pipeline.tsx"))).toBe(true);
   });
 
-  it("Sales Pipeline ADDED a surface — Deals kept its own, and the pair says which is which", () => {
-    // The restore's one real risk was editing next to /v2/deals and dropping
-    // it. Two adjacent CRM rail rows over the same opportunities also need
-    // descriptions that name what each has: Deals the autopilot and the
-    // at-risk strip, Sales Pipeline the forecast, create and export.
-    expect(tool("/v2/deals").group).toBe("CRM");
-    expect(primaryHrefs.has("/v2/deals")).toBe(true);
-    expect(tool("/v2/deals").description).toMatch(/autopilot/i);
+  // 2026-11-08 (batch CONB, U13): the pair is one board now. /v2/deals folded
+  // into /pipeline (autopilot, alerts, Move menu came across) and redirects,
+  // so its rail row left; the one row says it has both halves.
+  it("Sales Pipeline is THE deal board: one CRM row with the autopilot, the alerts and the forecast", () => {
+    expect(TOOLS.some((t) => t.href === "/v2/deals")).toBe(false);
+    expect(tool("/pipeline").group).toBe("CRM");
+    expect(tool("/pipeline").description).toMatch(/autopilot/i);
+    expect(tool("/pipeline").description).toMatch(/alerts/i);
     expect(tool("/pipeline").description).toMatch(/forecast/i);
-    expect(tool("/pipeline").description).not.toBe(tool("/v2/deals").description);
+    expect(tool("/pipeline").keywords).toContain("deals");
   });
 });
 

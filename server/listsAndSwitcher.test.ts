@@ -13,13 +13,17 @@ describe("the workspace switcher", () => {
   const shell = read("client/src/components/usip/Shell.tsx");
 
   it("is a Popover, so an outside click or Esc closes it", () => {
-    expect(shell).toContain("<Popover open={wsOpen} onOpenChange={setWsOpen}>");
+    // 2026-11-08 (CONB, U10): closing also clears the switcher's search.
+    expect(shell).toContain("<Popover open={wsOpen} onOpenChange={openSwitcher}>");
+    expect(shell).toContain('const openSwitcher = (v: boolean) => { setWsOpen(v); if (!v) setWsQuery(""); };');
     // The hand-rolled menu it replaced only closed on a route change.
     expect(shell).not.toContain("{wsOpen && (");
   });
 
   it("closes as soon as a workspace is picked, and picking the current one does not reload everything", () => {
-    expect(shell).toContain("onClick={() => { setWsOpen(false); if (current?.id !== w.id) switchTo(w.id); }}");
+    // 2026-11-08 (CONB, U10): the rows are the shared WorkspaceSwitchList now;
+    // its pick handler is the same rule.
+    expect(shell).toContain("onPick={(id) => { openSwitcher(false); if (current?.id !== id) switchTo(id); }}");
   });
 });
 

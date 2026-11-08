@@ -265,9 +265,12 @@ describe("tasks filter in SQL, and the Calls page reads call tasks only (O41)", 
   it("the Calls page asks for call tasks, bounded, and counts on the server", () => {
     const src = read("client/src/pages/usip/Calls.tsx");
     const page = src.slice(src.indexOf("export default function Calls()"));
-    expect(page).toContain('trpc.tasks.list.useQuery({ type: "call", status: "open", limit: CALL_QUEUE_LIMIT, order: "soonest" })');
-    expect(page).toContain('trpc.tasks.list.useQuery({ type: "call", status: "done", limit: DONE_SHOWN, order: "recent" })');
-    expect(page).toContain('trpc.tasks.stats.useQuery({ type: "call" })');
+    // 2026-11-08 (CONB, R72): each read also asks for the Tasks page's scope
+    // (`mine`: a rep's own call tasks, a manager's everyone's); still bounded
+    // and filtered on the server.
+    expect(page).toContain('trpc.tasks.list.useQuery({ type: "call", status: "open", limit: CALL_QUEUE_LIMIT, order: "soonest", mine: true })');
+    expect(page).toContain('trpc.tasks.list.useQuery({ type: "call", status: "done", limit: DONE_SHOWN, order: "recent", mine: true })');
+    expect(page).toContain('trpc.tasks.stats.useQuery({ type: "call", mine: true })');
     expect(page).not.toContain("trpc.tasks.list.useQuery({})");
     expect(page).not.toContain("setHours(24, 0, 0, 0)");
   });

@@ -210,9 +210,11 @@ export default function Calls() {
   // 2026-10-20, O41): this read every task in the workspace to keep the call
   // tasks, and counted them in the browser, on the browser's day. The counts
   // are tasks.stats for call tasks: the workspace's day, the Tasks page's rule.
-  const { data, isLoading, error, refetch } = trpc.tasks.list.useQuery({ type: "call", status: "open", limit: CALL_QUEUE_LIMIT, order: "soonest" });
-  const { data: doneData } = trpc.tasks.list.useQuery({ type: "call", status: "done", limit: DONE_SHOWN, order: "recent" });
-  const { data: counts } = trpc.tasks.stats.useQuery({ type: "call" });
+  // The Tasks page's scope too (audit 2026-10-20, R72): a rep's own calls, a
+  // manager's everyone's. This queue listed every rep's call tasks to everyone.
+  const { data, isLoading, error, refetch } = trpc.tasks.list.useQuery({ type: "call", status: "open", limit: CALL_QUEUE_LIMIT, order: "soonest", mine: true });
+  const { data: doneData } = trpc.tasks.list.useQuery({ type: "call", status: "done", limit: DONE_SHOWN, order: "recent", mine: true });
+  const { data: counts } = trpc.tasks.stats.useQuery({ type: "call", mine: true });
   const setStatus = trpc.tasks.setStatus.useMutation({
     onSuccess: () => { invalidateTaskReads(utils); },
     onError: (e) => toast.error(e.message),

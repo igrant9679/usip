@@ -402,10 +402,10 @@ describe("the resolver", () => {
   it("resolvePermissionMap answers every key, not just the ones with rows", async () => {
     h.db = makeDb("rep", []);
     const rep = await resolvePermissionMap(permCtx("rep"));
+    // 2026-11-08 (G51): five keys; view_all_leads, which granted nothing, is gone.
     expect(rep).toEqual({
       export_data: false,
       manage_sequences: true,
-      view_all_leads: true,
       manage_integrations: true,
       access_billing: true,
       manage_api_keys: false,
@@ -417,11 +417,12 @@ describe("the resolver", () => {
   });
 
   it("and layers the rows on top", async () => {
-    h.db = makeDb("rep", [{ feature: "export_data", granted: true }, { feature: "manage_sequences", granted: false }]);
+    h.db = makeDb("rep", [{ feature: "export_data", granted: true }, { feature: "manage_sequences", granted: false }, { feature: "view_all_leads", granted: false }]);
     const map = await resolvePermissionMap(permCtx("rep"));
     expect(map.export_data).toBe(true);
     expect(map.manage_sequences).toBe(false);
-    expect(map.view_all_leads).toBe(true);
+    // A stored row for the removed view_all_leads switch is not answered at all (G51).
+    expect((map as Record<string, unknown>).view_all_leads).toBeUndefined();
   });
 });
 
@@ -480,14 +481,10 @@ const ENFORCEMENT: Record<string, { enforced: boolean; files?: string[]; reason?
   manage_api_keys: { enforced: true, files: ["server/routers/aiCredentials.ts", "server/routers/apollo.ts", "server/routers/prospectSources.ts", "server/routers/quickenrich.ts", "server/routers/reoon.ts"] },
   // 2026-10-27 (audit Phase 3): the cost report is billing too.
   access_billing: { enforced: true, files: ["server/routers/admin.ts", "server/routers/spend.ts"] },
-  view_all_leads: {
-    enforced: false,
-    reason: "Data scoping, not a gate: it must NARROW the lead lists, never throw. " +
-      "Deferred deliberately — read-scoping alone would ship a member who cannot see " +
-      "a lead but can still delete it by id, and the in-app assistant's data explorer " +
-      "would hand the whole workspace back anyway. Until that lands the Team page " +
-      "labels this switch as not enforced.",
-  },
+  // view_all_leads was here as "enforced: false" with its reason (read-scoping
+  // alone would let a member delete a lead by id, and the assistant's data
+  // explorer would hand the workspace back). Batch CONB (2026-11-08, G51)
+  // removed the switch instead of shipping one that grants nothing.
 };
 
 describe("no toggle ships dead", () => {

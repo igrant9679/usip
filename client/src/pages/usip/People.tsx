@@ -936,6 +936,13 @@ export default function People() {
           <span aria-hidden className="absolute inset-x-0 top-0 h-0.5" style={{ backgroundColor: accent }} />
           <Users className="size-4" style={{ color: accent }} />
           <h1 className="text-[15px] font-semibold tracking-tight">Find people</h1>
+          {/* People and Leads stay two lists by design (audit X6.3, 2026-11-08):
+              this is the person database; a lead is an inbound enquiry still to
+              be qualified. Said here so the two read as different jobs. */}
+          <p className="hidden lg:block min-w-0 truncate text-[12px] text-muted-foreground" data-testid="people-purpose">
+            Every person you have imported or sourced: the database outreach draws on. Inbound enquiries waiting to be qualified are on{" "}
+            <button type="button" className="underline hover:text-foreground" onClick={() => setLocation("/leads")}>Leads</button>.
+          </p>
           <div className="flex-1" />
           <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setPhotoBatchOpen(true)}>
             <ImagePlus className="size-3.5" /> Photos

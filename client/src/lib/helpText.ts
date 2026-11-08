@@ -35,8 +35,8 @@ export interface HelpEntry {
  */
 export const NAV_HELP: Record<string, HelpEntry> = {
   // ── Overview ──
-  "/v2/home": { body: "Your starting point: what needs attention today, and how the pipeline moved this week.", article: "navigating-the-app" },
-  "/dashboard": { body: "The pipeline at a glance — revenue by period, win/loss, stage funnel, top reps and recent deals.", article: "navigating-the-app" },
+  "/v2/home": { body: "Your starting point: what needs attention today (Today), or the pipeline numbers (Pipeline). Set as home picks which one Velocity opens on, on every device.", article: "navigating-the-app" },
+  "/v2/home?view=pipeline": { body: "The pipeline at a glance — revenue by period, win/loss, stage funnel, top reps and recent deals. The Pipeline view of Home.", article: "navigating-the-app" },
   "/are/campaigns": { body: "Every Revenue Engine campaign: targeting, copy, prospects, and how each step performed.", article: "are-tuning-campaign" },
   "/forecast": { body: "Projected revenue from the open pipeline, weighted by stage." },
   "/v2/library": { body: "Every tool in the product, grouped and searchable. The sidebar shows only the daily loop — anything you can't find lives here (or press Ctrl+K)." },
@@ -45,7 +45,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/calendar": { body: "Your meetings, including any the AI booked for you." },
 
   // ── Prospect and enrich ──
-  "/v2/people": { body: "Every person you've imported or sourced. The contact database the rest of the app draws on.", article: "leads-contacts-accounts" },
+  "/v2/people": { body: "Every person you've imported or sourced. The contact database the rest of the app draws on. Inbound enquiries still to be qualified are Leads.", article: "leads-contacts-accounts" },
   "/v2/companies": { body: "The organisations behind your contacts, with the enrichment data found for each.", article: "leads-contacts-accounts" },
   "/v2/lists": { body: "Hand-picked groups of contacts you want to work as a set." },
   "/v2/saved-people": { body: "People you saved from a prospect search, before deciding whether to work them." },
@@ -58,7 +58,7 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/data-health": { body: "What's missing or wrong across your data, and what that's costing you in reach." },
   // Re-keyed 2026-08-21: Import Contacts folded into Data Enrichment's tab.
   "/v2/data-enrichment?tab=import-contacts": { body: "Bring contacts in from a CSV file.", article: "import-prospects-csv" },
-  "/leads": { body: "Inbound people who haven't been qualified yet — from the chat agent, booking pages and forms.", article: "leads-contacts-accounts" },
+  "/leads": { body: "Inbound people who haven't been qualified yet — from the chat agent, booking pages and forms. Not the person database: that is People.", article: "leads-contacts-accounts" },
 
   // ── Engage ──
   "/v2/sequences": { body: "Fixed multi-step email follow-ups — the same steps to everyone you enroll. Not the same as a Revenue Engine campaign, which writes per person and can source its own people.", article: "sequences-vs-campaigns" },
@@ -96,11 +96,10 @@ export const NAV_HELP: Record<string, HelpEntry> = {
   "/renewals": { body: "Contracts coming up for renewal, bucketed by how far off the contract end date is. Past due means the date has gone by with no outcome recorded; renewed and churned come from a contract amendment." },
   "/qbrs": { body: "Quarterly business reviews: the AI drafts the prep, you run the meeting." },
 
-  "/v2/deals": { body: "Open deals and what stage each is at, with the deal autopilot and the at-risk strip.", article: "managing-pipeline" },
   // Restored to the rail 2026-09-20 (owner: "bring back the traditional Sales
   // Pipeline page"). Distinct from Deals — say so here, because the two sit
   // side by side under CRM and the label alone will not explain the pair.
-  "/pipeline": { body: "The classic stage board plus the weighted forecast — the only place you can create an opportunity, export the board to CSV or switch between configured pipelines. Deals shows the same opportunities with the autopilot and the at-risk alerts instead.", article: "managing-pipeline" },
+  "/pipeline": { body: "The deal board: every deal by stage, with the Deal Autopilot, the at-risk alerts, owner and close-date filters, the weighted forecast, CSV export and a switcher between configured pipelines.", article: "managing-pipeline" },
   "/pipeline-alerts": { body: "Warnings about deals going quiet or slipping their close date." },
   "/proposals": { body: "Proposals, with their versioned pricing, and whether the client has opened, accepted or declined them." },
   "/products": { body: "Your product and pricing catalogue, used when building a quote." },

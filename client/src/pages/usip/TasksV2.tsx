@@ -10,14 +10,21 @@
  * Backed by the `tasks.*` tRPC procedures (list/stats/create/complete/snooze/
  * bulk + generateDrafts/approveDraft/approveAllDrafts/dismissDraft +
  * get/setAutopilotSettings). Drafts are excluded from the normal queue and
- * reviewed in their own section. The v1 /tasks page (pages/usip/Tasks.tsx,
- * which also exports RelatedTasks) is still live; both read their overdue,
- * scope and "recently closed" rules from @shared/taskRules (R72).
+ * reviewed in their own section.
+ *
+ * The one task page (audit 2026-10-20, R72 and X6.3; batch CONB,
+ * 2026-11-08). /tasks is retired into this one, folding first: its Today /
+ * Upcoming / Overdue / Done / All tabs are the views over the queue below,
+ * with its related-record filter, Reopen on a closed task and Cancel on an
+ * open one. /tasks redirects here (lib/retiredRoutes.ts); its file is kept,
+ * unrouted, and still exports RelatedTasks for the record pages. The overdue,
+ * scope and "recently closed" rules are @shared/taskRules.
  */
 import { useEffect, useMemo, useState } from "react";
 import { SHOW_MORE_STEP, useShowMore } from "@/hooks/useShowMore";
 import { forbiddenMessage } from "@/lib/forbidden";
-import { Link } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
+import { tablistProps, tabProps } from "@/lib/tabs";
 import { toast } from "sonner";
 import { Shell, useAccentColor } from "@/components/usip/Shell";
 import { trpc, type RouterInputs } from "@/lib/trpc";
@@ -43,7 +50,7 @@ import { confirmAction, ConfirmButton } from "@/components/usip/Common";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useWorkspaceTimezone } from "@/hooks/useWorkspaceTimezone";
 import { RelatedRecordPicker, type RelatedRecord } from "@/components/usip/RelatedRecordPicker";
-import { recentlyClosed, seesAllTasks, taskDueState } from "@shared/taskRules";
+import { bucketTasks, recentlyClosed, seesAllTasks, taskDueState } from "@shared/taskRules";
 
 type Task = {
   id: number;
@@ -125,6 +132,30 @@ function plusDays(n: number): string {
   return d.toISOString();
 }
 
+/**
+ * The views over the queue. "queue" is what this page always showed; the
+ * other five are /tasks' tabs, folded in when /tasks was retired (R72, X6.3).
+ * `?view=` opens one, so a link can land on Overdue or Today.
+ */
+export const TASK_VIEWS = [
+  { id: "queue", label: "Queue" },
+  { id: "today", label: "Today" },
+  { id: "overdue", label: "Overdue" },
+  { id: "upcoming", label: "Upcoming" },
+  { id: "done", label: "Done" },
+  { id: "all", label: "All" },
+] as const;
+export type TaskView = (typeof TASK_VIEWS)[number]["id"];
+
+/** The view a `?view=` asks for, or the queue. */
+export function taskViewFrom(search: string): TaskView {
+  const v = new URLSearchParams(search.replace(/^\?/, "")).get("view");
+  return (TASK_VIEWS.find((x) => x.id === v)?.id ?? "queue") as TaskView;
+}
+
+/** The record kinds a task links to; /tasks' "Related" filter. */
+const RELATED_TYPES = ["account", "contact", "lead", "opportunity", "prospect"] as const;
+
 const MODE_META: Record<string, { label: string; blurb: string }> = {
   off: { label: "Autopilot off", blurb: "AI won't create tasks. Everything is manual." },
   approval: { label: "Autopilot: Approve", blurb: "AI proposes next-best-action tasks for your review before they go live." },
@@ -192,6 +223,8 @@ export default function TasksV2() {
     onError: (e: any) => toast.error(e?.message ?? "Could not delete the task"),
   });
   const snooze = trpc.tasks.snooze.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
+  // Reopen a closed task and Cancel an open one, as /tasks did (R72, X6.3).
+  const setStatus = trpc.tasks.setStatus.useMutation({ onSuccess: invalidateAll, onError: (e) => toast.error(e.message) });
   const create = trpc.tasks.create.useMutation({
     onSuccess: () => { invalidateAll(); toast.success("Task created"); setNewOpen(false); },
     onError: (e) => toast.error(e.message),
@@ -223,6 +256,21 @@ export default function TasksV2() {
   // leaving those numbers alone is how a header ends up counting one population
   // and the list another.
   const [assigneeFilter, setAssigneeFilter] = useState<string>("");
+  // /tasks' "Related" filter: tasks about one kind of record ("" = any).
+  const [relTypeFilter, setRelTypeFilter] = useState<string>("");
+  // Which view of the list; `?view=` picks one, and a pick writes it back.
+  const search = useSearch();
+  const [, navigate] = useLocation();
+  const [view, setViewState] = useState<TaskView>(() => taskViewFrom(search));
+  useEffect(() => { setViewState(taskViewFrom(search)); }, [search]);
+  const setView = (v: TaskView) => {
+    setViewState(v);
+    navigate(v === "queue" ? "/v2/tasks" : `/v2/tasks?view=${v}`, { replace: true });
+  };
+  const filtersOn = !!assigneeFilter || !!relTypeFilter;
+  const passes = (t: Task) =>
+    (!assigneeFilter || String(t.ownerUserId ?? "") === assigneeFilter) &&
+    (!relTypeFilter || t.relatedType === relTypeFilter);
 
   const mode = autopilot.data?.mode ?? "off";
   const activeTasks = (active.data ?? []) as Task[];
@@ -254,12 +302,40 @@ export default function TasksV2() {
   // Kept separate from queueAll so the header can say "n of m" rather than
   // quietly showing a shorter list.
   const queue = useMemo(
-    () => (assigneeFilter ? queueAll.filter((t) => String(t.ownerUserId ?? "") === assigneeFilter) : queueAll),
-    [queueAll, assigneeFilter],
+    () => (filtersOn ? queueAll.filter(passes) : queueAll),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [queueAll, assigneeFilter, relTypeFilter],
   );
+  const now = Date.now();
+  // /tasks' tabs over the same rows and filters (R72, X6.3): Today / Upcoming
+  // / Overdue by the shared rule, Done latest first, All everything.
+  const scoped = useMemo(
+    () => activeTasks.filter((t) => !approvalIds.has(t.id)).filter(passes),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTasks, approvalIds, assigneeFilter, relTypeFilter],
+  );
+  const byDue = (a: Task, b: Task) => (a.dueAt ? new Date(a.dueAt).getTime() : Infinity) - (b.dueAt ? new Date(b.dueAt).getTime() : Infinity);
+  const buckets = useMemo(() => {
+    const b = bucketTasks(scoped, timezone, now);
+    return { today: b.today.sort(byDue), upcoming: b.upcoming.sort(byDue), overdue: b.overdue.sort(byDue) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scoped, timezone]);
+  const doneAll = useMemo(() => recentlyClosed(scoped.filter((t) => t.status === "done")), [scoped]);
+  const allRows = useMemo(() => [...scoped].sort(byDue), [scoped]);
+  const viewCount: Record<TaskView, number> = {
+    queue: queue.length, today: buckets.today.length, overdue: buckets.overdue.length,
+    upcoming: buckets.upcoming.length, done: doneAll.length, all: allRows.length,
+  };
+  const listed: Task[] =
+    view === "today" ? buckets.today :
+    view === "overdue" ? buckets.overdue :
+    view === "upcoming" ? buckets.upcoming :
+    view === "done" ? doneAll :
+    view === "all" ? allRows :
+    queue;
   // 50 rows at a time (X4.2): the page rendered every task and draft at once,
-  // 19,627 DOM nodes live.
-  const queueRows = useShowMore(queue);
+  // 19,627 DOM nodes live. A new view or filter starts over at 50.
+  const queueRows = useShowMore(listed, { view, assigneeFilter, relTypeFilter });
   const draftRows = useShowMore(draftTasks);
   // "Recently closed" deliberately includes CANCELLED, not just done.
   // Dismissing an AI-drafted task sets status="cancelled" (activities.dismissDraft),
@@ -269,8 +345,6 @@ export default function TasksV2() {
   // The LATEST ten closed (R72): this took the first ten of a list sorted by
   // due date, which were the oldest.
   const done = useMemo(() => recentlyClosed(activeTasks, 10), [activeTasks]);
-
-  const now = Date.now();
 
   const StatCard = ({ label, value, tone }: { label: string; value: number; tone?: "danger" | "warning" | "ai" }) => {
     const color = tone === "danger" ? "#e11d48" : tone === "warning" ? "#d97706" : tone === "ai" ? "#7c3aed" : accent;
@@ -343,6 +417,9 @@ export default function TasksV2() {
             <DropdownMenuItem onClick={() => snooze.mutate({ id: t.id, snoozedUntil: plusDays(3) })}>In 3 days</DropdownMenuItem>
             <DropdownMenuItem onClick={() => snooze.mutate({ id: t.id, snoozedUntil: plusDays(7) })}>Next week</DropdownMenuItem>
             <DropdownMenuSeparator />
+            {/* /tasks' Cancel (R72, X6.3): closes the task and keeps it in the
+                history, where Reopen brings it back; Delete removes it. */}
+            <DropdownMenuItem onClick={() => setStatus.mutate({ id: t.id, status: "cancelled" })}><X className="size-3.5 mr-2" /> Cancel task</DropdownMenuItem>
             {/* tasks.delete has existed since the router was written and nothing
                 ever called it. Completing a task that should not exist leaves it
                 in the done pile skewing every count that reads it. */}
@@ -362,6 +439,27 @@ export default function TasksV2() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+      </div>
+    );
+  };
+
+  /** A done or cancelled task, with /tasks' Reopen (R72, X6.3). */
+  const ClosedRow = ({ t }: { t: Task }) => {
+    const cancelled = t.status === "cancelled";
+    return (
+      <div className="flex items-center gap-3 px-3 py-2 border-b border-border/60 last:border-0">
+        <span
+          className="shrink-0 size-5 rounded-full flex items-center justify-center text-white"
+          style={{ backgroundColor: cancelled ? "hsl(var(--muted-foreground))" : accent }}
+        >
+          {cancelled ? <X className="size-3" /> : <Check className="size-3" />}
+        </span>
+        <TypeIcon type={t.type} />
+        <div className="min-w-0 flex-1"><div className="text-sm truncate line-through text-muted-foreground">{t.title}</div></div>
+        {cancelled && <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground">Dismissed</span>}
+        {t.disposition && <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-secondary text-muted-foreground capitalize">{t.disposition.replace(/_/g, " ")}</span>}
+        <Button size="sm" variant="ghost" className="h-7 shrink-0 text-xs" disabled={setStatus.isPending}
+          onClick={() => setStatus.mutate({ id: t.id, status: "open" })}>Reopen</Button>
       </div>
     );
   };
@@ -549,14 +647,25 @@ export default function TasksV2() {
           <section>
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold flex items-center gap-2"><CalendarClock className="size-4" style={{ color: accent }} /> Task queue</h2>
-              <div className="flex items-center gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
                 {/* Says what it is scoping, so the unfiltered stat cards above
                     cannot be read as describing this list. */}
-                {assigneeFilter && (
+                {filtersOn && view === "queue" && (
                   <span className="text-muted-foreground tabular-nums">
                     {queue.length} of {queueAll.length} in queue
                   </span>
                 )}
+                {/* /tasks' "Related" filter (R72, X6.3). */}
+                <label htmlFor="queue-related" className="text-muted-foreground">Related</label>
+                <select
+                  id="queue-related"
+                  className="rounded border bg-background px-2 py-1"
+                  value={relTypeFilter}
+                  onChange={(e) => setRelTypeFilter(e.target.value)}
+                >
+                  <option value="">Any</option>
+                  {RELATED_TYPES.map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
                 {/* Only a manager's queue holds other people's tasks (R72). */}
                 {seesAll && <>
                 <label htmlFor="queue-assignee" className="text-muted-foreground">Assignee</label>
@@ -574,6 +683,16 @@ export default function TasksV2() {
                 </>}
               </div>
             </div>
+            {/* /tasks' tabs, folded in (R72, X6.3). Counts are this list's,
+                with the filters above applied. */}
+            <div {...tablistProps("Task views")} className="mb-2 flex flex-wrap items-center gap-1">
+              {TASK_VIEWS.map((v) => (
+                <button {...tabProps(view === v.id)} key={v.id} type="button" onClick={() => setView(v.id)}
+                  className={cn("rounded-md px-2.5 py-1 text-xs transition-colors", view === v.id ? "bg-secondary font-medium text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
+                  {v.label} <span className="tabular-nums text-muted-foreground">{viewCount[v.id]}</span>
+                </button>
+              ))}
+            </div>
             <div className="rounded-xl border bg-card overflow-hidden shadow-sm">
               {active.isLoading ? (
                 <div className="p-3 space-y-2">{Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-10 rounded bg-muted/50 animate-pulse" />)}</div>
@@ -582,6 +701,23 @@ export default function TasksV2() {
                   <p className="text-sm text-muted-foreground">Couldn’t load tasks. {active.error.message}</p>
                   <Button variant="outline" size="sm" className="mt-3" onClick={() => active.refetch()}>Retry</Button>
                 </div>
+              ) : view !== "queue" ? (
+                listed.length === 0 ? (
+                  <div className="text-center py-14 px-4">
+                    <Inbox className="size-8 mx-auto text-muted-foreground opacity-50 mb-2" />
+                    <div className="text-sm font-medium">No tasks in {TASK_VIEWS.find((v) => v.id === view)?.label}</div>
+                    {filtersOn && <p className="text-xs text-muted-foreground mt-1">The filters above narrow this list.</p>}
+                  </div>
+                ) : (
+                  <>
+                    {queueRows.shown.map((t) => (t.status === "done" || t.status === "cancelled" ? <ClosedRow key={t.id} t={t} /> : <QueueRow key={t.id} t={t} />))}
+                    {queueRows.remaining > 0 && (
+                      <button type="button" onClick={queueRows.showMore} className="w-full border-t px-3 py-2 text-center text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground">
+                        Show {Math.min(queueRows.remaining, SHOW_MORE_STEP)} more tasks ({queueRows.remaining.toLocaleString()} not shown)
+                      </button>
+                    )}
+                  </>
+                )
               ) : queue.length === 0 && assigneeFilter ? (
                 // Nothing for THIS assignee is not the same as nothing at all,
                 // and the queue is not "clear" while queueAll still has rows.
@@ -593,6 +729,14 @@ export default function TasksV2() {
                   </p>
                   <div className="flex items-center justify-center gap-2 mt-3">
                     <Button size="sm" variant="outline" onClick={() => setAssigneeFilter("")}>Show anyone</Button>
+                  </div>
+                </div>
+              ) : queue.length === 0 && relTypeFilter ? (
+                <div className="text-center py-14 px-4">
+                  <Inbox className="size-8 mx-auto text-muted-foreground opacity-50 mb-2" />
+                  <div className="text-sm font-medium">Nothing in the queue about a {relTypeFilter}</div>
+                  <div className="flex items-center justify-center gap-2 mt-3">
+                    <Button size="sm" variant="outline" onClick={() => setRelTypeFilter("")}>Any record</Button>
                   </div>
                 </div>
               ) : queue.length === 0 ? (
@@ -621,27 +765,11 @@ export default function TasksV2() {
           </section>
 
           {/* Completed */}
-          {done.length > 0 && (
+          {done.length > 0 && view === "queue" && (
             <section>
               <h2 className="text-sm font-semibold mb-2 flex items-center gap-2 text-muted-foreground"><Check className="size-4" /> Recently closed</h2>
               <div className="rounded-xl border bg-card overflow-hidden shadow-sm opacity-80">
-                {done.map((t) => {
-                  const cancelled = t.status === "cancelled";
-                  return (
-                  <div key={t.id} className="flex items-center gap-3 px-3 py-2 border-b border-border/60 last:border-0">
-                    <span
-                      className="shrink-0 size-5 rounded-full flex items-center justify-center text-white"
-                      style={{ backgroundColor: cancelled ? "hsl(var(--muted-foreground))" : accent }}
-                    >
-                      {cancelled ? <X className="size-3" /> : <Check className="size-3" />}
-                    </span>
-                    <TypeIcon type={t.type} />
-                    <div className="min-w-0 flex-1"><div className="text-sm truncate line-through text-muted-foreground">{t.title}</div></div>
-                    {cancelled && <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-secondary text-secondary-foreground">Dismissed</span>}
-                    {t.disposition && <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-secondary text-muted-foreground capitalize">{t.disposition.replace(/_/g, " ")}</span>}
-                  </div>
-                  );
-                })}
+                {done.map((t) => <ClosedRow key={t.id} t={t} />)}
               </div>
             </section>
           )}

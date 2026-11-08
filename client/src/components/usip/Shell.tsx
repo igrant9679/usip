@@ -3,7 +3,8 @@ import { usePageTitle } from "@/lib/usePageTitle";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
-import { canOpenWorkspace } from "@/lib/activeWorkspace";
+import { WorkspaceSwitchList } from "@/components/usip/WorkspaceSwitchList";
+import { PendingInvitations, usePendingInvitations } from "@/components/usip/PendingInvitations";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { HelpHover } from "@/components/usip/HelpTip";
@@ -80,7 +81,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { ReactNode, useEffect, useLayoutEffect, useState, useRef, createContext, useContext } from "react";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { rememberPage } from "@/lib/lastPage";
 import { PageTransition } from "@/components/PageTransition";
 import ErrorBoundary from "@/components/ErrorBoundary";
@@ -94,6 +95,15 @@ import { isAdminRole } from "@shared/roleRank";
 import { EmailVerificationBanner } from "@/components/usip/EmailVerificationBanner";
 // ── Accent colour context ────────────────────────────────────────────────────
 const AccentContext = createContext<string>("#1D4ED8");
+
+/**
+ * True when a page is rendered inside the Settings hub (audit 2026-10-20, U9;
+ * batch CONB, 2026-11-08): Team, Audit log, Custom fields and Notifications
+ * are settings, so the hub shows them in its own content panel. The hub is the
+ * frame there, so Shell renders only the page, without a second sidebar and
+ * top bar. Everywhere else it is false and nothing changes.
+ */
+export const ShellEmbedContext = createContext(false);
 /**
  * The page accent. Defaults to the active section's colour (published by
  * Shell's provider) — but when the user picks a non-default colour theme, the
@@ -259,7 +269,7 @@ const _LEGACY_NAV: NavGroup[] = [
     //   - /quotes        → opens from /proposals (similar customer-facing doc)
     //   - /territories   → opens from /lead-routing (routing config lives there)
     items: [
-      { href: "/tasks", label: "Tasks", icon: ListChecks },
+      { href: "/v2/tasks", label: "Tasks", icon: ListChecks },
       { href: "/mindmaps", label: "Mindmaps", icon: GitFork },
       { href: "/workflows", label: "Workflows", icon: Workflow },
       { href: "/dashboards", label: "Dashboards", icon: PieChart },
@@ -305,8 +315,9 @@ type NavSection = { label: string; icon: any; items: NavLink[]; color: string; d
 // mailbox, calendar). Uncoloured links inherit their legacy section hue.
 const TOP_LINKS: NavLink[] = [
   { href: "/v2/home", label: "Home", icon: Home, color: "#3B82F6", darkColor: "#93C5FD" },
-  // Back on the rail (owner, 2026-09-04): the pipeline dashboard.
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, color: "#F59E0B", darkColor: "#FBBF24" },
+  // Back on the rail (owner, 2026-09-04): the pipeline dashboard. Since the two
+  // homes became one page (U33, 2026-11-08) it is that page's Pipeline view.
+  { href: "/v2/home?view=pipeline", label: "Dashboard", icon: LayoutDashboard, color: "#F59E0B", darkColor: "#FBBF24" },
   { href: "/v2/ai-assistant", label: "AI Assistant", icon: Sparkles, color: "#9333EA", darkColor: "#D8B4FE" },
   // One reply workspace (F25): Inbox and My Mailbox are its tabs now.
   { href: "/v2/inbox", label: "Inbox", icon: Inbox, color: "#1D4ED8", darkColor: "#93C5FD" },
@@ -383,10 +394,11 @@ const PALETTE_SHORTCUT = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.t
  * navigates — the panel is the navigation. Styled to match renderNavLink so
  * it reads as one of the rail's rows. */
 const ADMIN_MENU_ITEMS = [
-  { label: "Users and Teams", icon: Users, href: "/team" },
+  // Both open inside the Settings hub now (U9, 2026-11-08): they are settings.
+  { label: "Users and Teams", icon: Users, href: "/v2/settings/users-teams" },
   // Label matches the destination page's title ("Audit log"); it read as a
   // broken link when it was called "System Activity" but opened /audit.
-  { label: "Audit Log", icon: Activity, href: "/audit" },
+  { label: "Audit Log", icon: Activity, href: "/v2/settings/system-activity" },
   { label: "Security", icon: ShieldCheck, href: "/v2/settings/security" },
   { label: "Integrations", icon: Plug, href: "/v2/settings/integrations" },
 ];
@@ -507,17 +519,21 @@ function resolveAccent(loc: string, isDark: boolean): string {
   return isDark ? "#93C5FD" : "#1D4ED8";
 }
 
-/** Key used by Dashboards.tsx to persist the user's chosen home dashboard. */
-export const HOME_DASHBOARD_KEY = "velocity_home_dashboard";
-
 export function Shell({ children, title, actions }: { children: ReactNode; title?: string; actions?: ReactNode }) {
   const [location] = useLocation();
   usePageTitle(title);
+  const currentSearch = useSearch().replace(/^\?/, "");
+  const embedded = useContext(ShellEmbedContext);
   // The AI Assistant sends "the page the user came from" with each turn.
   useEffect(() => { rememberPage(location); }, [location]);
   const { user, logout } = useAuth();
   const { workspaces, current, switchTo, isLoading } = useWorkspace();
   const [wsOpen, setWsOpen] = useState(false);
+  // The switcher's search (U10); cleared each time it closes.
+  const [wsQuery, setWsQuery] = useState("");
+  const openSwitcher = (v: boolean) => { setWsOpen(v); if (!v) setWsQuery(""); };
+  // Invitations waiting for this person (U10): a dot on the switcher, a list inside it.
+  const pendingInvites = (usePendingInvitations().data ?? []).length;
   const [newWsOpen, setNewWsOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -601,11 +617,9 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const brandingQ = trpc.workspace.getBranding.useQuery(undefined, { enabled: !!current, staleTime: 60_000 });
   const workspaceLogo = brandingQ.data?.logoUrl ?? null;
 
-  // Respect the user's "Set as Home" preference for the Dashboard nav link
-  const homeDashboardHref = (typeof window !== "undefined" ? localStorage.getItem(HOME_DASHBOARD_KEY) : null) ?? "/";
-
-  // Home quick-link honours the user's "Set as Home" dashboard preference.
-  const topLinks = TOP_LINKS.map((l) => (l.href === "/" ? { ...l, href: homeDashboardHref } : l));
+  // "Set as home" is the person's now, read by the home page itself (U33,
+  // hooks/useHomeView): the Home link opens whichever view they chose.
+  const topLinks = TOP_LINKS;
 
   const isDark = theme === "dark";
   // Accent tracks the active section's colour and is published on AccentContext,
@@ -615,7 +629,11 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
 
   // ── Sidebar renderers (light, sectioned, colour-per-section rail) ───────
   const renderNavLink = (l: NavLink, opts?: { indented?: boolean; color?: string; darkColor?: string }) => {
-    const active = location === l.href || (l.href !== "/" && location.startsWith(l.href + "/"));
+    // A link to a view (/v2/home?view=pipeline) is active on that view only.
+    const [hrefPath, hrefQuery] = l.href.split("?");
+    const active = hrefQuery
+      ? location === hrefPath && currentSearch.split("&").includes(hrefQuery)
+      : location === l.href || (l.href !== "/" && location.startsWith(l.href + "/"));
     const Icon = l.icon;
     // Colour precedence: explicit link colour → the page's legacy section hue
     // (this is what gives every "More" item its own functional-area colour)
@@ -691,6 +709,15 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     setMobileOpen(false);
     setHelpOpen(false);
   }, [location]);
+  // Inside the Settings hub: the page alone (U9). After every hook, so the
+  // hook order is the same either way.
+  if (embedded) {
+    return (
+      <AccentContext.Provider value={accentColor}>
+        <div className="flex-1 min-h-0 overflow-y-auto" data-embedded-in="settings">{children}</div>
+      </AccentContext.Provider>
+    );
+  }
   return (
     <AccentContext.Provider value={accentColor}>
     <div className="h-full flex bg-background text-foreground">
@@ -835,7 +862,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
               closed only on a route change, and switching workspace keeps the
               route, so it stayed open; it also ignored outside clicks and Esc. */}
           <div className="relative min-w-0 max-w-[55vw] md:max-w-none">
-            <Popover open={wsOpen} onOpenChange={setWsOpen}>
+            <Popover open={wsOpen} onOpenChange={openSwitcher}>
             <PopoverTrigger asChild>
             <button
               className="flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-secondary text-sm min-w-0 max-w-full"
@@ -847,33 +874,27 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                 <Building2 className="size-4 text-muted-foreground shrink-0" />
               )}
               <span className="font-medium truncate">{current?.name ?? "Loading…"}</span>
+              {pendingInvites > 0 && (
+                <span className="shrink-0 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground" aria-label={`${pendingInvites} invitation${pendingInvites === 1 ? "" : "s"} waiting`}>{pendingInvites}</span>
+              )}
               <ChevronsUpDown className="size-3.5 text-muted-foreground shrink-0" />
             </button>
             </PopoverTrigger>
               <PopoverContent align="start" sideOffset={4} className="w-64 p-1 shadow-lg">
+                {/* Invitations waiting for you, with Accept (U10). */}
+                <PendingInvitations onAccepted={() => openSwitcher(false)} className="mb-1 border-b border-border pb-1" />
                 {/* An archived workspace is badged, and only a super admin may
                     open it: everyone else is refused inside (audit 2026-10-20,
-                    G36). It was listed like any other. */}
-                {workspaces.map((w) => (
-                  <button
-                    key={w.id}
-                    disabled={!canOpenWorkspace(w)}
-                    onClick={() => { setWsOpen(false); if (current?.id !== w.id) switchTo(w.id); }}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm hover:bg-secondary disabled:opacity-60 disabled:hover:bg-transparent"
-                  >
-                    {current?.id === w.id ? <Check className="size-3.5 text-primary" /> : <span className="size-3.5" />}
-                    {(w as { logoUrl?: string | null }).logoUrl && (
-                      <img src={(w as { logoUrl?: string | null }).logoUrl!} alt="" className="size-5 rounded-sm object-contain shrink-0" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
-                    )}
-                    <div className="flex-1 text-left">
-                      <div>{w.name}</div>
-                      <div className="text-[11px] text-muted-foreground">{w.role} · {w.plan}</div>
-                    </div>
-                    {w.archivedAt && (
-                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">Archived</span>
-                    )}
-                  </button>
-                ))}
+                    G36). A search box once the list is long (U10). The list is
+                    shared with the Settings hub's switcher. */}
+                <WorkspaceSwitchList
+                  detailed
+                  workspaces={workspaces}
+                  currentId={current?.id}
+                  query={wsQuery}
+                  onQuery={setWsQuery}
+                  onPick={(id) => { openSwitcher(false); if (current?.id !== id) switchTo(id); }}
+                />
                 {/* Creation is super_admin-only server-side; hiding it for
                     everyone else keeps the menu honest rather than offering a
                     button that always 403s. */}

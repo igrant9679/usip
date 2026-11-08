@@ -34,7 +34,7 @@ import { _clearWorkspaceTimezoneCache } from "./services/workspaceTimezone";
 import { ComparisonWidget, GoalProgressWidget } from "../client/src/components/usip/DashboardWidgets";
 import { DashboardChartRenderer } from "../client/src/components/usip/DashboardChartRenderer";
 import { goalsKey, LEGACY_GOALS_KEY, readGoals, writeGoals } from "../client/src/lib/dashboardGoals";
-import { DEFAULT_HOME, HOME_CHOICES, homeHref } from "../client/src/lib/homeChoice";
+import { DEFAULT_HOME_VIEW, HOME_CHOICES, homeViewFrom } from "../client/src/lib/homeChoice";
 import { socialFunnelSteps, socialStepNote } from "../client/src/lib/socialFunnel";
 
 const WS = 2, FOREIGN = 9, ME = 1, ANN = 21;
@@ -362,22 +362,25 @@ describe("the Dashboard's stat cards (G53)", () => {
 /* ── G56 ──────────────────────────────────────────────────────────────────── */
 
 describe("two homes, one choice of where to land (G56)", () => {
+  // 2026-11-08 (batch CONB, U33): the two homes are one page with two views,
+  // and the choice is the person's, on the server (conbHome.test.ts pins the
+  // page, the server and the one-time carry-over). What this block protected
+  // still holds: a saved value counts only if it is still a home, the
+  // dashboard is the default for anyone who never chose, and Dashboards
+  // offers both.
   it("a saved home is used only if it is still a home", () => {
-    expect(DEFAULT_HOME).toBe("/dashboard");
-    expect(homeHref("/v2/home")).toBe("/v2/home");
-    expect(homeHref("/dashboard")).toBe("/dashboard");
-    for (const old of [null, undefined, "/", "/dashboard-home2", "javascript:alert(1)"]) expect(homeHref(old)).toBe(DEFAULT_HOME);
+    expect(DEFAULT_HOME_VIEW).toBe("pipeline");
+    expect(homeViewFrom("/v2/home")).toBe("today");
+    expect(homeViewFrom("/dashboard")).toBe("pipeline");
+    for (const old of [null, undefined, "/", "/dashboard-home2", "javascript:alert(1)"]) expect(homeViewFrom(old)).toBe(null);
   });
 
   it("'/' opens the chosen home, and Dashboards offers both", () => {
-    expect(read("client/src/App.tsx")).toContain('<Route path="/"><AuthGate><HomeRoute /></AuthGate></Route>');
-    const route = read("client/src/pages/usip/HomeRoute.tsx");
-    expect(route).toContain("localStorage.getItem(HOME_DASHBOARD_KEY)");
-    expect(route).toContain("setLocation(href, { replace: true })");
+    expect(read("client/src/App.tsx")).toContain('<Route path="/"><AuthGate><Home /></AuthGate></Route>');
     const page = read("client/src/pages/usip/Dashboards.tsx");
     expect(page).toContain("{HOME_CHOICES.map((p) => {");
-    expect(page).toContain("localStorage.setItem(HOME_DASHBOARD_KEY, p.href)");
-    expect(HOME_CHOICES.map((c) => c.href)).toEqual(["/v2/home", "/dashboard"]);
+    expect(page).toContain("setHomeView(p.view);");
+    expect(HOME_CHOICES.map((c) => c.href)).toEqual(["/v2/home?view=today", "/v2/home?view=pipeline"]);
   });
 
   it("Home's open deals come from the server's reading, not the default pipeline's stages", () => {

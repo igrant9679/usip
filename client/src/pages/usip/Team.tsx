@@ -337,15 +337,13 @@ export default function Team() {
    * with nothing tying the two together; the descriptions are the only part
    * that is UI-only.
    *
-   * "View all leads" says what it does TODAY, which is nothing: the key is
-   * stored and read by no server code. Data scoping is a separate, approved
-   * piece of work. Labelling it honestly beats a switch that implies a
-   * restriction the server does not apply.
+   * "View all leads" is gone (G51, 2026-11-08): it restricted nothing, and a
+   * switch that grants nothing is removed rather than labelled. See
+   * shared/permissions.ts for how to bring it back with its enforcement.
    */
   const PERMISSION_DESCRIPTIONS: Record<string, { label: string; description: string }> = {
     export_data: { label: "Export data", description: "Can download report CSVs and the workspace data export" },
     manage_sequences: { label: "Manage sequences", description: "Can create, edit, fork, and delete email sequences (pausing a running sequence stays available to everyone)" },
-    view_all_leads: { label: "View all leads", description: "Not yet enforced — lead visibility is not restricted by this switch today" },
     manage_integrations: { label: "Manage integrations", description: "Can connect and disconnect external integrations" },
     access_billing: { label: "Access billing", description: "Can open Settings → Billing and credits" },
     manage_api_keys: { label: "Manage API keys", description: "Can create and revoke API keys for the workspace" },
