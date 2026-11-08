@@ -52,6 +52,7 @@ import { autoSendGroups, sequenceAutoSend } from "@shared/sequenceAutoSend";
 import { nextSendAt } from "@shared/recipientTime";
 import { enrollmentRecipientZones, sequenceUsesRecipientTime } from "../services/recipientZone";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
+import { isValidTimezone } from "@shared/availability";
 import { addVisitorIdsToEmail } from "../services/visitorLinks";
 
 /** One escaper for the whole codebase — @shared/escapeHtml. The comment here
@@ -902,7 +903,7 @@ export const sequencesRouter = router({
     exitConditions: z.array(z.object({ type: z.enum(["reply","bounce","unsubscribe","goal_met","manual"]), enabled: z.boolean() })).optional(),
     settings: z.object({
       /** null = use the workspace's time zone. */
-      timezone: z.string().max(64).nullable().optional(),
+      timezone: z.string().max(64).refine(isValidTimezone, { message: "That isn't a time zone this server knows." }).nullable().optional(),
       sendWindowStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
       sendWindowEnd: z.string().regex(/^\d{2}:\d{2}$/).optional(),
       skipWeekends: z.boolean().optional(),

@@ -32,7 +32,7 @@
  * row's business, because the log row is the one carrying the delivery outcome.
  */
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, isNotNull, like, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, like, ne, notExists, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   aiPipelineJobs,
@@ -77,6 +77,8 @@ const listInput = z.object({
   search: z.string().default(""),
   campaignId: z.number().optional(),
   contactId: z.number().optional(),
+  /** One sequence's sent mail and drafts (U15): the banner on a sequence links here. */
+  sequenceId: z.number().int().optional(),
   limit: z.number().int().min(1).max(200).default(50),
   offset: z.number().int().min(0).default(0),
 });
@@ -126,6 +128,7 @@ export const emailActivityRouter = {
       if (input.source !== "all") conds.push(eq(emailLog.source, input.source));
       if (input.campaignId) conds.push(eq(emailLog.campaignId, input.campaignId));
       if (input.contactId) conds.push(eq(emailLog.contactId, input.contactId));
+      if (input.sequenceId) conds.push(eq(emailLog.sequenceId, input.sequenceId));
       if (input.status === "sent") conds.push(eq(emailLog.status, "sent"));
       if (input.status === "failed") conds.push(eq(emailLog.status, "failed"));
       if (term) {
@@ -228,6 +231,7 @@ export const emailActivityRouter = {
         sql`NOT EXISTS (SELECT 1 FROM \`email_log\` l WHERE l.\`draftId\` = ${emailDrafts.id})`,
       ];
       if (input.contactId) conds.push(eq(emailDrafts.toContactId, input.contactId));
+      if (input.sequenceId) conds.push(eq(emailDrafts.sequenceId, input.sequenceId));
       if (input.source === "sequence") conds.push(sql`${emailDrafts.sequenceId} IS NOT NULL`);
       // Exact inverse of the row classification below (sequence wins over
       // ai_draft): the filter used to admit AI-written sequence drafts the
@@ -514,6 +518,33 @@ export const emailActivityRouter = {
       heldByPause: { count: n(paused), href: "/v2/emails?status=held" },
     };
   }),
+
+  /**
+   * One sequence's drafts that wait (audit 2026-10-20, U15), for the banner on
+   * its page: awaiting review, and approved but not sent. Together they are
+   * exactly what its link lists (/v2/emails?status=awaiting&sequence=<id>,
+   * EMAIL_STATUS_GROUPS.awaiting), counted in SQL.
+   */
+  sequenceDraftsWaiting: workspaceProcedure
+    .input(z.object({ sequenceId: z.number().int() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const rows = await db.select({ status: emailDrafts.status, n: sql<number>`count(*)` }).from(emailDrafts)
+        .where(and(
+          eq(emailDrafts.workspaceId, ctx.workspace.id),
+          eq(emailDrafts.sequenceId, input.sequenceId),
+          inArray(emailDrafts.status, [...WAITING]),
+          // As the feed excludes them: a draft whose send left a log row is that row's story.
+          notExists(db.select({ one: sql`1` }).from(emailLog).where(and(eq(emailLog.draftId, emailDrafts.id), eq(emailLog.workspaceId, emailDrafts.workspaceId)))),
+        ))
+        .groupBy(emailDrafts.status);
+      const byStatus = new Map(rows.map((r) => [String(r.status), num(r.n)]));
+      const of = (st: string) => byStatus.get(st) ?? 0;
+      const review = of("pending_review") + of("ai_pending_review");
+      const approved = of("approved");
+      return { review, approved, total: review + approved, href: `/v2/emails?status=awaiting&sequence=${input.sequenceId}` };
+    }),
 
   /**
    * Headline numbers and the per-source counts behind the filter chips.

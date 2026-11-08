@@ -147,6 +147,8 @@ export interface EmailFeedFilters {
   source: string;
   /** sent | engaged | bounced | failed | awaiting | approved | held | scheduled | received | all */
   status: string;
+  /** One sequence's mail (audit 2026-10-20, U15): only sent mail and drafts carry a sequence. */
+  sequenceId?: number;
 }
 
 /**
@@ -199,6 +201,7 @@ export function statusApplies(filters: EmailFeedFilters, kind: EmailFeedKind): b
  * returned rows the user had just filtered out.
  */
 export function feedSourceApplies(filters: EmailFeedFilters, kind: EmailFeedKind): boolean {
+  if (filters.sequenceId && kind !== "log" && kind !== "draft") return false;
   if (filters.direction === "inbound") return kind === "inbound" && statusApplies(filters, kind);
   if (filters.direction === "outbound" && kind === "inbound") return false;
   return sourceApplies(filters, kind) && statusApplies(filters, kind);

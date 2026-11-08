@@ -284,6 +284,11 @@ export default function EmailsV2() {
   const [direction, setDirection] = useState(initial.get("direction") || "all");
   const [source, setSource] = useState(initial.get("source") || "all");
   const [status, setStatus] = useState(initial.get("status") || "all");
+  // One sequence's mail, from the banner on its page (audit 2026-10-20, U15).
+  const [sequenceFilter, setSequenceFilter] = useState<number | null>(() => {
+    const n = Number(initial.get("sequence"));
+    return Number.isInteger(n) && n > 0 ? n : null;
+  });
   const [search, setSearch] = useState("");
   const [searchDebounced, setSearchDebounced] = useState("");
   const [page, setPage] = useState(0);
@@ -297,9 +302,11 @@ export default function EmailsV2() {
   }, [search]);
 
   const feed = trpc.emailActivity.list.useQuery(
-    { direction: direction as "all" | "outbound" | "inbound", source, status, search: searchDebounced, limit: PAGE, offset: page * PAGE },
+    { direction: direction as "all" | "outbound" | "inbound", source, status, search: searchDebounced, limit: PAGE, offset: page * PAGE, ...(sequenceFilter ? { sequenceId: sequenceFilter } : {}) },
     { retry: false },
   );
+  // The filtered sequence's name, for its chip.
+  const filteredSeq = trpc.sequences.get.useQuery({ id: sequenceFilter ?? 0 }, { enabled: !!sequenceFilter, retry: false });
   // Status-aware: the chips must count what the ACTIVE filter would show,
   // not all-time transmitted totals (owner report 2026-09-20).
   const stats = trpc.emailActivity.stats.useQuery({ status }, { retry: false });
@@ -500,6 +507,15 @@ export default function EmailsV2() {
                 </button>
               );
             })}
+            {sequenceFilter ? (
+              <span className="inline-flex items-center gap-1 rounded-full border bg-card px-2.5 py-1 text-[11.5px] font-medium">
+                <ListOrdered className="size-3" />
+                {(filteredSeq.data as { name?: string } | undefined)?.name ?? `Sequence #${sequenceFilter}`}
+                <button type="button" aria-label="Show every sequence's mail" className="ml-0.5 rounded p-0.5 text-muted-foreground hover:text-foreground" onClick={() => setFilter(() => setSequenceFilter(null))}>
+                  <X className="size-3" />
+                </button>
+              </span>
+            ) : null}
             <div className="flex-1 min-w-[140px]" />
             <div className="relative w-full sm:w-72">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
