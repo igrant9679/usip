@@ -28,8 +28,8 @@ import { HUB_SECTION_ALIASES, PROFILE_TAB_IDS, profileTabFrom, settingsMatches, 
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
-import { canOpenWorkspace } from "@/lib/activeWorkspace";
-import { Building2 as WsIcon, Check as WsCheck, ChevronsUpDown as WsChevrons } from "lucide-react";
+import { WorkspaceSwitchList } from "@/components/usip/WorkspaceSwitchList";
+import { Building2 as WsIcon, ChevronsUpDown as WsChevrons } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -1319,7 +1319,14 @@ function ChangeEmailDialog({ open, onClose, hasPassword, currentEmail }: { open:
  */
 function SettingsWorkspaceSwitcher() {
   const { workspaces, current, switchTo, isLoading } = useWorkspace();
-  const [open, setOpen] = useState(false);
+  const [open, setOpenState] = useState(false);
+  // Search, once the list is long (U10); cleared when the panel closes.
+  const [query, setQuery] = useState("");
+  const setOpen = (v: boolean | ((o: boolean) => boolean)) => setOpenState((o) => {
+    const next = typeof v === "function" ? v(o) : v;
+    if (!next) setQuery("");
+    return next;
+  });
   const triggerRef = useRef<HTMLButtonElement>(null);
   // Hand-rolled disclosure, so the semantics Radix supplies for free have to be
   // written out (a11y 2026-10-28): the trigger says it opens a popup and
@@ -1355,20 +1362,15 @@ function SettingsWorkspaceSwitcher() {
       </button>
       {open && (
         <div className="absolute left-0 right-0 top-full z-40 mt-1 rounded-md border bg-popover p-1 shadow-lg">
-          {/* Archived: badged, and open to super admins only (G36), as in Shell. */}
-          {workspaces.map((w) => (
-            <button
-              key={w.id}
-              type="button"
-              disabled={!canOpenWorkspace(w)}
-              onClick={() => { setOpen(false); if (w.id !== current?.id) switchTo(w.id); }}
-              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] hover:bg-muted disabled:opacity-60 disabled:hover:bg-transparent"
-            >
-              {current?.id === w.id ? <WsCheck className="size-3.5 shrink-0 text-primary" /> : <span className="size-3.5 shrink-0" />}
-              <span className="min-w-0 flex-1 truncate">{w.name}</span>
-              {w.archivedAt && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">Archived</span>}
-            </button>
-          ))}
+          {/* Archived: badged, and open to super admins only (G36); a search
+              box once the list is long (U10). The same list as the Shell's. */}
+          <WorkspaceSwitchList
+            workspaces={workspaces}
+            currentId={current?.id}
+            query={query}
+            onQuery={setQuery}
+            onPick={(id) => { setOpen(false); if (id !== current?.id) switchTo(id); }}
+          />
         </div>
       )}
     </div>

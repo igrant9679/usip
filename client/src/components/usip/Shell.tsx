@@ -3,7 +3,8 @@ import { usePageTitle } from "@/lib/usePageTitle";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
-import { canOpenWorkspace } from "@/lib/activeWorkspace";
+import { WorkspaceSwitchList } from "@/components/usip/WorkspaceSwitchList";
+import { PendingInvitations, usePendingInvitations } from "@/components/usip/PendingInvitations";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { HelpHover } from "@/components/usip/HelpTip";
@@ -528,6 +529,11 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const { user, logout } = useAuth();
   const { workspaces, current, switchTo, isLoading } = useWorkspace();
   const [wsOpen, setWsOpen] = useState(false);
+  // The switcher's search (U10); cleared each time it closes.
+  const [wsQuery, setWsQuery] = useState("");
+  const openSwitcher = (v: boolean) => { setWsOpen(v); if (!v) setWsQuery(""); };
+  // Invitations waiting for this person (U10): a dot on the switcher, a list inside it.
+  const pendingInvites = (usePendingInvitations().data ?? []).length;
   const [newWsOpen, setNewWsOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -856,7 +862,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
               closed only on a route change, and switching workspace keeps the
               route, so it stayed open; it also ignored outside clicks and Esc. */}
           <div className="relative min-w-0 max-w-[55vw] md:max-w-none">
-            <Popover open={wsOpen} onOpenChange={setWsOpen}>
+            <Popover open={wsOpen} onOpenChange={openSwitcher}>
             <PopoverTrigger asChild>
             <button
               className="flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-secondary text-sm min-w-0 max-w-full"
@@ -868,33 +874,27 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
                 <Building2 className="size-4 text-muted-foreground shrink-0" />
               )}
               <span className="font-medium truncate">{current?.name ?? "Loading…"}</span>
+              {pendingInvites > 0 && (
+                <span className="shrink-0 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground" aria-label={`${pendingInvites} invitation${pendingInvites === 1 ? "" : "s"} waiting`}>{pendingInvites}</span>
+              )}
               <ChevronsUpDown className="size-3.5 text-muted-foreground shrink-0" />
             </button>
             </PopoverTrigger>
               <PopoverContent align="start" sideOffset={4} className="w-64 p-1 shadow-lg">
+                {/* Invitations waiting for you, with Accept (U10). */}
+                <PendingInvitations onAccepted={() => openSwitcher(false)} className="mb-1 border-b border-border pb-1" />
                 {/* An archived workspace is badged, and only a super admin may
                     open it: everyone else is refused inside (audit 2026-10-20,
-                    G36). It was listed like any other. */}
-                {workspaces.map((w) => (
-                  <button
-                    key={w.id}
-                    disabled={!canOpenWorkspace(w)}
-                    onClick={() => { setWsOpen(false); if (current?.id !== w.id) switchTo(w.id); }}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm hover:bg-secondary disabled:opacity-60 disabled:hover:bg-transparent"
-                  >
-                    {current?.id === w.id ? <Check className="size-3.5 text-primary" /> : <span className="size-3.5" />}
-                    {(w as { logoUrl?: string | null }).logoUrl && (
-                      <img src={(w as { logoUrl?: string | null }).logoUrl!} alt="" className="size-5 rounded-sm object-contain shrink-0" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
-                    )}
-                    <div className="flex-1 text-left">
-                      <div>{w.name}</div>
-                      <div className="text-[11px] text-muted-foreground">{w.role} · {w.plan}</div>
-                    </div>
-                    {w.archivedAt && (
-                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">Archived</span>
-                    )}
-                  </button>
-                ))}
+                    G36). A search box once the list is long (U10). The list is
+                    shared with the Settings hub's switcher. */}
+                <WorkspaceSwitchList
+                  detailed
+                  workspaces={workspaces}
+                  currentId={current?.id}
+                  query={wsQuery}
+                  onQuery={setWsQuery}
+                  onPick={(id) => { openSwitcher(false); if (current?.id !== id) switchTo(id); }}
+                />
                 {/* Creation is super_admin-only server-side; hiding it for
                     everyone else keeps the menu honest rather than offering a
                     button that always 403s. */}
