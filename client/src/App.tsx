@@ -92,6 +92,7 @@ const MeetingPickPage = lazyChunk(() => import("@/pages/MeetingPickPage"));
 const LandingPage = lazyChunk(() => import("@/pages/LandingPage"));
 const ResetPassword = lazyChunk(() => import("@/pages/ResetPassword"));
 const ConfirmEmail = lazyChunk(() => import("@/pages/ConfirmEmail"));
+const VerifyEmail = lazyChunk(() => import("@/pages/VerifyEmail"));
 const LandingPages = lazyChunk(() => import("@/pages/usip/LandingPages"));
 const ChatPage = lazyChunk(() => import("@/pages/ChatPage"));
 const ChatAgents = lazyChunk(() => import("@/pages/usip/ChatAgents"));
@@ -166,6 +167,8 @@ function Landing() {
   // there is deliberately no SMS/text option.
   const [mfaStep, setMfaStep] = useState(false);
   const [totpCode, setTotpCode] = useState("");
+  // A one-time backup code in place of the authenticator code (G15).
+  const [useBackup, setUseBackup] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -207,7 +210,7 @@ function Landing() {
       return;
     }
     if (mode === "signin" && mfaStep && !totpCode.trim()) {
-      setError("Enter the 6-digit code from your authenticator app.");
+      setError(useBackup ? "Enter one of your backup codes." : "Enter the 6-digit code from your authenticator app.");
       return;
     }
     setLoading(true);
@@ -219,7 +222,10 @@ function Landing() {
         returnPath,
       };
       if (mode === "signup" && name.trim()) body.name = name.trim();
-      if (mfaStep && totpCode.trim()) body.totpCode = totpCode.trim();
+      if (mfaStep && totpCode.trim()) {
+        if (useBackup) body.backupCode = totpCode.trim();
+        else body.totpCode = totpCode.trim();
+      }
 
       const res = await fetch(endpoint, {
         method: "POST",
@@ -241,6 +247,15 @@ function Landing() {
           data.error ?? (mode === "signup" ? "Sign-up failed. Please try again." : "Login failed. Please try again."),
         );
         return;
+      }
+      // Signed in with a backup code: say how many are left before leaving,
+      // so a person running low knows to make a new set (G15).
+      if (typeof data.backupCodesLeft === "number") {
+        window.alert(
+          data.backupCodesLeft === 0
+            ? "That was your last backup code. Make a new set in Settings → Profile → Security."
+            : `Signed in with a backup code. You have ${data.backupCodesLeft} left; you can make a new set in Settings → Profile → Security.`,
+        );
       }
       // The server already sanitises `redirect`; re-checked here because this
       // is the sink, and a sink that trusts its caller is one refactor from
@@ -340,19 +355,30 @@ function Landing() {
           )}
           {mode === "signin" && mfaStep && (
             <div className="space-y-2">
-              <Label htmlFor="login-totp" className="text-white/80">Authentication code</Label>
+              <Label htmlFor="login-totp" className="text-white/80">{useBackup ? "Backup code" : "Authentication code"}</Label>
               <Input
                 id="login-totp"
-                inputMode="numeric"
+                inputMode={useBackup ? "text" : "numeric"}
                 autoComplete="one-time-code"
-                placeholder="6-digit code"
+                placeholder={useBackup ? "xxxxx-xxxxx" : "6-digit code"}
                 value={totpCode}
-                onChange={(e) => { setTotpCode(e.target.value.replace(/[^\d\s]/g, "")); setError(null); }}
+                onChange={(e) => { setTotpCode(useBackup ? e.target.value.replace(/[^A-Za-z0-9\s-]/g, "") : e.target.value.replace(/[^\d\s]/g, "")); setError(null); }}
                 className="bg-white/10 border-white/20 text-white placeholder:text-white/30 focus:border-[#14B89A] tracking-widest"
                 disabled={loading}
                 autoFocus
               />
-              <p className="text-xs text-white/40">Open your authenticator app and enter the current code.</p>
+              <p className="text-xs text-white/40">
+                {useBackup
+                  ? "Enter one of the backup codes you saved when you set up 2FA. Each one works once."
+                  : "Open your authenticator app and enter the current code."}
+              </p>
+              <button
+                type="button"
+                className="text-xs text-white/50 hover:text-[#14B89A] hover:underline"
+                onClick={() => { setUseBackup((v) => !v); setTotpCode(""); setError(null); }}
+              >
+                {useBackup ? "Use my authenticator app instead" : "Lost your phone? Use a backup code"}
+              </button>
             </div>
           )}
           {error && (
@@ -393,7 +419,7 @@ function Landing() {
               <button
                 type="button"
                 className="text-[#14B89A] hover:underline font-medium"
-                onClick={() => { setMode("signup"); setError(null); setMfaStep(false); setTotpCode(""); }}
+                onClick={() => { setMode("signup"); setError(null); setMfaStep(false); setTotpCode(""); setUseBackup(false); }}
               >
                 Create one
               </button>
@@ -404,7 +430,7 @@ function Landing() {
               <button
                 type="button"
                 className="text-[#14B89A] hover:underline font-medium"
-                onClick={() => { setMode("signin"); setError(null); setMfaStep(false); setTotpCode(""); }}
+                onClick={() => { setMode("signin"); setError(null); setMfaStep(false); setTotpCode(""); setUseBackup(false); }}
               >
                 Sign in
               </button>
@@ -599,6 +625,8 @@ function Router() {
       <Route path="/reset-password"><ResetPassword /></Route>
       {/* PUBLIC too: the link to a new sign-in email may open in a browser that is not signed in (G32). */}
       <Route path="/confirm-email"><ConfirmEmail /></Route>
+      {/* PUBLIC too: a new account's confirmation link (F1) may open where nobody is signed in. */}
+      <Route path="/verify-email"><VerifyEmail /></Route>
       <Route path="/c/:slug"><ChatPage /></Route>
       <Route path="/v2/landing-pages"><AuthGate><LandingPages /></AuthGate></Route>
       <Route path="/v2/chat"><AuthGate><ChatAgents /></AuthGate></Route>

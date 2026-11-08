@@ -13,7 +13,8 @@ import { adminWsProcedure, repProcedure, workspaceProcedure } from "../_core/wor
 import { generateTasksForWorkspace } from "../services/taskAutopilot";
 import { getWorkspaceTimezone } from "../services/workspaceTimezone";
 import { assertOutboundNotPaused } from "../services/outboundPause";
-import { assertOwnerInWorkspace, assertRelatedInWorkspace } from "../services/foreignIds";
+import { assertOwnerInWorkspace, assertRecordInWorkspace, assertRelatedInWorkspace } from "../services/foreignIds";
+import { activeMemberIds } from "../_core/activeMembers";
 import { deadlineFrom } from "../services/calendarDeadline";
 
 const TASK_TYPES = ["call", "email", "meeting", "linkedin", "todo", "follow_up", "social_touch", "manual_email", "meeting_prep", "crm_update", "generic_action"] as const;
@@ -318,6 +319,10 @@ export const tasksRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Every target and the owner are this workspace's (audit 2026-10-20,
+      // X1.1): the single create checked them; the bulk one stored any.
+      for (const t of input.targets) await assertRelatedInWorkspace(db, t.relatedType, t.relatedId, ctx.workspace.id);
+      await assertOwnerInWorkspace(ctx.workspace.id, input.template.ownerUserId);
       const due = deadlineFrom(input.template.dueAt, await getWorkspaceTimezone(ctx.workspace.id));
       const values = input.targets.map((t) => ({
         workspaceId: ctx.workspace.id,
@@ -469,6 +474,9 @@ export const activitiesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // On a record of this workspace (audit 2026-10-20, X1.1): another's id
+      // put the call on that tenant's timeline.
+      await assertRecordInWorkspace(db, input.relatedType, input.relatedId, ctx.workspace.id);
       await db.insert(activities).values({
         workspaceId: ctx.workspace.id,
         type: "call",
@@ -497,6 +505,7 @@ export const activitiesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      await assertRecordInWorkspace(db, input.relatedType, input.relatedId, ctx.workspace.id);
       await db.insert(activities).values({
         workspaceId: ctx.workspace.id,
         type: "meeting",
@@ -523,6 +532,7 @@ export const activitiesRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
 
+      await assertRecordInWorkspace(db, input.relatedType, input.relatedId, ctx.workspace.id);
       const mentioned: number[] = [];
       let m: RegExpExecArray | null;
       const re = new RegExp(MENTION_RE);
@@ -542,8 +552,11 @@ export const activitiesRouter = router({
         actorUserId: ctx.user.id,
       });
 
+      // Only teammates here are told (X1.1), as crmNotes.create does: a
+      // mention of another workspace's user id notified them of this note.
+      const here = await activeMemberIds(ctx.workspace.id, mentioned);
       for (const uid of mentioned) {
-        if (uid === ctx.user.id) continue;
+        if (uid === ctx.user.id || !here.has(uid)) continue;
         await db.insert(notifications).values({
           workspaceId: ctx.workspace.id,
           userId: uid,
@@ -620,6 +633,8 @@ export const attachmentsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // Attached to a record of this workspace (X1.1).
+      await assertRecordInWorkspace(db, input.relatedType, input.relatedId, ctx.workspace.id);
       const buf = Buffer.from(input.base64, "base64");
       if (buf.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "The file is empty." });
       if (buf.length > ATTACHMENT_MAX_BYTES) throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "Files must be under 8 MB." });

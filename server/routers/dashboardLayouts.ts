@@ -4,7 +4,8 @@
 import { TRPCError } from "@trpc/server";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
-import { dashboardLayouts } from "../../drizzle/schema";
+import { dashboardLayouts, dashboards } from "../../drizzle/schema";
+import { requireInWorkspace } from "../services/foreignIds";
 import { getDb } from "../db";
 import { workspaceProcedure } from "../_core/workspace";
 import { router } from "../_core/trpc";
@@ -47,6 +48,8 @@ export const dashboardLayoutsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      // A layout for one of this workspace's dashboards (audit 2026-10-20, X1.1).
+      await requireInWorkspace(db, dashboards, input.dashboardId, ctx.workspace.id, "Dashboard");
 
       const [existing] = await db
         .select()

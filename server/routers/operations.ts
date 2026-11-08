@@ -21,6 +21,7 @@ import {
   dashboards,
   notifications,
   opportunities,
+  products,
   quoteLineItems,
   quotes,
   reportSchedules,
@@ -45,7 +46,7 @@ import { activeMemberEmails, activeRecipients, revokedMemberEmails } from "../se
 import { escapeHtml } from "@shared/escapeHtml";
 import { csvCell } from "@shared/csvCell";
 import { filtersNotApplied } from "@shared/dashboardPresets";
-import { assertRowInWorkspace } from "../services/foreignIds";
+import { assertInWorkspace, assertOwnerInWorkspace, assertRowInWorkspace } from "../services/foreignIds";
 import { storagePut } from "../storage";
 import { buildTransporter, decrypt } from "./smtpConfig";
 import { evalConditions, executeRuleActions, normalizeConditions } from "../services/workflowEngine";
@@ -588,6 +589,8 @@ export const campaignsRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // The owner works here (audit 2026-10-20, X1.1).
+    await assertOwnerInWorkspace(ctx.workspace.id, input.patch.ownerUserId);
     const patch: any = { ...input.patch };
     if (patch.budget !== undefined) patch.budget = String(patch.budget);
     if (patch.startsAt && typeof patch.startsAt === "string") patch.startsAt = new Date(patch.startsAt);
@@ -632,6 +635,10 @@ export const campaignsRouter = router({
   })).mutation(async ({ ctx, input }) => {
     const db = await getDb();
     if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    // The campaign, and a sequence component, are this workspace's (X1.1):
+    // another's campaign id filed a component under that tenant's campaign.
+    await assertInWorkspace(db, campaigns, input.campaignId, ctx.workspace.id, "campaign");
+    if (input.componentType === "sequence") await assertInWorkspace(db, sequences, input.componentId, ctx.workspace.id, "sequence");
     await db.insert(campaignComponents).values({ ...input, workspaceId: ctx.workspace.id });
     return { ok: true };
   }),
@@ -1920,6 +1927,8 @@ export const quotesRouter = router({
     const [opp] = await db.select({ id: opportunities.id }).from(opportunities)
       .where(and(eq(opportunities.id, input.opportunityId), eq(opportunities.workspaceId, ctx.workspace.id)));
     if (!opp) throw new TRPCError({ code: "NOT_FOUND", message: "Opportunity not found" });
+    // A line's product, when it names one, is this workspace's (X1.1).
+    await assertInWorkspace(db, products, input.lineItems.map((li) => li.productId), ctx.workspace.id, "product");
 
     // One arithmetic rule, in integer cents — @shared/quoteTotals. Every figure
     // below is DERIVED from the rounded line figures, so the PDF's rows sum to

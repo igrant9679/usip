@@ -23,10 +23,13 @@ import {
   type AiFitOutput,
   composeScore,
   DEFAULT_SCORE_CONFIG,
+  firmoFacts,
+  type LeadBehaviorInput,
   type LeadFirmoInput,
   pickRoutingMatch,
   type RoutingPayload,
   type RoutingRule,
+  ruleMatches,
   type ScoreBreakdown,
   type ScoreConfig,
   scoreAiFit,
@@ -75,9 +78,29 @@ async function loadConfig(workspaceId: number): Promise<ScoreConfig> {
   };
 }
 
-async function aggregateBehavior(workspaceId: number, leadId: number) {
+/** A lead with no engagement on record, as the scorer reads one. */
+const NO_BEHAVIOR: LeadBehaviorInput = { opens: 0, clicks: 0, replies: 0, completedSteps: 0, bounces: 0, unsubscribes: 0, daysSinceLastEngagement: 999 };
+
+async function aggregateBehavior(workspaceId: number, leadId: number): Promise<LeadBehaviorInput> {
+  return (await aggregateBehaviorMany(workspaceId, [leadId])).get(leadId) ?? { ...NO_BEHAVIOR };
+}
+
+/**
+ * Each lead's engagement, read for many leads at once: six reads for the
+ * whole set, not six per lead, so the Lead Scoring page's what-if can score a
+ * sample of leads (audit 2026-10-20, U17). One lead's score reads through
+ * here too, so the sample and a saved score count the same things.
+ */
+async function aggregateBehaviorMany(workspaceId: number, leadIds: number[]): Promise<Map<number, LeadBehaviorInput>> {
+  const ids = Array.from(new Set(leadIds));
+  const out = new Map<number, LeadBehaviorInput>(ids.map((id) => [id, { ...NO_BEHAVIOR }]));
   const db = await getDb();
-  if (!db) return { opens: 0, clicks: 0, replies: 0, completedSteps: 0, bounces: 0, unsubscribes: 0, daysSinceLastEngagement: 999 };
+  if (!db || ids.length === 0) return out;
+  const byLead = <T,>(rows: T[], key: (r: T) => number | null | undefined) => {
+    const m = new Map<number, T[]>();
+    for (const r of rows) { const k = key(r); if (k == null) continue; const a = m.get(k) ?? []; a.push(r); m.set(k, a); }
+    return m;
+  };
 
   // Real engagement, not a stub model.
   //
@@ -92,11 +115,18 @@ async function aggregateBehavior(workspaceId: number, leadId: number) {
   // were never consulted despite existing all along. That matters more now
   // that a lead's score can auto-enrol them in a sequence: fabricated
   // engagement would have started real outreach.
-  const drafts = await db.select().from(emailDrafts).where(and(eq(emailDrafts.workspaceId, workspaceId), eq(emailDrafts.toLeadId, leadId)));
-  const sentDrafts = drafts.filter((d) => d.status === "sent");
-  const opens = sentDrafts.reduce((n, d) => n + (d.openCount ?? 0), 0);
-  const clicks = sentDrafts.reduce((n, d) => n + (d.clickCount ?? 0), 0);
-  const bounces = drafts.filter((d) => d.bouncedAt != null).length;
+  const drafts = byLead(
+    // The counters and times only: a sample of leads can have thousands of
+    // drafts, and their bodies are not read here.
+    await db
+      .select({
+        toLeadId: emailDrafts.toLeadId, status: emailDrafts.status, openCount: emailDrafts.openCount, clickCount: emailDrafts.clickCount,
+        bouncedAt: emailDrafts.bouncedAt, sentAt: emailDrafts.sentAt, lastOpenedAt: emailDrafts.lastOpenedAt, lastClickedAt: emailDrafts.lastClickedAt,
+      })
+      .from(emailDrafts)
+      .where(and(eq(emailDrafts.workspaceId, workspaceId), inArray(emailDrafts.toLeadId, ids))),
+    (d) => d.toLeadId,
+  );
 
   /**
    * Replies come from the emailReplies table the inbound poller writes, not from
@@ -112,19 +142,17 @@ async function aggregateBehavior(workspaceId: number, leadId: number) {
    * campaign replies.
    *
    * Same table and same omission as the Conversation Autopilot bug fixed in
-   * `aecfbbe`; that pass scoped the classifier and missed this consumer.
+   * `aecfbbe`; that pass scoped the classifier and missed this consumer. The
+   * shared genuine-reply scope (replyScope.ts) counts a campaign reply from
+   * this lead as engagement too, not just draft-matched ones.
    */
-  const replyRows = await db
-    .select({ receivedAt: emailReplies.receivedAt })
-    .from(emailReplies)
-    .where(and(
-      eq(emailReplies.workspaceId, workspaceId),
-      eq(emailReplies.leadId, leadId),
-      // Shared genuine-reply scope (replyScope.ts): a campaign reply from
-      // this lead is engagement too, not just draft-matched ones.
-      genuineReplyScope(),
-    ));
-  const replies = replyRows.length;
+  const replies = byLead(
+    await db
+      .select({ leadId: emailReplies.leadId, receivedAt: emailReplies.receivedAt })
+      .from(emailReplies)
+      .where(and(eq(emailReplies.workspaceId, workspaceId), inArray(emailReplies.leadId, ids), genuineReplyScope())),
+    (r) => r.leadId,
+  );
 
   /**
    * Activity rows no longer count as replies (audit 2026-10-20, P37). Any
@@ -137,70 +165,80 @@ async function aggregateBehavior(workspaceId: number, leadId: number) {
    * What does count from activities is a meeting or a call that reached the
    * person: that is the prospect engaging, for the decay clock below.
    */
-  const acts = await db
-    .select({ type: activities.type, occurredAt: activities.occurredAt, callDisposition: activities.callDisposition })
-    .from(activities)
-    .where(and(
-      eq(activities.workspaceId, workspaceId),
-      eq(activities.relatedType, "lead"),
-      eq(activities.relatedId, leadId),
-      inArray(activities.type, ["meeting", "call"]),
-    ));
-  const twoWay = acts.filter((a) => a.type === "meeting" || a.callDisposition === "connected" || a.callDisposition === "callback_requested");
-  /**
-   * Decay runs from the prospect's last action: an open, a click, a reply, a
-   * meeting or a call that connected (P117). Our own sends were in this list,
-   * so each step we sent reset the clock for someone who never responded.
-   * Someone who has never acted decays from our first send to them, when they
-   * could first have.
-   */
-  const ts = (t: Date | string | null | undefined) => (t ? new Date(t).getTime() : null);
-  const prospectTimes = [
-    ...twoWay.map((a) => ts(a.occurredAt)),
-    ...sentDrafts.map((d) => ts(d.lastOpenedAt)),
-    ...sentDrafts.map((d) => ts(d.lastClickedAt)),
-    ...replyRows.map((r) => ts(r.receivedAt)),
-  ].filter((t): t is number => t != null);
-  const sendTimes = sentDrafts.map((d) => ts(d.sentAt)).filter((t): t is number => t != null);
-  const since = prospectTimes.length > 0 ? Math.max(...prospectTimes) : sendTimes.length > 0 ? Math.min(...sendTimes) : null;
-  const daysSinceLastEngagement = since != null ? Math.max(0, Math.floor((Date.now() - since) / 86400000)) : 999;
+  const acts = byLead(
+    await db
+      .select({ relatedId: activities.relatedId, type: activities.type, occurredAt: activities.occurredAt, callDisposition: activities.callDisposition })
+      .from(activities)
+      .where(and(
+        eq(activities.workspaceId, workspaceId),
+        eq(activities.relatedType, "lead"),
+        inArray(activities.relatedId, ids),
+        inArray(activities.type, ["meeting", "call"]),
+      )),
+    (a) => a.relatedId,
+  );
 
   // Unsubscribes were hardcoded to 0, so opting out never dented a lead's
   // score — they could keep climbing toward "sales ready" (and now toward
   // auto-enrolment) after asking not to be contacted. email_suppressions is
-  // the real record.
-  let unsubscribes = 0;
-  const [leadRow] = await db
-    .select({ email: leads.email })
-    .from(leads)
-    .where(and(eq(leads.workspaceId, workspaceId), eq(leads.id, leadId)))
-    .limit(1);
-  if (leadRow?.email) {
+  // the real record. Addresses compare without case, as MySQL's collation does.
+  const leadRows = await db.select({ id: leads.id, email: leads.email }).from(leads)
+    .where(and(eq(leads.workspaceId, workspaceId), inArray(leads.id, ids)));
+  const emails = Array.from(new Set(leadRows.map((l) => l.email).filter((e): e is string => !!e)));
+  const suppressed = new Set<string>();
+  if (emails.length) {
     const sup = await db
-      .select({ id: emailSuppressions.id })
+      .select({ email: emailSuppressions.email })
       .from(emailSuppressions)
       .where(and(
         eq(emailSuppressions.workspaceId, workspaceId),
-        eq(emailSuppressions.email, leadRow.email),
+        inArray(emailSuppressions.email, emails),
         inArray(emailSuppressions.reason, ["unsubscribe", "spam_complaint"]),
-      ))
-      .limit(1);
-    unsubscribes = sup.length;
+      ));
+    for (const s of sup) if (s.email) suppressed.add(s.email.toLowerCase());
   }
+  const emailOf = new Map(leadRows.map((l) => [l.id, l.email]));
 
   // Sequence step completion (proxy: enrollments.currentStep)
-  const enr = await db.select().from(enrollments).where(and(eq(enrollments.workspaceId, workspaceId), eq(enrollments.leadId, leadId)));
-  const completedSteps = enr.reduce((s, e) => s + (e.currentStep ?? 0), 0);
+  const enr = byLead(
+    await db.select({ leadId: enrollments.leadId, currentStep: enrollments.currentStep }).from(enrollments)
+      .where(and(eq(enrollments.workspaceId, workspaceId), inArray(enrollments.leadId, ids))),
+    (e) => e.leadId,
+  );
 
-  return {
-    opens,
-    clicks,
-    replies,
-    completedSteps,
-    bounces,
-    unsubscribes,
-    daysSinceLastEngagement,
-  };
+  const ts = (t: Date | string | null | undefined) => (t ? new Date(t).getTime() : null);
+  for (const leadId of ids) {
+    const mine = drafts.get(leadId) ?? [];
+    const sentDrafts = mine.filter((d) => d.status === "sent");
+    const replyRows = replies.get(leadId) ?? [];
+    const twoWay = (acts.get(leadId) ?? []).filter((a) => a.type === "meeting" || a.callDisposition === "connected" || a.callDisposition === "callback_requested");
+    /**
+     * Decay runs from the prospect's last action: an open, a click, a reply, a
+     * meeting or a call that connected (P117). Our own sends were in this list,
+     * so each step we sent reset the clock for someone who never responded.
+     * Someone who has never acted decays from our first send to them, when they
+     * could first have.
+     */
+    const prospectTimes = [
+      ...twoWay.map((a) => ts(a.occurredAt)),
+      ...sentDrafts.map((d) => ts(d.lastOpenedAt)),
+      ...sentDrafts.map((d) => ts(d.lastClickedAt)),
+      ...replyRows.map((r) => ts(r.receivedAt)),
+    ].filter((t): t is number => t != null);
+    const sendTimes = sentDrafts.map((d) => ts(d.sentAt)).filter((t): t is number => t != null);
+    const since = prospectTimes.length > 0 ? Math.max(...prospectTimes) : sendTimes.length > 0 ? Math.min(...sendTimes) : null;
+    const email = emailOf.get(leadId);
+    out.set(leadId, {
+      opens: sentDrafts.reduce((n, d) => n + (d.openCount ?? 0), 0),
+      clicks: sentDrafts.reduce((n, d) => n + (d.clickCount ?? 0), 0),
+      replies: replyRows.length,
+      completedSteps: (enr.get(leadId) ?? []).reduce((s, e) => s + (e.currentStep ?? 0), 0),
+      bounces: mine.filter((d) => d.bouncedAt != null).length,
+      unsubscribes: email && suppressed.has(email.toLowerCase()) ? 1 : 0,
+      daysSinceLastEngagement: since != null ? Math.max(0, Math.floor((Date.now() - since) / 86400000)) : 999,
+    });
+  }
+  return out;
 }
 
 async function fetchAiFit(lead: typeof leads.$inferSelect): Promise<AiFitOutput | null> {
@@ -633,6 +671,9 @@ export const leadScoringRouter = router({
     const { job, existing } = await enqueueJob({
       workspaceId: ctx.workspace.id, userId: ctx.user.id, kind: RECOMPUTE_JOB, payload: {}, total: Number(n ?? 0), oneAtATime: true,
     });
+    // The job's finish writes the audit row (G49: no automatic one now).
+    const { noteAuditRecorded } = await import("../_core/requestContext");
+    noteAuditRecorded();
     return { jobId: job.id, total: job.total, existing };
   }),
 
@@ -680,6 +721,7 @@ export const leadScoringRouter = router({
     const now = composeScore({ firmo, behav, aiFit: ai, cfg });
     const max = componentMaxes(cfg);
     const scored = lead.scoredAt != null || last != null;
+    const fit = aiFitDetails(aiFitJson, last?.computedAt ?? null);
 
     // 90-day history
     const cutoff = new Date(Date.now() - 90 * 86400000);
@@ -698,7 +740,12 @@ export const leadScoringRouter = router({
       firmographic: { value: firmo.value, max: max.firmographic, reasons: firmo.reasons },
       // The real maximum (P22): this said 30 while behaviour could reach 75.
       behavioral: { value: behav.value, max: max.behavioral, reasons: behav.reasons, raw: behaviorInput },
-      aiFit: { value: ai.value, max: max.aiFit, reasons: ai.reasons, assessed: aiFitJson != null },
+      // The stored assessment's pains, recommended products and objection
+      // risks, which only its first two pains and risks reached (audit U32).
+      aiFit: { value: ai.value, max: max.aiFit, reasons: ai.reasons, assessed: aiFitJson != null, details: fit },
+      // What the page's what-if scores in the browser with the weights on
+      // screen (U17): facts, never the lead's email or phone.
+      inputs: { firmo: firmoFacts(lead), behavior: behaviorInput, aiFit: whatIfFit(aiFitJson) },
       maxSum: max.sum,
       saved: {
         scored,
@@ -710,7 +757,79 @@ export const leadScoringRouter = router({
       history: history.map((h) => ({ at: h.computedAt, total: h.total, firmographic: h.firmographic, behavioral: h.behavioral, aiFit: h.aiFit, tier: h.tier })),
     };
   }),
+
+  /**
+   * The newest leads as the Lead Scoring page's what-if scores them (audit
+   * 2026-10-20, U17): each lead's firmographic facts, engagement and last AI
+   * fit, so the page can sort them into tiers with the weights on screen,
+   * saved or not, without asking the server again. Facts only: no names,
+   * emails or phones leave for this.
+   */
+  whatIfSample: workspaceProcedure.query(async ({ ctx }) => {
+    const db = await getDb();
+    if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+    const ws = ctx.workspace.id;
+    const [{ n }] = await db.select({ n: count() }).from(leads).where(eq(leads.workspaceId, ws));
+    const rows = await db
+      .select({ id: leads.id, title: leads.title, company: leads.company, email: leads.email, phone: leads.phone, source: leads.source })
+      .from(leads)
+      .where(eq(leads.workspaceId, ws))
+      .orderBy(desc(leads.id))
+      .limit(WHAT_IF_SAMPLE);
+    const ids = rows.map((r) => r.id);
+    const behavior = await aggregateBehaviorMany(ws, ids);
+    const fits = await latestFits(ws, ids);
+    return {
+      totalLeads: Number(n ?? 0),
+      leads: rows.map((r) => ({
+        firmo: firmoFacts(r),
+        behavior: behavior.get(r.id)!,
+        aiFit: whatIfFit(fits.get(r.id) ?? null),
+      })),
+    };
+  }),
 });
+
+/** How many of the newest leads the what-if sorts into tiers (U17). */
+export const WHAT_IF_SAMPLE = 500;
+
+/** The part of a stored AI fit the score uses: the fit and whether it was a guess. */
+function whatIfFit(ai: AiFitOutput | null): { fit_score: number; source?: "title_heuristic" } | null {
+  if (!ai || typeof ai.fit_score !== "number") return null;
+  return ai.source === "title_heuristic" ? { fit_score: ai.fit_score, source: "title_heuristic" } : { fit_score: ai.fit_score };
+}
+
+/**
+ * A stored AI fit as the breakdown shows it (audit 2026-10-20, U32): every
+ * pain, recommended product and objection risk the model gave, whether it was
+ * a guess from the title instead, and when it was assessed.
+ */
+export function aiFitDetails(ai: AiFitOutput | null, assessedAt: Date | string | null) {
+  if (!ai || typeof ai.fit_score !== "number") return null;
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim() !== "").map((x) => x.trim()) : []);
+  return {
+    fitPct: Math.round(Math.max(0, Math.min(1, ai.fit_score)) * 100),
+    estimated: ai.source === "title_heuristic",
+    painPoints: list(ai.pain_points),
+    recommendedProducts: list(ai.recommended_products),
+    objectionRisks: list(ai.objection_risks),
+    assessedAt,
+  };
+}
+
+/** Each lead's latest stored AI fit assessment, read for many leads at once. */
+async function latestFits(workspaceId: number, leadIds: number[]): Promise<Map<number, AiFitOutput | null>> {
+  const out = new Map<number, AiFitOutput | null>();
+  const db = await getDb();
+  if (!db || leadIds.length === 0) return out;
+  const rows = await db
+    .select({ leadId: leadScoreHistory.leadId, aiFitPayload: leadScoreHistory.aiFitPayload })
+    .from(leadScoreHistory)
+    .where(and(eq(leadScoreHistory.workspaceId, workspaceId), inArray(leadScoreHistory.leadId, leadIds)))
+    .orderBy(desc(leadScoreHistory.id));
+  for (const r of rows) if (!out.has(r.leadId)) out.set(r.leadId, (r.aiFitPayload as AiFitOutput | null) ?? null);
+  return out;
+}
 
 /* ───────── Routing ───────── */
 
@@ -815,6 +934,43 @@ export const leadRoutingRouter = router({
     }
     return { ownerUserId: owner };
   }),
+
+  /**
+   * "Test a lead" (audit 2026-10-20, F41): which rule would take a lead and
+   * who would get it, changing nothing: no owner set, no round-robin turn
+   * used, no match counted. A saved lead is tested as applyToLead routes it;
+   * typed values test a lead that does not exist yet.
+   */
+  testLead: workspaceProcedure
+    .input(z.object({
+      leadId: z.number().int().positive().optional(),
+      lead: z.object({
+        title: z.string().max(200).optional(),
+        company: z.string().max(200).optional(),
+        source: z.string().max(100).optional(),
+        industry: z.string().max(200).optional(),
+        country: z.string().max(100).optional(),
+        state: z.string().max(100).optional(),
+        score: z.number().int().min(0).max(100).optional(),
+      }).optional(),
+    }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      const blank = (v: string | undefined) => (v && v.trim() ? v.trim() : null);
+      let payload: RoutingPayload;
+      if (input.leadId) {
+        const [lead] = await db.select().from(leads).where(and(eq(leads.id, input.leadId), eq(leads.workspaceId, ctx.workspace.id)));
+        if (!lead) throw new TRPCError({ code: "NOT_FOUND", message: "That lead is not in this workspace." });
+        payload = { title: lead.title, company: lead.company, source: lead.source, score: lead.score ?? 0, industry: null, country: null, state: null, city: null };
+      } else if (input.lead) {
+        const l = input.lead;
+        payload = { title: blank(l.title), company: blank(l.company), source: blank(l.source), industry: blank(l.industry), country: blank(l.country), state: blank(l.state), city: null, score: l.score ?? 0 };
+      } else {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Pick a lead or type one in." });
+      }
+      return previewRouting(ctx.workspace.id, payload);
+    }),
 });
 
 /** Lead statuses that still sit on a rep's plate: what a routing capacity counts (F43). */
@@ -839,37 +995,8 @@ export async function routeLeadOwner(workspaceId: number, payload: RoutingPayloa
   const db = await getDb();
   if (!db) return null;
 
-  // The routing-rule builder offers industry / country / state conditions, but
-  // ALL THREE call sites passed null for them (leads have no such columns), so
-  // any rule using those conditions could never match — it silently never
-  // fired, with nothing to tell the admin who built it.
-  //
-  // Leads don't carry that data, but the matching Account does: accounts have
-  // `industry` and `region` (which is where CSV import now puts state +
-  // country). Enrich here rather than at each call site so all three paths
-  // — CRM lead create, webform submit, landing-page submit — benefit alike.
-  if (payload.company && (!payload.industry || (!payload.country && !payload.state))) {
-    try {
-      const [acct] = await db
-        .select({ industry: accounts.industry, region: accounts.region })
-        .from(accounts)
-        .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.name, payload.company)))
-        .limit(1);
-      if (acct) {
-        payload = {
-          ...payload,
-          industry: payload.industry ?? acct.industry ?? null,
-          // region is a free-text "State, Country" string; expose it to BOTH
-          // condition fields so either spelling of a rule can match it.
-          country: payload.country ?? acct.region ?? null,
-          state: payload.state ?? acct.region ?? null,
-        };
-      }
-    } catch (e) {
-      // Enrichment is a bonus — never fail routing because of it.
-      console.error("[leadRouting] account enrichment failed:", (e as Error)?.cause ?? e);
-    }
-  }
+  // Industry, country and state from the lead's account (enrichRoutingPayload).
+  payload = await enrichRoutingPayload(db, workspaceId, payload);
 
   /**
    * Geography and Industry rules take the owner from the matching territory
@@ -959,4 +1086,118 @@ export async function routeLeadOwner(workspaceId: number, payload: RoutingPayloa
       ));
     if (Number((res as any)?.[0]?.affectedRows ?? (res as any)?.affectedRows ?? 0) > 0 || seen === undefined) return m.ownerUserId;
   }
+}
+
+/**
+ * The routing payload with what the lead's account knows filled in, for the
+ * router and its dry run alike.
+ *
+ * The routing-rule builder offers industry / country / state conditions, but
+ * ALL THREE call sites passed null for them (leads have no such columns), so
+ * any rule using those conditions could never match — it silently never
+ * fired, with nothing to tell the admin who built it.
+ *
+ * Leads don't carry that data, but the matching Account does: accounts have
+ * `industry` and `region` (which is where CSV import now puts state +
+ * country). Enrich here rather than at each call site so all three paths
+ * — CRM lead create, webform submit, landing-page submit — benefit alike.
+ */
+async function enrichRoutingPayload(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, workspaceId: number, payload: RoutingPayload): Promise<RoutingPayload> {
+  if (payload.company && (!payload.industry || (!payload.country && !payload.state))) {
+    try {
+      const [acct] = await db
+        .select({ industry: accounts.industry, region: accounts.region })
+        .from(accounts)
+        .where(and(eq(accounts.workspaceId, workspaceId), eq(accounts.name, payload.company)))
+        .limit(1);
+      if (acct) {
+        return {
+          ...payload,
+          industry: payload.industry ?? acct.industry ?? null,
+          // region is a free-text "State, Country" string; expose it to BOTH
+          // condition fields so either spelling of a rule can match it.
+          country: payload.country ?? acct.region ?? null,
+          state: payload.state ?? acct.region ?? null,
+        };
+      }
+    } catch (e) {
+      // Enrichment is a bonus — never fail routing because of it.
+      console.error("[leadRouting] account enrichment failed:", (e as Error)?.cause ?? e);
+    }
+  }
+  return payload;
+}
+
+/** One rule as the dry run saw it, in the order the router runs them (F41). */
+export type RoutingRuleVerdict = {
+  ruleId: number;
+  name: string;
+  /** disabled, conditions not met, met with nobody to give it to, the pick, or after the pick. */
+  verdict: "disabled" | "no_match" | "no_owner" | "picked" | "not_reached";
+  ownerUserId: number | null;
+};
+
+/**
+ * What routing would do with a lead, changing nothing (audit 2026-10-20, F41:
+ * "Test a lead"): the payload as the router sees it (the account's industry
+ * and region filled in), each rule's verdict in run order, and who the first
+ * rule that can assign would give the lead to. It reads what routeLeadOwner
+ * reads and picks with the same pickRoutingMatch and evaluator, but advances
+ * no round-robin cursor and counts no match: the round-robin pick shown is
+ * whoever is next in turn now.
+ */
+export async function previewRouting(workspaceId: number, input: RoutingPayload): Promise<{ payload: RoutingPayload; rules: RoutingRuleVerdict[]; pick: { ruleId: number; ownerUserId: number } | null }> {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const payload = await enrichRoutingPayload(db, workspaceId, input);
+  const rows = await db.select().from(leadRoutingRules).where(eq(leadRoutingRules.workspaceId, workspaceId));
+  const territory = await db.select().from(crmTerritoryRules)
+    .where(and(eq(crmTerritoryRules.workspaceId, workspaceId), eq(crmTerritoryRules.active, true)))
+    .orderBy(crmTerritoryRules.priority, crmTerritoryRules.id);
+  const active = await activeMemberIds(
+    workspaceId,
+    [...rows.flatMap((r) => ((r.targetUserIds as number[] | null) ?? [])), ...territory.map((t) => t.ownerUserId)],
+  );
+  const same = (rule: string | null, lead: string | null | undefined) =>
+    rule == null || rule.trim() === "" || rule.trim().toLowerCase() === (lead ?? "").trim().toLowerCase();
+  const company = (payload.company ?? "").toLowerCase();
+  const territoryOwner = (rule: RoutingRule, p: RoutingPayload): number | null => {
+    for (const t of territory) {
+      if (rule.strategy === "geography" ? !(t.country || t.state) : !t.industry) continue;
+      if (!same(t.industry, p.industry) || !same(t.country, p.country) || !same(t.state, p.state)) continue;
+      if (t.companyContains && !company.includes(t.companyContains.toLowerCase())) continue;
+      if (t.ownerUserId != null && active.has(t.ownerUserId)) return t.ownerUserId;
+    }
+    return null;
+  };
+  const rules: Array<RoutingRule & { name: string }> = rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    enabled: r.enabled,
+    priority: r.priority,
+    conditions: (r.conditions as any) ?? {},
+    strategy: r.strategy,
+    targetUserIds: (((r.targetUserIds as number[] | null) ?? []).filter((u) => active.has(u))),
+    rrCursor: r.rrCursor,
+    capacityPerRep: r.capacityPerRep ?? null,
+  })).sort((x, y) => x.priority - y.priority || x.id - y.id);
+  // The rep capacity the router honours (F43), read the same way, so the dry
+  // run never offers a rep who is full (merged with RESB 2026-11-07).
+  const load = rules.some((r) => r.capacityPerRep != null && r.capacityPerRep > 0)
+    ? await openLeadsByOwner(db, workspaceId, Array.from(active))
+    : null;
+  // The pick over every rule, exactly as the router makes it.
+  const pick = pickRoutingMatch(rules, payload, routingConditionsMatch, territoryOwner, load ? (uid) => load.get(uid) ?? 0 : undefined);
+  let reached = true;
+  const verdicts: RoutingRuleVerdict[] = rules.map((r) => {
+    if (!reached) return { ruleId: r.id, name: r.name, verdict: "not_reached", ownerUserId: null };
+    if (!r.enabled) return { ruleId: r.id, name: r.name, verdict: "disabled", ownerUserId: null };
+    if (!ruleMatches(r, payload, routingConditionsMatch)) return { ruleId: r.id, name: r.name, verdict: "no_match", ownerUserId: null };
+    if (pick?.ruleId === r.id) {
+      reached = false;
+      return { ruleId: r.id, name: r.name, verdict: "picked", ownerUserId: pick.ownerUserId };
+    }
+    return { ruleId: r.id, name: r.name, verdict: "no_owner", ownerUserId: null };
+  });
+  return { payload, rules: verdicts, pick: pick ? { ruleId: pick.ruleId, ownerUserId: pick.ownerUserId } : null };
 }

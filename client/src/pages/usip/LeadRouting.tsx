@@ -14,7 +14,8 @@ import {
   conditionsForSave, editableConditions, pickableMembers, ruleStatus,
   type EditableConditions, type RuleCond as Cond, type RuleMember as Member,
 } from "@/lib/routingRuleView";
-import { ArrowDown, ArrowUp, Pencil, Plus, Sparkles, Trash2, GitMerge } from "lucide-react";
+import { ArrowDown, ArrowUp, Pencil, Plus, Sparkles, Trash2, GitMerge, FlaskConical, Loader2 } from "lucide-react";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/usip/Common";
@@ -39,6 +40,7 @@ export default function LeadRouting() {
   const rules = rulesQ.data;
   const { data: members } = trpc.workspace.members.useQuery();
   const [editing, setEditing] = useState<Rule | null>(null);
+  const [testing, setTesting] = useState(false);
   const memberList = (members as Member[] | undefined) ?? [];
   // New, edit, delete and reorder are an admin's on the server (P120).
   const isAdmin = useWorkspaceRole().isAdmin;
@@ -70,6 +72,10 @@ export default function LeadRouting() {
             <Plus className="size-4" /> New rule
           </Button>
         )}
+        {/* A dry run anyone can make: it changes nothing (audit F41). */}
+        <Button variant="outline" className="bg-card" onClick={() => setTesting(true)}>
+          <FlaskConical className="size-4" /> Test a lead
+        </Button>
       </PageHeader>
       <SubNav items={LEAD_ASSIGNMENT_NAV} />
 
@@ -170,6 +176,8 @@ export default function LeadRouting() {
         )}
       </div>
 
+      <TestLeadDialog open={testing} onOpenChange={setTesting} members={memberList} />
+
       <RuleEditor
         rule={editing}
         position={editing?.id ? (rules ?? []).findIndex((r) => r.id === editing.id) + 1 : (rules?.length ?? 0) + 1}
@@ -260,6 +268,121 @@ function RuleEditor({ rule, position, members, onClose, onSaved }: { rule: Rule 
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button disabled={save.isPending || !draft.name.trim() || !!problem} onClick={() => save.mutate({ ...draft, conditions: conditionsForSave(draft.conditions) })}>Save</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** What each rule's verdict in a dry run reads as (F41). */
+export const TEST_VERDICT_LABEL: Record<string, string> = {
+  disabled: "Disabled, skipped",
+  no_match: "Conditions not met",
+  no_owner: "Conditions met, but nobody to give it to: skipped",
+  picked: "Takes the lead",
+  not_reached: "Not reached",
+};
+
+/** The lead a test describes when it is typed in: the routing fields, Score a number. */
+export function testLeadInput(values: Record<string, string>): Record<string, string | number> {
+  const out: Record<string, string | number> = {};
+  for (const f of ROUTING_FIELDS) {
+    const v = (values[f.v] ?? "").trim();
+    if (!v) continue;
+    if (f.type === "number") { const n = Number(v); if (Number.isFinite(n)) out[f.v] = Math.max(0, Math.min(100, Math.round(n))); }
+    else out[f.v] = v;
+  }
+  return out;
+}
+
+/**
+ * "Test a lead" (audit 2026-10-20, F41): which rule would take a lead and who
+ * would get it, run against the saved rules with nothing changed: no owner is
+ * set, no round-robin turn is used and no match is counted. Test a saved lead,
+ * or type one in with the fields the rules can match on.
+ */
+function TestLeadDialog({ open, onOpenChange, members }: { open: boolean; onOpenChange: (v: boolean) => void; members: Member[] }) {
+  const utils = trpc.useUtils();
+  const [mode, setMode] = useState<"saved" | "typed">("saved");
+  const [search, setSearch] = useState("");
+  const query = useDebouncedValue(search.trim());
+  const { data: leadList } = trpc.leads.list.useQuery({ search: query || undefined, limit: 20 }, { enabled: open && mode === "saved" });
+  const [leadId, setLeadId] = useState<number | null>(null);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<Awaited<ReturnType<typeof utils.leadRouting.testLead.fetch>> | null>(null);
+  const nameOf = (uid: number | null) => {
+    if (uid == null) return "nobody";
+    const m = members.find((x) => x.id === uid);
+    return m ? (m.name ?? m.email ?? `user #${uid}`) : `user #${uid}`;
+  };
+  const run = async () => {
+    setRunning(true);
+    try {
+      setResult(await utils.leadRouting.testLead.fetch(mode === "saved" ? { leadId: leadId ?? undefined } : { lead: testLeadInput(values) as never }));
+    } catch (e: any) {
+      toast.error(readableErrorMessage(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+  const picked = result?.pick ? result.rules.find((r) => r.ruleId === result.pick!.ruleId) : null;
+  return (
+    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) setResult(null); }}>
+      <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader><DialogTitle>Test a lead</DialogTitle></DialogHeader>
+        <p className="text-xs text-muted-foreground">Runs the saved rules against one lead and shows who would get it. Nothing changes: no owner is set, no round-robin turn is used, no match is counted.</p>
+        <div className="flex gap-2 text-sm" role="radiogroup" aria-label="Which lead">
+          <label className="flex items-center gap-1.5"><input type="radio" name="test-mode" checked={mode === "saved"} onChange={() => { setMode("saved"); setResult(null); }} /> A saved lead</label>
+          <label className="flex items-center gap-1.5"><input type="radio" name="test-mode" checked={mode === "typed"} onChange={() => { setMode("typed"); setResult(null); }} /> Type one in</label>
+        </div>
+        {mode === "saved" ? (
+          <div className="flex gap-2 flex-wrap">
+            <Input aria-label="Search leads" placeholder="Search leads…" className="h-9 w-48" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <select aria-label="Lead" className="h-9 rounded border bg-background px-2 text-sm flex-1 min-w-[12rem]" value={leadId ?? ""} onChange={(e) => { setLeadId(Number(e.target.value) || null); setResult(null); }}>
+              <option value="">{leadList && leadList.length === 0 ? "No leads match" : "Select a lead…"}</option>
+              {(leadList ?? []).map((l) => <option key={l.id} value={l.id}>{l.firstName} {l.lastName}{l.company ? ` — ${l.company}` : ""}</option>)}
+            </select>
+          </div>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {ROUTING_FIELDS.map((f) => (
+              <div key={f.v} className="space-y-1">
+                <Label htmlFor={`test-${f.v}`} className="text-xs">{f.l}</Label>
+                <Input id={`test-${f.v}`} className="h-8" type={f.type === "number" ? "number" : "text"} min={f.type === "number" ? 0 : undefined} max={f.type === "number" ? 100 : undefined}
+                  value={values[f.v] ?? ""} onChange={(e) => { setValues({ ...values, [f.v]: e.target.value }); setResult(null); }} />
+              </div>
+            ))}
+          </div>
+        )}
+        {result && (
+          <div className="space-y-2" role="status">
+            <div className={`rounded border p-3 text-sm ${result.pick ? "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30" : "border-amber-300 bg-amber-50 dark:bg-amber-950/30"}`}>
+              {result.pick && picked
+                ? <>Rule <strong>{picked.name}</strong> would assign this lead to <strong>{nameOf(result.pick.ownerUserId)}</strong>.</>
+                : <>No rule takes this lead: it would be left unassigned.</>}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              As the router sees it: {(["title", "company", "source", "industry", "country", "state", "score"] as const)
+                .map((k) => [ROUTING_FIELDS.find((f) => f.v === k)?.l ?? k, (result.payload as Record<string, unknown>)[k]] as const)
+                .filter(([, v]) => v != null && v !== "")
+                .map(([l, v]) => `${l} ${v}`).join(" · ") || "no field filled in"}
+            </div>
+            <ol className="text-xs space-y-1">
+              {result.rules.map((r, i) => (
+                <li key={r.ruleId} className={r.verdict === "picked" ? "font-medium" : "text-muted-foreground"}>
+                  {i + 1}. {r.name}: {TEST_VERDICT_LABEL[r.verdict] ?? r.verdict}{r.verdict === "picked" ? ` (to ${nameOf(r.ownerUserId)})` : ""}
+                </li>
+              ))}
+              {result.rules.length === 0 && <li className="text-muted-foreground">There are no routing rules yet.</li>}
+            </ol>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
+          <Button disabled={running || (mode === "saved" && !leadId)} onClick={run}>
+            {running ? <Loader2 className="size-4 animate-spin" /> : <FlaskConical className="size-4" />} Run test
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

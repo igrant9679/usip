@@ -35,6 +35,7 @@ import {
   type ResearchStatus, type SectorContent, type SectorScoreKey,
 } from "@shared/researchShape";
 import { NotFoundState } from "@/components/usip/QueryState";
+import { statedMoneyLinks } from "@shared/researchReports";
 
 const SCORE_HINT: Record<SectorScoreKey, string> = {
   reach: "How many organizations you could reach",
@@ -364,6 +365,24 @@ export default function ResearchSector() {
             addLabel="Add recipient"
             disabled={ro}
           />
+          {/* The diagram draws these and nothing else (audit U30). */}
+          <RowsEditor
+            label="Money flow links"
+            hint="Who passes money to whom, only where the research says so. Name each end as written above: a source, an intermediary or a recipient."
+            fields={[{ key: "from", label: "From" }, { key: "to", label: "To" }]}
+            value={f.moneyFlow.links}
+            onChange={(v) => setF({ moneyFlow: { ...f.moneyFlow, links: v } })}
+            addLabel="Add link"
+            disabled={ro}
+          />
+          {(() => {
+            const bad = statedMoneyLinks(f.moneyFlow).unmatched.filter((l) => l.from.trim() && l.to.trim());
+            return bad.length > 0 ? (
+              <p role="status" className="text-xs text-amber-700 dark:text-amber-300">
+                {bad.length === 1 ? "A link names" : `${bad.length} links name`} no source, intermediary or recipient above, or runs backwards, so the diagram leaves {bad.length === 1 ? "it" : "them"} out: {bad.slice(0, 3).map((l) => `${l.from} → ${l.to}`).join("; ")}.
+              </p>
+            ) : null;
+          })()}
           <RowsEditor
             label="Programs and budget lines"
             fields={[
@@ -406,6 +425,9 @@ export default function ResearchSector() {
         stale={draft.stale}
         saving={save.isPending}
         onDiscard={draft.discard}
+        merge={draft.merge}
+        current={sector?.content}
+        mine={c}
         onSave={() => save.mutate({ id, expectedRevision: draft.baseRevision, content: c as unknown as Record<string, unknown> })}
       />
 

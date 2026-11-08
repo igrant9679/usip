@@ -217,6 +217,8 @@ function Scorecard({ r }: { r: Report }) {
                 {s.score == null ? <span className="text-muted-foreground">—</span> : (
                   <span className="flex items-center gap-2"><span className="h-1.5 w-12 rounded bg-muted overflow-hidden"><span className="block h-full bg-teal-700 dark:bg-teal-400" style={{ width: `${s.score}%` }} /></span><span className="tabular-nums">{s.score}</span></span>
                 )}
+                {/* A score from fewer than five lines says so (U30). */}
+                <span className={`block text-[10.5px] ${s.scored < SECTOR_SCORE_KEYS.length ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"}`}>{s.scored} of {SECTOR_SCORE_KEYS.length} scored</span>
               </Td>
               <Td className="text-muted-foreground min-w-64">{s.content.tagline || s.content.summary.slice(0, 160)}</Td>
             </tr>

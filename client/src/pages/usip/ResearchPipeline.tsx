@@ -11,6 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import { CheckCircle, Circle, Loader2, ChevronDown, ChevronRight, Sparkles, Copy, ArrowRight, FlaskConical } from "lucide-react";
 import { toast } from "sonner";
+import { confirmAction } from "@/components/usip/Common";
+import { formatUsd } from "@shared/researchModels";
 
 const STAGES = [
   { id: 1, label: "Prospect Research", description: "Company + person profile" },
@@ -66,6 +68,24 @@ function JsonSection({ title, data }: { title: string; data: any }) {
   );
 }
 
+/**
+ * What a run will spend, for its confirmation (the audit's "Spending" rule):
+ * the AI calls it makes, and about what they cost at what calls have cost
+ * this workspace lately. No price on file says so rather than guessing.
+ */
+export function pipelineSpendLine(e: { calls: number; estUsd: number | null; basis: "pipeline" | "workspace" | "none" }): string {
+  const calls = `${e.calls} AI calls on this workspace's AI budget`;
+  if (e.estUsd == null) return `${calls}. There is no price on file for the model, so the cost can't be estimated.`;
+  return `${calls}, about ${formatUsd(e.estUsd)} at what ${e.basis === "pipeline" ? "pipeline runs have" : "AI calls have"} cost here in the last 30 days.`;
+}
+
+/** The line under the stages while a run is going: queued, or running in the background (P144). */
+export function pipelineJobLine(p: { status: string; stage1_prospect?: unknown; job?: { status: string } | null } | null | undefined): string | null {
+  if (!p || p.status !== "running") return null;
+  if (p.job?.status === "queued" && p.stage1_prospect == null) return "Queued: the background runner starts it within a few seconds.";
+  return "Runs in the background, one stage at a time. You can leave this page; a server restart carries on from the last finished stage.";
+}
+
 /** How often to re-read a pipeline in this state: until it is done, not after. */
 export function pipelinePollMs(status: string | null | undefined): number | false {
   return status === "complete" || status === "failed" ? false : 2000;
@@ -102,10 +122,22 @@ export default function ResearchPipeline() {
     },
   });
 
-  const handleStart = () => {
+  const utils = trpc.useUtils();
+  // What it spends, said and agreed to before it starts (the "Spending" rule).
+  const handleStart = async () => {
     if (!goal.trim() || recipient.length === 0) return;
-    start.mutate({ goal: goal.trim(), tone, contactId: recipient[0] });
+    let estimate;
+    try {
+      estimate = await utils.researchPipeline.estimate.fetch();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Couldn't work out what the run costs");
+      return;
+    }
+    confirmAction({ title: "Run the 5-stage pipeline?", description: pipelineSpendLine(estimate), confirmLabel: "Run pipeline" }, () => {
+      start.mutate({ goal: goal.trim(), tone, contactId: recipient[0] });
+    });
   };
+  const jobLine = pipelineJobLine(activePipeline as any);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -238,6 +270,7 @@ export default function ResearchPipeline() {
                   </div>
                 </CardHeader>
                 <CardContent>
+                  {jobLine && <p className="text-xs text-muted-foreground mb-3">{jobLine}</p>}
                   <div className="space-y-3">
                     {STAGES.map((s, i) => (
                       <div key={s.id}>

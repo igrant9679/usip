@@ -48,6 +48,73 @@ export async function assertRelatedInWorkspace(
   await assertRowInWorkspace(db, kind, relatedId, workspaceId);
 }
 
+/* ─── The scoped lookup (audit 2026-10-20, X1.1) ─────────────────────────
+   One way to read a record by id: by id AND workspace. Any table with `id`
+   and `workspaceId` columns, so a new table needs no entry in a list. The
+   kinds above stay for their messages; these are for everything else. */
+
+type WsTable = { id: any; workspaceId: any } & Record<string, any>;
+
+/** The row with this id in this workspace, or null when it is another's or none. */
+export async function byIdInWorkspace(db: Db, table: WsTable, id: number | null | undefined, workspaceId: number): Promise<Record<string, unknown> | null> {
+  if (id == null || !Number.isFinite(Number(id))) return null;
+  const [row] = await db
+    .select()
+    .from(table as any)
+    .where(and(eq(table.id, id), eq(table.workspaceId, workspaceId)))
+    .limit(1);
+  return (row as Record<string, unknown> | undefined) ?? null;
+}
+
+/**
+ * NOT_FOUND unless the record is in this workspace: for the record a
+ * procedure acts ON. Another workspace's id reads exactly like a missing one,
+ * so ids are not confirmed to outsiders.
+ */
+export async function requireInWorkspace(db: Db, table: WsTable, id: number, workspaceId: number, what: string): Promise<Record<string, unknown>> {
+  const row = await byIdInWorkspace(db, table, id, workspaceId);
+  if (!row) throw new TRPCError({ code: "NOT_FOUND", message: `${what} not found` });
+  return row;
+}
+
+/**
+ * BAD_REQUEST unless a record a write LINKS to is in this workspace; no-op for
+ * null/undefined (clearing a link is always allowed). Every id in a list must be.
+ */
+export async function assertInWorkspace(db: Db, table: WsTable, ids: number | null | undefined | Array<number | null | undefined>, workspaceId: number, what: string): Promise<void> {
+  const list = (Array.isArray(ids) ? ids : [ids]).filter((v): v is number => v != null);
+  for (const id of list.filter((v, i) => list.indexOf(v) === i)) {
+    if (!(await byIdInWorkspace(db, table, id, workspaceId))) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: `That ${what} is not in this workspace.` });
+    }
+  }
+}
+
+/**
+ * The record a call, meeting, note or file is about (audit 2026-10-20, X1.1):
+ * a kind people log against, and that kind's row in this workspace. The
+ * activity, meeting and attachment procedures stored any (type, id) they were
+ * given, so a note could be filed on another tenant's deal and show on its
+ * timeline. Unknown types are refused: every screen that logs one sends a
+ * kind listed here.
+ */
+const RECORD_KINDS: Record<string, ForeignKind> = {
+  account: "account", contact: "contact", lead: "lead", opportunity: "deal", deal: "deal",
+  prospect: "person", person: "person", customer: "customer", proposal: "proposal",
+};
+export async function assertRecordInWorkspace(
+  db: Db,
+  relatedType: string | null | undefined,
+  relatedId: number | null | undefined,
+  workspaceId: number,
+): Promise<void> {
+  if (relatedType == null && relatedId == null) return;
+  const kind = relatedType != null && Object.prototype.hasOwnProperty.call(RECORD_KINDS, relatedType) ? RECORD_KINDS[relatedType] : undefined;
+  if (!kind) throw new TRPCError({ code: "BAD_REQUEST", message: "This can be logged against an account, contact, lead, deal, person, customer or proposal." });
+  if (relatedId == null) throw new TRPCError({ code: "BAD_REQUEST", message: "Say which record this is about." });
+  await assertRowInWorkspace(db, kind, relatedId, workspaceId);
+}
+
 /** No-op for null/undefined (clearing a link is always allowed). */
 export async function assertRowInWorkspace(
   db: Db,
