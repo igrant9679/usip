@@ -144,7 +144,9 @@ const NO_CLIENT_CALLER: Record<string, string> = {
   ].map((p) => [p, CRMP])),
   ...Object.fromEntries([
     "campaigns.rewriteNotStartedSequences", "campaigns.rewriteNotStartedStatus", "campaigns.runEngine", "prospects.repairSequenceQualityTotals",
-    "prospects.skip", "prospects.setSequenceTimeline", "prospects.addManual", "prospects.bulkUnapprove", "prospects.bulkApprove", "prospects.bulkReject",
+    "prospects.skip", "prospects.setSequenceTimeline", "prospects.addManual", "prospects.bulkUnapprove", "prospects.bulkApprove",
+    // prospects.bulkReject left the list at the merge with AREUI (2026-11-07):
+    // the approval queue and the dossier's reject call it now.
     "execution.getQueue", "execution.pause", "execution.resume", "execution.reviveSkippedSteps", "execution.ingestSignal", "execution.getSuppressionList",
     "execution.addSuppression", "scraper.scrapeGoogleBusiness", "scraper.scrapeLinkedInCompany", "scraper.scrapeLinkedInPeople", "scraper.scrapeWeb",
     "scraper.scrapeNews", "scraper.scrapeIndustryEvents", "scraper.runFullScrape", "engine.enrollOnly", "metrics.abVariants", "metrics.thresholds",

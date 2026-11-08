@@ -74,7 +74,7 @@ import { spendDay } from "../../services/spend";
 import { assertInWorkspace, requireInWorkspace } from "../../services/foreignIds";
 import { campaignPreflight, preflightRefusal } from "../../services/are/campaignPreflight";
 import { icpProfiles } from "../../../drizzle/schema";
-import { affectedRowsOf } from "../../_core/claim";
+import { affectedRowsOf, claimRow } from "../../_core/claim";
 
 /** The model-token meters (services/spend), summed per source for F12. */
 const TOKEN_METERS = ["input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens"];
@@ -1688,13 +1688,18 @@ export const campaignsRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       await requireInWorkspace(db, areCampaigns, input.id, ctx.workspace.id, "Campaign");
-      const [cur] = await db.select({ status: areCampaigns.status, archivedAt: areCampaigns.archivedAt }).from(areCampaigns)
-        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id))).limit(1);
-      if (cur?.archivedAt) return { success: true, paused: false };
-      const paused = cur?.status === "active";
-      await db.update(areCampaigns)
-        .set({ archivedAt: new Date(), ...(paused ? { status: "paused" as const } : {}) } as never)
-        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id)));
+      // Two claims, not a read then a write (X1.5, at the merge with PLAT
+      // 2026-11-07): read-then-write let an activation landing in between
+      // leave the campaign archived AND active, still sending. The archive is
+      // taken only if not archived yet; the pause then catches whatever is
+      // active at that moment, the status in its WHERE.
+      const archived = await claimRow(db.update(areCampaigns)
+        .set({ archivedAt: new Date() } as never)
+        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id), isNull(areCampaigns.archivedAt))));
+      if (!archived) return { success: true, paused: false };
+      const paused = await claimRow(db.update(areCampaigns)
+        .set({ status: "paused" as const })
+        .where(and(eq(areCampaigns.id, input.id), eq(areCampaigns.workspaceId, ctx.workspace.id), eq(areCampaigns.status, "active"))));
       return { success: true, paused };
     }),
 
