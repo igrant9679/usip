@@ -38,6 +38,7 @@ import { smtpConfigRouter } from "./routers/smtpConfig";
 import { segmentRulesRouter } from "./routers/segmentRules";
 import { emailSuppressionsRouter } from "./routers/emailSuppressions";
 import { emailActivityRouter } from "./routers/emailActivity";
+import { sequenceTimelineRouter } from "./routers/sequenceTimeline";
 import { linkedinLimitsRouter } from "./routers/linkedinLimits";
 import { sendingAccountsRouter, senderPoolsRouter } from "./routers/sendingAccounts";
 import { mailboxRouter } from "./routers/mailbox";
@@ -127,6 +128,8 @@ export const appRouter = router({
   crmPipelines: crmPipelinesRouter,
   crmTerritoryRules: crmTerritoryRulesRouter,
   sequences: sequencesRouter,
+  // A sequence's real send dates, projected with the engine's rules (audit 2026-10-20, U4).
+  sequenceTimeline: sequenceTimelineRouter,
   emailDrafts: emailDraftsRouter,
   emailActivity: emailActivityRouter,
   linkedinLimits: linkedinLimitsRouter,

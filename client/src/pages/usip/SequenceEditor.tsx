@@ -40,6 +40,7 @@ import { StepTemplatePicker } from "@/components/usip/StepTemplatePicker";
 import { SequenceSendingSettings } from "@/components/usip/SequenceSendingSettings";
 import { SequenceReviewBanner } from "@/components/usip/SequenceReviewBanner";
 import { SequenceScheduleSettings } from "@/components/usip/SequenceScheduleSettings";
+import { SequenceTimelinePreview } from "@/components/usip/SequenceTimelinePreview";
 
 /**
  * `enabled: false` marks a RETIRED step: the send engine skips it entirely.
@@ -133,7 +134,7 @@ export default function SequenceEditor() {
    * saved, so a sequence could appear to say something it does not send.
    */
   const updateSteps = trpc.sequences.updateSteps.useMutation({
-    onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); },
+    onSuccess: () => { utils.sequences.get.invalidate({ id }); utils.sequences.list.invalidate(); utils.sequenceTimeline.preview.invalidate({ sequenceId: id }); },
     onError: (e) => {
       toast.error(e.message);
       void seqQ.refetch().then((r) => { if (r.data) setSteps(Array.isArray((r.data as any).steps) ? (r.data as any).steps : []); });
@@ -357,6 +358,8 @@ export default function SequenceEditor() {
                   <div className="pt-1"><AddStepButton accent={accent} open={addOpen} setOpen={setAddOpen} onAdd={addStep} /></div>
                 </div>
               )}
+              {/* When the steps really happen, with the engine's own rules (audit 2026-10-20, U4). */}
+              {steps.length > 0 && <SequenceTimelinePreview sequenceId={id} accent={accent} className="mt-5" />}
             </div>
           )}
 

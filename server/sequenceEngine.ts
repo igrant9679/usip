@@ -44,6 +44,10 @@ import { HUMAN_COPY_RULES, humanizeAiCopy } from "./services/humanCopy";
 import { describeSuppression, findSuppression, linkedinUrlVariants } from "./services/suppression";
 import { affected } from "./services/draftSend";
 import { getWorkspaceTimezone, startOfLocalDay } from "./services/workspaceTimezone";
+import {
+  HOLD_RECHECK_MS, STEP_GAP_MS, inSequenceWindow, nextSequenceWindowOpen, sequenceWindowOf, stepWaitDays, waitDueAt,
+  type ResolvedSequenceWindow,
+} from "@shared/sequenceTimeline";
 import { isFirstDegree, pickLinkedInAccount, toInviteNote } from "./services/are/linkedinStep";
 import { renderMergeFields, resolveBookingUrl, scrubForSend } from "./mergeVars";
 import { extractLinkedInIdentifier } from "./services/linkedinLookup";
@@ -111,7 +115,8 @@ function normalizeStep(raw: Record<string, unknown>): Step {
     body: str(raw.body) ?? (raw.type === "linkedin_dm" ? str(raw.linkedinMessage) : undefined),
     note: str(raw.note) ?? (raw.type === "linkedin_invite" ? str(raw.linkedinNote) : undefined),
     // `days` is what the schema stores; `waitDays` is tolerated for safety.
-    waitDays: num(raw.days) ?? num(raw.waitDays),
+    // The rule is shared with the timeline preview (U4).
+    waitDays: stepWaitDays(raw),
     taskDueOffsetDays: num(raw.taskDueOffsetDays),
     emailMode: raw.emailMode === "dynamic" ? "dynamic" : undefined,
     aiTone: str(raw.aiTone),
@@ -241,32 +246,10 @@ type AutoEnrollEvent =
    */
   | { kind: "score_threshold"; workspaceId: number; contactId?: number; leadId?: number; score: number; previousScore?: number };
 
-// ─── Sequence-timezone clock ──────────────────────────────────────────────────
-
-/**
- * Wall-clock info in an IANA timezone (no deps — Intl only).
- * Falls back to UTC on a bad/missing timezone string.
- */
-function nowInTz(tz: string | undefined, at: Date = new Date()): { hhmm: string; dow: number; dateKey: string } {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz || "UTC",
-      hourCycle: "h23",
-      weekday: "short",
-      year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit",
-    }).formatToParts(at);
-    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-    const dowMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-    return {
-      hhmm: `${get("hour")}:${get("minute")}`,
-      dow: dowMap[get("weekday")] ?? 1,
-      dateKey: `${get("year")}-${get("month")}-${get("day")}`,
-    };
-  } catch {
-    return { hhmm: at.toISOString().slice(11, 16), dow: at.getUTCDay(), dateKey: at.toISOString().slice(0, 10) };
-  }
-}
+// ─── The sequence's window ──────────────────────────────────────────────────
+// Read in its zone by @shared/recipientTime.inWindowAt, through
+// @shared/sequenceTimeline (audit 2026-10-20, U4): one rule for the engine and
+// the timeline preview.
 
 type SequenceSendSettings = {
   timezone?: string;
@@ -275,7 +258,7 @@ type SequenceSendSettings = {
   skipWeekends?: boolean;
 };
 
-type ResolvedSendSettings = Required<SequenceSendSettings>;
+type ResolvedSendSettings = ResolvedSequenceWindow;
 
 /**
  * The send window a sequence actually runs in (audit 2026-10-20, O9).
@@ -285,33 +268,17 @@ type ResolvedSendSettings = Required<SequenceSendSettings>;
  * A sequence without its own zone now uses the WORKSPACE's (Settings →
  * workspace time zone). "Skip weekends" showed as on while the engine read an
  * unset value as off; unset is now on, matching the screens.
+ *
+ * The window rule, its next opening, the wait rule and the step gaps live in
+ * @shared/sequenceTimeline (audit 2026-10-20, U4): the sequence pages' timeline
+ * preview walks the same functions, so the dates it shows are the engine's.
  */
 async function resolveSendSettings(seq: { settings: unknown }, workspaceId: number): Promise<ResolvedSendSettings> {
-  const s = (seq.settings ?? {}) as SequenceSendSettings;
-  return {
-    timezone: s.timezone || (await getWorkspaceTimezone(workspaceId)),
-    sendWindowStart: s.sendWindowStart || "08:00",
-    sendWindowEnd: s.sendWindowEnd || "18:00",
-    skipWeekends: s.skipWeekends !== false,
-  };
+  const own = (seq.settings ?? {}) as SequenceSendSettings;
+  return sequenceWindowOf(seq.settings, own.timezone || (await getWorkspaceTimezone(workspaceId)));
 }
 
-function inSequenceWindow(cfg: ResolvedSendSettings, at: Date): boolean {
-  const local = nowInTz(cfg.timezone, at);
-  if (cfg.skipWeekends && (local.dow === 0 || local.dow === 6)) return false;
-  // Zero-padded HH:MM strings compare correctly lexicographically.
-  return local.hhmm >= cfg.sendWindowStart && local.hhmm < cfg.sendWindowEnd;
-}
-
-/** The next quarter-hour the window is open, looking at most 8 days ahead. */
-function nextWindowOpen(cfg: ResolvedSendSettings, from: Date): Date {
-  const step = 15 * 60_000;
-  const start = Math.ceil((from.getTime() + 1) / step) * step;
-  for (let t = start; t <= from.getTime() + 8 * 86_400_000; t += step) {
-    if (inSequenceWindow(cfg, new Date(t))) return new Date(t);
-  }
-  return new Date(from.getTime() + HOLD_RECHECK_MS);
-}
+const nextWindowOpen = (cfg: ResolvedSendSettings, from: Date): Date => new Date(nextSequenceWindowOpen(cfg, from.getTime()));
 
 // ─── Daily email caps, counted from the database ─────────────────────────────
 
@@ -433,15 +400,14 @@ async function alreadyConnected(
 
 // ─── Core processor ───────────────────────────────────────────────────────────
 
-/** Gap after a step that does not wait, so one tick never runs two steps of one enrolment. */
-const STEP_GAP_MS = 60_000;
-/**
- * How far a held enrolment is pushed. A held row used to keep its past
- * nextActionAt, so it sat at the front of the unordered 200-row page every
- * tick and, once there were 200 of them, nothing behind them — in any
- * workspace — ever ran (audit 2026-10-20, O23).
+/*
+ * STEP_GAP_MS — the gap after a step that does not wait, so one tick never
+ * runs two steps of one enrolment — and HOLD_RECHECK_MS — how far a held
+ * enrolment is pushed — come from @shared/sequenceTimeline (U4). A held row
+ * used to keep its past nextActionAt, so it sat at the front of the unordered
+ * 200-row page every tick and, once there were 200 of them, nothing behind
+ * them — in any workspace — ever ran (audit 2026-10-20, O23).
  */
-const HOLD_RECHECK_MS = 15 * 60_000;
 /** A daily cap is not going to lift in five minutes. */
 const CAP_RECHECK_MS = 60 * 60_000;
 
@@ -603,8 +569,7 @@ export async function processEnrollments(): Promise<{ processed: number; errors:
       if (step.type === "wait") {
         // The wait counts from when this step came due or the last email
         // actually went out, whichever is later — never from both.
-        const base = Math.max(enrollment.nextActionAt ? new Date(enrollment.nextActionAt).getTime() : now.getTime(), lastSentAt);
-        if (await claim(new Date(base + (step.waitDays ?? 1) * 86_400_000))) processed++;
+        if (await claim(new Date(waitDueAt(enrollment.nextActionAt ? new Date(enrollment.nextActionAt).getTime() : now.getTime(), lastSentAt, step.waitDays)))) processed++;
         continue;
       }
 
