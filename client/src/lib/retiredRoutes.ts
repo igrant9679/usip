@@ -84,13 +84,16 @@
  *  - `/settings/pipelines` and `/settings/linkedin-limits` are separate pages
  *    that merely share the prefix. Same trap as `/prospects/:id`: the parent
  *    stopped being a page, the children did not.
- *  - The Settings hub still has seven rows that navigate to standalone pages
- *    rather than rendering inside it (`/team`, `/audit`, `/custom-fields`,
- *    `/notification-prefs`, `/tour-builder`, `/v2/calls`,
- *    `/v2/data-enrichment`). Those are link-outs BY DESIGN, not leftovers:
- *    each is a full page in its own right, so hosting it in the hub means
- *    re-rendering it, which is a different job from retiring a duplicate and
- *    was left out of Phase 5 item 3 on purpose.
+ *  - The Settings hub had seven rows that navigated to standalone pages.
+ *    Since 2026-11-08 (audit U9, batch CONB) the four that are settings —
+ *    Users and teams (`/team`), Audit log (`/audit`), Custom fields
+ *    (`/custom-fields`) and Notifications (`/notification-prefs`) — render
+ *    inside the hub (Shell's ShellEmbedContext drops the page's own frame),
+ *    and their routes stay for links and bookmarks; "Phone numbers", which
+ *    opened the call queue (`/v2/calls`), is the hub's Voice agents section,
+ *    where numbers are set. Three still link out on purpose: Tour builder (a
+ *    full-screen authoring tool for super admins, not a setting) and Imports
+ *    and Data enrichment (`/v2/data-enrichment`, places to work on records).
  */
 
 /*

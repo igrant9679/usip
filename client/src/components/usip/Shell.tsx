@@ -94,6 +94,15 @@ import { isAdminRole } from "@shared/roleRank";
 import { EmailVerificationBanner } from "@/components/usip/EmailVerificationBanner";
 // ── Accent colour context ────────────────────────────────────────────────────
 const AccentContext = createContext<string>("#1D4ED8");
+
+/**
+ * True when a page is rendered inside the Settings hub (audit 2026-10-20, U9;
+ * batch CONB, 2026-11-08): Team, Audit log, Custom fields and Notifications
+ * are settings, so the hub shows them in its own content panel. The hub is the
+ * frame there, so Shell renders only the page, without a second sidebar and
+ * top bar. Everywhere else it is false and nothing changes.
+ */
+export const ShellEmbedContext = createContext(false);
 /**
  * The page accent. Defaults to the active section's colour (published by
  * Shell's provider) — but when the user picks a non-default colour theme, the
@@ -384,10 +393,11 @@ const PALETTE_SHORTCUT = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.t
  * navigates — the panel is the navigation. Styled to match renderNavLink so
  * it reads as one of the rail's rows. */
 const ADMIN_MENU_ITEMS = [
-  { label: "Users and Teams", icon: Users, href: "/team" },
+  // Both open inside the Settings hub now (U9, 2026-11-08): they are settings.
+  { label: "Users and Teams", icon: Users, href: "/v2/settings/users-teams" },
   // Label matches the destination page's title ("Audit log"); it read as a
   // broken link when it was called "System Activity" but opened /audit.
-  { label: "Audit Log", icon: Activity, href: "/audit" },
+  { label: "Audit Log", icon: Activity, href: "/v2/settings/system-activity" },
   { label: "Security", icon: ShieldCheck, href: "/v2/settings/security" },
   { label: "Integrations", icon: Plug, href: "/v2/settings/integrations" },
 ];
@@ -512,6 +522,7 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
   const [location] = useLocation();
   usePageTitle(title);
   const currentSearch = useSearch().replace(/^\?/, "");
+  const embedded = useContext(ShellEmbedContext);
   // The AI Assistant sends "the page the user came from" with each turn.
   useEffect(() => { rememberPage(location); }, [location]);
   const { user, logout } = useAuth();
@@ -692,6 +703,15 @@ export function Shell({ children, title, actions }: { children: ReactNode; title
     setMobileOpen(false);
     setHelpOpen(false);
   }, [location]);
+  // Inside the Settings hub: the page alone (U9). After every hook, so the
+  // hook order is the same either way.
+  if (embedded) {
+    return (
+      <AccentContext.Provider value={accentColor}>
+        <div className="flex-1 min-h-0 overflow-y-auto" data-embedded-in="settings">{children}</div>
+      </AccentContext.Provider>
+    );
+  }
   return (
     <AccentContext.Provider value={accentColor}>
     <div className="h-full flex bg-background text-foreground">

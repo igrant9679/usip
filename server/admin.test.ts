@@ -179,8 +179,9 @@ describe("team — getPermissions / setPermissions logic", () => {
   // 2026-09-20: this used to re-declare the six keys locally, which meant it
   // agreed with itself rather than with the product. The list now lives in
   // shared/permissions.ts and is imported by Team.tsx AND server/db.ts.
-  it("correctly identifies all 6 expected feature keys", () => {
-    expect(PERMISSION_KEYS.length).toBe(6);
+  // 2026-11-08 (G51): five; the "View all leads" switch granted nothing and was removed.
+  it("correctly identifies all 5 expected feature keys", () => {
+    expect(PERMISSION_KEYS.length).toBe(5);
     for (const key of PERMISSION_KEYS) {
       expect(typeof key).toBe("string");
       // setPermissions stores the key in a varchar(80) column.
@@ -305,9 +306,10 @@ describe("role permission templates", () => {
     rep: roleTemplate(elevated("rep")),
   };
 
-  it("all templates cover exactly 6 features", () => {
+  // 2026-11-08 (G51): five features; the "View all leads" switch granted nothing and was removed.
+  it("all templates cover exactly 5 features", () => {
     for (const [role, tpl] of Object.entries(TEMPLATES)) {
-      expect(Object.keys(tpl).length, role).toBe(6);
+      expect(Object.keys(tpl).length, role).toBe(5);
     }
   });
 
@@ -332,7 +334,6 @@ describe("role permission templates", () => {
     const unelevated = {
       export_data: false,
       manage_sequences: true,
-      view_all_leads: true,
       manage_integrations: true,
       access_billing: true,
       manage_api_keys: false,

@@ -19,10 +19,20 @@
  * No imports, deliberately: this file is reached from the client, from
  * `server/db.ts` (which nothing may import back) and from tests.
  */
+/*
+ * Five switches, not six (audit 2026-10-20, G51; batch CONB, 2026-11-08: the
+ * owner delegated "switches that grant nothing" — remove or wire). "View all
+ * leads" (view_all_leads) was REMOVED: no server code ever read it, and wiring
+ * it needs lead-list scoping plus by-id refusals plus the assistant's data
+ * explorer narrowed too (permissionEnforcement.test.ts recorded exactly that
+ * as the reason it stayed unenforced). A switch that restricts nothing is
+ * worse than no switch. Stored rows for it are skipped by
+ * resolvePermissionMap and setPermissions refuses the key, so nothing reads
+ * or writes it. To bring it back, add the key here with its enforcement.
+ */
 export const PERMISSION_KEYS = [
   "export_data",
   "manage_sequences",
-  "view_all_leads",
   "manage_integrations",
   "access_billing",
   "manage_api_keys",
