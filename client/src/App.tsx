@@ -71,6 +71,7 @@ const QBRs = lazyChunk(() => import("@/pages/usip/QBRs"));
 const Quotes = lazyChunk(() => import("@/pages/usip/Quotes"));
 const Renewals = lazyChunk(() => import("@/pages/usip/Renewals"));
 const SCIM = lazyChunk(() => import("@/pages/usip/SCIM"));
+// Retired (U14, 2026-11-07): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const Sequences = lazyChunk(() => import("@/pages/usip/Sequences"));
 const Settings = lazyChunk(() => import("@/pages/usip/Settings"));
 const SettingsHub = lazyChunk(() => import("@/pages/usip/SettingsHub"));
@@ -103,6 +104,7 @@ const Workflows = lazyChunk(() => import("@/pages/usip/Workflows"));
 const NotificationPrefs = lazyChunk(() => import("@/pages/usip/NotificationPrefs"));
 const LeadScoring = lazyChunk(() => import("@/pages/usip/LeadScoring"));
 const LeadRouting = lazyChunk(() => import("@/pages/usip/LeadRouting"));
+// Retired (U14, 2026-11-07): kept so the redirect can be undone in one line; see @/lib/retiredRoutes.
 const SequenceCanvas = lazyChunk(() => import("@/pages/usip/SequenceCanvas"));
 const ResearchPipeline = lazyChunk(() => import("@/pages/usip/ResearchPipeline"));
 const Quota = lazyChunk(() => import("@/pages/usip/Quota"));
@@ -512,8 +514,8 @@ function Router() {
       <Route path="/settings/pipelines"><AuthGate><SettingsPipelines /></AuthGate></Route>
       <Route path="/settings/linkedin-limits"><AuthGate><LinkedInLimits /></AuthGate></Route>
       <Route path="/forecast"><AuthGate><Forecast /></AuthGate></Route>
-      <Route path="/sequences"><AuthGate><Sequences /></AuthGate></Route>
-      <Route path="/sequences/:id/canvas"><AuthGate><SequenceCanvas /></AuthGate></Route>
+      <Route path="/sequences"><AuthGate><RetiredRedirect from="/sequences" /></AuthGate></Route>
+      <Route path="/sequences/:id/canvas"><AuthGate><RetiredRedirect from="/sequences/:id/canvas" /></AuthGate></Route>
       <Route path="/email-analytics"><AuthGate><EmailAnalytics /></AuthGate></Route>
       <Route path="/email-suppressions"><AuthGate><EmailSuppressions /></AuthGate></Route>
       <Route path="/sending-accounts"><AuthGate><SendingAccounts /></AuthGate></Route>

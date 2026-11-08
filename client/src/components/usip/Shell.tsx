@@ -219,12 +219,12 @@ const _LEGACY_NAV: NavGroup[] = [
     //   - /sender-pools         → opens from /sending-accounts
     //   - /snippets             → opens from /email-builder
     //   - /segment-rules        → opens from /segments
-    //   - /email-drafts         → opens from /sequences + /unified-inbox
-    //   - /email-analytics      → opens from /sequences + /dashboards
+    //   - /email-drafts         → opens from /v2/sequences + /unified-inbox
+    //   - /email-analytics      → opens from /v2/sequences + /dashboards
+    // (/sequences itself is retired into /v2/sequences, U14 2026-11-07.)
     //   - /connected-accounts   → opens from /sending-accounts
     //   - /email-suppressions   → opens from /sending-accounts
     items: [
-      { href: "/sequences", label: "Sequences", icon: Activity },
       { href: "/segments", label: "Segments", icon: Filter },
       { href: "/sending-accounts", label: "Sending Accounts", icon: Mail },
       { href: "/email-builder", label: "Email Builder", icon: LayoutTemplate },

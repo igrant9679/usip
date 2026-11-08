@@ -9,7 +9,11 @@ export type EmailStep = {
   body?: string;
   /** Where the copy came from. The engine sends subject and body, never this. */
   templateId?: number;
+  /** "dynamic": the engine has AI write subject and body per person when the step runs. */
   emailMode?: "typed" | "dynamic";
+  aiTone?: string;
+  aiLength?: string;
+  aiFocus?: string;
   enabled?: boolean;
 };
 
@@ -76,6 +80,50 @@ export function describeSendWindow(settings: unknown): string {
   const zone = s.timezone || "the workspace's time zone";
   const days = s.skipWeekends === false ? "every day" : "Monday to Friday";
   return `Email steps are drafted between ${start} and ${end} (${zone}), ${days}.`;
+}
+
+/** The longest wait a step keeps: the server's step schema caps it at 60 days. */
+export const MAX_WAIT_DAYS = 60;
+
+/**
+ * A wait as whole days and hours (U14). The retired canvas wrote hours into a
+ * wait (`days` is fractional: 1 day 6 hours is 1.25), and the v2 editor showed
+ * one whole-number box, so it could not show or keep such a wait faithfully.
+ */
+export function waitParts(days: unknown): { days: number; hours: number } {
+  const total = Number(days);
+  if (!Number.isFinite(total) || total <= 0) return { days: 0, hours: 0 };
+  let whole = Math.floor(total + 1e-9);
+  let hours = Math.round((total - whole) * 24);
+  if (hours >= 24) { whole += 1; hours = 0; }
+  return { days: whole, hours };
+}
+
+/** Days and hours back to the step's `days`, kept whole when there are no hours. */
+export function waitDaysFrom(days: number, hours: number): number {
+  const d = Math.max(0, Math.floor(Number(days) || 0));
+  const h = Math.max(0, Math.min(23, Math.floor(Number(hours) || 0)));
+  return Math.min(MAX_WAIT_DAYS, h === 0 ? d : d + h / 24);
+}
+
+/**
+ * A/B variants belong to a step's POSITION (`sequence_ab_variants.stepIndex`,
+ * which the engine matches against the step it is running). Moving or
+ * removing a step does not move them, so a variant would start sending at a
+ * different step. Returns the first step, in the order given, that has
+ * variants and whose position this change would alter, or null when the change
+ * is safe. U14: legacy /sequences let the steps move under their variants.
+ */
+export function stepWithDisplacedVariants(
+  change: { kind: "move"; from: number; to: number } | { kind: "remove"; at: number },
+  stepCount: number,
+  variantsByStep: ReadonlyMap<number, number>,
+): number | null {
+  const moved = change.kind === "move"
+    ? [change.from, change.to]
+    : Array.from({ length: Math.max(0, stepCount - change.at) }, (_, k) => change.at + k);
+  for (const i of moved) if ((variantsByStep.get(i) ?? 0) > 0) return i;
+  return null;
 }
 
 /**

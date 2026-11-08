@@ -174,7 +174,8 @@ describe("rows, cards and tab strips work from the keyboard (X5.2, X5.3)", () =>
       ["client/src/pages/usip/Companies.tsx", /\{\.\.\.pressable\(\(\) => setLocation\(`\/v2\/companies\/\$\{a\.id\}`\), \{ row: true \}\)\}/],
       ["client/src/pages/usip/Lists.tsx", /\{\.\.\.pressable\(onOpen\)\}/],
       ["client/src/pages/usip/ARECampaignDetail.tsx", /\{\.\.\.pressable\(\(\) => onSelect\(p\.id\)\)\}/],
-      ["client/src/pages/usip/Sequences.tsx", /\{\.\.\.pressable\(\(\) => toggleContact\(c\.id\)\)\}/],
+      // 2026-11-07 (U14): the enrol dialog's rows moved with it out of legacy Sequences.tsx.
+      ["client/src/components/usip/SequenceEnrollDialog.tsx", /\{\.\.\.pressable\(\(\) => toggleContact\(c\.id\)\)\}/],
       ["client/src/pages/usip/Team.tsx", /\{\.\.\.tablistProps\("Team sections"\)\}/],
     ] as const) expect(read(f), f).toMatch(re);
   });

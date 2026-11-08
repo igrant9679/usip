@@ -1815,11 +1815,11 @@ export const TOURS: TourSeed[] = [
     type: "feature",
     estimatedMinutes: 2,
     pageKey: "prospects",
-    route: "/sequences",
+    route: "/v2/sequences",
     roleTags: ["sdr"],
     steps: [
-      { title: "From prospect to outreach", bodyMarkdown: "Prospects enroll natively — no contact conversion needed.", routeTo: "/sequences", visualTreatment: "coach", advanceCondition: "next_button" },
-      { title: "Open Enroll", bodyMarkdown: "In a sequence's Enrollments, click Enroll → Prospects tab.", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "From prospect to outreach", bodyMarkdown: "Prospects enroll natively — no contact conversion needed.", routeTo: "/v2/sequences", visualTreatment: "coach", advanceCondition: "next_button" },
+      { title: "Open Enroll", bodyMarkdown: "Open a sequence and click Add contacts, then the Prospects tab.", visualTreatment: "coach", advanceCondition: "next_button" },
       { title: "Select & go", bodyMarkdown: "Pick prospects (no-email rows are disabled), click Enroll. The engine sends.", visualTreatment: "coach", advanceCondition: "next_button" },
     ],
   },
@@ -1829,7 +1829,7 @@ export const TOURS: TourSeed[] = [
     type: "feature",
     estimatedMinutes: 4,
     pageKey: "sequences",
-    route: "/sequences",
+    route: "/v2/sequences",
     roleTags: ["sdr"],
     steps: [
       { title: "Create a cadence", bodyMarkdown: "Multi-step email + wait + task steps.", targetDataTourId: "sequences-new-button", visualTreatment: "pulse", advanceCondition: "element_clicked" },

@@ -246,7 +246,10 @@ describe("legacy /sequences says what deleting does, shows the copy that sends, 
   });
 
   it("the enrol dialog searches and pages on the server, marks prospect enrolments and reports every skip (O40)", () => {
-    const dialog = between(src, "function EnrollDialog(", "// ─── EnrollmentStatsPanel");
+    // 2026-11-07 (U14): the dialog moved, unchanged, into its own component so
+    // the v2 editor opens it; the legacy page imports it from there.
+    const dialog = between(read("client/src/components/usip/SequenceEnrollDialog.tsx"), "export function SequenceEnrollDialog(", "\n}\n");
+    expect(src).toContain('import { SequenceEnrollDialog } from "@/components/usip/SequenceEnrollDialog";');
     expect(dialog).toContain("trpc.prospects.list.useQuery({ page: prospectPage, perPage: ENROLL_PROSPECTS_PER_PAGE, search: debounced || undefined })");
     expect(dialog).toContain("trpc.contacts.list.useQuery({ search: debounced || undefined })");
     expect(dialog).toContain("trpc.leads.list.useQuery({ search: debounced || undefined })");
